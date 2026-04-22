@@ -567,3 +567,92 @@ class TestUseAppState:
         source = 'msg = "use self._state here"\n'
         path = _write(tmp_path, "app.py", source)
         check_file(path)  # just confirm it doesn't raise; no assertion on result
+
+
+# ---------------------------------------------------------------------------
+# False positive fixes (BLDX-1115)
+# ---------------------------------------------------------------------------
+
+
+class TestNoV2DirectoryStructureFalsePositives:
+    """Verify .github/workflows and other non-source dirs are not flagged."""
+
+    def test_github_workflows_not_flagged(self, tmp_path: Path) -> None:
+        """`.github/workflows/` is required by GitHub Actions, not a v2 artifact."""
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        _write(tmp_path, "app/__init__.py", "")
+        gh_wf = tmp_path / ".github" / "workflows"
+        gh_wf.mkdir(parents=True)
+        (gh_wf / "ci.yml").write_text("name: CI")
+
+        _, advisories = check_directory(tmp_path)
+        assert not any("no-v2-directory-structure" in a for a in advisories)
+
+    def test_app_workflows_still_flagged(self, tmp_path: Path) -> None:
+        """app/workflows/ IS a v2 artifact and should still be flagged."""
+        wf_dir = tmp_path / "app" / "workflows"
+        wf_dir.mkdir(parents=True)
+        (wf_dir / "__init__.py").write_text("")
+        _write(tmp_path, "app/__init__.py", "")
+
+        _, advisories = check_directory(tmp_path)
+        assert any("no-v2-directory-structure" in a for a in advisories)
+
+    def test_app_activities_still_flagged(self, tmp_path: Path) -> None:
+        """app/activities/ IS a v2 artifact and should still be flagged."""
+        act_dir = tmp_path / "app" / "activities"
+        act_dir.mkdir(parents=True)
+        (act_dir / "__init__.py").write_text("")
+        _write(tmp_path, "app/__init__.py", "")
+
+        _, advisories = check_directory(tmp_path)
+        assert any("no-v2-directory-structure" in a for a in advisories)
+
+    def test_venv_workflows_not_flagged(self, tmp_path: Path) -> None:
+        """Virtual env dirs with 'workflows' should not be flagged."""
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        _write(tmp_path, "app/__init__.py", "")
+        venv_wf = tmp_path / "my_venv" / "lib" / "workflows"
+        venv_wf.mkdir(parents=True)
+
+        _, advisories = check_directory(tmp_path)
+        # Only checks inside app/ — anything outside is ignored
+        assert not any("no-v2-directory-structure" in a for a in advisories)
+
+
+class TestResponseFormatChangeFalsePositives:
+    """Verify v3-migrated handlers don't get response-format-change warnings."""
+
+    def test_v3_handler_with_typed_contracts_no_warning(self, tmp_path: Path) -> None:
+        """Handler with MetadataInput/PreflightInput should NOT warn."""
+        source = """
+from application_sdk.handler.base import Handler
+from application_sdk.handler.contracts import MetadataInput, PreflightInput
+
+class MyHandler(Handler):
+    async def fetch_metadata(self, input: MetadataInput):
+        pass
+    async def preflight_check(self, input: PreflightInput):
+        pass
+"""
+        path = _write(tmp_path, "handler.py", source)
+        results = check_file(path)
+        assert not any(r.rule == "response-format-change" for r in results)
+
+    def test_v2_handler_without_typed_contracts_warns(self, tmp_path: Path) -> None:
+        """Handler without typed contracts SHOULD warn."""
+        source = """
+from application_sdk.handler.base import Handler
+
+class MyHandler(Handler):
+    async def fetch_metadata(self, **kwargs):
+        pass
+    async def preflight_check(self, **kwargs):
+        pass
+"""
+        path = _write(tmp_path, "handler.py", source)
+        results = check_file(path)
+        format_warnings = [r for r in results if r.rule == "response-format-change"]
+        assert len(format_warnings) == 2  # one for each method
