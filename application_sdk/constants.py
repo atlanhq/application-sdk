@@ -318,7 +318,7 @@ METRICS_CLEANUP_ENABLED = (
 )
 METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
 ENABLE_PROMETHEUS_METRICS = (
-    os.getenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "false").lower() == "true"
+    os.getenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "true").lower() == "true"
 )
 
 # Segment Configuration
