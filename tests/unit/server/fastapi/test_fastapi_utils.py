@@ -15,6 +15,26 @@ from application_sdk.server.fastapi.utils import (
 )
 
 
+class TestInternalServerErrorHandler:
+    """Test cases for internal_server_error_handler."""
+
+    def test_does_not_leak_exception_details(self):
+        """Regression test: 500 handler must not expose internal error details to clients."""
+        from application_sdk.server.fastapi.utils import internal_server_error_handler
+
+        sensitive_exc = Exception(
+            "OperationalError: connection to host 10.0.1.42:5432 failed: "
+            "password authentication failed for user 'admin'"
+        )
+        response = internal_server_error_handler(None, sensitive_exc)
+        body = json.loads(response.body)
+        assert response.status_code == 500
+        assert body["success"] is False
+        assert "10.0.1.42" not in body.get("details", "")
+        assert "password" not in body.get("details", "")
+        assert body["error"] == "An internal error has occurred."
+
+
 class TestResolveExtension:
     """Test cases for _resolve_extension helper."""
 

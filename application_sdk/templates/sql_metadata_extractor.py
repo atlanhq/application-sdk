@@ -401,6 +401,13 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 column_result.total_record_count,
             )
 
+            # Extract connection_qualified_name from the input connection.
+            # PublishInputMixin auto-derives publish_state_prefix and
+            # current_state_prefix from this value.
+            connection_qn = ""
+            if input.connection and input.connection.attributes:
+                connection_qn = input.connection.attributes.qualified_name or ""
+
             # Upload extracted data to Atlan
             if input.output_path:
                 upload_result = await self.upload_to_atlan(
@@ -418,6 +425,9 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 tables_extracted=table_result.total_record_count,
                 columns_extracted=column_result.total_record_count,
                 records_uploaded=records_uploaded,
+                connection_qualified_name=connection_qn,
+                output_path=input.output_path,
+                output_prefix=input.output_prefix,
             )
 
         except Exception as e:
