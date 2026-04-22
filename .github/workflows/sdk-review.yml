@@ -10,6 +10,11 @@
 #   @sdk-review override: <reason>    → Admin force-pass
 #   @sdk-review stop / cancel         → Cancel in-progress review
 #   @sdk-review retrospect            → Learn from recent PR patterns
+#
+# Auto-complete loop:
+#   The review sandbox posts "@sdk-review auto-complete --iteration=N"
+#   as a comment (via GitHub App). This triggers the `bot-iteration` job
+#   which re-dispatches without human intervention.
 
 name: SDK Review
 
@@ -22,10 +27,14 @@ permissions:
   pull-requests: write
 
 jobs:
+  # ----------------------------------------------------------------
+  # Job 1: Human-triggered review (OWNER/MEMBER/COLLABORATOR)
+  # ----------------------------------------------------------------
   dispatch:
     if: >-
       github.event.issue.pull_request
       && contains(github.event.comment.body, '@sdk-review')
+      && !contains(github.event.comment.body, '--iteration=')
       && (
         github.event.comment.author_association == 'OWNER'
         || github.event.comment.author_association == 'MEMBER'
@@ -33,7 +42,6 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Prevent double-dispatch: only one review per PR at a time
     concurrency:
       group: sdk-review-${{ github.event.issue.number }}
       cancel-in-progress: true
@@ -88,6 +96,15 @@ jobs:
       - name: Connect to VPN
         id: vpn
         uses: atlanhq/github-actions/globalprotect-connect-action@main
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Retry VPN if failed
+        if: steps.vpn.outcome == 'failure'
+        uses: atlanhq/github-actions/globalprotect-connect-action@main
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
@@ -102,11 +119,11 @@ jobs:
           COMMAND_CONTEXT: ${{ steps.parse.outputs.context }}
           COMMENTER: ${{ steps.parse.outputs.commenter }}
         run: |
-          # Retry VPN connectivity check (mothership may take a moment after VPN connects)
+          # Retry VPN connectivity check
           for attempt in 1 2 3 4 5; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${MOTHERSHIP_URL}/health" 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
-              echo "VPN connected, mothership reachable (attempt $attempt)"
+              echo "Mothership reachable (attempt $attempt)"
               break
             fi
             echo "Mothership unreachable (status=$STATUS), retrying in 5s (attempt $attempt/5)..."
@@ -118,7 +135,6 @@ jobs:
             exit 1
           fi
 
-          # Build JSON payload safely using jq
           PAYLOAD=$(jq -n \
             --arg pr_url "https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" \
             --arg review_mode "standard" \
@@ -136,7 +152,6 @@ jobs:
               commenter: $commenter
             }')
 
-          # Dispatch with retry (mothership may be restarting)
           for attempt in 1 2 3; do
             STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" --max-time 30 \
               -X POST "${MOTHERSHIP_URL}/api/pr-review/dispatch" \
@@ -158,10 +173,145 @@ jobs:
               exit 1
             fi
 
-            echo "Server error or timeout (status=$STATUS), retrying in 5s..."
+            echo "Server error or timeout ($STATUS), retrying in 5s..."
             sleep 5
           done
 
           echo "::error::Dispatch failed after 3 attempts"
           cat /tmp/response.json 2>/dev/null
           exit 1
+
+  # ----------------------------------------------------------------
+  # Job 2: Bot-triggered iteration (auto-complete loop continuation)
+  #
+  # When the review sandbox finishes, it posts a comment like:
+  #   @sdk-review auto-complete --iteration=2 --max=3
+  # This comment comes from the GitHub App (bot), not a human.
+  # Human-triggered @sdk-review is handled by the 'dispatch' job above.
+  # ----------------------------------------------------------------
+  bot-iteration:
+    if: >-
+      github.event.issue.pull_request
+      && contains(github.event.comment.body, '@sdk-review')
+      && contains(github.event.comment.body, '--iteration=')
+      && (
+        github.event.comment.author_association == 'NONE'
+        || endsWith(github.event.comment.user.login, '[bot]')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Different concurrency group suffix so it doesn't cancel the
+    # human-triggered job if both fire simultaneously
+    concurrency:
+      group: sdk-review-iter-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Parse iteration
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.comment.body.trim();
+            const prNumber = context.payload.issue.number;
+
+            // Extract --iteration=N and --max=M
+            const iterMatch = body.match(/--iteration=(\d+)/);
+            const maxMatch = body.match(/--max=(\d+)/);
+            const iteration = iterMatch ? parseInt(iterMatch[1]) : 2;
+            const maxIter = maxMatch ? parseInt(maxMatch[1]) : 3;
+
+            if (iteration > maxIter) {
+              core.setOutput('skip', 'true');
+              core.setOutput('reason', `iteration ${iteration} > max ${maxIter}`);
+              return;
+            }
+
+            // Check for sdk-review-stopped label (author cancelled)
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            const stopped = pr.labels.some(l => l.name === 'sdk-review-stopped');
+            if (stopped) {
+              core.setOutput('skip', 'true');
+              core.setOutput('reason', 'sdk-review-stopped label present');
+              return;
+            }
+
+            core.setOutput('skip', 'false');
+            core.setOutput('pr_number', String(prNumber));
+            core.setOutput('iteration', String(iteration));
+            core.setOutput('max', String(maxIter));
+
+      - name: Skip if over max or stopped
+        if: steps.parse.outputs.skip == 'true'
+        run: |
+          echo "Skipping: ${{ steps.parse.outputs.reason }}"
+
+      - name: Connect to VPN
+        if: steps.parse.outputs.skip != 'true'
+        id: vpn
+        uses: atlanhq/github-actions/globalprotect-connect-action@main
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Retry VPN if failed
+        if: steps.parse.outputs.skip != 'true' && steps.vpn.outcome == 'failure'
+        uses: atlanhq/github-actions/globalprotect-connect-action@main
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Dispatch iteration
+        if: steps.parse.outputs.skip != 'true'
+        env:
+          MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
+          HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          ITERATION: ${{ steps.parse.outputs.iteration }}
+          MAX_ITER: ${{ steps.parse.outputs.max }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${MOTHERSHIP_URL}/health" 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then break; fi
+            echo "Waiting for mothership... (attempt $attempt/5)"
+            sleep 5
+          done
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cannot reach mothership"
+            exit 1
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg pr_url "https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" \
+            --arg snapshot "sdk-reviewer" \
+            --arg command "auto-complete" \
+            --arg context "--iteration=${ITERATION} --max=${MAX_ITER}" \
+            '{
+              pr_url: $pr_url,
+              review_mode: "standard",
+              pipeline: "rover",
+              snapshot: $snapshot,
+              command: $command,
+              command_context: $context
+            }')
+
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" --max-time 30 \
+            -X POST "${MOTHERSHIP_URL}/api/pr-review/dispatch" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${HARNESS_TOKEN}" \
+            -d "$PAYLOAD")
+
+          echo "Dispatch iteration ${ITERATION}: status=$STATUS"
+          cat /tmp/response.json
+
+          if [ "$STATUS" -ge 400 ]; then
+            echo "::error::Dispatch failed: $STATUS"
+            exit 1
+          fi
