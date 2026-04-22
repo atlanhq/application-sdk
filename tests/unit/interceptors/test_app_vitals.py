@@ -1250,6 +1250,7 @@ class TestPreflightAndCircuitBreaker:
                 "error_type": "connection",
                 "error_class": "ConnectionError",
                 "error_message": "Connection refused",
+                "error_cause_chain": [],
                 "start_ns": 0,
                 "end_ns": 1000,
                 "duration_ms": 1.0,
@@ -1260,3 +1261,55 @@ class TestPreflightAndCircuitBreaker:
             common, MockWorkflowInfo(), "failed", 100.0
         )
         assert summary["circuit_breaker_tripped"] is False
+
+    def test_circuit_breaker_tripped_via_cause_chain(self):
+        """Publish app: ApplicationError(type='CircuitBreakerTriggered') wrapped by Temporal.
+
+        The outbound interceptor sees ActivityError as error_class and
+        'Activity task failed' as error_message. The real error is in the
+        cause chain.
+        """
+        interceptor = self._make_interceptor()
+        interceptor._activity_records = [
+            {
+                "activity_type": "check_circuit_breaker",
+                "status": "failed",
+                "error_type": "internal",
+                "error_class": "ActivityError",
+                "error_message": "Activity task failed",
+                "error_cause_chain": [
+                    "ApplicationError: Delete percentage (85.00%) is more than "
+                    "circuit breaker threshold (80%). Exiting."
+                ],
+                "start_ns": 0,
+                "end_ns": 1000,
+                "duration_ms": 1.0,
+            },
+        ]
+        common = {"app_name": "test"}
+        summary = interceptor._build_summary_attrs(
+            common, MockWorkflowInfo(), "failed", 100.0
+        )
+        assert summary["circuit_breaker_tripped"] is True
+
+    def test_circuit_breaker_tripped_via_type_hint(self):
+        """error_class contains CircuitBreakerTriggered from ApplicationError.type."""
+        interceptor = self._make_interceptor()
+        interceptor._activity_records = [
+            {
+                "activity_type": "check_circuit_breaker",
+                "status": "failed",
+                "error_type": "internal",
+                "error_class": "CircuitBreakerTriggered",
+                "error_message": "Delete percentage exceeded threshold",
+                "error_cause_chain": [],
+                "start_ns": 0,
+                "end_ns": 1000,
+                "duration_ms": 1.0,
+            },
+        ]
+        common = {"app_name": "test"}
+        summary = interceptor._build_summary_attrs(
+            common, MockWorkflowInfo(), "failed", 100.0
+        )
+        assert summary["circuit_breaker_tripped"] is True

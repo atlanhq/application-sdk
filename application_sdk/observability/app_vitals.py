@@ -208,7 +208,16 @@ def _emit_log_event(
 
 
 _PREFLIGHT_KEYWORDS = ("preflight", "setup", "connection_check")
-_CB_KEYWORDS = ("circuit breaker", "circuit_breaker", "circuitbreaker")
+# Keywords to detect circuit breaker trips. The Publish App raises:
+#   ApplicationError(message, type="CircuitBreakerTriggered", non_retryable=True)
+# After Temporal wrapping, this appears in error_class, error_message, or
+# error_cause_chain. We match broadly to catch all variations.
+_CB_KEYWORDS = (
+    "circuit breaker",
+    "circuit_breaker",
+    "circuitbreaker",
+    "circuitbreakertriggered",
+)
 
 
 def _detect_preflight_passed(acts: list[dict[str, Any]]) -> bool | None:
@@ -239,17 +248,22 @@ def _detect_preflight_passed(acts: list[dict[str, Any]]) -> bool | None:
 def _detect_circuit_breaker(failed_acts: list[dict[str, Any]]) -> bool:
     """Check if any failed activity indicates a circuit breaker trip.
 
-    Scans error_class and error_message of failed activities for circuit
-    breaker keywords.
+    Scans error_class, error_message, AND error_cause_chain of failed activities.
+    The cause chain is important because Temporal wraps the original exception:
+    the outbound interceptor sees ActivityError("Activity task failed") as the
+    outer exception, while the real CircuitBreakerTriggered ApplicationError
+    is in the cause chain.
     """
-    return any(
-        any(
-            kw in str(a.get("error_class", "")).lower()
-            or kw in str(a.get("error_message", "")).lower()
-            for kw in _CB_KEYWORDS
-        )
-        for a in failed_acts
-    )
+    for a in failed_acts:
+        # Build a single searchable string from all error fields
+        searchable = " ".join([
+            str(a.get("error_class", "")).lower(),
+            str(a.get("error_message", "")).lower(),
+            " ".join(str(c).lower() for c in a.get("error_cause_chain", [])),
+        ])
+        if any(kw in searchable for kw in _CB_KEYWORDS):
+            return True
+    return False
 
 
 class _AppVitalsWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
