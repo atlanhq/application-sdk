@@ -80,6 +80,58 @@ class TestUploadDirectory:
         assert out2.synced is False
         assert out2.reason == "skipped:hash_match"
 
+    async def test_upload_directory_concurrent_completes(self, store, tmp_path) -> None:
+        """Multi-file directory upload completes correctly via concurrent path."""
+        for i in range(10):
+            (tmp_path / f"file_{i}.txt").write_bytes(f"content_{i}".encode())
+        out = await upload(str(tmp_path), "conc", store=store)
+        assert out.ref.file_count == 10
+        assert out.synced is True
+        assert out.reason == "uploaded"
+
+        # Verify all files are downloadable
+        dest = tmp_path / "dest"
+        dl = await download("conc/", str(dest), store=store)
+        assert dl.ref.file_count == 10
+
+    async def test_upload_directory_partial_skip_count(self, store, tmp_path) -> None:
+        """transferred_count is accurate when some files are skipped."""
+        (tmp_path / "a.txt").write_bytes(b"aaa")
+        (tmp_path / "b.txt").write_bytes(b"bbb")
+        (tmp_path / "c.txt").write_bytes(b"ccc")
+
+        # Upload once so all files get sidecars
+        await upload(str(tmp_path), "partial", store=store, skip_if_exists=True)
+
+        # Change only one file
+        (tmp_path / "b.txt").write_bytes(b"bbb_v2")
+        out = await upload(str(tmp_path), "partial", store=store, skip_if_exists=True)
+
+        # Only the changed file should have been transferred
+        assert out.synced is True
+        assert out.reason == "uploaded"
+
+    async def test_upload_directory_error_propagation(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """Error in one upload propagates correctly from asyncio.gather."""
+        (tmp_path / "ok.txt").write_bytes(b"fine")
+        (tmp_path / "fail.txt").write_bytes(b"boom")
+
+        from application_sdk.storage import transfer as transfer_mod
+
+        _original = transfer_mod._upload_one
+
+        async def _failing_upload_one(st, local_file, store_key, *, skip_if_exists):
+            if "fail.txt" in str(local_file):
+                raise RuntimeError("simulated upload failure")
+            return await _original(st, local_file, store_key, skip_if_exists=skip_if_exists)
+
+        monkeypatch.setattr(transfer_mod, "_upload_one", _failing_upload_one)
+
+        with pytest.raises(RuntimeError, match="simulated upload failure"):
+            await upload(str(tmp_path), "errtest", store=store)
+
 
 class TestUploadStorageSubdir:
     """Tests for the storage_subdir parameter on upload."""
