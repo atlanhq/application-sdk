@@ -225,17 +225,18 @@ class TemporalAuthManager:
         await self._emit_token_refresh_event(expires_at)
 
     async def _emit_token_refresh_event(self, expires_at: datetime | None) -> None:
-        """Emit a token_refresh lifecycle event via the EventBus (best-effort)."""
+        """Emit a token_refresh lifecycle event via the event binding (best-effort)."""
         import os
         import time
 
         try:
-            from application_sdk.execution._temporal.interceptors.event_bus import (
-                get_event_bus,
+            from application_sdk.contracts.events import (
+                ApplicationEventNames,
+                Event,
+                EventTypes,
             )
             from application_sdk.execution._temporal.interceptors.events import (
-                TOKEN_REFRESH,
-                LifecycleEvent,
+                _publish_event_via_binding,
             )
 
             app_name = os.environ.get("ATLAN_APP_NAME", "")
@@ -244,11 +245,10 @@ class TemporalAuthManager:
             expires_at_ts = expires_at.timestamp() if expires_at else 0.0
             remaining = max(0.0, expires_at_ts - now)
 
-            event = LifecycleEvent(
-                event_name=TOKEN_REFRESH,
-                app_name=app_name,
-                timestamp_ms=int(now * 1000),
-                extra={
+            event = Event(
+                event_type=EventTypes.APPLICATION_EVENT.value,
+                event_name=ApplicationEventNames.TOKEN_REFRESH.value,
+                data={
                     "force_refresh": "true",
                     "token_expiry_time": str(expires_at_ts),
                     "time_until_expiry": str(remaining),
@@ -257,7 +257,7 @@ class TemporalAuthManager:
                     "deployment_name": deployment_name,
                 },
             )
-            await get_event_bus().emit(event)
+            await _publish_event_via_binding(event)
         except Exception:
             logger.warning("Failed to emit token_refresh event", exc_info=True)
 
