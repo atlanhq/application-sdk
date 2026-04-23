@@ -338,25 +338,21 @@ class TestResolveAgentJsonErrorPaths:
         with pytest.raises(CredentialParseError, match="must be a JSON object"):
             await resolve_agent_json(json.dumps(["a", "b"]), store)
 
-    async def test_missing_secret_path_raises_parse_error(self) -> None:
-        import pytest
-
+    async def test_missing_secret_path_skips_bundle_fetch(self) -> None:
         store = _store_with()
         agent_json = json.dumps(
             {"agent-name": "test", "host": "h", "basic.username": "u"}
         )
-        with pytest.raises(CredentialParseError, match="secret-path"):
-            await resolve_agent_json(agent_json, store)
+        result = await resolve_agent_json(agent_json, store)
+        assert result["host"] == "h"
 
-    async def test_empty_secret_path_raises_parse_error(self) -> None:
-        import pytest
-
+    async def test_empty_secret_path_skips_bundle_fetch(self) -> None:
         store = _store_with()
         agent_json = json.dumps(
             {"agent-name": "test", "secret-path": "", "basic.username": "u"}
         )
-        with pytest.raises(CredentialParseError, match="secret-path"):
-            await resolve_agent_json(agent_json, store)
+        result = await resolve_agent_json(agent_json, store)
+        assert "username" in str(result)
 
     async def test_secret_not_found_raises_credential_not_found(self) -> None:
         import pytest

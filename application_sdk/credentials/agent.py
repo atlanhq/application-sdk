@@ -105,14 +105,14 @@ async def resolve_agent_credential(
             a bundle at ``secret_path``.
         CredentialError: For any other secret-store failure.
     """
-    if not spec.secret_path:
-        raise CredentialParseError(
-            "agent_json is missing required field 'secret-path'",
-        )
-
     raw = spec.to_raw_dict()
-    bundle = await _fetch_bundle(secret_store, spec.secret_path)
-    resolved_flat = _substitute(raw, bundle)
+
+    if spec.secret_path:
+        bundle = await _fetch_bundle(secret_store, spec.secret_path)
+        resolved_flat = _substitute(raw, bundle)
+    else:
+        resolved_flat = raw
+
     expanded = _expand_dotted(resolved_flat)
     return _flatten_auth_section(expanded)
 
