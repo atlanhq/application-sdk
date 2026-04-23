@@ -72,6 +72,58 @@ class _ApiTreeHandler(Handler):
         )
 
 
+class _AuthFailedHandler(Handler):
+    """Handler that returns AuthStatus.FAILED (no exception)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.FAILED, message="bad credentials")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthExpiredHandler(Handler):
+    """Handler that returns AuthStatus.EXPIRED."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.EXPIRED, message="token expired")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthInvalidCredsHandler(Handler):
+    """Handler that returns AuthStatus.INVALID_CREDENTIALS."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.INVALID_CREDENTIALS, message="wrong key")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthUnhandledExceptionHandler(Handler):
+    """Handler whose test_auth raises an unexpected exception."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        raise RuntimeError("unexpected db connection error")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
 class _FailingHandler(Handler):
     """Handler that raises HandlerError."""
 
@@ -147,9 +199,16 @@ class TestHealthEndpoints:
 
 
 class TestAuthEndpoint:
-    """Tests for POST /workflows/v1/auth."""
+    """Tests for POST /workflows/v1/auth.
 
-    def test_auth_success(self) -> None:
+    Covers every AuthStatus, envelope format, credential passthrough,
+    HandlerError, and unhandled exceptions — ensures the contract between
+    the SDK and frontend never silently breaks again.
+    """
+
+    # -- Success ----------------------------------------------------------
+
+    def test_auth_success_returns_200(self) -> None:
         client = _make_client()
         response = client.post(
             "/workflows/v1/auth",
@@ -159,16 +218,9 @@ class TestAuthEndpoint:
         body = response.json()
         assert body["success"] is True
         assert body["data"]["status"] == "success"
+        assert body["message"] == "auth ok"
 
-    def test_auth_handler_error_returns_500(self) -> None:
-        client = _make_client(handler=_FailingHandler())
-        response = client.post(
-            "/workflows/v1/auth",
-            json={"credentials": []},
-        )
-        assert response.status_code == 500
-
-    def test_auth_response_has_envelope_format(self) -> None:
+    def test_auth_success_envelope_has_all_fields(self) -> None:
         client = _make_client()
         response = client.post(
             "/workflows/v1/auth",
@@ -178,6 +230,11 @@ class TestAuthEndpoint:
         assert "success" in body
         assert "message" in body
         assert "data" in body
+        # data must contain AuthOutput fields
+        data = body["data"]
+        assert "status" in data
+        assert "identities" in data
+        assert "scopes" in data
 
     def test_auth_with_credentials_succeeds(self) -> None:
         client = _make_client()
@@ -188,6 +245,101 @@ class TestAuthEndpoint:
             },
         )
         assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    # -- Failure (every non-SUCCESS AuthStatus) ---------------------------
+
+    def test_auth_failed_returns_401(self) -> None:
+        client = _make_client(handler=_AuthFailedHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["success"] is False
+        assert body["data"]["status"] == "failed"
+        assert body["message"] == "bad credentials"
+
+    def test_auth_expired_returns_401(self) -> None:
+        client = _make_client(handler=_AuthExpiredHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["success"] is False
+        assert body["data"]["status"] == "expired"
+        assert body["message"] == "token expired"
+
+    def test_auth_invalid_credentials_returns_401(self) -> None:
+        client = _make_client(handler=_AuthInvalidCredsHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["success"] is False
+        assert body["data"]["status"] == "invalid_credentials"
+        assert body["message"] == "wrong key"
+
+    # -- Failure envelope still has full structure ------------------------
+
+    def test_auth_failure_envelope_matches_success_shape(self) -> None:
+        """A failure response must have the same top-level keys as success
+        so that consumers can parse it uniformly."""
+        client = _make_client(handler=_AuthFailedHandler())
+        body = client.post("/workflows/v1/auth", json={"credentials": []}).json()
+        assert set(body.keys()) == {"success", "message", "data"}
+        assert set(body["data"].keys()) >= {"status", "message", "identities", "scopes"}
+
+    # -- Exception handling -----------------------------------------------
+
+    def test_auth_handler_error_returns_500(self) -> None:
+        client = _make_client(handler=_FailingHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 500
+        assert "detail" in response.json()
+
+    def test_auth_unhandled_exception_returns_500(self) -> None:
+        """Unexpected exceptions (not HandlerError) must return 500 with a
+        generic message — no stack traces leaked to the client."""
+        client = _make_client(handler=_AuthUnhandledExceptionHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 500
+        body = response.json()
+        assert body["detail"] == "Internal server error"
+        assert "RuntimeError" not in str(body)
+
+    # -- AuthStatus.http_status / is_success properties -------------------
+
+    def test_auth_status_http_codes(self) -> None:
+        assert AuthStatus.SUCCESS.http_status == 200
+        assert AuthStatus.FAILED.http_status == 401
+        assert AuthStatus.EXPIRED.http_status == 401
+        assert AuthStatus.INVALID_CREDENTIALS.http_status == 401
+
+    def test_auth_status_is_success(self) -> None:
+        assert AuthStatus.SUCCESS.is_success is True
+        assert AuthStatus.FAILED.is_success is False
+        assert AuthStatus.EXPIRED.is_success is False
+        assert AuthStatus.INVALID_CREDENTIALS.is_success is False
+
+    def test_every_auth_status_has_http_code(self) -> None:
+        """If someone adds a new AuthStatus without updating the map, this
+        test catches it."""
+        for status in AuthStatus:
+            assert isinstance(
+                status.http_status, int
+            ), f"{status} missing from _AUTH_STATUS_HTTP_CODES"
 
 
 class TestPreflightEndpoint:
