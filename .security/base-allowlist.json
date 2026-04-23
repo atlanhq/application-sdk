@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-04-21",
+  "_updated": "2026-04-23",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 60 days. HIGH: 90 days. Review before expiry.",
   "SNYK-GOLANG-GOOGLEGOLANGORGGRPC-15691172": {
     "package": "google.golang.org/grpc",
@@ -212,5 +212,12 @@
     "reason": "Base image \u2014 Go dependency, fix available in 0.5.1",
     "expires": "2026-07-21",
     "added_by": "mananjain99"
+  },
+  "CVE-2023-45853": {
+    "package": "zlib1g (Debian bookworm-slim)",
+    "severity": "CRITICAL",
+    "reason": "MiniZip heap overflow in zlib contrib. The zlib1g binary package ships only libz.so.1 and does NOT contain the vulnerable zipOpenNewFileInZip4_64 code \u2014 that lives in the separate minizip/libminizip1 packages, which are not installed in connector images (verified via Debian package file-list). No fix available upstream: zlib maintainers consider MiniZip contrib, Debian has tracked this without a patch for 18+ months. Blocks atlan-mssql-app releases.",
+    "expires": "2026-05-23",
+    "added_by": "Divyanshu-Patel"
   }
 }
