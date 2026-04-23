@@ -105,7 +105,13 @@ jobs:
                   allowlist = json.load(f)
 
           all_vulns = {}
-          go_prefixes = ("github.com/", "golang.org/", "google.golang.org/", "go.opentelemetry.io/", "go.")
+          # Non-Python package prefixes — skip these in auto-fix
+          non_python_prefixes = (
+              "github.com/", "golang.org/", "google.golang.org/", "go.opentelemetry.io/", "go.",  # Go
+              "com.", "org.", "io.", "net.",  # Java (Maven coordinates)
+              "helm.sh/",  # Helm
+              "filippo.io/",  # Go
+          )
 
           # Parse Trivy
           try:
@@ -163,7 +169,8 @@ jobs:
               is_allowlisted = entry and not entry.get("_comment")
               is_app = v.get("source_type") == "app"
               has_fix = bool(v.get("fixed"))
-              is_python = not v.get("package", "").startswith(go_prefixes)
+              pkg_name = v.get("package", "")
+              is_python = not pkg_name.startswith(non_python_prefixes) and ":" not in pkg_name
 
               if not is_allowlisted and is_app and has_fix and is_python:
                   fixable.append(v)
