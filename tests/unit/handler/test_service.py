@@ -249,37 +249,37 @@ class TestAuthEndpoint:
 
     # -- Failure (every non-SUCCESS AuthStatus) ---------------------------
 
-    def test_auth_failed_returns_400(self) -> None:
+    def test_auth_failed_returns_401(self) -> None:
         client = _make_client(handler=_AuthFailedHandler())
         response = client.post(
             "/workflows/v1/auth",
             json={"credentials": []},
         )
-        assert response.status_code == 400
+        assert response.status_code == 401
         body = response.json()
         assert body["success"] is False
         assert body["data"]["status"] == "failed"
         assert body["message"] == "bad credentials"
 
-    def test_auth_expired_returns_400(self) -> None:
+    def test_auth_expired_returns_401(self) -> None:
         client = _make_client(handler=_AuthExpiredHandler())
         response = client.post(
             "/workflows/v1/auth",
             json={"credentials": []},
         )
-        assert response.status_code == 400
+        assert response.status_code == 401
         body = response.json()
         assert body["success"] is False
         assert body["data"]["status"] == "expired"
         assert body["message"] == "token expired"
 
-    def test_auth_invalid_credentials_returns_400(self) -> None:
+    def test_auth_invalid_credentials_returns_401(self) -> None:
         client = _make_client(handler=_AuthInvalidCredsHandler())
         response = client.post(
             "/workflows/v1/auth",
             json={"credentials": []},
         )
-        assert response.status_code == 400
+        assert response.status_code == 401
         body = response.json()
         assert body["success"] is False
         assert body["data"]["status"] == "invalid_credentials"
@@ -323,9 +323,9 @@ class TestAuthEndpoint:
 
     def test_auth_status_http_codes(self) -> None:
         assert AuthStatus.SUCCESS.http_status == 200
-        assert AuthStatus.FAILED.http_status == 400
-        assert AuthStatus.EXPIRED.http_status == 400
-        assert AuthStatus.INVALID_CREDENTIALS.http_status == 400
+        assert AuthStatus.FAILED.http_status == 401
+        assert AuthStatus.EXPIRED.http_status == 401
+        assert AuthStatus.INVALID_CREDENTIALS.http_status == 401
 
     def test_auth_status_is_success(self) -> None:
         assert AuthStatus.SUCCESS.is_success is True

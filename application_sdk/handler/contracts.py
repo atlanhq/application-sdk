@@ -64,9 +64,9 @@ class AuthStatus(SerializableEnum):
 # member without updating this map fails loudly at runtime.
 _AUTH_STATUS_HTTP_CODES: dict[AuthStatus, int] = {
     AuthStatus.SUCCESS: 200,
-    AuthStatus.FAILED: 400,
-    AuthStatus.EXPIRED: 400,
-    AuthStatus.INVALID_CREDENTIALS: 400,
+    AuthStatus.FAILED: 401,
+    AuthStatus.EXPIRED: 401,
+    AuthStatus.INVALID_CREDENTIALS: 401,
 }
 
 
