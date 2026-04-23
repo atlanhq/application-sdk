@@ -58,7 +58,6 @@ from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
     AuthInput,
-    AuthStatus,
     EventTriggerConfig,
     FileUploadResponse,
     HandlerCredential,
@@ -498,11 +497,12 @@ def create_app_handler_service(
                 result.status.value,
             )
             return JSONResponse(
+                status_code=result.status.http_status,
                 content=_wrap_response(
                     result.model_dump(),
                     message=result.message or f"Authentication {result.status.value}",
-                    success=result.status == AuthStatus.SUCCESS,
-                )
+                    success=result.status.is_success,
+                ),
             )
         except HandlerError as e:
             logger.error(

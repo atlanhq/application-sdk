@@ -48,6 +48,27 @@ class AuthStatus(SerializableEnum):
     EXPIRED = "expired"
     INVALID_CREDENTIALS = "invalid_credentials"
 
+    @property
+    def http_status(self) -> int:
+        """HTTP status code that should accompany this auth result."""
+        return _AUTH_STATUS_HTTP_CODES[self]
+
+    @property
+    def is_success(self) -> bool:
+        """Whether this status represents a successful authentication."""
+        return self.http_status < 400
+
+
+# Placed outside the class because StrEnum treats class-level dicts as
+# member values.  Kept right next to AuthStatus so that adding a new
+# member without updating this map fails loudly at runtime.
+_AUTH_STATUS_HTTP_CODES: dict[AuthStatus, int] = {
+    AuthStatus.SUCCESS: 200,
+    AuthStatus.FAILED: 401,
+    AuthStatus.EXPIRED: 401,
+    AuthStatus.INVALID_CREDENTIALS: 401,
+}
+
 
 class AuthInput(BaseModel):
     """Input for the test_auth handler operation."""
