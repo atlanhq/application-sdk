@@ -1040,18 +1040,9 @@ async def run_dev_combined(
         frontend_assets_path=os.environ.get(
             "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
         ),
-        # Dev-friendly: disable Prometheus to avoid port collision on hot reload
-        enable_prometheus_metrics=os.environ.get(
-            "ATLAN_ENABLE_PROMETHEUS_METRICS", ""
-        ).lower()
-        in ("true", "1"),
-        # Dev-friendly: use ephemeral health port to avoid collision on reload
-        health_port=0,
     )
 
     # Create infrastructure early so run_combined_mode uses it directly.
-    # Note: DAPR_HTTP_PORT must be set in the shell. poe start-deps exports
-    # it automatically. If running Dapr manually, set it before starting the app.
     from application_sdk.infrastructure.context import set_infrastructure
 
     infra = await _create_infrastructure(credential_stores=credential_stores)
