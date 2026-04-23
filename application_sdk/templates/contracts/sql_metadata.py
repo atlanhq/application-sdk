@@ -6,6 +6,7 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 
 from pydantic import Field, model_validator
@@ -65,6 +66,26 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
             method = data.get("extraction_method", "")
             if method != "agent" and "agent_json" in data:
                 data = {**data, "agent_json": None}
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_filter_values_to_str(cls, data: Any) -> Any:
+        """Convert pre-parsed JSON filter values back to strings.
+
+        AE pre-parses JSON string filter values into dicts/lists before
+        passing them to Temporal (e.g. ``{"^qa$": ["^public$"]}`` instead
+        of the string ``'{"^qa$": ["^public$"]}'``). Pydantic expects
+        ``str`` for these fields, so we JSON-serialize them back.
+        """
+        if not isinstance(data, dict):
+            return data
+        for key in ("include_filter", "exclude_filter", "temp_table_regex"):
+            val = data.get(key)
+            if isinstance(val, (dict, list)):
+                data = {**data, key: json.dumps(val)}
+            elif val is None:
+                data = {**data, key: ""}
         return data
 
     output_prefix: str = ""
