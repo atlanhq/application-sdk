@@ -133,6 +133,23 @@ class AppConfig:
     auth_base_url: str = ""
     auth_scopes: str = ""
 
+    # Runtime flags (env-var defaults, overridable per execution mode)
+    enable_prometheus_metrics: bool = True
+    """Enable Temporal Prometheus metrics endpoint. Default True for prod,
+    set to False in run_dev_combined() to avoid port collisions on reload."""
+
+    prometheus_bind_address: str = "0.0.0.0:9464"
+    """Bind address for Temporal Prometheus metrics."""
+
+    enable_app_vitals: bool = True
+    """Enable App Vitals interceptor for activity-level observability."""
+
+    enable_mcp: bool = False
+    """Enable Model Context Protocol (MCP) server."""
+
+    max_concurrent_storage_transfers: int = 4
+    """Maximum concurrent object-store uploads/downloads."""
+
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
         if not self.task_queue and self.app_module:
@@ -247,6 +264,18 @@ class AppConfig:
             auth_scopes=_env("ATLAN_AUTH_SCOPES"),
             frontend_assets_path=_env(
                 "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
+            ),
+            # Runtime flags
+            enable_prometheus_metrics=_env_bool(
+                "ATLAN_ENABLE_PROMETHEUS_METRICS", default=True
+            ),
+            prometheus_bind_address=_env(
+                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+            ),
+            enable_app_vitals=_env_bool("ATLAN_ENABLE_APP_VITALS", default=True),
+            enable_mcp=_env_bool("ENABLE_MCP"),
+            max_concurrent_storage_transfers=_env_int(
+                "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
             ),
         )
 
@@ -622,6 +651,8 @@ async def run_worker_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
+        enable_prometheus=config.enable_prometheus_metrics,
+        prometheus_bind_address=config.prometheus_bind_address,
     )
 
     if auth_manager is not None:
@@ -828,6 +859,8 @@ async def run_combined_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
+        enable_prometheus=config.enable_prometheus_metrics,
+        prometheus_bind_address=config.prometheus_bind_address,
     )
 
     if auth_manager is not None:
@@ -1007,6 +1040,13 @@ async def run_dev_combined(
         frontend_assets_path=os.environ.get(
             "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
         ),
+        # Dev-friendly: disable Prometheus to avoid port collision on hot reload
+        enable_prometheus_metrics=os.environ.get(
+            "ATLAN_ENABLE_PROMETHEUS_METRICS", ""
+        ).lower()
+        in ("true", "1"),
+        # Dev-friendly: use ephemeral health port to avoid collision on reload
+        health_port=0,
     )
 
     # Create infrastructure early so run_combined_mode uses it directly

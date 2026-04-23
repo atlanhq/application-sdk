@@ -37,10 +37,12 @@ APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 #: Host address for the application's HTTP server
+#: Deprecated: prefer AppConfig.handler_host (reads same env vars at runtime)
 APP_HOST = str(
     os.getenv("ATLAN_HANDLER_HOST") or os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0")
 )
 #: Port number for the application's HTTP server
+#: Deprecated: prefer AppConfig.handler_port (reads same env vars at runtime)
 APP_PORT = int(
     os.getenv("ATLAN_HANDLER_PORT") or os.getenv("ATLAN_APP_HTTP_PORT", "8000")
 )
@@ -131,12 +133,14 @@ ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
 # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT/NAMESPACE fallbacks when all deployments
 # use ATLAN_TEMPORAL_HOST and ATLAN_TEMPORAL_NAMESPACE.
 #: Host address for the Temporal server
+#: Deprecated: prefer AppConfig.temporal_host (reads same env vars at runtime)
 #: Prefers ATLAN_TEMPORAL_HOST (v3 combined host:port) then ATLAN_WORKFLOW_HOST (v2).
 _temporal_host_parts = os.getenv("ATLAN_TEMPORAL_HOST", "").split(":")
 WORKFLOW_HOST = (
     _temporal_host_parts[0] if _temporal_host_parts[0] else None
 ) or os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
 #: Port number for the Temporal server
+#: Deprecated: prefer AppConfig.temporal_host (reads same env vars at runtime)
 #: Extracted from ATLAN_TEMPORAL_HOST if set, else falls back to ATLAN_WORKFLOW_PORT (v2).
 WORKFLOW_PORT = (
     _temporal_host_parts[1]
@@ -144,6 +148,7 @@ WORKFLOW_PORT = (
     else None
 ) or os.getenv("ATLAN_WORKFLOW_PORT", "7233")
 #: Namespace for Temporal workflows
+#: Deprecated: prefer AppConfig.temporal_namespace
 WORKFLOW_NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE") or os.getenv(
     "ATLAN_WORKFLOW_NAMESPACE", "default"
 )
@@ -156,8 +161,7 @@ WORKFLOW_UI_PORT = os.getenv("ATLAN_WORKFLOW_UI_PORT", "8233")
 WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
     hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))
 )
-#: Maximum number of activities that can run concurrently
-MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
+# REMOVED: MAX_CONCURRENT_ACTIVITIES — unused, see ExecutionSettings.max_concurrent_activities
 
 #: Maximum concurrent object-store transfers (uploads / downloads)
 MAX_CONCURRENT_STORAGE_TRANSFERS = int(
@@ -181,6 +185,7 @@ APP_DEPLOYMENT_NAME = os.getenv("ATLAN_APP_DEPLOYMENT_NAME") or os.getenv(
 DEPLOYMENT_SECRET_PATH = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
 )
+#: Deprecated: prefer AppConfig.auth_enabled
 AUTH_ENABLED = os.getenv("ATLAN_AUTH_ENABLED", "false").lower() == "true"
 #: OAuth2 authentication URL for workflow services
 AUTH_URL = os.getenv("ATLAN_AUTH_URL")
@@ -199,25 +204,10 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
     "ATLAN_AUTH_CLIENT_SECRET_KEY", "ATLAN_AUTH_CLIENT_SECRET"
 )
 
-# Workflow Constants
-#: Timeout duration for activity heartbeats
-HEARTBEAT_TIMEOUT = timedelta(
-    seconds=int(os.getenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 300))  # 5 minutes
-)
-#: Maximum duration an activity can run before timing out
-START_TO_CLOSE_TIMEOUT = timedelta(
-    seconds=int(
-        os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 2 * 60 * 60)
-    )  # 2 hours
-)
-
-#: Graceful shutdown timeout for workers
-#: This is the maximum time the worker will wait for in-flight activities to complete
-#: before forcing shutdown when receiving SIGTERM/SIGINT signals.
-#: The worker will exit early if all activities complete before this timeout.
-GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = int(
-    os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 12 * 60 * 60)  # 12 hours
-)
+# REMOVED: HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT, GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
+# These were never used. See ExecutionSettings for the actual runtime values:
+#   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
+#   - @task(timeout_seconds=..., heartbeat_timeout_seconds=...) for per-task timeouts
 
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
@@ -256,8 +246,10 @@ DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
 
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+#: Deprecated: prefer AppConfig.log_level
 LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")).upper()
 #: Service name for OpenTelemetry
+#: Deprecated: prefer AppConfig.service_name
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
 #: Service version for OpenTelemetry
 SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
