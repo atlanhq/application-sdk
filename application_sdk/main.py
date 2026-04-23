@@ -1049,6 +1049,15 @@ async def run_dev_combined(
         health_port=0,
     )
 
+    # Dev-friendly: ensure Dapr port env vars are set when running locally.
+    # poe start-deps launches dapr in a background process which sets these
+    # in its child, but they're not exported to the dev's shell. Default to
+    # standard Dapr ports so devs don't need to manually export them.
+    if not os.environ.get("DAPR_HTTP_PORT"):
+        os.environ["DAPR_HTTP_PORT"] = "3500"
+    if not os.environ.get("DAPR_GRPC_PORT"):
+        os.environ["DAPR_GRPC_PORT"] = "50001"
+
     # Create infrastructure early so run_combined_mode uses it directly
     from application_sdk.infrastructure.context import set_infrastructure
 

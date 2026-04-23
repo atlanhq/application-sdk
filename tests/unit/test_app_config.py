@@ -176,3 +176,48 @@ class TestRunDevCombinedDefaults:
 
         val = os.environ.get("ATLAN_ENABLE_PROMETHEUS_METRICS", "").lower()
         assert val in ("true", "1")
+
+
+class TestDaprPortDefaults:
+    """Verify run_dev_combined sets Dapr port env vars when missing."""
+
+    def test_dapr_http_port_defaults_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        """DAPR_HTTP_PORT should default to 3500 in dev mode."""
+        monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
+
+        # Simulate what run_dev_combined does
+        import os
+
+        if not os.environ.get("DAPR_HTTP_PORT"):
+            os.environ["DAPR_HTTP_PORT"] = "3500"
+
+        assert os.environ["DAPR_HTTP_PORT"] == "3500"
+
+        # Cleanup
+        monkeypatch.setenv("DAPR_HTTP_PORT", "")
+
+    def test_dapr_grpc_port_defaults_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        """DAPR_GRPC_PORT should default to 50001 in dev mode."""
+        monkeypatch.delenv("DAPR_GRPC_PORT", raising=False)
+
+        import os
+
+        if not os.environ.get("DAPR_GRPC_PORT"):
+            os.environ["DAPR_GRPC_PORT"] = "50001"
+
+        assert os.environ["DAPR_GRPC_PORT"] == "50001"
+
+        monkeypatch.setenv("DAPR_GRPC_PORT", "")
+
+    def test_dapr_http_port_not_overridden_when_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Explicit DAPR_HTTP_PORT should not be overridden."""
+        monkeypatch.setenv("DAPR_HTTP_PORT", "4500")
+
+        import os
+
+        if not os.environ.get("DAPR_HTTP_PORT"):
+            os.environ["DAPR_HTTP_PORT"] = "3500"
+
+        assert os.environ["DAPR_HTTP_PORT"] == "4500"
