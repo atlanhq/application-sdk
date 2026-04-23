@@ -113,8 +113,8 @@ jobs:
               }
             }
 
-      - name: Connect to VPN
-        id: vpn
+      - name: Connect to VPN (attempt 1/3)
+        id: vpn1
         uses: atlanhq/github-actions/globalprotect-connect-action@main
         continue-on-error: true
         with:
@@ -122,8 +122,18 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
-      - name: Retry VPN if failed
-        if: steps.vpn.outcome == 'failure'
+      - name: Connect to VPN (attempt 2/3)
+        id: vpn2
+        if: steps.vpn1.outcome == 'failure'
+        uses: atlanhq/github-actions/globalprotect-connect-action@main
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 3/3)
+        if: steps.vpn2.outcome == 'failure'
         uses: atlanhq/github-actions/globalprotect-connect-action@main
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
@@ -269,9 +279,9 @@ jobs:
         run: |
           echo "Skipping: ${{ steps.parse.outputs.reason }}"
 
-      - name: Connect to VPN
+      - name: Connect to VPN (attempt 1/3)
         if: steps.parse.outputs.skip != 'true'
-        id: vpn
+        id: vpn1
         uses: atlanhq/github-actions/globalprotect-connect-action@main
         continue-on-error: true
         with:
@@ -279,8 +289,18 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
-      - name: Retry VPN if failed
-        if: steps.parse.outputs.skip != 'true' && steps.vpn.outcome == 'failure'
+      - name: Connect to VPN (attempt 2/3)
+        if: steps.parse.outputs.skip != 'true' && steps.vpn1.outcome == 'failure'
+        id: vpn2
+        uses: atlanhq/github-actions/globalprotect-connect-action@main
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 3/3)
+        if: steps.parse.outputs.skip != 'true' && steps.vpn2.outcome == 'failure'
         uses: atlanhq/github-actions/globalprotect-connect-action@main
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
