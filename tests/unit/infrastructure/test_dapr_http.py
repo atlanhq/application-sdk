@@ -171,6 +171,45 @@ class TestAsyncDaprClientBinding:
 
         assert result.data is None
 
+    async def test_invoke_binding_json_data_not_double_encoded(self, mock_client):
+        """JSON bytes must be embedded as a parsed object, not a string.
+
+        Regression test: prior to the fix, ``data.decode()`` produced a
+        string which ``json=body`` then double-encoded, causing Dapr HTTP
+        bindings to forward a JSON string instead of an object (422).
+        """
+        client, mock_http = mock_client
+        mock_http.post.return_value = MagicMock(
+            status_code=200,
+            content=b"",
+            headers={},
+            raise_for_status=MagicMock(),
+        )
+
+        json_payload = b'{"event_name": "worker_start", "nested": {"key": 1}}'
+        await client.invoke_binding("eventstore", "create", data=json_payload)
+
+        body = mock_http.post.call_args[1]["json"]
+        # data must be a dict, NOT a string
+        assert isinstance(body["data"], dict)
+        assert body["data"]["event_name"] == "worker_start"
+        assert body["data"]["nested"] == {"key": 1}
+
+    async def test_invoke_binding_non_json_data_falls_back_to_string(self, mock_client):
+        """Non-JSON bytes should still be sent as a decoded string."""
+        client, mock_http = mock_client
+        mock_http.post.return_value = MagicMock(
+            status_code=200,
+            content=b"",
+            headers={},
+            raise_for_status=MagicMock(),
+        )
+
+        await client.invoke_binding("my-binding", "create", data=b"plain text")
+
+        body = mock_http.post.call_args[1]["json"]
+        assert body["data"] == "plain text"
+
 
 class TestAsyncDaprClientMetadata:
     async def test_get_metadata(self, mock_client):

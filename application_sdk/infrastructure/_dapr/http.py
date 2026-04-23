@@ -9,6 +9,7 @@ Endpoint reference: https://docs.dapr.io/reference/api/
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 from urllib.parse import quote
@@ -182,17 +183,21 @@ class AsyncDaprClient:
         """Invoke a Dapr output binding.
 
         Note:
-            ``data`` is decoded as UTF-8 text before JSON-encoding into the
-            request body.  This means only text-compatible payloads are
-            supported.  Binary data (protobuf, compressed) should be
-            base64-encoded by the caller before passing to this method.
+            If ``data`` contains valid JSON it is embedded as a parsed
+            object so that Dapr forwards a proper JSON body to HTTP
+            bindings (avoids double-encoding).  Otherwise the raw bytes
+            are decoded as UTF-8 text.  Binary data (protobuf, compressed)
+            should be base64-encoded by the caller.
         """
         body: dict[str, Any] = {
             "operation": operation,
             "metadata": metadata or {},
         }
         if data:
-            body["data"] = data.decode("utf-8", errors="replace")
+            try:
+                body["data"] = json.loads(data)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                body["data"] = data.decode("utf-8", errors="replace")
         resp = await self._client.post(
             BINDING_PATH.format(binding_name=binding_name),
             json=body,
