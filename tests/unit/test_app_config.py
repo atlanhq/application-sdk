@@ -218,7 +218,9 @@ class TestRealWorldDevScenarios:
         monkeypatch.setenv("ATLAN_ENABLE_APP_VITALS", "true")
         monkeypatch.setenv("ATLAN_AUTH_ENABLED", "true")
 
-        config = AppConfig.from_args_and_env(_minimal_args(app="app.connector:SnowflakeApp"))
+        config = AppConfig.from_args_and_env(
+            _minimal_args(app="app.connector:SnowflakeApp")
+        )
         assert config.temporal_host == "temporal.prod.svc:7236"
         assert config.temporal_namespace == "production"
         assert config.handler_host == "0.0.0.0"
