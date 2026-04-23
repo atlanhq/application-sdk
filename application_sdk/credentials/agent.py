@@ -99,11 +99,15 @@ async def resolve_agent_credential(
         ``basic.username``) collapsed into nested dicts.
 
     Raises:
-        CredentialParseError: If ``secret_path`` is empty or the
-            fetched bundle isn't valid JSON.
+        CredentialParseError: If the fetched bundle isn't valid JSON.
         CredentialNotFoundError: If the secret store does not have
             a bundle at ``secret_path``.
         CredentialError: For any other secret-store failure.
+
+    Note:
+        When ``secret_path`` is empty, bundle fetch is skipped and the
+        raw spec values are used directly (dotted-key expansion and
+        auth-section flattening still apply).
     """
     raw = spec.to_raw_dict()
 

@@ -352,7 +352,7 @@ class TestResolveAgentJsonErrorPaths:
             {"agent-name": "test", "secret-path": "", "basic.username": "u"}
         )
         result = await resolve_agent_json(agent_json, store)
-        assert "username" in str(result)
+        assert result.get("basic", {}).get("username") == "u"
 
     async def test_secret_not_found_raises_credential_not_found(self) -> None:
         import pytest
