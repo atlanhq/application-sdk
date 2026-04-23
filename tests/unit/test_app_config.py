@@ -95,6 +95,40 @@ class TestAppConfigFromEnv:
         assert config.enable_prometheus_metrics is True
 
 
+class TestAuthUrlFallback:
+    """ATLAN_AUTH_URL (v2 Helm) falls back to auth_token_url and auth_base_url."""
+
+    def test_v3_env_vars_take_precedence(self, monkeypatch: pytest.MonkeyPatch):
+        """v3 vars set → ATLAN_AUTH_URL ignored."""
+        monkeypatch.setenv("ATLAN_AUTH_TOKEN_URL", "https://v3-token.example.com")
+        monkeypatch.setenv("ATLAN_AUTH_BASE_URL", "https://v3-base.example.com")
+        monkeypatch.setenv("ATLAN_AUTH_URL", "https://legacy.example.com")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
+        config = AppConfig.from_args_and_env(_minimal_args())
+        assert config.auth_token_url == "https://v3-token.example.com"
+        assert config.auth_base_url == "https://v3-base.example.com"
+
+    def test_legacy_auth_url_used_as_fallback(self, monkeypatch: pytest.MonkeyPatch):
+        """Only ATLAN_AUTH_URL set (old Helm chart) → both fields get it."""
+        monkeypatch.delenv("ATLAN_AUTH_TOKEN_URL", raising=False)
+        monkeypatch.delenv("ATLAN_AUTH_BASE_URL", raising=False)
+        monkeypatch.setenv("ATLAN_AUTH_URL", "https://legacy.example.com")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
+        config = AppConfig.from_args_and_env(_minimal_args())
+        assert config.auth_token_url == "https://legacy.example.com"
+        assert config.auth_base_url == "https://legacy.example.com"
+
+    def test_no_auth_url_set(self, monkeypatch: pytest.MonkeyPatch):
+        """No auth URL env vars set → empty strings (auth disabled)."""
+        monkeypatch.delenv("ATLAN_AUTH_TOKEN_URL", raising=False)
+        monkeypatch.delenv("ATLAN_AUTH_BASE_URL", raising=False)
+        monkeypatch.delenv("ATLAN_AUTH_URL", raising=False)
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
+        config = AppConfig.from_args_and_env(_minimal_args())
+        assert config.auth_token_url == ""
+        assert config.auth_base_url == ""
+
+
 class TestAppConfigOverlappingConstants:
     """Verify AppConfig reads the same env vars as deprecated constants."""
 

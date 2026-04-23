@@ -259,8 +259,10 @@ class AppConfig:
             auth_enabled=_env_bool("ATLAN_AUTH_ENABLED"),
             auth_client_id=_env("ATLAN_AUTH_CLIENT_ID"),
             auth_client_secret=_env("ATLAN_AUTH_CLIENT_SECRET"),
-            auth_token_url=_env("ATLAN_AUTH_TOKEN_URL"),
-            auth_base_url=_env("ATLAN_AUTH_BASE_URL"),
+            # v2 compat: ATLAN_AUTH_URL is the legacy env var set by older Helm charts.
+            # v3 uses ATLAN_AUTH_TOKEN_URL / ATLAN_AUTH_BASE_URL separately.
+            auth_token_url=_env("ATLAN_AUTH_TOKEN_URL") or _env("ATLAN_AUTH_URL"),
+            auth_base_url=_env("ATLAN_AUTH_BASE_URL") or _env("ATLAN_AUTH_URL"),
             auth_scopes=_env("ATLAN_AUTH_SCOPES"),
             frontend_assets_path=_env(
                 "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
