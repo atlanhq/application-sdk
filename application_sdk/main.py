@@ -419,9 +419,13 @@ async def _create_infrastructure(
             DaprSecretStore,
             DaprStateStore,
         )
-        from application_sdk.infrastructure._dapr.http import AsyncDaprClient
+        from application_sdk.infrastructure._dapr.http import (
+            AsyncDaprClient,
+            wait_for_dapr_sidecar,
+        )
         from application_sdk.storage import create_store_from_binding
 
+        await wait_for_dapr_sidecar()
         dapr_client = AsyncDaprClient()
         components_dir = Path(os.environ.get("DAPR_COMPONENTS_PATH", "./components"))
         registered_components = await _log_dapr_components(dapr_client, components_dir)
