@@ -2,7 +2,7 @@
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
   "_updated": "2026-04-23",
-  "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 60 days. HIGH: 90 days. Review before expiry.",
+  "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 30 days. HIGH: 60 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py.",
   "SNYK-GOLANG-GOOGLEGOLANGORGGRPC-15691172": {
     "package": "google.golang.org/grpc",
     "severity": "CRITICAL",
