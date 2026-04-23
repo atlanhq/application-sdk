@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
+from application_sdk.common.sql_filters import normalize_filters
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
@@ -181,7 +182,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             SQL templates that use these placeholders MUST wrap each substitution
             in single quotes, e.g. ``WHERE name !~ '{normalized_exclude_regex}'``.
             Single quotes in filter values are blocked by the SQL injection guard
-            in ``_validate_filter_values``. Templates that omit the surrounding
+            in ``_validate_no_sql_injection``. Templates that omit the surrounding
             quotes are not protected.
         """
         # Filters can be dict (structured from AE) or str (raw regex / JSON string).
@@ -189,8 +190,6 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         if isinstance(input.include_filter, dict) or isinstance(
             input.exclude_filter, dict
         ):
-            from application_sdk.common.sql_filters import normalize_filters
-
             if isinstance(input.include_filter, dict):
                 inc_list = normalize_filters(input.include_filter, is_include=True)
                 include_regex = "|".join(inc_list) if inc_list else ".*"

@@ -24,6 +24,40 @@ FilterMap = dict[str, list[str]]
 _SAFE_FILTER_PATTERN = r"^[^']*$"
 
 
+def _coerce_filter_value(v: Any) -> FilterMap | str:
+    """Coerce filter input to FilterMap | str.
+
+    - ``dict`` → pass through (structured filter map from AE)
+    - ``list`` → wrap as ``{".*": <list>}``
+    - ``str`` → pass through (JSON string or raw regex)
+    - ``None`` → empty string
+    """
+    if v is None:
+        return ""
+    if isinstance(v, list):
+        return {".*": v}
+    return v
+
+
+def _validate_filter_no_sql_injection(v: FilterMap | str) -> FilterMap | str:
+    """Block single quotes in filter values to prevent SQL injection."""
+    if isinstance(v, str):
+        if "'" in v:
+            msg = f"Single quotes not allowed in filter value: {v}"
+            raise ValueError(msg)
+    elif isinstance(v, dict):
+        for key, values in v.items():
+            if "'" in key:
+                msg = f"Single quotes not allowed in filter key: {key}"
+                raise ValueError(msg)
+            if isinstance(values, list):
+                for val in values:
+                    if isinstance(val, str) and "'" in val:
+                        msg = f"Single quotes not allowed in filter value: {val}"
+                        raise ValueError(msg)
+    return v
+
+
 class ExtractionInput(Input, allow_unbounded_fields=True):
     """Top-level input for a SQL metadata extraction run."""
 
@@ -98,38 +132,12 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     @field_validator("include_filter", "exclude_filter", mode="before")
     @classmethod
     def _coerce_filter(cls, v: Any) -> FilterMap | str:
-        """Accept dict, JSON string, raw regex string, list, or None.
-
-        - ``dict`` → pass through (structured filter map from AE)
-        - ``list`` → pass through as dict ``{".*": <list>}``
-        - ``str`` → pass through (JSON string or raw regex)
-        - ``None`` → empty string
-        """
-        if v is None:
-            return ""
-        if isinstance(v, list):
-            return {".*": v}
-        return v
+        return _coerce_filter_value(v)
 
     @field_validator("include_filter", "exclude_filter", mode="after")
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
-        """Block single quotes in filter values to prevent SQL injection."""
-        if isinstance(v, str):
-            if "'" in v:
-                msg = f"Single quotes not allowed in filter value: {v}"
-                raise ValueError(msg)
-        elif isinstance(v, dict):
-            for key, values in v.items():
-                if "'" in key:
-                    msg = f"Single quotes not allowed in filter key: {key}"
-                    raise ValueError(msg)
-                if isinstance(values, list):
-                    for val in values:
-                        if isinstance(val, str) and "'" in val:
-                            msg = f"Single quotes not allowed in filter value: {val}"
-                            raise ValueError(msg)
-        return v
+        return _validate_filter_no_sql_injection(v)
 
 
 class ExtractionOutput(Output, PublishInputMixin):
@@ -170,14 +178,12 @@ class ExtractionTaskInput(Input, allow_unbounded_fields=True):
     @field_validator("include_filter", "exclude_filter", mode="before")
     @classmethod
     def _coerce_filter(cls, v: Any) -> FilterMap | str:
-        """Reuse the same coercion logic as ExtractionInput."""
-        return ExtractionInput._coerce_filter(v)
+        return _coerce_filter_value(v)
 
     @field_validator("include_filter", "exclude_filter", mode="after")
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
-        """Reuse the same SQL injection guard as ExtractionInput."""
-        return ExtractionInput._validate_no_sql_injection(v)
+        return _validate_filter_no_sql_injection(v)
 
 
 class FetchDatabasesInput(ExtractionTaskInput, allow_unbounded_fields=True):

@@ -325,6 +325,35 @@ class TestSqlMetadataExtractorPrepareSql:
         )
         assert result == "x  y"
 
+    def test_substitutes_dict_filters_via_normalize(self) -> None:
+        """Dict filters (from AE) are normalized into regex via sql_filters."""
+        sql = "{normalized_exclude_regex}|{normalized_include_regex}"
+        result = self._extractor()._prepare_sql(
+            sql,
+            ExtractionTaskInput(
+                include_filter={"^prod$": ["^analytics$", "^reporting$"]},
+                exclude_filter={"^temp_db$": [".*"]},
+            ),
+        )
+        # normalize_filters produces "db\.schema" patterns
+        assert "prod" in result
+        assert "analytics" in result
+        assert "temp_db" in result
+
+    def test_mixed_dict_include_string_exclude(self) -> None:
+        """Dict include + string exclude — each handled by its type."""
+        sql = "{normalized_exclude_regex}|{normalized_include_regex}"
+        result = self._extractor()._prepare_sql(
+            sql,
+            ExtractionTaskInput(
+                include_filter={"^prod$": ["^public$"]},
+                exclude_filter="^temp_.*$",
+            ),
+        )
+        assert "prod" in result
+        assert "public" in result
+        assert "^temp_.*$" in result
+
 
 class TestSqlMetadataExtractorLoadSqlClient:
     """Tests for ``_load_sql_client`` and default fetch task execution."""
