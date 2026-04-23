@@ -1,20 +1,16 @@
 """
-Writer Data Integrity Tests - Prevents data loss regression in JsonFileWriter.
+Writer Data Integrity Tests - Prevents data loss regression in file writers.
 
-This test suite verifies that both pandas and daft writers maintain data integrity
-when multiple write() calls are made. It specifically guards against a bug where
-the daft writer would lose data due to:
-1. Not uploading files at the end of each write() call
-2. Not incrementing chunk_count after each write() call
-3. File name collisions causing overwrites in object store
+This test suite verifies that writers maintain data integrity when multiple
+write() calls are made and when DataFrames exceed buffer_size.
 
-The bug manifested when using retain_local_copy=False (production default):
-- Write 1: uploads chunk-0-part0.json with records 0-99
-- Write 2: resets chunk_part, creates NEW chunk-0-part0.json with records 100-199
-- Result: records 0-99 are overwritten and lost
+Guards against two classes of bugs:
+1. JSON/daft writer: file name collisions across write() calls (fixed earlier)
+2. Parquet writer: pq.write_table() overwrites within a single write() call
+   when DataFrame exceeds buffer_size, since parquet cannot append (HYP-773)
 
 Run with:
-    uv run pytest tests/unit/io/test_writer_data_integrity.py -v -s
+    uv run pytest tests/unit/storage/formats/test_writer_data_integrity.py -v -s
 """
 
 import json
@@ -267,3 +263,110 @@ class TestWriterDataIntegrity:
             duplicates = {f: c for f, c in counts.items() if c > 1}
 
             assert not duplicates, f"Duplicate file uploads detected: {duplicates}"
+
+
+class TestParquetWriterDataIntegrity:
+    """Verify ParquetFileWriter preserves all data when DataFrames exceed buffer_size.
+
+    Parquet's pq.write_table() overwrites the target file (unlike JSON which
+    appends). Without incrementing chunk_part after each _flush_buffer call,
+    _write_dataframe's buffer loop writes every sub-chunk to the same filename,
+    silently losing all data except the last sub-chunk. See HYP-773.
+    """
+
+    @pytest.fixture
+    def temp_dir(self):
+        temp_path = tempfile.mkdtemp(prefix="parquet_integrity_")
+        yield temp_path
+        shutil.rmtree(temp_path, ignore_errors=True)
+
+    @pytest.mark.asyncio
+    async def test_single_write_exceeding_buffer_size(self, temp_dir: str):
+        """A single write() with rows > buffer_size must preserve all rows.
+
+        This is the core HYP-773 regression test. With buffer_size=50 and
+        120 rows, the writer creates 3 sub-chunks (50+50+20). Before the
+        fix, all three wrote to chunk-0-part0.parquet and only the last
+        20 rows survived.
+        """
+        from application_sdk.storage.formats.parquet import ParquetFileWriter
+
+        with patch(
+            "application_sdk.storage.formats._upload_file",
+            new_callable=AsyncMock,
+        ):
+            writer = ParquetFileWriter(
+                path=temp_dir,
+                typename="test_entity",
+                buffer_size=50,
+                use_consolidation=False,
+            )
+
+            df = pd.DataFrame(
+                {"id": list(range(120)), "value": [f"row_{i}" for i in range(120)]}
+            )
+            await writer.write(df)
+            await writer.close()
+
+            # Read back all parquet files written to disk
+            import glob
+
+            parquet_files = glob.glob(
+                os.path.join(temp_dir, "test_entity", "**", "*.parquet"),
+                recursive=True,
+            )
+            assert len(parquet_files) > 0, "No parquet files written"
+
+            result_df = pd.concat(
+                [pd.read_parquet(f) for f in parquet_files], ignore_index=True
+            )
+            assert len(result_df) == 120, (
+                f"Expected 120 rows, got {len(result_df)}. "
+                f"Data loss: {120 - len(result_df)} rows missing."
+            )
+            assert set(result_df["id"]) == set(range(120))
+
+    @pytest.mark.asyncio
+    async def test_multiple_writes_exceeding_buffer_size(self, temp_dir: str):
+        """Multiple write() calls, each exceeding buffer_size, must preserve all rows."""
+        from application_sdk.storage.formats.parquet import ParquetFileWriter
+
+        with patch(
+            "application_sdk.storage.formats._upload_file",
+            new_callable=AsyncMock,
+        ):
+            writer = ParquetFileWriter(
+                path=temp_dir,
+                typename="test_entity",
+                buffer_size=50,
+                use_consolidation=False,
+            )
+
+            total_records = 0
+            for batch_idx in range(3):
+                start = batch_idx * 200
+                df = pd.DataFrame(
+                    {
+                        "id": list(range(start, start + 200)),
+                        "batch": [f"batch_{batch_idx}"] * 200,
+                    }
+                )
+                await writer.write(df)
+                total_records += 200
+
+            await writer.close()
+
+            import glob
+
+            parquet_files = glob.glob(
+                os.path.join(temp_dir, "test_entity", "**", "*.parquet"),
+                recursive=True,
+            )
+            result_df = pd.concat(
+                [pd.read_parquet(f) for f in parquet_files], ignore_index=True
+            )
+            assert len(result_df) == total_records, (
+                f"Expected {total_records} rows, got {len(result_df)}. "
+                f"Data loss: {total_records - len(result_df)} rows missing."
+            )
+            assert set(result_df["id"]) == set(range(total_records))
