@@ -35,6 +35,7 @@ jobs:
               - 'uv.lock'
               - 'examples/**'
               - '.github/**'
+              - '.security/**'
 
   # Conventional Commits (skipped on fork PRs — no org PAT available)
   commits:
