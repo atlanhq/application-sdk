@@ -714,9 +714,9 @@ class PublishInputMixin(BaseModel):
     include a ``publish`` step in their AE manifest should use this
     as a mixin alongside their own output fields.
 
-    ``publish_state_prefix`` and ``current_state_prefix`` are auto-derived
-    from ``connection_qualified_name`` via a model validator. Apps only
-    need to set ``connection_qualified_name`` and ``transformed_data_prefix``.
+    ``publish_state_prefix``, ``staging_data_prefix``, and ``current_state_prefix``
+    are auto-derived from ``connection_qualified_name`` via a model validator.
+    Apps only need to set ``connection_qualified_name`` and ``transformed_data_prefix``.
 
     Example::
 
@@ -732,6 +732,9 @@ class PublishInputMixin(BaseModel):
     PUBLISH_STATE_PREFIX_TEMPLATE: ClassVar[str] = (
         "persistent-artifacts/apps/atlan-publish-app/state"
         "/{connection_qn}/publish-state"
+    )
+    STAGING_DATA_PREFIX_TEMPLATE: ClassVar[str] = (
+        "persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}"
     )
     CURRENT_STATE_PREFIX_TEMPLATE: ClassVar[str] = (
         "argo-artifacts/{connection_qn}/current-state"
@@ -756,6 +759,11 @@ class PublishInputMixin(BaseModel):
 
     publish_state_prefix: str = ""
     """Auto-derived from ``connection_qualified_name`` if not set."""
+
+    staging_data_prefix: str = ""
+    """Auto-derived from ``connection_qualified_name`` if not set.
+    Same as ``publish_state_prefix`` but only up to the connection QN
+    (without the ``/publish-state`` suffix)."""
 
     current_state_prefix: str = ""
     """Auto-derived from ``connection_qualified_name`` if not set."""
@@ -798,6 +806,10 @@ class PublishInputMixin(BaseModel):
             return self
         if not self.publish_state_prefix:
             self.publish_state_prefix = self.PUBLISH_STATE_PREFIX_TEMPLATE.format(
+                connection_qn=cqn
+            )
+        if not self.staging_data_prefix:
+            self.staging_data_prefix = self.STAGING_DATA_PREFIX_TEMPLATE.format(
                 connection_qn=cqn
             )
         if not self.current_state_prefix:
