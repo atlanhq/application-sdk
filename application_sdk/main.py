@@ -415,6 +415,8 @@ async def _log_dapr_components(
 
 async def _create_infrastructure(
     credential_stores: "Mapping[str, SecretStore] | None" = None,
+    *,
+    assume_dapr: bool = False,
 ) -> "InfrastructureContext":
     """Create infrastructure services based on environment.
 
@@ -425,16 +427,20 @@ async def _create_infrastructure(
     Args:
         credential_stores: Optional mapping of store name → SecretStore.
             Reserved for future use; currently unused.
+        assume_dapr: When True (used by ``run_dev_combined``), assume Dapr is
+            running on default ports without checking env vars. This avoids
+            requiring developers to manually export ``DAPR_HTTP_PORT`` when
+            ``poe start-deps`` runs Dapr in a background process.
 
     Returns:
         Configured InfrastructureContext.
 
     Raises:
-        RuntimeError: If DAPR_HTTP_PORT is not set (no Dapr sidecar).
+        RuntimeError: If DAPR_HTTP_PORT is not set and assume_dapr is False.
     """
     from application_sdk.infrastructure.context import InfrastructureContext
 
-    if os.environ.get("DAPR_HTTP_PORT"):
+    if os.environ.get("DAPR_HTTP_PORT") or assume_dapr:
         from pathlib import Path
 
         from application_sdk.constants import (
@@ -1049,19 +1055,15 @@ async def run_dev_combined(
         health_port=0,
     )
 
-    # Dev-friendly: ensure Dapr port env vars are set when running locally.
-    # poe start-deps launches dapr in a background process which sets these
-    # in its child, but they're not exported to the dev's shell. Default to
-    # standard Dapr ports so devs don't need to manually export them.
-    if not os.environ.get("DAPR_HTTP_PORT"):
-        os.environ["DAPR_HTTP_PORT"] = "3500"
-    if not os.environ.get("DAPR_GRPC_PORT"):
-        os.environ["DAPR_GRPC_PORT"] = "50001"
-
-    # Create infrastructure early so run_combined_mode uses it directly
+    # Create infrastructure early so run_combined_mode uses it directly.
+    # assume_dapr=True: poe start-deps runs Dapr in a background process that
+    # doesn't export DAPR_HTTP_PORT to the dev's shell. Rather than mutating
+    # os.environ, we tell _create_infrastructure to assume default Dapr ports.
     from application_sdk.infrastructure.context import set_infrastructure
 
-    infra = await _create_infrastructure(credential_stores=credential_stores)
+    infra = await _create_infrastructure(
+        credential_stores=credential_stores, assume_dapr=True
+    )
     set_infrastructure(infra)
 
     # Auto-provision credentials if provided (mimics Heracles writing to

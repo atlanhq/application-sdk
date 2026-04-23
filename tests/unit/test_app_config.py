@@ -178,46 +178,23 @@ class TestRunDevCombinedDefaults:
         assert val in ("true", "1")
 
 
-class TestDaprPortDefaults:
-    """Verify run_dev_combined sets Dapr port env vars when missing."""
+class TestDaprAssumption:
+    """Verify run_dev_combined uses assume_dapr instead of env var mutation."""
 
-    def test_dapr_http_port_defaults_when_unset(self, monkeypatch: pytest.MonkeyPatch):
-        """DAPR_HTTP_PORT should default to 3500 in dev mode."""
-        monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
+    def test_create_infrastructure_accepts_assume_dapr(self):
+        """_create_infrastructure has assume_dapr parameter."""
+        import inspect
 
-        # Simulate what run_dev_combined does
-        import os
+        from application_sdk.main import _create_infrastructure
 
-        if not os.environ.get("DAPR_HTTP_PORT"):
-            os.environ["DAPR_HTTP_PORT"] = "3500"
+        sig = inspect.signature(_create_infrastructure)
+        assert "assume_dapr" in sig.parameters
 
-        assert os.environ["DAPR_HTTP_PORT"] == "3500"
+    def test_assume_dapr_default_is_false(self):
+        """assume_dapr defaults to False (prod behavior)."""
+        import inspect
 
-        # Cleanup
-        monkeypatch.setenv("DAPR_HTTP_PORT", "")
+        from application_sdk.main import _create_infrastructure
 
-    def test_dapr_grpc_port_defaults_when_unset(self, monkeypatch: pytest.MonkeyPatch):
-        """DAPR_GRPC_PORT should default to 50001 in dev mode."""
-        monkeypatch.delenv("DAPR_GRPC_PORT", raising=False)
-
-        import os
-
-        if not os.environ.get("DAPR_GRPC_PORT"):
-            os.environ["DAPR_GRPC_PORT"] = "50001"
-
-        assert os.environ["DAPR_GRPC_PORT"] == "50001"
-
-        monkeypatch.setenv("DAPR_GRPC_PORT", "")
-
-    def test_dapr_http_port_not_overridden_when_set(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Explicit DAPR_HTTP_PORT should not be overridden."""
-        monkeypatch.setenv("DAPR_HTTP_PORT", "4500")
-
-        import os
-
-        if not os.environ.get("DAPR_HTTP_PORT"):
-            os.environ["DAPR_HTTP_PORT"] = "3500"
-
-        assert os.environ["DAPR_HTTP_PORT"] == "4500"
+        param = inspect.signature(_create_infrastructure).parameters["assume_dapr"]
+        assert param.default is False
