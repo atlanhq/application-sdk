@@ -178,23 +178,19 @@ class TestRunDevCombinedDefaults:
         assert val in ("true", "1")
 
 
-class TestDaprAssumption:
-    """Verify run_dev_combined uses assume_dapr instead of env var mutation."""
+class TestDaprPortExport:
+    """Verify poe start-deps exports Dapr ports in the shell."""
 
-    def test_create_infrastructure_accepts_assume_dapr(self):
-        """_create_infrastructure has assume_dapr parameter."""
-        import inspect
+    def test_start_deps_exports_dapr_http_port(self):
+        """pyproject.toml start-deps task must export DAPR_HTTP_PORT."""
+        from pathlib import Path
 
-        from application_sdk.main import _create_infrastructure
+        pyproject = Path("pyproject.toml").read_text()
+        assert "export DAPR_HTTP_PORT=3500" in pyproject
 
-        sig = inspect.signature(_create_infrastructure)
-        assert "assume_dapr" in sig.parameters
+    def test_start_deps_exports_dapr_grpc_port(self):
+        """pyproject.toml start-deps task must export DAPR_GRPC_PORT."""
+        from pathlib import Path
 
-    def test_assume_dapr_default_is_false(self):
-        """assume_dapr defaults to False (prod behavior)."""
-        import inspect
-
-        from application_sdk.main import _create_infrastructure
-
-        param = inspect.signature(_create_infrastructure).parameters["assume_dapr"]
-        assert param.default is False
+        pyproject = Path("pyproject.toml").read_text()
+        assert "DAPR_GRPC_PORT=50001" in pyproject
