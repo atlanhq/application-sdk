@@ -7,14 +7,14 @@ Rules enforced:
   2. `expires` must be a valid YYYY-MM-DD date
   3. `expires` must not already be in the past
   4. `expires` must be within the max window for the entry's severity:
-       CRITICAL → _expiry_policy.CRITICAL days (default 30)
-       HIGH     → _expiry_policy.HIGH days     (default 60)
+       CRITICAL → _expiry_policy.CRITICAL days (default 15)
+       HIGH     → _expiry_policy.HIGH days     (default 30)
 
 The expiry policy is read from the `_expiry_policy` metadata key in the
 allowlist itself so the security team can adjust limits without touching code:
 
   {
-    "_expiry_policy": { "CRITICAL": 30, "HIGH": 60 },
+    "_expiry_policy": { "CRITICAL": 15, "HIGH": 30 },
     "CVE-2026-12345": { ... }
   }
 """
@@ -24,7 +24,7 @@ import sys
 from datetime import datetime, timedelta
 
 ALLOWLIST_PATH = ".security/base-allowlist.json"
-DEFAULT_POLICY = {"CRITICAL": 30, "HIGH": 60}
+DEFAULT_POLICY = {"CRITICAL": 15, "HIGH": 30}
 REQUIRED_FIELDS = ["package", "severity", "reason", "expires", "added_by"]
 
 
