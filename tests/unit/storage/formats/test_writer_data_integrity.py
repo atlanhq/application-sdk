@@ -13,6 +13,7 @@ Run with:
     uv run pytest tests/unit/storage/formats/test_writer_data_integrity.py -v -s
 """
 
+import glob
 import json
 import os
 import shutil
@@ -289,8 +290,6 @@ class TestParquetWriterDataIntegrity:
         self, temp_dir: str, row_count: int, num_writes: int = 1
     ) -> dict:
         """Run a write scenario and return disk + upload results."""
-        import glob
-
         from application_sdk.storage.formats.parquet import ParquetFileWriter
 
         upload_calls: List[tuple] = []
@@ -369,37 +368,31 @@ class TestParquetWriterDataIntegrity:
 
     # --- Single write() scenarios ---
 
-    @pytest.mark.asyncio
     async def test_single_row(self, temp_dir: str):
         """1 row: minimal case, well under buffer_size."""
         r = await self._run_write_scenario(temp_dir, row_count=1)
         self._assert_no_data_loss(r, 1)
 
-    @pytest.mark.asyncio
     async def test_rows_less_than_buffer_size(self, temp_dir: str):
         """30 rows < buffer_size=50: single sub-chunk, no splitting."""
         r = await self._run_write_scenario(temp_dir, row_count=30)
         self._assert_no_data_loss(r, 30)
 
-    @pytest.mark.asyncio
     async def test_rows_equal_to_buffer_size(self, temp_dir: str):
         """50 rows == buffer_size=50: exactly one sub-chunk, boundary."""
         r = await self._run_write_scenario(temp_dir, row_count=50)
         self._assert_no_data_loss(r, 50)
 
-    @pytest.mark.asyncio
     async def test_rows_just_over_buffer_size(self, temp_dir: str):
         """51 rows: 2 sub-chunks (50+1). First overwrite scenario."""
         r = await self._run_write_scenario(temp_dir, row_count=51)
         self._assert_no_data_loss(r, 51)
 
-    @pytest.mark.asyncio
     async def test_rows_double_buffer_size(self, temp_dir: str):
         """100 rows == 2x buffer_size: exactly 2 sub-chunks (50+50)."""
         r = await self._run_write_scenario(temp_dir, row_count=100)
         self._assert_no_data_loss(r, 100)
 
-    @pytest.mark.asyncio
     async def test_rows_exceeding_buffer_size(self, temp_dir: str):
         """120 rows: 3 sub-chunks (50+50+20). Core HYP-773 regression case.
 
@@ -409,7 +402,6 @@ class TestParquetWriterDataIntegrity:
         r = await self._run_write_scenario(temp_dir, row_count=120)
         self._assert_no_data_loss(r, 120)
 
-    @pytest.mark.asyncio
     async def test_rows_many_sub_chunks(self, temp_dir: str):
         """501 rows: 11 sub-chunks (10x50 + 1). Stress test for part numbering."""
         r = await self._run_write_scenario(temp_dir, row_count=501)
@@ -417,13 +409,11 @@ class TestParquetWriterDataIntegrity:
 
     # --- Multiple write() scenarios ---
 
-    @pytest.mark.asyncio
     async def test_multiple_small_writes(self, temp_dir: str):
         """5 writes of 30 rows each: all under buffer_size, tests chunk_count."""
         r = await self._run_write_scenario(temp_dir, row_count=150, num_writes=5)
         self._assert_no_data_loss(r, 150)
 
-    @pytest.mark.asyncio
     async def test_multiple_writes_each_exceeding_buffer_size(self, temp_dir: str):
         """3 writes of 200 rows each: tests correctness across write() calls.
 
@@ -433,7 +423,6 @@ class TestParquetWriterDataIntegrity:
         r = await self._run_write_scenario(temp_dir, row_count=600, num_writes=3)
         self._assert_no_data_loss(r, 600)
 
-    @pytest.mark.asyncio
     async def test_multiple_writes_mixed_sizes(self, temp_dir: str):
         """4 writes of 75 rows each: 2 sub-chunks per write (50+25).
 

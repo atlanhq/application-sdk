@@ -871,7 +871,7 @@ class ParquetFileWriter(Writer):
                 await self._upload_file(output_file_name)
             except RuntimeError:
                 # No object store configured (local dev) — file stays on disk.
-                pass
+                logger.debug("No object store configured, skipping upload")
         # Advance part so the next sub-chunk gets a unique filename.
         self.chunk_part += 1
 
