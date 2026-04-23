@@ -145,8 +145,8 @@
         .trend-delta.down{color:#22c55e;}
         .trend-delta.flat{color:#8c8fa3;}
 
-        .tabs{display:flex;gap:0;margin-bottom:24px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 1px 3px rgba(0,0,0,0.04);display:inline-flex;}
-        .tab{padding:10px 22px;font-size:13px;font-weight:600;color:#8c8fa3;cursor:pointer;border-radius:8px;transition:all 0.2s;}
+        .tabs{display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 1px 3px rgba(0,0,0,0.04);}
+        .tab{flex:1;text-align:center;padding:10px 22px;font-size:13px;font-weight:600;color:#8c8fa3;cursor:pointer;border-radius:8px;transition:all 0.2s;}
         .tab:hover{color:#1a1a2e;background:#f5f7fa;}
         .tab.active{color:#fff;background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 2px 8px rgba(99,102,241,0.3);}
         .tab-panel{display:none;}
@@ -180,27 +180,38 @@
         </div>
     </div>
     <div class="tab-panel" id="tab-trends">
-        <div class="filters-bar" style="margin-bottom:14px">
-            <div class="filter-group"><label>Time Range</label><select id="fTrendDays" onchange="renderTrends()">
-                <option value="1">Last 1 day</option><option value="3">Last 3 days</option><option value="7" selected>Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>
-            </select></div>
-            <div class="filter-group"><label>Repo</label><select id="fTrendRepo" onchange="renderTrends()"><option value="all">All repos</option></select></div>
-            <div class="filter-group"><label>Metric</label><select id="fTrendMetric" onchange="renderTrends()">
-                <option value="total">Total CVEs</option><option value="new">New (blocking)</option><option value="app">App deps</option><option value="base_image">Base image</option><option value="allowlisted">Allowlisted</option><option value="critical">Critical</option>
-            </select></div>
-        </div>
-        <div class="card">
-            <div class="card-title">Vulnerability Trend</div>
-            <div id="trendChart" style="min-height:250px;position:relative;"></div>
-        </div>
-        <div class="grid-2" style="margin-top:16px">
-            <div class="card">
-                <div class="card-title">Change Summary</div>
-                <div id="trendSummary"></div>
+        <!-- Section 1: Snapshot cards -->
+        <div class="stats-row" id="trendSnapshot" style="grid-template-columns:repeat(5,1fr)"></div>
+        <!-- Section 2: Line chart -->
+        <div class="card" style="margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div class="card-title" style="margin:0">Vulnerability Trend</div>
+                <div class="filter-group"><label>Metric</label><select id="fTrendMetric" onchange="renderTrends()" style="margin-left:6px">
+                    <option value="total">Total CVEs</option><option value="new">New (blocking)</option><option value="app">App deps</option><option value="base_image">Base image</option>
+                </select></div>
             </div>
-            <div class="card">
-                <div class="card-title">Per Repo Change</div>
-                <div id="trendRepoChanges"></div>
+            <div id="trendChart" style="min-height:200px;position:relative;"></div>
+        </div>
+        <!-- Top movers -->
+        <div class="grid-2" style="margin-bottom:16px">
+            <div class="card"><div class="card-title">Biggest Improvements</div><div id="trendImproved"></div></div>
+            <div class="card"><div class="card-title">Needs Attention</div><div id="trendDegraded"></div></div>
+        </div>
+        <!-- Section 3: Per repo table -->
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div class="card-title" style="margin:0">Per Repo Progress</div>
+                <div style="display:flex;gap:10px;align-items:center">
+                    <div class="filter-group"><label>Compare</label><select id="fTrendDays" onchange="renderTrends()" style="margin-left:6px">
+                        <option value="1">Yesterday</option><option value="2">2 days ago</option><option value="3">3 days ago</option><option value="7" selected>7 days ago</option><option value="14">14 days ago</option><option value="30">30 days ago</option>
+                    </select></div>
+                    <button class="btn-clear" onclick="exportTrendCSV()">Export CSV</button>
+                </div>
+            </div>
+            <div style="overflow-x:auto">
+                <table id="trendTable"><thead><tr>
+                    <th>Repo</th><th>SDK</th><th>Total</th><th>App CVEs</th><th>Base CVEs</th><th id="thCompare">7d ago</th><th>Change</th><th>Status</th>
+                </tr></thead><tbody id="trendTableBody"></tbody></table>
             </div>
         </div>
     </div>
@@ -400,80 +411,121 @@ async function loadHistory(){
 
 function renderTrends(){
     const days=parseInt(document.getElementById('fTrendDays').value);
-    const repoFilter=document.getElementById('fTrendRepo').value;
     const metric=document.getElementById('fTrendMetric').value;
-    const colors={total:'#6366f1',new:'#ef4444',app:'#f97316',base_image:'#8b949e',allowlisted:'#22c55e',critical:'#ef4444'};
+    const colors={total:'#6366f1',new:'#ef4444',app:'#f97316',base_image:'#8b949e'};
+    const repos=Object.keys(D.repos);
+    const today=new Date().toISOString().slice(0,10);
 
-    // Populate repo filter
-    const sel=document.getElementById('fTrendRepo'),cur=sel.value;
-    const repos=Object.keys(historyData);
-    sel.innerHTML='<option value="all">All repos</option>';
-    repos.forEach(r=>{const o=document.createElement('option');o.value=r;o.textContent=r.split('/').pop();if(r===cur)o.selected=true;sel.appendChild(o);});
+    // Update compare column header
+    const labels={1:'Yesterday',2:'2d ago',3:'3d ago',7:'7d ago',14:'14d ago',30:'30d ago'};
+    document.getElementById('thCompare').textContent=labels[days]||days+'d ago';
 
     // Get date range
-    const now=new Date();const cutoff=new Date(now);cutoff.setDate(cutoff.getDate()-days);
+    const cutoff=new Date();cutoff.setDate(cutoff.getDate()-days);
     const cutoffStr=cutoff.toISOString().slice(0,10);
 
-    // Aggregate data by date
+    // Section 1: Snapshot cards
+    const totalToday=repos.reduce((s,r)=>s+(D.repos[r].total||0),0);
+    const newToday=repos.reduce((s,r)=>s+(D.repos[r].new||0),0);
+    const allHistory=Object.values(historyData).flat();
+    const oldEntries=allHistory.filter(e=>e.date<=cutoffStr);
+    const totalOld=oldEntries.length?oldEntries.reduce((s,e)=>s+(e.total||0),0):totalToday;
+    const totalDelta=totalToday-totalOld;
+    const fixedThisWeek=totalDelta<0?Math.abs(totalDelta):0;
+    const newThisWeek=totalDelta>0?totalDelta:0;
+    const deltaClass=totalDelta>0?'up':totalDelta<0?'down':'flat';
+    const deltaArrow=totalDelta>0?'&#9650;':totalDelta<0?'&#9660;':'&#8212;';
+
+    document.getElementById('trendSnapshot').innerHTML=`
+        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128230;</div><div class="stat-value">${repos.length}</div><div class="stat-label">Repos Scanned</div></div>
+        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128202;</div><div class="stat-value">${totalToday}</div><div class="stat-label">Total CVEs Today</div></div>
+        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:${totalDelta<=0?'#f0fdf4':'#fef2f2'};color:${totalDelta<=0?'#22c55e':'#ef4444'}">&#128200;</div><div class="stat-value"><span class="trend-delta ${deltaClass}">${deltaArrow} ${Math.abs(totalDelta)}</span></div><div class="stat-label">vs ${labels[days]||days+'d ago'}</div></div>
+        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#f0fdf4;color:#22c55e">&#10004;&#65039;</div><div class="stat-value" style="color:#22c55e">${fixedThisWeek}</div><div class="stat-label">Fixed (${days}d)</div></div>
+        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#fef2f2;color:#ef4444">&#10060;</div><div class="stat-value" style="color:#ef4444">${newThisWeek}</div><div class="stat-label">New (${days}d)</div></div>`;
+
+    // Section 2: Line chart
     const dateMap={};
-    const filteredRepos=repoFilter==='all'?repos:[repoFilter];
-    filteredRepos.forEach(r=>{
-        (historyData[r]||[]).forEach(e=>{
-            if(e.date>=cutoffStr){
-                if(!dateMap[e.date])dateMap[e.date]={total:0,new:0,app:0,base_image:0,allowlisted:0,critical:0,repos:0};
-                dateMap[e.date].total+=e.total||0;
-                dateMap[e.date].new+=e.new||0;
-                dateMap[e.date].app+=e.app||0;
-                dateMap[e.date].base_image+=e.base_image||0;
-                dateMap[e.date].allowlisted+=e.allowlisted||0;
-                dateMap[e.date].critical+=e.critical||0;
-                dateMap[e.date].repos++;
-            }
-        });
-    });
+    repos.forEach(r=>{(historyData[r]||[]).forEach(e=>{
+        if(!dateMap[e.date])dateMap[e.date]={total:0,new:0,app:0,base_image:0};
+        dateMap[e.date].total+=e.total||0;dateMap[e.date].new+=e.new||0;
+        dateMap[e.date].app+=e.app||0;dateMap[e.date].base_image+=e.base_image||0;
+    });});
+    // Add today from current data if not in history
+    if(!dateMap[today]){dateMap[today]={total:totalToday,new:newToday,app:repos.reduce((s,r)=>s+(D.repos[r].app_count||0),0),base_image:repos.reduce((s,r)=>s+(D.repos[r].base_image_count||0),0)};}
 
     const dates=Object.keys(dateMap).sort();
-    const values=dates.map(d=>dateMap[d][metric]||0);
-    const max=Math.max(...values,1);
+    const vals=dates.map(d=>dateMap[d][metric]||0);
+    const mx=Math.max(...vals,1);
     const color=colors[metric]||'#6366f1';
 
-    // Render bar chart
     if(!dates.length){
-        document.getElementById('trendChart').innerHTML='<div class="empty" style="padding:40px">No history data yet. Trends will appear after a few merges.</div>';
+        document.getElementById('trendChart').innerHTML='<div class="empty" style="padding:40px">Trends will appear after merges accumulate data.</div>';
     }else{
-        const bars=dates.map((d,i)=>{
-            const h=Math.max(4,Math.round((values[i]/max)*200));
-            return`<div class="trend-bar" style="height:${h}px;background:${color}"><div class="tip">${d}: ${values[i]}</div></div>`;
-        }).join('');
-        const labels=dates.map(d=>`<span>${d.slice(5)}</span>`).join('');
-        document.getElementById('trendChart').innerHTML=`<div class="trend-line">${bars}</div><div class="trend-labels">${labels}</div>`;
+        // SVG line chart
+        const w=800,h=180,pad=30;
+        const xStep=dates.length>1?(w-pad*2)/(dates.length-1):0;
+        const points=vals.map((v,i)=>[pad+i*xStep,h-pad-(v/mx)*(h-pad*2)]);
+        const line=points.map((p,i)=>(i===0?'M':'L')+p[0]+','+p[1]).join(' ');
+        const area=line+` L${points[points.length-1][0]},${h-pad} L${pad},${h-pad} Z`;
+        const dots=points.map((p,i)=>`<circle cx="${p[0]}" cy="${p[1]}" r="4" fill="${color}" stroke="#fff" stroke-width="2"><title>${dates[i]}: ${vals[i]}</title></circle>`).join('');
+        const xLabels=dates.map((d,i)=>`<text x="${pad+i*xStep}" y="${h-5}" text-anchor="middle" fill="#8c8fa3" font-size="10">${d.slice(5)}</text>`).join('');
+        const yLabels=[0,Math.round(mx/2),mx].map((v,i)=>{const y=h-pad-((v/mx)*(h-pad*2));return`<text x="${pad-5}" y="${y+4}" text-anchor="end" fill="#8c8fa3" font-size="10">${v}</text><line x1="${pad}" y1="${y}" x2="${w-pad}" y2="${y}" stroke="#f0f2f5" stroke-width="1"/>`}).join('');
+        document.getElementById('trendChart').innerHTML=`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:200px"><defs><linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity="0.15"/><stop offset="100%" stop-color="${color}" stop-opacity="0.01"/></linearGradient></defs>${yLabels}<path d="${area}" fill="url(#areaFill)"/><path d="${line}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>${dots}${xLabels}</svg>`;
     }
 
-    // Change summary
-    if(dates.length>=2){
-        const first=values[0],last=values[values.length-1];
-        const delta=last-first;
-        const cls=delta>0?'up':delta<0?'down':'flat';
-        const arrow=delta>0?'&#9650;':delta<0?'&#9660;':'&#8212;';
-        document.getElementById('trendSummary').innerHTML=`
-            <div class="trend-change"><span>${metric.replace('_',' ')}</span><span class="trend-delta ${cls}">${arrow} ${Math.abs(delta)} (${first} → ${last})</span></div>
-            <div class="trend-change"><span>Period</span><span style="color:#5c5f77">${dates[0]} → ${dates[dates.length-1]}</span></div>
-            <div class="trend-change"><span>Data points</span><span style="color:#5c5f77">${dates.length} days</span></div>`;
-    }else{
-        document.getElementById('trendSummary').innerHTML='<div class="empty" style="padding:20px">Need at least 2 data points for comparison.</div>';
-    }
+    // Top movers
+    const repoDeltas=repos.map(r=>{
+        const hist=(historyData[r]||[]).filter(e=>e.date<=cutoffStr).sort((a,b)=>b.date.localeCompare(a.date));
+        const old=hist.length?hist[0].total:D.repos[r].total;
+        const now=D.repos[r].total||0;
+        return{repo:r,sdk:D.repos[r].sdk_version||'?',now,old,delta:now-old,app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
+    });
 
-    // Per repo changes
-    const repoChanges=filteredRepos.map(r=>{
-        const entries=(historyData[r]||[]).filter(e=>e.date>=cutoffStr).sort((a,b)=>a.date.localeCompare(b.date));
-        if(entries.length<1)return null;
-        const first=entries[0],last=entries[entries.length-1];
-        const delta=(last[metric]||0)-(first[metric]||0);
-        const cls=delta>0?'up':delta<0?'down':'flat';
-        const arrow=delta>0?'&#9650;':delta<0?'&#9660;':'&#8212;';
-        return`<div class="trend-change"><span class="repo-tag">${r.split('/').pop()}</span><span style="color:#8c8fa3;font-size:11px">${last.sdk_version||'?'}</span><span class="trend-delta ${cls}" style="margin-left:auto">${arrow} ${Math.abs(delta)} (${first[metric]||0} → ${last[metric]||0})</span></div>`;
-    }).filter(Boolean).join('');
-    document.getElementById('trendRepoChanges').innerHTML=repoChanges||'<div class="empty" style="padding:20px">No data.</div>';
+    const improved=repoDeltas.filter(r=>r.delta<0).sort((a,b)=>a.delta-b.delta).slice(0,5);
+    const degraded=repoDeltas.filter(r=>r.delta>0).sort((a,b)=>b.delta-a.delta).slice(0,5);
+
+    document.getElementById('trendImproved').innerHTML=improved.length?improved.map(r=>
+        `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta down" style="margin-left:auto">&#9660; ${Math.abs(r.delta)} (${r.old} → ${r.now})</span></div>`
+    ).join(''):'<div class="empty" style="padding:20px;font-size:12px">No improvements yet — check back after fixes land.</div>';
+
+    document.getElementById('trendDegraded').innerHTML=degraded.length?degraded.map(r=>
+        `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta up" style="margin-left:auto">&#9650; ${r.delta} (${r.old} → ${r.now})</span></div>`
+    ).join(''):'<div class="empty" style="padding:20px;font-size:12px;color:#22c55e">No regressions — all repos stable or improving.</div>';
+
+    // Section 3: Per repo table
+    const sorted=[...repoDeltas].sort((a,b)=>b.delta-a.delta);
+    document.getElementById('trendTableBody').innerHTML=sorted.map(r=>{
+        const cls=r.delta>0?'up':r.delta<0?'down':'flat';
+        const arrow=r.delta>0?'&#9650;':r.delta<0?'&#9660;':'&#8212;';
+        const status=r.now===0?'Clean':r.delta<0?'Improving':r.delta>0?'Degraded':'Stable';
+        const statusColor=r.now===0?'#22c55e':r.delta<0?'#22c55e':r.delta>0?'#ef4444':'#8c8fa3';
+        const isV3=r.sdk.startsWith('3')||r.sdk.includes('v3')||r.sdk.includes('refactor-v3');
+        return`<tr>
+            <td><span class="repo-tag">${esc(r.repo.split('/').pop())}</span></td>
+            <td><span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'}">${esc(r.sdk)}</span></td>
+            <td><strong>${r.now}</strong></td>
+            <td>${r.app}</td>
+            <td>${r.base}</td>
+            <td style="color:#8c8fa3">${r.old}</td>
+            <td><span class="trend-delta ${cls}">${arrow} ${Math.abs(r.delta)}</span></td>
+            <td><span style="color:${statusColor};font-weight:600;font-size:11px">${status}</span></td>
+        </tr>`;
+    }).join('');
+}
+
+function exportTrendCSV(){
+    const repos=Object.keys(D.repos);
+    const days=parseInt(document.getElementById('fTrendDays').value);
+    const cutoff=new Date();cutoff.setDate(cutoff.getDate()-days);const cutoffStr=cutoff.toISOString().slice(0,10);
+    let csv='Repo,SDK,Total Today,App CVEs,Base CVEs,Compare Period,Change,Status\n';
+    repos.forEach(r=>{
+        const d=D.repos[r];const hist=(historyData[r]||[]).filter(e=>e.date<=cutoffStr).sort((a,b)=>b.date.localeCompare(a.date));
+        const old=hist.length?hist[0].total:d.total;const delta=(d.total||0)-old;
+        const status=(d.total||0)===0?'Clean':delta<0?'Improving':delta>0?'Degraded':'Stable';
+        csv+=`${r.split('/').pop()},${d.sdk_version||'?'},${d.total||0},${d.app_count||0},${d.base_image_count||0},${old},${delta},${status}\n`;
+    });
+    const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download='vulnerability-trends.csv';a.click();URL.revokeObjectURL(url);
 }
 
 async function init(){await load();await loadHistory();renderTrends();}
