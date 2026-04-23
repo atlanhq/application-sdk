@@ -849,6 +849,22 @@ class ParquetFileWriter(Writer):
         except Exception:
             logger.warning("Error cleaning up temp folders", exc_info=True)
 
+    async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
+        """Flush a buffer chunk to a Parquet file with unique filenames.
+
+        Overrides base Writer._flush_buffer because Parquet files cannot be
+        appended to (unlike JSON where _write_chunk uses open("a")).
+        pq.write_table() always overwrites the target file, so without
+        incrementing chunk_part after each flush, _write_dataframe's buffer
+        loop writes every sub-chunk to the same filename, silently losing
+        all data except the last sub-chunk. See HYP-773.
+        """
+        await super()._flush_buffer(chunk, chunk_part)
+        # Advance part so the next sub-chunk gets a unique filename.
+        # JSON's _write_chunk uses append mode ("a") so it can safely reuse
+        # the same file; Parquet's pq.write_table always overwrites.
+        self.chunk_part += 1
+
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a Parquet file, casting null-typed columns to string.
 
