@@ -14,7 +14,7 @@ The expiry policy is read from the `_expiry_policy` metadata key in the
 allowlist itself so the security team can adjust limits without touching code:
 
   {
-    "_expiry_policy": { "CRITICAL": 60, "HIGH": 90 },
+    "_expiry_policy": { "CRITICAL": 30, "HIGH": 60 },
     "CVE-2026-12345": { ... }
   }
 """
