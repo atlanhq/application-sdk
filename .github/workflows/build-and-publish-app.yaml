@@ -321,6 +321,11 @@ jobs:
             exit 1
           fi
 
+          if ! echo "$RELEASE_ID" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+            echo "::error::release_id '${RELEASE_ID}' is not a valid UUID."
+            exit 1
+          fi
+
           DEADLINE=$(( $(date +%s) + ${TIMEOUT_MINUTES} * 60 ))
           ATTEMPT=0
 
@@ -349,6 +354,13 @@ jobs:
             if [ "$HTTP_CODE" = "404" ]; then
               echo "::error::Release ${RELEASE_ID} not found in GM — it may have been deleted."
               echo "DockerHub push and deployment dispatch were skipped."
+              exit 1
+            fi
+
+            # 403 — tenant mismatch or token for wrong tenant, will not resolve on retry
+            if [ "$HTTP_CODE" = "403" ]; then
+              echo "::error::Access denied for release ${RELEASE_ID} (HTTP 403)."
+              echo "Check that APP_PUBLISH_TOKEN belongs to the tenant that created this release."
               exit 1
             fi
 
