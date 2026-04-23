@@ -195,7 +195,11 @@ class AsyncDaprClient:
         }
         if data:
             try:
-                body["data"] = json.loads(data)
+                parsed = json.loads(data)
+                if isinstance(parsed, (dict, list)):
+                    body["data"] = parsed
+                else:
+                    body["data"] = data.decode("utf-8", errors="replace")
             except (json.JSONDecodeError, UnicodeDecodeError):
                 body["data"] = data.decode("utf-8", errors="replace")
         resp = await self._client.post(
