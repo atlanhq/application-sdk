@@ -64,16 +64,17 @@ async def wait_for_dapr_sidecar(
     and the subsequent metadata call will surface any remaining errors.
     """
     url = f"{_dapr_base_url()}{_HEALTHZ_PATH}"
-    deadline = asyncio.get_event_loop().time() + timeout
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
     async with httpx.AsyncClient(timeout=2.0) as client:
         while True:
             try:
                 r = await client.get(url)
                 if r.status_code == 204:
                     return
-            except Exception:
-                pass
-            if asyncio.get_event_loop().time() >= deadline:
+            except Exception as exc:
+                logger.debug("Dapr sidecar poll failed: %s", exc)
+            if loop.time() >= deadline:
                 logger.warning(
                     "Dapr sidecar not ready after %.0fs — proceeding anyway", timeout
                 )
