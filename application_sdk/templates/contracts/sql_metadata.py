@@ -6,24 +6,21 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-import json
 from typing import Annotated, Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 
-# Disallow single quotes in filter/regex fields to prevent SQL injection when
+# Type alias for SQL filter maps: database-regex → list of schema-regexes.
+# Example: {"^prod$": ["^analytics$", "^reporting$"]}
+FilterMap = dict[str, list[str]]
+
+# Disallow single quotes in temp_table_regex to prevent SQL injection when
 # values are substituted into SQL templates via _prepare_sql (str.replace).
-# Safety invariant: every fetch_*_sql template MUST wrap substituted values in
-# single quotes (e.g. ``'{normalized_exclude_regex}'``).  This pattern blocks
-# the only character that would escape that wrapping.  If a connector template
-# omits the surrounding quotes this guard provides no protection — the wrapping
-# is a required connector contract, not optional.  Real-world DB name patterns
-# never require single quotes, so the restriction is not a practical limitation.
 _SAFE_FILTER_PATTERN = r"^[^']*$"
 
 
@@ -68,43 +65,71 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
                 data = {**data, "agent_json": None}
         return data
 
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_filter_values_to_str(cls, data: Any) -> Any:
-        """Convert pre-parsed JSON filter values back to strings.
-
-        AE pre-parses JSON string filter values into dicts/lists before
-        passing them to Temporal (e.g. ``{"^qa$": ["^public$"]}`` instead
-        of the string ``'{"^qa$": ["^public$"]}'``). Pydantic expects
-        ``str`` for these fields, so we JSON-serialize them back.
-        """
-        if not isinstance(data, dict):
-            return data
-        for key in ("include_filter", "exclude_filter", "temp_table_regex"):
-            val = data.get(key)
-            if isinstance(val, (dict, list)):
-                data = {**data, key: json.dumps(val)}
-            elif val is None:
-                data = {**data, key: ""}
-        return data
-
     output_prefix: str = ""
     """Object store prefix for all output artifacts."""
 
     output_path: str = ""
     """Local or object store path for output files."""
 
-    exclude_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
-    """Regex filter for excluding schemas/tables."""
+    exclude_filter: FilterMap | str = Field(default="")
+    """Filter for excluding schemas/tables.
 
-    include_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
-    """Regex filter for including schemas/tables."""
+    Accepts:
+    - ``dict[str, list[str]]`` — structured filter map from AE
+    - ``str`` — JSON string or raw regex (backward compat)
+    - ``None`` → empty string
+    """
+
+    include_filter: FilterMap | str = Field(default="")
+    """Filter for including schemas/tables.
+
+    Accepts:
+    - ``dict[str, list[str]]`` — structured filter map from AE
+    - ``str`` — JSON string or raw regex (backward compat)
+    - ``None`` → empty string
+    """
 
     temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     """Regex pattern identifying temporary tables."""
 
     source_tag_prefix: str = ""
     """Tag prefix for source-level metadata."""
+
+    @field_validator("include_filter", "exclude_filter", mode="before")
+    @classmethod
+    def _coerce_filter(cls, v: Any) -> FilterMap | str:
+        """Accept dict, JSON string, raw regex string, list, or None.
+
+        - ``dict`` → pass through (structured filter map from AE)
+        - ``list`` → pass through as dict ``{".*": <list>}``
+        - ``str`` → pass through (JSON string or raw regex)
+        - ``None`` → empty string
+        """
+        if v is None:
+            return ""
+        if isinstance(v, list):
+            return {".*": v}
+        return v
+
+    @field_validator("include_filter", "exclude_filter", mode="after")
+    @classmethod
+    def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
+        """Block single quotes in filter values to prevent SQL injection."""
+        if isinstance(v, str):
+            if "'" in v:
+                msg = f"Single quotes not allowed in filter value: {v}"
+                raise ValueError(msg)
+        elif isinstance(v, dict):
+            for key, values in v.items():
+                if "'" in key:
+                    msg = f"Single quotes not allowed in filter key: {key}"
+                    raise ValueError(msg)
+                if isinstance(values, list):
+                    for val in values:
+                        if isinstance(val, str) and "'" in val:
+                            msg = f"Single quotes not allowed in filter value: {val}"
+                            raise ValueError(msg)
+        return v
 
 
 class ExtractionOutput(Output, PublishInputMixin):
@@ -137,10 +162,22 @@ class ExtractionTaskInput(Input, allow_unbounded_fields=True):
     credential_ref: CredentialRef | None = None
     output_prefix: str = ""
     output_path: str = ""
-    exclude_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
-    include_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    exclude_filter: FilterMap | str = Field(default="")
+    include_filter: FilterMap | str = Field(default="")
     temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
+
+    @field_validator("include_filter", "exclude_filter", mode="before")
+    @classmethod
+    def _coerce_filter(cls, v: Any) -> FilterMap | str:
+        """Reuse the same coercion logic as ExtractionInput."""
+        return ExtractionInput._coerce_filter(v)
+
+    @field_validator("include_filter", "exclude_filter", mode="after")
+    @classmethod
+    def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
+        """Reuse the same SQL injection guard as ExtractionInput."""
+        return ExtractionInput._validate_no_sql_injection(v)
 
 
 class FetchDatabasesInput(ExtractionTaskInput, allow_unbounded_fields=True):
