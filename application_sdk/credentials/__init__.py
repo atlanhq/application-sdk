@@ -49,6 +49,7 @@ from application_sdk.credentials.errors import (
 from application_sdk.credentials.git import GitSshCredential, GitTokenCredential
 from application_sdk.credentials.oauth import OAuthTokenError, OAuthTokenService
 from application_sdk.credentials.ref import (
+    CredentialResolvable,
     CredentialRef,
     api_key_ref,
     atlan_api_token_ref,
@@ -79,8 +80,9 @@ from application_sdk.credentials.types import (
 )
 
 __all__ = [
-    # Core ref + spec
+    # Core ref + spec + protocol
     "CredentialRef",
+    "CredentialResolvable",
     "AgentCredentialSpec",
     # Factory functions
     "api_key_ref",
