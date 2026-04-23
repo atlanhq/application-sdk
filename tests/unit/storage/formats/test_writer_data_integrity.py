@@ -266,13 +266,18 @@ class TestWriterDataIntegrity:
 
 
 class TestParquetWriterDataIntegrity:
-    """Verify ParquetFileWriter preserves all data when DataFrames exceed buffer_size.
+    """Verify ParquetFileWriter preserves all data on disk AND in object store.
 
     Parquet's pq.write_table() overwrites the target file (unlike JSON which
-    appends). Without incrementing chunk_part after each _flush_buffer call,
-    _write_dataframe's buffer loop writes every sub-chunk to the same filename,
-    silently losing all data except the last sub-chunk. See HYP-773.
+    appends). The _flush_buffer override in ParquetFileWriter ensures each
+    sub-chunk gets a unique filename and is uploaded immediately. See HYP-773.
+
+    All tests use buffer_size=50 and verify:
+    - Disk: all rows readable from local parquet files
+    - Upload: all rows sent to object store via _upload_file
     """
+
+    BUFFER_SIZE = 50
 
     @pytest.fixture
     def temp_dir(self):
@@ -280,93 +285,160 @@ class TestParquetWriterDataIntegrity:
         yield temp_path
         shutil.rmtree(temp_path, ignore_errors=True)
 
-    @pytest.mark.asyncio
-    async def test_single_write_exceeding_buffer_size(self, temp_dir: str):
-        """A single write() with rows > buffer_size must preserve all rows.
+    async def _run_write_scenario(
+        self, temp_dir: str, row_count: int, num_writes: int = 1
+    ) -> dict:
+        """Run a write scenario and return disk + upload results."""
+        import glob
 
-        This is the core HYP-773 regression test. With buffer_size=50 and
-        120 rows, the writer creates 3 sub-chunks (50+50+20). Before the
-        fix, all three wrote to chunk-0-part0.parquet and only the last
-        20 rows survived.
-        """
         from application_sdk.storage.formats.parquet import ParquetFileWriter
+
+        upload_calls: List[tuple] = []
+
+        async def mock_upload(source: str, destination: str = "", **kwargs):
+            if os.path.exists(source):
+                with open(source, "rb") as f:
+                    upload_calls.append((source, f.read()))
 
         with patch(
             "application_sdk.storage.formats._upload_file",
             new_callable=AsyncMock,
+            side_effect=mock_upload,
         ):
             writer = ParquetFileWriter(
                 path=temp_dir,
                 typename="test_entity",
-                buffer_size=50,
+                buffer_size=self.BUFFER_SIZE,
                 use_consolidation=False,
             )
 
-            df = pd.DataFrame(
-                {"id": list(range(120)), "value": [f"row_{i}" for i in range(120)]}
-            )
-            await writer.write(df)
-            await writer.close()
-
-            # Read back all parquet files written to disk
-            import glob
-
-            parquet_files = glob.glob(
-                os.path.join(temp_dir, "test_entity", "**", "*.parquet"),
-                recursive=True,
-            )
-            assert len(parquet_files) > 0, "No parquet files written"
-
-            result_df = pd.concat(
-                [pd.read_parquet(f) for f in parquet_files], ignore_index=True
-            )
-            assert len(result_df) == 120, (
-                f"Expected 120 rows, got {len(result_df)}. "
-                f"Data loss: {120 - len(result_df)} rows missing."
-            )
-            assert set(result_df["id"]) == set(range(120))
-
-    @pytest.mark.asyncio
-    async def test_multiple_writes_exceeding_buffer_size(self, temp_dir: str):
-        """Multiple write() calls, each exceeding buffer_size, must preserve all rows."""
-        from application_sdk.storage.formats.parquet import ParquetFileWriter
-
-        with patch(
-            "application_sdk.storage.formats._upload_file",
-            new_callable=AsyncMock,
-        ):
-            writer = ParquetFileWriter(
-                path=temp_dir,
-                typename="test_entity",
-                buffer_size=50,
-                use_consolidation=False,
-            )
-
-            total_records = 0
-            for batch_idx in range(3):
-                start = batch_idx * 200
-                df = pd.DataFrame(
-                    {
-                        "id": list(range(start, start + 200)),
-                        "batch": [f"batch_{batch_idx}"] * 200,
-                    }
-                )
+            rows_per_write = row_count // num_writes
+            total = 0
+            for batch_idx in range(num_writes):
+                start = batch_idx * rows_per_write
+                df = pd.DataFrame({"id": list(range(start, start + rows_per_write))})
                 await writer.write(df)
-                total_records += 200
+                total += rows_per_write
 
             await writer.close()
 
-            import glob
-
-            parquet_files = glob.glob(
-                os.path.join(temp_dir, "test_entity", "**", "*.parquet"),
-                recursive=True,
-            )
-            result_df = pd.concat(
+        # Disk: read back all parquet files
+        parquet_files = glob.glob(
+            os.path.join(temp_dir, "test_entity", "**", "*.parquet"),
+            recursive=True,
+        )
+        if parquet_files:
+            disk_df = pd.concat(
                 [pd.read_parquet(f) for f in parquet_files], ignore_index=True
             )
-            assert len(result_df) == total_records, (
-                f"Expected {total_records} rows, got {len(result_df)}. "
-                f"Data loss: {total_records - len(result_df)} rows missing."
-            )
-            assert set(result_df["id"]) == set(range(total_records))
+        else:
+            disk_df = pd.DataFrame()
+
+        # Upload: reconstruct rows from captured upload content
+        upload_rows = 0
+        upload_ids: Set[int] = set()
+        for source, content in upload_calls:
+            if not source.endswith(".parquet") or "statistics" in source:
+                continue
+            tmp = os.path.join(temp_dir, "_up_" + os.path.basename(source))
+            with open(tmp, "wb") as f:
+                f.write(content)
+            chunk_df = pd.read_parquet(tmp)
+            upload_rows += len(chunk_df)
+            upload_ids.update(chunk_df["id"].tolist())
+
+        return {
+            "disk_rows": len(disk_df),
+            "disk_ids": set(disk_df["id"].tolist()) if len(disk_df) > 0 else set(),
+            "upload_rows": upload_rows,
+            "upload_ids": upload_ids,
+            "expected": total,
+        }
+
+    def _assert_no_data_loss(self, r: dict, expected: int) -> None:
+        """Assert zero data loss on both disk and object store."""
+        expected_ids = set(range(expected))
+        assert (
+            r["disk_rows"] == expected
+        ), f"Disk data loss: {r['disk_rows']}/{expected} rows"
+        assert r["disk_ids"] == expected_ids, "Disk: missing IDs detected"
+        assert (
+            r["upload_rows"] == expected
+        ), f"Upload data loss: {r['upload_rows']}/{expected} rows"
+        assert r["upload_ids"] == expected_ids, "Upload: missing IDs detected"
+
+    # --- Single write() scenarios ---
+
+    @pytest.mark.asyncio
+    async def test_single_row(self, temp_dir: str):
+        """1 row: minimal case, well under buffer_size."""
+        r = await self._run_write_scenario(temp_dir, row_count=1)
+        self._assert_no_data_loss(r, 1)
+
+    @pytest.mark.asyncio
+    async def test_rows_less_than_buffer_size(self, temp_dir: str):
+        """30 rows < buffer_size=50: single sub-chunk, no splitting."""
+        r = await self._run_write_scenario(temp_dir, row_count=30)
+        self._assert_no_data_loss(r, 30)
+
+    @pytest.mark.asyncio
+    async def test_rows_equal_to_buffer_size(self, temp_dir: str):
+        """50 rows == buffer_size=50: exactly one sub-chunk, boundary."""
+        r = await self._run_write_scenario(temp_dir, row_count=50)
+        self._assert_no_data_loss(r, 50)
+
+    @pytest.mark.asyncio
+    async def test_rows_just_over_buffer_size(self, temp_dir: str):
+        """51 rows: 2 sub-chunks (50+1). First overwrite scenario."""
+        r = await self._run_write_scenario(temp_dir, row_count=51)
+        self._assert_no_data_loss(r, 51)
+
+    @pytest.mark.asyncio
+    async def test_rows_double_buffer_size(self, temp_dir: str):
+        """100 rows == 2x buffer_size: exactly 2 sub-chunks (50+50)."""
+        r = await self._run_write_scenario(temp_dir, row_count=100)
+        self._assert_no_data_loss(r, 100)
+
+    @pytest.mark.asyncio
+    async def test_rows_exceeding_buffer_size(self, temp_dir: str):
+        """120 rows: 3 sub-chunks (50+50+20). Core HYP-773 regression case.
+
+        Before the fix, all three sub-chunks wrote to chunk-0-part0.parquet
+        and only the last 20 rows survived (83% data loss).
+        """
+        r = await self._run_write_scenario(temp_dir, row_count=120)
+        self._assert_no_data_loss(r, 120)
+
+    @pytest.mark.asyncio
+    async def test_rows_many_sub_chunks(self, temp_dir: str):
+        """501 rows: 11 sub-chunks (10x50 + 1). Stress test for part numbering."""
+        r = await self._run_write_scenario(temp_dir, row_count=501)
+        self._assert_no_data_loss(r, 501)
+
+    # --- Multiple write() scenarios ---
+
+    @pytest.mark.asyncio
+    async def test_multiple_small_writes(self, temp_dir: str):
+        """5 writes of 30 rows each: all under buffer_size, tests chunk_count."""
+        r = await self._run_write_scenario(temp_dir, row_count=150, num_writes=5)
+        self._assert_no_data_loss(r, 150)
+
+    @pytest.mark.asyncio
+    async def test_multiple_writes_each_exceeding_buffer_size(self, temp_dir: str):
+        """3 writes of 200 rows each: tests correctness across write() calls.
+
+        Each write() produces 4 sub-chunks (50+50+50+50). Verifies data is
+        preserved both within each write() and across write() calls.
+        """
+        r = await self._run_write_scenario(temp_dir, row_count=600, num_writes=3)
+        self._assert_no_data_loss(r, 600)
+
+    @pytest.mark.asyncio
+    async def test_multiple_writes_mixed_sizes(self, temp_dir: str):
+        """4 writes of 75 rows each: 2 sub-chunks per write (50+25).
+
+        Tests that chunk_count advances correctly across write() calls
+        when each write produces a partial last sub-chunk.
+        """
+        r = await self._run_write_scenario(temp_dir, row_count=300, num_writes=4)
+        self._assert_no_data_loss(r, 300)
