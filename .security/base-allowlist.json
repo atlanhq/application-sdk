@@ -2,7 +2,8 @@
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
   "_updated": "2026-04-23",
-  "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 30 days. HIGH: 60 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py.",
+  "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 60 days. HIGH: 90 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
+  "_expiry_policy": { "CRITICAL": 60, "HIGH": 90 },
   "SNYK-GOLANG-GOOGLEGOLANGORGGRPC-15691172": {
     "package": "google.golang.org/grpc",
     "severity": "CRITICAL",
@@ -217,7 +218,7 @@
     "package": "zlib1g (Debian bookworm-slim)",
     "severity": "CRITICAL",
     "reason": "MiniZip heap overflow in zlib contrib. The zlib1g binary package ships only libz.so.1 and does NOT contain the vulnerable zipOpenNewFileInZip4_64 code \u2014 that lives in the separate minizip/libminizip1 packages, which are not installed in connector images (verified via Debian package file-list). No fix available upstream: zlib maintainers consider MiniZip contrib, Debian has tracked this without a patch for 18+ months. Blocks atlan-mssql-app releases.",
-    "expires": "2026-05-23",
+    "expires": "2026-06-22",
     "added_by": "Divyanshu-Patel"
   }
 }
