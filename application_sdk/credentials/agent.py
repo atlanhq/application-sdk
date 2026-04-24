@@ -119,7 +119,7 @@ async def resolve_agent_credential(
 
     expanded = _expand_dotted(resolved_flat)
     flattened = _flatten_auth_section(expanded)
-    return _normalize_keys(flattened)
+    return _align_with_direct_flow(flattened)
 
 
 # Keep backward-compatible alias for existing callers and tests
@@ -303,29 +303,22 @@ def _flatten_auth_section(creds: dict[str, Any]) -> dict[str, Any]:
     return creds
 
 
-def _normalize_keys(creds: dict[str, Any]) -> dict[str, Any]:
-    """Convert hyphenated root-level keys to camelCase.
+def _align_with_direct_flow(creds: dict[str, Any]) -> dict[str, Any]:
+    """Align agent resolver output with the direct credential flow format.
 
-    The direct credential flow (``DaprCredentialVault.get_credentials``)
-    returns camelCase keys (``authType``, ``secretManager``). The agent
-    flow uses hyphenated aliases (``auth-type``, ``secret-manager``).
-    This step normalizes agent output to match the direct flow so
-    connectors see consistent key names regardless of resolution path.
+    The marketplace Argo template runs ``transform_agent_credentials()``
+    which renames ``auth-type`` → ``authType`` and adds
+    ``credentialSource = "agent"`` before storing credentials.  The
+    direct flow (``DaprCredentialVault``) returns credentials with
+    ``authType`` (camelCase).  Connectors do ``credentials.get("authType")``
+    to select auth strategy.
 
-    Example::
-
-        {"auth-type": "basic", "aws-region": "us-east-1", "host": "h"}
-        →
-        {"authType": "basic", "awsRegion": "us-east-1", "host": "h"}
-
-    Keys without hyphens and nested dicts are left unchanged.
+    This step applies the same transformation so the SDK's inline agent
+    resolver produces output consistent with both flows.  Only
+    ``auth-type`` is renamed — other hyphenated keys are left as-is,
+    matching the marketplace script behavior.
     """
-    out: dict[str, Any] = {}
-    for key, value in creds.items():
-        if "-" in key:
-            parts = key.split("-")
-            camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
-            out[camel] = value
-        else:
-            out[key] = value
-    return out
+    if "auth-type" in creds:
+        creds["authType"] = creds.pop("auth-type")
+    creds["credentialSource"] = "agent"
+    return creds
