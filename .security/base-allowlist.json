@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-04-23",
+  "_updated": "2026-04-24",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -237,5 +237,26 @@
     "reason": "MiniZip heap overflow in zlib contrib. The zlib1g binary package ships only libz.so.1 and does NOT contain the vulnerable zipOpenNewFileInZip4_64 code — that lives in the separate minizip/libminizip1 packages, which are not installed in connector images (verified via Debian package file-list). No fix available upstream: zlib maintainers consider MiniZip contrib, Debian has tracked this without a patch for 18+ months. Blocks atlan-mssql-app releases.",
     "expires": "2026-05-08",
     "added_by": "Divyanshu-Patel"
+  },
+  "CVE-2026-25537": {
+    "package": "jsonwebtoken (Rust crate)",
+    "severity": "HIGH",
+    "reason": "Base image — Rust jsonwebtoken type confusion in claim validation. No fix available in base image; fixed in jsonwebtoken >= 10.3.0 upstream. Awaiting base image rebuild.",
+    "expires": "2026-05-24",
+    "added_by": "shivahanumanthula-atlan"
+  },
+  "CVE-2025-69421": {
+    "package": "openssl",
+    "severity": "HIGH",
+    "reason": "Base image — OpenSSL NULL pointer dereference in PKCS12_item_decrypt_d2i_ex. Fixed in OpenSSL 3.5.5+. Python cryptography upgraded to 46.0.7 in app deps; base image OpenSSL pending rebuild.",
+    "expires": "2026-05-24",
+    "added_by": "shivahanumanthula-atlan"
+  },
+  "CVE-2026-25541": {
+    "package": "bytes (Rust crate)",
+    "severity": "HIGH",
+    "reason": "Base image — Rust bytes integer overflow in BytesMut::reserve. Fixed in bytes >= 1.11.1. temporalio upgraded to 1.23.0 in app deps; base image pending rebuild.",
+    "expires": "2026-05-24",
+    "added_by": "shivahanumanthula-atlan"
   }
 }
