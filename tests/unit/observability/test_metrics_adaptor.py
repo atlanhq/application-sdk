@@ -162,21 +162,30 @@ def test_export_record_with_otlp_enabled():
 
 def test_export_record_with_otlp_disabled():
     """Test export_record() method when OTLP is disabled."""
-    with create_metrics_adapter() as metrics_adapter:
-        with mock.patch.object(metrics_adapter, "_send_to_otel") as mock_send:
-            with mock.patch.object(metrics_adapter, "_log_to_console") as mock_log:
-                record = MetricRecord(
-                    timestamp=datetime.now().timestamp(),
-                    name="test_metric",
-                    value=42.0,
-                    type=MetricType.COUNTER,
-                    labels={"test": "label"},
-                    description="Test metric",
-                    unit="count",
-                )
-                metrics_adapter.export_record(record)
-                mock_send.assert_not_called()
-                mock_log.assert_called_once_with(record)
+    with mock.patch(
+        "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS", False
+    ):
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+            False,
+        ):
+            with create_metrics_adapter() as metrics_adapter:
+                with mock.patch.object(metrics_adapter, "_send_to_otel") as mock_send:
+                    with mock.patch.object(
+                        metrics_adapter, "_log_to_console"
+                    ) as mock_log:
+                        record = MetricRecord(
+                            timestamp=datetime.now().timestamp(),
+                            name="test_metric",
+                            value=42.0,
+                            type=MetricType.COUNTER,
+                            labels={"test": "label"},
+                            description="Test metric",
+                            unit="count",
+                        )
+                        metrics_adapter.export_record(record)
+                        mock_send.assert_not_called()
+                        mock_log.assert_called_once_with(record)
 
 
 def test_send_to_otel_counter():
@@ -443,57 +452,70 @@ class TestPython314EventLoopCompat:
         """When no running event loop exists (Python 3.14 behavior),
         the adapter should fall back to starting the flush in a daemon thread."""
         AtlanMetricsAdapter._flush_task_started = False
-        with mock.patch.dict(
-            "os.environ",
-            {
-                "ENABLE_OTLP_METRICS": "true",
-                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
-            },
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            True,
         ):
-            with mock.patch("opentelemetry.metrics.set_meter_provider"):
-                with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                    with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
-                        side_effect=RuntimeError("no running event loop"),
-                    ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                False,
+            ):
+                with mock.patch("opentelemetry.metrics.set_meter_provider"):
+                    with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
                         with mock.patch(
-                            "application_sdk.observability.metrics_adaptor.threading.Thread"
-                        ) as mock_thread:
-                            mock_thread_instance = mock.MagicMock()
-                            mock_thread.return_value = mock_thread_instance
+                            "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
+                            side_effect=RuntimeError("no running event loop"),
+                        ):
+                            with mock.patch(
+                                "application_sdk.observability.metrics_adaptor.threading.Thread"
+                            ) as mock_thread:
+                                mock_thread_instance = mock.MagicMock()
+                                mock_thread.return_value = mock_thread_instance
 
-                            _ = AtlanMetricsAdapter()
+                                _ = AtlanMetricsAdapter()
 
-                            mock_thread.assert_called_once()
-                            _, kwargs = mock_thread.call_args
-                            assert kwargs.get("daemon") is True
-                            mock_thread_instance.start.assert_called_once()
+                                # Filter for our daemon thread (not ThreadPoolExecutor workers)
+                                daemon_calls = [
+                                    c
+                                    for c in mock_thread.call_args_list
+                                    if c[1].get("daemon") is True
+                                ]
+                                assert len(daemon_calls) == 1
+                                mock_thread_instance.start.assert_called()
 
     def test_flush_task_uses_running_loop_when_available(self):
         """When a running event loop exists, the adapter should create
         a task on it instead of spawning a thread."""
         AtlanMetricsAdapter._flush_task_started = False
         mock_loop = mock.MagicMock()
-        with mock.patch.dict(
-            "os.environ",
-            {
-                "ENABLE_OTLP_METRICS": "true",
-                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
-            },
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            True,
         ):
-            with mock.patch("opentelemetry.metrics.set_meter_provider"):
-                with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                    with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
-                        return_value=mock_loop,
-                    ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                False,
+            ):
+                with mock.patch("opentelemetry.metrics.set_meter_provider"):
+                    with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
                         with mock.patch(
-                            "application_sdk.observability.metrics_adaptor.threading.Thread"
-                        ) as mock_thread:
-                            _ = AtlanMetricsAdapter()
+                            "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
+                            return_value=mock_loop,
+                        ):
+                            with mock.patch(
+                                "application_sdk.observability.metrics_adaptor.threading.Thread"
+                            ) as mock_thread:
+                                _ = AtlanMetricsAdapter()
 
-                            mock_loop.create_task.assert_called_once()
-                            mock_thread.assert_not_called()
+                                mock_loop.create_task.assert_called_once()
+                                # Only assert no daemon thread was created (ignore
+                                # ThreadPoolExecutor worker threads from OTEL internals)
+                                daemon_calls = [
+                                    c
+                                    for c in mock_thread.call_args_list
+                                    if c[1].get("daemon") is True
+                                ]
+                                assert len(daemon_calls) == 0
 
 
 class TestPrometheusMetrics:
