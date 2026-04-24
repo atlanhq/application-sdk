@@ -202,6 +202,7 @@
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                 <div class="card-title" style="margin:0">Per Repo Progress</div>
                 <div style="display:flex;gap:10px;align-items:center">
+                    <div class="filter-group"><label>SDK</label><select id="fTrendSdk" onchange="renderTrends()" style="margin-left:6px"><option value="all">All</option></select></div>
                     <div class="filter-group"><label>Compare</label><select id="fTrendDays" onchange="renderTrends()" style="margin-left:6px">
                         <option value="1">Yesterday</option><option value="2">2 days ago</option><option value="3">3 days ago</option><option value="7" selected>7 days ago</option><option value="14">14 days ago</option><option value="30">30 days ago</option>
                     </select></div>
@@ -263,9 +264,10 @@ function buildVM(){VM={};Object.keys(D.repos).forEach(repo=>{(D.repos[repo].vuln
 function renderAll(){renderStats();renderOverview();renderRepos();renderTable();
     document.getElementById('lastUpdated').textContent='Updated '+(D.generated_at?new Date(D.generated_at).toLocaleString():'N/A');}
 
-function renderStats(){
-    const vs=Object.values(VM);
-    const repos=Object.keys(D.repos);
+function renderStats(repoFilter){
+    const repos=repoFilter||Object.keys(D.repos);
+    const repoSet=new Set(repos);
+    const vs=Object.values(VM).map(v=>({...v,repos:v.repos.filter(r=>repoSet.has(r)),statuses:Object.fromEntries(Object.entries(v.statuses).filter(([r])=>repoSet.has(r)))})).filter(v=>v.repos.length>0);
     const c=vs.filter(v=>v.severity==='CRITICAL').length,h=vs.filter(v=>v.severity==='HIGH').length;
     const nw=vs.filter(v=>Object.values(v.statuses).includes('new')).length,al=vs.length-nw;
     // SDK version breakdown
@@ -382,7 +384,7 @@ function renderTable(){
 function toggle(i){document.getElementById('d'+i).classList.toggle('show');document.getElementById('d'+i).previousElementSibling.classList.toggle('expanded');}
 function clearFilters(){['fRepo','fSev','fStatus','fSource','fSdk'].forEach(id=>document.getElementById(id).value='all');document.getElementById('fSearch').value='';renderTable();}
 document.querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{const c=th.dataset.s;if(sortCol===c)sortDir=sortDir==='asc'?'desc':'asc';else{sortCol=c;sortDir='asc';}renderTable();}));
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');}));
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');if(t.dataset.tab==='trends'){renderTrends();}else{renderStats();}}));
 document.querySelectorAll('.filters-bar select,.filters-bar input').forEach(el=>{el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);});
 // Trend data
 let historyData={};
@@ -413,7 +415,15 @@ function renderTrends(){
     const days=parseInt(document.getElementById('fTrendDays').value);
     const metric=document.getElementById('fTrendMetric').value;
     const colors={total:'#6366f1',new:'#ef4444',app:'#f97316',base_image:'#8b949e'};
-    const repos=Object.keys(D.repos);
+    const allRepos=Object.keys(D.repos);
+    // Populate SDK filter from ALL repos (before filtering)
+    const trendSdkSel=document.getElementById('fTrendSdk'),curTrendSdk=trendSdkSel.value;
+    const trendSdkVers=[...new Set(allRepos.map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))].sort();
+    trendSdkSel.innerHTML='<option value="all">All ('+allRepos.length+')</option>';trendSdkVers.forEach(s=>{const cnt=allRepos.filter(r=>(D.repos[r].sdk_version||'')==s).length;const o=document.createElement('option');o.value=s;o.textContent=s+' ('+cnt+')';if(s===curTrendSdk)o.selected=true;trendSdkSel.appendChild(o);});
+    // Apply SDK filter — everything downstream uses this filtered set
+    const repos=curTrendSdk==='all'?allRepos:allRepos.filter(r=>(D.repos[r].sdk_version||'')==curTrendSdk);
+    // Reflect filter in top stats cards
+    renderStats(curTrendSdk==='all'?null:repos);
     const today=new Date().toISOString().slice(0,10);
 
     // Update compare column header
@@ -514,7 +524,9 @@ function renderTrends(){
 }
 
 function exportTrendCSV(){
-    const repos=Object.keys(D.repos);
+    const allRepos=Object.keys(D.repos);
+    const sdkFilter=document.getElementById('fTrendSdk').value;
+    const repos=sdkFilter==='all'?allRepos:allRepos.filter(r=>(D.repos[r].sdk_version||'')==sdkFilter);
     const days=parseInt(document.getElementById('fTrendDays').value);
     const cutoff=new Date();cutoff.setDate(cutoff.getDate()-days);const cutoffStr=cutoff.toISOString().slice(0,10);
     let csv='Repo,SDK,Total Today,App CVEs,Base CVEs,Compare Period,Change,Status\n';
