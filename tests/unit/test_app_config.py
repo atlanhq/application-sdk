@@ -129,6 +129,109 @@ class TestAuthUrlFallback:
         assert config.auth_base_url == ""
 
 
+class TestRemovedConstantsReplacedByAppConfig:
+    """Verify removed constants no longer exist and AppConfig replaces them."""
+
+    def test_app_host_removed_from_constants(self):
+        import application_sdk.constants as c
+
+        assert not hasattr(c, "APP_HOST"), (
+            "APP_HOST should be removed — use AppConfig.handler_host"
+        )
+
+    def test_app_port_removed_from_constants(self):
+        import application_sdk.constants as c
+
+        assert not hasattr(c, "APP_PORT"), (
+            "APP_PORT should be removed — use AppConfig.handler_port"
+        )
+
+    def test_workflow_host_removed_from_constants(self):
+        import application_sdk.constants as c
+
+        assert not hasattr(c, "WORKFLOW_HOST"), (
+            "WORKFLOW_HOST should be removed — use AppConfig.temporal_host"
+        )
+
+    def test_workflow_port_removed_from_constants(self):
+        import application_sdk.constants as c
+
+        assert not hasattr(c, "WORKFLOW_PORT"), (
+            "WORKFLOW_PORT should be removed — use AppConfig.temporal_host"
+        )
+
+    def test_workflow_namespace_removed_from_constants(self):
+        import application_sdk.constants as c
+
+        assert not hasattr(c, "WORKFLOW_NAMESPACE"), (
+            "WORKFLOW_NAMESPACE should be removed — use AppConfig.temporal_namespace"
+        )
+
+    def test_dead_constants_removed(self):
+        import application_sdk.constants as c
+
+        for name in [
+            "MAX_CONCURRENT_ACTIVITIES",
+            "HEARTBEAT_TIMEOUT",
+            "START_TO_CLOSE_TIMEOUT",
+            "GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS",
+        ]:
+            assert not hasattr(c, name), (
+                f"{name} should be removed — see ExecutionSettings"
+            )
+
+    def test_appconfig_handler_host_replaces_app_host(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATLAN_HANDLER_HOST", "10.0.0.1")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
+        config = AppConfig.from_args_and_env(_minimal_args())
+        assert config.handler_host == "10.0.0.1"
+
+    def test_appconfig_handler_port_replaces_app_port(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATLAN_HANDLER_PORT", "9000")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
+        config = AppConfig.from_args_and_env(_minimal_args())
+        assert config.handler_port == 9000
+
+    def test_appconfig_temporal_host_replaces_workflow_host_port(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATLAN_TEMPORAL_HOST", "temporal.prod:7236")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
+        config = AppConfig.from_args_and_env(_minimal_args())
+        assert config.temporal_host == "temporal.prod:7236"
+
+    def test_appconfig_temporal_namespace_replaces_workflow_namespace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATLAN_TEMPORAL_NAMESPACE", "production")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
+        config = AppConfig.from_args_and_env(_minimal_args())
+        assert config.temporal_namespace == "production"
+
+    def test_appconfig_temporal_host_v2_fallback(self, monkeypatch: pytest.MonkeyPatch):
+        """v2 env vars (ATLAN_WORKFLOW_HOST/PORT) still work as fallback."""
+        monkeypatch.delenv("ATLAN_TEMPORAL_HOST", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_HOST", "legacy-temporal")
+        monkeypatch.setenv("ATLAN_WORKFLOW_PORT", "7233")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
+        config = AppConfig.from_args_and_env(_minimal_args())
+        assert "legacy-temporal" in config.temporal_host
+
+    def test_appconfig_temporal_namespace_v2_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """v2 env var (ATLAN_WORKFLOW_NAMESPACE) still works as fallback."""
+        monkeypatch.delenv("ATLAN_TEMPORAL_NAMESPACE", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_NAMESPACE", "legacy-ns")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
+        config = AppConfig.from_args_and_env(_minimal_args())
+        assert config.temporal_namespace == "legacy-ns"
+
+
 class TestAppConfigOverlappingConstants:
     """Verify AppConfig reads the same env vars as deprecated constants."""
 
