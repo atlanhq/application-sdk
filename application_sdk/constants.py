@@ -18,6 +18,15 @@ Both read from the **same environment variables with the same defaults** so they
 stay in sync. The env var is the single source of truth — it is set once by
 Helm/Docker/.env before the process starts and both readers see the same value.
 
+**Why not move everything to AppConfig?**
+The observability layer (``logger_adaptor``, ``traces_adaptor``, ``metrics_adaptor``)
+calls ``logging.basicConfig(level=LOG_LEVEL)`` and creates ``MeterProvider`` /
+``TracerProvider`` at **module import time** — before ``main()`` parses CLI args and
+constructs ``AppConfig``. Moving these to AppConfig would require making the entire
+observability stack lazy-initializing (defer setup until first use), which is a large
+refactor. Until then, constants.py provides the import-time values that the
+observability layer needs.
+
 **Adding new config:**
 If the consumer runs at import time → add to ``constants.py``.
 If the consumer runs at runtime → add to ``AppConfig`` only.
