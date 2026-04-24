@@ -148,7 +148,9 @@ class AppConfig:
     """Enable Model Context Protocol (MCP) server."""
 
     max_concurrent_storage_transfers: int = 4
-    """Maximum concurrent object-store uploads/downloads."""
+    """Maximum concurrent object-store uploads/downloads.
+    Note: storage.transfer uses the constants.py value as the default parameter.
+    Callers with AppConfig access should pass config.max_concurrent_storage_transfers."""
 
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
@@ -1046,6 +1048,13 @@ async def run_dev_combined(
         handler_port=port,
         log_level="DEBUG",
         service_name=_derive_service_name(app_module),
+        # Dev-friendly: disable Prometheus to avoid port 9464 collision on
+        # hot reload, and use ephemeral health port to avoid 8081 collision.
+        enable_prometheus_metrics=os.environ.get(
+            "ATLAN_ENABLE_PROMETHEUS_METRICS", ""
+        ).lower()
+        in ("true", "1"),
+        health_port=0,
         frontend_assets_path=os.environ.get(
             "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
         ),
