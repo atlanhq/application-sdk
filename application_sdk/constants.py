@@ -185,7 +185,9 @@ APP_DEPLOYMENT_NAME = os.getenv("ATLAN_APP_DEPLOYMENT_NAME") or os.getenv(
 DEPLOYMENT_SECRET_PATH = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
 )
-#: Deprecated: prefer AppConfig.auth_enabled
+#: Used by events interceptor at import time (before AppConfig exists).
+#: AppConfig.auth_enabled is the runtime equivalent — this constant remains
+#: because the interceptor reads it at module level.
 AUTH_ENABLED = os.getenv("ATLAN_AUTH_ENABLED", "false").lower() == "true"
 #: OAuth2 authentication URL for workflow services
 AUTH_URL = os.getenv("ATLAN_AUTH_URL")
@@ -245,11 +247,14 @@ DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
 )
 
 # Logger Constants
-#: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-#: Deprecated: prefer AppConfig.log_level
+#: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+#: Used by logger_adaptor.py at module level (logging.basicConfig runs at
+#: import time, before AppConfig exists). AppConfig.log_level is the runtime
+#: equivalent for code that has access to the config instance.
 LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")).upper()
-#: Service name for OpenTelemetry
-#: Deprecated: prefer AppConfig.service_name
+#: Service name for OpenTelemetry.
+#: Used by traces_adaptor.py and metrics_adaptor.py at module level for
+#: tracer/meter initialization. AppConfig.service_name is the runtime equivalent.
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
 #: Service version for OpenTelemetry
 SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
