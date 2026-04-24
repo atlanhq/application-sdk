@@ -85,39 +85,6 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
 
     @model_validator(mode="before")
     @classmethod
-    def _normalize_ae_payload(cls, data: Any) -> Any:
-        """Lift fields from nested ``metadata{}`` and normalize hyphenated keys.
-
-        AE payloads nest config fields (``extraction_method``, ``agent_json``,
-        ``credential_guid``, filters, etc.) inside a ``metadata`` dict and may
-        use hyphenated key names. This validator promotes them to the top level
-        with underscored names so Pydantic can map them to fields.
-        """
-        if not isinstance(data, dict):
-            return data
-        field_names = set(cls.model_fields)
-        updates: dict[str, Any] = {}
-
-        metadata = data.get("metadata")
-        if isinstance(metadata, dict):
-            for key, value in metadata.items():
-                underscore_key = key.replace("-", "_")
-                if underscore_key in field_names and not data.get(underscore_key):
-                    updates[underscore_key] = value
-
-        for key, value in data.items():
-            if "-" not in key:
-                continue
-            underscore_key = key.replace("-", "_")
-            if underscore_key in field_names and not data.get(underscore_key):
-                updates[underscore_key] = value
-
-        if updates:
-            data = {**data, **updates}
-        return data
-
-    @model_validator(mode="before")
-    @classmethod
     def _skip_agent_json_for_direct(cls, data: Any) -> Any:
         """Null out agent_json when extraction_method is direct.
 
