@@ -96,7 +96,8 @@ jobs:
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
       ghcr_image:       ${{ steps.tags.outputs.ghcr_image }}
       ghcr_branch_tag:  ${{ steps.tags.outputs.ghcr_branch_tag }}
-      dockerhub_image:  ${{ steps.tags.outputs.dockerhub_image }}
+      dockerhub_image:       ${{ steps.tags.outputs.dockerhub_image }}
+      dockerhub_branch_tag:  ${{ steps.tags.outputs.dockerhub_branch_tag }}
 
     steps:
       - name: Checkout
@@ -168,6 +169,7 @@ jobs:
 
           DOCKERHUB_BASE="atlanhq/${REPO}"
           DOCKERHUB_IMAGE="${DOCKERHUB_BASE}:${BRANCH}-${IMAGE_TAG}"
+          DOCKERHUB_BRANCH_TAG="${DOCKERHUB_BASE}:${BRANCH}"
 
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
@@ -175,11 +177,13 @@ jobs:
           echo "ghcr_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
           echo "ghcr_branch_tag=${GHCR_BRANCH_TAG}" >> "$GITHUB_OUTPUT"
           echo "dockerhub_image=${DOCKERHUB_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_branch_tag=${DOCKERHUB_BRANCH_TAG}" >> "$GITHUB_OUTPUT"
 
           echo "Branch: ${BRANCH}"
           echo "Immutable image: ${GHCR_IMAGE}"
           echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
           echo "DockerHub image: ${DOCKERHUB_IMAGE}"
+          echo "DockerHub branch tag: ${DOCKERHUB_BRANCH_TAG}"
 
   # ── Job 2: Build — parallel per architecture ──────────────────────────────────
   build:
@@ -463,13 +467,16 @@ jobs:
 
       - name: Push to Docker Hub (re-tag from GHCR, no rebuild)
         env:
-          GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
-          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
+          GHCR_IMAGE:             ${{ needs.prepare.outputs.ghcr_image }}
+          DOCKERHUB_IMAGE:        ${{ needs.prepare.outputs.dockerhub_image }}
+          DOCKERHUB_BRANCH_TAG:   ${{ needs.prepare.outputs.dockerhub_branch_tag }}
         run: |
           docker buildx imagetools create \
             --tag "${DOCKERHUB_IMAGE}" \
+            --tag "${DOCKERHUB_BRANCH_TAG}" \
             "${GHCR_IMAGE}"
           echo "✅ Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+          echo "✅ Pushed to DockerHub: ${DOCKERHUB_BRANCH_TAG}"
 
   # ── Job 7: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   # For SDR apps only. When publish=true, waits for GM release to be active first.
