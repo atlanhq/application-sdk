@@ -1024,6 +1024,13 @@ async def run_dev_combined(
     """
     import json as _json
 
+    # Dev-friendly: ensure Dapr ports are set. poe start-deps launches Dapr
+    # on the default ports but in a background process, so the env vars aren't
+    # exported to the dev's shell. Default to standard Dapr ports so devs
+    # don't need to manually export them or add them to .env.
+    os.environ.setdefault("DAPR_HTTP_PORT", "3500")
+    os.environ.setdefault("DAPR_GRPC_PORT", "50001")
+
     app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
     effective_task_queue = task_queue or f"{app_name}-queue"
     app_module = f"{app_class.__module__}:{app_class.__name__}"
