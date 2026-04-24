@@ -16,6 +16,7 @@ from application_sdk.infrastructure._dapr.http import (
     STATE_PATH,
     AsyncDaprClient,
     BindingResult,
+    wait_for_dapr_sidecar,
 )
 
 
@@ -355,3 +356,73 @@ class TestRetryConfiguration:
 
         client = AsyncDaprClient(base_url="http://localhost:3500", retries=0)
         assert isinstance(client._client._transport, RetryTransport)
+
+
+class TestWaitForDaprSidecar:
+    async def test_ready_immediately(self):
+        """Returns as soon as sidecar responds 204 on first poll."""
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_get = AsyncMock(return_value=mock_response)
+        with patch(
+            "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+        ) as mock_cls:
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+        mock_get.assert_called_once()
+
+    async def test_ready_after_retries(self):
+        """Returns once sidecar eventually responds 204 after non-204 responses."""
+        not_ready = MagicMock()
+        not_ready.status_code = 503
+        ready = MagicMock()
+        ready.status_code = 204
+        mock_get = AsyncMock(side_effect=[not_ready, not_ready, ready])
+        with patch(
+            "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+        ) as mock_cls:
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+        assert mock_get.call_count == 3
+
+    async def test_timeout_logs_warning(self):
+        """Logs a warning and returns when sidecar never becomes ready."""
+        not_ready = MagicMock()
+        not_ready.status_code = 503
+        mock_get = AsyncMock(return_value=not_ready)
+        with (
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger") as mock_logger,
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
+        mock_logger.warning.assert_called_once()
+        assert "not ready" in mock_logger.warning.call_args[0][0]
+
+    async def test_connection_error_does_not_crash(self):
+        """Poll loop survives connection errors and eventually times out cleanly."""
+        import httpx as _httpx
+
+        mock_get = AsyncMock(side_effect=_httpx.ConnectError("refused"))
+        with (
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger"),
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)

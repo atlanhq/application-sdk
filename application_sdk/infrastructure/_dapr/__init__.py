@@ -12,10 +12,14 @@ from application_sdk.infrastructure._dapr.credential_vault import (
     DaprCredentialVault,
     create_dapr_credential_vault,
 )
-from application_sdk.infrastructure._dapr.http import AsyncDaprClient
+from application_sdk.infrastructure._dapr.http import (
+    AsyncDaprClient,
+    wait_for_dapr_sidecar,
+)
 
 __all__ = [
     "AsyncDaprClient",
+    "wait_for_dapr_sidecar",
     "DaprBinding",
     "DaprCredentialVault",
     "DaprPubSub",
