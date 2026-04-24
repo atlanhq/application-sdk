@@ -470,13 +470,19 @@ jobs:
           GHCR_IMAGE:             ${{ needs.prepare.outputs.ghcr_image }}
           DOCKERHUB_IMAGE:        ${{ needs.prepare.outputs.dockerhub_image }}
           DOCKERHUB_BRANCH_TAG:   ${{ needs.prepare.outputs.dockerhub_branch_tag }}
+          BRANCH:                 ${{ needs.prepare.outputs.branch }}
         run: |
-          docker buildx imagetools create \
-            --tag "${DOCKERHUB_IMAGE}" \
-            --tag "${DOCKERHUB_BRANCH_TAG}" \
-            "${GHCR_IMAGE}"
+          # Always push the immutable sha-pinned tag
+          TAGS="--tag ${DOCKERHUB_IMAGE}"
+
+          # Only push the mutable {branch}-latest tag for main branch builds
+          if [ "${BRANCH}" = "main" ]; then
+            TAGS="${TAGS} --tag ${DOCKERHUB_BRANCH_TAG}"
+          fi
+
+          docker buildx imagetools create ${TAGS} "${GHCR_IMAGE}"
           echo "✅ Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
-          echo "✅ Pushed to DockerHub: ${DOCKERHUB_BRANCH_TAG}"
+          [ "${BRANCH}" = "main" ] && echo "✅ Pushed to DockerHub: ${DOCKERHUB_BRANCH_TAG}"
 
   # ── Job 7: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   # For SDR apps only. When publish=true, waits for GM release to be active first.
