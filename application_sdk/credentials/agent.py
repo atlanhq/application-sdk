@@ -117,8 +117,13 @@ async def resolve_agent_credential(
     else:
         resolved_flat = raw
 
-    expanded = _expand_dotted(resolved_flat)
-    return _flatten_auth_section(expanded)
+    from application_sdk.credentials.transforms import (
+        expand_dotted_keys,
+        flatten_auth_section,
+    )
+
+    expanded = expand_dotted_keys(resolved_flat)
+    return flatten_auth_section(expanded)
 
 
 # Keep backward-compatible alias for existing callers and tests
@@ -216,87 +221,7 @@ def _substitute(agent: dict[str, Any], bundle: dict[str, Any]) -> dict[str, Any]
     return out
 
 
-def _expand_dotted(flat: dict[str, Any]) -> dict[str, Any]:
-    """Collapse dotted root keys into nested dicts.
 
-    ``{"basic.username": "u", "extra.database": "d", "host": "h"}``
-    becomes
-    ``{"basic": {"username": "u"}, "extra": {"database": "d"}, "host": "h"}``.
-
-    Keys without dots are copied as-is. If a dotted key's parent path
-    conflicts with a non-dict value already at that root (pathological —
-    would only happen if someone mixed ``"extra": {...}`` and
-    ``"extra.foo": "bar"`` in the same payload), the existing non-dict
-    root wins and the dotted key is dropped with a debug log.
-    """
-    out: dict[str, Any] = {}
-
-    # Pass 1: copy non-dotted keys first so dicts placed by dotted keys
-    # can co-exist with pre-existing dicts at the same root.
-    for key, value in flat.items():
-        if "." not in key:
-            out[key] = value
-
-    # Pass 2: insert dotted keys, merging into existing dicts where possible.
-    for key, value in flat.items():
-        if "." not in key:
-            continue
-        parts = key.split(".")
-        cursor: Any = out
-        ok = True
-        for part in parts[:-1]:
-            existing = cursor.get(part) if isinstance(cursor, dict) else None
-            if existing is None:
-                cursor[part] = {}
-                cursor = cursor[part]
-            elif isinstance(existing, dict):
-                cursor = existing
-            else:
-                logger.debug(
-                    "Dotted key %r conflicts with non-dict root %r=%r; skipping",
-                    key,
-                    part,
-                    existing,
-                )
-                ok = False
-                break
-        if ok:
-            cursor[parts[-1]] = value
-
-    return out
-
-
-def _flatten_auth_section(creds: dict[str, Any]) -> dict[str, Any]:
-    """Promote the auth-type section to root level for client compatibility.
-
-    The agent JSON uses dotted keys like ``basic.username`` which
-    ``_expand_dotted`` nests as ``{"basic": {"username": "u"}}``.
-    SQL/REST/NoSQL clients expect ``username`` and ``password`` at the
-    root level.  This function reads ``auth-type`` (e.g. ``"basic"``),
-    finds the matching nested dict, and **deep-merges** its contents
-    to root — so existing root-level dicts (e.g. ``extra``) are merged
-    rather than overwritten.
-
-    Example::
-
-        {"auth-type": "gcp-wif",
-         "extra": {"connect_type": "public"},
-         "gcp-wif": {"extra": {"project_id": "p"}}}
-        →
-        {"auth-type": "gcp-wif",
-         "extra": {"connect_type": "public", "project_id": "p"},
-         "gcp-wif": {"extra": {"project_id": "p"}}}
-    """
-    auth_type = creds.get("auth-type", "")
-    if not auth_type:
-        return creds
-    auth_section = creds.get(auth_type)
-    if not isinstance(auth_section, dict):
-        return creds
-    for key, value in auth_section.items():
-        existing = creds.get(key)
-        if isinstance(existing, dict) and isinstance(value, dict):
-            existing.update(value)
-        else:
-            creds[key] = value
-    return creds
+# _expand_dotted and _flatten_auth_section moved to
+# application_sdk.credentials.transforms as expand_dotted_keys
+# and flatten_auth_section.

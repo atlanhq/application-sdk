@@ -69,6 +69,13 @@ from application_sdk.credentials.registry import (
 )
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.credentials.transforms import (
+    camel_to_kebab,
+    expand_dotted_keys,
+    flatten_auth_section,
+    kebab_to_camel,
+    transform_agent_credentials,
+)
 from application_sdk.credentials.types import (
     ApiKeyCredential,
     BasicCredential,
@@ -126,4 +133,10 @@ __all__ = [
     "CredentialNotFoundError",
     "CredentialParseError",
     "CredentialValidationError",
+    # Transforms (deprecated — will be removed once apps are fully native)
+    "kebab_to_camel",
+    "camel_to_kebab",
+    "expand_dotted_keys",
+    "flatten_auth_section",
+    "transform_agent_credentials",
 ]

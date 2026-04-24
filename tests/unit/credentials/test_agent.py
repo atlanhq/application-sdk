@@ -14,10 +14,10 @@ import json
 from typing import Any
 
 from application_sdk.credentials.agent import (
-    _expand_dotted,
     _substitute,
     resolve_agent_json,
 )
+from application_sdk.credentials.transforms import expand_dotted_keys
 from application_sdk.credentials.errors import (
     CredentialError,
     CredentialNotFoundError,
@@ -444,21 +444,21 @@ class TestSubstitute:
 
 
 # ---------------------------------------------------------------------------
-# _expand_dotted — unit tests for dotted-key collapse
+# expand_dotted_keys — unit tests for dotted-key collapse
 # ---------------------------------------------------------------------------
 
 
 class TestExpandDotted:
     def test_empty_dict(self) -> None:
-        assert _expand_dotted({}) == {}
+        assert expand_dotted_keys({}) == {}
 
     def test_no_dotted_keys_passthrough(self) -> None:
         flat = {"host": "h", "port": 5432}
-        assert _expand_dotted(flat) == {"host": "h", "port": 5432}
+        assert expand_dotted_keys(flat) == {"host": "h", "port": 5432}
 
     def test_single_dot_collapses_to_one_nested_dict(self) -> None:
         flat = {"basic.username": "u", "basic.password": "p"}
-        assert _expand_dotted(flat) == {"basic": {"username": "u", "password": "p"}}
+        assert expand_dotted_keys(flat) == {"basic": {"username": "u", "password": "p"}}
 
     def test_multiple_roots(self) -> None:
         flat = {
@@ -467,7 +467,7 @@ class TestExpandDotted:
             "extra.compiled_url": "url",
             "host": "h",
         }
-        assert _expand_dotted(flat) == {
+        assert expand_dotted_keys(flat) == {
             "basic": {"username": "u"},
             "extra": {"database": "d", "compiled_url": "url"},
             "host": "h",
@@ -475,14 +475,14 @@ class TestExpandDotted:
 
     def test_deeply_nested(self) -> None:
         flat = {"a.b.c": 1, "a.b.d": 2, "a.e": 3}
-        assert _expand_dotted(flat) == {"a": {"b": {"c": 1, "d": 2}, "e": 3}}
+        assert expand_dotted_keys(flat) == {"a": {"b": {"c": 1, "d": 2}, "e": 3}}
 
     def test_mixed_dotted_and_nested_root_merges(self) -> None:
         """If a non-dotted ``extra: {}`` and a dotted ``extra.foo: bar``
         both appear, they merge into one dict (non-dotted copied first).
         """
         flat = {"extra": {"database": "d"}, "extra.compiled_url": "url"}
-        assert _expand_dotted(flat) == {
+        assert expand_dotted_keys(flat) == {
             "extra": {"database": "d", "compiled_url": "url"}
         }
 
@@ -491,7 +491,7 @@ class TestExpandDotted:
         Non-dict root wins; dotted key is silently dropped.
         """
         flat = {"extra": "just-a-string", "extra.foo": "bar"}
-        assert _expand_dotted(flat) == {"extra": "just-a-string"}
+        assert expand_dotted_keys(flat) == {"extra": "just-a-string"}
 
 
 # ---------------------------------------------------------------------------
