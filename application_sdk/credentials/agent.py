@@ -114,7 +114,8 @@ async def resolve_agent_credential(
     bundle = await _fetch_bundle(secret_store, spec.secret_path)
     resolved_flat = _substitute(raw, bundle)
     expanded = _expand_dotted(resolved_flat)
-    return _flatten_auth_section(expanded)
+    result = _flatten_auth_section(expanded)
+    return _normalize_keys(result)
 
 
 # Keep backward-compatible alias for existing callers and tests
@@ -260,6 +261,41 @@ def _expand_dotted(flat: dict[str, Any]) -> dict[str, Any]:
             cursor[parts[-1]] = value
 
     return out
+
+
+def _kebab_to_camel(key: str) -> str:
+    """Convert a kebab-case key to camelCase.
+
+    ``"auth-type"`` → ``"authType"``, ``"agent-name"`` → ``"agentName"``.
+    Keys without hyphens are returned unchanged.
+    """
+    parts = key.split("-")
+    return parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+
+def _normalize_keys(creds: dict[str, Any]) -> dict[str, Any]:
+    """Convert all hyphenated root-level keys to camelCase.
+
+    The agent wire format uses kebab-case (``auth-type``, ``key-type``,
+    ``agent-name``).  ``DaprCredentialVault.get_credentials()`` (direct
+    flow) returns camelCase (``authType``).  Connectors are written
+    against the direct-flow format.
+
+    This normalization ensures both resolution paths produce the same
+    key format so downstream consumers don't need dual-key lookups.
+    """
+    normalized: dict[str, Any] = {}
+    for key, value in creds.items():
+        if "-" in key:
+            camel_key = _kebab_to_camel(key)
+            # Only rename if the camelCase key doesn't already exist
+            if camel_key not in creds:
+                normalized[camel_key] = value
+            else:
+                normalized[key] = value
+        else:
+            normalized[key] = value
+    return normalized
 
 
 def _flatten_auth_section(creds: dict[str, Any]) -> dict[str, Any]:
