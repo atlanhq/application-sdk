@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
+from application_sdk.common.transforms import transform_agent_credentials
 from application_sdk.credentials.errors import (
     CredentialError,
     CredentialNotFoundError,
@@ -116,8 +117,6 @@ async def resolve_agent_credential(
         resolved_flat = _substitute(raw, bundle)
     else:
         resolved_flat = raw
-
-    from application_sdk.common.transforms import transform_agent_credentials
 
     return transform_agent_credentials(resolved_flat)
 
@@ -215,8 +214,3 @@ def _substitute(agent: dict[str, Any], bundle: dict[str, Any]) -> dict[str, Any]
         out["extra"] = new_extra
 
     return out
-
-
-# _expand_dotted and _flatten_auth_section moved to
-# application_sdk.credentials.transforms as expand_dotted_keys
-# and flatten_auth_section.
