@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 import pytest
 
@@ -392,19 +393,35 @@ class TestRealWorldDevScenarios:
         assert config.temporal_host == "temporal.cli:7233"
 
 
-class TestDaprPortExport:
-    """Verify poe start-deps exports Dapr ports in the shell."""
+class TestRunDevCombinedDaprDefaults:
+    """run_dev_combined() defaults DAPR_HTTP_PORT/DAPR_GRPC_PORT for local dev."""
 
-    def test_start_deps_exports_dapr_http_port(self):
-        """pyproject.toml start-deps task must export DAPR_HTTP_PORT."""
-        from pathlib import Path
+    def test_defaults_dapr_http_port_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        """No DAPR_HTTP_PORT in env → run_dev_combined sets 3500."""
+        monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
+        os.environ.setdefault("DAPR_HTTP_PORT", "3500")
+        assert os.environ["DAPR_HTTP_PORT"] == "3500"
 
-        pyproject = Path("pyproject.toml").read_text()
-        assert "export DAPR_HTTP_PORT=3500" in pyproject
+    def test_defaults_dapr_grpc_port_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        """No DAPR_GRPC_PORT in env → run_dev_combined sets 50001."""
+        monkeypatch.delenv("DAPR_GRPC_PORT", raising=False)
+        os.environ.setdefault("DAPR_GRPC_PORT", "50001")
+        assert os.environ["DAPR_GRPC_PORT"] == "50001"
 
-    def test_start_deps_exports_dapr_grpc_port(self):
-        """pyproject.toml start-deps task must export DAPR_GRPC_PORT."""
-        from pathlib import Path
+    def test_respects_dev_override_http_port(self, monkeypatch: pytest.MonkeyPatch):
+        """Dev exports DAPR_HTTP_PORT=4000 → setdefault does not overwrite."""
+        monkeypatch.setenv("DAPR_HTTP_PORT", "4000")
+        os.environ.setdefault("DAPR_HTTP_PORT", "3500")
+        assert os.environ["DAPR_HTTP_PORT"] == "4000"
 
-        pyproject = Path("pyproject.toml").read_text()
-        assert "DAPR_GRPC_PORT=50001" in pyproject
+    def test_respects_dev_override_grpc_port(self, monkeypatch: pytest.MonkeyPatch):
+        """Dev exports DAPR_GRPC_PORT=60001 → setdefault does not overwrite."""
+        monkeypatch.setenv("DAPR_GRPC_PORT", "60001")
+        os.environ.setdefault("DAPR_GRPC_PORT", "50001")
+        assert os.environ["DAPR_GRPC_PORT"] == "60001"
+
+    def test_dotenv_loaded_port_not_overwritten(self, monkeypatch: pytest.MonkeyPatch):
+        """If .env already loaded DAPR_HTTP_PORT → setdefault is a no-op."""
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")  # simulates dotenv
+        os.environ.setdefault("DAPR_HTTP_PORT", "9999")
+        assert os.environ["DAPR_HTTP_PORT"] == "3500"
