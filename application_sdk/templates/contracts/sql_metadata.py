@@ -99,6 +99,51 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
                 data = {**data, "agent_json": None}
         return data
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_ae_payload(cls, data: Any) -> Any:
+        """Lift fields from AE's ``metadata{}`` wrapper to model fields.
+
+        AE app manifests put extraction config under ``args.metadata`` while
+        this SDK contract exposes those fields at the top level. Normalize both
+        snake_case and kebab-case keys to the model's snake_case field names so
+        Pydantic can bind them. Explicit top-level values take priority.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        field_names = set(cls.model_fields)
+        normalized = dict(data)
+        updates: dict[str, Any] = {}
+
+        metadata = data.get("metadata")
+        metadata_has_unknown_keys = False
+        if isinstance(metadata, dict):
+            for key, value in metadata.items():
+                underscore_key = key.replace("-", "_")
+                if underscore_key not in field_names:
+                    metadata_has_unknown_keys = True
+                    continue
+                if underscore_key not in normalized:
+                    updates[underscore_key] = value
+
+            if not metadata_has_unknown_keys:
+                normalized.pop("metadata", None)
+
+        for key, value in data.items():
+            if "-" not in key:
+                continue
+            underscore_key = key.replace("-", "_")
+            if underscore_key not in field_names:
+                continue
+            if underscore_key not in normalized:
+                updates[underscore_key] = value
+            normalized.pop(key, None)
+
+        if updates:
+            normalized.update(updates)
+        return normalized
+
     output_prefix: str = ""
     """Object store prefix for all output artifacts."""
 

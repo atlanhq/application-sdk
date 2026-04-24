@@ -4,8 +4,11 @@ Filters accept dict (structured from AE), JSON string, raw regex string,
 list, and None. SQL injection is guarded by rejecting single quotes.
 """
 
+import logging
+
 import pytest
 
+from application_sdk.contracts.base import Input
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
@@ -130,3 +133,145 @@ class TestRealAEPayload:
         result = ExtractionInput.model_validate(payload)
         assert isinstance(result.include_filter, str)
         assert isinstance(result.exclude_filter, str)
+
+
+class TestAENestedMetadataLift:
+    """AE wraps extraction config under ``metadata``; SDK must lift it."""
+
+    def test_dict_filters_nested_in_metadata_are_lifted(self):
+        payload = {
+            "connection": {
+                "typeName": "Connection",
+                "attributes": {"qualifiedName": "default/x/1", "name": "n"},
+            },
+            "credential_guid": "g",
+            "metadata": {
+                "include_filter": {"^prod$": ["^analytics$"]},
+                "exclude_filter": {"^temp$": [".*"]},
+                "extraction_method": "direct",
+            },
+        }
+
+        result = ExtractionInput.model_validate(payload)
+
+        assert result.include_filter == {"^prod$": ["^analytics$"]}
+        assert result.exclude_filter == {"^temp$": [".*"]}
+        assert result.extraction_method == "direct"
+
+    def test_top_level_value_wins_over_nested(self):
+        payload = {
+            "connection": {
+                "typeName": "Connection",
+                "attributes": {"qualifiedName": "default/x/1", "name": "n"},
+            },
+            "credential_guid": "g",
+            "extraction_method": "agent",
+            "metadata": {"extraction_method": "direct"},
+        }
+
+        assert ExtractionInput.model_validate(payload).extraction_method == "agent"
+
+    def test_hyphenated_keys_in_metadata_are_normalised(self):
+        payload = {
+            "connection": {
+                "typeName": "Connection",
+                "attributes": {"qualifiedName": "default/x/1", "name": "n"},
+            },
+            "credential_guid": "g",
+            "metadata": {
+                "include-filter": {"^prod$": ["^a$"]},
+                "extraction-method": "direct",
+            },
+        }
+
+        result = ExtractionInput.model_validate(payload)
+
+        assert result.include_filter == {"^prod$": ["^a$"]}
+        assert result.extraction_method == "direct"
+
+    def test_top_level_hyphenated_keys_are_normalised(self):
+        payload = {
+            "credential-guid": "g",
+            "include-filter": {"^prod$": ["^a$"]},
+            "extraction-method": "direct",
+        }
+
+        result = ExtractionInput.model_validate(payload)
+
+        assert result.credential_guid == "g"
+        assert result.include_filter == {"^prod$": ["^a$"]}
+        assert result.extraction_method == "direct"
+
+    def test_string_filters_in_metadata_still_work(self):
+        payload = {
+            "connection": {
+                "typeName": "Connection",
+                "attributes": {"qualifiedName": "default/x/1", "name": "n"},
+            },
+            "credential_guid": "g",
+            "metadata": {"include_filter": "^prod_.*$"},
+        }
+
+        assert ExtractionInput.model_validate(payload).include_filter == "^prod_.*$"
+
+    def test_empty_metadata_does_not_overwrite_defaults(self):
+        payload = {
+            "connection": {
+                "typeName": "Connection",
+                "attributes": {"qualifiedName": "default/x/1", "name": "n"},
+            },
+            "credential_guid": "g",
+            "metadata": {},
+        }
+
+        result = ExtractionInput.model_validate(payload)
+
+        assert result.include_filter == ""
+        assert result.exclude_filter == ""
+
+    def test_nested_direct_agent_json_is_skipped_after_lift(self):
+        payload = {
+            "credential_guid": "g",
+            "metadata": {
+                "extraction_method": "direct",
+                "agent_json": '{"host": "host", "port": "port"}',
+            },
+        }
+
+        result = ExtractionInput.model_validate(payload)
+
+        assert result.extraction_method == "direct"
+        assert result.agent_json is None
+
+    def test_known_metadata_wrapper_does_not_warn(self, caplog):
+        Input._unknown_keys_seen.clear()
+        caplog.set_level(logging.WARNING, logger="application_sdk.contracts.base")
+
+        ExtractionInput.model_validate(
+            {
+                "metadata": {
+                    "include_filter": {"^prod$": ["^analytics$"]},
+                    "exclude_filter": {"^temp$": [".*"]},
+                    "extraction_method": "direct",
+                }
+            }
+        )
+
+        assert "Unknown keys in payload for ExtractionInput" not in caplog.text
+
+    def test_unknown_metadata_key_still_warns(self, caplog):
+        Input._unknown_keys_seen.clear()
+        caplog.set_level(logging.WARNING, logger="application_sdk.contracts.base")
+
+        result = ExtractionInput.model_validate(
+            {
+                "metadata": {
+                    "include_filter": {"^prod$": ["^analytics$"]},
+                    "future_field": "new-ae-config",
+                }
+            }
+        )
+
+        assert result.include_filter == {"^prod$": ["^analytics$"]}
+        assert "Unknown keys in payload for ExtractionInput" in caplog.text
+        assert "['metadata']" in caplog.text
