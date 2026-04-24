@@ -358,7 +358,7 @@ jobs:
 
           # Resolve triggering actor to email; fall back to GitHub username
           GH_EMAIL=$(gh api "users/${GITHUB_ACTOR}" --jq '.email // empty' 2>/dev/null || true)
-          export CREATED_BY="${GH_EMAIL:-${GITHUB_ACTOR}}"
+          CREATED_BY="${GH_EMAIL:-${GITHUB_ACTOR}}"
 
           # Build JSON payload matching the CLI's registerInMarketplace format
           BODY=$(python3 - <<'PYEOF'
