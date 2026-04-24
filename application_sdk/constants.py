@@ -12,8 +12,8 @@ The constants are organized into the following categories:
 - OpenTelemetry Configuration
 
 Example:
-    >>> from application_sdk.constants import APPLICATION_NAME, WORKFLOW_HOST
-    >>> print(f"Running application {APPLICATION_NAME} on {WORKFLOW_HOST}")
+    >>> from application_sdk.constants import APPLICATION_NAME
+    >>> print(f"Running application {APPLICATION_NAME}")
 
 Note:
     Most constants can be configured via environment variables. See the .env.example
@@ -36,16 +36,7 @@ LOCAL_ENVIRONMENT = "local"
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
-#: Host address for the application's HTTP server
-#: Deprecated: prefer AppConfig.handler_host (reads same env vars at runtime)
-APP_HOST = str(
-    os.getenv("ATLAN_HANDLER_HOST") or os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0")
-)
-#: Port number for the application's HTTP server
-#: Deprecated: prefer AppConfig.handler_port (reads same env vars at runtime)
-APP_PORT = int(
-    os.getenv("ATLAN_HANDLER_PORT") or os.getenv("ATLAN_APP_HTTP_PORT", "8000")
-)
+# REMOVED: APP_HOST, APP_PORT — use AppConfig.handler_host / handler_port
 #: Tenant ID for multi-tenant applications
 APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
 # Domain Name of the tenant
@@ -129,29 +120,8 @@ ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
     os.getenv("ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING", "false").lower() == "true"
 )
 
-# Workflow Client Constants
-# v2-compat: remove ATLAN_WORKFLOW_HOST/PORT/NAMESPACE fallbacks when all deployments
-# use ATLAN_TEMPORAL_HOST and ATLAN_TEMPORAL_NAMESPACE.
-#: Host address for the Temporal server
-#: Deprecated: prefer AppConfig.temporal_host (reads same env vars at runtime)
-#: Prefers ATLAN_TEMPORAL_HOST (v3 combined host:port) then ATLAN_WORKFLOW_HOST (v2).
-_temporal_host_parts = os.getenv("ATLAN_TEMPORAL_HOST", "").split(":")
-WORKFLOW_HOST = (
-    _temporal_host_parts[0] if _temporal_host_parts[0] else None
-) or os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
-#: Port number for the Temporal server
-#: Deprecated: prefer AppConfig.temporal_host (reads same env vars at runtime)
-#: Extracted from ATLAN_TEMPORAL_HOST if set, else falls back to ATLAN_WORKFLOW_PORT (v2).
-WORKFLOW_PORT = (
-    _temporal_host_parts[1]
-    if len(_temporal_host_parts) == 2 and _temporal_host_parts[1]
-    else None
-) or os.getenv("ATLAN_WORKFLOW_PORT", "7233")
-#: Namespace for Temporal workflows
-#: Deprecated: prefer AppConfig.temporal_namespace
-WORKFLOW_NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE") or os.getenv(
-    "ATLAN_WORKFLOW_NAMESPACE", "default"
-)
+# REMOVED: WORKFLOW_HOST, WORKFLOW_PORT, WORKFLOW_NAMESPACE
+# Use AppConfig.temporal_host / AppConfig.temporal_namespace instead.
 #: Host address for the Temporal UI
 WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
 #: Port number for the Temporal UI
