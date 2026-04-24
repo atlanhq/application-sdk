@@ -142,15 +142,16 @@ class AppConfig:
     """Bind address for Temporal Prometheus metrics."""
 
     enable_app_vitals: bool = True
-    """Enable App Vitals interceptor for activity-level observability."""
+    """Enable App Vitals interceptor for activity-level observability.
+    Reads same env var as constants.ENABLE_APP_VITALS (ATLAN_ENABLE_APP_VITALS)."""
 
     enable_mcp: bool = False
-    """Enable Model Context Protocol (MCP) server."""
+    """Enable Model Context Protocol (MCP) server.
+    Reads same env var as constants.ENABLE_MCP (ENABLE_MCP)."""
 
     max_concurrent_storage_transfers: int = 4
     """Maximum concurrent object-store uploads/downloads.
-    Note: storage.transfer uses the constants.py value as the default parameter.
-    Callers with AppConfig access should pass config.max_concurrent_storage_transfers."""
+    Reads same env var as constants.MAX_CONCURRENT_STORAGE_TRANSFERS."""
 
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
