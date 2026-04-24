@@ -1,90 +1,115 @@
-"""Tests for ExtractionInput filter value coercion (BLDX-1118).
+"""Tests for ExtractionInput filter value handling (BLDX-1125).
 
-AE pre-parses JSON filter strings into dicts before passing to Temporal.
-ExtractionInput must coerce them back to strings.
+Filters accept dict (structured from AE), JSON string, raw regex string,
+list, and None. SQL injection is guarded by rejecting single quotes.
 """
 
-import json
+import pytest
 
-from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionInput,
+    ExtractionTaskInput,
+)
 
 
-class TestFilterValueCoercion:
-    def test_dict_include_filter_coerced_to_json_string(self):
-        """AE sends include_filter as dict — should be JSON-serialized."""
-        payload = {
-            "include_filter": {"^qa_test_db$": ["^public$"]},
-        }
+class TestFilterCoercion:
+    """ExtractionInput accepts multiple filter formats."""
+
+    def test_dict_filter_passes_through(self):
+        """Native dict format from AE — pass through."""
+        payload = {"include_filter": {"^qa$": ["^public$"]}}
         result = ExtractionInput.model_validate(payload)
-        assert isinstance(result.include_filter, str)
-        assert json.loads(result.include_filter) == {"^qa_test_db$": ["^public$"]}
+        assert result.include_filter == {"^qa$": ["^public$"]}
 
-    def test_dict_exclude_filter_coerced_to_json_string(self):
-        """AE sends exclude_filter as dict — should be JSON-serialized."""
-        payload = {
-            "exclude_filter": {"^temp_.*$": [".*"]},
-        }
+    def test_string_filter_passes_through(self):
+        """Raw regex string — pass through as string."""
+        payload = {"exclude_filter": "^temp_.*$"}
         result = ExtractionInput.model_validate(payload)
-        assert isinstance(result.exclude_filter, str)
-        assert json.loads(result.exclude_filter) == {"^temp_.*$": [".*"]}
-
-    def test_list_filter_coerced_to_json_string(self):
-        """Filter value as list should also be JSON-serialized."""
-        payload = {
-            "include_filter": ["^db1$", "^db2$"],
-        }
-        result = ExtractionInput.model_validate(payload)
-        assert isinstance(result.include_filter, str)
-        assert json.loads(result.include_filter) == ["^db1$", "^db2$"]
-
-    def test_string_filter_unchanged(self):
-        """Normal string filter should pass through unchanged."""
-        payload = {
-            "include_filter": '{"^qa$": ["^public$"]}',
-            "exclude_filter": "^temp_.*$",
-        }
-        result = ExtractionInput.model_validate(payload)
-        assert result.include_filter == '{"^qa$": ["^public$"]}'
         assert result.exclude_filter == "^temp_.*$"
 
-    def test_empty_string_filter_unchanged(self):
-        """Empty string defaults should work."""
+    def test_json_string_stays_as_string(self):
+        """JSON string — stays as string (parsed at usage time by sql_filters)."""
+        payload = {"include_filter": '{"^qa$": ["^public$"]}'}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == '{"^qa$": ["^public$"]}'
+
+    def test_list_wrapped_as_dict(self):
+        """List of regexes — wrapped as match-all-databases dict."""
+        payload = {"include_filter": ["^db1$", "^db2$"]}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == {".*": ["^db1$", "^db2$"]}
+
+    def test_none_becomes_empty_string(self):
+        """None → empty string."""
+        payload = {"include_filter": None}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == ""
+
+    def test_empty_string_unchanged(self):
+        """Empty string → stays empty string."""
+        payload = {"include_filter": ""}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == ""
+
+    def test_default_is_empty_string(self):
+        """No filter provided → default empty string."""
         result = ExtractionInput.model_validate({})
         assert result.include_filter == ""
         assert result.exclude_filter == ""
-        assert result.temp_table_regex == ""
 
-    def test_dict_temp_table_regex_coerced(self):
-        """temp_table_regex as dict should be JSON-serialized."""
-        payload = {
-            "temp_table_regex": {"pattern": "^tmp_.*"},
-        }
-        result = ExtractionInput.model_validate(payload)
-        assert isinstance(result.temp_table_regex, str)
 
-    def test_multiple_filters_all_coerced(self):
-        """All three filter fields coerced in single payload."""
-        payload = {
-            "include_filter": {"^prod$": ["^analytics$"]},
-            "exclude_filter": {"^test_.*$": [".*"]},
-            "temp_table_regex": ["^tmp_", "^temp_"],
-        }
-        result = ExtractionInput.model_validate(payload)
-        assert isinstance(result.include_filter, str)
-        assert isinstance(result.exclude_filter, str)
-        assert isinstance(result.temp_table_regex, str)
+class TestFilterSQLInjectionGuard:
+    """Single quotes blocked in filter values."""
 
-    def test_none_filter_stays_default(self):
-        """None filter values should fall through to default empty string."""
-        payload = {
-            "include_filter": None,
-        }
-        result = ExtractionInput.model_validate(payload)
-        # None is not dict/list, so validator doesn't touch it — Pydantic uses default
+    def test_single_quote_in_string_rejected(self):
+        payload = {"include_filter": "prefix'injection"}
+        with pytest.raises(ValueError, match="Single quotes not allowed"):
+            ExtractionInput.model_validate(payload)
+
+    def test_single_quote_in_dict_key_rejected(self):
+        payload = {"include_filter": {"db'; DROP TABLE--": ["^public$"]}}
+        with pytest.raises(ValueError, match="Single quotes not allowed"):
+            ExtractionInput.model_validate(payload)
+
+    def test_single_quote_in_dict_value_rejected(self):
+        payload = {"include_filter": {"^db$": ["schema'; DROP TABLE--"]}}
+        with pytest.raises(ValueError, match="Single quotes not allowed"):
+            ExtractionInput.model_validate(payload)
+
+    def test_clean_string_passes(self):
+        result = ExtractionInput.model_validate({"include_filter": "^prod_.*$"})
+        assert result.include_filter == "^prod_.*$"
+
+    def test_clean_dict_passes(self):
+        result = ExtractionInput.model_validate(
+            {"include_filter": {"^prod$": ["^analytics$"]}}
+        )
+        assert result.include_filter == {"^prod$": ["^analytics$"]}
+
+
+class TestExtractionTaskInputFilters:
+    """ExtractionTaskInput has the same filter coercion."""
+
+    def test_dict_filter_accepted(self):
+        result = ExtractionTaskInput.model_validate(
+            {"include_filter": {"^qa$": ["^public$"]}}
+        )
+        assert result.include_filter == {"^qa$": ["^public$"]}
+
+    def test_string_filter_accepted(self):
+        result = ExtractionTaskInput.model_validate({"exclude_filter": "^temp_.*$"})
+        assert result.exclude_filter == "^temp_.*$"
+
+    def test_none_becomes_empty_string(self):
+        result = ExtractionTaskInput.model_validate({"include_filter": None})
         assert result.include_filter == ""
 
-    def test_real_ae_payload(self):
-        """Simulate a real AE payload with pre-parsed filters."""
+
+class TestRealAEPayload:
+    """Simulate real AE payloads."""
+
+    def test_ae_payload_with_pre_parsed_filters(self):
+        """AE sends pre-parsed dicts — works natively."""
         payload = {
             "workflow_id": "test-wf-123",
             "credential_guid": "abc-def",
@@ -93,8 +118,15 @@ class TestFilterValueCoercion:
             "extraction_method": "direct",
         }
         result = ExtractionInput.model_validate(payload)
-        assert result.workflow_id == "test-wf-123"
-        assert result.credential_guid == "abc-def"
+        assert result.include_filter == {"^qa_test_db$": ["^public$"]}
+        assert result.exclude_filter == {}
+
+    def test_legacy_payload_with_string_filters(self):
+        """Legacy connectors send strings — works as before."""
+        payload = {
+            "include_filter": '{"^prod$": ["^analytics$"]}',
+            "exclude_filter": "^temp_.*$",
+        }
+        result = ExtractionInput.model_validate(payload)
         assert isinstance(result.include_filter, str)
-        assert result.include_filter == '{"^qa_test_db$": ["^public$"]}'
-        assert result.exclude_filter == "{}"
+        assert isinstance(result.exclude_filter, str)
