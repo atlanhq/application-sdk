@@ -149,6 +149,10 @@ def create_store_from_binding(
             config["aws_access_key_id"] = meta["accessKey"]
         if "secretKey" in meta:
             config["aws_secret_access_key"] = meta["secretKey"]
+        if "endpoint" in meta:
+            config["aws_endpoint"] = meta["endpoint"]
+        if meta.get("forcePathStyle", "").lower() == "true":
+            config["aws_virtual_hosted_style_request"] = "false"
         return S3Store(bucket=bucket, config=config)
 
     if store_kind == "azure":

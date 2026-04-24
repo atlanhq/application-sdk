@@ -283,3 +283,55 @@ class TestS3StoreWithSecretKeyRef:
         config = call_kwargs.kwargs["config"]
         assert config["aws_access_key_id"] == "test-access-key"
         assert config["aws_secret_access_key"] == "test-secret-key"
+
+
+class TestS3EndpointAndPathStyle:
+    @patch("obstore.store.S3Store")
+    def test_endpoint_passed_to_s3_config(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "objectstore"},
+            "spec": {
+                "type": "bindings.aws.s3",
+                "metadata": [
+                    {"name": "bucket", "value": "test-bucket"},
+                    {"name": "region", "value": "us-east-1"},
+                    {
+                        "name": "endpoint",
+                        "value": "https://tenant.atlan.com/api/blobstorage",
+                    },
+                    {"name": "forcePathStyle", "value": "true"},
+                ],
+            },
+        }
+        (components_dir / "objectstore.yaml").write_text(yaml.dump(doc))
+        mock_s3_cls.return_value = MagicMock()
+
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config["aws_endpoint"] == "https://tenant.atlan.com/api/blobstorage"
+        assert config["aws_virtual_hosted_style_request"] == "false"
+
+    @patch("obstore.store.S3Store")
+    def test_no_endpoint_no_path_style(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert "aws_endpoint" not in config
+        assert "aws_virtual_hosted_style_request" not in config
