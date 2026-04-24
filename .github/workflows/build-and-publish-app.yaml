@@ -471,18 +471,28 @@ jobs:
           DOCKERHUB_IMAGE:        ${{ needs.prepare.outputs.dockerhub_image }}
           DOCKERHUB_BRANCH_TAG:   ${{ needs.prepare.outputs.dockerhub_branch_tag }}
           BRANCH:                 ${{ needs.prepare.outputs.branch }}
+          PUBLISH:                ${{ inputs.publish }}
+          CHANNEL:                ${{ inputs.channel }}
         run: |
           # Always push the immutable sha-pinned tag
           TAGS="--tag ${DOCKERHUB_IMAGE}"
 
-          # Only push the mutable {branch}-latest tag for main branch builds
+          # Push the mutable {branch}-latest tag only for main branch builds
+          # targeting all tenants. For beta/staging/specific channel publishes,
+          # main-latest is not updated — it should reflect all-tenant releases only.
+          # For non-publish builds (publish=false), main-latest is also pushed since
+          # there is no channel restriction.
+          IS_ALL_TENANTS_PUBLISH="false"
           if [ "${BRANCH}" = "main" ]; then
-            TAGS="${TAGS} --tag ${DOCKERHUB_BRANCH_TAG}"
+            if [ "${PUBLISH}" != "true" ] || [ "${CHANNEL}" = "all" ]; then
+              IS_ALL_TENANTS_PUBLISH="true"
+              TAGS="${TAGS} --tag ${DOCKERHUB_BRANCH_TAG}"
+            fi
           fi
 
           docker buildx imagetools create ${TAGS} "${GHCR_IMAGE}"
           echo "✅ Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
-          [ "${BRANCH}" = "main" ] && echo "✅ Pushed to DockerHub: ${DOCKERHUB_BRANCH_TAG}"
+          [ "${IS_ALL_TENANTS_PUBLISH}" = "true" ] && echo "✅ Pushed to DockerHub: ${DOCKERHUB_BRANCH_TAG}" || echo "ℹ️  Skipped main-latest (channel=${CHANNEL:-none}, publish=${PUBLISH})"
 
   # ── Job 7: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   # For SDR apps only. When publish=true, waits for GM release to be active first.
