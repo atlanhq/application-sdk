@@ -17,7 +17,7 @@ from application_sdk.credentials.agent import (
     _substitute,
     resolve_agent_json,
 )
-from application_sdk.credentials.transforms import expand_dotted_keys
+from application_sdk.common.transforms import expand_dotted_keys
 from application_sdk.credentials.errors import (
     CredentialError,
     CredentialNotFoundError,

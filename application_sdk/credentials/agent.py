@@ -117,7 +117,7 @@ async def resolve_agent_credential(
     else:
         resolved_flat = raw
 
-    from application_sdk.credentials.transforms import (
+    from application_sdk.common.transforms import (
         expand_dotted_keys,
         flatten_auth_section,
     )
