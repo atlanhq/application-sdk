@@ -117,13 +117,9 @@ async def resolve_agent_credential(
     else:
         resolved_flat = raw
 
-    from application_sdk.common.transforms import (
-        expand_dotted_keys,
-        flatten_auth_section,
-    )
+    from application_sdk.common.transforms import transform_agent_credentials
 
-    expanded = expand_dotted_keys(resolved_flat)
-    return flatten_auth_section(expanded)
+    return transform_agent_credentials(resolved_flat)
 
 
 # Keep backward-compatible alias for existing callers and tests

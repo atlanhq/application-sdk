@@ -209,4 +209,7 @@ def transform_agent_credentials(
     if extra_fields:
         creds["extra"] = extra_fields
 
+    # Expand any remaining dotted keys not handled by auth-prefix logic
+    creds = expand_dotted_keys(creds)
+
     return creds

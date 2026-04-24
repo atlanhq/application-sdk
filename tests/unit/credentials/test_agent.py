@@ -163,23 +163,22 @@ class TestResolveAgentJsonHappyPath:
         # Literal fields are preserved as-is.
         assert resolved["host"] == "34.122.182.89"
         assert resolved["port"] == 5432
-        assert resolved["auth-type"] == "basic"
+        assert resolved["authType"] == "basic"
         assert resolved["aws-region"] == "ap-south-1"
 
-        # Ref-keys substituted and collapsed into nested dicts.
-        assert resolved["basic"] == {
-            "username": "real_pg_user",
-            "password": "real_pg_password",
-        }
+        # Auth-prefixed fields promoted to root level.
+        assert resolved["username"] == "real_pg_user"
+        assert resolved["password"] == "real_pg_password"
+        assert "basic" not in resolved
+
         assert resolved["extra"] == {
             "database": "real_pg_db",
             # compiled_url was a literal value (not in bundle), copied through.
             "compiled_url": "postgresql+asyncpg://34.122.182.89:5432/database",
         }
 
-        # _flatten_auth_section promotes basic.* fields to root level.
-        assert resolved["username"] == "real_pg_user"
-        assert resolved["password"] == "real_pg_password"
+        # credentialSource added
+        assert resolved["credentialSource"] == "agent"
 
         # No dotted keys remain after expansion.
         assert not any("." in k for k in resolved)
@@ -215,6 +214,7 @@ class TestResolveAgentJsonHappyPath:
         agent_json = json.dumps(
             {
                 "agent-name": "test-agent",
+                "auth-type": "basic",
                 "secret-path": "bundle",
                 "host": "literal.example.com",
                 "port": 5432,
@@ -240,7 +240,7 @@ class TestResolveAgentJsonHappyPath:
 
         assert resolved["host"] == "literal.example.com"
         assert resolved["aws-region"] == "ap-south-1"
-        assert resolved["basic"] == {"username": "real_user"}
+        assert resolved["username"] == "real_user"
 
     async def test_missing_ref_key_stays_as_ref(self) -> None:
         """v2 parity: if the bundle doesn't have a ref-key, leave the
@@ -250,6 +250,7 @@ class TestResolveAgentJsonHappyPath:
         agent_json = json.dumps(
             {
                 "agent-name": "test-agent",
+                "auth-type": "basic",
                 "secret-path": "bundle",
                 "host": "h",
                 "basic.username": "username",  # present in bundle
@@ -260,9 +261,9 @@ class TestResolveAgentJsonHappyPath:
 
         resolved = await resolve_agent_json(agent_json, store)
 
-        assert resolved["basic"]["username"] == "real_user"
+        assert resolved["username"] == "real_user"
         # Ref-key preserved verbatim when no bundle entry matches.
-        assert resolved["basic"]["password"] == "password"
+        assert resolved["password"] == "password"
 
     async def test_v2_style_nested_extra_also_resolved(self) -> None:
         """Backward compat: if the upstream emits v2-style nested
@@ -310,12 +311,13 @@ class TestResolveAgentJsonHappyPath:
         agent_json = json.dumps(
             {
                 "agent-name": "test-agent",
+                "auth-type": "basic",
                 "secret-path": "bundle",
                 "basic.username": "user_ref",
             }
         )
         resolved = await resolve_agent_json(agent_json, DictReturningStore())  # type: ignore[arg-type]
-        assert resolved["basic"] == {"username": "real_user"}
+        assert resolved["username"] == "real_user"
 
 
 # ---------------------------------------------------------------------------
@@ -349,10 +351,10 @@ class TestResolveAgentJsonErrorPaths:
     async def test_empty_secret_path_skips_bundle_fetch(self) -> None:
         store = _store_with()
         agent_json = json.dumps(
-            {"agent-name": "test", "secret-path": "", "basic.username": "u"}
+            {"agent-name": "test", "auth-type": "basic", "secret-path": "", "basic.username": "u"}
         )
         result = await resolve_agent_json(agent_json, store)
-        assert result.get("basic", {}).get("username") == "u"
+        assert result["username"] == "u"
 
     async def test_secret_not_found_raises_credential_not_found(self) -> None:
         import pytest
@@ -680,10 +682,10 @@ class TestCredentialResolverAgentBranch:
 
         assert resolved["host"] == "34.122.182.89"
         assert resolved["port"] == 5432
-        assert resolved["basic"] == {
-            "username": "real_pg_user",
-            "password": "real_pg_password",
-        }
+        assert resolved["username"] == "real_pg_user"
+        assert resolved["password"] == "real_pg_password"
+        assert resolved["authType"] == "basic"
+        assert resolved["credentialSource"] == "agent"
         assert resolved["extra"]["database"] == "real_pg_db"
 
     async def test_resolve_raw_legacy_guid_ref_still_works(self) -> None:
