@@ -293,6 +293,8 @@ async def create_temporal_client(
         tls_domain: TLS server name override.
         connect_max_attempts: Maximum connection attempts (default 5).
         connect_retry_delay_seconds: Initial delay between retries (default 2.0s).
+        enable_prometheus: Enable Temporal Prometheus metrics endpoint.
+        prometheus_bind_address: Bind address for Prometheus metrics (e.g. "0.0.0.0:9464").
 
     Returns:
         Connected Temporal client.

@@ -285,6 +285,32 @@ class TestDeadConstantsRemoved:
         assert not hasattr(constants, "GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS")
 
 
+class TestServiceVersionDefault:
+    """SERVICE_VERSION should default to the SDK version, not 0.1.0."""
+
+    def test_defaults_to_sdk_version(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("OTEL_SERVICE_VERSION", raising=False)
+        # Re-import to pick up the default
+        import importlib
+
+        import application_sdk.constants as c
+
+        importlib.reload(c)
+        from application_sdk.version import __version__
+
+        assert c.SERVICE_VERSION == __version__
+        assert c.SERVICE_VERSION != "0.1.0"
+
+    def test_env_override_respected(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("OTEL_SERVICE_VERSION", "custom-1.2.3")
+        import importlib
+
+        import application_sdk.constants as c
+
+        importlib.reload(c)
+        assert c.SERVICE_VERSION == "custom-1.2.3"
+
+
 class TestRealWorldDevScenarios:
     """Simulate real developer workflows using AppConfig + env vars."""
 

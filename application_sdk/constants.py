@@ -234,7 +234,11 @@ LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")).upp
 #: tracer/meter initialization. AppConfig.service_name is the runtime equivalent.
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
 #: Service version for OpenTelemetry
-SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
+SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "")
+if not SERVICE_VERSION:
+    from application_sdk.version import __version__
+
+    SERVICE_VERSION = __version__
 #: Additional resource attributes for OpenTelemetry
 OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 #: Endpoint for the OpenTelemetry collector
