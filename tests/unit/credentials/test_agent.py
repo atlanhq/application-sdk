@@ -163,8 +163,8 @@ class TestResolveAgentJsonHappyPath:
         # Literal fields are preserved as-is.
         assert resolved["host"] == "34.122.182.89"
         assert resolved["port"] == 5432
-        assert resolved["auth-type"] == "basic"
-        assert resolved["aws-region"] == "ap-south-1"
+        assert resolved["authType"] == "basic"
+        assert resolved["awsRegion"] == "ap-south-1"
 
         # Ref-keys substituted and collapsed into nested dicts.
         assert resolved["basic"] == {
@@ -239,7 +239,7 @@ class TestResolveAgentJsonHappyPath:
         resolved = await resolve_agent_json(agent_json, store)
 
         assert resolved["host"] == "literal.example.com"
-        assert resolved["aws-region"] == "ap-south-1"
+        assert resolved["awsRegion"] == "ap-south-1"
         assert resolved["basic"] == {"username": "real_user"}
 
     async def test_missing_ref_key_stays_as_ref(self) -> None:

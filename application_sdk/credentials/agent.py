@@ -118,7 +118,8 @@ async def resolve_agent_credential(
         resolved_flat = raw
 
     expanded = _expand_dotted(resolved_flat)
-    return _flatten_auth_section(expanded)
+    flattened = _flatten_auth_section(expanded)
+    return _normalize_keys(flattened)
 
 
 # Keep backward-compatible alias for existing callers and tests
@@ -300,3 +301,31 @@ def _flatten_auth_section(creds: dict[str, Any]) -> dict[str, Any]:
         else:
             creds[key] = value
     return creds
+
+
+def _normalize_keys(creds: dict[str, Any]) -> dict[str, Any]:
+    """Convert hyphenated root-level keys to camelCase.
+
+    The direct credential flow (``DaprCredentialVault.get_credentials``)
+    returns camelCase keys (``authType``, ``secretManager``). The agent
+    flow uses hyphenated aliases (``auth-type``, ``secret-manager``).
+    This step normalizes agent output to match the direct flow so
+    connectors see consistent key names regardless of resolution path.
+
+    Example::
+
+        {"auth-type": "basic", "aws-region": "us-east-1", "host": "h"}
+        →
+        {"authType": "basic", "awsRegion": "us-east-1", "host": "h"}
+
+    Keys without hyphens and nested dicts are left unchanged.
+    """
+    out: dict[str, Any] = {}
+    for key, value in creds.items():
+        if "-" in key:
+            parts = key.split("-")
+            camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+            out[camel] = value
+        else:
+            out[key] = value
+    return out
