@@ -317,9 +317,11 @@ class TestS3EndpointAndPathStyle:
         config = mock_s3_cls.call_args.kwargs["config"]
         assert config["aws_endpoint"] == "https://tenant.atlan.com/api/blobstorage"
         assert config["aws_virtual_hosted_style_request"] == "false"
+        client_options = mock_s3_cls.call_args.kwargs["client_options"]
+        assert client_options == {"user_agent": "aws-sdk-go-v2 atlan-application-sdk"}
 
     @patch("obstore.store.S3Store")
-    def test_no_endpoint_no_path_style(
+    def test_no_endpoint_no_path_style_no_user_agent(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
         components_dir = _write_component(
@@ -335,3 +337,4 @@ class TestS3EndpointAndPathStyle:
         config = mock_s3_cls.call_args.kwargs["config"]
         assert "aws_endpoint" not in config
         assert "aws_virtual_hosted_style_request" not in config
+        assert mock_s3_cls.call_args.kwargs["client_options"] is None

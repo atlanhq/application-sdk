@@ -143,6 +143,7 @@ def create_store_from_binding(
 
         bucket = meta.get("bucket", "")
         config: dict[str, str] = {}
+        client_options = None
         if "region" in meta:
             config["aws_region"] = meta["region"]
         if "accessKey" in meta:
@@ -151,9 +152,10 @@ def create_store_from_binding(
             config["aws_secret_access_key"] = meta["secretKey"]
         if "endpoint" in meta:
             config["aws_endpoint"] = meta["endpoint"]
+            client_options = {"user_agent": "aws-sdk-go-v2 atlan-application-sdk"}
         if meta.get("forcePathStyle", "").lower() == "true":
             config["aws_virtual_hosted_style_request"] = "false"
-        return S3Store(bucket=bucket, config=config)
+        return S3Store(bucket=bucket, config=config, client_options=client_options)
 
     if store_kind == "azure":
         from obstore.store import AzureStore
