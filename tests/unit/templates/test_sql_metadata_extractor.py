@@ -325,6 +325,35 @@ class TestSqlMetadataExtractorPrepareSql:
         )
         assert result == "x  y"
 
+    def test_substitutes_dict_filters_via_normalize(self) -> None:
+        """Dict filters (from AE) are normalized into regex via sql_filters."""
+        sql = "{normalized_exclude_regex}|{normalized_include_regex}"
+        result = self._extractor()._prepare_sql(
+            sql,
+            ExtractionTaskInput(
+                include_filter={"^prod$": ["^analytics$", "^reporting$"]},
+                exclude_filter={"^temp_db$": [".*"]},
+            ),
+        )
+        # normalize_filters produces "db\.schema" patterns
+        assert "prod" in result
+        assert "analytics" in result
+        assert "temp_db" in result
+
+    def test_mixed_dict_include_string_exclude(self) -> None:
+        """Dict include + string exclude — each handled by its type."""
+        sql = "{normalized_exclude_regex}|{normalized_include_regex}"
+        result = self._extractor()._prepare_sql(
+            sql,
+            ExtractionTaskInput(
+                include_filter={"^prod$": ["^public$"]},
+                exclude_filter="^temp_.*$",
+            ),
+        )
+        assert "prod" in result
+        assert "public" in result
+        assert "^temp_.*$" in result
+
 
 class TestSqlMetadataExtractorLoadSqlClient:
     """Tests for ``_load_sql_client`` and default fetch task execution."""
@@ -499,25 +528,30 @@ class TestPublishInputMixin:
     def test_auto_derives_state_prefixes(self) -> None:
         out = PublishInputMixin(connection_qualified_name="default/snowflake/123")
         assert "default/snowflake/123" in out.publish_state_prefix
+        assert "default/snowflake/123" in out.staging_data_prefix
         assert "default/snowflake/123" in out.current_state_prefix
 
     def test_empty_connection_yields_empty_prefixes(self) -> None:
         out = PublishInputMixin()
         assert out.publish_state_prefix == ""
+        assert out.staging_data_prefix == ""
         assert out.current_state_prefix == ""
 
     def test_explicit_values_not_overridden(self) -> None:
         out = PublishInputMixin(
             connection_qualified_name="default/pg/456",
             publish_state_prefix="custom/publish",
+            staging_data_prefix="custom/staging",
             current_state_prefix="custom/current",
         )
         assert out.publish_state_prefix == "custom/publish"
+        assert out.staging_data_prefix == "custom/staging"
         assert out.current_state_prefix == "custom/current"
 
     def test_unsafe_connection_qn_no_derivation(self) -> None:
         out = PublishInputMixin(connection_qualified_name="../../attack")
         assert out.publish_state_prefix == ""
+        assert out.staging_data_prefix == ""
         assert out.current_state_prefix == ""
 
     def test_used_as_mixin(self) -> None:
@@ -563,6 +597,7 @@ class TestPublishInputMixin:
         )
         # Auto-resolve fails gracefully outside Temporal
         assert out.publish_state_prefix != ""
+        assert out.staging_data_prefix != ""
         assert out.current_state_prefix != ""
         # transformed_data_prefix empty since output_path couldn't be resolved
         assert out.transformed_data_prefix == ""
@@ -574,6 +609,18 @@ class TestPublishInputMixin:
             transformed_data_prefix="custom/transformed",
         )
         assert out.transformed_data_prefix == "custom/transformed"
+
+    def test_staging_data_prefix_is_publish_without_suffix(self) -> None:
+        """staging_data_prefix is publish_state_prefix up to connection QN only."""
+        out = PublishInputMixin(connection_qualified_name="default/snowflake/123")
+        assert out.staging_data_prefix == (
+            "persistent-artifacts/apps/atlan-publish-app/state/default/snowflake/123"
+        )
+        assert out.publish_state_prefix == (
+            "persistent-artifacts/apps/atlan-publish-app/state"
+            "/default/snowflake/123/publish-state"
+        )
+        assert out.publish_state_prefix.startswith(out.staging_data_prefix)
 
     def test_path_traversal_in_output_path_yields_empty(self) -> None:
         out = PublishInputMixin(
@@ -731,4 +778,5 @@ class TestExtractionOutputFields:
             connection_qualified_name="default/postgres/prod",
         )
         assert "default/postgres/prod" in output.publish_state_prefix
+        assert "default/postgres/prod" in output.staging_data_prefix
         assert "default/postgres/prod" in output.current_state_prefix

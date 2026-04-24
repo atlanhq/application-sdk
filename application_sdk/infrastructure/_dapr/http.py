@@ -9,6 +9,8 @@ Endpoint reference: https://docs.dapr.io/reference/api/
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 from typing import Any
 from urllib.parse import quote
@@ -41,9 +43,43 @@ BINDING_PATH = f"{_API_PREFIX}/bindings/{{binding_name}}"
 METADATA_PATH = f"{_API_PREFIX}/metadata"
 
 
+_HEALTHZ_PATH = "/v1.0/healthz"
+_DEFAULT_SIDECAR_WAIT_TIMEOUT = 10.0
+_DEFAULT_SIDECAR_POLL_INTERVAL = 0.5
+
+
 def _dapr_base_url() -> str:
     port = os.environ.get("DAPR_HTTP_PORT", str(_DEFAULT_DAPR_HTTP_PORT))
     return f"http://localhost:{port}"
+
+
+async def wait_for_dapr_sidecar(
+    timeout: float = _DEFAULT_SIDECAR_WAIT_TIMEOUT,
+    interval: float = _DEFAULT_SIDECAR_POLL_INTERVAL,
+) -> None:
+    """Poll /v1.0/healthz until the Dapr sidecar is ready or timeout elapses.
+
+    Dapr returns 204 when all components have finished initializing.
+    On timeout the function logs a warning and returns — startup proceeds
+    and the subsequent metadata call will surface any remaining errors.
+    """
+    url = f"{_dapr_base_url()}{_HEALTHZ_PATH}"
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    async with httpx.AsyncClient(timeout=2.0) as client:
+        while True:
+            try:
+                r = await client.get(url)
+                if r.status_code == 204:
+                    return
+            except Exception as exc:
+                logger.debug("Dapr sidecar poll failed: %s", exc)
+            if loop.time() >= deadline:
+                logger.warning(
+                    "Dapr sidecar not ready after %.0fs — proceeding anyway", timeout
+                )
+                return
+            await asyncio.sleep(interval)
 
 
 # ---------------------------------------------------------------------------
@@ -182,17 +218,25 @@ class AsyncDaprClient:
         """Invoke a Dapr output binding.
 
         Note:
-            ``data`` is decoded as UTF-8 text before JSON-encoding into the
-            request body.  This means only text-compatible payloads are
-            supported.  Binary data (protobuf, compressed) should be
-            base64-encoded by the caller before passing to this method.
+            If ``data`` contains valid JSON it is embedded as a parsed
+            object so that Dapr forwards a proper JSON body to HTTP
+            bindings (avoids double-encoding).  Otherwise the raw bytes
+            are decoded as UTF-8 text.  Binary data (protobuf, compressed)
+            should be base64-encoded by the caller.
         """
         body: dict[str, Any] = {
             "operation": operation,
             "metadata": metadata or {},
         }
         if data:
-            body["data"] = data.decode("utf-8", errors="replace")
+            try:
+                parsed = json.loads(data)
+                if isinstance(parsed, (dict, list)):
+                    body["data"] = parsed
+                else:
+                    body["data"] = data.decode("utf-8", errors="replace")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                body["data"] = data.decode("utf-8", errors="replace")
         resp = await self._client.post(
             BINDING_PATH.format(binding_name=binding_name),
             json=body,

@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.1.0"
+version = "3.2.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -147,7 +147,9 @@ start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app
 #start-dapr.shell = "set -a && source .env && set +a && dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
 
 start-temporal = "temporal server start-dev --db-filename ./temporal.db"
-start-deps.shell = "poe start-dapr & poe start-temporal &"
+# Export Dapr ports before backgrounding so `uv run main.py` (run separately)
+# sees them. Without this, devs must manually `export DAPR_HTTP_PORT=3500`.
+start-deps.shell = "export DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 && poe start-dapr & poe start-temporal &"
 stop-deps.shell = "lsof -ti:3000,3500,7233,8233,50001 | xargs kill -9 2>/dev/null || true"
 test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-integ.db &>/tmp/temporal-integ.log & sleep 3 && uv run pytest tests/integration/ -m integration -v --timeout=120; EXIT=$?; kill %1 2>/dev/null; exit $EXIT"
 

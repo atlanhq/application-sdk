@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.2.0 (April 23, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.1.0...v3.2.0
+
+### Features
+
+- revamp trends tab with snapshot cards, line chart, and sortable table (#1541) (by @mananjain99 in [b78f213](https://github.com/atlanhq/application-sdk/commit/b78f213))
+
+### Bug Fixes
+
+- coerce pre-parsed JSON filter values to strings [BLDX-1118] (#1531) (by @Aryamanz29 in [2e211fe](https://github.com/atlanhq/application-sdk/commit/2e211fe))
+- parse JSON data in invoke_binding to prevent double-encoding (#1530) (by @vaibhavatlan in [4e6a065](https://github.com/atlanhq/application-sdk/commit/4e6a065))
+- skip all deploy steps when scan artifacts expired (#1537) (by @mananjain99 in [6d23f9b](https://github.com/atlanhq/application-sdk/commit/6d23f9b))
+- skip non-Python packages in auto-fix (Java, Go, Helm, Rust) (#1534) (by @mananjain99 in [be1e83d](https://github.com/atlanhq/application-sdk/commit/be1e83d))
+- allowlist CVE-2023-45853 (zlib1g MiniZip — no fix available) (#1538) (by @Divyanshu-Patel in [dcc5dd4](https://github.com/atlanhq/application-sdk/commit/dcc5dd4))
+- resolve broken event_bus import in token refresh (#1543) (by @SwarnadeepChatterjee in [bad5b2d](https://github.com/atlanhq/application-sdk/commit/bad5b2d))
+- return HTTP 400 for failed auth instead of 200 [BLDX-1092] (#1536) (by @vaibhavatlan in [8895344](https://github.com/atlanhq/application-sdk/commit/8895344))
+- tighten allowlist expiry policy — CRITICAL 15d, HIGH 30d (#1545) (by @adityachoudhury-cloud in [5bc8836](https://github.com/atlanhq/application-sdk/commit/5bc8836))
+- wait for sidecar readiness before querying metadata at startup (#1535) (by @anuj-atlan in [bb5bc74](https://github.com/atlanhq/application-sdk/commit/bb5bc74))
+- ParquetFileWriter data loss — unique filenames + immediate upload per sub-chunk (#1547) (by @prateek11rai in [9af8023](https://github.com/atlanhq/application-sdk/commit/9af8023))
+
+
 ## v3.1.0 (April 22, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.0.1...v3.1.0

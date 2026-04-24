@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
+from application_sdk.common.sql_filters import normalize_filters
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
@@ -180,12 +181,29 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Warning:
             SQL templates that use these placeholders MUST wrap each substitution
             in single quotes, e.g. ``WHERE name !~ '{normalized_exclude_regex}'``.
-            The ``_SAFE_FILTER_PATTERN`` guard blocks single quotes in filter
-            values but only prevents injection when this wrapping is present.
-            Templates that omit the surrounding quotes are not protected.
+            Single quotes in filter values are blocked by the SQL injection guard
+            in ``_validate_no_sql_injection``. Templates that omit the surrounding
+            quotes are not protected.
         """
-        exclude_regex = input.exclude_filter or "^$"
-        include_regex = input.include_filter or ".*"
+        # Filters can be dict (structured from AE) or str (raw regex / JSON string).
+        # Dict filters are normalized via sql_filters; strings are used directly.
+        if isinstance(input.include_filter, dict) or isinstance(
+            input.exclude_filter, dict
+        ):
+            if isinstance(input.include_filter, dict):
+                inc_list = normalize_filters(input.include_filter, is_include=True)
+                include_regex = "|".join(inc_list) if inc_list else ".*"
+            else:
+                include_regex = input.include_filter or ".*"
+
+            if isinstance(input.exclude_filter, dict):
+                exc_list = normalize_filters(input.exclude_filter, is_include=False)
+                exclude_regex = "|".join(exc_list) if exc_list else "^$"
+            else:
+                exclude_regex = input.exclude_filter or "^$"
+        else:
+            exclude_regex = input.exclude_filter or "^$"
+            include_regex = input.include_filter or ".*"
 
         temp_table_sql = ""
         if input.temp_table_regex:
