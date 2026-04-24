@@ -24,8 +24,22 @@ calls ``logging.basicConfig(level=LOG_LEVEL)`` and creates ``MeterProvider`` /
 ``TracerProvider`` at **module import time** — before ``main()`` parses CLI args and
 constructs ``AppConfig``. Moving these to AppConfig would require making the entire
 observability stack lazy-initializing (defer setup until first use), which is a large
-refactor. Until then, constants.py provides the import-time values that the
-observability layer needs.
+refactor with the following risks:
+
+- **Lost early logs**: any log emitted before ``configure()`` is called would be
+  silently dropped or go to a default handler with wrong level/format. This makes
+  startup failures harder to diagnose — exactly when logs matter most.
+- **Thread safety**: lazy init requires double-checked locking or ``threading.Once``
+  to avoid races when multiple threads (Temporal worker, health server, handler)
+  trigger first-use concurrently.
+- **Import-order sensitivity**: if any module happens to log during import (common
+  for dependency warnings, deprecation notices), the lazy guard must handle the
+  "not yet configured" state gracefully without crashing or losing the message.
+- **Test isolation**: every test that touches logging/metrics/traces would need to
+  reset the lazy singleton, adding fragile teardown logic across ~100 test files.
+
+Until the observability stack is refactored, constants.py provides the import-time
+values it needs. The env var is the single source of truth for both readers.
 
 **Adding new config:**
 If the consumer runs at import time → add to ``constants.py``.
