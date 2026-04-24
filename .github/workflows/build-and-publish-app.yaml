@@ -169,7 +169,7 @@ jobs:
 
           DOCKERHUB_BASE="atlanhq/${REPO}"
           DOCKERHUB_IMAGE="${DOCKERHUB_BASE}:${BRANCH}-${IMAGE_TAG}"
-          DOCKERHUB_BRANCH_TAG="${DOCKERHUB_BASE}:${BRANCH}"
+          DOCKERHUB_BRANCH_TAG="${DOCKERHUB_BASE}:${BRANCH}-latest"
 
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
