@@ -86,11 +86,8 @@ APP_SDK_VERSION = os.getenv("ATLAN_SDK_VERSION", "")
 APP_TYPE = os.getenv("ATLAN_APP_TYPE", "")
 #: Release publication timestamp from Global Marketplace (ISO 8601)
 PUBLISHED_AT = os.getenv("ATLAN_PUBLISHED_AT", "")
-# REMOVED: APP_DASHBOARD_HOST, APP_DASHBOARD_PORT — unused.
-#: Minimum required SQL Server version (used by teradata-app, hive-app)
-SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
-#: Path to the SQL queries directory (used by redshift-app, saphana-app, snowflake-app)
-SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
+# REMOVED: APP_DASHBOARD_HOST, APP_DASHBOARD_PORT, SQL_SERVER_MIN_VERSION,
+# SQL_QUERIES_PATH — unused internally, v2-only external consumers.
 
 # Output Path Constants
 #: Output path format for workflows.
@@ -141,13 +138,9 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
     "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
 )
 
-#: Enable structured failure logging for Temporal activities (used by automation-engine-app)
-ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
-    os.getenv("ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING", "false").lower() == "true"
-)
-
-# REMOVED: WORKFLOW_UI_HOST, WORKFLOW_UI_PORT, WORKFLOW_MAX_TIMEOUT_HOURS,
-# WORKFLOW_HOST, WORKFLOW_PORT, WORKFLOW_NAMESPACE — unused or moved to AppConfig.
+# REMOVED: ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING, WORKFLOW_UI_HOST,
+# WORKFLOW_UI_PORT, WORKFLOW_MAX_TIMEOUT_HOURS, WORKFLOW_HOST, WORKFLOW_PORT,
+# WORKFLOW_NAMESPACE — unused or moved to AppConfig.
 # REMOVED: MAX_CONCURRENT_ACTIVITIES — unused, see ExecutionSettings.max_concurrent_activities
 
 #: Maximum concurrent object-store transfers (uploads / downloads)
@@ -178,10 +171,7 @@ DEPLOYMENT_SECRET_PATH = os.getenv(
 AUTH_ENABLED = os.getenv("ATLAN_AUTH_ENABLED", "false").lower() == "true"
 #: OAuth2 authentication URL for workflow services
 AUTH_URL = os.getenv("ATLAN_AUTH_URL")
-#: Whether to enable TLS for Temporal workflow connections (used by openlineage-app, enrichment-studio-app)
-WORKFLOW_TLS_ENABLED = (
-    os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
-)
+# REMOVED: WORKFLOW_TLS_ENABLED — v2-only consumers, v3 is a breaking release.
 
 # Deployment Secret Store Key Names
 #: Key name for OAuth2 client ID in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_ID_KEY)
