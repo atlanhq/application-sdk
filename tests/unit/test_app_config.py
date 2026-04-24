@@ -135,37 +135,37 @@ class TestRemovedConstantsReplacedByAppConfig:
     def test_app_host_removed_from_constants(self):
         import application_sdk.constants as c
 
-        assert not hasattr(c, "APP_HOST"), (
-            "APP_HOST should be removed — use AppConfig.handler_host"
-        )
+        assert not hasattr(
+            c, "APP_HOST"
+        ), "APP_HOST should be removed — use AppConfig.handler_host"
 
     def test_app_port_removed_from_constants(self):
         import application_sdk.constants as c
 
-        assert not hasattr(c, "APP_PORT"), (
-            "APP_PORT should be removed — use AppConfig.handler_port"
-        )
+        assert not hasattr(
+            c, "APP_PORT"
+        ), "APP_PORT should be removed — use AppConfig.handler_port"
 
     def test_workflow_host_removed_from_constants(self):
         import application_sdk.constants as c
 
-        assert not hasattr(c, "WORKFLOW_HOST"), (
-            "WORKFLOW_HOST should be removed — use AppConfig.temporal_host"
-        )
+        assert not hasattr(
+            c, "WORKFLOW_HOST"
+        ), "WORKFLOW_HOST should be removed — use AppConfig.temporal_host"
 
     def test_workflow_port_removed_from_constants(self):
         import application_sdk.constants as c
 
-        assert not hasattr(c, "WORKFLOW_PORT"), (
-            "WORKFLOW_PORT should be removed — use AppConfig.temporal_host"
-        )
+        assert not hasattr(
+            c, "WORKFLOW_PORT"
+        ), "WORKFLOW_PORT should be removed — use AppConfig.temporal_host"
 
     def test_workflow_namespace_removed_from_constants(self):
         import application_sdk.constants as c
 
-        assert not hasattr(c, "WORKFLOW_NAMESPACE"), (
-            "WORKFLOW_NAMESPACE should be removed — use AppConfig.temporal_namespace"
-        )
+        assert not hasattr(
+            c, "WORKFLOW_NAMESPACE"
+        ), "WORKFLOW_NAMESPACE should be removed — use AppConfig.temporal_namespace"
 
     def test_dead_constants_removed(self):
         import application_sdk.constants as c
@@ -176,9 +176,9 @@ class TestRemovedConstantsReplacedByAppConfig:
             "START_TO_CLOSE_TIMEOUT",
             "GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS",
         ]:
-            assert not hasattr(c, name), (
-                f"{name} should be removed — see ExecutionSettings"
-            )
+            assert not hasattr(
+                c, name
+            ), f"{name} should be removed — see ExecutionSettings"
 
     def test_appconfig_handler_host_replaces_app_host(
         self, monkeypatch: pytest.MonkeyPatch
