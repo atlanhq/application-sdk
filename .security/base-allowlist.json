@@ -56,6 +56,20 @@
     "expires": "2026-05-23",
     "added_by": "mananjain99"
   },
+  "CVE-2026-4786": {
+    "package": "python-3.11-base",
+    "severity": "HIGH",
+    "reason": "Base image — Python 3.11 runtime (python-3.11-base@3.11.15-r1). Fixed in 3.11.15-r2 upstream; awaiting Wolfi rebuild of app-runtime-base.",
+    "expires": "2026-05-24",
+    "added_by": "hritika-atlan"
+  },
+  "CVE-2026-6100": {
+    "package": "python-3.11-base",
+    "severity": "HIGH",
+    "reason": "Base image — Python 3.11 runtime (python-3.11-base@3.11.15-r1). Fixed in 3.11.15-r2 upstream; awaiting Wolfi rebuild of app-runtime-base.",
+    "expires": "2026-05-24",
+    "added_by": "hritika-atlan"
+  },
   "CVE-2026-31812": {
     "package": "quinn-proto",
     "severity": "HIGH",
