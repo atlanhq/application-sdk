@@ -1,23 +1,31 @@
 """Application SDK configuration constants.
 
-This module contains all the configuration constants used throughout the Application SDK.
-Constants are primarily loaded from environment variables with sensible defaults.
+This module provides **import-time** configuration — values read from environment
+variables once at module import, before ``AppConfig`` is constructed. They are used
+by code that initialises at import time (observability stack, OTEL exporters,
+logging.basicConfig, Dapr component names).
 
-The constants are organized into the following categories:
-- Application Configuration
-- Workflow Configuration
-- SQL Client Configuration
-- DAPR Configuration
-- Logging Configuration
-- OpenTelemetry Configuration
+**When to use constants.py vs AppConfig:**
+
+* ``constants.py`` — for values consumed at **module level** (top of file, class
+  body, default parameters). These run before ``main()`` or ``run_dev_combined()``
+  and cannot wait for ``AppConfig``.
+* ``AppConfig`` (in ``main.py``) — for values consumed at **runtime** inside
+  functions and methods. ``AppConfig`` is the single authoritative config object
+  passed through the call chain.
+
+Both read from the **same environment variables with the same defaults** so they
+stay in sync. The env var is the single source of truth — it is set once by
+Helm/Docker/.env before the process starts and both readers see the same value.
+
+**Adding new config:**
+If the consumer runs at import time → add to ``constants.py``.
+If the consumer runs at runtime → add to ``AppConfig`` only.
+If both → add to both with the same env var and default, and document the link.
 
 Example:
     >>> from application_sdk.constants import APPLICATION_NAME
     >>> print(f"Running application {APPLICATION_NAME}")
-
-Note:
-    Most constants can be configured via environment variables. See the .env.example
-    file for all available configuration options.
 """
 
 import os

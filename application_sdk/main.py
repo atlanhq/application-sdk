@@ -89,9 +89,24 @@ from application_sdk.discovery import (  # noqa: E402
 
 @dataclass
 class AppConfig:
-    """Configuration for app execution.
+    """Runtime configuration for app execution.
 
-    Loaded from CLI arguments with environment variable fallbacks.
+    ``AppConfig`` is the **authoritative runtime config** passed through the call
+    chain to workers, handlers, and the Temporal client. It is constructed after
+    CLI argument parsing (``from_args_and_env``) or directly in dev scripts
+    (``run_dev_combined``).
+
+    **Relationship with constants.py:**
+    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``,
+    ``ENABLE_PROMETHEUS_METRICS``). Those constants serve code that runs at
+    **import time** (observability init, logging.basicConfig) — before AppConfig
+    exists. Both AppConfig and constants.py read the **same env vars with the
+    same defaults** so they stay in sync.
+
+    **Construction paths:**
+    - Production: ``main()`` → ``AppConfig.from_args_and_env(args)``
+    - Dev (CLI): ``atlan app run`` → same as production
+    - Dev (script): ``run_dev_combined(MyApp)`` → ``AppConfig(...)`` directly
     """
 
     mode: str
