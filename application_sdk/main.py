@@ -624,7 +624,24 @@ async def run_worker_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue)
+    # Discover the app's Handler so SDR workflows can be registered on the
+    # worker.  When no Handler is found, create_worker silently skips SDR.
+    handler_class_for_sdr = load_handler_class(
+        config.app_module,
+        handler_module_path=config.handler_module,
+    )
+    handler_for_sdr = (
+        handler_class_for_sdr() if handler_class_for_sdr is not None else None
+    )
+    if handler_for_sdr is not None:
+        logger.info(
+            "Loaded handler %s for SDR workflow registration",
+            type(handler_for_sdr).__name__,
+        )
+
+    worker = create_worker(
+        client, task_queue=config.task_queue, handler=handler_for_sdr
+    )
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -830,18 +847,8 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue)
-
-    for registered_app in AppRegistry.get_instance().list_apps():
-        app_meta = AppRegistry.get_instance().get(registered_app)
-        logger.info("Registered app %s version %s", registered_app, app_meta.version)
-
-    for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
-        for task_meta in tasks:
-            logger.debug(
-                "Registered task %s for app %s", task_meta.name, registered_app
-            )
-
+    # Discover the handler before building the worker so the same instance
+    # serves both the HTTP service and the SDR Temporal workflows.
     handler_class = load_handler_class(
         config.app_module,
         handler_module_path=config.handler_module,
@@ -857,6 +864,19 @@ async def run_combined_mode(config: AppConfig) -> None:
         )
 
     handler = handler_class()
+
+    worker = create_worker(client, task_queue=config.task_queue, handler=handler)
+
+    for registered_app in AppRegistry.get_instance().list_apps():
+        app_meta = AppRegistry.get_instance().get(registered_app)
+        logger.info("Registered app %s version %s", registered_app, app_meta.version)
+
+    for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
+        for task_meta in tasks:
+            logger.debug(
+                "Registered task %s for app %s", task_meta.name, registered_app
+            )
+
     fastapi_app = create_app_handler_service(
         handler,
         app_name=app_name,

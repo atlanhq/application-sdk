@@ -193,6 +193,104 @@ class TestCreateWorker:
         assert "_filter-app-a" in user_app_names
         assert "_filter-app-b" in user_app_names
 
+    def test_sdr_workflows_skipped_when_no_handler(self) -> None:
+        """SDR registration is silently skipped when no Handler is provided."""
+
+        class _NoHandlerApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["workflows"] = list(kwargs.get("workflows", []))
+            captured["activities"] = list(kwargs.get("activities", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+
+        from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
+
+        for sdr_wf in SDR_WORKFLOWS:
+            assert sdr_wf not in captured["workflows"]
+        activity_names = [
+            getattr(a, "__temporal_activity_definition", None).name  # type: ignore[union-attr]
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+        ]
+        assert not any(n.startswith("sdr:") for n in activity_names)
+
+    def test_sdr_workflows_registered_when_handler_provided(self) -> None:
+        """When ``handler`` is provided, SDR workflows + activities are appended."""
+
+        from application_sdk.handler.base import DefaultHandler
+
+        class _WithHandlerApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["workflows"] = list(kwargs.get("workflows", []))
+            captured["activities"] = list(kwargs.get("activities", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, handler=DefaultHandler())
+
+        from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
+
+        for sdr_wf in SDR_WORKFLOWS:
+            assert sdr_wf in captured["workflows"]
+        activity_names = {
+            getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+        }
+        assert {
+            "sdr:test_auth",
+            "sdr:preflight_check",
+            "sdr:fetch_metadata",
+        }.issubset(activity_names)
+
+    def test_sdr_opt_out_via_enable_sdr_flag(self) -> None:
+        """``enable_sdr=False`` suppresses SDR even when a handler is provided."""
+
+        from application_sdk.handler.base import DefaultHandler
+
+        class _OptOutApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["workflows"] = list(kwargs.get("workflows", []))
+            captured["activities"] = list(kwargs.get("activities", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, handler=DefaultHandler(), enable_sdr=False)
+
+        from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
+
+        for sdr_wf in SDR_WORKFLOWS:
+            assert sdr_wf not in captured["workflows"]
+
     def test_passthrough_modules_included_in_sandbox(self) -> None:
         class _SandboxApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
