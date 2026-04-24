@@ -21,7 +21,6 @@ Note:
 """
 
 import os
-from datetime import timedelta
 from enum import Enum
 
 from dotenv import load_dotenv
@@ -56,13 +55,10 @@ APP_SDK_VERSION = os.getenv("ATLAN_SDK_VERSION", "")
 APP_TYPE = os.getenv("ATLAN_APP_TYPE", "")
 #: Release publication timestamp from Global Marketplace (ISO 8601)
 PUBLISHED_AT = os.getenv("ATLAN_PUBLISHED_AT", "")
-#: Host address for the application's dashboard
-APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
-#: Port number for the application's dashboard
-APP_DASHBOARD_PORT = int(os.getenv("ATLAN_APP_DASHBOARD_PORT", "8000"))
-#: Minimum required SQL Server version
+# REMOVED: APP_DASHBOARD_HOST, APP_DASHBOARD_PORT — unused.
+#: Minimum required SQL Server version (used by teradata-app, hive-app)
 SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
-#: Path to the SQL queries directory
+#: Path to the SQL queries directory (used by redshift-app, saphana-app, snowflake-app)
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 
 # Output Path Constants
@@ -114,23 +110,13 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
     "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
 )
 
-#: Enable structured failure logging for Temporal activities with context
-#: (tenant, retries, timeouts). Opt-in per application.
+#: Enable structured failure logging for Temporal activities (used by automation-engine-app)
 ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
     os.getenv("ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING", "false").lower() == "true"
 )
 
-# REMOVED: WORKFLOW_HOST, WORKFLOW_PORT, WORKFLOW_NAMESPACE
-# Use AppConfig.temporal_host / AppConfig.temporal_namespace instead.
-#: Host address for the Temporal UI
-WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
-#: Port number for the Temporal UI
-WORKFLOW_UI_PORT = os.getenv("ATLAN_WORKFLOW_UI_PORT", "8233")
-
-#: Maximum timeout duration for workflows
-WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
-    hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))
-)
+# REMOVED: WORKFLOW_UI_HOST, WORKFLOW_UI_PORT, WORKFLOW_MAX_TIMEOUT_HOURS,
+# WORKFLOW_HOST, WORKFLOW_PORT, WORKFLOW_NAMESPACE — unused or moved to AppConfig.
 # REMOVED: MAX_CONCURRENT_ACTIVITIES — unused, see ExecutionSettings.max_concurrent_activities
 
 #: Maximum concurrent object-store transfers (uploads / downloads)
@@ -161,7 +147,7 @@ DEPLOYMENT_SECRET_PATH = os.getenv(
 AUTH_ENABLED = os.getenv("ATLAN_AUTH_ENABLED", "false").lower() == "true"
 #: OAuth2 authentication URL for workflow services
 AUTH_URL = os.getenv("ATLAN_AUTH_URL")
-#: Whether to enable TLS for Temporal workflow connections
+#: Whether to enable TLS for Temporal workflow connections (used by openlineage-app, enrichment-studio-app)
 WORKFLOW_TLS_ENABLED = (
     os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
 )
@@ -273,10 +259,7 @@ LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
-# Hive Partitioning Configuration
-ENABLE_HIVE_PARTITIONING = (
-    os.getenv("ATLAN_ENABLE_HIVE_PARTITIONING", "true").lower() == "true"
-)
+# REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
 # Metrics Configuration
 ENABLE_OTLP_METRICS = os.getenv("ATLAN_ENABLE_OTLP_METRICS", "false").lower() == "true"
@@ -328,12 +311,9 @@ ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     == "true"
 )
 
-# atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
-ATLAN_API_TOKEN_GUID = os.getenv("API_TOKEN_GUID")
+# REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
+# ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")
-ATLAN_API_KEY = os.getenv("ATLAN_API_KEY")
-ATLAN_CLIENT_ID = os.getenv("CLIENT_ID")
-ATLAN_CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 # Lock Configuration
 LOCK_METADATA_KEY = "__lock_metadata__"
 
