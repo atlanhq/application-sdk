@@ -11,7 +11,6 @@ from application_sdk.common.transforms import (
     transform_agent_credentials,
 )
 
-
 # -------------------------------------------------------------------------
 # kebab_to_camel
 # -------------------------------------------------------------------------
@@ -85,15 +84,11 @@ class TestExpandDottedKeys:
         }
 
     def test_multiple_dotted_keys_same_root(self):
-        result = expand_dotted_keys(
-            {"basic.username": "u", "basic.password": "p"}
-        )
+        result = expand_dotted_keys({"basic.username": "u", "basic.password": "p"})
         assert result == {"basic": {"username": "u", "password": "p"}}
 
     def test_mixed_dotted_and_plain(self):
-        result = expand_dotted_keys(
-            {"host": "h", "extra.database": "db", "port": 5432}
-        )
+        result = expand_dotted_keys({"host": "h", "extra.database": "db", "port": 5432})
         assert result == {"host": "h", "extra": {"database": "db"}, "port": 5432}
 
     def test_multi_level_dots(self):
@@ -105,15 +100,11 @@ class TestExpandDottedKeys:
         assert result["extra"] == "just-a-string"
 
     def test_merge_with_existing_dict(self):
-        result = expand_dotted_keys(
-            {"extra": {"existing": "v"}, "extra.new_key": "v2"}
-        )
+        result = expand_dotted_keys({"extra": {"existing": "v"}, "extra.new_key": "v2"})
         assert result["extra"]["existing"] == "v"
         assert result["extra"]["new_key"] == "v2"
 
 
-# -------------------------------------------------------------------------
-# flatten_auth_section
 # -------------------------------------------------------------------------
 
 

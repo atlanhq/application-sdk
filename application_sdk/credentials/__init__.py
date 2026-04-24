@@ -35,6 +35,12 @@ Public API::
     )
 """
 
+from application_sdk.common.transforms import (
+    camel_to_kebab,
+    expand_dotted_keys,
+    kebab_to_camel,
+    transform_agent_credentials,
+)
 from application_sdk.credentials.atlan import AtlanApiToken, AtlanOAuthClient
 from application_sdk.credentials.atlan_client import (
     AtlanClientMixin,
@@ -69,12 +75,6 @@ from application_sdk.credentials.registry import (
 )
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.common.transforms import (
-    camel_to_kebab,
-    expand_dotted_keys,
-    kebab_to_camel,
-    transform_agent_credentials,
-)
 from application_sdk.credentials.types import (
     ApiKeyCredential,
     BasicCredential,

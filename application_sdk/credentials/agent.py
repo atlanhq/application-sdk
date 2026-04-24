@@ -217,7 +217,6 @@ def _substitute(agent: dict[str, Any], bundle: dict[str, Any]) -> dict[str, Any]
     return out
 
 
-
 # _expand_dotted and _flatten_auth_section moved to
 # application_sdk.credentials.transforms as expand_dotted_keys
 # and flatten_auth_section.

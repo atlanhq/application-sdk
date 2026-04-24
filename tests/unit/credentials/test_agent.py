@@ -13,11 +13,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from application_sdk.credentials.agent import (
-    _substitute,
-    resolve_agent_json,
-)
 from application_sdk.common.transforms import expand_dotted_keys
+from application_sdk.credentials.agent import _substitute, resolve_agent_json
 from application_sdk.credentials.errors import (
     CredentialError,
     CredentialNotFoundError,
@@ -351,7 +348,12 @@ class TestResolveAgentJsonErrorPaths:
     async def test_empty_secret_path_skips_bundle_fetch(self) -> None:
         store = _store_with()
         agent_json = json.dumps(
-            {"agent-name": "test", "auth-type": "basic", "secret-path": "", "basic.username": "u"}
+            {
+                "agent-name": "test",
+                "auth-type": "basic",
+                "secret-path": "",
+                "basic.username": "u",
+            }
         )
         result = await resolve_agent_json(agent_json, store)
         assert result["username"] == "u"

@@ -196,11 +196,17 @@ class TestBindingErrors:
 
 class TestResolveMetadataValue:
     def test_plain_value(self):
-        assert _resolve_metadata_value({"name": "bucket", "value": "my-bucket"}) == "my-bucket"
+        assert (
+            _resolve_metadata_value({"name": "bucket", "value": "my-bucket"})
+            == "my-bucket"
+        )
 
     def test_secret_key_ref_from_env(self, monkeypatch):
         monkeypatch.setenv("MY_SECRET", "secret-value")
-        item = {"name": "accessKey", "secretKeyRef": {"name": "MY_SECRET", "key": "MY_SECRET"}}
+        item = {
+            "name": "accessKey",
+            "secretKeyRef": {"name": "MY_SECRET", "key": "MY_SECRET"},
+        }
         assert _resolve_metadata_value(item) == "secret-value"
 
     def test_key_takes_precedence_over_name(self, monkeypatch):
@@ -223,7 +229,11 @@ class TestResolveMetadataValue:
 
     def test_value_takes_precedence_over_secret_ref(self, monkeypatch):
         monkeypatch.setenv("MY_SECRET", "from-env")
-        item = {"name": "x", "value": "from-value", "secretKeyRef": {"key": "MY_SECRET"}}
+        item = {
+            "name": "x",
+            "value": "from-value",
+            "secretKeyRef": {"key": "MY_SECRET"},
+        }
         assert _resolve_metadata_value(item) == "from-value"
 
 
@@ -246,8 +256,20 @@ class TestS3StoreWithSecretKeyRef:
                 "metadata": [
                     {"name": "bucket", "value": "test-bucket"},
                     {"name": "region", "value": "us-east-1"},
-                    {"name": "accessKey", "secretKeyRef": {"name": "ATLAN_AUTH_CLIENT_ID", "key": "ATLAN_AUTH_CLIENT_ID"}},
-                    {"name": "secretKey", "secretKeyRef": {"name": "ATLAN_AUTH_CLIENT_SECRET", "key": "ATLAN_AUTH_CLIENT_SECRET"}},
+                    {
+                        "name": "accessKey",
+                        "secretKeyRef": {
+                            "name": "ATLAN_AUTH_CLIENT_ID",
+                            "key": "ATLAN_AUTH_CLIENT_ID",
+                        },
+                    },
+                    {
+                        "name": "secretKey",
+                        "secretKeyRef": {
+                            "name": "ATLAN_AUTH_CLIENT_SECRET",
+                            "key": "ATLAN_AUTH_CLIENT_SECRET",
+                        },
+                    },
                 ],
             },
         }

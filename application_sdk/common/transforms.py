@@ -155,7 +155,7 @@ def transform_agent_credentials(
     # Root-level extra.field → extra: {field: value}
     for key, value in agent_json.items():
         if key.startswith("extra."):
-            field_name = key[len("extra."):]
+            field_name = key[len("extra.") :]
             extra_fields[field_name] = value
             fields_to_remove.append(key)
 
@@ -163,11 +163,11 @@ def transform_agent_credentials(
     # {authType}.field → root-level field
     for key, value in agent_json.items():
         if extra_prefix and key.startswith(extra_prefix):
-            field_name = key[len(extra_prefix):]
+            field_name = key[len(extra_prefix) :]
             extra_fields[field_name] = value
             fields_to_remove.append(key)
         elif auth_prefix and key.startswith(auth_prefix):
-            field_name = key[len(auth_prefix):]
+            field_name = key[len(auth_prefix) :]
             creds[field_name] = value
             fields_to_remove.append(key)
 
