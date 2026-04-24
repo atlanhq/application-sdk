@@ -6,11 +6,6 @@
     the frontend and Argo templates) into the format connectors and the
     vault expect. Once all apps are fully native and the frontend sends
     the canonical format directly, these transformations should be removed.
-
-Replicates the logic from the marketplace script
-``marketplace_scripts/paas_app_utils/interim/upsert_configurations.py``
-(``transform_agent_credentials``) so the SDK can perform the same
-normalization inline without depending on the Argo template step.
 """
 
 from __future__ import annotations
