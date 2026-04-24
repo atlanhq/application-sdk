@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -153,25 +152,17 @@ def flatten_auth_section(creds: dict[str, Any]) -> dict[str, Any]:
 
 def transform_agent_credentials(
     agent_json: dict[str, Any],
-    *,
-    workflow_id: str = "",
 ) -> dict[str, Any]:
     """Transform raw agent JSON into the format connectors expect.
 
-    Replicates the marketplace script's ``transform_agent_credentials()``
-    logic:
-
     1. ``auth-type`` → ``authType``
     2. Adds ``credentialSource = "agent"``
-    3. Optionally adds ``id`` (deterministic UUID from *workflow_id*)
-    4. Expands ``extra.field`` → ``{"extra": {"field": value}}``
-    5. Expands ``{authType}.field`` → root-level ``field``
-    6. Expands ``{authType}.extra.field`` → ``{"extra": {"field": value}}``
+    3. Expands ``extra.field`` → ``{"extra": {"field": value}}``
+    4. Expands ``{authType}.field`` → root-level ``field``
+    5. Expands ``{authType}.extra.field`` → ``{"extra": {"field": value}}``
 
     Args:
         agent_json: Raw agent credential dict (wire format from frontend).
-        workflow_id: Workflow ID for deterministic credential GUID generation.
-            Empty string skips ``id`` generation.
 
     Returns:
         Transformed credential dict matching the vault/direct-flow format.
@@ -184,10 +175,6 @@ def transform_agent_credentials(
 
     # Step 2: mark as agent source
     creds["credentialSource"] = "agent"
-
-    # Step 3: deterministic credential GUID
-    if workflow_id:
-        creds["id"] = str(uuid.uuid5(uuid.NAMESPACE_DNS, workflow_id))
 
     # Step 4: expand dotted keys (extra.field, {authType}.field, etc.)
     auth_type = creds.get("authType", "")

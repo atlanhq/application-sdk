@@ -4,8 +4,6 @@ Covers key format converters, dotted key expansion, auth section
 flattening, and the full transform_agent_credentials pipeline.
 """
 
-import uuid
-
 from application_sdk.common.transforms import (
     camel_to_kebab,
     expand_dotted_keys,
@@ -171,18 +169,6 @@ class TestTransformAgentCredentials:
         result = transform_agent_credentials({"auth-type": "basic"})
         assert result["credentialSource"] == "agent"
 
-    def test_id_generated_from_workflow_id(self):
-        wf_id = "test-workflow-123"
-        result = transform_agent_credentials(
-            {"auth-type": "basic"}, workflow_id=wf_id
-        )
-        expected_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, wf_id))
-        assert result["id"] == expected_id
-
-    def test_no_id_when_workflow_id_empty(self):
-        result = transform_agent_credentials({"auth-type": "basic"})
-        assert "id" not in result
-
     def test_extra_dot_expansion(self):
         result = transform_agent_credentials(
             {"auth-type": "basic", "extra.database": "db", "extra.ssl": True}
@@ -240,15 +226,14 @@ class TestTransformAgentCredentials:
             "key-type": "single-key",
             "port": 5432,
         }
-        result = transform_agent_credentials(payload, workflow_id="wf-123")
+        result = transform_agent_credentials(payload)
 
         # auth-type → authType
         assert result["authType"] == "basic"
         assert "auth-type" not in result
 
-        # credentialSource + id added
+        # credentialSource added
         assert result["credentialSource"] == "agent"
-        assert result["id"] == str(uuid.uuid5(uuid.NAMESPACE_DNS, "wf-123"))
 
         # dotted keys expanded
         assert result["extra"] == {
