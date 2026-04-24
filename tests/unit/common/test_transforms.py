@@ -7,7 +7,6 @@ flattening, and the full transform_agent_credentials pipeline.
 from application_sdk.common.transforms import (
     camel_to_kebab,
     expand_dotted_keys,
-    flatten_auth_section,
     kebab_to_camel,
     transform_agent_credentials,
 )
@@ -116,42 +115,6 @@ class TestExpandDottedKeys:
 # -------------------------------------------------------------------------
 # flatten_auth_section
 # -------------------------------------------------------------------------
-
-
-class TestFlattenAuthSection:
-    def test_basic_auth_flattening(self):
-        creds = {
-            "auth-type": "basic",
-            "basic": {"username": "u", "password": "p"},
-        }
-        result = flatten_auth_section(creds)
-        assert result["username"] == "u"
-        assert result["password"] == "p"
-
-    def test_deep_merge_extra(self):
-        creds = {
-            "auth-type": "gcp-wif",
-            "extra": {"connect_type": "public"},
-            "gcp-wif": {"extra": {"project_id": "p"}},
-        }
-        result = flatten_auth_section(creds)
-        assert result["extra"]["connect_type"] == "public"
-        assert result["extra"]["project_id"] == "p"
-
-    def test_no_auth_type_passthrough(self):
-        creds = {"host": "h", "port": 5432}
-        result = flatten_auth_section(creds)
-        assert result == {"host": "h", "port": 5432}
-
-    def test_auth_type_with_no_matching_section(self):
-        creds = {"auth-type": "basic", "host": "h"}
-        result = flatten_auth_section(creds)
-        assert result == {"auth-type": "basic", "host": "h"}
-
-    def test_empty_auth_type_passthrough(self):
-        creds = {"auth-type": "", "host": "h"}
-        result = flatten_auth_section(creds)
-        assert result == {"auth-type": "", "host": "h"}
 
 
 # -------------------------------------------------------------------------

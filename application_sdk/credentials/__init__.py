@@ -72,7 +72,6 @@ from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.common.transforms import (
     camel_to_kebab,
     expand_dotted_keys,
-    flatten_auth_section,
     kebab_to_camel,
     transform_agent_credentials,
 )
@@ -137,6 +136,5 @@ __all__ = [
     "kebab_to_camel",
     "camel_to_kebab",
     "expand_dotted_keys",
-    "flatten_auth_section",
     "transform_agent_credentials",
 ]

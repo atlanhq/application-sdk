@@ -113,38 +113,6 @@ def expand_dotted_keys(flat: dict[str, Any]) -> dict[str, Any]:
 # -------------------------------------------------------------------------
 
 
-def flatten_auth_section(creds: dict[str, Any]) -> dict[str, Any]:
-    """Promote the auth-type section to root level for client compatibility.
-
-    Reads ``auth-type`` (e.g. ``"basic"``), finds the matching nested
-    dict, and deep-merges its contents to root — so existing root-level
-    dicts (e.g. ``extra``) are merged rather than overwritten.
-
-    Example::
-
-        {"auth-type": "gcp-wif",
-         "extra": {"connect_type": "public"},
-         "gcp-wif": {"extra": {"project_id": "p"}}}
-        →
-        {"auth-type": "gcp-wif",
-         "extra": {"connect_type": "public", "project_id": "p"},
-         "gcp-wif": {"extra": {"project_id": "p"}}}
-    """
-    auth_type = creds.get("auth-type", "")
-    if not auth_type:
-        return creds
-    auth_section = creds.get(auth_type)
-    if not isinstance(auth_section, dict):
-        return creds
-    for key, value in auth_section.items():
-        existing = creds.get(key)
-        if isinstance(existing, dict) and isinstance(value, dict):
-            existing.update(value)
-        else:
-            creds[key] = value
-    return creds
-
-
 # -------------------------------------------------------------------------
 # Full agent credential transformation
 # -------------------------------------------------------------------------
