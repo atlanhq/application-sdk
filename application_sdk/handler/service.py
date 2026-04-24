@@ -901,11 +901,11 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except Exception:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow result retrieval failed for workflow_id=%s",
                         workflow_id,
-                        e,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -950,11 +950,11 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except Exception:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow result retrieval failed for workflow_id=%s",
                         workflow_id,
-                        e,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -1089,8 +1089,10 @@ def create_app_handler_service(
         try:
             await download_file(key, safe_tmp, _storage)
             return orjson.loads(Path(safe_tmp).read_bytes())
-        except Exception as exc:
-            logger.warning("Object-store config load failed for key=%s: %r", key, exc)
+        except Exception:
+            logger.warning(
+                "Object-store config load failed for key=%s", key, exc_info=True
+            )
             return None
         finally:
             if os.path.exists(safe_tmp):

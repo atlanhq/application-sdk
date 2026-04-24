@@ -253,7 +253,7 @@ def _copy_columns_from_transformed(
 
     dest_dir = current_state_dir.joinpath(EntityType.COLUMN.value)
     count = copy_directory_parallel(column_dir, dest_dir, max_workers=copy_workers)
-    logger.info("Copied column files to current state", count=count)
+    logger.info("Copied %d column files to current state", count)
     return count
 
 

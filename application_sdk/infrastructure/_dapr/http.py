@@ -72,8 +72,8 @@ async def wait_for_dapr_sidecar(
                 r = await client.get(url)
                 if r.status_code == 204:
                     return
-            except Exception as exc:
-                logger.debug("Dapr sidecar poll failed: %s", exc)
+            except Exception:
+                logger.debug("Dapr sidecar poll failed", exc_info=True)
             if loop.time() >= deadline:
                 logger.warning(
                     "Dapr sidecar not ready after %.0fs — proceeding anyway", timeout

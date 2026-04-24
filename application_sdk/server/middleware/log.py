@@ -33,15 +33,14 @@ class LogMiddleware(BaseHTTPMiddleware):
         should_log = request.url.path not in EXCLUDED_LOG_PATHS
 
         if should_log:
+            client_host = request.client.host if request.client else None
             self.logger.info(
-                "Request started",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "request_id": request_id,
-                    "url": str(request.url),
-                    "client_host": request.client.host if request.client else None,
-                },
+                "Request started: method=%s path=%s request_id=%s url=%s client_host=%s",
+                request.method,
+                request.url.path,
+                request_id,
+                str(request.url),
+                client_host,
             )
 
         try:
@@ -50,28 +49,23 @@ class LogMiddleware(BaseHTTPMiddleware):
 
             if should_log:
                 self.logger.info(
-                    "Request completed",
-                    extra={
-                        "method": request.method,
-                        "path": request.url.path,
-                        "status_code": response.status_code,
-                        "duration_ms": round(duration * 1000, 2),
-                        "request_id": request_id,
-                    },
+                    "Request completed: method=%s path=%s status_code=%d duration_ms=%.2f request_id=%s",
+                    request.method,
+                    request.url.path,
+                    response.status_code,
+                    round(duration * 1000, 2),
+                    request_id,
                 )
             return response
 
-        except Exception as e:
+        except Exception:
             duration = time.time() - start_time
             self.logger.error(
-                "Request failed",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "error": str(e),
-                    "duration_ms": round(duration * 1000, 2),
-                    "request_id": request_id,
-                },
+                "Request failed: method=%s path=%s duration_ms=%.2f request_id=%s",
+                request.method,
+                request.url.path,
+                round(duration * 1000, 2),
+                request_id,
                 exc_info=True,
             )
             raise

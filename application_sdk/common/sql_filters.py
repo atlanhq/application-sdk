@@ -198,10 +198,10 @@ def prepare_query(
     except CommonError as e:
         error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
         logger.error(
-            "Error preparing query",
-            query=query,
-            error_message=error_message,
-            error_code=CommonError.QUERY_PREPARATION_ERROR.code,
+            "Error preparing query: error_code=%s error_message=%s",
+            CommonError.QUERY_PREPARATION_ERROR.code,
+            error_message,
+            exc_info=True,
         )
         return None
 

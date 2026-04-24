@@ -248,7 +248,9 @@ def validate_with_pandera(
 
         except FileNotFoundError as e:
             result["error"] = str(e)
-            logger.warning(f"Skipping {entity} validation: {e}")  # noqa: G004
+            logger.warning(
+                "Skipping %s validation: file not found", entity, exc_info=True
+            )
         except Exception as e:
             result["error"] = str(e)
             logger.error("Validation failed for %s: %s", entity, e, exc_info=True)

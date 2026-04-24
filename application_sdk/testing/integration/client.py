@@ -330,7 +330,9 @@ class IntegrationTestClient:
             response = requests.get(url, timeout=self.timeout)
             return self._handle_response(response)
         except requests.ConnectionError as e:
-            logger.error(f"GET request failed - cannot connect to {url}: {e}")  # noqa: G004
+            logger.error(
+                "GET request failed - cannot connect to %s", url, exc_info=True
+            )
             return {
                 "success": False,
                 "error": {
@@ -343,7 +345,7 @@ class IntegrationTestClient:
                 },
             }
         except requests.Timeout as e:
-            logger.error(f"GET request timed out after {self.timeout}s: {e}")  # noqa: G004
+            logger.error("GET request timed out after %ss", self.timeout, exc_info=True)
             return {
                 "success": False,
                 "error": {
@@ -353,7 +355,7 @@ class IntegrationTestClient:
                 },
             }
         except requests.RequestException as e:
-            logger.error(f"GET request failed: {e}")  # noqa: G004
+            logger.error("GET request failed", exc_info=True)
             return {
                 "success": False,
                 "error": {
@@ -382,7 +384,9 @@ class IntegrationTestClient:
             response = requests.post(url, json=data, timeout=self.timeout)
             return self._handle_response(response)
         except requests.ConnectionError as e:
-            logger.error(f"POST request failed - cannot connect to {url}: {e}")  # noqa: G004
+            logger.error(
+                "POST request failed - cannot connect to %s", url, exc_info=True
+            )
             return {
                 "success": False,
                 "error": {
@@ -395,7 +399,9 @@ class IntegrationTestClient:
                 },
             }
         except requests.Timeout as e:
-            logger.error(f"POST request timed out after {self.timeout}s: {e}")  # noqa: G004
+            logger.error(
+                "POST request timed out after %ss", self.timeout, exc_info=True
+            )
             return {
                 "success": False,
                 "error": {
@@ -405,7 +411,7 @@ class IntegrationTestClient:
                 },
             }
         except requests.RequestException as e:
-            logger.error(f"POST request failed: {e}")  # noqa: G004
+            logger.error("POST request failed", exc_info=True)
             return {
                 "success": False,
                 "error": {

@@ -579,7 +579,9 @@ class BaseIntegrationTest:
             result.error = e
             result.success = False
             if not isinstance(e, (AssertionError, pytest.skip.Exception)):
-                logger.error(f"Scenario {scenario.name} failed with error: {e}")  # noqa: G004
+                logger.error(
+                    "Scenario %s failed with error", scenario.name, exc_info=True
+                )
             raise
 
         finally:
@@ -631,7 +633,7 @@ class BaseIntegrationTest:
                         f"expected {expected_desc}, got {actual!r}"  # noqa: G004
                     )
             except Exception as e:
-                logger.error(f"Assertion error for {path}: {e}")  # noqa: G004
+                logger.error("Assertion error for %s", path, exc_info=True)
                 result_entry = {
                     "passed": False,
                     "actual": actual,

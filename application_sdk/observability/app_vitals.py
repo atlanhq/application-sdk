@@ -51,7 +51,7 @@ def _get_correlation_id() -> str:
         ctx = get_correlation_context()
         if ctx and ctx.correlation_id:
             return ctx.correlation_id
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     return ""
 
@@ -107,6 +107,15 @@ def _format_stack_trace(exc: BaseException) -> str:
         full = "".join(lines)
         return full[:2000]
     except Exception:
+        try:
+            from application_sdk.observability.logger_adaptor import get_logger
+
+            get_logger("app_vitals").debug(
+                "AppVitals: _format_stack_trace failed — returning empty string",
+                exc_info=True,
+            )
+        except Exception:  # noqa: S110
+            pass
         return ""
 
 
@@ -192,7 +201,7 @@ def _emit_log_event(
         }
         sys.stdout.write(f"APP_VITALS | {event_name} | {json.dumps(summary)}\n")
         sys.stdout.flush()
-    except Exception:
+    except Exception:  # noqa: S110
         pass
 
     try:
@@ -203,7 +212,7 @@ def _emit_log_event(
         logger = get_logger("app_vitals")
         level = "error" if attrs.get("status") == "failed" else "info"
         getattr(logger, level)(event_name, **attrs)
-    except Exception:
+    except Exception:  # noqa: S110
         pass
 
 
@@ -436,7 +445,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "metric_name": "app_vitals.reliability.wf_started",
             }
             _emit_log_event("app_vitals.wf.started", started_attrs)
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # never block workflow on observability
 
         status = "succeeded"
@@ -463,6 +472,17 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             try:
                 info = workflow.info()
             except Exception:
+                try:
+                    from application_sdk.observability.logger_adaptor import (
+                        get_logger as _gl,
+                    )
+
+                    _gl("app_vitals").debug(
+                        "AppVitals: workflow.info() unavailable in finally — skipping completion events",
+                        exc_info=True,
+                    )
+                except Exception:  # noqa: S110
+                    pass
                 info = None
 
             # Guard: skip event emission if workflow info unavailable.
@@ -507,7 +527,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         history_length: int | None = None
         try:
             history_length = info.get_current_history_length()
-        except Exception:
+        except Exception:  # noqa: S110
             pass
 
         event_attrs: dict[str, Any] = {
@@ -549,7 +569,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         try:
             summary_attrs = self._build_summary_attrs(common, info, status, duration_ms)
             _emit_log_event("app_vitals.wf.summary", summary_attrs)
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # summary is best-effort; never block the workflow
 
 
@@ -567,12 +587,23 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         try:
             if input.args:
                 input_payload_bytes = sum(sys.getsizeof(a) for a in input.args)
-        except Exception:
-            pass
+        except Exception:  # noqa: S110
+            pass  # best-effort size measurement; never block activity on observability
 
         try:
             info = activity.info()
         except Exception:
+            try:
+                from application_sdk.observability.logger_adaptor import (
+                    get_logger as _gl,
+                )
+
+                _gl("app_vitals").debug(
+                    "AppVitals interceptor: activity.info() failed — skipping vitals emission",
+                    exc_info=True,
+                )
+            except Exception:  # noqa: S110
+                pass
             return await self.next.execute_activity(input)
 
         schedule_to_start_ms: float | None = None
@@ -609,7 +640,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             if input_payload_bytes is not None:
                 started_attrs["input_payload_bytes"] = input_payload_bytes
             _emit_log_event("app_vitals.act.started", started_attrs)
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # never block activity on observability
 
         status = "succeeded"

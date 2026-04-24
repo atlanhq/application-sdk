@@ -388,11 +388,10 @@ class ParquetFileReader(Reader):
                     )
                     for field in unified
                 }
-            except Exception as exc:
+            except Exception:
                 logger.debug(
-                    "Could not unify parquet schemas (%s); "
-                    "falling back to daft default schema inference",
-                    type(exc).__name__,
+                    "Could not unify parquet schemas, falling back to daft default schema inference",
+                    exc_info=True,
                 )
 
             lazy_df = daft.read_parquet(parquet_files, schema=daft_schema)

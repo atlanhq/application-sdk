@@ -202,10 +202,12 @@ class BaseClient(ClientInterface):
                 )
                 return response
             except httpx.HTTPStatusError as e:
-                logger.error("HTTP error for %s: %s", url, e.response.status_code)
+                logger.error(
+                    "HTTP error for %s: %s", url, e.response.status_code, exc_info=True
+                )
                 return None
-            except Exception as e:
-                logger.error("Request failed for %s: %s", url, e)
+            except Exception:
+                logger.error("Request failed for %s", url, exc_info=True)
                 return None
 
     async def execute_http_post_request(
@@ -287,8 +289,10 @@ class BaseClient(ClientInterface):
                 )
                 return response
             except httpx.HTTPStatusError as e:
-                logger.error("HTTP error for %s: %s", url, e.response.status_code)
+                logger.error(
+                    "HTTP error for %s: %s", url, e.response.status_code, exc_info=True
+                )
                 return None
-            except Exception as e:
-                logger.error("Request failed for %s: %s", url, e)
+            except Exception:
+                logger.error("Request failed for %s", url, exc_info=True)
                 return None

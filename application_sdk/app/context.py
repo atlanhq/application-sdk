@@ -138,7 +138,10 @@ class _WorkflowSafeLogger:
                     if v3_ctx and v3_ctx.correlation_id:
                         kwargs = {**kwargs, "correlation_id": v3_ctx.correlation_id}
                 except Exception:
-                    pass
+                    self._get_structlog_logger().debug(
+                        "Failed to resolve v3 correlation context for log enrichment",
+                        exc_info=True,
+                    )
             logger = self._get_structlog_logger()
             log_method = getattr(logger, level)
             log_method(message, *args, **kwargs)

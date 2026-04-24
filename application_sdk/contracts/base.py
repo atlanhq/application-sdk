@@ -57,7 +57,6 @@ Evolution:
 """
 
 import hashlib
-import logging
 import re
 from enum import StrEnum
 from typing import (
@@ -78,8 +77,9 @@ from pydantic_core import PydanticUndefined
 
 from application_sdk.contracts.types import MaxItems  # noqa: TC001
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
+from application_sdk.observability.logger_adaptor import get_logger
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 # =============================================================================
 # Serializable Enum Base Class
@@ -788,7 +788,7 @@ class PublishInputMixin(BaseModel):
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )
-            except Exception:
+            except Exception:  # noqa: S110
                 pass  # Not in Temporal context — output_path stays empty
 
         # Derive transformed_data_prefix from output_path
