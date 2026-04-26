@@ -308,6 +308,20 @@ class ConnectionRef(BaseModel, frozen=True):
         serialize_by_alias=True,
     )
 
+    @property
+    def qualified_name(self) -> str:
+        """Resolve the connection's qualified name from attributes.
+
+        Convenience accessor so callers don't need to traverse
+        ``ref.attributes.qualified_name`` and handle ``None`` attributes.
+
+        Returns:
+            The qualified name string, or ``""`` if unavailable.
+        """
+        if self.attributes:
+            return self.attributes.qualified_name or ""
+        return ""
+
     @staticmethod
     def from_connection(conn: Any) -> "ConnectionRef":
         """Convert a pyatlan_v9 Connection (msgspec.Struct) to ConnectionRef.

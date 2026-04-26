@@ -57,6 +57,7 @@ Evolution:
 """
 
 import hashlib
+import json
 import logging
 import re
 from enum import StrEnum
@@ -169,9 +170,92 @@ class Input(BaseModel):
     config_hash() unions this set across the full MRO, so subclass entries
     are merged with (not replaced by) base-class exclusions."""
 
+    normalize_input: ClassVar[bool] = True
+    """When True (default), the ``_normalize_input_payload`` validator
+    runs before field validation to align the raw AE/Heracles payload
+    with the SDK's snake_case Pydantic models.  Set to ``False`` on a
+    subclass to disable normalization for edge-case inputs."""
+
     _unknown_keys_seen: ClassVar[set[tuple[str, tuple[str, ...]]]] = set()
     """Dedup set for the unknown-key warning: at most one log line per
     (subclass name, sorted unknown keys) pair across the process lifetime."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_input_payload(cls, data: Any) -> Any:
+        """Normalize raw AE/Heracles payloads before Pydantic validation.
+
+        Every app that receives input from the Automation Engine or Heracles
+        independently normalizes the payload today.  This validator
+        centralizes that logic in the SDK so individual apps don't need to.
+
+        Steps (in order):
+        1. Lift ``metadata`` dict contents to top level (without overriding
+           existing top-level keys).
+        2. Convert kebab-case keys to snake_case (keep originals for
+           backward compatibility).
+        3. Parse JSON strings — values starting with ``{`` or ``[`` are
+           attempted through ``json.loads``.
+        4. Coerce string booleans — ``"true"``/``"false"`` (case-insensitive)
+           become Python ``True``/``False``.
+
+        The validator is opt-out via the ``normalize_input`` class variable.
+        """
+        if not isinstance(data, dict):
+            return data
+        if not cls.normalize_input:
+            return data
+
+        # 1. Lift metadata dict to top level
+        metadata = data.get("metadata")
+        if isinstance(metadata, dict):
+            for key, value in metadata.items():
+                if key not in data:
+                    data[key] = value
+
+        # 2. Kebab-case → snake_case (keep originals for backward compat)
+        kebab_additions: dict[str, Any] = {}
+        for key in list(data.keys()):
+            if isinstance(key, str) and "-" in key:
+                snake_key = key.replace("-", "_")
+                if snake_key not in data:
+                    kebab_additions[snake_key] = data[key]
+        data.update(kebab_additions)
+
+        # Build a set of field names whose annotation is plain ``str`` so
+        # JSON parsing and bool coercion don't convert values that Pydantic
+        # expects to receive as strings.
+        _str_fields: set[str] = set()
+        for fname, finfo in cls.model_fields.items():
+            if finfo.annotation is str:
+                _str_fields.add(fname)
+                if finfo.alias is not None:
+                    _str_fields.add(finfo.alias)
+
+        # 3. Parse JSON strings (skip known str-typed fields)
+        for key in list(data.keys()):
+            if key in _str_fields:
+                continue
+            value = data[key]
+            if isinstance(value, str) and value and value[0] in ("{", "["):
+                try:
+                    data[key] = json.loads(value)
+                except (json.JSONDecodeError, ValueError):
+                    pass  # Keep original string on parse failure
+
+        # 4. Coerce string booleans (skip known str-typed fields)
+        for key in list(data.keys()):
+            if key in _str_fields:
+                continue
+            value = data[key]
+            if isinstance(value, str):
+                lower = value.lower()
+                if lower == "true":
+                    data[key] = True
+                elif lower == "false":
+                    data[key] = False
+
+        return data
 
     @model_validator(mode="before")
     @classmethod

@@ -511,7 +511,7 @@ def _reset_unknown_keys_seen() -> Any:
 
 
 class TestUnknownKeyWarning:
-    def test_kebab_case_extra_warns_with_snake_case_hint(
+    def test_kebab_case_extra_normalised_and_warns(
         self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
     ) -> None:
         class ExtractionInput(Input):
@@ -525,17 +525,19 @@ class TestUnknownKeyWarning:
         with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
             obj = ExtractionInput.model_validate(payload)
 
-        # Silent drop still happens — we only observe, not normalize.
-        assert obj.credential_guid == ""
-        assert obj.include_filter == "{}"
+        # Normalization converts kebab-case → snake_case, populating
+        # the declared model fields.  str-typed fields keep their
+        # original string value (JSON parsing is skipped for str fields).
+        assert obj.credential_guid == "abc-123"
+        assert obj.include_filter == '{"^qa$":[".*"]}'
 
+        # The original kebab-case keys are still present (and unknown to
+        # the model), so _warn_on_unknown_keys fires for them.
         assert len(caplog.records) == 1
         msg = caplog.records[0].getMessage()
         assert "ExtractionInput" in msg
         assert "credential-guid" in msg
         assert "include-filter" in msg
-        assert "credential_guid" in msg
-        assert "include_filter" in msg
 
     def test_arbitrary_extras_warn_without_kebab_hint(
         self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
