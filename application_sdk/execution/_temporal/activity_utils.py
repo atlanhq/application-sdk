@@ -5,6 +5,7 @@ including workflow ID retrieval, automatic heartbeating, and periodic heartbeat 
 """
 
 import os
+import warnings
 from typing import Any, Callable, TypeVar
 
 from temporalio import activity
@@ -23,6 +24,41 @@ logger = get_logger(__name__)
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+# ---------------------------------------------------------------------------
+# Private helpers (no deprecation warnings — used by the new public context API)
+# ---------------------------------------------------------------------------
+
+
+def _get_workflow_id() -> str:
+    """Get workflow ID from the current activity (internal, no deprecation warning)."""
+    try:
+        return activity.info().workflow_id
+    except Exception as e:
+        raise rewrap(e, "Failed to get workflow id") from e
+
+
+def _get_workflow_run_id() -> str:
+    """Get workflow run ID from the current activity (internal, no deprecation warning)."""
+    try:
+        return activity.info().workflow_run_id
+    except Exception as e:
+        raise rewrap(e, "Failed to get workflow run id") from e
+
+
+def _build_output_path() -> str:
+    """Build output path from current activity context (internal, no deprecation warning)."""
+    return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
+        application_name=APPLICATION_NAME,
+        workflow_id=_get_workflow_id(),
+        run_id=_get_workflow_run_id(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API (deprecated — prefer AppContext / TaskExecutionContext properties)
+# ---------------------------------------------------------------------------
+
+
 def get_workflow_id() -> str:
     """Get the workflow ID from the current activity.
 
@@ -39,19 +75,30 @@ def get_workflow_id() -> str:
     Example:
         >>> workflow_id = get_workflow_id()
         >>> print(workflow_id)  # e.g. "my-workflow-123"
+
+    .. deprecated::
+        Use ``self.context.workflow_id`` instead.
     """
-    try:
-        return activity.info().workflow_id
-    except Exception as e:
-        raise rewrap(e, "Failed to get workflow id") from e
+    warnings.warn(
+        "get_workflow_id() is deprecated. Use self.context.workflow_id instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _get_workflow_id()
 
 
 def get_workflow_run_id() -> str:
-    """Get the workflow run ID from the current activity."""
-    try:
-        return activity.info().workflow_run_id
-    except Exception as e:
-        raise rewrap(e, "Failed to get workflow run id") from e
+    """Get the workflow run ID from the current activity.
+
+    .. deprecated::
+        Use ``self.context.workflow_run_id`` instead.
+    """
+    warnings.warn(
+        "get_workflow_run_id() is deprecated. Use self.context.workflow_run_id instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _get_workflow_run_id()
 
 
 def build_output_path() -> str:
@@ -65,12 +112,36 @@ def build_output_path() -> str:
     Example:
         >>> build_output_path()
         "artifacts/apps/appName/workflows/wf-123/run-456"
+
+    .. deprecated::
+        Use ``self.task_context.output_prefix`` or
+        ``self.task_context.build_output_path(...)`` instead.
     """
-    return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-        application_name=APPLICATION_NAME,
-        workflow_id=get_workflow_id(),
-        run_id=get_workflow_run_id(),
+    warnings.warn(
+        "build_output_path() is deprecated. "
+        "Use self.task_context.output_prefix or self.task_context.build_output_path() instead.",
+        DeprecationWarning,
+        stacklevel=2,
     )
+    return _build_output_path()
+
+
+def _get_object_store_prefix(path: str) -> str:
+    """Normalize a path to an object-store prefix (internal, no deprecation warning)."""
+    # Normalize paths for comparison
+    abs_path = os.path.abspath(path)
+    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
+
+    # Check if path is under TEMPORARY_PATH
+    try:
+        common_path = os.path.commonpath([abs_path, abs_temp_path])
+        if common_path == abs_temp_path:
+            relative_path = os.path.relpath(abs_path, abs_temp_path)
+            return relative_path.replace(os.path.sep, "/")
+        else:
+            return path.strip("/")
+    except ValueError:
+        return path.strip("/")
 
 
 def get_object_store_prefix(path: str) -> str:
@@ -94,25 +165,13 @@ def get_object_store_prefix(path: str) -> str:
         >>> # User-provided path case
         >>> get_object_store_prefix("datasets/sales/2024/")
         "datasets/sales/2024"
-    """
-    # Normalize paths for comparison
-    abs_path = os.path.abspath(path)
-    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
 
-    # Check if path is under TEMPORARY_PATH
-    try:
-        # Use os.path.commonpath to properly check if path is under temp directory
-        # This prevents false positives like '/tmp/local123' matching '/tmp/local'
-        common_path = os.path.commonpath([abs_path, abs_temp_path])
-        if common_path == abs_temp_path:
-            # Path is under temp directory, convert to relative object store path
-            relative_path = os.path.relpath(abs_path, abs_temp_path)
-            # Normalize path separators to forward slashes for object store
-            return relative_path.replace(os.path.sep, "/")
-        else:
-            # Path is already a relative object store path, return as-is
-            return path.strip("/")
-    except ValueError:
-        # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
-        # In this case, treat as user-provided path, return as-is
-        return path.strip("/")
+    .. deprecated::
+        This function may be removed in a future release.
+    """
+    warnings.warn(
+        "get_object_store_prefix() is deprecated.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _get_object_store_prefix(path)
