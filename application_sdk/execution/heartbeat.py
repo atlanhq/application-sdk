@@ -10,6 +10,7 @@ Two modes of heartbeating are supported:
 
 import asyncio
 import concurrent.futures
+import contextvars
 import functools
 import os
 import time
@@ -178,6 +179,10 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     Use this for blocking I/O or CPU-bound operations to keep the event loop
     responsive for heartbeating.
 
+    ContextVars (ObjectStore, logger context, correlation ID, infrastructure
+    handles) are automatically propagated to the worker thread via
+    ``contextvars.copy_context()``.
+
     CRITICAL: YOUR BLOCKING CODE MUST HAVE ITS OWN TIMEOUTS.
     Python threads cannot be forcibly killed. If your blocking code hangs
     indefinitely, the thread will run forever.
@@ -190,8 +195,9 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     Returns:
         Result of ``func(*args, **kwargs)``.
     """
+    ctx = contextvars.copy_context()
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         _BLOCKING_EXECUTOR,
-        functools.partial(func, *args, **kwargs),
+        functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
     )
