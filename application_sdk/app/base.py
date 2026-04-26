@@ -449,6 +449,9 @@ class App(ABC):
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
 
+    # Pre-sandbox snapshot of os.environ, captured during worker startup.
+    _env_snapshot: ClassVar[dict[str, str]] = {}
+
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False
 
@@ -650,6 +653,34 @@ class App(ABC):
                 "Do not access task_context in run() or outside of task methods."
             )
         return self._task_context
+
+    # =========================================================================
+    # Environment access (sandbox-safe)
+    # =========================================================================
+
+    @classmethod
+    def _capture_env_snapshot(cls) -> None:
+        """Capture ``os.environ`` before Temporal sandbox activates.
+
+        Called automatically by ``create_worker()`` during worker startup.
+        """
+        cls._env_snapshot = dict(os.environ)
+
+    def env(self, key: str, default: str = "") -> str:
+        """Read an environment variable safely inside workflow code.
+
+        Temporal's deterministic sandbox blocks direct ``os.environ`` access
+        inside ``run()``.  This method reads from a pre-sandbox snapshot
+        captured during worker startup.
+
+        Args:
+            key: Environment variable name.
+            default: Value returned when *key* is absent (default ``""``).
+
+        Returns:
+            The environment variable value, or *default* if not set.
+        """
+        return self._env_snapshot.get(key, default)
 
     # =========================================================================
     # Convenience accessors for common context properties

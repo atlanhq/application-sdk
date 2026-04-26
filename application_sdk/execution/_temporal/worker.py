@@ -247,6 +247,12 @@ def create_worker(
 
     all_interceptors.append(TaskFailureLoggingInterceptor())
 
+    # Capture os.environ snapshot before sandbox activates so that
+    # App.env() can read environment variables inside workflow code.
+    from application_sdk.app.base import App
+
+    App._capture_env_snapshot()
+
     # Build sandbox configuration
     config = SandboxConfig()
 

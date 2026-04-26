@@ -49,6 +49,29 @@ _FRAMEWORK_MODULES: frozenset[str] = frozenset(
     }
 )
 
+# Common native database driver packages that use C extensions or
+# ctypes and must pass through the sandbox to work correctly.
+_KNOWN_DRIVER_MODULES: frozenset[str] = frozenset(
+    {
+        "snowflake",
+        "oracledb",
+        "hdbcli",
+        "pyodbc",
+        "cassandra",
+        "clickhouse_connect",
+        "teradatasql",
+        "pyhive",
+        "impyla",
+        "pymssql",
+        "psycopg",
+        "psycopg2",
+        "asyncpg",
+        "aiomysql",
+        "cx_Oracle",
+        "sqlanydb",
+    }
+)
+
 
 @dataclass(frozen=True)
 class SandboxConfig:
@@ -87,5 +110,7 @@ class SandboxConfig:
         """
         from temporalio.worker.workflow_sandbox import SandboxRestrictions
 
-        all_modules = _FRAMEWORK_MODULES | self.passthrough_modules
+        all_modules = (
+            _FRAMEWORK_MODULES | _KNOWN_DRIVER_MODULES | self.passthrough_modules
+        )
         return SandboxRestrictions.default.with_passthrough_modules(*all_modules)
