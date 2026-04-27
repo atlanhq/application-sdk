@@ -12,6 +12,7 @@ from httpx._types import (
 
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.ssl_utils import get_ssl_context
+from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -101,8 +102,11 @@ class BaseClient(ClientInterface):
         self.credentials = credentials
         self.http_headers = http_headers
 
-        # Use httpx default transport (no retries on status codes)
-        self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport()
+        # Use httpx default transport with pool limits to prevent CLOSE_WAIT
+        # zombie socket accumulation (see BLDX-1153).
+        self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(
+            limits=_HTTP_POOL_LIMITS,
+        )
 
     async def load(self, **kwargs: Any) -> None:
         """
@@ -187,7 +191,9 @@ class BaseClient(ClientInterface):
         """
         ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
-            timeout=timeout, transport=self.http_retry_transport, verify=ssl_context
+            timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
+            transport=self.http_retry_transport,
+            verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
@@ -266,7 +272,9 @@ class BaseClient(ClientInterface):
         """
         ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
-            timeout=timeout, transport=self.http_retry_transport, verify=ssl_context
+            timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
+            transport=self.http_retry_transport,
+            verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:

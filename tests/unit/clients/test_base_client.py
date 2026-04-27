@@ -317,10 +317,12 @@ class TestBaseClient:
         result = await base_client.execute_http_post_request(url=url, timeout=timeout)
 
         assert result == mock_response
-        # Verify that timeout was passed to AsyncClient
-        mock_async_client.assert_called_once_with(
-            timeout=timeout, transport=base_client.http_retry_transport, verify=True
-        )
+        # Verify that timeout was passed to AsyncClient (with pool timeout)
+        call_kwargs = mock_async_client.call_args.kwargs
+        assert call_kwargs["transport"] is base_client.http_retry_transport
+        assert call_kwargs["verify"] is True
+        assert call_kwargs["timeout"].pool == 30.0
+        assert call_kwargs["timeout"].connect == timeout
 
     @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
@@ -342,9 +344,10 @@ class TestBaseClient:
 
         assert result == mock_response
         mock_get_ssl_context.assert_called_once()
-        mock_async_client.assert_called_once_with(
-            timeout=30, transport=base_client.http_retry_transport, verify=True
-        )
+        call_kwargs = mock_async_client.call_args.kwargs
+        assert call_kwargs["transport"] is base_client.http_retry_transport
+        assert call_kwargs["verify"] is True
+        assert call_kwargs["timeout"].pool == 30.0
 
     @given(credentials=sql_credentials_strategy)
     @settings(
