@@ -116,9 +116,13 @@ def _needs_materialize(ref: FileReference) -> bool:
 
 
 def has_refs_to_persist(data: Any) -> bool:
-    """Return True if *data* contains ephemeral FileReferences (local but not durable)."""
+    """Return True if *data* contains ephemeral FileReferences (local but not durable).
+
+    Refs with ``auto_materialize=False`` are excluded — those are managed by
+    the application directly, not the activity interceptor.
+    """
     return any(
-        ref.local_path is not None and not ref.is_durable
+        ref.local_path is not None and not ref.is_durable and ref.auto_materialize
         for ref in _find_file_refs(data)
     )
 
@@ -129,8 +133,14 @@ def has_refs_to_materialize(data: Any) -> bool:
     Checks for: missing local file, stale local_path (different worker),
     missing local sha256 sidecar (conservative), and sidecar hash mismatch
     (corrupt/partial file).
+
+    Refs with ``auto_materialize=False`` are excluded — those are managed by
+    the application directly, not the activity interceptor.
     """
-    return any(_needs_materialize(ref) for ref in _find_file_refs(data))
+    return any(
+        ref.auto_materialize and _needs_materialize(ref)
+        for ref in _find_file_refs(data)
+    )
 
 
 async def _replace_refs(
@@ -155,6 +165,9 @@ async def _replace_refs(
     )
 
     if isinstance(data, FileReference):
+        # Honor opt-out: app owns the lifecycle for this ref.
+        if not data.auto_materialize:
+            return data
         if mode == "persist" and data.local_path is not None and not data.is_durable:
             return await persist_file_reference(store, data, output_path=output_path)
         if mode == "materialize" and _needs_materialize(data):

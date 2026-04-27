@@ -188,6 +188,14 @@ class FileReference(BaseModel, frozen=True):
             run-scoped prefix for post-run investigation, or
             ``StorageTier.PERSISTENT`` to keep it indefinitely under
             ``persistent-artifacts/``.
+        auto_materialize: When ``True`` (default), the activity interceptor
+            will transparently upload (persist) ephemeral refs after a task
+            completes and download (materialize) durable refs before the
+            next task runs.  Set to ``False`` to opt out — the app then
+            owns the upload/download lifecycle.  Useful when an app needs
+            custom retry/timeout/streaming behavior the interceptor cannot
+            provide (e.g. multi-GB files, lazy-streaming reads, or
+            deferred materialization).
     """
 
     local_path: str | None = None
@@ -195,6 +203,7 @@ class FileReference(BaseModel, frozen=True):
     is_durable: bool = False
     file_count: int = 1
     tier: StorageTier = StorageTier.TRANSIENT
+    auto_materialize: bool = True
 
     @staticmethod
     def from_local(
@@ -202,18 +211,31 @@ class FileReference(BaseModel, frozen=True):
     ) -> "FileReference":
         """Create an ephemeral FileReference from a local filesystem path.
 
+        For a directory, ``file_count`` is computed as the number of regular
+        files under the tree (recursively); for a single file it is ``1``.
+        Non-existent paths fall back to the default ``file_count=1`` so this
+        helper is safe to call before the file has been written.
+
         Args:
             path: Local file or directory path.
 
         Returns:
             An ephemeral ``FileReference`` (``is_durable=False``) with
-            ``local_path`` set.  ``file_count`` is always 1; use
-            :func:`~application_sdk.storage.transfer.upload` if you need
-            accurate file counts for directories.
+            ``local_path`` set.
         """
         p = Path(path) if not isinstance(path, Path) else path
+        # Best-effort file_count computation. We swallow OSError so the
+        # constructor is still usable from inside Temporal sandbox where
+        # filesystem inspection may not be desirable.
+        file_count = 1
+        try:
+            if p.is_dir():
+                file_count = sum(1 for child in p.rglob("*") if child.is_file())
+        except OSError:
+            file_count = 1
         return FileReference(
             local_path=str(p),
+            file_count=file_count,
         )
 
 
