@@ -172,6 +172,18 @@ class AsyncDaprClient:
         resp = await self._client.get(
             SECRET_STORE_PATH.format(store_name=store_name, key=quote(key, safe=""))
         )
+        if resp.status_code >= 400:
+            # Log the Dapr response body — it contains the actual Vault error
+            # (e.g. "permission denied", "secret not found") that raise_for_status
+            # would otherwise discard. Critical for debugging BLDX-1151.
+            body = resp.text[:500] if resp.text else "(empty)"
+            logger.error(
+                "Failed to fetch secret (component=%s, key=%s, status=%s): %s",
+                store_name,
+                key,
+                resp.status_code,
+                body,
+            )
         resp.raise_for_status()
         return resp.json()
 
