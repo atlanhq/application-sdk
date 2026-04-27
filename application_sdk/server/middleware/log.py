@@ -58,14 +58,15 @@ class LogMiddleware(BaseHTTPMiddleware):
                 )
             return response
 
-        except Exception:
+        except Exception as exc:
             duration = time.time() - start_time
             self.logger.error(
-                "Request failed: method=%s path=%s duration_ms=%.2f request_id=%s",
+                "Request failed: method=%s path=%s duration_ms=%.2f request_id=%s error_type=%s",
                 request.method,
                 request.url.path,
                 round(duration * 1000, 2),
                 request_id,
+                type(exc).__name__,
                 exc_info=True,
             )
             raise

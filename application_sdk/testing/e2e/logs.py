@@ -19,9 +19,12 @@ async def _run_to_file(args: list[str], output_path: Path) -> None:
         )
         stdout_bytes, _ = await proc.communicate()
         output_path.write_bytes(stdout_bytes)
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "Log collection command failed (%s)", " ".join(args), exc_info=True
+            "Log collection command failed (%s) error_type=%s",
+            " ".join(args),
+            type(exc).__name__,
+            exc_info=True,
         )
 
 
@@ -51,9 +54,12 @@ class LogCollector:
         """
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Failed to create output dir %s", self.output_dir, exc_info=True
+                "Failed to create output dir %s error_type=%s",
+                self.output_dir,
+                type(exc).__name__,
+                exc_info=True,
             )
             return
 
@@ -142,9 +148,12 @@ class LogCollector:
         """Write namespace events sorted by timestamp to ``events.txt``."""
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Failed to create output dir %s", self.output_dir, exc_info=True
+                "Failed to create output dir %s error_type=%s",
+                self.output_dir,
+                type(exc).__name__,
+                exc_info=True,
             )
             return
 

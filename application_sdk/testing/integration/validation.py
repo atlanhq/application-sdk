@@ -250,7 +250,10 @@ def validate_with_pandera(
         except FileNotFoundError as e:
             result["error"] = str(e)
             logger.warning(
-                "Skipping %s validation: file not found", entity, exc_info=True
+                "Skipping %s validation: schema_file=%s not found",
+                entity,
+                schema_file,
+                exc_info=True,
             )
         except Exception as e:
             result["error"] = str(e)

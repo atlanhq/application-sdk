@@ -901,10 +901,11 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception:
+                except Exception as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s",
+                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
                         workflow_id,
+                        type(exc).__name__,
                         exc_info=True,
                     )
                     return JSONResponse(
@@ -950,10 +951,11 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception:
+                except Exception as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s",
+                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
                         workflow_id,
+                        type(exc).__name__,
                         exc_info=True,
                     )
                     return JSONResponse(
