@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+
+- **`--mode handler` removed** [ARUN-342]. Production HTTP traffic for core apps is now served by the new `common-app-server` runtime, which mounts each app's router via `application_sdk.routing.host_apps()`. Local dev still runs `--mode combined` as before; `--mode worker` is unchanged. Anyone passing `APPLICATION_MODE=SERVER` (legacy alias) will see a clear "Unknown mode" error rather than silent fallback.
+
+### Features
+
+- new `application_sdk.routing` module exposing `host_apps()` for the consolidated runtime: parent FastAPI with Starlette `Host`-route dispatch, RFC-7230-compliant case-insensitive Host matching via an ASGI lowercasing middleware, and a `current_app_name` ContextVar that handlers can read to learn which app context they're running in (replaces the process-level `application_sdk.constants.APPLICATION_NAME` for multi-app processes).
+- `tests/unit/test_routing.py` ports the consolidation PoC: 12 functional tests + a 500-concurrent-request stress test covering same-path collision avoidance, port suffix tolerance, case-insensitive Host matching, ContextVar isolation under concurrency, and short-form / FQDN dispatch.
+
 ## v3.2.0 (April 23, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.1.0...v3.2.0

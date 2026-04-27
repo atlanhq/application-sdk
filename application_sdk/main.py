@@ -1,14 +1,16 @@
 """Unified entry point for Application SDK containers.
 
-Supports three execution modes:
+Supports two execution modes:
 - ``worker``: Temporal workflow execution only
-- ``handler``: HTTP FastAPI handler service only
-- ``combined``: Worker + handler in a single process (SDR / docker-compose)
+- ``combined``: Worker + handler in a single process (local dev / docker-compose)
+
+In production, the per-app HTTP handler is no longer deployed standalone;
+it is mounted inside ``common-app-server`` via :mod:`application_sdk.routing`.
+The ``handler`` mode was removed in the consolidation work (ARUN-342).
 
 CLI usage::
 
     python -m application_sdk.main --mode worker --app my_package.apps:MyApp
-    python -m application_sdk.main --mode handler --app my_package.apps:MyApp
     python -m application_sdk.main --mode combined --app my_package.apps:MyApp
 
 Environment variable equivalents::
@@ -110,7 +112,7 @@ class AppConfig:
     """
 
     mode: str
-    """Execution mode: "worker", "handler", or "combined"."""
+    """Execution mode: "worker" or "combined"."""
 
     app_module: str
     """App class module path, e.g. "my_package.apps:MyApp"."""
@@ -193,7 +195,10 @@ class AppConfig:
 
         _legacy_mode_map = {
             "WORKER": "worker",
-            "SERVER": "handler",
+            # SERVER (legacy "handler" mode) was removed in the consolidation
+            # work (ARUN-342) — production no longer runs a per-app handler pod.
+            # Anyone still passing APPLICATION_MODE=SERVER is misconfigured;
+            # leave the alias out so it raises a clear "Unknown mode" error.
             "LOCAL": "combined",
         }
         mode = (
@@ -724,79 +729,6 @@ async def run_worker_mode(config: AppConfig) -> None:
     logger.info("Worker stopped")
 
 
-def run_handler_mode(config: AppConfig) -> None:
-    """Run in handler mode (HTTP FastAPI server).
-
-    Loads the handler class (or DefaultHandler) and runs the FastAPI
-    server via uvicorn. This is synchronous — uvicorn manages its own loop.
-    """
-    import asyncio
-
-    from application_sdk.execution._temporal.converter import (
-        create_data_converter_for_app,
-    )
-    from application_sdk.handler import DefaultHandler, run_app_handler_service
-    from application_sdk.infrastructure.context import set_infrastructure
-
-    infra = asyncio.run(_create_infrastructure())
-    set_infrastructure(infra)
-
-    logger.info(
-        "Starting handler mode: app=%s host=%s port=%d",
-        config.app_module,
-        config.handler_host,
-        config.handler_port,
-    )
-
-    app_class = load_app_class(config.app_module)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
-
-    handler_class = load_handler_class(
-        config.app_module,
-        handler_module_path=config.handler_module,
-    )
-    if handler_class is None:
-        handler_class = DefaultHandler
-        logger.info("Using DefaultHandler for %s", app_name)
-    else:
-        logger.info(
-            "Loaded custom handler %s for %s",
-            handler_class.__name__,
-            app_name,
-        )
-
-    handler = handler_class()
-    data_converter = create_data_converter_for_app(app_class)
-
-    run_app_handler_service(
-        handler,
-        host=config.handler_host,
-        port=config.handler_port,
-        log_level=config.log_level.lower(),
-        app_name=app_name,
-        app_class=app_class,
-        temporal_host=config.temporal_host,
-        temporal_namespace=config.temporal_namespace,
-        task_queue=config.task_queue,
-        data_converter=data_converter,
-        tls_enabled=config.tls_enabled,
-        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
-        tls_client_cert_path=config.tls_client_cert_path,
-        tls_client_private_key_path=config.tls_client_private_key_path,
-        tls_domain=config.tls_domain,
-        auth_enabled=config.auth_enabled,
-        auth_client_id=config.auth_client_id,
-        auth_client_secret=config.auth_client_secret,
-        auth_token_url=config.auth_token_url,
-        auth_base_url=config.auth_base_url,
-        auth_scopes=config.auth_scopes,
-        secret_store=infra.secret_store,
-        storage=infra.storage,
-        frontend_assets_path=config.frontend_assets_path,
-    )
-    asyncio.run(_flush_observability())
-
-
 async def run_combined_mode(config: AppConfig) -> None:
     """Run worker + handler in a single process (SDR / docker-compose mode).
 
@@ -1160,16 +1092,21 @@ async def run_dev_combined(
 
 
 def run_main(config: AppConfig) -> None:
-    """Route to worker, handler, or combined mode based on config."""
+    """Route to worker or combined mode based on config."""
     if config.mode == "worker":
         asyncio.run(run_worker_mode(config))
-    elif config.mode == "handler":
-        run_handler_mode(config)
     elif config.mode == "combined":
         asyncio.run(run_combined_mode(config))
+    elif config.mode == "handler":
+        raise ValueError(
+            "Mode 'handler' was removed in the server-consolidation work "
+            "(ARUN-342). Production HTTP traffic is now served by "
+            "common-app-server via application_sdk.routing.host_apps. "
+            "For local dev, use --mode combined."
+        )
     else:
         raise ValueError(
-            f"Unknown mode: {config.mode!r}. Must be 'worker', 'handler', or 'combined'."
+            f"Unknown mode: {config.mode!r}. Must be 'worker' or 'combined'."
         )
 
 
@@ -1180,7 +1117,7 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Environment Variables:
-  ATLAN_APP_MODE           Execution mode (worker, handler, or combined)
+  ATLAN_APP_MODE           Execution mode (worker or combined)
   ATLAN_APP_MODULE         App class path in 'module:ClassName' form (e.g. app.main:MyApp)
                            Apps expose multiple workflows via @entrypoint methods
   ATLAN_HANDLER_MODULE     Optional custom handler module path
@@ -1199,7 +1136,6 @@ Environment Variables:
 
 Examples:
   python -m application_sdk.main --mode worker --app my_package.apps:MyApp
-  python -m application_sdk.main --mode handler --app my_package.apps:MyApp --port 9000
   python -m application_sdk.main --mode combined --app my_package.apps:MyApp
         """,
     )
@@ -1207,7 +1143,7 @@ Examples:
     parser.add_argument(
         "--mode",
         "-m",
-        choices=["worker", "handler", "combined"],
+        choices=["worker", "combined"],
         help="Execution mode",
     )
     parser.add_argument(

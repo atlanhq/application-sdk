@@ -77,11 +77,11 @@ class TestAppConfigFromArgsAndEnv:
         assert config.mode == "worker"
 
     def test_mode_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("ATLAN_APP_MODE", "handler")
+        monkeypatch.setenv("ATLAN_APP_MODE", "worker")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
         args = self._make_args()
         config = AppConfig.from_args_and_env(args)
-        assert config.mode == "handler"
+        assert config.mode == "worker"
 
     def test_app_module_from_args(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ATLAN_APP_MODULE", raising=False)
@@ -115,14 +115,19 @@ class TestAppConfigFromArgsAndEnv:
         config = AppConfig.from_args_and_env(self._make_args())
         assert config.mode == "worker"
 
-    def test_legacy_application_mode_server(
+    def test_legacy_application_mode_server_no_longer_aliased(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Legacy ``APPLICATION_MODE=SERVER`` was the alias for handler mode.
+        Handler mode is removed in the consolidation work; the alias is
+        intentionally not honoured so misconfigured deploys fail loudly
+        instead of silently running the wrong code path. The fallback
+        kicks in and we land at "combined" (the safe local-dev default)."""
         monkeypatch.delenv("ATLAN_APP_MODE", raising=False)
         monkeypatch.setenv("APPLICATION_MODE", "SERVER")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
         config = AppConfig.from_args_and_env(self._make_args())
-        assert config.mode == "handler"
+        assert config.mode == "combined"
 
     def test_legacy_application_mode_unset_defaults_combined(
         self, monkeypatch: pytest.MonkeyPatch
@@ -137,11 +142,11 @@ class TestAppConfigFromArgsAndEnv:
     def test_atlan_app_mode_takes_precedence(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ATLAN_APP_MODE", "handler")
+        monkeypatch.setenv("ATLAN_APP_MODE", "combined")
         monkeypatch.setenv("APPLICATION_MODE", "WORKER")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
         config = AppConfig.from_args_and_env(self._make_args())
-        assert config.mode == "handler"
+        assert config.mode == "combined"
 
     def test_missing_app_module_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ATLAN_APP_MODULE", raising=False)
@@ -194,7 +199,10 @@ class TestAppConfigFromArgsAndEnv:
         assert config.temporal_host == "localhost:7233"
 
     def test_default_handler_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("ATLAN_APP_MODE", "handler")
+        # handler_port still exists on AppConfig — used by run_combined_mode
+        # for the in-process FastAPI in local dev. Standalone handler mode
+        # is gone (ARUN-342).
+        monkeypatch.setenv("ATLAN_APP_MODE", "combined")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
         monkeypatch.delenv("ATLAN_HANDLER_PORT", raising=False)
         monkeypatch.delenv("ATLAN_APP_HTTP_PORT", raising=False)
@@ -336,11 +344,13 @@ class TestRunMain:
                 run_main(config)
                 mock_run.assert_called_once()
 
-    def test_handler_mode_calls_run_handler_mode(self) -> None:
+    def test_handler_mode_raises_after_consolidation(self) -> None:
+        """``handler`` mode was removed in ARUN-342 — the dispatcher must
+        raise a clear error rather than silently routing to combined or
+        falling through to ``Unknown mode``."""
         config = AppConfig(mode="handler", app_module="pkg:App")
-        with mock.patch("application_sdk.main.run_handler_mode") as mock_handler:
+        with pytest.raises(ValueError, match="ARUN-342"):
             run_main(config)
-            mock_handler.assert_called_once_with(config)
 
     def test_combined_mode_calls_asyncio_run(self) -> None:
         config = AppConfig(mode="combined", app_module="pkg:App")
@@ -363,9 +373,9 @@ class TestParseArgs:
         assert args.app == "pkg:Cls"
 
     def test_parse_short_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("sys.argv", ["prog", "-m", "handler", "-a", "pkg:Cls"])
+        monkeypatch.setattr("sys.argv", ["prog", "-m", "worker", "-a", "pkg:Cls"])
         args = parse_args()
-        assert args.mode == "handler"
+        assert args.mode == "worker"
         assert args.app == "pkg:Cls"
 
     def test_parse_temporal_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
