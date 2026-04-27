@@ -127,12 +127,13 @@ class DaprCredentialVault:
                 try:
                     logger.debug("Fetching multi-key secret: %s", key_to_fetch)
                     secret_data = await self._get_secret(key_to_fetch)
-                except Exception:
-                    logger.warning(
-                        "Failed to fetch secret bundle: %s",
-                        key_to_fetch,
-                        exc_info=True,
-                    )
+                except Exception as exc:
+                    raise CredentialVaultError(
+                        f"Failed to fetch secrets for credential {credential_guid} "
+                        f"from secret store (key={key_to_fetch}). "
+                        "The workflow cannot proceed without credentials. "
+                        "Check Dapr secret store component logs and Vault connectivity."
+                    ) from exc
             else:
                 secret_data = await self._fetch_single_key_secrets(credential_config)
 

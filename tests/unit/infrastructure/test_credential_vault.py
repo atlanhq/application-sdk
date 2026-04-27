@@ -191,6 +191,59 @@ class TestDaprCredentialVaultGetCredentials:
 
         assert captured == ["abc-123"], f"Expected string guid, got: {captured}"
 
+    async def test_secret_store_500_raises_not_silently_continues(self) -> None:
+        """Vault 500 on secret fetch must raise CredentialVaultError, not
+        silently continue with empty credentials (BLDX-1151).
+
+        Before the fix, the SDK caught the exception and proceeded with
+        secret_data={}, resulting in credentials without password/token
+        and a downstream 401 from the target API.
+        """
+        import httpx
+
+        config = {"credentialSource": "direct", "host": "cloud.getdbt.com"}
+        mock_client = MagicMock()
+
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        mock_client.invoke_binding = AsyncMock(
+            return_value=BindingResult(data=json.dumps(config).encode(), metadata={})
+        )
+        # Simulate Vault returning 500
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "Server error '500 Internal Server Error'",
+                request=httpx.Request(
+                    "GET", "http://localhost:3500/v1.0/secrets/store/guid"
+                ),
+                response=httpx.Response(500),
+            )
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError, match="Failed to fetch secrets"):
+                await vault.get_credentials("60d7a92a-ac62-4520-9aa1-e78ae991977f")
+
+    async def test_secret_store_error_includes_credential_guid(self) -> None:
+        """Error message must include the credential GUID for debugging."""
+        config = {"credentialSource": "direct", "host": "example.com"}
+        mock_client = MagicMock()
+
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        mock_client.invoke_binding = AsyncMock(
+            return_value=BindingResult(data=json.dumps(config).encode(), metadata={})
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=RuntimeError("Vault unreachable")
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError, match="my-test-guid"):
+                await vault.get_credentials("my-test-guid")
+
     async def test_vault_error_on_binding_failure(self) -> None:
         """Dapr binding error → wrapped in CredentialVaultError."""
         mock_client = MagicMock()
