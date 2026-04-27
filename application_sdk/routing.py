@@ -55,9 +55,11 @@ from __future__ import annotations
 
 import os
 from contextvars import ContextVar
-from typing import Sequence
+from typing import Any, Sequence
 
-from fastapi import FastAPI
+import httpx  # noqa: TCH002 — runtime use in _proxy_to_sub_app
+from fastapi import FastAPI, Request  # noqa: TCH002 — Request used by FastAPI DI
+from fastapi.responses import Response  # noqa: TCH002 — runtime return value
 from starlette.routing import Host
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -132,6 +134,55 @@ def _extract_host(scope: Scope) -> str:
     return ""
 
 
+def _collect_dapr_subscriptions(sub_app: FastAPI) -> list[dict[str, Any]]:
+    """Call the sub-app's ``GET /dapr/subscribe`` synchronously and return its
+    subscription list.
+
+    Uses Starlette's ``TestClient`` (backed by ``requests`` + the ASGI
+    interface) so this works at module-import time before any async event loop
+    is running.  If the sub-app doesn't expose ``/dapr/subscribe`` (or it
+    returns empty), an empty list is returned without error.
+    """
+    from starlette.testclient import TestClient
+
+    try:
+        with TestClient(sub_app, raise_server_exceptions=False) as client:
+            r = client.get("/dapr/subscribe")
+            if r.status_code == 200:
+                return r.json()
+    except Exception:  # noqa: BLE001 — best-effort; don't crash the runtime
+        pass
+    return []
+
+
+async def _proxy_to_sub_app(sub_app: FastAPI, request: Request, path: str) -> Response:
+    """Forward an HTTP request body + headers to ``sub_app`` at ``path`` and
+    return the response.
+
+    Used to proxy Dapr's inbound delivery calls (pub/sub + event triggers) from
+    the pod-level parent (which Dapr calls on ``localhost``) to the correct
+    per-app sub-app FastAPI instance.  The round-trip is entirely in-process via
+    ``httpx.AsyncClient`` + Starlette's ASGI transport — no network hop.
+    """
+    body = await request.body()
+    # Pass only the headers Dapr sets; skip Host (would confuse the sub-app).
+    forward_headers = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in ("host", "content-length")
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=sub_app),
+        base_url="http://dapr-delivery",
+    ) as client:
+        r = await client.post(path, content=body, headers=forward_headers)
+    return Response(
+        content=r.content,
+        status_code=r.status_code,
+        media_type=r.headers.get("content-type"),
+    )
+
+
 def host_apps(
     apps: Sequence[tuple[str, FastAPI]],
     *,
@@ -177,12 +228,66 @@ def host_apps(
     seen_names: set[str] = set()
     host_to_name: dict[str, str] = {}
 
+    # Build Dapr subscription aggregation.  Dapr's sidecar calls
+    # ``GET /dapr/subscribe`` on localhost (no Host header) at startup, then
+    # delivers events via ``POST /events/v1/event/{id}`` and
+    # ``POST /subscriptions/v1/{route}`` — also on localhost, no Host.
+    # Neither of those goes through Host-header dispatch, so we collect all
+    # subscriptions here and register aggregated routes on the parent.
+    all_dapr_subscriptions: list[dict[str, Any]] = []
+    # Maps the delivery path (without leading slash) → sub-app that handles it
+    dapr_route_to_app: dict[str, FastAPI] = {}
+
+    for k8s_name, router in apps:
+        subs = _collect_dapr_subscriptions(router)
+        for sub in subs:
+            if "route" in sub:
+                # pub/sub: Dapr delivers to POST /subscriptions/v1/{route}
+                path = sub["route"].lstrip("/")
+                dapr_route_to_app[path] = router
+            if "routes" in sub:
+                # event-trigger: Dapr delivers to POST /events/v1/event/{id}
+                for rule in sub["routes"].get("rules", []):
+                    p = rule.get("path", "").lstrip("/")
+                    if p:
+                        dapr_route_to_app[p] = router
+        all_dapr_subscriptions.extend(subs)
+
     parent = FastAPI()
 
-    # Order matters: register Host routes BEFORE any parent-level path routes.
-    # Starlette matches routes in order; if /health on the parent comes first,
-    # it shadows per-app /health under Host dispatch. Verified by the
-    # ``per-app /health via Host header`` test in tests/unit/test_routing.py.
+    # 1. Aggregated Dapr discovery endpoint (called by sidecar on localhost).
+    @parent.get("/dapr/subscribe")
+    async def dapr_subscribe_aggregated() -> list[dict[str, Any]]:
+        return all_dapr_subscriptions
+
+    # 2. Event-trigger delivery (from event_triggers registered per-app).
+    @parent.post("/events/v1/event/{event_id}")
+    async def proxy_event_trigger(event_id: str, request: Request) -> Response:
+        path = f"events/v1/event/{event_id}"
+        sub_app = dapr_route_to_app.get(path)
+        if sub_app is None:
+            return Response(content=b'{"status":"DROP"}', media_type="application/json")
+        return await _proxy_to_sub_app(sub_app, request, f"/{path}")
+
+    # 3. Dead-letter / unmatched event trigger route.
+    @parent.post("/events/v1/drop")
+    async def event_drop() -> dict[str, str]:
+        return {"status": "DROP"}
+
+    # 4. Pub/sub subscription delivery.
+    @parent.post("/subscriptions/v1/{route:path}")
+    async def proxy_subscription(route: str, request: Request) -> Response:
+        path = f"subscriptions/v1/{route}"
+        sub_app = dapr_route_to_app.get(path)
+        if sub_app is None:
+            return Response(content=b'{"status":"DROP"}', media_type="application/json")
+        return await _proxy_to_sub_app(sub_app, request, f"/{path}")
+
+    # 5. Host-dispatch routes — AFTER Dapr routes, BEFORE the catch-all /health.
+    # Order matters: Starlette matches in list order; Dapr endpoints above are
+    # path-only (no Host constraint) so they must precede the Host routes or a
+    # request with a matching Host would shadow them.  In practice Dapr never
+    # sends a Host that matches an app pattern, but defence-in-depth.
     for k8s_name, router in apps:
         if k8s_name in seen_names:
             raise ValueError(f"duplicate app name in host_apps(): {k8s_name!r}")
@@ -192,6 +297,7 @@ def host_apps(
             parent.routes.append(Host(host, app=router))
             host_to_name[host] = k8s_name
 
+    # 6. Pod-level /health — after everything else.
     @parent.get("/health")
     async def pod_health() -> dict[str, str]:
         """Pod-level liveness — answers when no app's Host route matched."""

@@ -240,3 +240,196 @@ async def test_namespace_override_via_env(monkeypatch: pytest.MonkeyPatch) -> No
     ) as c:
         r = await c.get("/health", headers={"Host": "alpha.env-ns.svc.cluster.local"})
     assert r.status_code == 200 and r.json()["app"] == "alpha"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dapr aggregation tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _make_app_with_subscription(label: str, topic: str, route: str) -> FastAPI:
+    """App that registers a Dapr pub/sub subscription and handles delivery."""
+    sub = FastAPI()
+
+    @sub.get("/dapr/subscribe")
+    async def subscribe() -> list[dict]:
+        return [
+            {
+                "pubsubname": "messaging",
+                "topic": topic,
+                "route": f"/subscriptions/v1/{route}",
+            }
+        ]
+
+    @sub.post(f"/subscriptions/v1/{route}")
+    async def handle(payload: dict) -> dict:
+        return {"app": label, "topic": topic, "payload": payload}
+
+    @sub.get("/health")
+    async def health() -> dict:
+        return {"status": "ok", "app": label}
+
+    return sub
+
+
+def _make_app_with_event_trigger(label: str, event_id: str) -> FastAPI:
+    """App that registers a Dapr event trigger and handles delivery."""
+    sub = FastAPI()
+
+    @sub.get("/dapr/subscribe")
+    async def subscribe() -> list[dict]:
+        return [
+            {
+                "pubsubname": "atlan-event-store",
+                "topic": "workflow_events",
+                "routes": {
+                    "rules": [
+                        {
+                            "match": f"event.data.event_id == '{event_id}'",
+                            "path": f"/events/v1/event/{event_id}",
+                        }
+                    ],
+                    "default": "/events/v1/drop",
+                },
+            }
+        ]
+
+    @sub.post(f"/events/v1/event/{event_id}")
+    async def handle(payload: dict) -> dict:
+        return {"app": label, "event_id": event_id}
+
+    return sub
+
+
+@pytest.mark.asyncio
+async def test_dapr_subscribe_aggregated_across_apps() -> None:
+    """GET /dapr/subscribe (no Host) returns subscriptions from ALL apps.
+
+    Dapr calls this once at sidecar startup on localhost — no Host header.
+    Under Host dispatch alone this would return 404. The aggregated route
+    on the parent must merge subscriptions from every sub-app.
+    """
+    parent = host_apps(
+        [
+            (
+                "publish",
+                _make_app_with_subscription("publish", "pub-topic", "pub-route"),
+            ),
+            (
+                "lineage",
+                _make_app_with_subscription("lineage", "lin-topic", "lin-route"),
+            ),
+        ]
+    )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=parent), base_url="http://t"
+    ) as c:
+        # Simulate Dapr sidecar: no Host header (Host = 127.0.0.1)
+        r = await c.get("/dapr/subscribe", headers={"Host": "127.0.0.1"})
+
+    assert r.status_code == 200
+    subs = r.json()
+    topics = {s["topic"] for s in subs}
+    assert "pub-topic" in topics
+    assert "lin-topic" in topics
+    assert len(subs) == 2
+
+
+@pytest.mark.asyncio
+async def test_dapr_pubsub_delivery_proxied_to_correct_app() -> None:
+    """POST /subscriptions/v1/{route} (no Host) is proxied to the right sub-app.
+
+    Dapr delivers messages to this path on localhost. Without the aggregation
+    proxy the route would 404 and the message would be lost.
+    """
+    parent = host_apps(
+        [
+            (
+                "publish",
+                _make_app_with_subscription("publish", "pub-topic", "pub-route"),
+            ),
+            (
+                "lineage",
+                _make_app_with_subscription("lineage", "lin-topic", "lin-route"),
+            ),
+        ]
+    )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=parent), base_url="http://t"
+    ) as c:
+        # Dapr delivers to publish's route
+        rp = await c.post(
+            "/subscriptions/v1/pub-route",
+            json={"msg": "hello-publish"},
+            headers={"Host": "127.0.0.1"},
+        )
+        # Dapr delivers to lineage's route
+        rl = await c.post(
+            "/subscriptions/v1/lin-route",
+            json={"msg": "hello-lineage"},
+            headers={"Host": "127.0.0.1"},
+        )
+
+    assert rp.status_code == 200
+    assert rp.json()["app"] == "publish"
+    assert rl.status_code == 200
+    assert rl.json()["app"] == "lineage"
+
+
+@pytest.mark.asyncio
+async def test_dapr_event_trigger_delivery_proxied() -> None:
+    """POST /events/v1/event/{event_id} (no Host) is proxied to the right sub-app."""
+    parent = host_apps(
+        [
+            (
+                "automation-engine",
+                _make_app_with_event_trigger("automation-engine", "ae-evt-001"),
+            ),
+            ("publish", _make_app_with_event_trigger("publish", "pub-evt-002")),
+        ]
+    )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=parent), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/events/v1/event/ae-evt-001",
+            json={"trigger": "run"},
+            headers={"Host": "127.0.0.1"},
+        )
+    assert r.status_code == 200
+    assert r.json()["app"] == "automation-engine"
+    assert r.json()["event_id"] == "ae-evt-001"
+
+
+@pytest.mark.asyncio
+async def test_dapr_unknown_route_returns_drop() -> None:
+    """An unregistered Dapr delivery path returns DROP, not 404.
+
+    Dapr treats 404 as an error that triggers retries. Returning DROP (200)
+    tells Dapr the message was intentionally discarded.
+    """
+    parent = host_apps(
+        [("publish", _make_app_with_subscription("publish", "pub-topic", "pub-route"))]
+    )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=parent), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/subscriptions/v1/ghost-route",
+            json={},
+            headers={"Host": "127.0.0.1"},
+        )
+    assert r.status_code == 200
+    assert r.json()["status"] == "DROP"
+
+
+@pytest.mark.asyncio
+async def test_dapr_drop_endpoint_reachable() -> None:
+    """/events/v1/drop (the dead-letter route) returns DROP."""
+    parent = host_apps([("publish", _make_app("publish"))])
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=parent), base_url="http://t"
+    ) as c:
+        r = await c.post("/events/v1/drop", json={}, headers={"Host": "127.0.0.1"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "DROP"
