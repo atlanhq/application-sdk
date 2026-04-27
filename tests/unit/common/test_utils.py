@@ -78,10 +78,10 @@ class TestPrepareQuery:
         with patch("application_sdk.common.sql_filters.logger") as mock_logger:
             result = prepare_query(query, workflow_args)
             mock_logger.error.assert_called_once_with(
-                "Error preparing query",
-                query=query,
-                error_message="Expecting value: line 1 column 1 (char 0)",
-                error_code=CommonError.QUERY_PREPARATION_ERROR.code,
+                "Error preparing query: error_code=%s error_message=%s",
+                CommonError.QUERY_PREPARATION_ERROR.code,
+                "Expecting value: line 1 column 1 (char 0)",
+                exc_info=True,
             )
             assert result is None
 

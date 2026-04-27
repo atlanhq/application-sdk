@@ -570,7 +570,13 @@ class App(ABC):
         try:
             hints = get_type_hints(cls.run)
         except Exception:
-            return  # Unresolvable annotations (e.g. forward refs) — skip silently
+            # Unresolvable annotations (e.g. forward refs) — skip silently.
+            _task_logger.debug(
+                "Skipping run() annotation validation for %s: could not resolve type hints",
+                cls.__name__,
+                exc_info=True,
+            )
+            return
 
         run_input_type = hints.get("input")
         output_type = hints.get("return")
@@ -1284,14 +1290,20 @@ class App(ABC):
                 try:
                     await self.cleanup_files(CleanupInput())
                 except Exception:
-                    _safe_log("warning", "cleanup_files task failed during on_complete")
+                    _safe_log(
+                        "warning",
+                        "cleanup_files task failed during on_complete",
+                        exc_info=True,
+                    )
 
             async def _storage_cleanup() -> None:
                 try:
                     await self.cleanup_storage(StorageCleanupInput())
                 except Exception:
                     _safe_log(
-                        "warning", "cleanup_storage task failed during on_complete"
+                        "warning",
+                        "cleanup_storage task failed during on_complete",
+                        exc_info=True,
                     )
 
             await asyncio.gather(_local_cleanup(), _storage_cleanup())
@@ -1301,7 +1313,7 @@ class App(ABC):
 
             await AtlanObservability.flush_all()
         except Exception:
-            _safe_log("warning", "flush_all() failed during on_complete")
+            _safe_log("warning", "flush_all() failed during on_complete", exc_info=True)
 
 
 # =============================================================================
@@ -1516,7 +1528,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                         input=input_summary,
                     )
         except Exception:
-            _safe_log("warning", "Failed to log input summary")
+            _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
             entry_method = getattr(app_instance, entry_method_name)
@@ -1531,6 +1543,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                 run_id=str(run_id),
                 correlation_id=context.correlation_id,
                 error_type=type(e).__name__,
+                exc_info=True,
             )
             # deferred import: circular dependency
             # Raw Python exceptions (e.g. ValueError raised directly in an
@@ -1564,7 +1577,9 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                 await app_instance.on_complete()
             except Exception:
                 _safe_log(
-                    "warning", "on_complete() hook raised an unexpected exception"
+                    "warning",
+                    "on_complete() hook raised an unexpected exception",
+                    exc_info=True,
                 )
 
             end_time = _safe_now()

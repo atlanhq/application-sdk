@@ -74,9 +74,6 @@ class BaseRedisClient:
         if not REDIS_PASSWORD or (
             not REDIS_SENTINEL_HOSTS and not (REDIS_HOST and REDIS_PORT)
         ):
-            logger.error(
-                "Redis configuration invalid: REDIS_PASSWORD is required and either REDIS_SENTINEL_HOSTS or REDIS_HOST/REDIS_PORT must be configured"
-            )
             raise ClientError(
                 f"{ClientError.REQUEST_VALIDATION_ERROR}: Redis configuration invalid - REDIS_PASSWORD is required and either REDIS_SENTINEL_HOSTS or REDIS_HOST/REDIS_PORT must be configured"
             )
@@ -103,7 +100,6 @@ class BaseRedisClient:
             ) from e
 
         if not sentinel_hosts:
-            logger.error("No Sentinel hosts configured")
             raise ClientError(
                 f"{ClientError.REQUEST_VALIDATION_ERROR}: No Sentinel hosts configured"
             )
@@ -261,7 +257,6 @@ class RedisClient(BaseRedisClient):
             ClientError: If Redis connection or operation fails
         """
         if not self.redis_client:
-            logger.error("Sync Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -293,7 +288,6 @@ class RedisClient(BaseRedisClient):
             ClientError: If Redis connection or operation fails.
         """
         if not self.redis_client:
-            logger.error("Sync Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -412,7 +406,6 @@ class RedisClientAsync(BaseRedisClient):
             ClientError: If Redis connection or operation fails
         """
         if not self.redis_client:
-            logger.error("Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -444,7 +437,6 @@ class RedisClientAsync(BaseRedisClient):
             ClientError: If Redis connection or operation fails.
         """
         if not self.redis_client:
-            logger.error("Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )

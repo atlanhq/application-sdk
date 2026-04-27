@@ -122,7 +122,8 @@ async def _emit_worker_start_event(
         await _publish_event_via_binding(event)
     except BindingError:
         logger.warning(
-            "eventstore binding unavailable — worker_start event not emitted"
+            "eventstore binding unavailable — worker_start event not emitted",
+            exc_info=True,
         )
     except Exception:
         logger.warning("Failed to emit worker_start event", exc_info=True)
@@ -206,7 +207,8 @@ def create_worker(
         except ImportError:
             logger.warning(
                 "ATLAN_ENABLE_OTLP_TRACES=true but temporalio.contrib.opentelemetry "
-                "is not available; falling back to empty trace_ids"
+                "is not available; falling back to empty trace_ids",
+                exc_info=True,
             )
 
     # AppVitalsInterceptor — emits lifecycle metrics on workflow/activity completion.
