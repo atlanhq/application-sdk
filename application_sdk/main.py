@@ -89,9 +89,24 @@ from application_sdk.discovery import (  # noqa: E402
 
 @dataclass
 class AppConfig:
-    """Configuration for app execution.
+    """Runtime configuration for app execution.
 
-    Loaded from CLI arguments with environment variable fallbacks.
+    ``AppConfig`` is the **authoritative runtime config** passed through the call
+    chain to workers, handlers, and the Temporal client. It is constructed after
+    CLI argument parsing (``from_args_and_env``) or directly in dev scripts
+    (``run_dev_combined``).
+
+    **Relationship with constants.py:**
+    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``,
+    ``ENABLE_PROMETHEUS_METRICS``). Those constants serve code that runs at
+    **import time** (observability init, logging.basicConfig) — before AppConfig
+    exists. Both AppConfig and constants.py read the **same env vars with the
+    same defaults** so they stay in sync.
+
+    **Construction paths:**
+    - Production: ``main()`` → ``AppConfig.from_args_and_env(args)``
+    - Dev (CLI): ``atlan app run`` → same as production
+    - Dev (script): ``run_dev_combined(MyApp)`` → ``AppConfig(...)`` directly
     """
 
     mode: str
@@ -132,6 +147,26 @@ class AppConfig:
     auth_token_url: str = ""
     auth_base_url: str = ""
     auth_scopes: str = ""
+
+    # Runtime flags (env-var defaults, overridable per execution mode)
+    enable_prometheus_metrics: bool = True
+    """Enable Temporal Prometheus metrics endpoint. Default True for prod,
+    set to False in run_dev_combined() to avoid port collisions on reload."""
+
+    prometheus_bind_address: str = "0.0.0.0:9464"
+    """Bind address for Temporal Prometheus metrics."""
+
+    enable_app_vitals: bool = True
+    """Enable App Vitals interceptor for activity-level observability.
+    Reads same env var as constants.ENABLE_APP_VITALS (ATLAN_ENABLE_APP_VITALS)."""
+
+    enable_mcp: bool = False
+    """Enable Model Context Protocol (MCP) server.
+    Reads same env var as constants.ENABLE_MCP (ENABLE_MCP)."""
+
+    max_concurrent_storage_transfers: int = 4
+    """Maximum concurrent object-store uploads/downloads.
+    Reads same env var as constants.MAX_CONCURRENT_STORAGE_TRANSFERS."""
 
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
@@ -242,11 +277,25 @@ class AppConfig:
             auth_enabled=_env_bool("ATLAN_AUTH_ENABLED"),
             auth_client_id=_env("ATLAN_AUTH_CLIENT_ID"),
             auth_client_secret=_env("ATLAN_AUTH_CLIENT_SECRET"),
-            auth_token_url=_env("ATLAN_AUTH_TOKEN_URL"),
-            auth_base_url=_env("ATLAN_AUTH_BASE_URL"),
+            # v2 compat: ATLAN_AUTH_URL is the legacy env var set by older Helm charts.
+            # v3 uses ATLAN_AUTH_TOKEN_URL / ATLAN_AUTH_BASE_URL separately.
+            auth_token_url=_env("ATLAN_AUTH_TOKEN_URL") or _env("ATLAN_AUTH_URL"),
+            auth_base_url=_env("ATLAN_AUTH_BASE_URL") or _env("ATLAN_AUTH_URL"),
             auth_scopes=_env("ATLAN_AUTH_SCOPES"),
             frontend_assets_path=_env(
                 "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
+            ),
+            # Runtime flags
+            enable_prometheus_metrics=_env_bool(
+                "ATLAN_ENABLE_PROMETHEUS_METRICS", default=True
+            ),
+            prometheus_bind_address=_env(
+                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+            ),
+            enable_app_vitals=_env_bool("ATLAN_ENABLE_APP_VITALS", default=True),
+            enable_mcp=_env_bool("ENABLE_MCP"),
+            max_concurrent_storage_transfers=_env_int(
+                "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
             ),
         )
 
@@ -623,6 +672,8 @@ async def run_worker_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
+        enable_prometheus=config.enable_prometheus_metrics,
+        prometheus_bind_address=config.prometheus_bind_address,
     )
 
     if auth_manager is not None:
@@ -829,6 +880,8 @@ async def run_combined_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
+        enable_prometheus=config.enable_prometheus_metrics,
+        prometheus_bind_address=config.prometheus_bind_address,
     )
 
     if auth_manager is not None:
@@ -990,6 +1043,13 @@ async def run_dev_combined(
     """
     import json as _json
 
+    # Dev-friendly: ensure Dapr ports are set. poe start-deps launches Dapr
+    # on the default ports but in a background process, so the env vars aren't
+    # exported to the dev's shell. Default to standard Dapr ports so devs
+    # don't need to manually export them or add them to .env.
+    os.environ.setdefault("DAPR_HTTP_PORT", "3500")
+    os.environ.setdefault("DAPR_GRPC_PORT", "50001")
+
     app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
     effective_task_queue = task_queue or f"{app_name}-queue"
     app_module = f"{app_class.__module__}:{app_class.__name__}"
@@ -1005,12 +1065,19 @@ async def run_dev_combined(
         handler_port=port,
         log_level="DEBUG",
         service_name=_derive_service_name(app_module),
+        # Dev-friendly: disable Prometheus to avoid port 9464 collision on
+        # hot reload, and use ephemeral health port to avoid 8081 collision.
+        enable_prometheus_metrics=os.environ.get(
+            "ATLAN_ENABLE_PROMETHEUS_METRICS", ""
+        ).lower()
+        in ("true", "1"),
+        health_port=0,
         frontend_assets_path=os.environ.get(
             "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
         ),
     )
 
-    # Create infrastructure early so run_combined_mode uses it directly
+    # Create infrastructure early so run_combined_mode uses it directly.
     from application_sdk.infrastructure.context import set_infrastructure
 
     infra = await _create_infrastructure(credential_stores=credential_stores)
