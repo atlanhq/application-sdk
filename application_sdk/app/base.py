@@ -1,5 +1,6 @@
 """App base class and decorators."""
 
+import asyncio
 import importlib.metadata
 import inspect
 import os
@@ -9,19 +10,34 @@ import sys
 import threading
 from abc import ABC
 from collections.abc import Callable
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Never, TypeVar, cast, get_type_hints
 from uuid import UUID
 
-from temporalio import workflow
+import obstore as obs
+from temporalio import activity, workflow
+from temporalio.exceptions import FailureError
 
 from application_sdk.app.context import (
     AppContext,
     TaskExecutionContext,
     _is_atlan_logger,
 )
+from application_sdk.app.entrypoint import (
+    EntryPointContractError,
+    EntryPointMetadata,
+    get_entrypoint_metadata,
+    is_entrypoint,
+)
 from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
-from application_sdk.app.task import task
+from application_sdk.app.task import get_task_metadata, is_task, task
+from application_sdk.constants import (
+    CLEANUP_BASE_PATHS,
+    PROTECTED_STORAGE_PREFIXES,
+    TEMPORARY_PATH,
+    TRACKED_FILE_REFS_KEY,
+)
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -35,7 +51,7 @@ from application_sdk.contracts.storage import (
     UploadInput,
     UploadOutput,
 )
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.errors import (
     APP_CONTEXT_ERROR,
     APP_ERROR,
@@ -43,6 +59,10 @@ from application_sdk.errors import (
     ErrorCode,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.observability import AtlanObservability
+from application_sdk.storage.ops import _resolve_store, delete
+from application_sdk.storage.transfer import download as _download
+from application_sdk.storage.transfer import upload as _upload
 
 _task_logger = get_logger(__name__)
 
@@ -54,7 +74,7 @@ except importlib.metadata.PackageNotFoundError:
 if TYPE_CHECKING:
     # BLDX-878: inter-app calls deactivated pending review.
     # from application_sdk.app.client import WorkflowAppClient
-    from application_sdk.app.entrypoint import EntryPointMetadata
+    pass
 
 # Type variable for require() method
 T = TypeVar("T")
@@ -277,8 +297,6 @@ def _get_execution_id_from_task() -> str:
     Raises:
         RuntimeError: If called outside a @task method.
     """
-    from temporalio import activity
-
     try:
         return activity.info().workflow_id or ""
     except Exception as e:
@@ -505,8 +523,6 @@ class App(ABC):
             # classes), explicit @entrypoint decoration is always intentional —
             # raise loudly so the developer sees the problem immediately.
             # deferred import: circular dependency (entrypoint imports App)
-            from application_sdk.app.entrypoint import EntryPointContractError
-
             for ep in entry_points.values():
                 if not (
                     isinstance(ep.input_type, type) and issubclass(ep.input_type, Input)
@@ -558,8 +574,6 @@ class App(ABC):
             return
 
         # deferred import: circular dependency (entrypoint imports App)
-        from application_sdk.app.entrypoint import EntryPointContractError
-
         try:
             hints = get_type_hints(cls.run)
         except Exception:
@@ -599,8 +613,6 @@ class App(ABC):
             )
 
         # deferred import: circular dependency (entrypoint imports App)
-        from application_sdk.app.entrypoint import EntryPointMetadata
-
         implicit_ep = EntryPointMetadata(
             name="run",
             input_type=input_type,
@@ -962,8 +974,6 @@ class App(ABC):
             up = await self.upload(UploadInput(local_path="/tmp/output/"))
             # up.ref.file_count == number of files in the directory
         """
-        from application_sdk.storage.transfer import upload as _upload
-
         store = self.context.storage
         if store is None:
             raise RuntimeError(
@@ -1021,8 +1031,6 @@ class App(ABC):
 
             dl = await self.download(DownloadInput(ref=input.model_ref))
         """
-        from application_sdk.storage.transfer import download as _download
-
         store = self.context.storage
         if store is None:
             raise RuntimeError(
@@ -1060,12 +1068,7 @@ class App(ABC):
         automatically).  Do not call it directly from ``run()``.
         """
 
-        from application_sdk.constants import (
-            CLEANUP_BASE_PATHS,
-            TEMPORARY_PATH,
-            TRACKED_FILE_REFS_KEY,
-        )
-        from application_sdk.execution import build_output_path
+        from application_sdk.execution import build_output_path  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
 
         path_results: dict[str, bool] = {}
 
@@ -1139,16 +1142,7 @@ class App(ABC):
         zero counts.  Individual delete errors increment ``error_count`` but
         never abort the task.
         """
-        import asyncio
-
-        import obstore as obs
-
-        from application_sdk.constants import (
-            PROTECTED_STORAGE_PREFIXES,
-            TRACKED_FILE_REFS_KEY,
-        )
-        from application_sdk.execution import build_output_path
-        from application_sdk.storage.ops import _resolve_store, delete
+        from application_sdk.execution import build_output_path  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
 
         store = self.context.storage if self._context is not None else None
         if store is None:
@@ -1176,8 +1170,6 @@ class App(ABC):
                     return False
 
         # 1. Delete tracked transient objects.
-        from application_sdk.contracts.types import StorageTier
-
         tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY)
         if tracked_refs:
             for ref in tracked_refs:
@@ -1259,7 +1251,6 @@ class App(ABC):
             "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true"
         ).lower() not in ("0", "false", "no")
         if cleanup_enabled:
-            import asyncio
 
             async def _local_cleanup() -> None:
                 try:
@@ -1278,8 +1269,6 @@ class App(ABC):
             await asyncio.gather(_local_cleanup(), _storage_cleanup())
 
         try:
-            from application_sdk.observability.observability import AtlanObservability
-
             await AtlanObservability.flush_all()
         except Exception:
             _safe_log("warning", "flush_all() failed during on_complete")
@@ -1297,10 +1286,6 @@ def _register_tasks(cls: type, app_name: str) -> None:
         cls: The App class.
         app_name: The app's registered name.
     """
-    from dataclasses import replace
-
-    from application_sdk.app.task import get_task_metadata, is_task
-
     task_registry = TaskRegistry.get_instance()
 
     # Scan the class for @task decorated methods
@@ -1331,12 +1316,6 @@ def _scan_entrypoints(cls: type) -> "dict[str, EntryPointMetadata]":
         Dict mapping entry point name to EntryPointMetadata.
     """
     # deferred import: circular dependency (entrypoint imports App)
-    from application_sdk.app.entrypoint import (
-        EntryPointMetadata,
-        get_entrypoint_metadata,
-        is_entrypoint,
-    )
-
     entry_points: dict[str, EntryPointMetadata] = {}
     for attr_name in dir(cls):
         if attr_name.startswith("_"):
@@ -1440,14 +1419,12 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         # BLDX-878: inter-app calls deactivated pending review.
         # from application_sdk.app.client import WorkflowAppClient
-        from application_sdk.app.context import AppContext
-
         start_time = _safe_now()
         run_id = workflow.info().run_id
 
         try:
             with workflow.unsafe.imports_passed_through():
-                from application_sdk.observability.correlation import (
+                from application_sdk.observability.correlation import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
                     get_correlation_context,
                 )
 
@@ -1528,9 +1505,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             # deterministic — retrying will never fix a KeyError or TypeError.
             # Transient failures (network, timeout) should be modelled as @task
             # activities with their own retry policy, not raised directly here.
-            from temporalio.exceptions import FailureError
-
-            from application_sdk.execution.errors import ApplicationError
+            from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
 
             if isinstance(e, FailureError):
                 raise
@@ -1605,8 +1580,6 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
         app_instance: The app instance.
         context_data: Context dict with run_id and correlation_id.
     """
-    from application_sdk.app.task import get_task_metadata, is_task
-
     for attr_name in dir(app_instance):
         if attr_name.startswith("_"):
             continue
@@ -1662,13 +1635,11 @@ def _create_task_activity_wrapper(
     Returns:
         Async function that executes the task as an activity.
     """
-    from datetime import timedelta
-
-    from application_sdk.execution.retry import RetryPolicy as _RP
-    from application_sdk.execution.retry import _to_temporal_retry_policy
+    from application_sdk.execution.retry import RetryPolicy as _RP  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+    from application_sdk.execution.retry import _to_temporal_retry_policy  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
 
     with workflow.unsafe.imports_passed_through():
-        from application_sdk.execution._temporal.activities import TaskContext
+        from application_sdk.execution._temporal.activities import TaskContext  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
 
     # Build the Temporal RetryPolicy once (not per invocation)
     if retry_policy is not None:

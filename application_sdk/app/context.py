@@ -6,7 +6,13 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
+from loguru import logger as _loguru_logger
+from temporalio import workflow as _workflow
+
 from application_sdk.contracts.base import HeartbeatDetails
+from application_sdk.credentials.resolver import CredentialResolver
+from application_sdk.observability.context import get_execution_context
+from application_sdk.observability.correlation import get_correlation_context
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -32,8 +38,6 @@ def _is_in_workflow() -> bool:
     Returns True only inside workflow code, False in activities or elsewhere.
     Reads from the ExecutionContext ContextVar — no Temporal import needed.
     """
-    from application_sdk.observability.context import get_execution_context
-
     return get_execution_context().execution_type == "workflow"
 
 
@@ -74,10 +78,6 @@ class _WorkflowSafeLogger:
     def _get_structlog_logger(self) -> Any:
         """Get or create the fallback logger (for activity/non-workflow use)."""
         if self._structlog_logger is None:
-            from temporalio import workflow as _workflow
-
-            with _workflow.unsafe.imports_passed_through():
-                from loguru import logger as _loguru_logger
             self._structlog_logger = _loguru_logger.bind(**self._context)
         return self._structlog_logger
 
@@ -102,8 +102,6 @@ class _WorkflowSafeLogger:
                 pass  # {} style or mismatch — loguru will handle it
 
         if _is_in_workflow():
-            from temporalio import workflow as _workflow
-
             wf_logger = _workflow.logger
             log_method = getattr(wf_logger, level)
 
@@ -130,10 +128,6 @@ class _WorkflowSafeLogger:
             # CorrelationContextInterceptor ran) or empty.
             if "correlation_id" not in kwargs:
                 try:
-                    from application_sdk.observability.correlation import (
-                        get_correlation_context,
-                    )
-
                     v3_ctx = get_correlation_context()
                     if v3_ctx and v3_ctx.correlation_id:
                         kwargs = {**kwargs, "correlation_id": v3_ctx.correlation_id}
@@ -357,8 +351,6 @@ class AppContext:
         """
         if self._secret_store is None:
             raise RuntimeError("No secret store configured")
-        from application_sdk.credentials.resolver import CredentialResolver
-
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve(ref)
 
@@ -376,8 +368,6 @@ class AppContext:
         """
         if self._secret_store is None:
             raise RuntimeError("No secret store configured")
-        from application_sdk.credentials.resolver import CredentialResolver
-
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve_raw(ref)
 
@@ -558,6 +548,6 @@ class TaskExecutionContext:
                 pd.read_csv, path, sep=",", header=0
             )
         """
-        from application_sdk.execution.heartbeat import run_in_thread
+        from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
 
         return await run_in_thread(func, *args, **kwargs)
