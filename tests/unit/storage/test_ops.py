@@ -351,3 +351,99 @@ class TestPutJson:
             await put_json(key, value, store)
             raw = await _get_bytes(key, store)
             assert raw == orjson.dumps(value), f"serialisation mismatch for key={key!r}"
+
+
+# ---------------------------------------------------------------------------
+# Typed not-found detection (BLDX-1155 #5: typed obstore exceptions)
+# ---------------------------------------------------------------------------
+
+
+class TestIsNotFound:
+    """The not-found helper must recognise both built-in and typed exceptions."""
+
+    def test_recognises_filenotfounderror(self) -> None:
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(FileNotFoundError("/no/such")) is True
+
+    def test_recognises_obstore_typed_notfounderror(self) -> None:
+        """obstore.exceptions.NotFoundError must be classified as not-found."""
+        from application_sdk.storage.ops import _is_not_found
+
+        try:
+            from obstore.exceptions import NotFoundError as ObstoreNotFoundError
+        except ImportError:  # pragma: no cover — older obstore
+            pytest.skip("obstore.exceptions.NotFoundError not available")
+
+        assert _is_not_found(ObstoreNotFoundError("missing key")) is True
+
+    def test_does_not_match_unrelated_messages(self) -> None:
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(RuntimeError("internal failure")) is False
+        assert _is_not_found(PermissionError("denied")) is False
+
+    def test_substring_fallback_still_works(self) -> None:
+        """Generic obstore errors carrying 404 strings remain identifiable."""
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(RuntimeError("got HTTP 404 from S3")) is True
+        assert _is_not_found(RuntimeError("key not found in bucket")) is True
+
+
+# ---------------------------------------------------------------------------
+# Structured transfer logs (BLDX-1155 #6: surface what's actually happening)
+# ---------------------------------------------------------------------------
+
+
+class TestTransferLogging:
+    """upload_file / download_file must emit structured per-attempt log events.
+
+    The autodesk/mindbody RCA was wrong-footed by the absence of these fields:
+    we said "single attempt" when ~5–6 attempts had actually happened in the
+    Rust layer. Even though we cannot count Rust retries directly, we *can*
+    expose what the SDK observed: bytes, elapsed, throughput, outcome, error
+    class. That alone closes the worst gap.
+    """
+
+    async def test_upload_emits_success_log_with_metrics(
+        self, store, tmp_path, caplog
+    ) -> None:
+        f = tmp_path / "p.bin"
+        f.write_bytes(b"x" * (256 * 1024))
+        with caplog.at_level("INFO", logger="application_sdk.storage.ops"):
+            await upload_file("metrics/up.bin", f, store)
+
+        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
+        outcome_events = [r for r in events if r.__dict__.get("outcome") == "success"]
+        assert outcome_events, (
+            "expected at least one structured 'success' upload event; "
+            f"got events: {[r.message for r in events]}"
+        )
+        evt = outcome_events[-1]
+        assert evt.__dict__.get("storage_op") == "upload"
+        assert evt.__dict__.get("size_bytes") == 256 * 1024
+        assert evt.__dict__.get("elapsed_ms") is not None
+        assert evt.__dict__.get("key") == "metrics/up.bin"
+
+    async def test_download_emits_failure_log_with_error_class(
+        self, store, tmp_path, caplog
+    ) -> None:
+        with caplog.at_level("WARNING", logger="application_sdk.storage.ops"):
+            with pytest.raises(StorageNotFoundError):
+                await download_file("no/such/key.bin", tmp_path / "out.bin", store)
+
+        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
+        failure_events = [r for r in events if r.__dict__.get("outcome") == "failure"]
+        assert failure_events, (
+            "expected at least one structured 'failure' download event; "
+            f"got events: {[r.message for r in events]}"
+        )
+        evt = failure_events[-1]
+        assert evt.__dict__.get("storage_op") == "download"
+        assert evt.__dict__.get("error_class") is not None
+        # Not-found should be classified explicitly.
+        assert evt.__dict__.get("error_class") in {
+            "StorageNotFoundError",
+            "FileNotFoundError",
+        } or "NotFound" in evt.__dict__.get("error_class", "")
