@@ -10,6 +10,7 @@ Supports the following Dapr binding types:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -43,9 +44,36 @@ BINDING_TYPE_MAP: dict[str, str] = {
 }
 
 
+def _resolve_metadata_value(item: dict) -> str:
+    """Resolve a single Dapr metadata item to its string value.
+
+    Supports plain ``value`` fields and ``secretKeyRef`` references.
+    For ``secretKeyRef``, the secret is resolved from environment variables
+    using the ref's ``key`` (falling back to ``name``).  This mirrors the
+    behaviour of the ``secretstores.local.env`` Dapr component used in
+    Docker Compose / SDR deployments where secrets are injected as env vars.
+    """
+    if "value" in item:
+        return str(item["value"])
+
+    secret_ref = item.get("secretKeyRef")
+    if secret_ref:
+        env_key = secret_ref.get("key") or secret_ref.get("name", "")
+        if env_key:
+            return os.environ.get(env_key, "")
+
+    return ""
+
+
 def _parse_dapr_metadata(metadata_list: list[dict[str, str]]) -> dict[str, str]:
-    """Convert Dapr metadata list format to a flat dict."""
-    return {item["name"]: str(item.get("value", "")) for item in (metadata_list or [])}
+    """Convert Dapr metadata list format to a flat dict.
+
+    Handles both plain ``value`` entries and ``secretKeyRef`` entries
+    (resolved via environment variables).
+    """
+    return {
+        item["name"]: _resolve_metadata_value(item) for item in (metadata_list or [])
+    }
 
 
 def create_store_from_binding(
@@ -115,13 +143,19 @@ def create_store_from_binding(
 
         bucket = meta.get("bucket", "")
         config: dict[str, str] = {}
+        client_options = None
         if "region" in meta:
             config["aws_region"] = meta["region"]
         if "accessKey" in meta:
             config["aws_access_key_id"] = meta["accessKey"]
         if "secretKey" in meta:
             config["aws_secret_access_key"] = meta["secretKey"]
-        return S3Store(bucket=bucket, config=config)
+        if "endpoint" in meta:
+            config["aws_endpoint"] = meta["endpoint"]
+            client_options = {"user_agent": "aws-sdk-go-v2 atlan-application-sdk"}
+        if meta.get("forcePathStyle", "").lower() == "true":
+            config["aws_virtual_hosted_style_request"] = "false"
+        return S3Store(bucket=bucket, config=config, client_options=client_options)
 
     if store_kind == "azure":
         from obstore.store import AzureStore  # noqa: PLC0415 — defensive: keep inline
