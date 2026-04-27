@@ -92,7 +92,7 @@ class _CorrelationWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         super().init(_LazyCorrelationOutboundInterceptor(outbound, self))
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        from application_sdk.observability.correlation import (
+        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             CorrelationContext,
             set_correlation_context,
         )
@@ -143,7 +143,7 @@ class _CorrelationActivityInboundInterceptor(ActivityInboundInterceptor):
     """Reads the x-correlation-id header and sets the CorrelationContext ContextVar."""
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
-        from application_sdk.observability.correlation import (
+        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             CorrelationContext,
             set_correlation_context,
         )

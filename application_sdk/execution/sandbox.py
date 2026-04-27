@@ -85,7 +85,7 @@ class SandboxConfig:
         Returns:
             SandboxRestrictions with framework + user-specified passthrough modules.
         """
-        from temporalio.worker.workflow_sandbox import SandboxRestrictions
+        from temporalio.worker.workflow_sandbox import SandboxRestrictions  # noqa: PLC0415 — cold path: sandbox restrictions only at worker startup
 
         all_modules = _FRAMEWORK_MODULES | self.passthrough_modules
         return SandboxRestrictions.default.with_passthrough_modules(*all_modules)

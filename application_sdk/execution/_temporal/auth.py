@@ -146,8 +146,8 @@ class TemporalAuthManager:
     def _get_token_service(self) -> OAuthTokenService:
         """Lazily construct the OAuthTokenService from TemporalAuthConfig."""
         if self._token_service is None:
-            from application_sdk.credentials.oauth import OAuthTokenService
-            from application_sdk.credentials.types import OAuthClientCredential
+            from application_sdk.credentials.oauth import OAuthTokenService  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            from application_sdk.credentials.types import OAuthClientCredential  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
             cred = OAuthClientCredential(
                 client_id=self.config.client_id,
@@ -226,16 +226,16 @@ class TemporalAuthManager:
 
     async def _emit_token_refresh_event(self, expires_at: datetime | None) -> None:
         """Emit a token_refresh lifecycle event via the event binding (best-effort)."""
-        import os
-        import time
+        import os  # noqa: PLC0415 — circular: contracts.events imports execution.errors
+        import time  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
 
         try:
-            from application_sdk.contracts.events import (
+            from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
                 ApplicationEventNames,
                 Event,
                 EventTypes,
             )
-            from application_sdk.execution._temporal.interceptors.events import (
+            from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                 _publish_event_via_binding,
             )
 
