@@ -203,9 +203,9 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
        ``self.context.storage`` (ObjectStore), ``self.context.state``
        (StateStore), and credential resolution all expose ``await``-able
        methods. Don't wrap them in ``run_in_thread``.
-    3. **Only then** fall back to ``run_in_thread`` — for genuinely sync-only
-       libraries (e.g. ``pyatlan`` today, some C extensions, third-party
-       SDKs without async support).
+    3. **Only then** fall back to ``run_in_thread`` — and only after
+       confirming there is no async-native alternative for the library
+       you're calling.
 
     **Examples of incorrect use (do not do this):**
 
@@ -216,16 +216,6 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
 
         # WRONG — requests has httpx; use that instead.
         await self.task_context.run_in_thread(requests.get, url, timeout=30)
-
-    **Examples of correct use:**
-
-    .. code-block:: python
-
-        # OK — pyatlan client is sync-only today.
-        await self.task_context.run_in_thread(pyatlan_client.search, request)
-
-        # OK — CPU-bound work that must yield to the event loop.
-        await self.task_context.run_in_thread(parse_huge_csv, path)
 
     **Behavior:**
 

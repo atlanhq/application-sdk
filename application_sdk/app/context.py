@@ -544,10 +544,10 @@ class TaskExecutionContext:
             Many SDK helpers are also already async — ``self.context.storage``,
             ``self.context.state``, credential resolution. Don't wrap them.
 
-        Only use this wrapper for genuinely sync-only libraries (e.g.
-        ``pyatlan`` today, some C extensions, vendor SDKs without async
-        support). The wrapper exists to keep the event loop responsive for
-        auto-heartbeating; it is not a substitute for using async libraries.
+        Only use this wrapper after confirming no async-native alternative
+        exists for the library you're calling. The wrapper exists to keep
+        the event loop responsive for auto-heartbeating; it is not a
+        substitute for using async libraries.
 
         ContextVars (ObjectStore, logger context, correlation ID, infrastructure
         handles) are propagated to the worker thread automatically.
@@ -565,11 +565,6 @@ class TaskExecutionContext:
             Result of ``func(*args, **kwargs)``.
 
         Example::
-
-            # OK — pyatlan client is sync-only today.
-            assets = await self.task_context.run_in_thread(
-                pyatlan_client.search, request
-            )
 
             # WRONG — boto3 has aioboto3; use that instead.
             # await self.task_context.run_in_thread(s3.put_object, ...)
