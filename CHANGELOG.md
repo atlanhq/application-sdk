@@ -1,5 +1,28 @@
 # Changelog
 
+## v3.3.0 (April 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.2.0...v3.3.0
+
+### Features
+
+- add CredentialRef.resolve() — strongly typed credential routing for agent + direct modes (#1550) (by @vaibhavatlan in [9041557](https://github.com/atlanhq/application-sdk/commit/9041557))
+- redirect activity_utils internals to input.workflow_id [BLDX-1149] (#1570) (by @vaibhavatlan in [67bfe46](https://github.com/atlanhq/application-sdk/commit/67bfe46))
+
+### Bug Fixes
+
+- export CREATED_BY so Python subprocess can read it (#1553) (by @adityachoudhury-cloud in [76b2dd6](https://github.com/atlanhq/application-sdk/commit/76b2dd6))
+- type SQL filter fields as dict | str union [BLDX-1125] (#1532) (by @Aryamanz29 in [d6ed882](https://github.com/atlanhq/application-sdk/commit/d6ed882))
+- allowlist CVE-2026-4786 and CVE-2026-6100 (python-3.11-base) (#1555) (by @hritika-atlan in [b2ba4ae](https://github.com/atlanhq/application-sdk/commit/b2ba4ae))
+- consolidate env var config through AppConfig [BLDX-1123] (#1544) (by @Aryamanz29 in [9c2710d](https://github.com/atlanhq/application-sdk/commit/9c2710d))
+- add httpx pool limits and timeout to prevent connection pool deadlock [BLDX-1153] (#1575) (by @Aryamanz29 in [8ca9c45](https://github.com/atlanhq/application-sdk/commit/8ca9c45))
+- skip allowlist approval check on PR open (#1583) (by @vaibhavatlan in [ecc731f](https://github.com/atlanhq/application-sdk/commit/ecc731f))
+- propagate ContextVars through run_in_thread [BLDX-1150] (#1567) (by @vaibhavatlan in [6ed15cc](https://github.com/atlanhq/application-sdk/commit/6ed15cc))
+- remove parquet size double-discount (#1566) (by @fyzanshaik-atlan in [dd5f342](https://github.com/atlanhq/application-sdk/commit/dd5f342))
+- logging quality audit — exc_info, %-style, noise reduction (#1572) (by @cmgrote in [c0a2b8f](https://github.com/atlanhq/application-sdk/commit/c0a2b8f))
+- move inline imports to top-level + enforce via PLC0415 (#1577) (by @vaibhavatlan in [baa506f](https://github.com/atlanhq/application-sdk/commit/baa506f))
+
+
 ## v3.2.0 (April 23, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.1.0...v3.2.0
