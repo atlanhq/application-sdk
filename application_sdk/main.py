@@ -331,9 +331,9 @@ def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, st
     Non-allowlisted keys (secrets, connection strings, credentials) are never included.
     Silently returns an empty dict on any parse error.
     """
-    import yaml
+    import yaml  # noqa: PLC0415 — cold path: yaml only when reading dapr binding YAML
 
-    from application_sdk.storage.binding import _parse_dapr_metadata
+    from application_sdk.storage.binding import _parse_dapr_metadata  # noqa: PLC0415 — cold path: storage init only when binding YAML present
 
     result: dict[str, dict[str, str]] = {}
     try:
@@ -373,7 +373,7 @@ async def _log_dapr_components(
     Returns:
         Set of registered component names. Empty set if metadata query fails.
     """
-    from application_sdk.constants import (
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
         DEPLOYMENT_OBJECT_STORE_NAME,
         EVENT_STORE_NAME,
         SECRET_STORE_NAME,
@@ -452,27 +452,27 @@ async def _create_infrastructure(
     Raises:
         RuntimeError: If DAPR_HTTP_PORT is not set (no Dapr sidecar).
     """
-    from application_sdk.infrastructure.context import InfrastructureContext
+    from application_sdk.infrastructure.context import InfrastructureContext  # noqa: PLC0415 — cold path: only when infrastructure init is needed
 
     if os.environ.get("DAPR_HTTP_PORT"):
-        from pathlib import Path
+        from pathlib import Path  # noqa: PLC0415 — cold path: lazy load for entry-point function
 
-        from application_sdk.constants import (
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
             DEPLOYMENT_OBJECT_STORE_NAME,
             EVENT_STORE_NAME,
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
         )
-        from application_sdk.infrastructure._dapr.client import (
+        from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             DaprBinding,
             DaprSecretStore,
             DaprStateStore,
         )
-        from application_sdk.infrastructure._dapr.http import (
+        from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             AsyncDaprClient,
             wait_for_dapr_sidecar,
         )
-        from application_sdk.storage import create_store_from_binding
+        from application_sdk.storage import create_store_from_binding  # noqa: PLC0415 — cold path: storage init only when binding YAML present
 
         await wait_for_dapr_sidecar()
         dapr_client = AsyncDaprClient()
@@ -505,7 +505,7 @@ async def _create_infrastructure(
 def _derive_service_name(app_module: str) -> str:
     """Convert "my_package.apps:MyApp" to "my-app" (kebab-case)."""
     if ":" in app_module:
-        from application_sdk.app.base import _pascal_to_kebab
+        from application_sdk.app.base import _pascal_to_kebab  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
 
         return _pascal_to_kebab(app_module.split(":")[1])
     return "application-sdk"
@@ -530,7 +530,7 @@ def _derive_task_queue(app_module: str) -> str:
 
 async def _flush_observability() -> None:
     """Flush all observability buffers before exit."""
-    from application_sdk.observability.observability import AtlanObservability
+    from application_sdk.observability.observability import AtlanObservability  # noqa: PLC0415 — cold path: observability components only at startup
 
     try:
         await AtlanObservability.flush_all()
@@ -610,13 +610,13 @@ async def run_worker_mode(config: AppConfig) -> None:
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
 
-    from application_sdk.app.registry import AppRegistry, TaskRegistry
-    from application_sdk.execution._temporal.backend import create_temporal_client
-    from application_sdk.execution._temporal.converter import (
+    from application_sdk.app.registry import AppRegistry, TaskRegistry  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
+    from application_sdk.execution._temporal.backend import create_temporal_client  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+    from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.execution._temporal.worker import create_worker
-    from application_sdk.infrastructure.context import set_infrastructure
+    from application_sdk.execution._temporal.worker import create_worker  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+    from application_sdk.infrastructure.context import set_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
 
     logger.info(
         "Starting worker mode: app=%s temporal=%s queue=%s",
@@ -644,7 +644,7 @@ async def run_worker_mode(config: AppConfig) -> None:
     auth_manager: Any = None
     api_key: str | None = None
     if config.auth_enabled:
-        from application_sdk.execution._temporal.auth import (
+        from application_sdk.execution._temporal.auth import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
             TemporalAuthConfig,
             TemporalAuthManager,
         )
@@ -703,7 +703,7 @@ async def run_worker_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import WorkerHealthServer
+    from application_sdk.server.health import WorkerHealthServer  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
 
     health_server = WorkerHealthServer(port=config.health_port)
     health_server.set_temporal_client(client)
@@ -713,7 +713,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         async with worker:
             await shutdown_event.wait()
 
-    from application_sdk.infrastructure.context import close_infrastructure
+    from application_sdk.infrastructure.context import close_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
 
     await close_infrastructure()
     await _flush_observability()
@@ -730,13 +730,13 @@ def run_handler_mode(config: AppConfig) -> None:
     Loads the handler class (or DefaultHandler) and runs the FastAPI
     server via uvicorn. This is synchronous — uvicorn manages its own loop.
     """
-    import asyncio
+    import asyncio  # noqa: PLC0415 — cold path: lazy load for entry-point function
 
-    from application_sdk.execution._temporal.converter import (
+    from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.handler import DefaultHandler, run_app_handler_service
-    from application_sdk.infrastructure.context import set_infrastructure
+    from application_sdk.handler import DefaultHandler, run_app_handler_service  # noqa: PLC0415 — cold path: only loaded in handler mode
+    from application_sdk.infrastructure.context import set_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
 
     infra = asyncio.run(_create_infrastructure())
     set_infrastructure(infra)
@@ -807,16 +807,16 @@ async def run_combined_mode(config: AppConfig) -> None:
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
 
-    import uvicorn
+    import uvicorn  # noqa: PLC0415 — cold path: uvicorn only loaded in worker/handler runtime modes
 
-    from application_sdk.app.registry import AppRegistry, TaskRegistry
-    from application_sdk.execution._temporal.backend import create_temporal_client
-    from application_sdk.execution._temporal.converter import (
+    from application_sdk.app.registry import AppRegistry, TaskRegistry  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
+    from application_sdk.execution._temporal.backend import create_temporal_client  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+    from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.execution._temporal.worker import create_worker
-    from application_sdk.handler import DefaultHandler, create_app_handler_service
-    from application_sdk.infrastructure.context import (
+    from application_sdk.execution._temporal.worker import create_worker  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+    from application_sdk.handler import DefaultHandler, create_app_handler_service  # noqa: PLC0415 — cold path: only loaded in handler mode
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         get_infrastructure,
         set_infrastructure,
     )
@@ -852,7 +852,7 @@ async def run_combined_mode(config: AppConfig) -> None:
     auth_manager: Any = None
     api_key: str | None = None
     if config.auth_enabled:
-        from application_sdk.execution._temporal.auth import (
+        from application_sdk.execution._temporal.auth import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
             TemporalAuthConfig,
             TemporalAuthManager,
         )
@@ -958,7 +958,7 @@ async def run_combined_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import WorkerHealthServer
+    from application_sdk.server.health import WorkerHealthServer  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
 
     health_server = WorkerHealthServer(port=config.health_port)
     health_server.set_temporal_client(client)
@@ -976,7 +976,7 @@ async def run_combined_mode(config: AppConfig) -> None:
                 shutdown_event.wait(),
             )
 
-    from application_sdk.infrastructure.context import close_infrastructure
+    from application_sdk.infrastructure.context import close_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
 
     await close_infrastructure()
     await _flush_observability()
@@ -1040,7 +1040,7 @@ async def run_dev_combined(
             },
         ))
     """
-    import json as _json
+    import json as _json  # noqa: PLC0415 — cold path: lazy load to keep import-time cost low
 
     # Dev-friendly: ensure Dapr ports are set. poe start-deps launches Dapr
     # on the default ports but in a background process, so the env vars aren't
@@ -1077,7 +1077,7 @@ async def run_dev_combined(
     )
 
     # Create infrastructure early so run_combined_mode uses it directly.
-    from application_sdk.infrastructure.context import set_infrastructure
+    from application_sdk.infrastructure.context import set_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
 
     infra = await _create_infrastructure(credential_stores=credential_stores)
     set_infrastructure(infra)
@@ -1086,7 +1086,7 @@ async def run_dev_combined(
     # /workflows/v1/dev/local-vault before starting the workflow). This writes non-sensitive
     # config to object storage and sensitive secrets to the local secrets file.
     if credentials is not None:
-        import httpx
+        import httpx  # noqa: PLC0415 — cold path: lazy load to keep import-time cost low
 
         async def _provision_and_start() -> None:
             """Wait for handler, provision creds, start workflow — mimics prod."""
