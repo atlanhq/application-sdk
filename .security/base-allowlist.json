@@ -237,5 +237,33 @@
     "reason": "Base image — Chainguard python-3.11/3.13-base. Upstream fix available (3.11.15-r2, 3.13.13-r2), pending SDK v2.8.x base rebuild. Note: v3.2.0 base already includes the patched packages.",
     "expires": "2026-05-24",
     "added_by": "mananjain99"
+  },
+  "SNYK-JAVA-COMFASTERXMLJACKSONCORE-15907551": {
+    "package": "com.fasterxml.jackson.core:jackson-core",
+    "severity": "HIGH",
+    "reason": "Base image — Jackson Java transitive in application-sdk-main:2.7.3 (likely via Dapr tooling). No fix released upstream. Connector apps are Python at runtime and do not invoke Jackson code paths; review at expiry to track upstream patch availability.",
+    "expires": "2026-05-27",
+    "added_by": "vishalkatlan"
+  },
+  "SNYK-JAVA-COMFASTERXMLJACKSONCORE-15365924": {
+    "package": "com.fasterxml.jackson.core:jackson-core",
+    "severity": "HIGH",
+    "reason": "Base image — Jackson Java transitive in application-sdk-main:2.7.3 (likely via Dapr tooling). No fix released upstream. Connector apps are Python at runtime and do not invoke Jackson code paths; review at expiry to track upstream patch availability.",
+    "expires": "2026-05-27",
+    "added_by": "vishalkatlan"
+  },
+  "CVE-2026-33871": {
+    "package": "com.fasterxml.jackson.core:jackson-databind",
+    "severity": "HIGH",
+    "reason": "Base image — Jackson Java transitive in application-sdk-main:2.7.3 (likely via Dapr tooling). No fix released upstream. Connector apps are Python at runtime and do not invoke Jackson code paths; review at expiry to track upstream patch availability.",
+    "expires": "2026-05-27",
+    "added_by": "vishalkatlan"
+  },
+  "CVE-2026-33870": {
+    "package": "com.fasterxml.jackson.core:jackson-databind",
+    "severity": "HIGH",
+    "reason": "Base image — Jackson Java transitive in application-sdk-main:2.7.3 (likely via Dapr tooling). No fix released upstream. Connector apps are Python at runtime and do not invoke Jackson code paths; review at expiry to track upstream patch availability.",
+    "expires": "2026-05-27",
+    "added_by": "vishalkatlan"
   }
 }
