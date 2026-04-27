@@ -19,6 +19,7 @@ import httpx
 from httpx_retries import Retry, RetryTransport
 from pydantic import BaseModel
 
+from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -114,7 +115,7 @@ class AsyncDaprClient:
     ):
         self._base_url = base_url or _dapr_base_url()
         transport = RetryTransport(
-            transport=httpx.AsyncHTTPTransport(),
+            transport=httpx.AsyncHTTPTransport(limits=_HTTP_POOL_LIMITS),
             retry=Retry(
                 total=retries,
                 backoff_factor=0.5,
@@ -123,7 +124,7 @@ class AsyncDaprClient:
         )
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
-            timeout=timeout,
+            timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
             transport=transport,
         )
 
