@@ -18,7 +18,7 @@ import json
 import sys
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from temporalio import activity, workflow
@@ -46,7 +46,9 @@ from application_sdk.observability.trace_context import get_trace_context
 def _get_correlation_id() -> str:
     """Get correlation_id from the v3 CorrelationContext ContextVar."""
     try:
-        from application_sdk.observability.correlation import get_correlation_context
+        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+            get_correlation_context,
+        )
 
         ctx = get_correlation_context()
         if ctx and ctx.correlation_id:
@@ -108,7 +110,9 @@ def _format_stack_trace(exc: BaseException) -> str:
         return full[:2000]
     except Exception:
         try:
-            from application_sdk.observability.logger_adaptor import get_logger
+            from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — last-resort fallback inside except handler
+                get_logger,
+            )
 
             get_logger("app_vitals").debug(
                 "AppVitals: _format_stack_trace failed — returning empty string",
@@ -207,7 +211,9 @@ def _emit_log_event(
     try:
         # Deferred import: logger_adaptor may not be initialized yet during early
         # workflow lifecycle events (interceptor runs before full app setup).
-        from application_sdk.observability.logger_adaptor import get_logger
+        from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+            get_logger,
+        )
 
         logger = get_logger("app_vitals")
         level = "error" if attrs.get("status") == "failed" else "info"
@@ -473,7 +479,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 info = workflow.info()
             except Exception:
                 try:
-                    from application_sdk.observability.logger_adaptor import (
+                    from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — last-resort fallback inside except handler
                         get_logger as _gl,
                     )
 
@@ -594,7 +600,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             info = activity.info()
         except Exception:
             try:
-                from application_sdk.observability.logger_adaptor import (
+                from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — last-resort fallback inside except handler
                     get_logger as _gl,
                 )
 
@@ -690,7 +696,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             activity_start_time_iso = (
                 info.started_time.isoformat() if info.started_time else ""
             )
-            activity_end_time_iso = datetime.now(timezone.utc).isoformat()
+            activity_end_time_iso = datetime.now(UTC).isoformat()
             event_attrs: dict[str, Any] = {
                 **common,
                 "workflow_id": info.workflow_id or "",
@@ -754,7 +760,7 @@ class AppVitalsInterceptor(Interceptor):
 
     def workflow_interceptor_class(
         self,
-        input: WorkflowInterceptorClassInput,  # noqa: ARG002
+        input: WorkflowInterceptorClassInput,
     ) -> type[WorkflowInboundInterceptor] | None:
         return _AppVitalsWorkflowInboundInterceptor
 

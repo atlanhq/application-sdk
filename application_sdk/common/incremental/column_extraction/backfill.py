@@ -159,7 +159,7 @@ def _load_tables_to_duckdb(
     union_query = " UNION ALL ".join(union_parts)
 
     # lazy import: heavy optional dependency (installed via [sql] extra)
-    import duckdb
+    import duckdb  # noqa: PLC0415 — optional dep: duckdb
 
     try:
         conn.execute(f"""

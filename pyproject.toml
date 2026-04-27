@@ -219,22 +219,33 @@ show_missing = true
 precision = 2
 
 [tool.ruff.lint]
+# explicit-preview-rules: only the preview rules listed in extend-select are
+# enabled — other preview rules remain off. This lets us opt into PLC0415
+# without inheriting every other preview rule's churn.
+preview = true
+explicit-preview-rules = true
 extend-select = [
-    "G001",   # % operator inline in log call (not lazy)
-    "G003",   # string concatenation in log call
-    "G004",   # f-string in log call
-    "T201",   # print() in production code
-    "S110",   # try-except-pass detected
-    "S112",   # try-except-continue detected
+    "G001",    # % operator inline in log call (not lazy)
+    "G003",    # string concatenation in log call
+    "G004",    # f-string in log call
+    "T201",    # print() in production code
+    "PLC0415", # imports must be at top of module — prevents broken-import-at-runtime bugs (e.g. PR #1543)
+    "S110",    # try-except-pass detected
+    "S112",    # try-except-continue detected
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "application_sdk/main.py" = ["T201"]
 ".github/**" = ["G004", "T201"]
-"tests/**" = ["G004"]
-"tools/**" = ["T201"]
-"application_sdk/tools/**" = ["T201"]
-"examples/**" = ["T201"]
+# tests, tools, examples exempted from PLC0415: production runtime risk does
+# not apply, and tests sometimes use inline imports for fixture isolation.
+# F841 is also exempted in tests because enabling `preview = true` (required
+# for PLC0415) made F841 stricter on tuple unpacking and codemod tests
+# routinely capture-and-discard return values for assertion staging.
+"tests/**" = ["G004", "PLC0415", "F841"]
+"tools/**" = ["T201", "PLC0415"]
+"application_sdk/tools/**" = ["T201", "PLC0415"]
+"examples/**" = ["T201", "PLC0415"]
 
 [tool.uv]
 default-groups = ["dev", "test"]

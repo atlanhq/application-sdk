@@ -64,7 +64,9 @@ _logger = None
 def _log():
     global _logger
     if _logger is None:
-        from application_sdk.observability.logger_adaptor import get_logger
+        from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — deferred to break circular import (observability ↔ storage)
+            get_logger,
+        )
 
         _logger = get_logger(__name__)
     return _logger

@@ -51,7 +51,7 @@ class AtlasTransformer(TransformerInterface):
                 current_epoch (str): Current epoch timestamp.
                 connection_qualified_name (str): Qualified name for the connection.
         """
-        from application_sdk.transformers.atlas.sql import (
+        from application_sdk.transformers.atlas.sql import (  # noqa: PLC0415 — circular: transformers/atlas/__init__.py loads sibling sql submodule
             Column,
             Database,
             Function,
@@ -112,7 +112,7 @@ class AtlasTransformer(TransformerInterface):
             except Exception:
                 logger.error("Error processing row: %s", typename, exc_info=True)
 
-        import daft
+        import daft  # noqa: PLC0415 — optional dep: daft
 
         return daft.from_pylist(transformed_metadata_list)
 

@@ -69,20 +69,26 @@ class TemporalHeartbeatController:
 
     def heartbeat(self, *details: Any) -> None:
         """Send a heartbeat to Temporal with optional progress details."""
-        from temporalio import activity
+        from temporalio import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            activity,
+        )
 
         self._last_details = details
         activity.heartbeat(*details)
 
     def heartbeat_keepalive(self) -> None:
         """Send a keepalive heartbeat re-using the most recently set details."""
-        from temporalio import activity
+        from temporalio import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            activity,
+        )
 
         activity.heartbeat(*self._last_details)
 
     def get_last_heartbeat_details(self) -> tuple[Any, ...]:
         """Get details from the last heartbeat before activity was retried."""
-        from temporalio import activity
+        from temporalio import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            activity,
+        )
 
         return tuple(activity.info().heartbeat_details)
 

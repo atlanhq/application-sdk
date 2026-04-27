@@ -152,7 +152,7 @@ async def finalize_multidb_results(
 
     if not write_to_file and concatenate:
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             valid_dataframes: List[pd.DataFrame] = []
             for df_generator in dataframe_list:

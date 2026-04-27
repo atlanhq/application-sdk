@@ -68,7 +68,7 @@ async def list_keys(
         StorageError: If the listing fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
-    import asyncio
+    import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
     resolved = _resolve_store(store)
     if normalize and prefix:
@@ -88,7 +88,9 @@ async def list_keys(
     try:
         return await asyncio.to_thread(_collect)
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"Failed to list keys with prefix '{prefix}'", cause=exc
@@ -158,7 +160,7 @@ async def download_prefix(
         StorageError: If listing or downloading fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
-    import asyncio
+    import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
     keys = await list_keys(prefix, store, suffix=suffix, normalize=normalize)
     local = Path(local_dir)
@@ -205,7 +207,7 @@ async def upload_prefix(
     Returns:
         List of uploaded object keys.
     """
-    import asyncio
+    import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
     local = Path(local_dir)
     if normalize and prefix:
@@ -257,7 +259,7 @@ async def upload_file_from_bytes(
     Returns:
         Hex-encoded SHA-256 digest of the uploaded content.
     """
-    import tempfile
+    import tempfile  # noqa: PLC0415 — stdlib tempfile; lazy use only
 
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(content)
