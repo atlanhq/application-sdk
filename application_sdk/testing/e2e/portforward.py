@@ -27,7 +27,7 @@ async def _wait_for_port(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            reader, writer = await asyncio.wait_for(
+            _reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port), timeout=1.0
             )
             writer.close()
