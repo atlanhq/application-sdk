@@ -32,12 +32,6 @@ from application_sdk.app.entrypoint import (
 )
 from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
 from application_sdk.app.task import get_task_metadata, is_task, task
-from application_sdk.constants import (
-    CLEANUP_BASE_PATHS,
-    PROTECTED_STORAGE_PREFIXES,
-    TEMPORARY_PATH,
-    TRACKED_FILE_REFS_KEY,
-)
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -60,9 +54,6 @@ from application_sdk.errors import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
-from application_sdk.storage.ops import _resolve_store, delete
-from application_sdk.storage.transfer import download as _download
-from application_sdk.storage.transfer import upload as _upload
 
 _task_logger = get_logger(__name__)
 
@@ -974,6 +965,8 @@ class App(ABC):
             up = await self.upload(UploadInput(local_path="/tmp/output/"))
             # up.ref.file_count == number of files in the directory
         """
+        from application_sdk.storage.transfer import upload as _upload  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+
         store = self.context.storage
         if store is None:
             raise RuntimeError(
@@ -1031,6 +1024,8 @@ class App(ABC):
 
             dl = await self.download(DownloadInput(ref=input.model_ref))
         """
+        from application_sdk.storage.transfer import download as _download  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+
         store = self.context.storage
         if store is None:
             raise RuntimeError(
@@ -1068,6 +1063,11 @@ class App(ABC):
         automatically).  Do not call it directly from ``run()``.
         """
 
+        from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+            CLEANUP_BASE_PATHS,
+            TEMPORARY_PATH,
+            TRACKED_FILE_REFS_KEY,
+        )
         from application_sdk.execution import build_output_path  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
 
         path_results: dict[str, bool] = {}
@@ -1142,7 +1142,12 @@ class App(ABC):
         zero counts.  Individual delete errors increment ``error_count`` but
         never abort the task.
         """
+        from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+            PROTECTED_STORAGE_PREFIXES,
+            TRACKED_FILE_REFS_KEY,
+        )
         from application_sdk.execution import build_output_path  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+        from application_sdk.storage.ops import _resolve_store, delete  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
 
         store = self.context.storage if self._context is not None else None
         if store is None:
