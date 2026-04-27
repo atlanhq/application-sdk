@@ -311,11 +311,11 @@ async def _get_temporal_client() -> Client:
         logger.info("Acquired auth token for handler Temporal client")
 
     logger.info(
-        "Connecting to Temporal for workflow execution",
-        host=_workflow_config.host,
-        namespace=_workflow_config.namespace,
-        tls_enabled=_workflow_config.tls_enabled,
-        auth_enabled=_workflow_config.auth_enabled,
+        "Connecting to Temporal for workflow execution host=%s namespace=%s tls=%s auth=%s",
+        _workflow_config.host,
+        _workflow_config.namespace,
+        _workflow_config.tls_enabled,
+        _workflow_config.auth_enabled,
     )
 
     _temporal_client = await create_temporal_client(

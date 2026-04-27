@@ -142,11 +142,11 @@ async def auto_heartbeat_loop(
         if actual_elapsed > interval_seconds + warning_threshold:
             blocked_time = actual_elapsed - interval_seconds
             logger.warning(
-                "Event loop blocked during task, auto-heartbeating may be unreliable. "
-                "Use self.task_context.run_in_thread() for blocking operations, "
+                "Event loop blocked for %.1fs during task %s, auto-heartbeating may be "
+                "unreliable. Use self.task_context.run_in_thread() for blocking operations, "
                 "or switch to manual heartbeating.",
-                blocked_time=round(blocked_time, 1),
-                task_name=task_name,
+                round(blocked_time, 1),
+                task_name,
             )
 
         try:

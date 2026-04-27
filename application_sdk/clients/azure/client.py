@@ -205,9 +205,7 @@ class AzureClient(ClientInterface):
                         await service_client.disconnect()
                 except Exception:
                     logger.warning(
-                        "Error closing service client",
-                        service_name=service_name,
-                        exc_info=True,
+                        "Error closing service client %s", service_name, exc_info=True
                     )
 
             # Clear service cache

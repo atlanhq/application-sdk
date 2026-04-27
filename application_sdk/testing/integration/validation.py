@@ -228,7 +228,7 @@ def validate_with_pandera(
         }
 
         try:
-            logger.info(f"Validating {entity} data against {schema_file}")  # noqa: G004
+            logger.info("Validating %s data against %s", entity, schema_file)
 
             # Load pandera schema from YAML
             schema = from_yaml(schema_file)
@@ -242,8 +242,9 @@ def validate_with_pandera(
 
             result["success"] = True
             logger.info(
-                f"Validation passed for {entity}: "  # noqa: G004
-                f"{result['record_count']} records validated"  # noqa: G004
+                "Validation passed for %s: %d records validated",
+                entity,
+                result["record_count"],
             )
 
         except FileNotFoundError as e:

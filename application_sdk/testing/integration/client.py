@@ -324,7 +324,7 @@ class IntegrationTestClient:
             requests.RequestException: If the request fails.
         """
         url = f"{self.base_url}{endpoint}"
-        logger.debug(f"GET {url}")  # noqa: G004
+        logger.debug("GET %s", url)
 
         try:
             response = requests.get(url, timeout=self.timeout)
@@ -378,7 +378,7 @@ class IntegrationTestClient:
             requests.RequestException: If the request fails.
         """
         url = f"{self.base_url}{endpoint}"
-        logger.debug(f"POST {url}")  # noqa: G004
+        logger.debug("POST %s", url)
 
         try:
             response = requests.post(url, json=data, timeout=self.timeout)

@@ -37,7 +37,6 @@ to target a specific store instead.
 from __future__ import annotations
 
 import hashlib
-import logging
 import math
 import os
 from pathlib import Path
@@ -53,9 +52,19 @@ if TYPE_CHECKING:
 
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
-# stdlib logger: cannot use get_logger here due to circular import
-# (observability -> storage -> batch -> ops -> observability)
-logger = logging.getLogger(__name__)
+# Lazy import: direct get_logger() at module load would create a circular
+# dependency (observability -> storage -> batch -> ops -> observability).
+# Deferred to first log call so all modules finish loading first.
+_logger = None
+
+
+def _log():
+    global _logger
+    if _logger is None:
+        from application_sdk.observability.logger_adaptor import get_logger
+
+        _logger = get_logger(__name__)
+    return _logger
 
 
 def normalize_key(key: str) -> str:
@@ -224,7 +233,7 @@ async def upload_file(
             try:
                 resolved_path.unlink(missing_ok=True)
             except OSError:
-                logger.debug("Failed to delete local file (cleanup)", exc_info=True)
+                _log().debug("Failed to delete local file (cleanup)", exc_info=True)
 
     return digest
 

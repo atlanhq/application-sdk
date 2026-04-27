@@ -267,18 +267,18 @@ def create_aws_client(
         # Priority 1: Use provided session
         if session is not None:
             logger.debug(
-                "Creating AWS client using provided session",
-                service=service,
-                region=region,
+                "Creating AWS client using provided session service=%s region=%s",
+                service,
+                region,
             )
             return session.client(service, region_name=region)  # type: ignore
 
         # Priority 2: Use temporary credentials
         if temp_credentials is not None:
             logger.debug(
-                "Creating AWS client using temporary credentials",
-                service=service,
-                region=region,
+                "Creating AWS client using temporary credentials service=%s region=%s",
+                service,
+                region,
             )
             return boto3.client(  # type: ignore
                 service,
@@ -291,9 +291,9 @@ def create_aws_client(
         # Priority 3: Use default credentials
         if use_default_credentials:
             logger.debug(
-                "Creating AWS client using default credentials",
-                service=service,
-                region=region,
+                "Creating AWS client using default credentials service=%s region=%s",
+                service,
+                region,
             )
             return boto3.client(service, region_name=region)  # type: ignore
 

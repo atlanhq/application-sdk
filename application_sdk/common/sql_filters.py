@@ -80,8 +80,8 @@ def extract_database_names_from_regex_common(
 
     except Exception:
         logger.error(
-            "Error extracting database names from regex",
-            normalized_regex=normalized_regex,
+            "Error extracting database names from regex: %s",
+            normalized_regex,
             exc_info=True,
         )
         return empty_default

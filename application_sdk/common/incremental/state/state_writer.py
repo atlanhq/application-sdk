@@ -107,9 +107,7 @@ async def download_transformed_data(output_path: str) -> Path:
     transformed_local_path = os.path.join(output_path_str, "transformed")
     transformed_s3_prefix = get_object_store_prefix(transformed_local_path)
 
-    logger.info(
-        "Downloading transformed files from S3", s3_prefix=transformed_s3_prefix
-    )
+    logger.info("Downloading transformed files from S3: %s", transformed_s3_prefix)
 
     # Ensure local directory exists before download
     transformed_dir = Path(transformed_local_path)
@@ -176,8 +174,8 @@ async def prepare_previous_state(
             local_destination=previous_state_temp_dir,
         )
         logger.info(
-            "Previous state downloaded to temporary location",
-            path=str(previous_state_temp_dir),
+            "Previous state downloaded to temporary location: %s",
+            previous_state_temp_dir,
         )
         return previous_state_temp_dir
     except Exception as e:
@@ -220,9 +218,9 @@ def copy_non_column_entities(
             )
             copy_counts[entity_type.value] = count
             logger.info(
-                "Copied entity files to current state",
-                entity_type=entity_type.value,
-                count=count,
+                "Copied %d %s entity files to current state",
+                count,
+                entity_type.value,
             )
 
     return copy_counts
@@ -310,8 +308,8 @@ def cleanup_previous_state(previous_state_dir: Optional[Path]) -> None:
         try:
             shutil.rmtree(previous_state_dir)
             logger.info(
-                "Cleaned up temporary previous state directory",
-                path=str(previous_state_dir),
+                "Cleaned up temporary previous state directory: %s",
+                previous_state_dir,
             )
         except Exception:
             # Non-critical cleanup failure - log warning but don't raise
@@ -407,8 +405,8 @@ async def create_current_state_snapshot(
                 )
 
             logger.info(
-                "Creating current-state snapshot",
-                table_count=get_scope_length(table_scope),
+                "Creating current-state snapshot: %d tables",
+                get_scope_length(table_scope),
             )
 
             # Step 2: Clear and prepare current-state directory
@@ -440,11 +438,12 @@ async def create_current_state_snapshot(
             total_files = count_json_files_recursive(current_state_dir)
 
             logger.info(
-                "Current-state snapshot complete (lightweight)",
-                tables=get_scope_length(table_scope),
-                columns_copied=column_count,
-                tables_with_columns=len(tables_with_columns),
-                total_files=total_files,
+                "Current-state snapshot complete (lightweight): tables=%d columns_copied=%d "
+                "tables_with_columns=%d total_files=%d",
+                get_scope_length(table_scope),
+                column_count,
+                len(tables_with_columns),
+                total_files,
             )
 
             # Step 5: Create incremental-diff (only changed assets from this run)
@@ -479,8 +478,8 @@ async def create_current_state_snapshot(
                     prefix=incremental_diff_s3_prefix,
                 )
                 logger.info(
-                    "Incremental-diff uploaded to S3",
-                    s3_prefix=incremental_diff_s3_prefix,
+                    "Incremental-diff uploaded to S3: %s",
+                    incremental_diff_s3_prefix,
                 )
             else:
                 logger.info(
