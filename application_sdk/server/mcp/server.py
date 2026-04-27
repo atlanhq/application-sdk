@@ -54,7 +54,7 @@ class MCPServer:
         Args:
             app_name: The app name used to look up tasks in the registry.
         """
-        from application_sdk.app.registry import TaskRegistry
+        from application_sdk.app.registry import TaskRegistry  # noqa: PLC0415 — circular: app.registry imports execution-related modules
 
         tasks = TaskRegistry.get_instance().get_tasks_for_app(app_name)
         for task_meta in tasks:
