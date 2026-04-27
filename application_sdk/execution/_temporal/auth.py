@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -230,8 +232,6 @@ class TemporalAuthManager:
 
     async def _emit_token_refresh_event(self, expires_at: datetime | None) -> None:
         """Emit a token_refresh lifecycle event via the event binding (best-effort)."""
-        import os  # noqa: PLC0415 — circular: contracts.events imports execution.errors
-        import time  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
 
         try:
             from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors

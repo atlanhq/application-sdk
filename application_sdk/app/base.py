@@ -12,7 +12,7 @@ from abc import ABC
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, Never, TypeVar, cast, get_type_hints
+from typing import Any, ClassVar, Never, TypeVar, cast, get_type_hints
 from uuid import UUID
 
 import obstore as obs
@@ -62,10 +62,6 @@ try:
 except importlib.metadata.PackageNotFoundError:
     _FRAMEWORK_VERSION = "unknown"
 
-if TYPE_CHECKING:
-    # BLDX-878: inter-app calls deactivated pending review.
-    # from application_sdk.app.client import WorkflowAppClient
-    pass
 
 # Type variable for require() method
 T = TypeVar("T")
@@ -1732,21 +1728,21 @@ __all__ = [
     "App",
     "AppError",
     "AppStateAccessor",
+    "FileReference",
     "NonRetryableError",
     "PersistentStateAccessor",
     "TaskStateAccessor",
     "_app_state",
     "_app_state_lock",
+    "_apply_app_registration",
+    "_create_task_activity_wrapper",
     "_pascal_to_kebab",
+    "_register_tasks",
     "_safe_log",
     "_safe_now",
     "_safe_uuid",
-    "_apply_app_registration",
-    "_create_task_activity_wrapper",
-    "_register_tasks",
     "_scan_entrypoints",
     "_wrap_instance_tasks",
     "generate_workflow_class",
     "task",
-    "FileReference",
 ]
