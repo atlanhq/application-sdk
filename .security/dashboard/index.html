@@ -541,11 +541,14 @@ function renderTrends(){
     const cutoffStr=cutoff.toISOString().slice(0,10);
 
     // Per-repo "old total" lookup: most recent history entry at/before cutoff;
-    // if no entry exists at/before cutoff, fall back to the oldest available entry
-    // so longer windows naturally include the change captured in shorter windows.
+    // if no entry exists at/before cutoff, fall back to the oldest available entry.
+    // Skip leading total=0 entries when non-zero entries exist — those are typically
+    // failed/empty initial scans (no artifacts), not a true clean baseline. A genuinely
+    // clean repo will have all-zero entries and the fallback will still pick 0 honestly.
     function getOldTotal(r){
-        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        let all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
         if(!all.length)return D.repos[r].total||0;
+        if(all.some(e=>(e.total||0)>0))all=all.filter(e=>(e.total||0)>0);
         const before=all.filter(e=>e.date<=cutoffStr);
         return (before.length?before[before.length-1].total:all[0].total)||0;
     }
@@ -692,19 +695,34 @@ function renderTrends(){
         </div>`;
     }
 
-    // Top movers
+    // Top movers — asymmetric comparison
+    //  - Improvements: today vs PEAK in the window. Catches recent fixes regardless of where in
+    //    the window they happened, and is immune to onboarding-day noise (e.g. a first scan with 0 CVEs).
+    //  - Regressions: today vs OLDEST entry in the window (window-start). Honest about cumulative worsening.
+    function getMaxInWindow(r){
+        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        if(!all.length)return D.repos[r].total||0;
+        const inWindow=all.filter(e=>e.date>=cutoffStr);
+        const candidates=inWindow.length?inWindow:[all[all.length-1]];
+        const peak=candidates.reduce((m,e)=>Math.max(m,e.total||0),0);
+        return Math.max(peak,D.repos[r].total||0);
+    }
     const repoDeltas=repos.map(r=>{
-        const old=getOldTotal(r);
+        const oldStart=getOldTotal(r);
+        const peak=getMaxInWindow(r);
         const now=D.repos[r].total||0;
-        return{repo:r,sdk:D.repos[r].sdk_version||'?',now,old,delta:now-old,app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
+        return{repo:r,sdk:D.repos[r].sdk_version||'?',now,
+            old:oldStart,delta:now-oldStart,                 // window-start basis (used by table & regressions)
+            peak,improvementDelta:now-peak,                  // peak basis (used by improvements)
+            app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
     });
 
-    const improved=repoDeltas.filter(r=>r.delta<0).sort((a,b)=>a.delta-b.delta);
+    const improved=repoDeltas.filter(r=>r.improvementDelta<0).sort((a,b)=>a.improvementDelta-b.improvementDelta);
     const degraded=repoDeltas.filter(r=>r.delta>0).sort((a,b)=>b.delta-a.delta);
 
     document.getElementById('trendImprovedCount').textContent=improved.length?`(${improved.length})`:'';
     document.getElementById('trendImproved').innerHTML=improved.length?improved.map(r=>
-        `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta down" style="margin-left:auto">&#9660; ${Math.abs(r.delta)} (${r.old} → ${r.now})</span></div>`
+        `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta down" style="margin-left:auto">&#9660; ${Math.abs(r.improvementDelta)} (${r.peak} → ${r.now})</span></div>`
     ).join(''):'<div class="empty" style="padding:20px;font-size:12px">No improvements yet — check back after fixes land.</div>';
 
     document.getElementById('trendDegradedCount').textContent=degraded.length?`(${degraded.length})`:'';
