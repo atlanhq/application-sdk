@@ -381,30 +381,6 @@ class AppContext:
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve_raw(ref)
 
-    @property
-    def workflow_id(self) -> str:
-        """The Temporal workflow ID for the current execution.
-
-        Reads from the ``ExecutionContext`` ContextVar set by the
-        ``ExecutionContextInterceptor`` at the start of each workflow/activity.
-        Returns an empty string outside Temporal (tests, CLI tools).
-        """
-        from application_sdk.observability.context import get_execution_context
-
-        return get_execution_context().workflow_id
-
-    @property
-    def workflow_run_id(self) -> str:
-        """The Temporal workflow run ID for the current execution.
-
-        Reads from the ``ExecutionContext`` ContextVar set by the
-        ``ExecutionContextInterceptor`` at the start of each workflow/activity.
-        Returns an empty string outside Temporal (tests, CLI tools).
-        """
-        from application_sdk.observability.context import get_execution_context
-
-        return get_execution_context().workflow_run_id
-
     def log_error(self, message: str, **kwargs: Any) -> None:
         """Log an error message."""
         self.logger.error(message, **kwargs)
@@ -549,47 +525,6 @@ class TaskExecutionContext:
             known = set(cls.model_fields)
             return cls(**{k: v for k, v in detail.items() if k in known})
         return None
-
-    @property
-    def output_prefix(self) -> str:
-        """The object-store prefix for this workflow's output.
-
-        Builds the prefix from the current workflow's identity using the
-        ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` constant.  Must be called from
-        within a Temporal activity context.
-
-        Example::
-
-            prefix = self.task_context.output_prefix
-            # "artifacts/apps/myapp/workflows/wf-123/run-456"
-        """
-        from application_sdk.execution._temporal.activity_utils import (
-            _build_output_path,
-        )
-
-        return _build_output_path()
-
-    def build_output_path(self, *segments: str) -> str:
-        """Build an output path under the workflow's output prefix.
-
-        Joins the workflow output prefix with the given path segments
-        using ``/`` as separator.
-
-        Args:
-            *segments: Path segments to append (e.g. ``"raw"``, ``"tables"``).
-
-        Returns:
-            Full object-store path.
-
-        Example::
-
-            path = self.task_context.build_output_path("raw", "table")
-            # "artifacts/apps/myapp/workflows/wf-123/run-456/raw/table"
-        """
-        prefix = self.output_prefix
-        if not segments:
-            return prefix
-        return "/".join([prefix, *segments])
 
     async def run_in_thread(
         self, func: Callable[..., T], *args: Any, **kwargs: Any

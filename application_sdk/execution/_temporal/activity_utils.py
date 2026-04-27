@@ -2,6 +2,26 @@
 
 This module provides utility functions for working with Temporal activities,
 including workflow ID retrieval, automatic heartbeating, and periodic heartbeat sending.
+
+.. note::
+    The public ``get_workflow_id`` / ``get_workflow_run_id`` / ``build_output_path``
+    helpers in this module are **deprecated**. Apps should not reach into
+    ``execution._temporal.activity_utils``; use the input contract instead:
+
+    .. code-block:: python
+
+        @task(timeout_seconds=300)
+        async def extract(self, input: ExtractInput) -> ExtractOutput:
+            workflow_id = input.workflow_id  # populated by the framework
+            ...
+
+    See ``application_sdk.contracts.base.Input.workflow_id`` and the
+    ``atlan-openapi-app`` reference connector for the canonical pattern.
+
+    The private ``_get_workflow_id`` / ``_get_workflow_run_id`` /
+    ``_build_output_path`` helpers remain for SDK-internal use (cleanup
+    activities, framework dispatch) where reaching for ``activity.info()``
+    is unavoidable.
 """
 
 import os
@@ -25,12 +45,16 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 # ---------------------------------------------------------------------------
-# Private helpers (no deprecation warnings — used by the new public context API)
+# Private helpers — SDK-internal only.
+#
+# Used by framework code that has no Input parameter (cleanup activities,
+# dispatch glue). Apps must not import these. App code should read
+# ``input.workflow_id`` from the task's typed Input contract.
 # ---------------------------------------------------------------------------
 
 
 def _get_workflow_id() -> str:
-    """Get workflow ID from the current activity (internal, no deprecation warning)."""
+    """Get workflow ID from the current activity (SDK-internal)."""
     try:
         return activity.info().workflow_id
     except Exception as e:
@@ -38,7 +62,7 @@ def _get_workflow_id() -> str:
 
 
 def _get_workflow_run_id() -> str:
-    """Get workflow run ID from the current activity (internal, no deprecation warning)."""
+    """Get workflow run ID from the current activity (SDK-internal)."""
     try:
         return activity.info().workflow_run_id
     except Exception as e:
@@ -46,7 +70,7 @@ def _get_workflow_run_id() -> str:
 
 
 def _build_output_path() -> str:
-    """Build output path from current activity context (internal, no deprecation warning)."""
+    """Build output path from current activity context (SDK-internal)."""
     return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
         application_name=APPLICATION_NAME,
         workflow_id=_get_workflow_id(),
@@ -55,32 +79,54 @@ def _build_output_path() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Public API (deprecated — prefer AppContext / TaskExecutionContext properties)
+# Deprecated public API.
+#
+# These shipped in earlier SDK versions and are still imported by 8+ connector
+# apps. They emit ``DeprecationWarning`` at call time so apps and AI agents
+# migrate to the input contract pattern.
 # ---------------------------------------------------------------------------
 
 
 def get_workflow_id() -> str:
     """Get the workflow ID from the current activity.
 
-    Retrieves the workflow ID from the current activity's context. This function
-    must be called from within an activity execution context.
+    .. deprecated::
+        Apps should read ``input.workflow_id`` from the task's typed
+        ``Input`` contract instead of reaching into
+        ``execution._temporal.activity_utils``.
+
+        The framework populates ``Input.workflow_id`` at dispatch time
+        (see ``application_sdk.handler.service`` and
+        ``application_sdk.contracts.base.Input``). Reading it from the
+        input keeps activities decoupled from the Temporal runtime, makes
+        them trivially testable, and matches the canonical pattern in
+        the ``atlan-openapi-app`` reference connector.
+
+        .. code-block:: python
+
+            # Before — couples app to internal Temporal helpers:
+            from application_sdk.execution._temporal.activity_utils import get_workflow_id
+            wf_id = get_workflow_id()
+
+            # After — uses the public input contract:
+            @task(timeout_seconds=300)
+            async def extract(self, input: ExtractInput) -> ExtractOutput:
+                wf_id = input.workflow_id
+
+        Will be removed in v3.5.0.
 
     Returns:
         The workflow ID of the current activity.
 
     Raises:
-        RuntimeError: If called outside of an activity context.
-        Exception: If there is an error retrieving the workflow ID.
-
-    Example:
-        >>> workflow_id = get_workflow_id()
-        >>> print(workflow_id)  # e.g. "my-workflow-123"
-
-    .. deprecated::
-        Use ``self.context.workflow_id`` instead. Will be removed in v3.5.0.
+        Exception: If called outside an activity context, or if the
+            workflow ID cannot be retrieved.
     """
     warnings.warn(
-        "get_workflow_id() is deprecated. Use self.context.workflow_id instead. "
+        "get_workflow_id() is deprecated. Read input.workflow_id from the "
+        "task's typed Input contract instead — the framework populates it "
+        "at dispatch time. See application_sdk.contracts.base.Input and "
+        "the atlan-openapi-app reference connector. "
         "Will be removed in v3.5.0.",
         DeprecationWarning,
         stacklevel=2,
@@ -92,10 +138,18 @@ def get_workflow_run_id() -> str:
     """Get the workflow run ID from the current activity.
 
     .. deprecated::
-        Use ``self.context.workflow_run_id`` instead. Will be removed in v3.5.0.
+        Apps should read ``input.workflow_id`` from the typed ``Input``
+        contract for run-scoped paths and identifiers; the run ID is an
+        intra-attempt detail of Temporal that apps generally do not need.
+        If you do need it, use ``activity.info().workflow_run_id``
+        directly inside framework code rather than this helper.
+        Will be removed in v3.5.0.
     """
     warnings.warn(
-        "get_workflow_run_id() is deprecated. Use self.context.workflow_run_id instead. "
+        "get_workflow_run_id() is deprecated. Apps should read "
+        "input.workflow_id from the typed Input contract for run-scoped "
+        "paths; if you genuinely need the per-attempt run ID, use "
+        "activity.info().workflow_run_id directly. "
         "Will be removed in v3.5.0.",
         DeprecationWarning,
         stacklevel=2,
@@ -106,22 +160,23 @@ def get_workflow_run_id() -> str:
 def build_output_path() -> str:
     """Build a standardized output path for workflow artifacts.
 
-    This method creates a consistent output path format across all workflows using the WORKFLOW_OUTPUT_PATH_TEMPLATE constant.
+    .. deprecated::
+        Apps should compose paths from ``input.workflow_id`` (the input
+        contract field populated by the framework at dispatch time)
+        rather than reaching into
+        ``execution._temporal.activity_utils``. See the
+        ``atlan-openapi-app`` reference connector for the canonical
+        pattern. Will be removed in v3.5.0.
 
     Returns:
-        str: The standardized output path.
-
-    Example:
-        >>> build_output_path()
-        "artifacts/apps/appName/workflows/wf-123/run-456"
-
-    .. deprecated::
-        Use ``self.task_context.output_prefix`` or
-        ``self.task_context.build_output_path(...)`` instead. Will be removed in v3.5.0.
+        str: The standardized output path
+        (``artifacts/apps/{app}/workflows/{wf_id}/{run_id}``).
     """
     warnings.warn(
-        "build_output_path() is deprecated. "
-        "Use self.task_context.output_prefix or self.task_context.build_output_path() instead. "
+        "build_output_path() is deprecated. Compose paths from "
+        "input.workflow_id (populated by the framework on the typed Input "
+        "contract) instead of importing this helper. "
+        "See the atlan-openapi-app reference connector. "
         "Will be removed in v3.5.0.",
         DeprecationWarning,
         stacklevel=2,
@@ -130,11 +185,19 @@ def build_output_path() -> str:
 
 
 def get_object_store_prefix(path: str) -> str:
-    """Get the object store prefix for the path.
+    """Convert a local-path or object-store-path into an object-store prefix.
 
-    This function handles two types of paths:
-    1. Paths under TEMPORARY_PATH - converts them to relative object store paths
-    2. User-provided paths - returns them as-is (already relative object store paths)
+    Handles two input shapes:
+
+    1. Paths under ``TEMPORARY_PATH`` — converted to relative object-store keys.
+    2. User-provided paths — returned as-is (already relative object-store keys).
+
+    .. note::
+        This is a path-shape utility, not a "where am I in the workflow"
+        helper. Apps that need workflow identity should read
+        ``input.workflow_id`` from the input contract rather than building
+        paths via ``build_output_path()`` + this function. See
+        ``atlan-openapi-app`` for the canonical pattern.
 
     Args:
         path: The path to convert to object store prefix.
@@ -143,11 +206,9 @@ def get_object_store_prefix(path: str) -> str:
         The object store prefix for the path.
 
     Examples:
-        >>> # Temporary path case
         >>> get_object_store_prefix("./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456")
         "artifacts/apps/appName/workflows/wf-123/run-456"
 
-        >>> # User-provided path case
         >>> get_object_store_prefix("datasets/sales/2024/")
         "datasets/sales/2024"
     """
