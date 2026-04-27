@@ -64,13 +64,19 @@ jobs:
 
       - name: Wait for Temporal to be ready
         run: |
+          ready=false
           for i in $(seq 1 20); do
             if temporal workflow list --namespace default 2>/dev/null; then
               echo "Temporal is ready"
+              ready=true
               break
             fi
             sleep 2
           done
+          if [ "$ready" != "true" ]; then
+            echo "Temporal failed to become ready after 40 seconds"
+            exit 1
+          fi
 
       - name: Install and start Dapr runtime (daprd)
         run: |
@@ -89,13 +95,19 @@ jobs:
             --placement-host-address '' \
             --scheduler-host-address '' \
             --log-level warn &
+          ready=false
           for i in $(seq 1 15); do
             if curl -sf http://localhost:3500/v1.0/metadata > /dev/null 2>&1; then
               echo "daprd is ready"
+              ready=true
               break
             fi
             sleep 2
           done
+          if [ "$ready" != "true" ]; then
+            echo "daprd failed to become ready after 30 seconds"
+            exit 1
+          fi
 
       - name: Run integration tests
         env:
