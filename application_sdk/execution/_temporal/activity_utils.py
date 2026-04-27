@@ -77,10 +77,11 @@ def get_workflow_id() -> str:
         >>> print(workflow_id)  # e.g. "my-workflow-123"
 
     .. deprecated::
-        Use ``self.context.workflow_id`` instead.
+        Use ``self.context.workflow_id`` instead. Will be removed in v3.5.0.
     """
     warnings.warn(
-        "get_workflow_id() is deprecated. Use self.context.workflow_id instead.",
+        "get_workflow_id() is deprecated. Use self.context.workflow_id instead. "
+        "Will be removed in v3.5.0.",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -91,10 +92,11 @@ def get_workflow_run_id() -> str:
     """Get the workflow run ID from the current activity.
 
     .. deprecated::
-        Use ``self.context.workflow_run_id`` instead.
+        Use ``self.context.workflow_run_id`` instead. Will be removed in v3.5.0.
     """
     warnings.warn(
-        "get_workflow_run_id() is deprecated. Use self.context.workflow_run_id instead.",
+        "get_workflow_run_id() is deprecated. Use self.context.workflow_run_id instead. "
+        "Will be removed in v3.5.0.",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -115,33 +117,16 @@ def build_output_path() -> str:
 
     .. deprecated::
         Use ``self.task_context.output_prefix`` or
-        ``self.task_context.build_output_path(...)`` instead.
+        ``self.task_context.build_output_path(...)`` instead. Will be removed in v3.5.0.
     """
     warnings.warn(
         "build_output_path() is deprecated. "
-        "Use self.task_context.output_prefix or self.task_context.build_output_path() instead.",
+        "Use self.task_context.output_prefix or self.task_context.build_output_path() instead. "
+        "Will be removed in v3.5.0.",
         DeprecationWarning,
         stacklevel=2,
     )
     return _build_output_path()
-
-
-def _get_object_store_prefix(path: str) -> str:
-    """Normalize a path to an object-store prefix (internal, no deprecation warning)."""
-    # Normalize paths for comparison
-    abs_path = os.path.abspath(path)
-    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
-
-    # Check if path is under TEMPORARY_PATH
-    try:
-        common_path = os.path.commonpath([abs_path, abs_temp_path])
-        if common_path == abs_temp_path:
-            relative_path = os.path.relpath(abs_path, abs_temp_path)
-            return relative_path.replace(os.path.sep, "/")
-        else:
-            return path.strip("/")
-    except ValueError:
-        return path.strip("/")
 
 
 def get_object_store_prefix(path: str) -> str:
@@ -165,13 +150,25 @@ def get_object_store_prefix(path: str) -> str:
         >>> # User-provided path case
         >>> get_object_store_prefix("datasets/sales/2024/")
         "datasets/sales/2024"
-
-    .. deprecated::
-        This function may be removed in a future release.
     """
-    warnings.warn(
-        "get_object_store_prefix() is deprecated.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _get_object_store_prefix(path)
+    # Normalize paths for comparison
+    abs_path = os.path.abspath(path)
+    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
+
+    # Check if path is under TEMPORARY_PATH
+    try:
+        # Use os.path.commonpath to properly check if path is under temp directory
+        # This prevents false positives like '/tmp/local123' matching '/tmp/local'
+        common_path = os.path.commonpath([abs_path, abs_temp_path])
+        if common_path == abs_temp_path:
+            # Path is under temp directory, convert to relative object store path
+            relative_path = os.path.relpath(abs_path, abs_temp_path)
+            # Normalize path separators to forward slashes for object store
+            return relative_path.replace(os.path.sep, "/")
+        else:
+            # Path is already a relative object store path, return as-is
+            return path.strip("/")
+    except ValueError:
+        # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
+        # In this case, treat as user-provided path, return as-is
+        return path.strip("/")

@@ -199,15 +199,3 @@ class TestDeprecationWarnings:
             ]
             assert len(deprecation_warnings) == 1
             assert "task_context" in str(deprecation_warnings[0].message)
-
-    def test_get_object_store_prefix_warns(self) -> None:
-        from application_sdk.execution._temporal.activity_utils import (
-            get_object_store_prefix,
-        )
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            result = get_object_store_prefix("datasets/sales/2024/")
-            assert result == "datasets/sales/2024"
-            assert len(w) == 1
-            assert issubclass(w[0].category, DeprecationWarning)
