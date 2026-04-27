@@ -77,8 +77,8 @@ def get_tables_needing_column_extraction(
     """
     try:
         # lazy import: heavy optional dependency (installed via [sql] extra)
-        import daft
-        from daft.functions import format as daft_format
+        import daft  # noqa: PLC0415 — optional dep: daft
+        from daft.functions import format as daft_format  # noqa: PLC0415 — optional dep: daft
 
         backfill_qns = backfill_qualified_names or set()
 

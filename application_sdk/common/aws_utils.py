@@ -58,10 +58,10 @@ def generate_aws_rds_token_with_iam_role(
     Returns:
         str: RDS authentication token
     """
-    from botocore.exceptions import ClientError
+    from botocore.exceptions import ClientError  # noqa: PLC0415 — optional dep: botocore
 
     try:
-        from boto3 import client
+        from boto3 import client  # noqa: PLC0415 — optional dep: boto3
 
         sts_client = client(
             "sts", region_name=region or get_region_name_from_hostname(host)
@@ -107,7 +107,7 @@ def generate_aws_rds_token_with_iam_user(
         str: RDS authentication token
     """
     try:
-        from boto3 import client
+        from boto3 import client  # noqa: PLC0415 — optional dep: boto3
 
         aws_client = client(
             "rds",
@@ -157,7 +157,7 @@ def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
     Returns:
         boto3.Session: Configured boto3 session
     """
-    import boto3
+    import boto3  # noqa: PLC0415 — optional dep: boto3
 
     aws_access_key_id = credentials.get("aws_access_key_id") or credentials.get(
         "username"
@@ -261,7 +261,7 @@ def create_aws_client(
     if credential_sources > 1:
         raise ValueError("Only one credential source should be provided at a time")
 
-    import boto3
+    import boto3  # noqa: PLC0415 — optional dep: boto3
 
     try:
         # Priority 1: Use provided session
@@ -317,7 +317,7 @@ def create_engine_url(
     Returns:
         URL: SQLAlchemy engine URL
     """
-    from sqlalchemy.engine.url import URL
+    from sqlalchemy.engine.url import URL  # noqa: PLC0415 — optional dep: sqlalchemy
 
     host = credentials["host"]
     port = credentials.get("port")
@@ -342,7 +342,7 @@ def get_all_aws_regions() -> list[str]:
         Exception: If unable to retrieve regions from AWS
     """
     try:
-        import boto3
+        import boto3  # noqa: PLC0415 — optional dep: boto3
 
         # Use us-east-1 as the default region for the EC2 client since it's always available
         ec2_client = boto3.client("ec2", region_name="us-east-1")
