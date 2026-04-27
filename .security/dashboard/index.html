@@ -165,9 +165,10 @@
     <div class="stats-row" id="stats"></div>
     <div class="tabs">
         <div class="tab active" data-tab="overview">Overview</div>
+        <div class="tab" data-tab="sdkvulns">SDK Vulnerabilities</div>
+        <div class="tab" data-tab="vulns">App Vulnerabilities</div>
         <div class="tab" data-tab="trends">Trends</div>
         <div class="tab" data-tab="repos">Repos</div>
-        <div class="tab" data-tab="vulns">Vulnerabilities</div>
     </div>
     <div class="tab-panel active" id="tab-overview">
         <div class="grid-2">
@@ -186,8 +187,8 @@
         <div class="card" style="margin-bottom:16px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                 <div class="card-title" style="margin:0">Vulnerability Trend</div>
-                <div class="filter-group"><label>Metric</label><select id="fTrendMetric" onchange="renderTrends()" style="margin-left:6px">
-                    <option value="total">Total CVEs</option><option value="new">New (blocking)</option><option value="app">App deps</option><option value="base_image">Base image</option>
+                <div class="filter-group"><label>Stack by</label><select id="fTrendMetric" onchange="renderTrends()" style="margin-left:6px">
+                    <option value="source" selected>Source (App / Base)</option><option value="severity">Severity (Critical / High)</option><option value="status">Status (New / Allowlisted)</option>
                 </select></div>
             </div>
             <div id="trendChart" style="min-height:200px;position:relative;"></div>
@@ -222,13 +223,22 @@
         </div>
         <div class="repo-grid" id="repoCards"></div>
     </div>
+    <div class="tab-panel" id="tab-sdkvulns">
+        <div class="filters-bar">
+            <div class="filter-group"><label>SDK Version</label><select id="fSdkVer" onchange="renderSdkVulns()"><option value="all">All</option></select></div>
+            <div class="filter-group"><label>Severity</label><select id="fSdkSev" onchange="renderSdkVulns()"><option value="all">All</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option></select></div>
+            <div class="filter-group"><label>Status</label><select id="fSdkStatus" onchange="renderSdkVulns()"><option value="all">All</option><option value="new">New</option><option value="allowlisted">Allowlisted</option><option value="expired">Expired</option></select></div>
+            <div class="filter-group"><label>Search</label><input type="text" id="fSdkSearch" placeholder="CVE or package..." style="width:160px" oninput="renderSdkVulns()"></div>
+        </div>
+        <div id="sdkVulnsContainer"></div>
+        <div class="empty" id="sdkVulnsEmpty" style="display:none">No SDK vulnerabilities match filters.</div>
+    </div>
     <div class="tab-panel" id="tab-vulns">
         <div class="filters-bar">
             <div class="filter-group"><label>Repo</label><select id="fRepo"></select></div>
             <div class="filter-group"><label>Severity</label><select id="fSev"><option value="all">All</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option></select></div>
             <div class="filter-group"><label>Status</label><select id="fStatus"><option value="all">All</option><option value="new">New</option><option value="allowlisted">Allowlisted</option><option value="expired">Expired</option></select></div>
-            <div class="filter-group"><label>Source</label><select id="fSource"><option value="all">All</option><option value="base_image">Base image</option><option value="app">App dep</option></select></div>
-            <div class="filter-group"><label>SDK</label><select id="fSdk"><option value="all">All</option></select></div>
+            <div class="filter-group"><label>Source</label><select id="fSource"><option value="app" selected>App</option><option value="base_image">Base image</option><option value="all">All</option></select></div>
             <div class="filter-group"><label>Search</label><input type="text" id="fSearch" placeholder="CVE or package..." style="width:160px"></div>
             <button class="btn-clear" onclick="clearFilters()">Clear</button>
         </div>
@@ -261,7 +271,7 @@ async function load(){
 
 function buildVM(){VM={};Object.keys(D.repos).forEach(repo=>{(D.repos[repo].vulnerabilities||[]).forEach(v=>{if(!VM[v.id]){VM[v.id]={...v,repos:[repo],statuses:{}};}else{if(!VM[v.id].repos.includes(repo))VM[v.id].repos.push(repo);if(v.source_type==='base_image')VM[v.id].source_type='base_image';}VM[v.id].statuses[repo]=v.status||'new';});});}
 
-function renderAll(){renderStats();renderOverview();renderRepos();renderTable();
+function renderAll(){renderStats();renderOverview();renderRepos();renderTable();renderSdkVulns();
     document.getElementById('lastUpdated').textContent='Updated '+(D.generated_at?new Date(D.generated_at).toLocaleString():'N/A');}
 
 function renderStats(repoFilter){
@@ -305,6 +315,71 @@ function renderOverview(){
     document.getElementById('repoBars').innerHTML=repos.map(r=>`<div class="hbar"><div class="hbar-header"><span class="hbar-label">${esc(r.name)}</span><span class="hbar-val">${r.total}</span></div><div class="hbar-track"><div class="hbar-fill" style="width:${pct(r.total,rmx)}%;background:linear-gradient(90deg,#ef4444 ${pct(r.c,r.total)}%,#f97316 ${pct(r.c,r.total)}%)"></div></div></div>`).join('');
 }
 
+function renderSdkVulns(){
+    // Group base-image CVEs by SDK version. A repo's base CVEs come from its SDK base image,
+    // so grouping by SDK shows what's baked into each base image.
+    const sdkSel=document.getElementById('fSdkVer');
+    const allSdks=[...new Set(Object.keys(D.repos).map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))]
+        .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+    // Default to latest SDK version on first render; preserve user choice afterwards.
+    let curSdk=sdkSel.value;
+    if(!sdkSel.dataset.initialized){
+        curSdk=allSdks.length?allSdks[allSdks.length-1]:'all';
+        sdkSel.dataset.initialized='true';
+    }
+    sdkSel.innerHTML='<option value="all">All</option>';allSdks.forEach(s=>{const cnt=Object.keys(D.repos).filter(r=>(D.repos[r].sdk_version||'')==s).length;const o=document.createElement('option');o.value=s;o.textContent=s+' ('+cnt+')';if(s===curSdk)o.selected=true;sdkSel.appendChild(o);});
+    const sdkFilter=sdkSel.value;
+    const sevFilter=document.getElementById('fSdkSev').value;
+    const stFilter=document.getElementById('fSdkStatus').value;
+    const qFilter=document.getElementById('fSdkSearch').value.toLowerCase();
+    const bySdk={};
+    Object.values(VM).filter(v=>v.source_type==='base_image').forEach(v=>{
+        const sdks=[...new Set(v.repos.map(r=>(D.repos[r]||{}).sdk_version||'unknown'))];
+        sdks.forEach(sdk=>{
+            if(!bySdk[sdk])bySdk[sdk]={vulns:[],repos:new Set()};
+            bySdk[sdk].vulns.push(v);
+        });
+    });
+    Object.keys(D.repos).forEach(r=>{
+        const sdk=D.repos[r].sdk_version||'unknown';
+        if(bySdk[sdk])bySdk[sdk].repos.add(r);
+    });
+    const ord={CRITICAL:0,HIGH:1};
+    const sdkVersions=Object.keys(bySdk).sort().filter(s=>sdkFilter==='all'||s===sdkFilter);
+    const container=document.getElementById('sdkVulnsContainer');
+    let totalShown=0;
+    container.innerHTML=sdkVersions.map(sdk=>{
+        // Dedupe vulns per SDK and apply filters
+        const seen=new Set();
+        let vs=bySdk[sdk].vulns.filter(v=>{if(seen.has(v.id))return false;seen.add(v.id);return true;});
+        if(sevFilter!=='all')vs=vs.filter(v=>v.severity===sevFilter);
+        if(stFilter!=='all')vs=vs.filter(v=>Object.values(v.statuses).includes(stFilter));
+        if(qFilter)vs=vs.filter(v=>v.id.toLowerCase().includes(qFilter)||v.package.toLowerCase().includes(qFilter));
+        vs.sort((a,b)=>(ord[a.severity]||9)-(ord[b.severity]||9)||a.id.localeCompare(b.id));
+        if(!vs.length)return '';
+        totalShown+=vs.length;
+        const repoCount=bySdk[sdk].repos.size;
+        const isV3=sdk.startsWith('3')||sdk.includes('v3');
+        const sdkBadge=`<span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'};font-size:11px;margin-left:8px">${esc(sdk)}</span>`;
+        const rows=vs.map(v=>{
+            const status=Object.values(v.statuses).includes('new')?'new':Object.values(v.statuses).includes('expired')?'expired':'allowlisted';
+            return`<tr><td><span class="badge b-${v.severity.toLowerCase()}">${esc(v.severity)}</span></td>
+                <td><code>${v.id.length>38?esc(v.id.slice(0,38))+'...':esc(v.id)}</code></td>
+                <td><code>${esc(v.package)}</code></td>
+                <td><span class="badge b-${v.scanner}">${v.scanner}</span></td>
+                <td><span class="badge b-${status}">${status}</span></td>
+                <td>${v.fixed?esc(v.fixed):'<span style="color:#b0b3c6">None</span>'}</td></tr>`;
+        }).join('');
+        return`<div class="card" style="margin-bottom:16px">
+            <div class="card-title" style="display:flex;align-items:center">SDK${sdkBadge}<span style="color:#b0b3c6;font-weight:500;margin-left:auto;font-size:11px">${vs.length} CVE${vs.length===1?'':'s'} · ${repoCount} repo${repoCount===1?'':'s'}</span></div>
+            <div style="overflow-x:auto"><table style="min-width:auto"><thead><tr>
+                <th>Severity</th><th>ID</th><th>Package</th><th>Scanner</th><th>Status</th><th>Fix</th>
+            </tr></thead><tbody>${rows}</tbody></table></div>
+        </div>`;
+    }).join('');
+    document.getElementById('sdkVulnsEmpty').style.display=totalShown?'none':'block';
+}
+
 function renderRepos(){
     // Populate SDK filter for repos tab
     const repoSdkSel=document.getElementById('fRepoSdk'),curRepoSdk=repoSdkSel.value;
@@ -335,12 +410,11 @@ function selectRepo(r){document.querySelectorAll('.repo-card').forEach(c=>c.clas
     document.querySelector('[data-tab="vulns"]').classList.add('active');document.getElementById('tab-vulns').classList.add('active');renderTable();}
 
 function getFiltered(){
-    let vs=Object.values(VM);const r=document.getElementById('fRepo').value,sv=document.getElementById('fSev').value,st=document.getElementById('fStatus').value,src=document.getElementById('fSource').value,q=document.getElementById('fSearch').value.toLowerCase();
+    let vs=Object.values(VM);
+    const r=document.getElementById('fRepo').value,sv=document.getElementById('fSev').value,st=document.getElementById('fStatus').value,src=document.getElementById('fSource').value,q=document.getElementById('fSearch').value.toLowerCase();
+    if(src!=='all')vs=vs.filter(v=>v.source_type===src);
     if(r!=='all')vs=vs.filter(v=>v.repos.includes(r));if(sv!=='all')vs=vs.filter(v=>v.severity===sv);
     if(st!=='all')vs=vs.filter(v=>{if(r!=='all')return v.statuses[r]===st;return Object.values(v.statuses).includes(st);});
-    if(src!=='all')vs=vs.filter(v=>v.source_type===src);
-    const sdk=document.getElementById('fSdk').value;
-    if(sdk!=='all')vs=vs.filter(v=>v.repos.some(repo=>D.repos[repo]&&(D.repos[repo].sdk_version||'')==sdk));
     if(q)vs=vs.filter(v=>v.id.toLowerCase().includes(q)||v.package.toLowerCase().includes(q));
     const ord={CRITICAL:0,HIGH:1};vs.sort((a,b)=>{let av,bv;if(sortCol==='severity'){av=ord[a.severity]||9;bv=ord[b.severity]||9;}else{av=(a[sortCol]||'').toString().toLowerCase();bv=(b[sortCol]||'').toString().toLowerCase();}
         return av<bv?(sortDir==='asc'?-1:1):av>bv?(sortDir==='asc'?1:-1):0;});return vs;
@@ -349,10 +423,6 @@ function getFiltered(){
 function renderTable(){
     const repos=Object.keys(D.repos),sel=document.getElementById('fRepo'),cur=sel.value;
     sel.innerHTML=`<option value="all">All repos (${repos.length})</option>`;repos.forEach(r=>{const o=document.createElement('option');o.value=r;o.textContent=r.split('/').pop();if(r===cur)o.selected=true;sel.appendChild(o);});
-    // Populate SDK filter
-    const sdkSel=document.getElementById('fSdk'),curSdk=sdkSel.value;
-    const sdkVersions=[...new Set(repos.map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))].sort();
-    sdkSel.innerHTML='<option value="all">All</option>';sdkVersions.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;if(s===curSdk)o.selected=true;sdkSel.appendChild(o);});
     const vs=getFiltered(),sr=document.getElementById('fRepo').value;
     document.getElementById('tblCount').textContent=vs.length+' vulnerabilities';const tb=document.getElementById('tbl');tb.innerHTML='';
     if(!vs.length){document.getElementById('empty').style.display='block';return;}document.getElementById('empty').style.display='none';
@@ -382,9 +452,9 @@ function renderTable(){
 }
 
 function toggle(i){document.getElementById('d'+i).classList.toggle('show');document.getElementById('d'+i).previousElementSibling.classList.toggle('expanded');}
-function clearFilters(){['fRepo','fSev','fStatus','fSource','fSdk'].forEach(id=>document.getElementById(id).value='all');document.getElementById('fSearch').value='';renderTable();}
+function clearFilters(){['fRepo','fSev','fStatus'].forEach(id=>document.getElementById(id).value='all');document.getElementById('fSource').value='app';document.getElementById('fSearch').value='';renderTable();}
 document.querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{const c=th.dataset.s;if(sortCol===c)sortDir=sortDir==='asc'?'desc':'asc';else{sortCol=c;sortDir='asc';}renderTable();}));
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');if(t.dataset.tab==='trends'){renderTrends();}else{renderStats();}}));
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');if(t.dataset.tab==='trends'){renderTrends();}else if(t.dataset.tab==='sdkvulns'){renderSdkVulns();renderStats();}else{renderStats();}}));
 document.querySelectorAll('.filters-bar select,.filters-bar input').forEach(el=>{el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);});
 // Trend data
 let historyData={};
@@ -409,6 +479,42 @@ async function loadHistory(){
             historyData[r]=[{date:new Date().toISOString().slice(0,10),repo:r,sdk_version:d.sdk_version||'unknown',total:d.total,critical:d.critical,high:d.high,base_image:d.base_image_count||0,app:d.app_count||0,allowlisted:d.allowlisted,new:d.new||0}];
         });
     }
+}
+
+function trendHoverOut(){
+    const tip=document.getElementById('trendTip'),cur=document.getElementById('trendCursor');
+    if(tip)tip.style.display='none';if(cur)cur.style.display='none';
+}
+function trendHover(e){
+    const c=window._trendChart;if(!c)return;
+    const svg=document.getElementById('trendSvg'),rect=svg.getBoundingClientRect();
+    const xPx=e.clientX-rect.left;
+    const xViewbox=(xPx/rect.width)*c.w;
+    let idx=Math.round((xViewbox-c.padL)/(c.xStep||1));
+    if(idx<0)idx=0;if(idx>=c.stacks.length)idx=c.stacks.length-1;
+    const s=c.stacks[idx],d=c.dateMap[s.date];
+    const cur=document.getElementById('trendCursor');
+    const xLine=c.padL+idx*c.xStep;
+    cur.setAttribute('x1',xLine);cur.setAttribute('x2',xLine);cur.style.display='block';
+    const fmt=(n)=>(n||0).toLocaleString();
+    const tip=document.getElementById('trendTip');
+    tip.innerHTML=`<div style="font-weight:700;margin-bottom:8px;font-size:12px">${s.date}</div>
+        <div style="display:grid;grid-template-columns:auto auto;gap:4px 16px">
+            <span style="opacity:0.85">Total</span><span style="text-align:right;font-weight:700">${fmt(d.total)}</span>
+            <span style="color:#a5b4fc">Base image</span><span style="text-align:right">${fmt(d.base_image)}</span>
+            <span style="color:#fdba74">App deps</span><span style="text-align:right">${fmt(d.app)}</span>
+            <span style="color:#fca5a5">Critical</span><span style="text-align:right">${fmt(d.critical)}</span>
+            <span style="color:#fdba74">High</span><span style="text-align:right">${fmt(d.high)}</span>
+            <span style="color:#fca5a5">New (blocking)</span><span style="text-align:right">${fmt(d.new)}</span>
+            <span style="color:#86efac">Allowlisted</span><span style="text-align:right">${fmt(d.allowlisted)}</span>
+        </div>`;
+    tip.style.display='block';
+    // Position: prefer right of cursor, flip if it would overflow
+    const tipW=tip.offsetWidth||220;
+    let leftPx=xPx+14;
+    if(leftPx+tipW>rect.width-8)leftPx=xPx-tipW-14;
+    tip.style.left=Math.max(4,leftPx)+'px';
+    tip.style.top=Math.max(4,e.clientY-rect.top-tip.offsetHeight/2)+'px';
 }
 
 function renderTrends(){
@@ -444,66 +550,176 @@ function renderTrends(){
         return (before.length?before[before.length-1].total:all[0].total)||0;
     }
 
-    // Section 1: Snapshot cards
-    const totalToday=repos.reduce((s,r)=>s+(D.repos[r].total||0),0);
-    const newToday=repos.reduce((s,r)=>s+(D.repos[r].new||0),0);
-    const totalOld=repos.reduce((s,r)=>s+getOldTotal(r),0);
-    const totalDelta=totalToday-totalOld;
-    const fixedThisWeek=totalDelta<0?Math.abs(totalDelta):0;
-    const newThisWeek=totalDelta>0?totalDelta:0;
-    const deltaClass=totalDelta>0?'up':totalDelta<0?'down':'flat';
-    const deltaArrow=totalDelta>0?'&#9650;':totalDelta<0?'&#9660;':'&#8212;';
+    // Section 1: Snapshot cards (unique CVE counts — same CVE shared across repos counted once)
+    const collectIds=(repoList,filter)=>{
+        const s=new Set();
+        repoList.forEach(r=>(D.repos[r].vulnerabilities||[]).forEach(v=>{if(!filter||filter(v,r))s.add(v.id);}));
+        return s;
+    };
+    // Today: union of CVE IDs across the in-scope repos
+    const todayIdSet=collectIds(repos);
+    const todayNewIdSet=collectIds(repos,(v,r)=>(v.status||(v.statuses&&v.statuses[r]))==='new');
+    const totalToday=todayIdSet.size;
+    const newToday=todayNewIdSet.size;
+    // Old: union of historical CVE IDs at the cutoff date.
+    // Use the new `ids` field if present (post-schema-update); otherwise approximate
+    // via per-repo summed totals (legacy — overstates).
+    function getOldEntry(r){
+        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        if(!all.length)return null;
+        const before=all.filter(e=>e.date<=cutoffStr);
+        return before.length?before[before.length-1]:all[0];
+    }
+    // Delta: only honest when we have ID-level history (post-schema-update). Until then, show "—".
+    let oldHasIds=false;
+    const oldIdSet=new Set();
+    const reposNoOldIds=[];
+    repos.forEach(r=>{
+        const e=getOldEntry(r);
+        if(e&&Array.isArray(e.ids)){oldHasIds=true;e.ids.forEach(id=>oldIdSet.add(id));}
+        else reposNoOldIds.push(r);
+    });
+    let totalDelta=null;
+    if(oldHasIds){
+        reposNoOldIds.forEach(r=>(D.repos[r].vulnerabilities||[]).forEach(v=>oldIdSet.add(v.id)));
+        totalDelta=totalToday-oldIdSet.size;
+    }
+    const fixedThisWeek=totalDelta!==null&&totalDelta<0?Math.abs(totalDelta):(totalDelta===null?null:0);
+    const newThisWeek=totalDelta!==null&&totalDelta>0?totalDelta:(totalDelta===null?null:0);
+    const deltaClass=totalDelta===null?'flat':totalDelta>0?'up':totalDelta<0?'down':'flat';
+    const deltaArrow=totalDelta===null?'':totalDelta>0?'&#9650;':totalDelta<0?'&#9660;':'&#8212;';
+    const dash='&#8212;';
+    const deltaIconBg=totalDelta===null?'#f5f7fa':(totalDelta<=0?'#f0fdf4':'#fef2f2');
+    const deltaIconColor=totalDelta===null?'#8c8fa3':(totalDelta<=0?'#22c55e':'#ef4444');
+    const deltaValue=totalDelta===null?dash:`${deltaArrow} ${Math.abs(totalDelta)}`;
+    const fixedValue=fixedThisWeek===null?dash:fixedThisWeek;
+    const newValue=newThisWeek===null?dash:newThisWeek;
+    const baselineNote=totalDelta===null?' <span style="font-size:9px;color:#b0b3c6;font-weight:500;text-transform:none;letter-spacing:0">awaiting ID baseline</span>':'';
 
     document.getElementById('trendSnapshot').innerHTML=`
         <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128230;</div><div class="stat-value">${repos.length}</div><div class="stat-label">Repos Scanned</div></div>
-        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128202;</div><div class="stat-value">${totalToday}</div><div class="stat-label">Total CVEs Today</div></div>
-        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:${totalDelta<=0?'#f0fdf4':'#fef2f2'};color:${totalDelta<=0?'#22c55e':'#ef4444'}">&#128200;</div><div class="stat-value"><span class="trend-delta ${deltaClass}">${deltaArrow} ${Math.abs(totalDelta)}</span></div><div class="stat-label">vs ${labels[days]||days+'d ago'}</div></div>
-        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#f0fdf4;color:#22c55e">&#10004;&#65039;</div><div class="stat-value" style="color:#22c55e">${fixedThisWeek}</div><div class="stat-label">Fixed (${days}d)</div></div>
-        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#fef2f2;color:#ef4444">&#10060;</div><div class="stat-value" style="color:#ef4444">${newThisWeek}</div><div class="stat-label">New (${days}d)</div></div>`;
+        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128202;</div><div class="stat-value">${totalToday}</div><div class="stat-label">Unique CVEs Today</div></div>
+        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:${deltaIconBg};color:${deltaIconColor}">&#128200;</div><div class="stat-value"><span class="trend-delta ${deltaClass}">${deltaValue}</span></div><div class="stat-label">vs ${labels[days]||days+'d ago'}${baselineNote}</div></div>
+        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#f0fdf4;color:#22c55e">&#10004;&#65039;</div><div class="stat-value" style="color:#22c55e">${fixedValue}</div><div class="stat-label">Fixed (${days}d)</div></div>
+        <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#fef2f2;color:#ef4444">&#10060;</div><div class="stat-value" style="color:#ef4444">${newValue}</div><div class="stat-label">New (${days}d)</div></div>`;
 
-    // Section 2: Line chart
+    // Section 2: Stacked area chart
+    // For each date, prefer unique CVE counts via the `ids` arrays in history; if no repo
+    // on that date has `ids`, fall back to per-repo summed counts (legacy, overstates).
+    const KEYS=['total','new','app','base_image','critical','high','allowlisted'];
     const dateMap={};
+    const dateSets={};  // date -> {total:Set, app:Set, base:Set}
     repos.forEach(r=>{(historyData[r]||[]).forEach(e=>{
-        if(!dateMap[e.date])dateMap[e.date]={total:0,new:0,app:0,base_image:0};
-        dateMap[e.date].total+=e.total||0;dateMap[e.date].new+=e.new||0;
-        dateMap[e.date].app+=e.app||0;dateMap[e.date].base_image+=e.base_image||0;
+        if(!dateMap[e.date]){const o={};KEYS.forEach(k=>o[k]=0);dateMap[e.date]=o;}
+        if(!dateSets[e.date])dateSets[e.date]={total:new Set(),app:new Set(),base:new Set(),hasIds:false};
+        if(Array.isArray(e.ids)){dateSets[e.date].hasIds=true;e.ids.forEach(id=>dateSets[e.date].total.add(id));}
+        if(Array.isArray(e.ids_app))e.ids_app.forEach(id=>dateSets[e.date].app.add(id));
+        if(Array.isArray(e.ids_base))e.ids_base.forEach(id=>dateSets[e.date].base.add(id));
+        // Always keep summed values too — used for severity/status stacking and as legacy fallback
+        KEYS.forEach(k=>{dateMap[e.date][k]+=(e[k]||0);});
     });});
-    // Add today from current data if not in history
-    if(!dateMap[today]){dateMap[today]={total:totalToday,new:newToday,app:repos.reduce((s,r)=>s+(D.repos[r].app_count||0),0),base_image:repos.reduce((s,r)=>s+(D.repos[r].base_image_count||0),0)};}
+    // Override total/app/base_image with unique counts when ids are present
+    Object.keys(dateSets).forEach(d=>{
+        if(dateSets[d].hasIds){
+            dateMap[d].total=dateSets[d].total.size;
+            if(dateSets[d].app.size)dateMap[d].app=dateSets[d].app.size;
+            if(dateSets[d].base.size)dateMap[d].base_image=dateSets[d].base.size;
+        }
+    });
+    if(!dateMap[today]){
+        dateMap[today]={
+            total:totalToday,new:newToday,
+            app:collectIds(repos,v=>v.source_type==='app').size,
+            base_image:collectIds(repos,v=>v.source_type==='base_image').size,
+            critical:repos.reduce((s,r)=>s+(D.repos[r].critical||0),0),
+            high:repos.reduce((s,r)=>s+(D.repos[r].high||0),0),
+            allowlisted:repos.reduce((s,r)=>s+(D.repos[r].allowlisted||0),0)
+        };
+    }else{
+        // Today entry exists in history — make sure it reflects unique counts from current data
+        dateMap[today].total=totalToday;
+        dateMap[today].new=newToday;
+        dateMap[today].app=collectIds(repos,v=>v.source_type==='app').size;
+        dateMap[today].base_image=collectIds(repos,v=>v.source_type==='base_image').size;
+    }
 
+    const stackBy=(metric==='source'||metric==='severity'||metric==='status')?metric:'source';
+    const stackConfig={
+        source:[{key:'base_image',label:'Base image',color:'#6366f1'},{key:'app',label:'App deps',color:'#f97316'}],
+        severity:[{key:'critical',label:'Critical',color:'#ef4444'},{key:'high',label:'High',color:'#f97316'}],
+        status:[{key:'new',label:'New (blocking)',color:'#ef4444'},{key:'allowlisted',label:'Allowlisted',color:'#22c55e'}]
+    };
+    const layers=stackConfig[stackBy];
     const dates=Object.keys(dateMap).sort();
-    const vals=dates.map(d=>dateMap[d][metric]||0);
-    const mx=Math.max(...vals,1);
-    const color=colors[metric]||'#6366f1';
 
     if(!dates.length){
         document.getElementById('trendChart').innerHTML='<div class="empty" style="padding:40px">Trends will appear after merges accumulate data.</div>';
     }else{
-        // SVG line chart
-        const w=800,h=180,pad=30;
-        const xStep=dates.length>1?(w-pad*2)/(dates.length-1):0;
-        const points=vals.map((v,i)=>[pad+i*xStep,h-pad-(v/mx)*(h-pad*2)]);
-        const line=points.map((p,i)=>(i===0?'M':'L')+p[0]+','+p[1]).join(' ');
-        const area=line+` L${points[points.length-1][0]},${h-pad} L${pad},${h-pad} Z`;
-        const dots=points.map((p,i)=>`<circle cx="${p[0]}" cy="${p[1]}" r="4" fill="${color}" stroke="#fff" stroke-width="2"><title>${dates[i]}: ${vals[i]}</title></circle>`).join('');
-        const xLabels=dates.map((d,i)=>`<text x="${pad+i*xStep}" y="${h-5}" text-anchor="middle" fill="#8c8fa3" font-size="10">${d.slice(5)}</text>`).join('');
-        const yLabels=[0,Math.round(mx/2),mx].map((v,i)=>{const y=h-pad-((v/mx)*(h-pad*2));return`<text x="${pad-5}" y="${y+4}" text-anchor="end" fill="#8c8fa3" font-size="10">${v}</text><line x1="${pad}" y1="${y}" x2="${w-pad}" y2="${y}" stroke="#f0f2f5" stroke-width="1"/>`}).join('');
-        document.getElementById('trendChart').innerHTML=`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:200px"><defs><linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity="0.15"/><stop offset="100%" stop-color="${color}" stop-opacity="0.01"/></linearGradient></defs>${yLabels}<path d="${area}" fill="url(#areaFill)"/><path d="${line}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>${dots}${xLabels}</svg>`;
+        const w=800,h=200,padL=44,padR=12,padT=12,padB=28;
+        const xStep=dates.length>1?(w-padL-padR)/(dates.length-1):0;
+        // Compute stack tops per date
+        const stacks=dates.map(d=>{
+            let acc=0;const pts=layers.map(l=>{const v=dateMap[d][l.key]||0;const seg={lower:acc,upper:acc+v,val:v};acc+=v;return seg;});
+            return{date:d,total:acc,segs:pts};
+        });
+        const mx=Math.max(...stacks.map(s=>s.total),1);
+        const yScale=v=>padT+(h-padT-padB)*(1-v/mx);
+        const xPos=i=>padL+i*xStep;
+        // Layer paths (bottom layer first so it sits behind)
+        const layerPaths=layers.map((l,li)=>{
+            const top=stacks.map((s,i)=>`${xPos(i)},${yScale(s.segs[li].upper)}`).join(' L');
+            const bot=stacks.map((s,i)=>`${xPos(i)},${yScale(s.segs[li].lower)}`).reverse().join(' L');
+            return`<path d="M${top} L${bot} Z" fill="${l.color}" fill-opacity="0.55" stroke="${l.color}" stroke-width="1.5"/>`;
+        }).join('');
+        // Y-axis: nice rounded ticks
+        const niceTicks=(max)=>{const step=Math.pow(10,Math.floor(Math.log10(max/3)));const m=max/step;const niceStep=m>=7?step*2:m>=3?step:step/2;const ticks=[];for(let v=0;v<=max;v+=niceStep)ticks.push(Math.round(v));if(ticks[ticks.length-1]<max)ticks.push(Math.ceil(max/niceStep)*niceStep);return ticks;};
+        const ticks=niceTicks(mx);
+        const yLabels=ticks.map(v=>{const y=yScale(v);return`<line x1="${padL}" y1="${y}" x2="${w-padR}" y2="${y}" stroke="#f0f2f5" stroke-width="1"/><text x="${padL-6}" y="${y+3}" text-anchor="end" fill="#8c8fa3" font-size="10">${v}</text>`}).join('');
+        const xLabels=dates.map((d,i)=>`<text x="${xPos(i)}" y="${h-padB+14}" text-anchor="middle" fill="#8c8fa3" font-size="10">${d.slice(5)}</text>`).join('');
+        // Persist data globally for hover handler
+        window._trendChart={stacks,dateMap,layers,w,h,padL,padR,padT,padB,xStep,xPos:xPos.toString()};
+        const legends=layers.map(l=>`<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#5c5f77"><span style="width:11px;height:11px;border-radius:3px;background:${l.color};opacity:0.8"></span>${esc(l.label)}</span>`).join('');
+        document.getElementById('trendChart').innerHTML=`
+        <div style="position:relative">
+          <svg id="trendSvg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:220px;display:block;cursor:crosshair" onmousemove="trendHover(event)" onmouseleave="trendHoverOut()">
+            ${yLabels}
+            ${layerPaths}
+            <line id="trendCursor" x1="0" y1="${padT}" x2="0" y2="${h-padB}" stroke="#1a1a2e" stroke-width="1" stroke-dasharray="3,3" style="display:none;pointer-events:none"/>
+            ${xLabels}
+          </svg>
+          <div id="trendTip" style="display:none;position:absolute;background:#1a1a2e;color:#fff;padding:10px 12px;border-radius:8px;font-size:11px;pointer-events:none;z-index:10;min-width:200px;box-shadow:0 6px 16px rgba(0,0,0,0.18)"></div>
+          <div style="display:flex;gap:18px;justify-content:center;margin-top:8px;flex-wrap:wrap">${legends}</div>
+        </div>`;
     }
 
-    // Top movers
+    // Top movers — asymmetric comparison
+    //  - Improvements: today vs PEAK in the window. Catches recent fixes regardless of where in
+    //    the window they happened, and is immune to onboarding-day noise (e.g. a first scan with 0 CVEs).
+    //  - Regressions: today vs OLDEST entry in the window (window-start). Honest about cumulative worsening.
+    function getMaxInWindow(r){
+        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        if(!all.length)return D.repos[r].total||0;
+        const inWindow=all.filter(e=>e.date>=cutoffStr);
+        const candidates=inWindow.length?inWindow:[all[all.length-1]];
+        const peak=candidates.reduce((m,e)=>Math.max(m,e.total||0),0);
+        return Math.max(peak,D.repos[r].total||0);
+    }
     const repoDeltas=repos.map(r=>{
-        const old=getOldTotal(r);
+        const oldStart=getOldTotal(r);
+        const peak=getMaxInWindow(r);
         const now=D.repos[r].total||0;
-        return{repo:r,sdk:D.repos[r].sdk_version||'?',now,old,delta:now-old,app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
+        return{repo:r,sdk:D.repos[r].sdk_version||'?',now,
+            old:oldStart,delta:now-oldStart,                 // window-start basis (used by table & regressions)
+            peak,improvementDelta:now-peak,                  // peak basis (used by improvements)
+            app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
     });
 
-    const improved=repoDeltas.filter(r=>r.delta<0).sort((a,b)=>a.delta-b.delta);
+    const improved=repoDeltas.filter(r=>r.improvementDelta<0).sort((a,b)=>a.improvementDelta-b.improvementDelta);
     const degraded=repoDeltas.filter(r=>r.delta>0).sort((a,b)=>b.delta-a.delta);
 
     document.getElementById('trendImprovedCount').textContent=improved.length?`(${improved.length})`:'';
     document.getElementById('trendImproved').innerHTML=improved.length?improved.map(r=>
-        `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta down" style="margin-left:auto">&#9660; ${Math.abs(r.delta)} (${r.old} → ${r.now})</span></div>`
+        `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta down" style="margin-left:auto">&#9660; ${Math.abs(r.improvementDelta)} (${r.peak} → ${r.now})</span></div>`
     ).join(''):'<div class="empty" style="padding:20px;font-size:12px">No improvements yet — check back after fixes land.</div>';
 
     document.getElementById('trendDegradedCount').textContent=degraded.length?`(${degraded.length})`:'';
