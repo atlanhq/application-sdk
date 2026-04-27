@@ -216,6 +216,8 @@ def estimate_dataframe_record_size(
         raise ValueError(f"Unsupported file extension: {file_extension}")
 
     if sample_file is not None:
+        # Parquet samples are already snappy-compressed above, so use the
+        # measured sample size directly instead of applying another factor.
         avg_record_size = len(sample_file) / sample_size
         return int(avg_record_size)
 
