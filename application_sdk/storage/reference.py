@@ -293,7 +293,10 @@ async def materialize_file_reference(
                 # Hash mismatch — file is corrupt; fall through to re-download.
             # else: no stored sidecar → conservative: re-download (cannot verify).
 
-        # Determine output path.
+        # Determine output path.  When mkstemp creates the file we own its
+        # cleanup on every failure path below — otherwise a network blip
+        # mid-download orphans an empty temp file forever.
+        owns_temp = False
         if ref.local_path is not None:
             out_path = ref.local_path
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -305,25 +308,38 @@ async def materialize_file_reference(
             else:
                 fd, out_path = tempfile.mkstemp(suffix=suffix)
             os.close(fd)  # close immediately; download_file will overwrite
+            owns_temp = True
 
-        sha256 = await download_file(
-            ref.storage_path, out_path, store, compute_hash=True, normalize=False
-        )
-        if sha256 is None:
-            raise StorageNotFoundError(
-                f"FileReference storage path not found in store: {ref.storage_path}",
-                key=ref.storage_path,
+        try:
+            sha256 = await download_file(
+                ref.storage_path, out_path, store, compute_hash=True, normalize=False
             )
+            if sha256 is None:
+                raise StorageNotFoundError(
+                    f"FileReference storage path not found in store: {ref.storage_path}",
+                    key=ref.storage_path,
+                )
 
-        # Verify against stored sidecar (reuse fetched value if already retrieved).
-        if stored_hash is None:
-            stored_hash = await _get_stored_sidecar(ref.storage_path, store)
-        if stored_hash is not None and sha256 != stored_hash:
-            raise StorageError(
-                f"SHA-256 mismatch for {ref.storage_path}: "
-                f"downloaded={sha256}, stored={stored_hash}",
-                key=ref.storage_path,
-            )
+            # Verify against stored sidecar (reuse value if already retrieved).
+            if stored_hash is None:
+                stored_hash = await _get_stored_sidecar(ref.storage_path, store)
+            if stored_hash is not None and sha256 != stored_hash:
+                raise StorageError(
+                    f"SHA-256 mismatch for {ref.storage_path}: "
+                    f"downloaded={sha256}, stored={stored_hash}",
+                    key=ref.storage_path,
+                )
+        except BaseException:
+            # On any failure, unlink the temp file we created so retries don't
+            # accumulate orphaned files (BLDX-1155 #5).  We only own the temp
+            # when we created it via mkstemp; caller-supplied local_paths are
+            # left intact so the caller can inspect partial state.
+            if owns_temp:
+                try:
+                    os.unlink(out_path)
+                except OSError:
+                    pass
+            raise
 
         _write_local_sidecar(out_path, sha256)
 
