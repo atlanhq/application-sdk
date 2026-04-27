@@ -58,7 +58,9 @@ def generate_aws_rds_token_with_iam_role(
     Returns:
         str: RDS authentication token
     """
-    from botocore.exceptions import ClientError  # noqa: PLC0415 — optional dep: botocore
+    from botocore.exceptions import (  # noqa: PLC0415 — optional dep: botocore
+        ClientError,
+    )
 
     try:
         from boto3 import client  # noqa: PLC0415 — optional dep: boto3

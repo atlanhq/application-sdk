@@ -965,7 +965,9 @@ class App(ABC):
             up = await self.upload(UploadInput(local_path="/tmp/output/"))
             # up.ref.file_count == number of files in the directory
         """
-        from application_sdk.storage.transfer import upload as _upload  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+        from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+            upload as _upload,
+        )
 
         store = self.context.storage
         if store is None:
@@ -1024,7 +1026,9 @@ class App(ABC):
 
             dl = await self.download(DownloadInput(ref=input.model_ref))
         """
-        from application_sdk.storage.transfer import download as _download  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+        from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+            download as _download,
+        )
 
         store = self.context.storage
         if store is None:
@@ -1068,7 +1072,9 @@ class App(ABC):
             TEMPORARY_PATH,
             TRACKED_FILE_REFS_KEY,
         )
-        from application_sdk.execution import build_output_path  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            build_output_path,
+        )
 
         path_results: dict[str, bool] = {}
 
@@ -1146,8 +1152,13 @@ class App(ABC):
             PROTECTED_STORAGE_PREFIXES,
             TRACKED_FILE_REFS_KEY,
         )
-        from application_sdk.execution import build_output_path  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-        from application_sdk.storage.ops import _resolve_store, delete  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            build_output_path,
+        )
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+            _resolve_store,
+            delete,
+        )
 
         store = self.context.storage if self._context is not None else None
         if store is None:
@@ -1510,7 +1521,9 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             # deterministic — retrying will never fix a KeyError or TypeError.
             # Transient failures (network, timeout) should be modelled as @task
             # activities with their own retry policy, not raised directly here.
-            from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+                ApplicationError,
+            )
 
             if isinstance(e, FailureError):
                 raise
@@ -1640,11 +1653,17 @@ def _create_task_activity_wrapper(
     Returns:
         Async function that executes the task as an activity.
     """
-    from application_sdk.execution.retry import RetryPolicy as _RP  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-    from application_sdk.execution.retry import _to_temporal_retry_policy  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+    from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+        RetryPolicy as _RP,
+    )
+    from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+        _to_temporal_retry_policy,
+    )
 
     with workflow.unsafe.imports_passed_through():
-        from application_sdk.execution._temporal.activities import TaskContext  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+        from application_sdk.execution._temporal.activities import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            TaskContext,
+        )
 
     # Build the Temporal RetryPolicy once (not per invocation)
     if retry_policy is not None:

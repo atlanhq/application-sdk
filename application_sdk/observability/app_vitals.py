@@ -46,7 +46,9 @@ from application_sdk.observability.trace_context import get_trace_context
 def _get_correlation_id() -> str:
     """Get correlation_id from the v3 CorrelationContext ContextVar."""
     try:
-        from application_sdk.observability.correlation import get_correlation_context  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+            get_correlation_context,
+        )
 
         ctx = get_correlation_context()
         if ctx and ctx.correlation_id:
@@ -198,7 +200,9 @@ def _emit_log_event(
     try:
         # Deferred import: logger_adaptor may not be initialized yet during early
         # workflow lifecycle events (interceptor runs before full app setup).
-        from application_sdk.observability.logger_adaptor import get_logger  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+        from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+            get_logger,
+        )
 
         logger = get_logger("app_vitals")
         level = "error" if attrs.get("status") == "failed" else "info"

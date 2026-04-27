@@ -59,7 +59,9 @@ class BasicCredential(BaseModel, frozen=True):
         return f"Basic {token}"
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialValidationError,
+        )
 
         if not self.username:
             raise CredentialValidationError(
@@ -92,7 +94,9 @@ class ApiKeyCredential(BaseModel, frozen=True):
         return {self.header_name: value}
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialValidationError,
+        )
 
         if not self.api_key:
             raise CredentialValidationError(
@@ -134,7 +138,9 @@ class BearerTokenCredential(BaseModel, frozen=True):
             return False
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialValidationError,
+        )
 
         if not self.token:
             raise CredentialValidationError(
@@ -195,7 +201,9 @@ class OAuthClientCredential(BaseModel, frozen=True):
         return {"Authorization": f"Bearer {self.access_token}"}
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialValidationError,
+        )
 
         if not self.client_id:
             raise CredentialValidationError(
@@ -236,7 +244,9 @@ class CertificateCredential(BaseModel, frozen=True):
         return "certificate"
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialValidationError,
+        )
 
         if not self.cert_data and not self.key_data:
             raise CredentialValidationError(

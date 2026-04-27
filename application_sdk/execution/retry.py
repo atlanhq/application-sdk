@@ -87,7 +87,9 @@ def _to_temporal_retry_policy(policy: RetryPolicy) -> _TemporalRetryPolicy:
 
     Internal helper for the execution layer.  Not part of the public API.
     """
-    from temporalio.common import RetryPolicy as _TR  # noqa: PLC0415 — cold path: only when constructing temporal retry policy
+    from temporalio.common import (  # noqa: PLC0415 — cold path: only when constructing temporal retry policy
+        RetryPolicy as _TR,
+    )
 
     return _TR(
         maximum_attempts=policy.max_attempts,

@@ -171,7 +171,9 @@ class SegmentClient:
 
             # Initialize queue and client in the event loop
             self._queue = asyncio.Queue()
-            from application_sdk.constants import _HTTP_POOL_TIMEOUT_SECONDS  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+            from application_sdk.constants import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+                _HTTP_POOL_TIMEOUT_SECONDS,
+            )
 
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0, pool=_HTTP_POOL_TIMEOUT_SECONDS),

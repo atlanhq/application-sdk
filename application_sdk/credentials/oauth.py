@@ -138,7 +138,9 @@ class OAuthTokenService:
         """
         import httpx  # deferred: matches existing lazy-import pattern for optional heavy deps  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
-        from application_sdk.clients.ssl_utils import get_ssl_context  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        from application_sdk.clients.ssl_utils import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            get_ssl_context,
+        )
 
         data: dict[str, str] = {
             "grant_type": "client_credentials",

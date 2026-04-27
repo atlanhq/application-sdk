@@ -98,7 +98,9 @@ class BaseSQLClient(ClientInterface):
 
         self.credentials = credentials  # Update the instance credentials
         try:
-            from sqlalchemy import create_engine  # noqa: PLC0415 — optional dep: sqlalchemy
+            from sqlalchemy import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                create_engine,
+            )
 
             # Create engine but no persistent connection
             self.engine = create_engine(
@@ -422,7 +424,9 @@ class BaseSQLClient(ClientInterface):
                 or iterator of DataFrames if chunked.
         """
         import pandas as pd  # noqa: PLC0415 — optional dep: pandas
-        from pandas.compat._optional import import_optional_dependency  # noqa: PLC0415 — optional dep: pandas
+        from pandas.compat._optional import (  # noqa: PLC0415 — optional dep: pandas
+            import_optional_dependency,
+        )
         from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
         if import_optional_dependency("sqlalchemy", errors="ignore"):
@@ -489,11 +493,16 @@ class BaseSQLClient(ClientInterface):
         if isinstance(self.engine, str):
             raise ValueError("Engine should be an SQLAlchemy engine object")
 
-        from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession  # noqa: PLC0415 — optional dep: sqlalchemy
+        from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
+            AsyncEngine,
+            AsyncSession,
+        )
 
         async_session = None
         if self.engine and isinstance(self.engine, AsyncEngine):
-            from sqlalchemy.orm import sessionmaker  # noqa: PLC0415 — optional dep: sqlalchemy
+            from sqlalchemy.orm import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                sessionmaker,
+            )
 
             async_session = sessionmaker(
                 self.engine, expire_on_commit=False, class_=AsyncSession
@@ -588,7 +597,9 @@ class AsyncBaseSQLClient(BaseSQLClient):
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
         try:
-            from sqlalchemy.ext.asyncio import create_async_engine  # noqa: PLC0415 — optional dep: sqlalchemy
+            from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                create_async_engine,
+            )
 
             # Create async engine but no persistent connection
             self.engine = create_async_engine(

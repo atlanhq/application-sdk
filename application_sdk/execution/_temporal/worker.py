@@ -87,7 +87,9 @@ async def _emit_worker_start_event(
     from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         _publish_event_via_binding,
     )
-    from application_sdk.infrastructure.bindings import BindingError  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+    from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+        BindingError,
+    )
 
     deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
     host_part, _, port_part = host.partition(":")
@@ -196,7 +198,9 @@ def create_worker(
     # Gated behind ATLAN_ENABLE_OTLP_TRACES so apps not using traces pay nothing.
     if os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true":
         try:
-            from temporalio.contrib.opentelemetry import TracingInterceptor  # noqa: PLC0415 — cold path: only when OTel tracing enabled
+            from temporalio.contrib.opentelemetry import (  # noqa: PLC0415 — cold path: only when OTel tracing enabled
+                TracingInterceptor,
+            )
 
             all_interceptors.append(TracingInterceptor())
             logger.info(
@@ -212,10 +216,14 @@ def create_worker(
     # AppVitalsInterceptor — emits lifecycle metrics on workflow/activity completion.
     # Must come after ExecutionContext, CorrelationContext, and TracingInterceptor
     # so ContextVars and span context are set when we emit.
-    from application_sdk.constants import ENABLE_APP_VITALS  # noqa: PLC0415 — cold path: ENABLE_APP_VITALS guard
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: ENABLE_APP_VITALS guard
+        ENABLE_APP_VITALS,
+    )
 
     if ENABLE_APP_VITALS:
-        from application_sdk.observability.app_vitals import AppVitalsInterceptor  # noqa: PLC0415 — cold path: only when ENABLE_APP_VITALS
+        from application_sdk.observability.app_vitals import (  # noqa: PLC0415 — cold path: only when ENABLE_APP_VITALS
+            AppVitalsInterceptor,
+        )
 
         all_interceptors.append(AppVitalsInterceptor())
 

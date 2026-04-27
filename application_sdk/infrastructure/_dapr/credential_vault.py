@@ -75,7 +75,9 @@ class DaprCredentialVault:
             SECRET_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
         )
-        from application_sdk.infrastructure._dapr.client import DaprBinding  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+        from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            DaprBinding,
+        )
 
         self._client = client
         self._upstream = DaprBinding(
@@ -96,7 +98,9 @@ class DaprCredentialVault:
             CredentialVaultError: If any step fails.
         """
         # Deferred import: circular dependency
-        from application_sdk.infrastructure.credential_vault import CredentialVaultError  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+        from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            CredentialVaultError,
+        )
 
         try:
             credential_config = await self._fetch_credential_config(credential_guid)
@@ -166,8 +170,12 @@ class DaprCredentialVault:
             STATE_STORE_PATH_TEMPLATE,
             TEMPORARY_PATH,
         )
-        from application_sdk.infrastructure.credential_vault import CredentialVaultError  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
-        from application_sdk.storage.ops import normalize_key  # noqa: PLC0415 — circular: storage.ops imports execution-related modules
+        from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            CredentialVaultError,
+        )
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related modules
+            normalize_key,
+        )
 
         # Validate before interpolation to prevent path traversal.
         if not _SAFE_GUID_RE.match(credential_guid):
@@ -214,8 +222,13 @@ class DaprCredentialVault:
         dependency during development.
         """
         # Deferred import: circular dependency
-        from application_sdk.common.exc_utils import rewrap  # noqa: PLC0415 — circular: common.exc_utils imports observability
-        from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT  # noqa: PLC0415 — cold path: only on credential resolution
+        from application_sdk.common.exc_utils import (  # noqa: PLC0415 — circular: common.exc_utils imports observability
+            rewrap,
+        )
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
+            DEPLOYMENT_NAME,
+            LOCAL_ENVIRONMENT,
+        )
 
         if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
             return self._get_local_secret(secret_key)

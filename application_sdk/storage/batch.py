@@ -88,7 +88,9 @@ async def list_keys(
     try:
         return await asyncio.to_thread(_collect)
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"Failed to list keys with prefix '{prefix}'", cause=exc

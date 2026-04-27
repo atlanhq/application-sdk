@@ -116,14 +116,18 @@ class AgentCredentialSpec(BaseModel):
             try:
                 parsed = orjson.loads(data)
             except Exception as exc:
-                from application_sdk.credentials.errors import CredentialParseError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                    CredentialParseError,
+                )
 
                 raise CredentialParseError(
                     f"agent_json is not valid JSON: {exc}",
                     cause=exc,
                 ) from exc
             if not isinstance(parsed, dict):
-                from application_sdk.credentials.errors import CredentialParseError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                    CredentialParseError,
+                )
 
                 raise CredentialParseError(
                     f"agent_json must be a JSON object, got {type(parsed).__name__}",

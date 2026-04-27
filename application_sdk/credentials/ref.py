@@ -211,7 +211,9 @@ class CredentialRef(BaseModel, frozen=True):
             stacklevel=2,
         )
 
-        from application_sdk.credentials.spec import AgentCredentialSpec  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        from application_sdk.credentials.spec import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            AgentCredentialSpec,
+        )
 
         method = (workflow_args.get("extraction_method") or "").strip().lower()
         raw_agent = workflow_args.get("agent_json")

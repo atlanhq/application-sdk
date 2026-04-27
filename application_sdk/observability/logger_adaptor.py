@@ -232,7 +232,9 @@ def _has_remote_otlp_endpoint() -> bool:
         ep = OTEL_EXPORTER_OTLP_ENDPOINT.strip()
         if not ep:
             return False
-        from urllib.parse import urlparse  # noqa: PLC0415 — stdlib urllib.parse; lazy use only on URL config
+        from urllib.parse import (  # noqa: PLC0415 — stdlib urllib.parse; lazy use only on URL config
+            urlparse,
+        )
 
         host = urlparse(ep).hostname or ""
         return host not in ("", "localhost", "127.0.0.1", "::1")

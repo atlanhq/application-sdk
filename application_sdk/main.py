@@ -333,7 +333,9 @@ def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, st
     """
     import yaml  # noqa: PLC0415 — cold path: yaml only when reading dapr binding YAML
 
-    from application_sdk.storage.binding import _parse_dapr_metadata  # noqa: PLC0415 — cold path: storage init only when binding YAML present
+    from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
+        _parse_dapr_metadata,
+    )
 
     result: dict[str, dict[str, str]] = {}
     try:
@@ -452,10 +454,14 @@ async def _create_infrastructure(
     Raises:
         RuntimeError: If DAPR_HTTP_PORT is not set (no Dapr sidecar).
     """
-    from application_sdk.infrastructure.context import InfrastructureContext  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        InfrastructureContext,
+    )
 
     if os.environ.get("DAPR_HTTP_PORT"):
-        from pathlib import Path  # noqa: PLC0415 — cold path: lazy load for entry-point function
+        from pathlib import (  # noqa: PLC0415 — cold path: lazy load for entry-point function
+            Path,
+        )
 
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
             DEPLOYMENT_OBJECT_STORE_NAME,
@@ -472,7 +478,9 @@ async def _create_infrastructure(
             AsyncDaprClient,
             wait_for_dapr_sidecar,
         )
-        from application_sdk.storage import create_store_from_binding  # noqa: PLC0415 — cold path: storage init only when binding YAML present
+        from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
+            create_store_from_binding,
+        )
 
         await wait_for_dapr_sidecar()
         dapr_client = AsyncDaprClient()
@@ -505,7 +513,9 @@ async def _create_infrastructure(
 def _derive_service_name(app_module: str) -> str:
     """Convert "my_package.apps:MyApp" to "my-app" (kebab-case)."""
     if ":" in app_module:
-        from application_sdk.app.base import _pascal_to_kebab  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
+        from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
+            _pascal_to_kebab,
+        )
 
         return _pascal_to_kebab(app_module.split(":")[1])
     return "application-sdk"
@@ -530,7 +540,9 @@ def _derive_task_queue(app_module: str) -> str:
 
 async def _flush_observability() -> None:
     """Flush all observability buffers before exit."""
-    from application_sdk.observability.observability import AtlanObservability  # noqa: PLC0415 — cold path: observability components only at startup
+    from application_sdk.observability.observability import (  # noqa: PLC0415 — cold path: observability components only at startup
+        AtlanObservability,
+    )
 
     try:
         await AtlanObservability.flush_all()
@@ -610,13 +622,22 @@ async def run_worker_mode(config: AppConfig) -> None:
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
 
-    from application_sdk.app.registry import AppRegistry, TaskRegistry  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
-    from application_sdk.execution._temporal.backend import create_temporal_client  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+    from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
+        AppRegistry,
+        TaskRegistry,
+    )
+    from application_sdk.execution._temporal.backend import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+        create_temporal_client,
+    )
     from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.execution._temporal.worker import create_worker  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
-    from application_sdk.infrastructure.context import set_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+    from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+        create_worker,
+    )
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        set_infrastructure,
+    )
 
     logger.info(
         "Starting worker mode: app=%s temporal=%s queue=%s",
@@ -703,7 +724,9 @@ async def run_worker_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import WorkerHealthServer  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
+        WorkerHealthServer,
+    )
 
     health_server = WorkerHealthServer(port=config.health_port)
     health_server.set_temporal_client(client)
@@ -713,7 +736,9 @@ async def run_worker_mode(config: AppConfig) -> None:
         async with worker:
             await shutdown_event.wait()
 
-    from application_sdk.infrastructure.context import close_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        close_infrastructure,
+    )
 
     await close_infrastructure()
     await _flush_observability()
@@ -735,8 +760,13 @@ def run_handler_mode(config: AppConfig) -> None:
     from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.handler import DefaultHandler, run_app_handler_service  # noqa: PLC0415 — cold path: only loaded in handler mode
-    from application_sdk.infrastructure.context import set_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+    from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
+        DefaultHandler,
+        run_app_handler_service,
+    )
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        set_infrastructure,
+    )
 
     infra = asyncio.run(_create_infrastructure())
     set_infrastructure(infra)
@@ -809,13 +839,23 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     import uvicorn  # noqa: PLC0415 — cold path: uvicorn only loaded in worker/handler runtime modes
 
-    from application_sdk.app.registry import AppRegistry, TaskRegistry  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
-    from application_sdk.execution._temporal.backend import create_temporal_client  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+    from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
+        AppRegistry,
+        TaskRegistry,
+    )
+    from application_sdk.execution._temporal.backend import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+        create_temporal_client,
+    )
     from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.execution._temporal.worker import create_worker  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
-    from application_sdk.handler import DefaultHandler, create_app_handler_service  # noqa: PLC0415 — cold path: only loaded in handler mode
+    from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+        create_worker,
+    )
+    from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
+        DefaultHandler,
+        create_app_handler_service,
+    )
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         get_infrastructure,
         set_infrastructure,
@@ -958,7 +998,9 @@ async def run_combined_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import WorkerHealthServer  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
+        WorkerHealthServer,
+    )
 
     health_server = WorkerHealthServer(port=config.health_port)
     health_server.set_temporal_client(client)
@@ -976,7 +1018,9 @@ async def run_combined_mode(config: AppConfig) -> None:
                 shutdown_event.wait(),
             )
 
-    from application_sdk.infrastructure.context import close_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        close_infrastructure,
+    )
 
     await close_infrastructure()
     await _flush_observability()
@@ -1077,7 +1121,9 @@ async def run_dev_combined(
     )
 
     # Create infrastructure early so run_combined_mode uses it directly.
-    from application_sdk.infrastructure.context import set_infrastructure  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        set_infrastructure,
+    )
 
     infra = await _create_infrastructure(credential_stores=credential_stores)
     set_infrastructure(infra)

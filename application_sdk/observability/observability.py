@@ -275,7 +275,9 @@ class AtlanObservability(Generic[T], ABC):
         # File I/O is restricted inside Temporal's workflow sandbox — skip the
         # store sink there; records are still exported via OTLP/console.
         try:
-            from temporalio.workflow import unsafe as _wf_unsafe  # noqa: PLC0415 — defensive: try/except detects temporal sandbox / non-temporal context
+            from temporalio.workflow import (  # noqa: PLC0415 — defensive: try/except detects temporal sandbox / non-temporal context
+                unsafe as _wf_unsafe,
+            )
 
             if _wf_unsafe.in_sandbox():
                 return
@@ -381,7 +383,9 @@ class AtlanObservability(Generic[T], ABC):
         - Updates last cleanup time after successful cleanup
         """
         try:
-            from application_sdk.infrastructure.context import get_infrastructure  # noqa: PLC0415 — circular: infrastructure imports observability
+            from application_sdk.infrastructure.context import (  # noqa: PLC0415 — circular: infrastructure imports observability
+                get_infrastructure,
+            )
 
             infra = get_infrastructure()
             state_store = infra.state_store if infra else None

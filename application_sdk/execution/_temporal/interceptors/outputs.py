@@ -152,7 +152,9 @@ def _merge_outputs_into_result(result: Any, collector: OutputCollector) -> Any:
       accepted without any runtime class manipulation.
     - Other: return just the collector dict (fallback).
     """
-    from pydantic import BaseModel  # noqa: PLC0415 — cold path: pydantic only when serializing
+    from pydantic import (  # noqa: PLC0415 — cold path: pydantic only when serializing
+        BaseModel,
+    )
 
     output_data = collector.to_dict()
 

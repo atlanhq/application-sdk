@@ -83,7 +83,9 @@ def normalize_key(key: str) -> str:
     if not key:
         return ""
 
-    from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        TEMPORARY_PATH,
+    )
 
     abs_path = os.path.abspath(key)
     abs_temp_path = os.path.abspath(TEMPORARY_PATH)
@@ -111,7 +113,9 @@ def _resolve_store(store: "ObjectStore | None") -> "ObjectStore":
     """
     if store is not None:
         return store
-    from application_sdk.infrastructure.context import get_infrastructure  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        get_infrastructure,
+    )
 
     infra = get_infrastructure()
     if infra is None or infra.storage is None:
@@ -206,7 +210,9 @@ async def upload_file(
                     h.update(chunk)
                     await writer.write(chunk)
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"Failed to upload file to key '{key}'", key=key, cause=exc
@@ -215,7 +221,9 @@ async def upload_file(
     digest = h.hexdigest()
 
     if not retain_local_copy:
-        from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+            TEMPORARY_PATH,
+        )
 
         resolved_path = path.resolve()
         staging_root = Path(TEMPORARY_PATH).resolve()
@@ -277,12 +285,16 @@ async def download_file(
         result = await obstore.get_async(resolved, key)
     except Exception as exc:
         if _is_not_found(exc):
-            from application_sdk.storage.errors import StorageNotFoundError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                StorageNotFoundError,
+            )
 
             raise StorageNotFoundError(
                 f"Key not found in store: {key}", key=key
             ) from exc
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"Failed to download key '{key}'", key=key, cause=exc
@@ -296,7 +308,9 @@ async def download_file(
                 if h is not None:
                     h.update(raw)
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"Failed to write downloaded file to '{local_path}'", key=key, cause=exc
@@ -345,7 +359,9 @@ async def _get_bytes(
     except Exception as exc:
         if _is_not_found(exc):
             return None
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(f"Failed to get key '{key}'", key=key, cause=exc) from exc
 
@@ -383,7 +399,9 @@ async def _put(
     try:
         await obstore.put_async(resolved, key, data)
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
 
@@ -449,7 +467,9 @@ async def delete(
     except Exception as exc:
         if _is_not_found(exc):
             return False
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(f"Failed to delete key '{key}'", key=key, cause=exc) from exc
 
@@ -490,7 +510,9 @@ async def exists(
     except Exception as exc:
         if _is_not_found(exc):
             return False
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"Failed to check existence of key '{key}'", key=key, cause=exc

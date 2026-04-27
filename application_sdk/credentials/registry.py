@@ -103,7 +103,9 @@ class CredentialTypeRegistry:
             CredentialParseError: If ``type_name`` is not registered or parsing fails.
         """
         self._ensure_initialized()
-        from application_sdk.credentials.errors import CredentialParseError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialParseError,
+        )
 
         entry = self._registry.get(type_name)
         if entry is None:

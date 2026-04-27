@@ -213,7 +213,9 @@ def _build_tls_config(
         FileNotFoundError: If a specified cert file does not exist.
         ValueError: If client cert is provided without key or vice versa.
     """
-    from temporalio.service import TLSConfig  # noqa: PLC0415 — cold path: TLS reload only when cert paths configured
+    from temporalio.service import (  # noqa: PLC0415 — cold path: TLS reload only when cert paths configured
+        TLSConfig,
+    )
 
     server_root_ca_cert: bytes | None = None
     client_cert: bytes | None = None
@@ -321,7 +323,9 @@ async def create_temporal_client(
 
             ca_cert_bytes = get_custom_ca_cert_bytes()
             if ca_cert_bytes:
-                from temporalio.service import TLSConfig  # noqa: PLC0415 — cold path: TLS only when reloaded
+                from temporalio.service import (  # noqa: PLC0415 — cold path: TLS only when reloaded
+                    TLSConfig,
+                )
 
                 tls_config = TLSConfig(server_root_ca_cert=ca_cert_bytes)
             else:

@@ -146,8 +146,12 @@ class TemporalAuthManager:
     def _get_token_service(self) -> OAuthTokenService:
         """Lazily construct the OAuthTokenService from TemporalAuthConfig."""
         if self._token_service is None:
-            from application_sdk.credentials.oauth import OAuthTokenService  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            from application_sdk.credentials.types import OAuthClientCredential  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            from application_sdk.credentials.oauth import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                OAuthTokenService,
+            )
+            from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                OAuthClientCredential,
+            )
 
             cred = OAuthClientCredential(
                 client_id=self.config.client_id,

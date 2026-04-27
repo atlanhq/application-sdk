@@ -548,6 +548,8 @@ class TaskExecutionContext:
                 pd.read_csv, path, sep=",", header=0
             )
         """
-        from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            run_in_thread,
+        )
 
         return await run_in_thread(func, *args, **kwargs)

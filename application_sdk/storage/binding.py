@@ -100,7 +100,9 @@ def create_store_from_binding(
     """
     import yaml  # noqa: PLC0415 — defensive: keep inline
 
-    from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageConfigError,
+    )
 
     components_path = Path(components_dir)
     component: dict | None = None
@@ -134,7 +136,9 @@ def create_store_from_binding(
 
     if store_kind == "local":
         root_path = meta.get("rootPath", "./objectstore")
-        from application_sdk.storage.factory import create_local_store  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        from application_sdk.storage.factory import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            create_local_store,
+        )
 
         return create_local_store(root_path)
 

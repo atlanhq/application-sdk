@@ -42,7 +42,9 @@ async def _get_event_token_service() -> "OAuthTokenService | None":
     """Return the singleton OAuthTokenService for event auth, or None if unconfigured."""
     global _event_token_service  # noqa: PLW0603
 
-    from application_sdk.constants import AUTH_ENABLED  # noqa: PLC0415 — cold path: AUTH_ENABLED guard
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: AUTH_ENABLED guard
+        AUTH_ENABLED,
+    )
 
     if not AUTH_ENABLED:
         return None
@@ -53,9 +55,15 @@ async def _get_event_token_service() -> "OAuthTokenService | None":
             WORKFLOW_AUTH_CLIENT_ID_KEY,
             WORKFLOW_AUTH_CLIENT_SECRET_KEY,
         )
-        from application_sdk.credentials.oauth import OAuthTokenService  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-        from application_sdk.credentials.types import OAuthClientCredential  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-        from application_sdk.infrastructure.secrets import get_deployment_secret  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+        from application_sdk.credentials.oauth import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            OAuthTokenService,
+        )
+        from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            OAuthClientCredential,
+        )
+        from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+            get_deployment_secret,
+        )
 
         client_id = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
         client_secret = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
@@ -100,7 +108,9 @@ def _enrich_event_metadata(event: Event) -> Event:
     Mirrors the logic from the v2 EventStore.enrich_event_metadata, inlined
     here so we have no dependency on the v2 services layer.
     """
-    from application_sdk.constants import APPLICATION_NAME  # noqa: PLC0415 — cold path: only when computing app_id at startup
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app_id at startup
+        APPLICATION_NAME,
+    )
 
     if not event.metadata:
         event.metadata = EventMetadata()
@@ -145,7 +155,10 @@ def _send_lifecycle_event_to_segment(event: Event) -> None:
     try:
         import time  # noqa: PLC0415 — cold path: only when emitting metrics
 
-        from application_sdk.constants import APP_TENANT_ID, ATLAN_BASE_URL  # noqa: PLC0415 — cold path: only when emitting metrics
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when emitting metrics
+            APP_TENANT_ID,
+            ATLAN_BASE_URL,
+        )
         from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — cold path: metrics adaptor only on emit
             MetricRecord,
             MetricType,
@@ -224,7 +237,9 @@ async def _publish_event_via_binding(event: Event) -> None:
     Silently skips if no event binding is configured. Enriches event
     metadata and sends Segment metrics as a side-channel.
     """
-    from application_sdk.infrastructure.context import get_infrastructure  # noqa: PLC0415 — circular: infrastructure.context imports execution transitively
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — circular: infrastructure.context imports execution transitively
+        get_infrastructure,
+    )
 
     infra = get_infrastructure()
     if infra is None or infra.event_binding is None:

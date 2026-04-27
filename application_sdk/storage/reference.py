@@ -59,7 +59,9 @@ def _make_storage_path(ref: FileReference, *, output_path: str | None = None) ->
 
     Delegates to :meth:`StorageTier._make_file_ref_path`.
     """
-    from application_sdk.constants import APPLICATION_NAME  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        APPLICATION_NAME,
+    )
 
     suffix = Path(ref.local_path).suffix if ref.local_path else ""
     return ref.tier._make_file_ref_path(
@@ -74,7 +76,9 @@ def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) 
 
     Delegates to :meth:`StorageTier._make_file_ref_prefix`.
     """
-    from application_sdk.constants import APPLICATION_NAME  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        APPLICATION_NAME,
+    )
 
     return ref.tier._make_file_ref_prefix(
         run_prefix=output_path or "",
@@ -96,7 +100,9 @@ def _sha256_hex_file(path: Path) -> str:
 
 async def _get_stored_sidecar(storage_path: str, store: "ObjectStore") -> str | None:
     """Fetch the stored sha256 sidecar for *storage_path*, or None if absent."""
-    from application_sdk.storage.ops import _get_bytes  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _get_bytes,
+    )
 
     try:
         raw = await _get_bytes(storage_path + ".sha256", store)
@@ -151,8 +157,13 @@ async def persist_file_reference(
         ValueError: If ``ref.tier`` is ``RETAINED`` and *output_path* is not
             provided.
     """
-    from application_sdk.storage.errors import StorageError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-    from application_sdk.storage.ops import _put, upload_file  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _put,
+        upload_file,
+    )
 
     if ref.is_durable:
         return ref  # already persisted — nothing to do
@@ -259,9 +270,16 @@ async def materialize_file_reference(
         StorageNotFoundError: If the key does not exist in the store.
         StorageError: If the downloaded data does not match the stored sidecar.
     """
-    from application_sdk.storage.batch import list_keys  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-    from application_sdk.storage.errors import StorageError, StorageNotFoundError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-    from application_sdk.storage.ops import download_file  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        list_keys,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+        StorageNotFoundError,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        download_file,
+    )
 
     if not ref.is_durable or ref.storage_path is None:
         return ref  # nothing to materialise

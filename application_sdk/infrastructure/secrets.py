@@ -38,7 +38,9 @@ async def get_deployment_secret(key: str) -> Any:
         return None
 
     try:
-        from application_sdk.infrastructure._dapr.http import AsyncDaprClient  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+        from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            AsyncDaprClient,
+        )
 
         client = AsyncDaprClient()
         try:

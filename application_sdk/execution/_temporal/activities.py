@@ -60,7 +60,10 @@ def _track_file_refs(workflow_id: str, *refs: FileReference) -> None:
     """
     if not refs:
         return
-    from application_sdk.app.base import _app_state, _app_state_lock  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+    from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        _app_state,
+        _app_state_lock,
+    )
 
     with _app_state_lock:
         state = _app_state.setdefault(workflow_id, {})
@@ -85,7 +88,10 @@ def create_activity_from_task(
 
     async def activity_fn(context: TaskContext, input_data: Input) -> Output:
         """Execute the task as a Temporal activity."""
-        from application_sdk.app.context import AppContext, TaskExecutionContext  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        from application_sdk.app.context import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            AppContext,
+            TaskExecutionContext,
+        )
         from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             NoopHeartbeatController,
             TemporalHeartbeatController,
@@ -99,7 +105,9 @@ def create_activity_from_task(
         run_id = context.run_id or str(uuid4())
 
         # Read correlation_id from ContextVar (set by CorrelationContextInterceptor)
-        from application_sdk.observability.correlation import get_correlation_context  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            get_correlation_context,
+        )
 
         corr_ctx = get_correlation_context()
         correlation_id = corr_ctx.correlation_id if corr_ctx else ""
@@ -111,7 +119,9 @@ def create_activity_from_task(
             correlation_id=correlation_id,
         )
 
-        from application_sdk.infrastructure.context import get_infrastructure  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        from application_sdk.infrastructure.context import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            get_infrastructure,
+        )
 
         infra = get_infrastructure()
         if infra is not None:
@@ -189,7 +199,9 @@ def create_activity_from_task(
                 result = await persist_file_refs(store, result, output_path=output_path)
 
             # Track all FileReference local paths for on_complete() cleanup.
-            from application_sdk.storage.file_ref_sync import _find_file_refs  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                _find_file_refs,
+            )
 
             all_refs = _find_file_refs(input_data) + _find_file_refs(result)
             if all_refs:
@@ -198,10 +210,14 @@ def create_activity_from_task(
             return cast("Output", result)
 
         except Exception as e:
-            from application_sdk.app.base import NonRetryableError  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                NonRetryableError,
+            )
 
             if isinstance(e, NonRetryableError):
-                from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                    ApplicationError,
+                )
 
                 raise ApplicationError(
                     str(e),
@@ -264,7 +280,9 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
     Returns:
         Dict of activity options for workflow.execute_activity().
     """
-    from temporalio.common import RetryPolicy as TemporalRetryPolicy  # noqa: PLC0415 — cold path: only used in retry policy reconstruction
+    from temporalio.common import (  # noqa: PLC0415 — cold path: only used in retry policy reconstruction
+        RetryPolicy as TemporalRetryPolicy,
+    )
 
     if task_metadata.retry_policy is not None:
         rp = task_metadata.retry_policy

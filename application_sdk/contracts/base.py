@@ -775,7 +775,9 @@ class PublishInputMixin(BaseModel):
         # Auto-resolve output_path from Temporal context if not set
         if not self.output_path:
             try:
-                from temporalio import workflow as _wf  # noqa: PLC0415 — defensive: try/except wraps "not in Temporal context"
+                from temporalio import (  # noqa: PLC0415 — defensive: try/except wraps "not in Temporal context"
+                    workflow as _wf,
+                )
 
                 from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
                     APPLICATION_NAME,

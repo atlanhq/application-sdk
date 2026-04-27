@@ -64,7 +64,9 @@ def create_data_converter(
     )
     # Append the pydantic JSON converter from the official chain
     for conv in pydantic_data_converter.payload_converter.converters:
-        from temporalio.converter import JSONPlainPayloadConverter  # noqa: PLC0415 — cold path: temporal payload converter setup
+        from temporalio.converter import (  # noqa: PLC0415 — cold path: temporal payload converter setup
+            JSONPlainPayloadConverter,
+        )
 
         if isinstance(conv, JSONPlainPayloadConverter):
             converters.append(conv)

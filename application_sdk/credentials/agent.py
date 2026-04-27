@@ -138,7 +138,9 @@ async def resolve_agent_json(
     Returns:
         A flat ``dict[str, Any]`` with substituted and expanded credentials.
     """
-    from application_sdk.credentials.spec import AgentCredentialSpec  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+    from application_sdk.credentials.spec import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        AgentCredentialSpec,
+    )
 
     spec = AgentCredentialSpec.model_validate(agent_json)
     return await resolve_agent_credential(spec, secret_store)
