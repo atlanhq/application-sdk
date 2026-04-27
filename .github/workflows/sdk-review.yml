@@ -1,7 +1,11 @@
-# SDK Review — dispatches to mothership rover-native sandbox
+# SDK Review — dispatches to mothership's generic pr-reviewer engine
 #
-# Parses @sdk-review comments on PRs and POSTs to mothership's
-# pr-review dispatch endpoint with the sdk-reviewer snapshot.
+# All SDK-specific review behavior (orchestration, agents, rules, severity rubric,
+# guardrails, modes) lives in application-sdk/.mothership/pr-review/
+# and is loaded by mothership's discover() into session/CUSTOM/ at dispatch time.
+#
+# Mothership provides: sandbox runtime, Claude Code CLI, dispatch endpoint, submit_review handler.
+# This repo provides: every detail of how to review SDK PRs.
 #
 # Commands:
 #   @sdk-review                       → Review only
@@ -168,7 +172,7 @@ jobs:
           PAYLOAD=$(jq -n \
             --arg pr_url "https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" \
             --arg review_mode "standard" \
-            --arg snapshot "sdk-reviewer" \
+            --arg snapshot "pr-reviewer" \
             --arg command "${COMMAND}" \
             --arg command_context "${COMMAND_CONTEXT}" \
             --arg commenter "${COMMENTER}" \
@@ -330,7 +334,7 @@ jobs:
 
           PAYLOAD=$(jq -n \
             --arg pr_url "https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" \
-            --arg snapshot "sdk-reviewer" \
+            --arg snapshot "pr-reviewer" \
             --arg command "auto-complete" \
             --arg context "--iteration=${ITERATION} --max=${MAX_ITER}" \
             '{
