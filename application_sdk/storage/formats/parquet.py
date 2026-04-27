@@ -849,6 +849,32 @@ class ParquetFileWriter(Writer):
         except Exception:
             logger.warning("Error cleaning up temp folders", exc_info=True)
 
+    async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
+        """Flush a buffer chunk to a Parquet file, upload it, and advance chunk_part.
+
+        Overrides base Writer._flush_buffer because Parquet files cannot be
+        appended to (unlike JSON where _write_chunk uses open("a")).
+        pq.write_table() always overwrites the target file, so without this
+        override _write_dataframe's buffer loop writes every sub-chunk to the
+        same filename, silently losing all data except the last sub-chunk.
+
+        Each parquet sub-chunk file is complete after write (no appending), so
+        we upload it to the object store immediately. The base class post-loop
+        upload only handles the last file and would miss intermediate sub-chunks.
+        See HYP-773.
+        """
+        await super()._flush_buffer(chunk, chunk_part)
+        # Upload the completed parquet file to object store.
+        output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
+        if os.path.exists(output_file_name):
+            try:
+                await self._upload_file(output_file_name)
+            except RuntimeError:
+                # No object store configured (local dev) — file stays on disk.
+                logger.debug("No object store configured, skipping upload")
+        # Advance part so the next sub-chunk gets a unique filename.
+        self.chunk_part += 1
+
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a Parquet file, casting null-typed columns to string.
 

@@ -11,6 +11,7 @@ import yaml
 
 from application_sdk.storage.binding import (
     GCS_SERVICE_ACCOUNT_FIELDS,
+    _resolve_metadata_value,
     create_store_from_binding,
 )
 from application_sdk.storage.errors import StorageConfigError
@@ -191,3 +192,149 @@ class TestBindingErrors:
 
         with pytest.raises(StorageConfigError, match="Unsupported binding type"):
             create_store_from_binding("objectstore", components_dir=components_dir)
+
+
+class TestResolveMetadataValue:
+    def test_plain_value(self):
+        assert (
+            _resolve_metadata_value({"name": "bucket", "value": "my-bucket"})
+            == "my-bucket"
+        )
+
+    def test_secret_key_ref_from_env(self, monkeypatch):
+        monkeypatch.setenv("MY_SECRET", "secret-value")
+        item = {
+            "name": "accessKey",
+            "secretKeyRef": {"name": "MY_SECRET", "key": "MY_SECRET"},
+        }
+        assert _resolve_metadata_value(item) == "secret-value"
+
+    def test_key_takes_precedence_over_name(self, monkeypatch):
+        monkeypatch.setenv("KEY_VAR", "from-key")
+        monkeypatch.setenv("NAME_VAR", "from-name")
+        item = {"name": "x", "secretKeyRef": {"name": "NAME_VAR", "key": "KEY_VAR"}}
+        assert _resolve_metadata_value(item) == "from-key"
+
+    def test_fallback_to_name_when_no_key(self, monkeypatch):
+        monkeypatch.setenv("NAME_VAR", "from-name")
+        item = {"name": "x", "secretKeyRef": {"name": "NAME_VAR"}}
+        assert _resolve_metadata_value(item) == "from-name"
+
+    def test_missing_env_returns_empty(self):
+        item = {"name": "x", "secretKeyRef": {"key": "NONEXISTENT_VAR"}}
+        assert _resolve_metadata_value(item) == ""
+
+    def test_no_value_no_ref_returns_empty(self):
+        assert _resolve_metadata_value({"name": "x"}) == ""
+
+    def test_value_takes_precedence_over_secret_ref(self, monkeypatch):
+        monkeypatch.setenv("MY_SECRET", "from-env")
+        item = {
+            "name": "x",
+            "value": "from-value",
+            "secretKeyRef": {"key": "MY_SECRET"},
+        }
+        assert _resolve_metadata_value(item) == "from-value"
+
+
+class TestS3StoreWithSecretKeyRef:
+    @patch("obstore.store.S3Store")
+    def test_secret_key_ref_resolves_credentials(
+        self, mock_s3_cls: MagicMock, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_AUTH_CLIENT_ID", "test-access-key")
+        monkeypatch.setenv("ATLAN_AUTH_CLIENT_SECRET", "test-secret-key")
+
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "objectstore"},
+            "spec": {
+                "type": "bindings.aws.s3",
+                "metadata": [
+                    {"name": "bucket", "value": "test-bucket"},
+                    {"name": "region", "value": "us-east-1"},
+                    {
+                        "name": "accessKey",
+                        "secretKeyRef": {
+                            "name": "ATLAN_AUTH_CLIENT_ID",
+                            "key": "ATLAN_AUTH_CLIENT_ID",
+                        },
+                    },
+                    {
+                        "name": "secretKey",
+                        "secretKeyRef": {
+                            "name": "ATLAN_AUTH_CLIENT_SECRET",
+                            "key": "ATLAN_AUTH_CLIENT_SECRET",
+                        },
+                    },
+                ],
+            },
+        }
+        (components_dir / "objectstore.yaml").write_text(yaml.dump(doc))
+
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        call_kwargs = mock_s3_cls.call_args
+        assert call_kwargs.kwargs["bucket"] == "test-bucket"
+        config = call_kwargs.kwargs["config"]
+        assert config["aws_access_key_id"] == "test-access-key"
+        assert config["aws_secret_access_key"] == "test-secret-key"
+
+
+class TestS3EndpointAndPathStyle:
+    @patch("obstore.store.S3Store")
+    def test_endpoint_passed_to_s3_config(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "objectstore"},
+            "spec": {
+                "type": "bindings.aws.s3",
+                "metadata": [
+                    {"name": "bucket", "value": "test-bucket"},
+                    {"name": "region", "value": "us-east-1"},
+                    {
+                        "name": "endpoint",
+                        "value": "https://tenant.atlan.com/api/blobstorage",
+                    },
+                    {"name": "forcePathStyle", "value": "true"},
+                ],
+            },
+        }
+        (components_dir / "objectstore.yaml").write_text(yaml.dump(doc))
+        mock_s3_cls.return_value = MagicMock()
+
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config["aws_endpoint"] == "https://tenant.atlan.com/api/blobstorage"
+        assert config["aws_virtual_hosted_style_request"] == "false"
+        client_options = mock_s3_cls.call_args.kwargs["client_options"]
+        assert client_options == {"user_agent": "aws-sdk-go-v2 atlan-application-sdk"}
+
+    @patch("obstore.store.S3Store")
+    def test_no_endpoint_no_path_style_no_user_agent(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert "aws_endpoint" not in config
+        assert "aws_virtual_hosted_style_request" not in config
+        assert mock_s3_cls.call_args.kwargs["client_options"] is None
