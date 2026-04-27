@@ -293,7 +293,8 @@ jobs:
           print(f"  Allowlisted: {repo_data['allowlisted']}")
           print(f"  New: {repo_data['new']}")
 
-          # Append to history for trend tracking
+          # Append to history for trend tracking. Includes CVE ID lists so the dashboard can
+          # compute true cross-repo unique counts (instead of inflated per-repo sums).
           history_entry = {
               "date": datetime.now().strftime("%Y-%m-%d"),
               "repo": repo_name,
@@ -305,6 +306,9 @@ jobs:
               "app": app_count,
               "allowlisted": repo_data["allowlisted"],
               "new": repo_data["new"],
+              "ids": [v["id"] for v in unique],
+              "ids_app": [v["id"] for v in unique if v.get("source_type") == "app"],
+              "ids_base": [v["id"] for v in unique if v.get("source_type") == "base_image"],
           }
           os.makedirs("/tmp/dashboard-deploy", exist_ok=True)
           with open(f"/tmp/dashboard-deploy/history_{repo_slug}.jsonl", "a") as f:
