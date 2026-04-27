@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
@@ -52,13 +54,12 @@ class BasicCredential(BaseModel, frozen=True):
 
     def to_auth_header(self) -> str:
         """Return a Basic Authorization header value (base64-encoded)."""
-        import base64
 
         token = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
         return f"Basic {token}"
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
         if not self.username:
             raise CredentialValidationError(
@@ -91,7 +92,7 @@ class ApiKeyCredential(BaseModel, frozen=True):
         return {self.header_name: value}
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
         if not self.api_key:
             raise CredentialValidationError(
@@ -123,7 +124,6 @@ class BearerTokenCredential(BaseModel, frozen=True):
         """
         if not self.expires_at:
             return False
-        from datetime import UTC, datetime
 
         try:
             expiry = datetime.fromisoformat(self.expires_at)
@@ -134,7 +134,7 @@ class BearerTokenCredential(BaseModel, frozen=True):
             return False
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
         if not self.token:
             raise CredentialValidationError(
@@ -166,7 +166,6 @@ class OAuthClientCredential(BaseModel, frozen=True):
             return True
         if not self.expires_at:
             return False
-        from datetime import UTC, datetime
 
         try:
             expiry = datetime.fromisoformat(self.expires_at)
@@ -196,7 +195,7 @@ class OAuthClientCredential(BaseModel, frozen=True):
         return {"Authorization": f"Bearer {self.access_token}"}
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
         if not self.client_id:
             raise CredentialValidationError(
@@ -237,7 +236,7 @@ class CertificateCredential(BaseModel, frozen=True):
         return "certificate"
 
     async def validate(self) -> None:  # type: ignore[override]
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
         if not self.cert_data and not self.key_data:
             raise CredentialValidationError(

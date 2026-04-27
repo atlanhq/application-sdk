@@ -135,7 +135,7 @@ class CredentialRef(BaseModel, frozen=True):
         Raises:
             ValueError: If no routable credential source is present.
         """
-        from application_sdk.credentials.spec import AgentCredentialSpec
+        from application_sdk.credentials.spec import AgentCredentialSpec  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
         method = (workflow_args.get("extraction_method") or "").strip().lower()
         raw_agent = workflow_args.get("agent_json")

@@ -30,9 +30,9 @@ def create_async_atlan_client(cred: "Credential") -> "object":
     Raises:
         TypeError: If ``cred`` is not a supported Atlan credential type.
     """
-    from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]
+    from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
 
-    from application_sdk.credentials.atlan import AtlanApiToken, AtlanOAuthClient
+    from application_sdk.credentials.atlan import AtlanApiToken, AtlanOAuthClient  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
     logger.debug(
         "creating AsyncAtlanClient",

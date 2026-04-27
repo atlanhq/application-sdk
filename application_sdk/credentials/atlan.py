@@ -29,7 +29,7 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
         return "atlan_api_token"
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
         if not self.token:
             raise CredentialValidationError(
@@ -42,7 +42,7 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
                 credential_name="atlan_api_token",
             )
         # Lazy import — avoids hard dependency for apps that don't use Atlan creds.
-        from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]
+        from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
 
         client = AsyncAtlanClient(base_url=self.base_url, api_key=self.token)
         try:
@@ -133,7 +133,7 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
         )
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import CredentialValidationError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
         if not self.client_id:
             raise CredentialValidationError(
@@ -156,7 +156,7 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
                 credential_name="atlan_oauth_client",
             )
         # Lazy import — avoids hard dependency for apps that don't use Atlan creds.
-        from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]
+        from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
 
         client = AsyncAtlanClient(base_url=self.base_url, api_key=self.access_token)
         try:

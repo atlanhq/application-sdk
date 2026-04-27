@@ -48,7 +48,7 @@ class CredentialResolver:
     ) -> None:
         self._secret_store = secret_store
         if registry is None:
-            from application_sdk.credentials.registry import get_registry
+            from application_sdk.credentials.registry import get_registry  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
             self._registry = get_registry()
         else:
@@ -117,7 +117,7 @@ class CredentialResolver:
             or "unknown"
         )
         if type_name == "unknown":
-            from application_sdk.credentials.types import RawCredential
+            from application_sdk.credentials.types import RawCredential  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
             return RawCredential(data=data)
         # For typed parsing, pull the section matching the auth type if
@@ -128,24 +128,24 @@ class CredentialResolver:
 
     async def _resolve_agent_raw(self, ref: "CredentialRef") -> dict[str, Any]:
         """Resolve an agent-shape ref to a flat dict with ``extra`` nested."""
-        from application_sdk.credentials.agent import resolve_agent_credential
+        from application_sdk.credentials.agent import resolve_agent_credential  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
         assert ref.agent_spec is not None  # guaranteed by caller
         return await resolve_agent_credential(ref.agent_spec, self._secret_store)
 
     async def _fetch_raw_json(self, ref: "CredentialRef") -> dict[str, Any]:
-        from application_sdk.credentials.errors import (
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             CredentialNotFoundError,
             CredentialParseError,
         )
-        from application_sdk.infrastructure.secrets import SecretNotFoundError
+        from application_sdk.infrastructure.secrets import SecretNotFoundError  # noqa: PLC0415 — circular: infrastructure.secrets imports observability which loads credentials transitively
 
         try:
             raw = await self._secret_store.get(ref.name)
         except SecretNotFoundError as exc:
             raise CredentialNotFoundError(ref.name) from exc
         except Exception as exc:
-            from application_sdk.credentials.errors import CredentialError
+            from application_sdk.credentials.errors import CredentialError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
             raise CredentialError(
                 f"Failed to fetch credential '{ref.name}': {exc}",
@@ -167,7 +167,7 @@ class CredentialResolver:
     async def _resolve_legacy(self, ref: "CredentialRef") -> "Credential":
         data = await self._resolve_by_guid(ref)
         if ref.credential_type == "unknown":
-            from application_sdk.credentials.types import RawCredential
+            from application_sdk.credentials.types import RawCredential  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
             return RawCredential(data=data)
         return self._registry.parse(ref.credential_type, data)
@@ -179,8 +179,8 @@ class CredentialResolver:
         (S3) and merges it with secrets from the Dapr secret store (Vault).
         This is the single resolution path for both production and local dev.
         """
-        from application_sdk.credentials.errors import CredentialNotFoundError
-        from application_sdk.infrastructure import AsyncDaprClient, DaprCredentialVault
+        from application_sdk.credentials.errors import CredentialNotFoundError  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        from application_sdk.infrastructure import AsyncDaprClient, DaprCredentialVault  # noqa: PLC0415 — optional dep: dapr (DaprCredentialVault is Dapr-only)
 
         dapr_client = AsyncDaprClient()
         try:
