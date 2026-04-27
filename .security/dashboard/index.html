@@ -194,8 +194,8 @@
         </div>
         <!-- Top movers -->
         <div class="grid-2" style="margin-bottom:16px">
-            <div class="card"><div class="card-title">Biggest Improvements</div><div id="trendImproved"></div></div>
-            <div class="card"><div class="card-title">Needs Attention</div><div id="trendDegraded"></div></div>
+            <div class="card"><div class="card-title">Biggest Improvements <span id="trendImprovedCount" style="color:#b0b3c6;font-weight:500"></span></div><div id="trendImproved" style="max-height:340px;overflow-y:auto"></div></div>
+            <div class="card"><div class="card-title">Needs Attention <span id="trendDegradedCount" style="color:#b0b3c6;font-weight:500"></span></div><div id="trendDegraded" style="max-height:340px;overflow-y:auto"></div></div>
         </div>
         <!-- Section 3: Per repo table -->
         <div class="card">
@@ -434,12 +434,20 @@ function renderTrends(){
     const cutoff=new Date();cutoff.setDate(cutoff.getDate()-days);
     const cutoffStr=cutoff.toISOString().slice(0,10);
 
+    // Per-repo "old total" lookup: most recent history entry at/before cutoff;
+    // if no entry exists at/before cutoff, fall back to the oldest available entry
+    // so longer windows naturally include the change captured in shorter windows.
+    function getOldTotal(r){
+        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        if(!all.length)return D.repos[r].total||0;
+        const before=all.filter(e=>e.date<=cutoffStr);
+        return (before.length?before[before.length-1].total:all[0].total)||0;
+    }
+
     // Section 1: Snapshot cards
     const totalToday=repos.reduce((s,r)=>s+(D.repos[r].total||0),0);
     const newToday=repos.reduce((s,r)=>s+(D.repos[r].new||0),0);
-    const allHistory=Object.values(historyData).flat();
-    const oldEntries=allHistory.filter(e=>e.date<=cutoffStr);
-    const totalOld=oldEntries.length?oldEntries.reduce((s,e)=>s+(e.total||0),0):totalToday;
+    const totalOld=repos.reduce((s,r)=>s+getOldTotal(r),0);
     const totalDelta=totalToday-totalOld;
     const fixedThisWeek=totalDelta<0?Math.abs(totalDelta):0;
     const newThisWeek=totalDelta>0?totalDelta:0;
@@ -485,19 +493,20 @@ function renderTrends(){
 
     // Top movers
     const repoDeltas=repos.map(r=>{
-        const hist=(historyData[r]||[]).filter(e=>e.date<=cutoffStr).sort((a,b)=>b.date.localeCompare(a.date));
-        const old=hist.length?hist[0].total:D.repos[r].total;
+        const old=getOldTotal(r);
         const now=D.repos[r].total||0;
         return{repo:r,sdk:D.repos[r].sdk_version||'?',now,old,delta:now-old,app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
     });
 
-    const improved=repoDeltas.filter(r=>r.delta<0).sort((a,b)=>a.delta-b.delta).slice(0,5);
-    const degraded=repoDeltas.filter(r=>r.delta>0).sort((a,b)=>b.delta-a.delta).slice(0,5);
+    const improved=repoDeltas.filter(r=>r.delta<0).sort((a,b)=>a.delta-b.delta);
+    const degraded=repoDeltas.filter(r=>r.delta>0).sort((a,b)=>b.delta-a.delta);
 
+    document.getElementById('trendImprovedCount').textContent=improved.length?`(${improved.length})`:'';
     document.getElementById('trendImproved').innerHTML=improved.length?improved.map(r=>
         `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta down" style="margin-left:auto">&#9660; ${Math.abs(r.delta)} (${r.old} → ${r.now})</span></div>`
     ).join(''):'<div class="empty" style="padding:20px;font-size:12px">No improvements yet — check back after fixes land.</div>';
 
+    document.getElementById('trendDegradedCount').textContent=degraded.length?`(${degraded.length})`:'';
     document.getElementById('trendDegraded').innerHTML=degraded.length?degraded.map(r=>
         `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta up" style="margin-left:auto">&#9650; ${r.delta} (${r.old} → ${r.now})</span></div>`
     ).join(''):'<div class="empty" style="padding:20px;font-size:12px;color:#22c55e">No regressions — all repos stable or improving.</div>';
@@ -531,8 +540,11 @@ function exportTrendCSV(){
     const cutoff=new Date();cutoff.setDate(cutoff.getDate()-days);const cutoffStr=cutoff.toISOString().slice(0,10);
     let csv='Repo,SDK,Total Today,App CVEs,Base CVEs,Compare Period,Change,Status\n';
     repos.forEach(r=>{
-        const d=D.repos[r];const hist=(historyData[r]||[]).filter(e=>e.date<=cutoffStr).sort((a,b)=>b.date.localeCompare(a.date));
-        const old=hist.length?hist[0].total:d.total;const delta=(d.total||0)-old;
+        const d=D.repos[r];
+        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        const before=all.filter(e=>e.date<=cutoffStr);
+        const old=(all.length?(before.length?before[before.length-1].total:all[0].total):d.total)||0;
+        const delta=(d.total||0)-old;
         const status=(d.total||0)===0?'Clean':delta<0?'Improving':delta>0?'Degraded':'Stable';
         csv+=`${r.split('/').pop()},${d.sdk_version||'?'},${d.total||0},${d.app_count||0},${d.base_image_count||0},${old},${delta},${status}\n`;
     });
