@@ -311,7 +311,10 @@ async def materialize_file_reference(
             # Otherwise (no stored sidecar OR hash mismatch) fall through
             # to re-download — conservative since we cannot verify.
 
-        # Determine output path.
+        # Determine output path.  When mkstemp creates the file we own its
+        # cleanup on every failure path below — otherwise a network blip
+        # mid-download orphans an empty temp file forever.
+        owns_temp = False
         if ref.local_path is not None:
             out_path = ref.local_path
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -323,42 +326,55 @@ async def materialize_file_reference(
             else:
                 fd, out_path = tempfile.mkstemp(suffix=suffix)
             os.close(fd)  # close immediately; download_file will overwrite
+            owns_temp = True
 
-        # list_keys() with empty result alone cannot distinguish "single
-        # file at this exact key" from "no objects under this prefix":
-        # list_keys appends a trailing slash so a real single file always
-        # lists empty here, AND some stores (notably GCS with conditional
-        # IAM) silently return an empty listing when the caller lacks
-        # permission. Without this HEAD, that ambiguity collapses into a
-        # misleading 404 from download_file on a bare prefix.
-        if not await exists(ref.storage_path, store, normalize=False):
-            raise StorageNotFoundError(
-                f"FileReference path '{ref.storage_path}' resolved to no "
-                f"objects under the prefix and no single file at the exact "
-                f"key. Either the upstream writer has not deposited files "
-                f"yet, the path is wrong, or the store credentials lack "
-                f"list/read permission on this location.",
-                key=ref.storage_path,
-            )
+        try:
+            # list_keys() with empty result alone cannot distinguish "single
+            # file at this exact key" from "no objects under this prefix":
+            # list_keys appends a trailing slash so a real single file always
+            # lists empty here, AND some stores (notably GCS with conditional
+            # IAM) silently return an empty listing when the caller lacks
+            # permission. Without this HEAD, that ambiguity collapses into a
+            # misleading 404 from download_file on a bare prefix.
+            if not await exists(ref.storage_path, store, normalize=False):
+                raise StorageNotFoundError(
+                    f"FileReference path '{ref.storage_path}' resolved to no "
+                    f"objects under the prefix and no single file at the exact "
+                    f"key. Either the upstream writer has not deposited files "
+                    f"yet, the path is wrong, or the store credentials lack "
+                    f"list/read permission on this location.",
+                    key=ref.storage_path,
+                )
 
-        sha256 = await download_file(
-            ref.storage_path, out_path, store, compute_hash=True, normalize=False
-        )
-        if sha256 is None:
-            raise StorageNotFoundError(
-                f"FileReference storage path not found in store: {ref.storage_path}",
-                key=ref.storage_path,
+            sha256 = await download_file(
+                ref.storage_path, out_path, store, compute_hash=True, normalize=False
             )
+            if sha256 is None:
+                raise StorageNotFoundError(
+                    f"FileReference storage path not found in store: {ref.storage_path}",
+                    key=ref.storage_path,
+                )
 
-        # Verify against stored sidecar (reuse fetched value if already retrieved).
-        if stored_hash is None:
-            stored_hash = await _get_stored_sidecar(ref.storage_path, store)
-        if stored_hash is not None and sha256 != stored_hash:
-            raise StorageError(
-                f"SHA-256 mismatch for {ref.storage_path}: "
-                f"downloaded={sha256}, stored={stored_hash}",
-                key=ref.storage_path,
-            )
+            # Verify against stored sidecar (reuse value if already retrieved).
+            if stored_hash is None:
+                stored_hash = await _get_stored_sidecar(ref.storage_path, store)
+            if stored_hash is not None and sha256 != stored_hash:
+                raise StorageError(
+                    f"SHA-256 mismatch for {ref.storage_path}: "
+                    f"downloaded={sha256}, stored={stored_hash}",
+                    key=ref.storage_path,
+                )
+        except BaseException:
+            # On any failure, unlink the temp file we created so retries don't
+            # accumulate orphaned files (BLDX-1155 #5).  We only own the temp
+            # when we created it via mkstemp; caller-supplied local_paths are
+            # left intact so the caller can inspect partial state.
+            if owns_temp:
+                try:
+                    os.unlink(out_path)
+                except OSError:
+                    pass
+            raise
 
         _write_local_sidecar(out_path, sha256)
 
