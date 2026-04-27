@@ -208,17 +208,17 @@ def estimate_dataframe_record_size(
     # Sample up to 10 records to estimate average size
     sample_size = min(10, len(dataframe))
     sample = dataframe.head(sample_size)
-    compression_factor = 1
     if file_extension == JSON_FILE_EXTENSION:
         sample_file = sample.to_json(orient="records", lines=True)
     elif file_extension == PARQUET_FILE_EXTENSION:
         sample_file = sample.to_parquet(index=False, compression="snappy")
-        compression_factor = 0.01
     else:
         raise ValueError(f"Unsupported file extension: {file_extension}")
 
     if sample_file is not None:
-        avg_record_size = len(sample_file) / sample_size * compression_factor
+        # Parquet samples are already snappy-compressed above, so use the
+        # measured sample size directly instead of applying another factor.
+        avg_record_size = len(sample_file) / sample_size
         return int(avg_record_size)
 
     return 0
