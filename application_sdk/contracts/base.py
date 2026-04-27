@@ -57,7 +57,6 @@ Evolution:
 """
 
 import hashlib
-import logging
 import posixpath
 import re
 from enum import StrEnum
@@ -79,8 +78,9 @@ from pydantic_core import PydanticUndefined
 
 from application_sdk.contracts.types import MaxItems  # noqa: TC001
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
+from application_sdk.observability.logger_adaptor import get_logger
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 # =============================================================================
 # Serializable Enum Base Class
@@ -159,7 +159,24 @@ class Input(BaseModel):
     model_config = ConfigDict()
 
     workflow_id: str = ""
-    """Temporal workflow ID for the current run. Populated by the framework at dispatch time."""
+    """Temporal workflow ID for the current run.
+
+    Populated by the framework at dispatch time
+    (``application_sdk.handler.service`` sets this before the workflow
+    starts).  This is the **canonical way** for apps to access the
+    workflow ID inside a task — read it from the input parameter rather
+    than importing helpers from ``application_sdk.execution._temporal``::
+
+        @task(timeout_seconds=300)
+        async def extract(self, input: ExtractInput) -> ExtractOutput:
+            wf_id = input.workflow_id   # ← do this
+            # not: from application_sdk.execution._temporal.activity_utils
+            #      import get_workflow_id
+
+    See the ``atlan-openapi-app`` reference connector for the canonical
+    pattern, including how to compose run-scoped object-store paths from
+    ``input.workflow_id``.
+    """
 
     correlation_id: str = ""
     """Caller-supplied correlation ID for tracing across systems."""
@@ -789,7 +806,7 @@ class PublishInputMixin(BaseModel):
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )
-            except Exception:
+            except Exception:  # noqa: S110
                 pass  # Not in Temporal context — output_path stays empty
 
         # Derive transformed_data_prefix from output_path

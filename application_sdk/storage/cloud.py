@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -56,10 +55,21 @@ from application_sdk.storage.errors import (
     StorageNotFoundError,
 )
 
-# Cannot use get_logger due to circular import
-# (observability -> storage -> cloud -> observability). Resolve when
-# observability module decouples from storage.
-logger = logging.getLogger(__name__)
+# Lazy import: direct get_logger() at module load would create a circular
+# dependency (observability -> storage -> cloud -> observability).
+# Deferred to first log call so all modules finish loading first.
+_logger = None
+
+
+def _log():
+    global _logger
+    if _logger is None:
+        from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — deferred to break circular import (observability ↔ storage)
+            get_logger,
+        )
+
+        _logger = get_logger(__name__)
+    return _logger
 
 
 class CloudStore:
@@ -135,7 +145,7 @@ class CloudStore:
                 f"Set 'authType' to 's3', 'gcs', or 'adls'. Got: {auth_type!r}"
             )
 
-        logger.debug("Created CloudStore provider=%s", auth_type)
+        _log().debug("Created CloudStore provider=%s", auth_type)
         return cls(store, provider=auth_type)
 
     # ------------------------------------------------------------------
@@ -215,7 +225,7 @@ class CloudStore:
 
         data = await self.get_bytes(key)
         local_path.write_bytes(data)
-        logger.info("Downloaded key=%s size=%d local=%s", key, len(data), local_path)
+        _log().info("Downloaded key=%s size=%d local=%s", key, len(data), local_path)
         return [local_path]
 
     async def _download_prefix(
@@ -227,7 +237,7 @@ class CloudStore:
     ) -> list[Path]:
         """Download all files under a prefix."""
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
-        logger.info("Listing objects under prefix=%s", list_prefix)
+        _log().info("Listing objects under prefix=%s", list_prefix)
 
         keys = await self._list_keys(list_prefix, suffix_filter)
 
@@ -258,7 +268,7 @@ class CloudStore:
 
         results = await asyncio.gather(*[_dl(k) for k in keys])
         downloaded = list(results)
-        logger.info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
+        _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
     def _list_keys_sync(
@@ -329,7 +339,7 @@ class CloudStore:
             await obs.put_async(self._store, key, data)
         except Exception as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
-        logger.info("Uploaded key=%s size=%d", key, len(data))
+        _log().info("Uploaded key=%s size=%d", key, len(data))
         return len(data)
 
     async def upload_bytes(self, key: str, data: bytes) -> int:
@@ -428,7 +438,7 @@ def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStor
     if role_arn:
         config["aws_role_arn"] = role_arn
         config["aws_role_session_name"] = "cloud-store-session"
-        logger.debug("S3 role-based auth configured")
+        _log().debug("S3 role-based auth configured")
 
     return S3Store(bucket=bucket, config=config)
 

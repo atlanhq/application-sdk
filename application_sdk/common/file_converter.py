@@ -96,7 +96,5 @@ def convert_parquet_to_json(file_path: str) -> Optional[str]:
         df.to_json(json_file_path, orient="records", lines=True)
         return json_file_path
     except Exception:
-        logger.error(
-            "Error converting file to json", file_path=file_path, exc_info=True
-        )
+        logger.error("Error converting file to json: %s", file_path, exc_info=True)
         return None

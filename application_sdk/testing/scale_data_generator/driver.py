@@ -31,10 +31,10 @@ def driver(args: DriverArgs):
     generator.generate_duckdb_tables(args.output_dir)
     end_time = time.time()
     logger.info(
-        "Data generated successfully",
-        output_format=args.output_format,
-        output_dir=args.output_dir,
-        duration_s=end_time - start_time,
+        "Data generated successfully format=%s dir=%s duration=%.1fs",
+        args.output_format,
+        args.output_dir,
+        end_time - start_time,
     )
 
 

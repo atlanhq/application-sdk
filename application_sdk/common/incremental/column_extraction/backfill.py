@@ -168,9 +168,9 @@ def _load_tables_to_duckdb(
         """)
     except duckdb.Error:
         logger.error(
-            "DuckDB failed to load JSON files",
-            file_count=len(json_files),
-            table_name=table_name,
+            "DuckDB failed to load %d JSON files for table %s",
+            len(json_files),
+            table_name,
             exc_info=True,
         )
         raise

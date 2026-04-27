@@ -1,21 +1,28 @@
 # Allowlist Approval Gate — enforces that changes to .security/ are approved
 # by a designated approver, not just any code reviewer.
 #
-# Triggers on every PR and every review submission. Checks if the PR touches
-# .security/ files; if not, exits early with success (so it doesn't block
-# unrelated PRs when set as a required status check).
+# Triggers on PR synchronize/reopen and review submission. The `opened` type
+# is intentionally excluded — a freshly opened PR has no reviews yet, so
+# running on open would always fail noisily for .security/-touching PRs.
+# Synchronize is required so the required status check re-fires on every new
+# SHA; without it, "Update branch" or any new commit leaves the check in a
+# permanent "Expected" (waiting) state and blocks the merge.
+#
+# The check exits early with success when the PR does not touch .security/,
+# so unrelated PRs are never blocked.
 #
 # The authorized approver list is read from .security/approvers.json on the
 # BASE branch (main), not the PR branch — so adding yourself to the approver
 # list in a PR doesn't let you self-approve.
 #
-# Make this a REQUIRED STATUS CHECK on main to enforce.
+# Pair this with branch protection requiring at least one approving review
+# on main, so a .security/ PR cannot merge without a review event firing.
 #
 name: Allowlist Approval
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [synchronize, reopened]
   pull_request_review:
     types: [submitted]
 

@@ -318,11 +318,11 @@ async def _get_temporal_client() -> Client:
         logger.info("Acquired auth token for handler Temporal client")
 
     logger.info(
-        "Connecting to Temporal for workflow execution",
-        host=_workflow_config.host,
-        namespace=_workflow_config.namespace,
-        tls_enabled=_workflow_config.tls_enabled,
-        auth_enabled=_workflow_config.auth_enabled,
+        "Connecting to Temporal for workflow execution host=%s namespace=%s tls=%s auth=%s",
+        _workflow_config.host,
+        _workflow_config.namespace,
+        _workflow_config.tls_enabled,
+        _workflow_config.auth_enabled,
     )
 
     _temporal_client = await create_temporal_client(
@@ -917,11 +917,12 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except Exception as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
                         workflow_id,
-                        e,
+                        type(exc).__name__,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -966,11 +967,12 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except Exception as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
                         workflow_id,
-                        e,
+                        type(exc).__name__,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -1107,8 +1109,10 @@ def create_app_handler_service(
         try:
             await download_file(key, safe_tmp, _storage)
             return orjson.loads(Path(safe_tmp).read_bytes())
-        except Exception as exc:
-            logger.warning("Object-store config load failed for key=%s: %r", key, exc)
+        except Exception:
+            logger.warning(
+                "Object-store config load failed for key=%s", key, exc_info=True
+            )
             return None
         finally:
             if os.path.exists(safe_tmp):

@@ -16,12 +16,13 @@ but the sum remains correct.
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 from dataclasses import dataclass
 
-_logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+_logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)

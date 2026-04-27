@@ -588,7 +588,7 @@ def _install_excepthook() -> None:
         )
         try:
             asyncio.run(_flush_observability())
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # best-effort; never mask the original crash
         _orig(exc_type, exc_value, exc_traceback)
 
@@ -610,6 +610,7 @@ def _install_graceful_signal_handlers(
                 "loop.add_signal_handler() not supported on this platform "
                 "(signal=%s); graceful shutdown via signals is unavailable",
                 sig.name,
+                exc_info=True,
             )
 
 
@@ -1144,7 +1145,7 @@ async def run_dev_combined(
                         resp = await client.get(f"{base}/health", timeout=2)
                         if resp.status_code == 200:
                             break
-                    except Exception:
+                    except Exception:  # noqa: S110
                         pass
                     await asyncio.sleep(1)
 
@@ -1323,7 +1324,7 @@ def main() -> NoReturn:
         logger.exception("Fatal error")
         try:
             asyncio.run(_flush_observability())
-        except Exception:
+        except Exception:  # noqa: S110
             pass
         sys.exit(1)
 

@@ -230,6 +230,8 @@ extend-select = [
     "G004",    # f-string in log call
     "T201",    # print() in production code
     "PLC0415", # imports must be at top of module — prevents broken-import-at-runtime bugs (e.g. PR #1543)
+    "S110",    # try-except-pass detected
+    "S112",    # try-except-continue detected
 ]
 
 [tool.ruff.lint.per-file-ignores]

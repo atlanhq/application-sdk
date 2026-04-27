@@ -446,9 +446,9 @@ class QueryBasedTransformer(TransformerInterface):
         import daft  # noqa: PLC0415 — optional dep: daft
 
         logger.debug(
-            "Running transformer for asset",
-            typename=typename,
-            sql=entity_sql_template,
+            "Running transformer for asset typename=%s sql=%s",
+            typename,
+            entity_sql_template,
         )
         transformed_df = daft.sql(entity_sql_template)
 

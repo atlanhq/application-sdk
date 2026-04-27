@@ -203,9 +203,9 @@ def load_handler_class(
             )
 
         logger.info(
-            "Loaded handler class from explicit path",
-            handler_module_path=handler_module_path,
-            handler_class=class_name,
+            "Loaded handler class from explicit path handler_module_path=%s class=%s",
+            handler_module_path,
+            class_name,
         )
         return cls  # type: ignore[return-value]
 
@@ -222,9 +222,9 @@ def load_handler_class(
         cls = getattr(module, handler_class_name)
         if _is_handler_class(cls):
             logger.info(
-                "Loaded handler class by convention",
-                module_path=module_path,
-                handler_class=handler_class_name,
+                "Loaded handler class by convention module_path=%s class=%s",
+                module_path,
+                handler_class_name,
             )
             return cls  # type: ignore[return-value]
 
@@ -232,16 +232,16 @@ def load_handler_class(
     for name, obj in inspect.getmembers(module, inspect.isclass):
         if issubclass(obj, Handler) and obj is not Handler:
             logger.info(
-                "Found handler class by type inspection",
-                module_path=module_path,
-                handler_class=name,
+                "Found handler class by type inspection module_path=%s class=%s",
+                module_path,
+                name,
             )
             return obj  # type: ignore[return-value]
 
     logger.debug(
-        "No handler class found for app",
-        module_path=module_path,
-        tried_class_name=handler_class_name,
+        "No handler class found for app module_path=%s tried_class=%s",
+        module_path,
+        handler_class_name,
     )
     return None
 
@@ -280,7 +280,7 @@ def validate_app_class(cls: type[App]) -> None:
         )
 
     logger.debug(
-        "App class validated",
-        app_name=app_name,
-        app_version=cls._app_version,  # type: ignore[attr-defined]
+        "App class validated app_name=%s version=%s",
+        app_name,
+        cls._app_version,  # type: ignore[attr-defined]
     )

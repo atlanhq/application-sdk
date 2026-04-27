@@ -47,7 +47,7 @@ class TestWriterDataIntegrity:
                 try:
                     record = json.loads(line)
                     ids.add(record.get("id"))
-                except Exception:
+                except Exception:  # noqa: S110  # skip non-JSON lines; test assertions validate id completeness
                     pass
         return ids
 

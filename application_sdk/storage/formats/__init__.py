@@ -142,8 +142,8 @@ class Reader(ABC):
                     shutil.rmtree(file_path, ignore_errors=True)
             except Exception:
                 logger.warning(
-                    "Failed to clean up temporary file",
-                    file_path=file_path,
+                    "Failed to clean up temporary file: %s",
+                    file_path,
                     exc_info=True,
                 )
 
@@ -504,7 +504,6 @@ class Writer(ABC):
                 },
                 description="Number of errors while writing to files",
             )
-            logger.error("Error writing pandas dataframe to files", exc_info=True)
             raise
 
     async def _write_batched_daft_dataframe(
@@ -670,7 +669,6 @@ class Writer(ABC):
                 labels={"type": "output", "error": str(e)},
                 description="Number of errors while writing to files",
             )
-            logger.error("Error flushing buffer to files", exc_info=True)
             raise
 
     async def _write_statistics(
