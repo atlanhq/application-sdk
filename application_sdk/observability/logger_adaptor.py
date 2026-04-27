@@ -16,7 +16,6 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     ENABLE_OBSERVABILITY_STORE_SINK,
     ENABLE_OTLP_LOGS,
-    ENABLE_OTLP_WORKFLOW_LOGS,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
     LOG_FILE_NAME,
@@ -28,7 +27,6 @@ from application_sdk.constants import (
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_QUEUE_SIZE,
-    OTEL_WORKFLOW_LOGS_ENDPOINT,
     SERVICE_NAME,
 )
 from application_sdk.observability.context import correlation_context, request_context
@@ -445,9 +443,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 except Exception:
                     logging.error("Failed to start flush task", exc_info=True)
 
-        # OTLP export: build list of processors, wire up only if any are enabled.
-        #   ENABLE_OTLP_LOGS: primary exporter (host DaemonSet, central ClickHouse)
-        #   ENABLE_OTLP_WORKFLOW_LOGS: secondary exporter (tenant collector, S3/Kafka)
+        # OTLP log export — single exporter to OTEL_EXPORTER_OTLP_ENDPOINT.
         try:
             otlp_processors = []
 
@@ -463,26 +459,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                         max_queue_size=OTEL_QUEUE_SIZE,
                     )
                 )
-                logging.info(
-                    "OTLP primary exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT
-                )
-
-            if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
-                otlp_processors.append(
-                    BatchLogRecordProcessor(
-                        OTLPLogExporter(
-                            endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
-                            timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                        ),
-                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-                        max_export_batch_size=OTEL_BATCH_SIZE,
-                        max_queue_size=OTEL_QUEUE_SIZE,
-                    )
-                )
-                logging.info(
-                    "OTLP workflow logs exporter enabled: %s",
-                    OTEL_WORKFLOW_LOGS_ENDPOINT,
-                )
+                logging.info("OTLP exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT)
 
             if otlp_processors:
                 self.logger_provider = LoggerProvider(

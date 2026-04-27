@@ -133,9 +133,29 @@ STATE_STORE_PATH_TEMPLATE = (
 OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
 
 # Temporal Prometheus Metrics
-#: Bind address for the Temporal Prometheus metrics endpoint
+#: Bind address for the Temporal Runtime's Rust-core Prometheus endpoint.
+#: Defaults to loopback (127.0.0.1) so the endpoint is not externally
+#: reachable — the FastAPI ``/metrics`` endpoint proxies it on the server,
+#: and the worker's ``TemporalCoreCollector`` scrapes it locally to feed the
+#: Pushgateway push.
 TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
-    "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+    "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
+)
+
+# Prometheus Pushgateway (worker-only deployments)
+#: Pushgateway URL workers push to. Empty disables push (combined-mode
+#: server+worker deployments leave this unset; ``/metrics`` covers
+#: everything via in-process proxy).
+PROMETHEUS_PUSHGATEWAY_URL = os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_URL", "")
+#: Periodic push interval (seconds). A final push always happens on shutdown.
+PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS = float(
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS", "30")
+)
+#: When True, call ``delete_from_gateway`` on graceful worker shutdown so
+#: stopped pods don't leave sticky data in the Pushgateway.
+PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN = (
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN", "false").lower()
+    == "true"
 )
 
 # REMOVED: ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING, WORKFLOW_UI_HOST,
@@ -245,18 +265,8 @@ OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
-#: Secondary endpoint for workflow logs (optional, for dual export to tenant-level collector)
-OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
-#: Whether to enable workflow logs export to secondary endpoint (for S3 archival + live streaming)
-ENABLE_OTLP_WORKFLOW_LOGS: bool = (
-    os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
-)
-
-# App Vitals
-#: Enable App Vitals interceptor for automatic lifecycle metrics
-ENABLE_APP_VITALS: bool = os.getenv("ATLAN_ENABLE_APP_VITALS", "true").lower() == "true"
 
 # OTEL Constants
 #: Node name for workflow telemetry
@@ -286,21 +296,6 @@ LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
-# Metrics Configuration
-ENABLE_OTLP_METRICS = os.getenv("ATLAN_ENABLE_OTLP_METRICS", "false").lower() == "true"
-METRICS_FILE_NAME = "metrics.parquet"
-METRICS_BATCH_SIZE = int(os.getenv("ATLAN_METRICS_BATCH_SIZE", "100"))
-METRICS_FLUSH_INTERVAL_SECONDS = int(
-    os.getenv("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", "10")
-)
-METRICS_CLEANUP_ENABLED = (
-    os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
-)
-METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
-ENABLE_PROMETHEUS_METRICS = (
-    os.getenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "true").lower() == "true"
-)
-
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
 SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
@@ -316,16 +311,9 @@ SEGMENT_BATCH_TIMEOUT_SECONDS = float(
 )
 
 # Traces Configuration
+#: Whether to register Temporal's OTel TracingInterceptor and emit spans.
+#: Production does not yet support traces; default is False.
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
-TRACES_BATCH_SIZE = int(os.getenv("ATLAN_TRACES_BATCH_SIZE", "100"))
-TRACES_FLUSH_INTERVAL_SECONDS = int(
-    os.getenv("ATLAN_TRACES_FLUSH_INTERVAL_SECONDS", "5")
-)
-TRACES_RETENTION_DAYS = int(os.getenv("ATLAN_TRACES_RETENTION_DAYS", "30"))
-TRACES_CLEANUP_ENABLED = (
-    os.getenv("ATLAN_TRACES_CLEANUP_ENABLED", "true").lower() == "true"
-)
-TRACES_FILE_NAME = "traces.parquet"
 
 # Store Sink Configuration (defaults to enabled)
 ENABLE_OBSERVABILITY_STORE_SINK: bool = (

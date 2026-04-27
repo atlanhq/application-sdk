@@ -6,21 +6,9 @@ from time import time
 from typing import Any, ClassVar, Dict, Optional
 
 from opentelemetry import metrics
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 
 from application_sdk.constants import (
-    ENABLE_OTLP_METRICS,
-    ENABLE_PROMETHEUS_METRICS,
-    METRICS_BATCH_SIZE,
-    METRICS_CLEANUP_ENABLED,
-    METRICS_FILE_NAME,
-    METRICS_FLUSH_INTERVAL_SECONDS,
-    METRICS_RETENTION_DAYS,
-    OTEL_BATCH_DELAY_MS,
-    OTEL_EXPORTER_OTLP_ENDPOINT,
-    OTEL_EXPORTER_TIMEOUT_SECONDS,
     SEGMENT_API_URL,
     SEGMENT_BATCH_SIZE,
     SEGMENT_BATCH_TIMEOUT_SECONDS,
@@ -30,13 +18,25 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
-from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.observability import (
+    METRICS_FILE_NAME,
+    AtlanObservability,
+)
 from application_sdk.observability.segment_client import SegmentClient
 from application_sdk.observability.utils import (
     build_otel_resource,
     get_observability_dir,
     get_workflow_context,
 )
+
+# Local metrics-parquet sink tuning. Hardcoded defaults — the local sink is
+# only used in customer-environment archival (object-store upload of
+# metrics.parquet); production reads metrics via Prometheus / Pushgateway, so
+# these don't need to be operator-tunable.
+_METRICS_BATCH_SIZE = 100
+_METRICS_FLUSH_INTERVAL_SECONDS = 10
+_METRICS_RETENTION_DAYS = 30
+_METRICS_CLEANUP_ENABLED = False
 
 # MetricRecord and MetricType are imported from models.py to avoid circular dependencies
 logger = get_logger(__name__)
@@ -75,17 +75,16 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         - Starts periodic flush task for metric buffering
         """
         super().__init__(
-            batch_size=METRICS_BATCH_SIZE,
-            flush_interval=METRICS_FLUSH_INTERVAL_SECONDS,
-            retention_days=METRICS_RETENTION_DAYS,
-            cleanup_enabled=METRICS_CLEANUP_ENABLED,
+            batch_size=_METRICS_BATCH_SIZE,
+            flush_interval=_METRICS_FLUSH_INTERVAL_SECONDS,
+            retention_days=_METRICS_RETENTION_DAYS,
+            cleanup_enabled=_METRICS_CLEANUP_ENABLED,
             data_dir=get_observability_dir(),
             file_name=METRICS_FILE_NAME,
         )
 
-        # Initialize OpenTelemetry metrics if enabled (OTLP export or Prometheus scraping)
-        if ENABLE_OTLP_METRICS or ENABLE_PROMETHEUS_METRICS:
-            self._setup_otel_metrics()
+        # Prometheus is the canonical metrics surface and is always on.
+        self._setup_otel_metrics()
 
         # Initialize Segment client (enabled automatically if write key is present)
         self.segment_client = SegmentClient(
@@ -113,58 +112,26 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 logging.error("Failed to start metrics flush task", exc_info=True)
 
     def _setup_otel_metrics(self):
-        """Set up OpenTelemetry metrics exporter and configuration.
+        """Set up the OpenTelemetry MeterProvider with the Prometheus reader.
 
-        This method:
-        - Configures resource attributes
-        - Creates OTLP exporter
-        - Sets up metric reader
-        - Initializes meter provider
-        - Creates meter for the service
-
-        Raises:
-            Exception: If setup fails, logs error and continues without OTLP
+        Production exposes metrics via Prometheus only — both server scrape
+        (FastAPI ``/metrics``) and worker push (Pushgateway) read from
+        ``prometheus_client.REGISTRY``, which the ``PrometheusMetricReader``
+        writes to.
         """
         try:
-            # Create resource
-            resource = build_otel_resource()
+            from opentelemetry.exporter.prometheus import PrometheusMetricReader
 
-            metric_readers = []
-
-            # Add OTLP exporter if enabled
-            if ENABLE_OTLP_METRICS:
-                exporter = OTLPMetricExporter(
-                    endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                    timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                )
-                reader = PeriodicExportingMetricReader(
-                    exporter,
-                    export_interval_millis=OTEL_BATCH_DELAY_MS,
-                )
-                metric_readers.append(reader)
-
-            # Add Prometheus metric reader if enabled
-            if ENABLE_PROMETHEUS_METRICS:
-                from opentelemetry.exporter.prometheus import PrometheusMetricReader
-
-                self._prometheus_reader = PrometheusMetricReader()
-                metric_readers.append(self._prometheus_reader)
-                logging.info("Prometheus metrics reader enabled")
-
-            # Create meter provider
+            self._prometheus_reader = PrometheusMetricReader()
             self.meter_provider = MeterProvider(
-                resource=resource,
-                metric_readers=metric_readers,
+                resource=build_otel_resource(),
+                metric_readers=[self._prometheus_reader],
             )
-
-            # Set global meter provider
             metrics.set_meter_provider(self.meter_provider)
-
-            # Create meter
             self.meter = self.meter_provider.get_meter(SERVICE_NAME)
-
+            logging.info("Prometheus metrics reader enabled")
         except Exception:
-            logging.error("Failed to setup OTLP metrics", exc_info=True)
+            logging.error("Failed to setup OTel meter provider", exc_info=True)
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic metric flushing.
@@ -215,9 +182,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         if not isinstance(record, MetricRecord):
             return
 
-        # Send to OpenTelemetry if any OTel-based sink is enabled
-        if ENABLE_OTLP_METRICS or ENABLE_PROMETHEUS_METRICS:
-            self._send_to_otel(record)
+        # Always emit through the OTel meter — Prometheus reader picks it up.
+        self._send_to_otel(record)
 
         # Send to Segment (client handles enable/disable internally)
         self.segment_client.send_metric(record)

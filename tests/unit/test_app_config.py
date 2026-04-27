@@ -38,11 +38,9 @@ class TestAppConfigDefaults:
 
     def test_prometheus_bind_address_default(self):
         config = AppConfig(mode="worker", app_module="app:MyApp")
-        assert config.prometheus_bind_address == "0.0.0.0:9464"
-
-    def test_enable_app_vitals_default_true(self):
-        config = AppConfig(mode="worker", app_module="app:MyApp")
-        assert config.enable_app_vitals is True
+        # Loopback by default — only the in-process /metrics proxy and the
+        # worker's TemporalCoreCollector consume the Temporal Runtime endpoint.
+        assert config.prometheus_bind_address == "127.0.0.1:9464"
 
     def test_enable_mcp_default_false(self):
         config = AppConfig(mode="worker", app_module="app:MyApp")
@@ -67,12 +65,6 @@ class TestAppConfigFromEnv:
         monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
         config = AppConfig.from_args_and_env(_minimal_args())
         assert config.prometheus_bind_address == "0.0.0.0:9999"
-
-    def test_app_vitals_from_env(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ATLAN_ENABLE_APP_VITALS", "false")
-        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
-        config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_app_vitals is False
 
     def test_mcp_from_env(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ENABLE_MCP", "true")
@@ -324,12 +316,12 @@ class TestRealWorldDevScenarios:
 
     def test_prod_deployment_no_env_override(self, monkeypatch: pytest.MonkeyPatch):
         """Prod: ATLAN_ENABLE_PROMETHEUS_METRICS not set → defaults to True.
-        KEDA scrapes :9464 as expected."""
+        Temporal Runtime binds loopback; FastAPI ``/metrics`` proxies it."""
         monkeypatch.delenv("ATLAN_ENABLE_PROMETHEUS_METRICS", raising=False)
         monkeypatch.setenv("ATLAN_APP_MODULE", "app.my_app:MyApp")
         config = AppConfig.from_args_and_env(_minimal_args())
         assert config.enable_prometheus_metrics is True
-        assert config.prometheus_bind_address == "0.0.0.0:9464"
+        assert config.prometheus_bind_address == "127.0.0.1:9464"
 
     def test_prod_deployment_with_helm_env(self, monkeypatch: pytest.MonkeyPatch):
         """Prod: Helm chart sets ATLAN_ENABLE_PROMETHEUS_METRICS=true explicitly."""
@@ -346,15 +338,6 @@ class TestRealWorldDevScenarios:
         config = AppConfig.from_args_and_env(_minimal_args())
         assert config.enable_prometheus_metrics is True
         assert config.prometheus_bind_address == "127.0.0.1:9999"
-
-    def test_dev_disables_app_vitals_for_debugging(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Dev disables vitals interceptor to reduce log noise during debugging."""
-        monkeypatch.setenv("ATLAN_ENABLE_APP_VITALS", "false")
-        monkeypatch.setenv("ATLAN_APP_MODULE", "app.my_app:MyApp")
-        config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_app_vitals is False
 
     def test_dev_enables_mcp_server(self, monkeypatch: pytest.MonkeyPatch):
         """Dev enables MCP server for AI-assisted development."""
@@ -379,7 +362,6 @@ class TestRealWorldDevScenarios:
         monkeypatch.setenv("ATLAN_HANDLER_PORT", "8000")
         monkeypatch.setenv("ATLAN_LOG_LEVEL", "INFO")
         monkeypatch.setenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "true")
-        monkeypatch.setenv("ATLAN_ENABLE_APP_VITALS", "true")
         monkeypatch.setenv("ATLAN_AUTH_ENABLED", "true")
 
         config = AppConfig.from_args_and_env(
@@ -391,7 +373,6 @@ class TestRealWorldDevScenarios:
         assert config.handler_port == 8000
         assert config.log_level == "INFO"
         assert config.enable_prometheus_metrics is True
-        assert config.enable_app_vitals is True
         assert config.auth_enabled is True
 
     def test_full_local_dev_env(self, monkeypatch: pytest.MonkeyPatch):

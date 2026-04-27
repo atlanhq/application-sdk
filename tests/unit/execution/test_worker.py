@@ -86,11 +86,12 @@ class TestCreateWorker:
 
         assert isinstance(result, AppWorker)
 
-    def test_create_worker_with_all_interceptors_enabled(
+    def test_create_worker_includes_observability_trio(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """LogInterceptor, MetricsInterceptor, TraceInterceptor are
+        unconditional and the EventInterceptor stays gated by env var."""
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR", "true")
-        monkeypatch.setenv("APPLICATION_SDK_ENABLE_CORRELATION_INTERCEPTOR", "true")
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true")
 
         class _InterceptorApp(App):
@@ -115,17 +116,17 @@ class TestCreateWorker:
             create_worker(client)
 
         interceptor_types = [type(i).__name__ for i in interceptors_used]
-        assert "CorrelationContextInterceptor" in interceptor_types
+        assert "LogInterceptor" in interceptor_types
+        assert "MetricsInterceptor" in interceptor_types
+        assert "TraceInterceptor" in interceptor_types
         assert "EventInterceptor" in interceptor_types
         # CleanupInterceptor is no longer registered — cleanup is via App.on_complete()
         assert "CleanupInterceptor" not in interceptor_types
-        assert "TaskFailureLoggingInterceptor" in interceptor_types
 
     def test_event_interceptor_disabled_via_env(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR", "false")
-        monkeypatch.setenv("APPLICATION_SDK_ENABLE_CORRELATION_INTERCEPTOR", "true")
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true")
 
         class _NoEventApp(App):
@@ -151,8 +152,10 @@ class TestCreateWorker:
 
         interceptor_types = [type(i).__name__ for i in interceptors_used]
         assert "EventInterceptor" not in interceptor_types
-        # Others should still be present
-        assert "TaskFailureLoggingInterceptor" in interceptor_types
+        # The observability trio still runs.
+        assert "LogInterceptor" in interceptor_types
+        assert "MetricsInterceptor" in interceptor_types
+        assert "TraceInterceptor" in interceptor_types
 
     def test_all_registered_apps_activities_included(self) -> None:
         class _FilterAppA(App):

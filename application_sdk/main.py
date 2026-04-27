@@ -97,11 +97,11 @@ class AppConfig:
     (``run_dev_combined``).
 
     **Relationship with constants.py:**
-    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``,
-    ``ENABLE_PROMETHEUS_METRICS``). Those constants serve code that runs at
-    **import time** (observability init, logging.basicConfig) — before AppConfig
-    exists. Both AppConfig and constants.py read the **same env vars with the
-    same defaults** so they stay in sync.
+    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``).
+    Those constants serve code that runs at **import time** (observability
+    init, logging.basicConfig) — before AppConfig exists. Both AppConfig and
+    constants.py read the **same env vars with the same defaults** so they
+    stay in sync.
 
     **Construction paths:**
     - Production: ``main()`` → ``AppConfig.from_args_and_env(args)``
@@ -150,15 +150,15 @@ class AppConfig:
 
     # Runtime flags (env-var defaults, overridable per execution mode)
     enable_prometheus_metrics: bool = True
-    """Enable Temporal Prometheus metrics endpoint. Default True for prod,
-    set to False in run_dev_combined() to avoid port collisions on reload."""
+    """Enable Temporal Runtime's loopback Prometheus metrics endpoint. Default
+    True so the FastAPI ``/metrics`` proxy can pull Temporal core metrics, and
+    so worker-mode's ``TemporalCoreCollector`` can read them. Set False in
+    ``run_dev_combined()`` to avoid port collisions on reload."""
 
-    prometheus_bind_address: str = "0.0.0.0:9464"
-    """Bind address for Temporal Prometheus metrics."""
-
-    enable_app_vitals: bool = True
-    """Enable App Vitals interceptor for activity-level observability.
-    Reads same env var as constants.ENABLE_APP_VITALS (ATLAN_ENABLE_APP_VITALS)."""
+    prometheus_bind_address: str = "127.0.0.1:9464"
+    """Loopback bind address for the Temporal Runtime Prometheus endpoint.
+    Not externally reachable — only the FastAPI ``/metrics`` proxy and the
+    worker's ``TemporalCoreCollector`` consume it."""
 
     enable_mcp: bool = False
     """Enable Model Context Protocol (MCP) server.
@@ -290,9 +290,8 @@ class AppConfig:
                 "ATLAN_ENABLE_PROMETHEUS_METRICS", default=True
             ),
             prometheus_bind_address=_env(
-                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
             ),
-            enable_app_vitals=_env_bool("ATLAN_ENABLE_APP_VITALS", default=True),
             enable_mcp=_env_bool("ENABLE_MCP"),
             max_concurrent_storage_transfers=_env_int(
                 "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
@@ -679,7 +678,15 @@ async def run_worker_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue)
+    # Worker-only mode pushes metrics to a Pushgateway since the process has
+    # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
+    # leaves enable_pushgateway=False so the FastAPI /metrics endpoint
+    # exposes everything via in-process proxy.
+    worker = create_worker(
+        client,
+        task_queue=config.task_queue,
+        enable_pushgateway=True,
+    )
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():

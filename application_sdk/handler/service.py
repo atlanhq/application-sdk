@@ -49,11 +49,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import (
-    DEPLOYMENT_NAME,
-    ENABLE_PROMETHEUS_METRICS,
-    LOCAL_ENVIRONMENT,
-)
+from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
@@ -457,9 +453,19 @@ def create_app_handler_service(
     else:
         app = FastAPI(title=title, description=description, version=version)
 
-    from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-    app.add_middleware(MetricsMiddleware)
+    from application_sdk.server.middleware import EXCLUDED_LOG_PATHS, LogMiddleware
+
+    # Auto-instrument HTTP server with OTel: emits http.server.duration,
+    # http.server.active_requests, etc. with route-templated http.route labels
+    # (no raw-path cardinality blowup). Metrics flow through the global
+    # MeterProvider configured in observability/metrics_adaptor.py and land in
+    # prometheus_client.REGISTRY via the PrometheusMetricReader.
+    FastAPIInstrumentor.instrument_app(
+        app,
+        excluded_urls=",".join(sorted(EXCLUDED_LOG_PATHS)),
+    )
     app.add_middleware(LogMiddleware)
 
     def _create_context(credentials: list[HandlerCredential]) -> HandlerContext:
@@ -1582,17 +1588,42 @@ def create_app_handler_service(
     # Prometheus metrics
     # ------------------------------------------------------------------
 
-    if ENABLE_PROMETHEUS_METRICS:
+    @app.get("/metrics")
+    async def prometheus_metrics() -> Response:
+        """Expose application metrics in Prometheus exposition format.
 
-        @app.get("/metrics")
-        async def prometheus_metrics() -> Response:
-            """Expose application metrics in Prometheus exposition format."""
-            from prometheus_client import REGISTRY, generate_latest
+        Merges two sources into a single response:
+        1. The OTel ``PrometheusMetricReader`` registry — covers HTTP metrics
+           from FastAPIInstrumentor, the worker's ``MetricsInterceptor``, and
+           any custom user metrics via ``application_sdk.observability.metrics``.
+        2. The Temporal Runtime's loopback Prometheus endpoint — proxies the
+           Rust-core metrics (gRPC client-call latencies on the server,
+           workflow / activity task latencies, sticky cache, etc.) so
+           operators have a single scrape target per pod.
+        """
+        from prometheus_client import REGISTRY, generate_latest
 
-            return Response(
-                content=generate_latest(REGISTRY),
-                media_type="text/plain; version=0.0.4; charset=utf-8",
-            )
+        from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
+
+        body = generate_latest(REGISTRY)
+
+        if TEMPORAL_PROMETHEUS_BIND_ADDRESS:
+            try:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    resp = await client.get(
+                        f"http://{TEMPORAL_PROMETHEUS_BIND_ADDRESS}/metrics"
+                    )
+                    if resp.status_code == 200:
+                        body = body + b"\n" + resp.content
+            except Exception:
+                logger.warning("Temporal core metrics unavailable", exc_info=True)
+
+        return Response(
+            content=body,
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     # ------------------------------------------------------------------
     # UI routes

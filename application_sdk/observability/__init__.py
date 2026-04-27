@@ -1,3 +1,4 @@
+from application_sdk.observability import metrics
 from application_sdk.observability.context import (
     ExecutionContext,
     correlation_context,
@@ -20,4 +21,5 @@ __all__ = [
     "CorrelationContext",
     "get_correlation_context",
     "set_correlation_context",
+    "metrics",
 ]
