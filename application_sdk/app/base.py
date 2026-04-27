@@ -448,6 +448,13 @@ class App(ABC):
     description: ClassVar[str] = ""
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
+    input_contract: ClassVar[type[Input] | None] = None
+    """Optional /start validation contract for implicit run()-based apps.
+
+    Use this when the concrete app should validate incoming workflow payloads
+    with a generated subclass while keeping ``run()`` typed against a broader
+    template input for static type-checker compatibility.
+    """
 
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False
@@ -565,18 +572,18 @@ class App(ABC):
         except Exception:
             return  # Unresolvable annotations (e.g. forward refs) — skip silently
 
-        input_type = hints.get("input")
+        run_input_type = hints.get("input")
         output_type = hints.get("return")
 
-        if input_type is None or output_type is None:
+        if run_input_type is None or output_type is None:
             raise EntryPointContractError(
                 f"run() on {cls.__name__} must have type annotations: "
                 f"async def run(self, input: <Input subclass>) -> <Output subclass>"
             )
 
-        if not (isinstance(input_type, type) and issubclass(input_type, Input)):
+        if not (isinstance(run_input_type, type) and issubclass(run_input_type, Input)):
             raise EntryPointContractError(
-                f"run() on {cls.__name__}: input type {input_type!r} must be "
+                f"run() on {cls.__name__}: input type {run_input_type!r} must be "
                 f"a subclass of Input."
             )
         if not (isinstance(output_type, type) and issubclass(output_type, Output)):
@@ -585,8 +592,20 @@ class App(ABC):
                 f"a subclass of Output."
             )
 
+        input_type = cls.input_contract or run_input_type
+        if not (isinstance(input_type, type) and issubclass(input_type, Input)):
+            raise EntryPointContractError(
+                f"run() on {cls.__name__}: input_contract {input_type!r} must be "
+                f"a subclass of Input."
+            )
+        if not issubclass(input_type, run_input_type):
+            raise EntryPointContractError(
+                f"run() on {cls.__name__}: input_contract {input_type!r} must be "
+                f"a subclass of the run() input type {run_input_type!r}."
+            )
+
         # Using the base Input/Output directly is an error — concrete apps must
-        # define their own narrowed dataclass types.
+        # define their own narrowed dataclass types or an input_contract.
         if input_type is Input:
             raise EntryPointContractError(
                 f"run() on {cls.__name__}: input type must be a concrete subclass "

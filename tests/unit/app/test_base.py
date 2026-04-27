@@ -27,6 +27,21 @@ class SimpleOutput(Output):
     result: str = ""
 
 
+@dataclass
+class BroaderInput(Input):
+    value: str = ""
+
+
+@dataclass
+class GeneratedInput(BroaderInput):
+    extra: str = ""
+
+
+@dataclass
+class OtherInput(Input):
+    value: str = ""
+
+
 # =============================================================================
 # _pascal_to_kebab
 # =============================================================================
@@ -242,6 +257,34 @@ class TestAppRegistration:
                 return SimpleOutput()
 
         assert TypedApp2._output_type is SimpleOutput
+
+    def test_input_contract_overrides_implicit_run_validation_type(self) -> None:
+        """Implicit run() apps can validate /start with a generated subclass."""
+
+        class ContractOverrideApp(App):
+            input_contract = GeneratedInput
+
+            async def run(self, input: BroaderInput) -> SimpleOutput:
+                return SimpleOutput(result=input.value)
+
+        registry = AppRegistry.get_instance()
+        metadata = registry.get("contract-override-app")
+        ep = metadata.entry_points["run"]
+        assert ContractOverrideApp._input_type is GeneratedInput
+        assert metadata.input_type is GeneratedInput
+        assert ep.input_type is GeneratedInput
+        assert ep.output_type is SimpleOutput
+
+    def test_input_contract_must_extend_run_input_type(self) -> None:
+        """The validation contract must be safe to pass into run()."""
+
+        with pytest.raises(EntryPointContractError, match="subclass of the run"):
+
+            class BadContractOverrideApp(App):
+                input_contract = OtherInput
+
+                async def run(self, input: BroaderInput) -> SimpleOutput:
+                    return SimpleOutput(result=input.value)
 
     def test_registered_app_has_app_name_set(self) -> None:
         """After registration, _app_name is set."""
