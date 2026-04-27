@@ -113,9 +113,13 @@ class TestPushGatewayClientInit:
         with pytest.raises(ValueError, match="job"):
             PushGatewayClient(url="http://localhost:9091", job="")
 
-    def test_default_grouping_key_includes_task_queue_and_hostname(self):
+    def test_default_grouping_key_excludes_task_queue_to_avoid_label_conflict(self):
+        # task_queue is intentionally absent from the default grouping key:
+        # Temporal metrics already carry task_queue as a metric label, and
+        # the Pushgateway rejects pushes where a label appears in both the
+        # metric body and the grouping-key URL path (400 Bad Request).
         c = PushGatewayClient(url="http://localhost:9091", job="j", task_queue="my-q")
-        assert c._grouping_key["task_queue"] == "my-q"
+        assert "task_queue" not in c._grouping_key
         assert "instance" in c._grouping_key
         assert c._grouping_key["instance"]  # non-empty hostname
 
