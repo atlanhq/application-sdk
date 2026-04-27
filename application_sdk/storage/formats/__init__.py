@@ -132,7 +132,7 @@ class Reader(ABC):
 
         Override this method in subclasses for custom cleanup behavior.
         """
-        import shutil
+        import shutil  # noqa: PLC0415 — stdlib shutil; lazy use only
 
         for file_path in self._downloaded_files:
             try:
@@ -274,13 +274,13 @@ class Writer(ABC):
         Raises:
             TypeError: If data type is not supported or if dict/list input is used with daft when daft is not available.
         """
-        import pandas as pd
+        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
         # Already a pandas DataFrame - return as-is or convert to daft if needed
         if isinstance(data, pd.DataFrame):
             if self.dataframe_type == DataframeType.daft:
                 try:
-                    import daft
+                    import daft  # noqa: PLC0415 — optional dep: daft
 
                     return daft.from_pandas(data)
                 except ImportError:
@@ -292,7 +292,7 @@ class Writer(ABC):
 
         # Check for daft DataFrame
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             if isinstance(data, daft.DataFrame):
                 return data
@@ -306,7 +306,7 @@ class Writer(ABC):
             # For daft dataframe_type, convert to daft DataFrame directly
             if self.dataframe_type == DataframeType.daft:
                 try:
-                    import daft
+                    import daft  # noqa: PLC0415 — optional dep: daft
 
                     # Convert to columnar format for daft.from_pydict()
                     if isinstance(data, dict):

@@ -70,9 +70,9 @@ def create_store_from_binding(
         StorageConfigError: If no matching component is found, or the
             binding type is not supported.
     """
-    import yaml
+    import yaml  # noqa: PLC0415 — defensive: keep inline
 
-    from application_sdk.storage.errors import StorageConfigError
+    from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
 
     components_path = Path(components_dir)
     component: dict | None = None
@@ -106,12 +106,12 @@ def create_store_from_binding(
 
     if store_kind == "local":
         root_path = meta.get("rootPath", "./objectstore")
-        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.factory import create_local_store  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
 
         return create_local_store(root_path)
 
     if store_kind == "s3":
-        from obstore.store import S3Store
+        from obstore.store import S3Store  # noqa: PLC0415 — defensive: keep inline
 
         bucket = meta.get("bucket", "")
         config: dict[str, str] = {}
@@ -124,7 +124,7 @@ def create_store_from_binding(
         return S3Store(bucket=bucket, config=config)
 
     if store_kind == "azure":
-        from obstore.store import AzureStore
+        from obstore.store import AzureStore  # noqa: PLC0415 — defensive: keep inline
 
         account = meta.get("accountName", "")
         container = meta.get("containerName", "")
@@ -134,8 +134,8 @@ def create_store_from_binding(
         return AzureStore(container_name=container, config=az_config)
 
     if store_kind == "gcs":
-        import orjson
-        from obstore.store import GCSStore
+        import orjson  # noqa: PLC0415 — defensive: keep inline
+        from obstore.store import GCSStore  # noqa: PLC0415 — defensive: keep inline
 
         bucket = meta.get("bucket", "")
         gcs_config: dict[str, str] = {}

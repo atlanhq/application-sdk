@@ -185,7 +185,7 @@ class ParquetFileReader(Reader):
         - Only reads files in the specified directory
         """
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -245,7 +245,7 @@ class ParquetFileReader(Reader):
         - Only reads files in the specified directory
         """
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -297,7 +297,7 @@ class ParquetFileReader(Reader):
         - Column schemas must be compatible across files
         """
         try:
-            import daft  # type: ignore
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -356,7 +356,7 @@ class ParquetFileReader(Reader):
         - Files processed individually for memory efficiency
         """
         try:
-            import daft  # type: ignore
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -375,8 +375,8 @@ class ParquetFileReader(Reader):
             # daft so it reads all files with consistent types. See BLDX-837.
             daft_schema = None
             try:
-                import pyarrow as pa
-                import pyarrow.parquet as pq_meta
+                import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+                import pyarrow.parquet as pq_meta  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
                 pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
                 unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
@@ -596,7 +596,7 @@ class ParquetFileWriter(Writer):
             - If partition_cols is set, creates Hive-style directory structure
         """
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Convert string to enum if needed for backward compatibility
             if isinstance(write_mode, str):
@@ -758,7 +758,7 @@ class ParquetFileWriter(Writer):
             return
 
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Read all parquet files in temp folder
             pattern = os.path.join(self.current_temp_folder_path, f"*{self.extension}")
@@ -884,8 +884,8 @@ class ParquetFileWriter(Writer):
         conflict by using ``null`` for ALL rows, dropping actual data from files
         that had the column typed as ``string``. See BLDX-837.
         """
-        import pyarrow as pa
-        import pyarrow.parquet as pq
+        import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+        import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
         table = pa.Table.from_pandas(chunk, preserve_index=False)
 

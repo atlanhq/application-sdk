@@ -148,7 +148,7 @@ class JsonFileReader(Reader):
     ) -> AsyncIterator["pd.DataFrame"]:
         """Read the data from the JSON files and return as a batched pandas dataframe."""
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -172,7 +172,7 @@ class JsonFileReader(Reader):
     async def _get_dataframe(self) -> "pd.DataFrame":
         """Read the data from the JSON files and return as a single pandas dataframe."""
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -197,7 +197,7 @@ class JsonFileReader(Reader):
     ) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
         """Read the data from the JSON files and return as a batched daft dataframe."""
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -218,7 +218,7 @@ class JsonFileReader(Reader):
     async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Read the data from the JSON files and return as a single daft dataframe."""
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
