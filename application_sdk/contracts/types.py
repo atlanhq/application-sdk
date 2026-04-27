@@ -108,8 +108,6 @@ class StorageTier(StrEnum):
             run_prefix: Run-scoped base prefix.  Required for ``RETAINED``.
             app_name: Application name.  Used by ``PERSISTENT``.
         """
-        import uuid
-
         base = self._file_ref_base(run_prefix=run_prefix, app_name=app_name)
         return f"{base}/{uuid.uuid4().hex}{suffix}"
 
