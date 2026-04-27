@@ -414,6 +414,63 @@ def test_segment_client_disabled_without_write_key():
                         assert adapter.segment_client.enabled is False
 
 
+class TestMetricLabels:
+    """record_metric() merges only low-cardinality labels — no high-cardinality IDs."""
+
+    def test_only_low_cardinality_labels_merged(self):
+        with create_metrics_adapter() as adapter:
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.get_metric_labels",
+                return_value={
+                    "app_name": "test-app",
+                    "workflow_type": "MyWorkflow",
+                    "activity_type": "MyActivity",
+                },
+            ):
+                adapter.record_metric(
+                    name="test_metric",
+                    value=1.0,
+                    metric_type=MetricType.COUNTER,
+                    labels={},
+                )
+
+            assert len(adapter._buffer) == 1
+            labels = adapter._buffer[0]["labels"]
+            assert labels == {
+                "app_name": "test-app",
+                "workflow_type": "MyWorkflow",
+                "activity_type": "MyActivity",
+            }
+            for forbidden in (
+                "workflow_id",
+                "workflow_run_id",
+                "activity_id",
+                "task_queue",
+                "namespace",
+                "attempt",
+            ):
+                assert forbidden not in labels
+
+    def test_caller_labels_preserved(self):
+        with create_metrics_adapter() as adapter:
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.get_metric_labels",
+                return_value={
+                    "app_name": "app",
+                    "workflow_type": "",
+                    "activity_type": "",
+                },
+            ):
+                adapter.record_metric(
+                    name="m",
+                    value=5.0,
+                    metric_type=MetricType.GAUGE,
+                    labels={"custom": "value"},
+                )
+
+            assert adapter._buffer[0]["labels"]["custom"] == "value"
+
+
 class TestPrometheusMetrics:
     """Tests for the consolidated Prometheus metrics path.
 

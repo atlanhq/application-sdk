@@ -37,6 +37,23 @@ def get_observability_dir() -> str:
     )
 
 
+def get_metric_labels() -> dict[str, str]:
+    """Return low-cardinality labels for Prometheus metrics.
+
+    Only workflow_type, activity_type, and app_name are included.
+    High-cardinality identifiers (workflow_id, run_id, activity_id, task_queue,
+    namespace, attempt) are intentionally excluded to prevent time-series explosion.
+    """
+    from application_sdk.observability.context import get_execution_context
+
+    ctx = get_execution_context()
+    return {
+        "app_name": APPLICATION_NAME,
+        "workflow_type": ctx.workflow_type,
+        "activity_type": ctx.activity_type,
+    }
+
+
 def get_workflow_context() -> dict[str, str]:
     """Get the workflow context as a plain dict.
 

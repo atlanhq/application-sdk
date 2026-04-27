@@ -27,8 +27,8 @@ from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.segment_client import SegmentClient
 from application_sdk.observability.utils import (
     build_otel_resource,
+    get_metric_labels,
     get_observability_dir,
-    get_workflow_context,
 )
 
 # MetricRecord and MetricType are imported from models.py to avoid circular dependencies
@@ -286,7 +286,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If recording fails, logs error and continues
         """
-        labels.update(get_workflow_context())
+        labels.update(get_metric_labels())
 
         try:
             # Create metric record
