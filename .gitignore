@@ -176,3 +176,10 @@ temporal.db
 
 # Claude Code plans (local working files, not for version control)
 .claude/plans/
+# >>> atlan-builders >>>
+# Managed by atlan-core — edit inside this block and it will be preserved
+# only until the next bootstrap tick. Add your own rules outside the block.
+.atlan/journal/pending.jsonl
+.atlan/journal/.drafts/
+.atlan/cache/
+# <<< atlan-builders <<<
