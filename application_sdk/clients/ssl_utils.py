@@ -128,7 +128,7 @@ def _get_default_ca_bundle_path() -> str | None:
         Path to the default CA bundle file, or None if not found.
     """
     try:
-        import certifi
+        import certifi  # noqa: PLC0415 — optional dep: certifi
 
         certifi_path = certifi.where()
         if certifi_path and os.path.isfile(certifi_path):

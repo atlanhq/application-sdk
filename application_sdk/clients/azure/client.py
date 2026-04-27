@@ -137,7 +137,7 @@ class AzureClient(ClientInterface):
 
             # Handle credential resolution
             if "credential_guid" in self.credentials:
-                from application_sdk.infrastructure import (
+                from application_sdk.infrastructure import (  # noqa: PLC0415 — optional dep: dapr (azure-dapr credential pattern)
                     AsyncDaprClient,
                     DaprCredentialVault,
                 )
