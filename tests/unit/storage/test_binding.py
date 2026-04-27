@@ -317,8 +317,13 @@ class TestS3EndpointAndPathStyle:
         config = mock_s3_cls.call_args.kwargs["config"]
         assert config["aws_endpoint"] == "https://tenant.atlan.com/api/blobstorage"
         assert config["aws_virtual_hosted_style_request"] == "false"
+        # BLDX-1155: client_options now ALWAYS contains the SDK-default
+        # ClientConfig (timeout, connect_timeout, etc.); custom-endpoint
+        # callers additionally override the user_agent string.
         client_options = mock_s3_cls.call_args.kwargs["client_options"]
-        assert client_options == {"user_agent": "aws-sdk-go-v2 atlan-application-sdk"}
+        assert client_options is not None
+        assert client_options.get("timeout") == "30m"
+        assert client_options.get("user_agent") == "aws-sdk-go-v2 atlan-application-sdk"
 
     @patch("obstore.store.S3Store")
     def test_no_endpoint_no_path_style_no_user_agent(
@@ -337,4 +342,11 @@ class TestS3EndpointAndPathStyle:
         config = mock_s3_cls.call_args.kwargs["config"]
         assert "aws_endpoint" not in config
         assert "aws_virtual_hosted_style_request" not in config
-        assert mock_s3_cls.call_args.kwargs["client_options"] is None
+        # BLDX-1155: client_options now contains SDK defaults; default UA
+        # is the SDK-versioned identifier (no custom endpoint override).
+        client_options = mock_s3_cls.call_args.kwargs["client_options"]
+        assert client_options is not None
+        assert client_options.get("timeout") == "30m"
+        assert client_options.get("user_agent", "").startswith("atlan-application-sdk")
+        # No retry override by default — obstore's defaults are kept.
+        assert mock_s3_cls.call_args.kwargs.get("retry_config") is None
