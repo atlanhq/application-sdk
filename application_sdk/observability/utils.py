@@ -98,15 +98,15 @@ def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
         resource_attributes["service.name"] = SERVICE_NAME
     if "service.version" not in resource_attributes:
         resource_attributes["service.version"] = SERVICE_VERSION
+    if APPLICATION_NAME:
+        resource_attributes["app.name"] = APPLICATION_NAME
     if OTEL_WF_NODE_NAME:
         resource_attributes["k8s.workflow.node.name"] = OTEL_WF_NODE_NAME
     # Deployment-level attributes — constant per pod, don't duplicate in log attrs.
     # tenant.id is intentionally omitted: k8s.cluster.name (injected by the
     # central OTel collector's resource processor) identifies the tenant at
     # the deployment level.
-    # NOTE: app.name is intentionally NOT a resource attribute — a deployment
-    # can host multiple apps; app_name stays in log attrs per-event.
-    # app.build_id is also omitted — app.version carries the same signal.
+    # app.build_id is omitted — app.version carries the same signal.
     if APPLICATION_VERSION:
         resource_attributes["app.version"] = APPLICATION_VERSION
     if RELEASE_ID:

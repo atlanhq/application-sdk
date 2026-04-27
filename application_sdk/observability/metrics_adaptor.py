@@ -9,6 +9,11 @@ from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
 
 from application_sdk.constants import (
+    METRICS_BATCH_SIZE,
+    METRICS_CLEANUP_ENABLED,
+    METRICS_FILE_NAME,
+    METRICS_FLUSH_INTERVAL_SECONDS,
+    METRICS_RETENTION_DAYS,
     SEGMENT_API_URL,
     SEGMENT_BATCH_SIZE,
     SEGMENT_BATCH_TIMEOUT_SECONDS,
@@ -18,25 +23,13 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
-from application_sdk.observability.observability import (
-    METRICS_FILE_NAME,
-    AtlanObservability,
-)
+from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.segment_client import SegmentClient
 from application_sdk.observability.utils import (
     build_otel_resource,
     get_observability_dir,
     get_workflow_context,
 )
-
-# Local metrics-parquet sink tuning. Hardcoded defaults — the local sink is
-# only used in customer-environment archival (object-store upload of
-# metrics.parquet); production reads metrics via Prometheus / Pushgateway, so
-# these don't need to be operator-tunable.
-_METRICS_BATCH_SIZE = 100
-_METRICS_FLUSH_INTERVAL_SECONDS = 10
-_METRICS_RETENTION_DAYS = 30
-_METRICS_CLEANUP_ENABLED = False
 
 # MetricRecord and MetricType are imported from models.py to avoid circular dependencies
 logger = get_logger(__name__)
@@ -75,10 +68,10 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         - Starts periodic flush task for metric buffering
         """
         super().__init__(
-            batch_size=_METRICS_BATCH_SIZE,
-            flush_interval=_METRICS_FLUSH_INTERVAL_SECONDS,
-            retention_days=_METRICS_RETENTION_DAYS,
-            cleanup_enabled=_METRICS_CLEANUP_ENABLED,
+            batch_size=METRICS_BATCH_SIZE,
+            flush_interval=METRICS_FLUSH_INTERVAL_SECONDS,
+            retention_days=METRICS_RETENTION_DAYS,
+            cleanup_enabled=METRICS_CLEANUP_ENABLED,
             data_dir=get_observability_dir(),
             file_name=METRICS_FILE_NAME,
         )

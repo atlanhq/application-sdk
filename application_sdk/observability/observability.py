@@ -20,16 +20,12 @@ from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_STORE_SINK,
     LOG_FILE_NAME,
+    METRICS_FILE_NAME,
+    TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.storage import delete, upload_file
 from application_sdk.storage.binding import create_store_from_binding
-
-# Internal signal-type identifiers used by AtlanObservability subclasses to
-# pick the right partition layout. Not env vars; defining them here keeps the
-# parquet sink working without polluting constants.py.
-METRICS_FILE_NAME = "metrics.parquet"
-TRACES_FILE_NAME = "traces.parquet"
 
 # --- Path configuration ---
 # Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz

@@ -296,6 +296,19 @@ LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
+# Metrics batching / sink configuration
+ENABLE_OTLP_METRICS: bool = (
+    os.getenv("ATLAN_ENABLE_OTLP_METRICS", "false").lower() == "true"
+)
+METRICS_BATCH_SIZE = int(os.environ.get("ATLAN_METRICS_BATCH_SIZE", 100))
+METRICS_FLUSH_INTERVAL_SECONDS = int(
+    os.environ.get("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", 10)
+)
+METRICS_RETENTION_DAYS = int(os.environ.get("ATLAN_METRICS_RETENTION_DAYS", 30))
+METRICS_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_METRICS_CLEANUP_ENABLED", False))
+METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
+TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
+
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
 SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")

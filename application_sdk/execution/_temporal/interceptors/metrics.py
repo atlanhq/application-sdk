@@ -88,6 +88,14 @@ def _activity_errors():
     return _INSTRUMENTS["act_err"]
 
 
+def _outcome_from_error_type(error_type: str) -> str:
+    if error_type == "cancelled":
+        return "CANCELED"
+    if error_type == "timeout":
+        return "TIMED_OUT"
+    return "ERROR"
+
+
 class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         if workflow.unsafe.is_replaying():
@@ -101,8 +109,8 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         status = "OK"
         try:
             return await self.next.execute_workflow(input)
-        except Exception:
-            status = "ERROR"
+        except BaseException as exc:
+            status = _outcome_from_error_type(classify_error(exc))
             raise
         finally:
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
@@ -127,8 +135,8 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
         try:
             return await self.next.execute_activity(input)
         except BaseException as exc:
-            status = "ERROR"
             error_type = classify_error(exc)
+            status = _outcome_from_error_type(error_type)
             raise
         finally:
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
@@ -136,7 +144,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
             try:
                 _activity_executions().add(1, tagged)
                 _activity_duration().record(duration_s, tagged)
-                if status == "ERROR":
+                if status != "OK":
                     _activity_errors().add(
                         1,
                         {

@@ -30,13 +30,13 @@ def create_metrics_adapter() -> Generator[AtlanMetricsAdapter, None, None]:
     with mock.patch.dict(
         "os.environ",
         {
-            "ENABLE_OTLP_METRICS": "true",  # Enable OTLP for testing
+            "ATLAN_ENABLE_OTLP_METRICS": "true",  # Enable OTLP for testing
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
-            "METRICS_BATCH_SIZE": "100",
-            "METRICS_FLUSH_INTERVAL_SECONDS": "1",
-            "METRICS_RETENTION_DAYS": "7",
-            "METRICS_CLEANUP_ENABLED": "true",
-            "METRICS_FILE_NAME": "metrics.parquet",
+            "ATLAN_METRICS_BATCH_SIZE": "100",
+            "ATLAN_METRICS_FLUSH_INTERVAL_SECONDS": "1",
+            "ATLAN_METRICS_RETENTION_DAYS": "7",
+            "ATLAN_METRICS_CLEANUP_ENABLED": "true",
+            "ATLAN_METRICS_FILE_NAME": "metrics.parquet",
         },
     ):
         # Create mock meter first
@@ -322,11 +322,11 @@ def test_export_record_with_segment_write_key():
         {
             "ATLAN_SEGMENT_WRITE_KEY": "test_key",
             "ATLAN_SEGMENT_API_URL": "https://api.segment.io/v1/batch",
-            "METRICS_BATCH_SIZE": "100",
-            "METRICS_FLUSH_INTERVAL_SECONDS": "1",
-            "METRICS_RETENTION_DAYS": "7",
-            "METRICS_CLEANUP_ENABLED": "true",
-            "METRICS_FILE_NAME": "metrics.parquet",
+            "ATLAN_METRICS_BATCH_SIZE": "100",
+            "ATLAN_METRICS_FLUSH_INTERVAL_SECONDS": "1",
+            "ATLAN_METRICS_RETENTION_DAYS": "7",
+            "ATLAN_METRICS_CLEANUP_ENABLED": "true",
+            "ATLAN_METRICS_FILE_NAME": "metrics.parquet",
         },
     ):
         with mock.patch("opentelemetry.metrics.set_meter_provider"):
@@ -392,11 +392,11 @@ def test_segment_client_disabled_without_write_key():
         "os.environ",
         {
             "ATLAN_SEGMENT_WRITE_KEY": "",
-            "METRICS_BATCH_SIZE": "100",
-            "METRICS_FLUSH_INTERVAL_SECONDS": "1",
-            "METRICS_RETENTION_DAYS": "7",
-            "METRICS_CLEANUP_ENABLED": "true",
-            "METRICS_FILE_NAME": "metrics.parquet",
+            "ATLAN_METRICS_BATCH_SIZE": "100",
+            "ATLAN_METRICS_FLUSH_INTERVAL_SECONDS": "1",
+            "ATLAN_METRICS_RETENTION_DAYS": "7",
+            "ATLAN_METRICS_CLEANUP_ENABLED": "true",
+            "ATLAN_METRICS_FILE_NAME": "metrics.parquet",
         },
     ):
         with mock.patch("opentelemetry.metrics.set_meter_provider"):
