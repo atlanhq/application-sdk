@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
 from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
@@ -264,3 +265,159 @@ class TestDirectoryPersistMaterialize:
         )
         # Directory always needs materialize (no fast path).
         assert _needs_materialize(ref) is True
+
+
+# ---------------------------------------------------------------------------
+# auto_materialize=False escape hatch (BLDX-1155)
+# ---------------------------------------------------------------------------
+
+
+class TestAutoMaterializeOptOut:
+    """When ``auto_materialize=False`` the interceptor must skip the ref."""
+
+    def test_has_refs_to_persist_skips_opted_out_refs(self) -> None:
+        path = _make_local_file()
+        try:
+            output = _TaskOutput(
+                ref=FileReference(
+                    local_path=path, is_durable=False, auto_materialize=False
+                )
+            )
+            assert has_refs_to_persist(output) is False
+        finally:
+            os.unlink(path)
+
+    def test_has_refs_to_materialize_skips_opted_out_refs(self) -> None:
+        inp = _TaskInput(
+            ref=FileReference(
+                is_durable=True,
+                storage_path="file_refs/abc",
+                local_path=None,
+                auto_materialize=False,
+            )
+        )
+        assert has_refs_to_materialize(inp) is False
+
+    async def test_persist_does_not_upload_opted_out_refs(self) -> None:
+        store = create_memory_store()
+        path = _make_local_file(b"opt-out payload")
+        try:
+            output = _TaskOutput(
+                ref=FileReference(
+                    local_path=path, is_durable=False, auto_materialize=False
+                )
+            )
+            persisted = await persist_file_refs(store, output)
+            # Ref must come back unchanged — still ephemeral, no storage_path.
+            assert persisted.ref.is_durable is False
+            assert persisted.ref.storage_path is None
+            assert persisted.ref.auto_materialize is False
+        finally:
+            os.unlink(path)
+
+    async def test_materialize_does_not_download_opted_out_refs(self) -> None:
+        store = create_memory_store()
+        # Storage path doesn't even need to exist — interceptor must not call.
+        inp = _TaskInput(
+            ref=FileReference(
+                is_durable=True,
+                storage_path="file_refs/never-uploaded",
+                local_path=None,
+                auto_materialize=False,
+            )
+        )
+        result = await materialize_file_refs(store, inp)
+        # Ref must be untouched: no local_path was filled in.
+        assert result.ref.local_path is None
+        assert result.ref.auto_materialize is False
+
+    async def test_mixed_refs_only_opted_in_are_processed(self) -> None:
+        """When two refs share an Output and one is opted out, only the other is uploaded."""
+        store = create_memory_store()
+        opt_in_path = _make_local_file(b"opt-in")
+        opt_out_path = _make_local_file(b"opt-out")
+        try:
+
+            class _DualOutput(Output, allow_unbounded_fields=True):
+                opt_in: FileReference
+                opt_out: FileReference
+
+            output = _DualOutput(
+                opt_in=FileReference(local_path=opt_in_path, is_durable=False),
+                opt_out=FileReference(
+                    local_path=opt_out_path,
+                    is_durable=False,
+                    auto_materialize=False,
+                ),
+            )
+            persisted = await persist_file_refs(store, output)
+            assert persisted.opt_in.is_durable is True
+            assert persisted.opt_in.storage_path is not None
+            assert persisted.opt_out.is_durable is False
+            assert persisted.opt_out.storage_path is None
+        finally:
+            os.unlink(opt_in_path)
+            os.unlink(opt_out_path)
+
+
+# ---------------------------------------------------------------------------
+# mkstemp cleanup on failure (BLDX-1155 #5: don't orphan temp files)
+# ---------------------------------------------------------------------------
+
+
+class TestMaterializeTempCleanup:
+    """When a materialize fails after mkstemp, the temp file must be unlinked.
+
+    Today a network failure mid-download orphans an empty temp file in the
+    system temp directory.  Across thousands of retries that fills disk and
+    eventually evicts the worker pod for reasons unrelated to the original
+    failure.
+    """
+
+    async def test_temp_file_unlinked_when_download_fails(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        from pathlib import Path
+
+        from application_sdk.storage import reference as reference_module
+        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.factory import create_memory_store
+
+        store = create_memory_store()
+
+        # Simulate "ref already in store, but download_file raises" — i.e. we
+        # made it past the listing stage and into mkstemp + download.
+        ref = FileReference(
+            is_durable=True,
+            storage_path="file_refs/never-finishes.bin",
+            local_path=None,
+        )
+
+        # Stub list_keys() so the function takes the single-file branch.
+        async def _fake_list_keys(*_args, **_kwargs):
+            return []  # empty data_keys → single-file path
+
+        # Stub download_file() to raise mid-way (simulates network blip).
+        async def _failing_download(*_args, **_kwargs):
+            raise StorageError("simulated network failure", key="file_refs/x")
+
+        # The function imports both lazily inside its body, so patch the
+        # source modules they're resolved from.
+        from application_sdk.storage import batch as batch_module
+        from application_sdk.storage import ops as ops_module
+
+        monkeypatch.setattr(batch_module, "list_keys", _fake_list_keys)
+        monkeypatch.setattr(ops_module, "download_file", _failing_download)
+
+        # Snapshot the temp dir before so we can compare.
+        local_dir = str(tmp_path)
+        before = set(Path(local_dir).iterdir())
+
+        with pytest.raises(StorageError):
+            await reference_module.materialize_file_reference(
+                store, ref, local_dir=local_dir
+            )
+
+        after = set(Path(local_dir).iterdir())
+        leaked = after - before
+        assert not leaked, f"temp files were orphaned after failed download: {leaked}"
