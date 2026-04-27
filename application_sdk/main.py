@@ -28,6 +28,14 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from application_sdk.discovery import (
+    DiscoveryError,
+    load_app_class,
+    load_handler_class,
+    validate_app_class,
+)
+from application_sdk.observability.logger_adaptor import get_logger
+
 # Enable faulthandler so C-level crashes dump a traceback to stderr.
 faulthandler.enable()
 
@@ -36,9 +44,9 @@ faulthandler.enable()
 _worker_event_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _debug_dump_handler(signum: int, frame: object) -> None:  # noqa: ARG001
+def _debug_dump_handler(signum: int, frame: object) -> None:
     """Dump thread stacks and asyncio tasks to /tmp/debug-dump-<pid>.txt on SIGUSR1."""
-    dump_path = os.path.join("/tmp", f"debug-dump-{os.getpid()}.txt")  # noqa: PTH118
+    dump_path = os.path.join("/tmp", f"debug-dump-{os.getpid()}.txt")
     fd = os.open(dump_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     try:
         os.write(fd, b"\n===== DEBUG DUMP (SIGUSR1) =====\n")
@@ -75,16 +83,8 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure.context import InfrastructureContext
     from application_sdk.infrastructure.secrets import SecretStore
 
-from application_sdk.observability.logger_adaptor import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
-
-from application_sdk.discovery import DiscoveryError  # noqa: E402
-from application_sdk.discovery import (  # noqa: E402
-    load_app_class,
-    load_handler_class,
-    validate_app_class,
-)
 
 
 @dataclass
@@ -324,7 +324,7 @@ _SAFE_METADATA_KEYS: frozenset[str] = frozenset(
 )
 
 
-def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, str]]:
+def _parse_all_component_yamls(components_dir: Path) -> dict[str, dict[str, str]]:
     """Parse all Dapr component YAML files and return safe metadata per component.
 
     Returns a mapping of component name → dict of allowlisted metadata values.
@@ -357,8 +357,8 @@ def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, st
 
 
 async def _log_dapr_components(
-    dapr_client: "AsyncDaprClient",
-    components_dir: "Path",
+    dapr_client: AsyncDaprClient,
+    components_dir: Path,
 ) -> set[str]:
     """Log registered Dapr components and their safe configuration at startup.
 
@@ -436,8 +436,8 @@ async def _log_dapr_components(
 
 
 async def _create_infrastructure(
-    credential_stores: "Mapping[str, SecretStore] | None" = None,
-) -> "InfrastructureContext":
+    credential_stores: Mapping[str, SecretStore] | None = None,
+) -> InfrastructureContext:
     """Create infrastructure services based on environment.
 
     If ``DAPR_HTTP_PORT`` is set (Dapr sidecar present), creates Dapr-backed
@@ -733,9 +733,8 @@ async def run_worker_mode(config: AppConfig) -> None:
     health_server.set_temporal_client(client)
 
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
-    async with health_server:
-        async with worker:
-            await shutdown_event.wait()
+    async with health_server, worker:
+        await shutdown_event.wait()
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -756,8 +755,6 @@ def run_handler_mode(config: AppConfig) -> None:
     Loads the handler class (or DefaultHandler) and runs the FastAPI
     server via uvicorn. This is synchronous — uvicorn manages its own loop.
     """
-    import asyncio  # noqa: PLC0415 — cold path: lazy load for entry-point function
-
     from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
@@ -1012,12 +1009,11 @@ async def run_combined_mode(config: AppConfig) -> None:
         config.task_queue,
         config.handler_port,
     )
-    async with health_server:
-        async with worker:
-            await asyncio.gather(
-                uvicorn_server.serve(),
-                shutdown_event.wait(),
-            )
+    async with health_server, worker:
+        await asyncio.gather(
+            uvicorn_server.serve(),
+            shutdown_event.wait(),
+        )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
