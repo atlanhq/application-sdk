@@ -3,7 +3,7 @@ import logging
 import sys
 import threading
 import traceback as tb_module
-from typing import Any, ClassVar, Dict, Tuple
+from typing import Any, ClassVar
 
 from loguru import logger
 from opentelemetry._logs import LogRecord, SeverityNumber
@@ -127,10 +127,10 @@ _KNOWN_EXTRA_KEYS = frozenset(
 
 
 def _build_extra_dict(
-    record_extra: Dict[str, Any], exception: Any = None
-) -> Dict[str, Any]:
+    record_extra: dict[str, Any], exception: Any = None
+) -> dict[str, Any]:
     """Build a dict of structured log extra fields from a loguru record's extra dict."""
-    extra: Dict[str, Any] = {}
+    extra: dict[str, Any] = {}
     for k, v in record_extra.items():
         if k != "logger_name" and k in _KNOWN_EXTRA_KEYS:
             extra[k] = _normalize_log_extra_value(k, v)
@@ -146,7 +146,7 @@ def _build_extra_dict(
     return extra
 
 
-def _make_log_record_dict(message: Any) -> Dict[str, Any]:
+def _make_log_record_dict(message: Any) -> dict[str, Any]:
     """Build a log record dict from a loguru message."""
     return {
         "timestamp": message.record["time"].timestamp(),
@@ -176,7 +176,7 @@ def _format_exception_stacktrace(exception: Any) -> str:
     ).rstrip()
 
 
-def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
+def _extract_exception_attributes(exception: Any) -> dict[str, str]:
     """Extract OTEL semantic exception attributes from a Loguru exception record."""
     if exception is None:
         return {}
@@ -190,7 +190,7 @@ def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
     qualname = getattr(exc_type, "__qualname__", getattr(exc_type, "__name__", None))
     type_name = f"{module}.{qualname}" if module and qualname else str(exc_type)
 
-    attrs: Dict[str, str] = {"exception.type": type_name}
+    attrs: dict[str, str] = {"exception.type": type_name}
     if exc_value is not None:
         attrs["exception.message"] = str(exc_value)
 
@@ -208,7 +208,7 @@ def _normalize_log_extra_value(key: str, value: Any) -> Any:
     return value
 
 
-def _format_printf_args(msg: str, args: Tuple[Any, ...]) -> Tuple[str, Tuple[Any, ...]]:
+def _format_printf_args(msg: str, args: tuple[Any, ...]) -> tuple[str, tuple[Any, ...]]:
     """Pre-format printf-style args into the message string.
 
     Loguru uses {} formatting, not %s. This bridges the gap so both styles work
@@ -440,9 +440,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                             self._periodic_flush()
                         )
                     except RuntimeError:
-                        threading.Thread(
-                            target=self._start_asyncio_flush, daemon=True
-                        ).start()
+                        self._spawn_flush_thread()
                     AtlanLoggerAdapter._flush_task_started = True
                 except Exception:
                     logging.error("Failed to start flush task", exc_info=True)
@@ -503,7 +501,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # Mark initialization complete only after all sinks are successfully added
         AtlanLoggerAdapter._initialized = True
 
-    def process_record(self, record: Any) -> Dict[str, Any]:
+    def process_record(self, record: Any) -> dict[str, Any]:
         """Process a log record into a standardized dictionary format.
 
         Args:
@@ -530,7 +528,6 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         OTLP export is handled exclusively by the otlp_sink; this path is a no-op.
         """
-        pass
 
     def _create_log_record(self, record: dict) -> LogRecord:
         """Create an OpenTelemetry LogRecord from a dictionary.
@@ -546,7 +543,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         )
 
         # Start with base attributes
-        attributes: Dict[str, Any] = {
+        attributes: dict[str, Any] = {
             "code.filepath": record["file"],
             "code.function": record["function"],
             "code.lineno": record["line"],
@@ -580,6 +577,14 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             attributes=attributes,
         )
 
+    def _spawn_flush_thread(self) -> None:
+        """Spawn a daemon thread to run the asyncio flush loop.
+
+        Extracted for testability — lets tests assert this specific call without
+        patching threading.Thread globally (which would also capture OTel internals).
+        """
+        threading.Thread(target=self._start_asyncio_flush, daemon=True).start()
+
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic log flushing.
 
@@ -594,7 +599,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         finally:
             loop.close()
 
-    def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+    def process(self, msg: Any, kwargs: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         """Process log message with temporal and request context.
 
         Args:
@@ -630,10 +635,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         corr_ctx = correlation_context.get()
         if corr_ctx:
             # Add trace_id if present (for log format display)
-            if "trace_id" in corr_ctx and corr_ctx["trace_id"]:
+            if corr_ctx.get("trace_id"):
                 kwargs["trace_id"] = str(corr_ctx["trace_id"])
             # Add correlation_id if present (AppWorkflowRun GUID for e2e correlation)
-            if "correlation_id" in corr_ctx and corr_ctx["correlation_id"]:
+            if corr_ctx.get("correlation_id"):
                 kwargs["correlation_id"] = str(corr_ctx["correlation_id"])
             # Add atlan-* headers for OTEL
             for key, value in corr_ctx.items():
@@ -828,7 +833,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             logging.error("Error in metric logging", exc_info=True)
             self._sync_flush()
 
-    def _send_to_otel(self, record: Dict[str, Any]):
+    def _send_to_otel(self, record: dict[str, Any]):
         """Send log record to OpenTelemetry.
 
         Args:
@@ -926,7 +931,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
 
 # Create a singleton instance of the logger
-_logger_instances: Dict[str, AtlanLoggerAdapter] = {}
+_logger_instances: dict[str, AtlanLoggerAdapter] = {}
 
 
 def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
