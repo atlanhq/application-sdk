@@ -254,9 +254,7 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(
-                "Reading parquet files in batches", file_count=len(parquet_files)
-            )
+            logger.info("Reading %d parquet files in batches", len(parquet_files))
 
             # Process each file individually to maintain memory efficiency
             for parquet_file in parquet_files:
@@ -306,9 +304,7 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(
-                "Reading parquet files with daft", file_count=len(parquet_files)
-            )
+            logger.info("Reading %d parquet files with daft", len(parquet_files))
 
             # Use the discovered/downloaded files directly
             return daft.read_parquet(parquet_files)
@@ -365,9 +361,7 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(
-                "Reading parquet files as daft batches", file_count=len(parquet_files)
-            )
+            logger.info("Reading %d parquet files as daft batches", len(parquet_files))
 
             # Unify parquet schemas before reading: when early files have
             # null-typed columns and later files have string-typed columns,
@@ -389,11 +383,10 @@ class ParquetFileReader(Reader):
                     )
                     for field in unified
                 }
-            except Exception as exc:
+            except Exception:
                 logger.debug(
-                    "Could not unify parquet schemas (%s); "
-                    "falling back to daft default schema inference",
-                    type(exc).__name__,
+                    "Could not unify parquet schemas, falling back to daft default schema inference",
+                    exc_info=True,
                 )
 
             lazy_df = daft.read_parquet(parquet_files, schema=daft_schema)
@@ -709,7 +702,6 @@ class ParquetFileWriter(Writer):
                 },
                 description="Number of errors while writing to Parquet files",
             )
-            logger.error("Error writing daft dataframe to parquet", exc_info=True)
             raise
 
     def get_full_path(self) -> str:
@@ -849,9 +841,9 @@ class ParquetFileWriter(Writer):
             )
 
             logger.info(
-                "Consolidated folder",
-                folder_index=self.temp_folder_index,
-                record_count=self.current_folder_records,
+                "Consolidated folder index=%d record_count=%d",
+                self.temp_folder_index,
+                self.current_folder_records,
             )
 
         except Exception:

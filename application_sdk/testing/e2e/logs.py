@@ -20,7 +20,12 @@ async def _run_to_file(args: list[str], output_path: Path) -> None:
         stdout_bytes, _ = await proc.communicate()
         output_path.write_bytes(stdout_bytes)
     except Exception as exc:
-        logger.warning("Log collection command failed (%s): %s", " ".join(args), exc)
+        logger.warning(
+            "Log collection command failed (%s) error_type=%s",
+            " ".join(args),
+            type(exc).__name__,
+            exc_info=True,
+        )
 
 
 class LogCollector:
@@ -50,7 +55,12 @@ class LogCollector:
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
-            logger.warning("Failed to create output dir %s: %s", self.output_dir, exc)
+            logger.warning(
+                "Failed to create output dir %s error_type=%s",
+                self.output_dir,
+                type(exc).__name__,
+                exc_info=True,
+            )
             return
 
         pods = await get_pods(self.namespace, label_selector)
@@ -139,7 +149,12 @@ class LogCollector:
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
-            logger.warning("Failed to create output dir %s: %s", self.output_dir, exc)
+            logger.warning(
+                "Failed to create output dir %s error_type=%s",
+                self.output_dir,
+                type(exc).__name__,
+                exc_info=True,
+            )
             return
 
         await _run_to_file(
