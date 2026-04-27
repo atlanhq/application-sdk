@@ -61,10 +61,11 @@ class AgentCredentialSpec(BaseModel):
         populate_by_name=True,
     )
 
-    # ---- Always present (the "envelope") ----
+    # ---- Envelope fields (all optional, default to empty) ----
 
     agent_name: str = Field(default="", alias="agent-name")
-    """Name of the Secure Agent instance."""
+    """Name of the Secure Agent instance. Used by ``is_populated()`` to
+    determine if this spec carries a real agent payload."""
 
     secret_manager: str = Field(default="", alias="secret-manager")
     """Secret store backend: ``awssecretmanager``, ``azurekeyvault``,
