@@ -541,11 +541,14 @@ function renderTrends(){
     const cutoffStr=cutoff.toISOString().slice(0,10);
 
     // Per-repo "old total" lookup: most recent history entry at/before cutoff;
-    // if no entry exists at/before cutoff, fall back to the oldest available entry
-    // so longer windows naturally include the change captured in shorter windows.
+    // if no entry exists at/before cutoff, fall back to the oldest available entry.
+    // Skip leading total=0 entries when non-zero entries exist — those are typically
+    // failed/empty initial scans (no artifacts), not a true clean baseline. A genuinely
+    // clean repo will have all-zero entries and the fallback will still pick 0 honestly.
     function getOldTotal(r){
-        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        let all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
         if(!all.length)return D.repos[r].total||0;
+        if(all.some(e=>(e.total||0)>0))all=all.filter(e=>(e.total||0)>0);
         const before=all.filter(e=>e.date<=cutoffStr);
         return (before.length?before[before.length-1].total:all[0].total)||0;
     }
