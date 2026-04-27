@@ -21,29 +21,39 @@ _prometheus_runtime: Runtime | None = None
 _prometheus_lock = threading.Lock()
 
 
-def _get_prometheus_runtime() -> Runtime:
-    """Get or create the process-level Temporal Runtime with Prometheus metrics.
+_default_runtime: Runtime | None = None
 
-    The Runtime binds a Prometheus metrics endpoint on the configured address.
-    It is created at most once per process — subsequent calls return the same
-    instance. This prevents port-already-in-use errors when create_temporal_client
-    is called more than once (e.g., after a reconnect or in tests).
+
+def _get_or_create_runtime(
+    *, enable_prometheus: bool = True, prometheus_bind_address: str = ""
+) -> Runtime:
+    """Get or create the process-level Temporal Runtime.
+
+    When *enable_prometheus* is True, the Runtime binds a Prometheus metrics
+    endpoint. When False (e.g. local dev), it creates a default Runtime
+    without the endpoint to avoid port-already-in-use errors on reload.
+
+    Created at most once per process — subsequent calls return the same instance.
     """
-    global _prometheus_runtime
-    with _prometheus_lock:
-        if _prometheus_runtime is None:
-            _prometheus_runtime = Runtime(
-                telemetry=TelemetryConfig(
-                    metrics=PrometheusConfig(
-                        bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS
+    global _prometheus_runtime, _default_runtime
+
+    if enable_prometheus:
+        with _prometheus_lock:
+            if _prometheus_runtime is None:
+                bind_addr = prometheus_bind_address or TEMPORAL_PROMETHEUS_BIND_ADDRESS
+                _prometheus_runtime = Runtime(
+                    telemetry=TelemetryConfig(
+                        metrics=PrometheusConfig(bind_address=bind_addr)
                     )
                 )
-            )
-            logger.info(
-                "Temporal Prometheus metrics enabled on %s",
-                TEMPORAL_PROMETHEUS_BIND_ADDRESS,
-            )
-    return _prometheus_runtime
+                logger.info("Temporal Prometheus metrics enabled on %s", bind_addr)
+        return _prometheus_runtime
+    else:
+        with _prometheus_lock:
+            if _default_runtime is None:
+                _default_runtime = Runtime.default()
+                logger.info("Temporal Prometheus metrics disabled")
+        return _default_runtime
 
 
 if TYPE_CHECKING:
@@ -263,6 +273,8 @@ async def create_temporal_client(
     tls_domain: str = "",
     connect_max_attempts: int = 5,
     connect_retry_delay_seconds: float = 2.0,
+    enable_prometheus: bool = True,
+    prometheus_bind_address: str = "",
 ) -> Client:
     """Create a Temporal client with optional TLS and auth.
 
@@ -281,6 +293,8 @@ async def create_temporal_client(
         tls_domain: TLS server name override.
         connect_max_attempts: Maximum connection attempts (default 5).
         connect_retry_delay_seconds: Initial delay between retries (default 2.0s).
+        enable_prometheus: Enable Temporal Prometheus metrics endpoint.
+        prometheus_bind_address: Bind address for Prometheus metrics (e.g. "0.0.0.0:9464").
 
     Returns:
         Connected Temporal client.
@@ -334,8 +348,11 @@ async def create_temporal_client(
     if api_key:
         kwargs["api_key"] = api_key
 
-    # Configure Temporal runtime with Prometheus metrics (process-level singleton)
-    kwargs["runtime"] = _get_prometheus_runtime()
+    # Configure Temporal runtime (with or without Prometheus metrics)
+    kwargs["runtime"] = _get_or_create_runtime(
+        enable_prometheus=enable_prometheus,
+        prometheus_bind_address=prometheus_bind_address,
+    )
 
     last_exc: Exception | None = None
     delay = connect_retry_delay_seconds
