@@ -142,12 +142,26 @@ def create_store_from_binding(
 
         return create_local_store(root_path)
 
+    # BLDX-1155: every store gets the SDK-default ClientConfig + RetryConfig
+    # so timeouts and pool sizes are sized for GB-class transfers, not for
+    # small objects.  Without this, S3Store falls back to obstore's small-
+    # object defaults (30 s timeout) and 100 MB+ downloads time out mid-stream.
+    from application_sdk.storage._obstore_config import (
+        log_obstore_config,
+        obstore_client_options,
+        obstore_retry_config,
+    )
+
+    sdk_client_options = obstore_client_options()
+    sdk_retry_config = obstore_retry_config()
+
     if store_kind == "s3":
         from obstore.store import S3Store  # noqa: PLC0415 — defensive: keep inline
 
         bucket = meta.get("bucket", "")
         config: dict[str, str] = {}
-        client_options = None
+        # Start from SDK defaults so every S3Store inherits the right timeouts.
+        client_options: dict[str, object] = dict(sdk_client_options)
         if "region" in meta:
             config["aws_region"] = meta["region"]
         if "accessKey" in meta:
@@ -156,10 +170,20 @@ def create_store_from_binding(
             config["aws_secret_access_key"] = meta["secretKey"]
         if "endpoint" in meta:
             config["aws_endpoint"] = meta["endpoint"]
-            client_options = {"user_agent": "aws-sdk-go-v2 atlan-application-sdk"}
+            # Custom-endpoint sets a more specific UA so log analytics on the
+            # endpoint can identify SDK traffic (legacy behavior).
+            client_options["user_agent"] = "aws-sdk-go-v2 atlan-application-sdk"
         if meta.get("forcePathStyle", "").lower() == "true":
             config["aws_virtual_hosted_style_request"] = "false"
-        return S3Store(bucket=bucket, config=config, client_options=client_options)
+        log_obstore_config(
+            "s3", client_options=client_options, retry_config=sdk_retry_config
+        )
+        return S3Store(
+            bucket=bucket,
+            config=config,
+            client_options=client_options,
+            retry_config=sdk_retry_config,
+        )
 
     if store_kind == "azure":
         from obstore.store import AzureStore  # noqa: PLC0415 — defensive: keep inline
@@ -169,7 +193,17 @@ def create_store_from_binding(
         az_config: dict[str, str] = {"azure_storage_account_name": account}
         if "accountKey" in meta:
             az_config["azure_storage_account_key"] = meta["accountKey"]
-        return AzureStore(container_name=container, config=az_config)
+        log_obstore_config(
+            "azure",
+            client_options=sdk_client_options,
+            retry_config=sdk_retry_config,
+        )
+        return AzureStore(
+            container_name=container,
+            config=az_config,
+            client_options=sdk_client_options,
+            retry_config=sdk_retry_config,
+        )
 
     if store_kind == "gcs":
         import orjson  # noqa: PLC0415 — defensive: keep inline
@@ -188,6 +222,14 @@ def create_store_from_binding(
                 sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
             gcs_config["service_account_key"] = orjson.dumps(sa_data).decode()
 
-        return GCSStore(bucket=bucket, config=gcs_config)
+        log_obstore_config(
+            "gcs", client_options=sdk_client_options, retry_config=sdk_retry_config
+        )
+        return GCSStore(
+            bucket=bucket,
+            config=gcs_config,
+            client_options=sdk_client_options,
+            retry_config=sdk_retry_config,
+        )
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")
