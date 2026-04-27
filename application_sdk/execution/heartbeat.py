@@ -174,26 +174,84 @@ async def auto_heartbeat_loop(
 
 
 async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-    """Run a blocking function in a thread pool.
+    """Last-resort escape hatch: run a blocking function in a thread pool.
 
-    Use this for blocking I/O or CPU-bound operations to keep the event loop
-    responsive for heartbeating.
+    .. warning::
+        **Use only when no async-native alternative exists.** This is the
+        bottom of the preference list, not the default tool for "I have I/O
+        to do". Per ADR-0010 (async-first design), the SDK runs on Temporal's
+        asyncio event loop; blocking the loop breaks auto-heartbeats and
+        causes activities to be retried even though they are making progress.
 
-    ContextVars (ObjectStore, logger context, correlation ID, infrastructure
-    handles) are automatically propagated to the worker thread via
-    ``contextvars.copy_context()``.
+    **Decision order for blocking work (apps and SDK alike):**
 
-    CRITICAL: YOUR BLOCKING CODE MUST HAVE ITS OWN TIMEOUTS.
-    Python threads cannot be forcibly killed. If your blocking code hangs
-    indefinitely, the thread will run forever.
+    1. **Prefer an async-native library.** If one exists, use it. No
+       ``run_in_thread`` needed:
+
+       =========================  ======================  ====================
+       Need                       Use (async)             Avoid (blocking)
+       =========================  ======================  ====================
+       HTTP requests              ``httpx``, ``aiohttp``  ``requests``
+       AWS SDK                    ``aioboto3``,           ``boto3``
+                                  ``aiobotocore``
+       PostgreSQL                 ``asyncpg``             ``psycopg2``
+       MySQL                      ``aiomysql``            ``pymysql``
+       File I/O                   ``aiofiles``            ``open()``
+       =========================  ======================  ====================
+
+    2. **Then check the SDK.** Many helpers are already async — for example,
+       ``self.context.storage`` (ObjectStore), ``self.context.state``
+       (StateStore), and credential resolution all expose ``await``-able
+       methods. Don't wrap them in ``run_in_thread``.
+    3. **Only then** fall back to ``run_in_thread`` — for genuinely sync-only
+       libraries (e.g. ``pyatlan`` today, some C extensions, third-party
+       SDKs without async support).
+
+    **Examples of incorrect use (do not do this):**
+
+    .. code-block:: python
+
+        # WRONG — boto3 has aioboto3; use that instead.
+        await self.task_context.run_in_thread(s3_client.put_object, ...)
+
+        # WRONG — requests has httpx; use that instead.
+        await self.task_context.run_in_thread(requests.get, url, timeout=30)
+
+    **Examples of correct use:**
+
+    .. code-block:: python
+
+        # OK — pyatlan client is sync-only today.
+        await self.task_context.run_in_thread(pyatlan_client.search, request)
+
+        # OK — CPU-bound work that must yield to the event loop.
+        await self.task_context.run_in_thread(parse_huge_csv, path)
+
+    **Behavior:**
+
+    - ContextVars (ObjectStore, logger context, correlation ID, infrastructure
+      handles) are propagated to the worker thread via
+      ``contextvars.copy_context()``. Mutations inside the thread stay
+      isolated from the caller (copy semantics).
+    - Threads run on a dedicated ``sdk-blocking-*`` pool, separate from
+      Temporal's activity pool, to avoid deadlocking the worker.
+
+    **CRITICAL: your blocking code MUST have its own timeout.**
+    Python threads cannot be forcibly killed. If the wrapped call hangs
+    forever, the thread runs forever — this orphans state and consumes
+    pool slots even after the activity is retried.
 
     Args:
         func: Blocking function to run. MUST have internal timeout handling.
-        *args: Positional arguments for func.
-        **kwargs: Keyword arguments for func.
+        *args: Positional arguments for ``func``.
+        **kwargs: Keyword arguments for ``func``.
 
     Returns:
         Result of ``func(*args, **kwargs)``.
+
+    See Also:
+        - ``docs/adr/0010-async-first-blocking-code.md`` — full rationale.
+        - ``self.context.storage`` / ``self.context.state`` — already async.
     """
     ctx = contextvars.copy_context()
     loop = asyncio.get_running_loop()
