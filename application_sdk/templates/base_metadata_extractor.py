@@ -101,7 +101,7 @@ class BaseMetadataExtractor(App):
                     os.unlink(tmp_path)
 
         if failures:
-            from application_sdk.common.error_codes import ActivityError
+            from application_sdk.common.error_codes import ActivityError  # noqa: PLC0415 — circular: package __init__ loads sibling modules
 
             failed = len(failures)
             raise ActivityError(

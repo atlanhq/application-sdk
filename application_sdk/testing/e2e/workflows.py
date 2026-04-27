@@ -69,7 +69,7 @@ async def wait_for_workflow(
     Raises:
         TimeoutError: If the workflow does not complete within ``timeout``.
     """
-    import time
+    import time  # noqa: PLC0415 — stdlib time; lazy use only
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

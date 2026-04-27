@@ -264,7 +264,7 @@ class BaseIntegrationTest:
         """
         # Load .env file so E2E_* credentials are available
         try:
-            from dotenv import load_dotenv
+            from dotenv import load_dotenv  # noqa: PLC0415 — optional dep: dotenv
 
             load_dotenv(override=False)
         except ImportError:

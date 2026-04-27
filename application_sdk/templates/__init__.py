@@ -39,7 +39,7 @@ _module_map = {
 
 def __getattr__(name: str) -> object:
     if name in _module_map:
-        import importlib
+        import importlib  # noqa: PLC0415 — defensive: keep inline
 
         module = importlib.import_module(_module_map[name])
         return getattr(module, name)

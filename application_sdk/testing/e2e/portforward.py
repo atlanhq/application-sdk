@@ -22,7 +22,7 @@ async def _wait_for_port(
     port: int, host: str = "127.0.0.1", timeout: float = 10.0
 ) -> None:
     """Poll until TCP port accepts connections or timeout."""
-    import time
+    import time  # noqa: PLC0415 — stdlib time; lazy use only
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
