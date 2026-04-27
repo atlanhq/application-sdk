@@ -232,7 +232,7 @@ def _has_remote_otlp_endpoint() -> bool:
         ep = OTEL_EXPORTER_OTLP_ENDPOINT.strip()
         if not ep:
             return False
-        from urllib.parse import urlparse
+        from urllib.parse import urlparse  # noqa: PLC0415 — stdlib urllib.parse; lazy use only on URL config
 
         host = urlparse(ep).hostname or ""
         return host not in ("", "localhost", "127.0.0.1", "::1")
@@ -648,7 +648,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # Bridge: if legacy correlation_context dict is empty, read from v3
         # CorrelationContext ContextVar (set by the v3 CorrelationContextInterceptor).
         if "correlation_id" not in kwargs:
-            from application_sdk.observability.correlation import (
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
                 get_correlation_context,
             )
 

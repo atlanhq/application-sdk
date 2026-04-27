@@ -48,7 +48,7 @@ def get_workflow_context() -> dict[str, str]:
     Returns:
         dict[str, str]: The workflow context fields.
     """
-    from application_sdk.observability.context import get_execution_context
+    from application_sdk.observability.context import get_execution_context  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
 
     ctx = get_execution_context()
     context: dict[str, str] = {

@@ -275,7 +275,7 @@ class AtlanObservability(Generic[T], ABC):
         # File I/O is restricted inside Temporal's workflow sandbox — skip the
         # store sink there; records are still exported via OTLP/console.
         try:
-            from temporalio.workflow import unsafe as _wf_unsafe
+            from temporalio.workflow import unsafe as _wf_unsafe  # noqa: PLC0415 — defensive: try/except detects temporal sandbox / non-temporal context
 
             if _wf_unsafe.in_sandbox():
                 return
@@ -381,7 +381,7 @@ class AtlanObservability(Generic[T], ABC):
         - Updates last cleanup time after successful cleanup
         """
         try:
-            from application_sdk.infrastructure.context import get_infrastructure
+            from application_sdk.infrastructure.context import get_infrastructure  # noqa: PLC0415 — circular: infrastructure imports observability
 
             infra = get_infrastructure()
             state_store = infra.state_store if infra else None
@@ -434,7 +434,7 @@ class AtlanObservability(Generic[T], ABC):
                 year = int(year_dir.split("=")[1])
                 if year < cutoff_date.year:
                     # Delete entire year directory
-                    import shutil
+                    import shutil  # noqa: PLC0415 — stdlib shutil; lazy use only when computing disk usage
 
                     shutil.rmtree(year_path)
                     continue
@@ -532,7 +532,7 @@ class DuckDBUI:
 
     def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
         """Check if DuckDB UI is already running on the default port."""
-        import socket
+        import socket  # noqa: PLC0415 — stdlib socket; lazy use only on hostname resolution
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.settimeout(0.5)
@@ -542,7 +542,7 @@ class DuckDBUI:
     def start_ui(self):
         """Start DuckDB UI and create views for Hive partitioned json.gz files."""
         if not self._is_duckdb_ui_running():
-            import duckdb
+            import duckdb  # noqa: PLC0415 — optional dep: duckdb
 
             os.makedirs(self.observability_dir, exist_ok=True)
             con = duckdb.connect(self.db_path)
