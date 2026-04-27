@@ -217,9 +217,7 @@ def test_send_to_otel_counter():
 def test_send_to_otel_gauge():
     """Test _send_to_otel() method with gauge metric."""
     with create_metrics_adapter() as metrics_adapter:
-        with mock.patch.object(
-            metrics_adapter.meter, "create_observable_gauge"
-        ) as mock_create:
+        with mock.patch.object(metrics_adapter.meter, "create_gauge") as mock_create:
             mock_gauge = mock.MagicMock()
             mock_create.return_value = mock_gauge
 
@@ -239,7 +237,7 @@ def test_send_to_otel_gauge():
                 description="Test gauge",
                 unit="count",
             )
-            mock_gauge.add.assert_called_once_with(42.0, {"test": "label"})
+            mock_gauge.set.assert_called_once_with(42.0, {"test": "label"})
 
 
 def test_send_to_otel_histogram():
@@ -268,6 +266,110 @@ def test_send_to_otel_histogram():
                 unit="count",
             )
             mock_histogram.record.assert_called_once_with(42.0, {"test": "label"})
+
+
+def test_send_to_otel_normalizes_optional_metadata():
+    """Test unset description and unit are normalized before creating OTel instruments."""
+    with create_metrics_adapter() as metrics_adapter:
+        with (
+            mock.patch.object(metrics_adapter.meter, "create_counter") as mock_counter,
+            mock.patch.object(metrics_adapter.meter, "create_gauge") as mock_gauge,
+            mock.patch.object(
+                metrics_adapter.meter, "create_histogram"
+            ) as mock_histogram,
+        ):
+            mock_counter_instance = mock.MagicMock()
+            mock_gauge_instance = mock.MagicMock()
+            mock_histogram_instance = mock.MagicMock()
+            mock_counter.return_value = mock_counter_instance
+            mock_gauge.return_value = mock_gauge_instance
+            mock_histogram.return_value = mock_histogram_instance
+
+            counter_record = MetricRecord(
+                timestamp=datetime.now().timestamp(),
+                name="optional_counter",
+                value=1.0,
+                type=MetricType.COUNTER,
+                labels={},
+            )
+            gauge_record = MetricRecord(
+                timestamp=datetime.now().timestamp(),
+                name="optional_gauge",
+                value=2.0,
+                type=MetricType.GAUGE,
+                labels={},
+            )
+            histogram_record = MetricRecord(
+                timestamp=datetime.now().timestamp(),
+                name="optional_histogram",
+                value=3.0,
+                type=MetricType.HISTOGRAM,
+                labels={},
+            )
+
+            metrics_adapter._send_to_otel(counter_record)
+            metrics_adapter._send_to_otel(gauge_record)
+            metrics_adapter._send_to_otel(histogram_record)
+
+            mock_counter.assert_called_once_with(
+                name="optional_counter",
+                description="",
+                unit="",
+            )
+            mock_gauge.assert_called_once_with(
+                name="optional_gauge",
+                description="",
+                unit="",
+            )
+            mock_histogram.assert_called_once_with(
+                name="optional_histogram",
+                description="",
+                unit="",
+            )
+            mock_counter_instance.add.assert_called_once_with(1.0, {})
+            mock_gauge_instance.set.assert_called_once_with(2.0, {})
+            mock_histogram_instance.record.assert_called_once_with(3.0, {})
+
+
+def test_record_metric_with_optional_metadata_uses_real_otel_meter():
+    """Regression test for OTel rejecting None unit or description."""
+    from opentelemetry.sdk.metrics import MeterProvider
+
+    previous_flush_task_started = AtlanMetricsAdapter._flush_task_started
+    AtlanMetricsAdapter._flush_task_started = True
+    try:
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            False,
+        ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                False,
+            ):
+                metrics_adapter = AtlanMetricsAdapter()
+        metrics_adapter.meter = MeterProvider().get_meter("test_optional_metadata")
+
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            True,
+        ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                False,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.metrics_adaptor.logging.error"
+                ) as mock_error:
+                    metrics_adapter.record_metric(
+                        name="optional_metadata_counter",
+                        value=1.0,
+                        metric_type=MetricType.COUNTER,
+                        labels={},
+                    )
+
+        mock_error.assert_not_called()
+    finally:
+        AtlanMetricsAdapter._flush_task_started = previous_flush_task_started
 
 
 def test_send_to_otel_filters_non_scalar_labels():
