@@ -28,15 +28,17 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 import warnings
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
@@ -293,11 +295,11 @@ async def _get_temporal_client() -> Client:
     if _temporal_client is not None:
         return _temporal_client
 
-    from application_sdk.execution import create_temporal_client
+    from application_sdk.execution import create_temporal_client  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
 
     api_key: str | None = None
     if _workflow_config.auth_enabled:
-        from application_sdk.execution import TemporalAuthConfig, TemporalAuthManager
+        from application_sdk.execution import TemporalAuthConfig, TemporalAuthManager  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
 
         auth_config = TemporalAuthConfig(
             client_id=_workflow_config.auth_client_id,
@@ -431,12 +433,12 @@ def create_app_handler_service(
         auth_scopes=auth_scopes,
     )
 
-    from application_sdk.constants import ENABLE_MCP
+    from application_sdk.constants import ENABLE_MCP  # noqa: PLC0415 — cold path: only at handler service startup
 
     if ENABLE_MCP and app_name:
-        from contextlib import asynccontextmanager
+        from contextlib import asynccontextmanager  # noqa: PLC0415 — cold path: lifespan setup, only when MCP enabled
 
-        from application_sdk.server.mcp import MCPServer
+        from application_sdk.server.mcp import MCPServer  # noqa: PLC0415 — cold path: only when ENABLE_MCP set
 
         _mcp_server = MCPServer(application_name=app_name)
 
@@ -457,7 +459,7 @@ def create_app_handler_service(
     else:
         app = FastAPI(title=title, description=description, version=version)
 
-    from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware
+    from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware  # noqa: PLC0415 — cold path: middleware setup at app creation
 
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(LogMiddleware)
@@ -782,7 +784,7 @@ def create_app_handler_service(
             input_data.correlation_id = correlation_id
             input_data._correlation_id = correlation_id
 
-            from application_sdk.observability.correlation import (
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
                 CorrelationContext,
                 set_correlation_context,
             )
@@ -1069,7 +1071,7 @@ def create_app_handler_service(
             raise ValueError(f"Invalid config_id: {config_id!r}")
         if not _CONFIG_KEY_RE.match(config_type):
             raise ValueError(f"Invalid config_type: {config_type!r}")
-        from application_sdk.constants import APPLICATION_NAME
+        from application_sdk.constants import APPLICATION_NAME  # noqa: PLC0415 — cold path: only when computing app paths
 
         return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
 
@@ -1178,12 +1180,7 @@ def create_app_handler_service(
         if _storage is None:
             raise HTTPException(status_code=503, detail="Storage not configured")
 
-        import asyncio
-        import os
-        import shutil
-        from pathlib import PurePosixPath
-
-        from application_sdk.storage.ops import upload_file as _upload_file
+        from application_sdk.storage.ops import upload_file as _upload_file  # noqa: PLC0415 — circular: storage.ops imports execution-related
 
         raw_name = filename or file.filename or "upload"
         # Strip non-alphanumeric chars and cap at 16 chars for object-store key safety.
@@ -1254,7 +1251,7 @@ def create_app_handler_service(
 
     @app.get("/dapr/subscribe")
     async def get_dapr_subscriptions() -> JSONResponse:
-        from application_sdk.constants import EVENT_STORE_NAME
+        from application_sdk.constants import EVENT_STORE_NAME  # noqa: PLC0415 — cold path: only when emitting events
 
         result: list[dict[str, Any]] = []
 
@@ -1587,7 +1584,7 @@ def create_app_handler_service(
         @app.get("/metrics")
         async def prometheus_metrics() -> Response:
             """Expose application metrics in Prometheus exposition format."""
-            from prometheus_client import REGISTRY, generate_latest
+            from prometheus_client import REGISTRY, generate_latest  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
 
             return Response(
                 content=generate_latest(REGISTRY),
@@ -1600,8 +1597,6 @@ def create_app_handler_service(
 
     @app.get("/")
     async def frontend_home() -> HTMLResponse:
-        import os
-
         frontend_html_path = os.path.join(frontend_assets_path, "index.html")
         if os.path.exists(frontend_html_path):
             with open(frontend_html_path, encoding="utf-8") as f:
@@ -1645,7 +1640,7 @@ def run_app_handler_service(
         **kwargs: Additional keyword arguments forwarded to
             ``create_app_handler_service()``.
     """
-    import uvicorn
+    import uvicorn  # noqa: PLC0415 — cold path: uvicorn only when starting standalone server
 
     app = create_app_handler_service(handler, **kwargs)
     uvicorn.run(app, host=host, port=port, log_level=log_level)
