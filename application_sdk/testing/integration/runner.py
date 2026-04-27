@@ -93,13 +93,15 @@ def _auto_discover_credentials(scenario_name: str = "") -> Dict[str, Any]:
 
     if app_credentials:
         logger.info(
-            f"Auto-discovered {len(app_credentials)} credential fields "  # noqa: G004
-            f"from {app_prefix}* env vars: {list(app_credentials.keys())}"
+            "Auto-discovered %d credential fields from %s* env vars: %s",
+            len(app_credentials),
+            app_prefix,
+            list(app_credentials.keys()),
         )
     else:
         logger.warning(
-            f"No {app_prefix}* environment variables found. "  # noqa: G004
-            f"Set them in your .env file or environment."  # noqa: G004
+            "No %s* environment variables found. Set them in your .env file or environment.",
+            app_prefix,
         )
 
     # Check for scenario-specific overrides: E2E_{SCENARIO_NAME}_*
@@ -109,9 +111,10 @@ def _auto_discover_credentials(scenario_name: str = "") -> Dict[str, Any]:
 
         if scenario_credentials:
             logger.info(
-                f"Found {len(scenario_credentials)} scenario-specific credential "  # noqa: G004
-                f"fields from {scenario_prefix}* env vars: "
-                f"{list(scenario_credentials.keys())}"
+                "Found %d scenario-specific credential fields from %s* env vars: %s",
+                len(scenario_credentials),
+                scenario_prefix,
+                list(scenario_credentials.keys()),
             )
             # Scenario-specific vars override app-level defaults
             return {**app_credentials, **scenario_credentials}
@@ -273,7 +276,7 @@ class BaseIntegrationTest:
         # Auto-discover server URL if not explicitly set
         if not cls.server_host:
             cls.server_host = _auto_discover_server()
-            logger.info(f"Auto-discovered server: {cls.server_host}")  # noqa: G004
+            logger.info("Auto-discovered server: %s", cls.server_host)
 
         # Server health check
         if not cls.skip_server_check:
@@ -309,7 +312,7 @@ class BaseIntegrationTest:
     @classmethod
     def teardown_class(cls) -> None:
         """Tear down the test class after all tests complete."""
-        logger.info(f"Tearing down integration test class: {cls.__name__}")  # noqa: G004
+        logger.info("Tearing down integration test class: %s", cls.__name__)
 
         # Call user-defined cleanup hook
         if hasattr(cls, "cleanup_test_environment"):
@@ -413,7 +416,7 @@ class BaseIntegrationTest:
         with open(summary_path, "wb") as f:
             f.write(orjson.dumps(summary, option=orjson.OPT_INDENT_2))
 
-        logger.info(f"Integration test summary written to {summary_path}")  # noqa: G004
+        logger.info("Integration test summary written to %s", summary_path)
         return summary_path
 
     def _build_scenario_args(self, scenario: Scenario) -> Dict[str, Any]:
@@ -498,11 +501,13 @@ class BaseIntegrationTest:
         Returns:
             ScenarioResult: The result of the scenario execution.
         """
-        logger.info(f"Executing scenario: {scenario.name}")  # noqa: G004
+        logger.info("Executing scenario: %s", scenario.name)
 
         # Check if scenario should be skipped
         if scenario.skip:
-            logger.info(f"Skipping scenario: {scenario.name} - {scenario.skip_reason}")  # noqa: G004
+            logger.info(
+                "Skipping scenario: %s - %s", scenario.name, scenario.skip_reason
+            )
             pytest.skip(scenario.skip_reason or "Scenario marked as skip")
 
         start_time = time.time()
@@ -515,7 +520,7 @@ class BaseIntegrationTest:
 
             # Step 1: Build args (auto-fill from env if needed)
             args = self._build_scenario_args(scenario)
-            logger.debug(f"Built args for {scenario.name}")  # noqa: G004
+            logger.debug("Built args for %s", scenario.name)
 
             # Step 2: Call the API
             endpoint = scenario.endpoint or self.workflow_endpoint
@@ -525,7 +530,7 @@ class BaseIntegrationTest:
                 endpoint_override=endpoint if scenario.api == "workflow" else None,
             )
             result.response = response
-            logger.debug(f"API response for {scenario.name}: {response}")  # noqa: G004
+            logger.debug("API response for %s: %s", scenario.name, response)
 
             # Step 3: Validate assertions with rich error messages
             assertion_results = self._validate_assertions(
@@ -552,7 +557,6 @@ class BaseIntegrationTest:
                     f"Assertions failed for scenario '{scenario.name}':\n"
                     + "\n".join(failed_details)
                 )
-                logger.error(error_msg)
                 raise AssertionError(error_msg)
 
             # Step 4: Poll for workflow completion if any output validation is needed
@@ -573,13 +577,15 @@ class BaseIntegrationTest:
             if needs_pandera:
                 self._validate_pandera_schemas(scenario, response, schema_path)
 
-            logger.info(f"Scenario {scenario.name} passed")  # noqa: G004
+            logger.info("Scenario %s passed", scenario.name)
 
         except Exception as e:
             result.error = e
             result.success = False
             if not isinstance(e, (AssertionError, pytest.skip.Exception)):
-                logger.error(f"Scenario {scenario.name} failed with error: {e}")  # noqa: G004
+                logger.error(
+                    "Scenario %s failed with error", scenario.name, exc_info=True
+                )
             raise
 
         finally:
@@ -627,11 +633,13 @@ class BaseIntegrationTest:
                 results[path] = result_entry
                 if not passed:
                     logger.debug(
-                        f"Assertion failed: {path} - "  # noqa: G004
-                        f"expected {expected_desc}, got {actual!r}"  # noqa: G004
+                        "Assertion failed: %s - expected %s, got %r",
+                        path,
+                        expected_desc,
+                        actual,
                     )
             except Exception as e:
-                logger.error(f"Assertion error for {path}: {e}")  # noqa: G004
+                logger.error("Assertion error for %s", path, exc_info=True)
                 result_entry = {
                     "passed": False,
                     "actual": actual,
@@ -667,8 +675,10 @@ class BaseIntegrationTest:
             )
 
         logger.info(
-            f"Waiting for workflow completion: {workflow_id}/{run_id} "  # noqa: G004
-            f"(timeout={scenario.workflow_timeout}s)"  # noqa: G004
+            "Waiting for workflow completion: %s/%s (timeout=%ss)",
+            workflow_id,
+            run_id,
+            scenario.workflow_timeout,
         )
         final_status = self._poll_workflow_completion(
             workflow_id=workflow_id,
@@ -712,7 +722,9 @@ class BaseIntegrationTest:
             )
 
         # Load actual and expected data
-        logger.info(f"Loading actual output from {base_path}/{workflow_id}/{run_id}")  # noqa: G004
+        logger.info(
+            "Loading actual output from %s/%s/%s", base_path, workflow_id, run_id
+        )
         actual = load_actual_output(
             base_path,
             workflow_id,
@@ -720,7 +732,7 @@ class BaseIntegrationTest:
             subdirectory=scenario.output_subdirectory,
         )
 
-        logger.info(f"Loading expected data from {scenario.expected_data}")  # noqa: G004
+        logger.info("Loading expected data from %s", scenario.expected_data)
         expected = load_expected_data(scenario.expected_data)
 
         # Compare
@@ -740,8 +752,9 @@ class BaseIntegrationTest:
             )
 
         logger.info(
-            f"Metadata validation passed for scenario '{scenario.name}': "  # noqa: G004
-            f"{len(actual)} assets match expected baseline"  # noqa: G004
+            "Metadata validation passed for scenario '%s': %d assets match expected baseline",
+            scenario.name,
+            len(actual),
         )
 
     def _validate_pandera_schemas(
@@ -787,8 +800,9 @@ class BaseIntegrationTest:
         extracted_output_path = f"{base_path}/{workflow_id}/{run_id}"
 
         logger.info(
-            f"Running pandera validation for scenario '{scenario.name}' "  # noqa: G004
-            f"using schemas from {schema_base_path}"  # noqa: G004
+            "Running pandera validation for scenario '%s' using schemas from %s",
+            scenario.name,
+            schema_base_path,
         )
 
         results = validate_with_pandera(
@@ -808,8 +822,10 @@ class BaseIntegrationTest:
 
         total_records = sum(r["record_count"] for r in results)
         logger.info(
-            f"Pandera validation passed for scenario '{scenario.name}': "  # noqa: G004
-            f"{len(results)} schemas, {total_records} total records validated"  # noqa: G004
+            "Pandera validation passed for scenario '%s': %d schemas, %d total records validated",
+            scenario.name,
+            len(results),
+            total_records,
         )
 
     def _poll_workflow_completion(
@@ -839,11 +855,11 @@ class BaseIntegrationTest:
             status_response = self.client.get_workflow_status(workflow_id, run_id)
 
             if not status_response.get("success", False):
-                logger.warning(f"Workflow status check failed: {status_response}")  # noqa: G004
+                logger.warning("Workflow status check failed: %s", status_response)
                 # Continue polling — transient failures are possible
             else:
                 current_status = status_response.get("data", {}).get("status", "")
-                logger.debug(f"Workflow status: {current_status}")  # noqa: G004
+                logger.debug("Workflow status: %s", current_status)
 
                 if current_status != "RUNNING":
                     return current_status

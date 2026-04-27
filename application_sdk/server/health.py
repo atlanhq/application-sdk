@@ -266,13 +266,14 @@ class WorkerHealthServer:
             logger.debug("Health check request timed out")
         except Exception as e:
             logger.warning("Error handling health check request", exc_info=True)
-            with contextlib.suppress(Exception):
+            # Best-effort error response to client; outer except already logged with exc_info.
+            with contextlib.suppress(ConnectionResetError, BrokenPipeError, OSError):
                 await self._send_response(
                     writer, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(e)}
                 )
         finally:
             writer.close()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(ConnectionResetError, BrokenPipeError, OSError):
                 await writer.wait_closed()
 
     async def _send_response(
