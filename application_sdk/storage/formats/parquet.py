@@ -24,6 +24,7 @@ from application_sdk.storage.formats.utils import (
     is_empty_dataframe,
     path_gen,
 )
+from application_sdk.storage.ops import normalize_key
 from application_sdk.storage.ops import upload_file as _upload_file
 
 logger = get_logger(__name__)
@@ -422,6 +423,8 @@ class ParquetFileWriter(Writer):
         end_marker (Optional[str]): End marker for query extraction.
         retain_local_copy (bool): Whether to retain the local copy of the files.
         use_consolidation (bool): Whether to use consolidation.
+        replace_prefix (bool): Whether to clear the existing object-store prefix before
+            the first write.
     """
 
     def __init__(
@@ -439,6 +442,7 @@ class ParquetFileWriter(Writer):
         retain_local_copy: Optional[bool] = False,
         use_consolidation: Optional[bool] = False,
         dataframe_type: DataframeType = DataframeType.pandas,
+        replace_prefix: bool = False,
     ):
         """Initialize the Parquet output handler.
 
@@ -459,6 +463,8 @@ class ParquetFileWriter(Writer):
             use_consolidation (bool, optional): Whether to use consolidation.
                 Defaults to False.
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
+            replace_prefix (bool, optional): Clear existing object-store keys under
+                the writer prefix before the first write. Defaults to False.
         """
         self.extension = PARQUET_FILE_EXTENSION
         self.path = path
@@ -483,6 +489,8 @@ class ParquetFileWriter(Writer):
         self.dataframe_type = dataframe_type
         self._is_closed = False
         self._statistics = None
+        self.replace_prefix = replace_prefix
+        self._prefix_replaced = False
 
         # Consolidation-specific attributes
         # Use consolidation to efficiently write parquet files in buffered manner
@@ -506,6 +514,36 @@ class ParquetFileWriter(Writer):
             self.path = os.path.join(self.path, self.typename)
         SafeFileOps.makedirs(self.path, exist_ok=True)
 
+    async def _ensure_prefix_replaced(self) -> None:
+        """Clear the object-store prefix once for replacing writes."""
+        if not self.replace_prefix or self._prefix_replaced:
+            return
+
+        normalized_prefix = normalize_key(self.path)
+        if not normalized_prefix:
+            raise ValueError(
+                "replace_prefix=True requires a non-empty object-store prefix"
+            )
+
+        try:
+            deleted_count = await _delete_prefix(self.path)
+        except RuntimeError as exc:
+            if "No ObjectStore provided" not in str(exc):
+                raise
+            logger.debug("No object store configured, skipping prefix replacement")
+        else:
+            logger.info(
+                "Cleared existing parquet object-store prefix",
+                prefix=normalized_prefix,
+                deleted_count=deleted_count,
+            )
+        self._prefix_replaced = True
+
+    async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
+        """Write a pandas DataFrame after optional prefix replacement."""
+        await self._ensure_prefix_replaced()
+        await super()._write_dataframe(dataframe, **kwargs)
+
     async def _write_batched_dataframe(
         self,
         batched_dataframe: Union[
@@ -525,6 +563,8 @@ class ParquetFileWriter(Writer):
         Args:
             batched_dataframe: AsyncGenerator or Generator of pandas DataFrames to write.
         """
+        await self._ensure_prefix_replaced()
+
         if not self.use_consolidation:
             # Fallback to base class implementation
             await super()._write_batched_dataframe(batched_dataframe)
@@ -589,6 +629,8 @@ class ParquetFileWriter(Writer):
             - If partition_cols is set, creates Hive-style directory structure
         """
         try:
+            await self._ensure_prefix_replaced()
+
             import daft
 
             # Convert string to enum if needed for backward compatibility
