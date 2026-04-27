@@ -99,7 +99,20 @@ class DaprCredentialVault:
         from application_sdk.infrastructure.credential_vault import CredentialVaultError
 
         try:
+            logger.info(
+                "Resolving credentials for guid=%s, secret_store=%s",
+                credential_guid,
+                self._secret_store_name,
+            )
+
             credential_config = await self._fetch_credential_config(credential_guid)
+            logger.info(
+                "Fetched credential config for guid=%s — "
+                "config keys: %s, credentialSource: %s",
+                credential_guid,
+                sorted(credential_config.keys()),
+                credential_config.get("credentialSource", "(not set)"),
+            )
 
             credential_source_str = credential_config.get(
                 "credentialSource", _CredentialSource.DIRECT.value
@@ -116,6 +129,16 @@ class DaprCredentialVault:
             else:
                 mode = _SecretMode.SINGLE_KEY
 
+            logger.info(
+                "Credential resolution: guid=%s, source=%s, mode=%s, "
+                "secret_path=%s, secret_store=%s",
+                credential_guid,
+                credential_source.value,
+                mode.value,
+                secret_path or "(none)",
+                self._secret_store_name,
+            )
+
             secret_data: dict[str, Any] = {}
 
             if mode == _SecretMode.MULTI_KEY:
@@ -125,23 +148,62 @@ class DaprCredentialVault:
                     else credential_guid
                 )
                 try:
-                    logger.debug("Fetching multi-key secret: %s", key_to_fetch)
+                    logger.info(
+                        "Fetching multi-key secret: store=%s, key=%s",
+                        self._secret_store_name,
+                        key_to_fetch,
+                    )
                     secret_data = await self._get_secret(key_to_fetch)
+                    logger.info(
+                        "Secret fetched successfully for guid=%s — " "secret keys: %s",
+                        credential_guid,
+                        sorted(secret_data.keys()) if secret_data else "(empty)",
+                    )
                 except Exception as exc:
                     raise CredentialVaultError(
                         f"Failed to fetch secrets for credential {credential_guid} "
-                        f"from secret store (key={key_to_fetch}). "
+                        f"from secret store '{self._secret_store_name}' "
+                        f"(key={key_to_fetch}). "
                         "The workflow cannot proceed without credentials. "
                         "Check Dapr secret store component logs and Vault connectivity."
                     ) from exc
             else:
+                logger.info(
+                    "Fetching single-key secrets for guid=%s",
+                    credential_guid,
+                )
                 secret_data = await self._fetch_single_key_secrets(credential_config)
+                logger.info(
+                    "Single-key secrets fetched for guid=%s — " "secret keys: %s",
+                    credential_guid,
+                    sorted(secret_data.keys()) if secret_data else "(empty)",
+                )
 
             if credential_source == _CredentialSource.DIRECT:
                 credential_config.update(secret_data)
+                merged_keys = sorted(credential_config.keys())
+                has_password = "password" in credential_config
+                has_token = "token" in credential_config
+                logger.info(
+                    "Credential resolution complete for guid=%s — "
+                    "merged keys: %s, has_password: %s, has_token: %s",
+                    credential_guid,
+                    merged_keys,
+                    has_password,
+                    has_token,
+                )
                 return credential_config
             else:
-                return _resolve_credentials(credential_config, secret_data)
+                result = _resolve_credentials(credential_config, secret_data)
+                logger.info(
+                    "Credential resolution complete for guid=%s — "
+                    "result keys: %s, has_password: %s, has_token: %s",
+                    credential_guid,
+                    sorted(result.keys()),
+                    "password" in result,
+                    "token" in result,
+                )
+                return result
 
         except CredentialVaultError:
             raise
