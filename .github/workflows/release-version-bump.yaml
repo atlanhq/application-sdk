@@ -1,0 +1,122 @@
+# Reusable workflow: bump semver version based on conventional commits since last tag.
+#
+# Opens a bump-version PR against target_branch with:
+#   - pyproject.toml version updated (MAJOR.MINOR.PATCH via conventional commits)
+#   - uv.lock regenerated
+#   - CHANGELOG.md prepended with a new section
+#
+# The opened PR gets release_label applied; tag-and-release.yaml fires when it merges.
+#
+# Usage in each app repo (.github/workflows/release.yaml):
+#
+#   on:
+#     pull_request:
+#       types: [closed]
+#       branches: [main]
+#   jobs:
+#     bump:
+#       if: |
+#         github.event.pull_request.merged == true &&
+#         !startsWith(github.event.pull_request.head.ref, 'bump-version')
+#       uses: atlanhq/application-sdk/.github/workflows/release-version-bump.yaml@main
+#       secrets: inherit
+#
+name: Release Version Bump
+
+on:
+  workflow_call:
+    inputs:
+      target_branch:
+        description: "Branch to open the bump PR against"
+        required: false
+        type: string
+        default: "main"
+      release_label:
+        description: "Label applied to the bump PR (triggers tag-and-release.yaml on merge)"
+        required: false
+        type: string
+        default: "release"
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+        description: "Org PAT for git push and gh pr create"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump-version:
+    name: Update version and changelog
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-scripts
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.7.3"
+
+      - name: Get current version
+        id: versions
+        run: |
+          CURRENT=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version
+        id: bump
+        run: |
+          python3 -m venv /tmp/bump-venv
+          /tmp/bump-venv/bin/pip install semver packaging -q
+          /tmp/bump-venv/bin/python .sdk-scripts/.github/scripts/release.py main "${{ steps.versions.outputs.current }}"
+          uv lock
+          NEW=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
+          echo "new=${NEW}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}"
+
+      - name: Commit and open PR
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          set -euo pipefail
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
+          BRANCH="bump-version-${{ inputs.target_branch }}"
+          git checkout -b "$BRANCH"
+          git add pyproject.toml uv.lock CHANGELOG.md
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.new }}"
+          git push origin "$BRANCH" --force
+
+          gh pr create \
+            --base "${{ inputs.target_branch }}" \
+            --title "Bump version to ${{ steps.bump.outputs.new }}" \
+            --body "Automated version bump after merge to ${{ inputs.target_branch }}.
+
+          This PR updates:
+          - pyproject.toml
+          - uv.lock
+          - CHANGELOG.md
+
+          Version: ${{ steps.versions.outputs.current }} → ${{ steps.bump.outputs.new }}" \
+            --label "${{ inputs.release_label }}" \
+          || echo "PR already exists for ${BRANCH}, skipping creation."

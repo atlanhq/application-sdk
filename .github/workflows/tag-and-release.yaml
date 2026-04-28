@@ -1,0 +1,93 @@
+# Reusable workflow: create an annotated git tag and GitHub Release from the current
+# version in pyproject.toml, using the matching CHANGELOG.md section as release notes.
+#
+# After the GitHub Release is published, build-and-publish.yaml in the caller's repo
+# fires on the 'release: published' event and pushes the GHCR version-tag ladder.
+#
+# Usage in each app repo (.github/workflows/tag-and-publish.yaml):
+#
+#   on:
+#     pull_request:
+#       types: [closed]
+#       branches: [main]
+#   jobs:
+#     release:
+#       if: |
+#         github.event.pull_request.merged == true &&
+#         contains(github.event.pull_request.labels.*.name, 'release')
+#       permissions:
+#         contents: write
+#       uses: atlanhq/application-sdk/.github/workflows/tag-and-release.yaml@main
+#       secrets: inherit
+#
+name: Tag and Release
+
+on:
+  workflow_call:
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+        description: "Org PAT for git tag push and gh release create"
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-scripts
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.7.3"
+
+      - name: Get version
+        id: get_version
+        run: |
+          VERSION=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes
+        run: python3 .sdk-scripts/.github/scripts/extract_release_notes.py "${{ steps.get_version.outputs.version }}" > .github/release_notes.md
+
+      - name: Create git tag
+        run: |
+          set -euo pipefail
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+          git push origin ":refs/tags/v${{ steps.get_version.outputs.version }}" 2>/dev/null || true
+          git tag -d "v${{ steps.get_version.outputs.version }}" 2>/dev/null || true
+          git tag -a "v${{ steps.get_version.outputs.version }}" -m "Release v${{ steps.get_version.outputs.version }}"
+          git push origin "v${{ steps.get_version.outputs.version }}"
+
+      - name: Delete existing GitHub Release (if any)
+        run: gh release delete "v${{ steps.get_version.outputs.version }}" --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: "v${{ steps.get_version.outputs.version }}"
+          name: "v${{ steps.get_version.outputs.version }}"
+          body_path: .github/release_notes.md
+          draft: false
+          prerelease: ${{ contains(steps.get_version.outputs.version, 'rc') }}
+          token: ${{ secrets.ORG_PAT_GITHUB }}
