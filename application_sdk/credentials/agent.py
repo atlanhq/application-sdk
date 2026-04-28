@@ -82,8 +82,8 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
 
 
 async def resolve_agent_credential(
-    spec: "AgentCredentialSpec",
-    secret_store: "SecretStore",
+    spec: AgentCredentialSpec,
+    secret_store: SecretStore,
 ) -> dict[str, Any]:
     """Resolve a typed agent credential spec to a flat dict.
 
@@ -112,8 +112,8 @@ async def resolve_agent_credential(
     """
     raw = spec.to_raw_dict()
 
-    if spec.secret_path:
-        bundle = await _fetch_bundle(secret_store, spec.secret_path)
+    if spec.secret_path.strip():
+        bundle = await _fetch_bundle(secret_store, spec.secret_path.strip())
         resolved_flat = _substitute(raw, bundle)
     else:
         resolved_flat = raw
@@ -124,7 +124,7 @@ async def resolve_agent_credential(
 # Keep backward-compatible alias for existing callers and tests
 async def resolve_agent_json(
     agent_json: str,
-    secret_store: "SecretStore",
+    secret_store: SecretStore,
 ) -> dict[str, Any]:
     """Resolve an agent-shape JSON string to a flat dict.
 
@@ -146,9 +146,7 @@ async def resolve_agent_json(
     return await resolve_agent_credential(spec, secret_store)
 
 
-async def _fetch_bundle(
-    secret_store: "SecretStore", secret_path: str
-) -> dict[str, Any]:
+async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str, Any]:
     """Fetch and JSON-parse the secret bundle at ``secret-path``."""
     try:
         raw = await secret_store.get(secret_path)
