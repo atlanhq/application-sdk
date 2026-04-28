@@ -231,11 +231,11 @@ def create_activity_from_task(
                 stop_event.set()
                 try:
                     await asyncio.wait_for(heartbeat_task, timeout=1.0)
-                except (TimeoutError, Exception, BaseException):
+                except (TimeoutError, Exception):
                     heartbeat_task.cancel()
                     try:
                         await heartbeat_task
-                    except (Exception, BaseException):
+                    except Exception:
                         logger.debug(
                             "Heartbeat task did not cancel cleanly", exc_info=True
                         )
