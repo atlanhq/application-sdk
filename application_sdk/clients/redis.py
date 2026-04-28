@@ -181,6 +181,8 @@ class RedisClient(BaseRedisClient):
             self.redis_client.ping()
             logger.info("Sync Redis connection established for strict locking")
 
+        except ClientError:
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
 

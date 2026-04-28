@@ -113,7 +113,9 @@ class AzureClient(ClientInterface):
         self.credential: Optional[TokenCredential] = None
         self.auth_provider = AzureAuthProvider()
         self._services: Dict[str, Any] = {}
-        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
+            max_workers=max_workers
+        )
         self._connection_health = False
         self._kwargs = kwargs
 
@@ -131,6 +133,11 @@ class AzureClient(ClientInterface):
         """
         if credentials:
             self.credentials = credentials
+
+        if self._executor is None:
+            raise ClientError(
+                f"{ClientError.CLIENT_AUTH_ERROR}: client has been closed; instantiate a new AzureClient"
+            )
 
         try:
             logger.info("Loading Azure client...")
@@ -186,6 +193,8 @@ class AzureClient(ClientInterface):
             raise ClientError(
                 f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameter types - {str(e)}"
             ) from e
+        except ClientError:
+            raise
         except Exception as e:
             raise ClientError(
                 f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
@@ -212,7 +221,9 @@ class AzureClient(ClientInterface):
             self._services.clear()
 
             # Shutdown executor
-            self._executor.shutdown(wait=True)
+            if self._executor is not None:
+                self._executor.shutdown(wait=True)
+                self._executor = None
 
             # Reset connection health
             self._connection_health = False
