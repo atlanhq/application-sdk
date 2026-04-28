@@ -160,6 +160,21 @@ class DaprCredentialVault:
                         sorted(secret_data.keys()) if secret_data else "(empty)",
                     )
                 except Exception as exc:
+                    # Vault direct access failed (e.g. 403 permission denied).
+                    # Check if the S3 config already contains secrets
+                    # (pre-provisioned by Heracles via /config endpoint).
+                    _secret_keys = {"password", "token", "extra"}
+                    if _secret_keys & set(credential_config.keys()):
+                        logger.warning(
+                            "Vault secret fetch failed for guid=%s, but "
+                            "credential config from S3 already contains "
+                            "secret fields %s — using pre-provisioned "
+                            "credentials (Heracles flow). Vault error: %s",
+                            credential_guid,
+                            sorted(_secret_keys & set(credential_config.keys())),
+                            exc,
+                        )
+                        return credential_config
                     # Walk the exception chain to find the httpx response
                     # with the actual Vault error. Chain is typically:
                     # RuntimeError (rewrap) → httpx.HTTPStatusError
