@@ -344,13 +344,20 @@ class TestRunMain:
                 run_main(config)
                 mock_run.assert_called_once()
 
-    def test_handler_mode_raises_after_consolidation(self) -> None:
-        """``handler`` mode was removed in ARUN-342 — the dispatcher must
-        raise a clear error rather than silently routing to combined or
-        falling through to ``Unknown mode``."""
+    def test_handler_mode_emits_deprecation_warning(self) -> None:
+        """``handler`` mode is deprecated (ARUN-342) — should warn, not raise."""
+        import warnings
+
         config = AppConfig(mode="handler", app_module="pkg:App")
-        with pytest.raises(ValueError, match="ARUN-342"):
+        with (
+            mock.patch("application_sdk.main.run_handler_mode") as mock_handler,
+            warnings.catch_warnings(record=True) as w,
+        ):
+            warnings.simplefilter("always")
             run_main(config)
+            mock_handler.assert_called_once_with(config)
+            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+            assert any("ARUN-342" in str(x.message) for x in dep_warnings)
 
     def test_combined_mode_calls_asyncio_run(self) -> None:
         config = AppConfig(mode="combined", app_module="pkg:App")

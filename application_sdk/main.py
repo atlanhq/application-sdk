@@ -729,6 +729,94 @@ async def run_worker_mode(config: AppConfig) -> None:
     logger.info("Worker stopped")
 
 
+def run_handler_mode(config: AppConfig) -> None:
+    """Run the per-app HTTP handler service (standalone FastAPI + uvicorn).
+
+    .. deprecated::
+        Standalone handler pods are superseded by the ``common-app-server``
+        runtime introduced in ARUN-342. The per-app ``-server`` Deployment
+        will be removed from Helm charts once all core apps have migrated.
+        Use ``--mode combined`` for local development.
+
+        To suppress this warning set the environment variable
+        ``ATLAN_SUPPRESS_HANDLER_DEPRECATION=1``.
+    """
+    import asyncio
+    import os
+    import warnings
+
+    if not os.environ.get("ATLAN_SUPPRESS_HANDLER_DEPRECATION"):
+        warnings.warn(
+            "--mode handler is deprecated and will be removed in a future release. "
+            "Production HTTP traffic for core apps is now served by the "
+            "common-app-server runtime (ARUN-342). "
+            "Use --mode combined for local dev, or set "
+            "ATLAN_SUPPRESS_HANDLER_DEPRECATION=1 to silence this warning.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+
+    from application_sdk.execution._temporal.converter import (
+        create_data_converter_for_app,
+    )
+    from application_sdk.handler import DefaultHandler, run_app_handler_service
+    from application_sdk.infrastructure.context import set_infrastructure
+
+    infra = asyncio.run(_create_infrastructure())
+    set_infrastructure(infra)
+
+    logger.info(
+        "Starting handler mode (deprecated): app=%s host=%s port=%d",
+        config.app_module,
+        config.handler_host,
+        config.handler_port,
+    )
+
+    app_class = load_app_class(config.app_module)
+    app_name = app_class._app_name  # type: ignore[attr-defined]
+
+    handler_class = load_handler_class(
+        config.app_module,
+        handler_module_path=config.handler_module,
+    )
+    if handler_class is None:
+        handler_class = DefaultHandler
+        logger.info("Using DefaultHandler for %s", app_name)
+    else:
+        logger.info("Loaded custom handler %s for %s", handler_class.__name__, app_name)
+
+    handler = handler_class()
+    data_converter = create_data_converter_for_app(app_class)
+
+    run_app_handler_service(
+        handler,
+        host=config.handler_host,
+        port=config.handler_port,
+        log_level=config.log_level.lower(),
+        app_name=app_name,
+        app_class=app_class,
+        temporal_host=config.temporal_host,
+        temporal_namespace=config.temporal_namespace,
+        task_queue=config.task_queue,
+        data_converter=data_converter,
+        tls_enabled=config.tls_enabled,
+        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+        tls_client_cert_path=config.tls_client_cert_path,
+        tls_client_private_key_path=config.tls_client_private_key_path,
+        tls_domain=config.tls_domain,
+        auth_enabled=config.auth_enabled,
+        auth_client_id=config.auth_client_id,
+        auth_client_secret=config.auth_client_secret,
+        auth_token_url=config.auth_token_url,
+        auth_base_url=config.auth_base_url,
+        auth_scopes=config.auth_scopes,
+        secret_store=infra.secret_store,
+        storage=infra.storage,
+        frontend_assets_path=config.frontend_assets_path,
+    )
+    asyncio.run(_flush_observability())
+
+
 async def run_combined_mode(config: AppConfig) -> None:
     """Run worker + handler in a single process (SDR / docker-compose mode).
 
@@ -1098,15 +1186,22 @@ def run_main(config: AppConfig) -> None:
     elif config.mode == "combined":
         asyncio.run(run_combined_mode(config))
     elif config.mode == "handler":
-        raise ValueError(
-            "Mode 'handler' was removed in the server-consolidation work "
-            "(ARUN-342). Production HTTP traffic is now served by "
-            "common-app-server via application_sdk.routing.host_apps. "
-            "For local dev, use --mode combined."
-        )
+        import warnings as _warnings
+
+        if not os.environ.get("ATLAN_SUPPRESS_HANDLER_DEPRECATION"):
+            _warnings.warn(
+                "--mode handler is deprecated and will be removed in a future release. "
+                "Production HTTP traffic for core apps is now served by the "
+                "common-app-server runtime (ARUN-342). "
+                "Use --mode combined for local dev, or set "
+                "ATLAN_SUPPRESS_HANDLER_DEPRECATION=1 to silence this warning.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        run_handler_mode(config)
     else:
         raise ValueError(
-            f"Unknown mode: {config.mode!r}. Must be 'worker' or 'combined'."
+            f"Unknown mode: {config.mode!r}. Must be 'worker', 'handler', or 'combined'."
         )
 
 
@@ -1143,8 +1238,8 @@ Examples:
     parser.add_argument(
         "--mode",
         "-m",
-        choices=["worker", "combined"],
-        help="Execution mode",
+        choices=["worker", "handler", "combined"],
+        help="Execution mode ('handler' is deprecated — use 'combined' for local dev)",
     )
     parser.add_argument(
         "--app",
