@@ -55,8 +55,14 @@ from application_sdk.app.base import App
 from application_sdk.app.task import task
 from application_sdk.common.sql_filters import normalize_filters
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
+from application_sdk.execution import build_output_path
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage.transfer import upload as transfer_upload
+from application_sdk.templates.contracts.base_metadata_extraction import (
+    UploadInput,
+    UploadOutput,
+)
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -75,10 +81,6 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchViewsOutput,
     TransformInput,
     TransformOutput,
-)
-from application_sdk.templates.contracts.base_metadata_extraction import (
-    UploadInput,
-    UploadOutput,
 )
 
 if TYPE_CHECKING:
@@ -365,17 +367,19 @@ class SqlApp(App):
     )
     async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
         """Upload transformed output to the upstream Atlan store."""
-        from application_sdk.storage.transfer import upload  # noqa: PLC0415
-
         if not input.output_path:
-            return UploadOutput(records_uploaded=0)
+            return UploadOutput(migrated_files=0, total_files=0)
 
-        records = await upload(
-            source_prefix=input.output_path,
-            destination_prefix=input.output_path,
+        result = await transfer_upload(
+            local_path=input.output_path,
+            storage_path=build_output_path(),
         )
-        logger.info("Uploaded %d records to Atlan", records)
-        return UploadOutput(records_uploaded=records)
+        file_count = result.ref.file_count if result.ref else 0
+        logger.info("Uploaded %d files to Atlan (synced=%s)", file_count, result.synced)
+        return UploadOutput(
+            migrated_files=file_count,
+            total_files=file_count,
+        )
 
     # =====================================================================
     # Asset mapper stubs — connectors override these
