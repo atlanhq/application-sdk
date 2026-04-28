@@ -273,8 +273,8 @@ async def create_temporal_client(
     tls_client_cert_path: str = "",
     tls_client_private_key_path: str = "",
     tls_domain: str = "",
-    connect_max_attempts: int = 5,
-    connect_retry_delay_seconds: float = 2.0,
+    connect_max_attempts: int = 10,
+    connect_retry_delay_seconds: float = 0.5,
     enable_prometheus: bool = True,
     prometheus_bind_address: str = "",
 ) -> Client:
@@ -376,7 +376,7 @@ async def create_temporal_client(
                     exc_info=True,
                 )
                 await asyncio.sleep(delay)
-                delay *= 2
+                delay = min(delay * 2, 5.0)
             else:
                 logger.error(
                     "Temporal connection failed after %d attempts",
