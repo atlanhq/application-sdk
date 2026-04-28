@@ -39,7 +39,7 @@ class HelloWorldApp(App):
     @task(timeout_seconds=10, heartbeat_timeout_seconds=10)
     async def demo_task(self, input: HelloInput) -> HelloOutput:
         """A simple task that returns a greeting."""
-        logger.info("Running demo_task", extra={"name": input.name})
+        logger.info("Running demo_task for %s", input.name)
         return HelloOutput(message=f"Hello, {input.name}!")
 
     async def run(self, input: HelloInput) -> HelloOutput:  # type: ignore[override]

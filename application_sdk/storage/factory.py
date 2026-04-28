@@ -24,7 +24,7 @@ def create_local_store(root_path: str | Path) -> "LocalStore":
     Returns:
         A configured ``LocalStore`` instance.
     """
-    from obstore.store import LocalStore
+    from obstore.store import LocalStore  # noqa: PLC0415 — defensive: keep inline
 
     path = Path(root_path)
     path.mkdir(parents=True, exist_ok=True)
@@ -37,6 +37,6 @@ def create_memory_store() -> "MemoryStore":
     Returns:
         A configured ``MemoryStore`` instance.
     """
-    from obstore.store import MemoryStore
+    from obstore.store import MemoryStore  # noqa: PLC0415 — defensive: keep inline
 
     return MemoryStore()

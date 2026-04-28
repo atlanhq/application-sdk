@@ -159,7 +159,7 @@ def _load_tables_to_duckdb(
     union_query = " UNION ALL ".join(union_parts)
 
     # lazy import: heavy optional dependency (installed via [sql] extra)
-    import duckdb
+    import duckdb  # noqa: PLC0415 — optional dep: duckdb
 
     try:
         conn.execute(f"""
@@ -168,9 +168,9 @@ def _load_tables_to_duckdb(
         """)
     except duckdb.Error:
         logger.error(
-            "DuckDB failed to load JSON files",
-            file_count=len(json_files),
-            table_name=table_name,
+            "DuckDB failed to load %d JSON files for table %s",
+            len(json_files),
+            table_name,
             exc_info=True,
         )
         raise

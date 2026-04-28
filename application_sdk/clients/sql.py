@@ -98,7 +98,9 @@ class BaseSQLClient(ClientInterface):
 
         self.credentials = credentials  # Update the instance credentials
         try:
-            from sqlalchemy import create_engine
+            from sqlalchemy import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                create_engine,
+            )
 
             # Create engine but no persistent connection
             self.engine = create_engine(
@@ -380,7 +382,7 @@ class BaseSQLClient(ClientInterface):
                 connection = connection.execution_options(yield_per=batch_size)
 
             with ThreadPoolExecutor() as pool:
-                from sqlalchemy import text
+                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
                 cursor = await loop.run_in_executor(
                     pool, connection.execute, text(query)
@@ -421,9 +423,11 @@ class BaseSQLClient(ClientInterface):
             Union["pd.DataFrame", Iterator["pd.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
-        import pandas as pd
-        from pandas.compat._optional import import_optional_dependency
-        from sqlalchemy import text
+        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+        from pandas.compat._optional import (  # noqa: PLC0415 — optional dep: pandas
+            import_optional_dependency,
+        )
+        from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
         if import_optional_dependency("sqlalchemy", errors="ignore"):
             return pd.read_sql_query(text(query), conn, chunksize=chunksize)
@@ -458,7 +462,7 @@ class BaseSQLClient(ClientInterface):
         # Daft uses ConnectorX to read data from SQL by default for supported connectors
         # If a connection string is passed, it will use ConnectorX to read data
         # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-        import daft
+        import daft  # noqa: PLC0415 — optional dep: daft
 
         if not self.engine:
             raise ValueError("Engine is not initialized. Call load() first.")
@@ -489,11 +493,16 @@ class BaseSQLClient(ClientInterface):
         if isinstance(self.engine, str):
             raise ValueError("Engine should be an SQLAlchemy engine object")
 
-        from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+        from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
+            AsyncEngine,
+            AsyncSession,
+        )
 
         async_session = None
         if self.engine and isinstance(self.engine, AsyncEngine):
-            from sqlalchemy.orm import sessionmaker
+            from sqlalchemy.orm import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                sessionmaker,
+            )
 
             async_session = sessionmaker(
                 self.engine, expire_on_commit=False, class_=AsyncSession
@@ -543,7 +552,7 @@ class BaseSQLClient(ClientInterface):
         """
         try:
             result = await self._execute_async_read_operation(query, None)
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             if isinstance(result, pd.DataFrame):
                 return result
@@ -588,7 +597,9 @@ class AsyncBaseSQLClient(BaseSQLClient):
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
         try:
-            from sqlalchemy.ext.asyncio import create_async_engine
+            from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                create_async_engine,
+            )
 
             # Create async engine but no persistent connection
             self.engine = create_async_engine(
@@ -649,7 +660,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         # Use async context manager for automatic connection cleanup
         async with self.engine.connect() as connection:
             try:
-                from sqlalchemy import text
+                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
                 if use_server_side_cursor:
                     connection = await connection.execution_options(

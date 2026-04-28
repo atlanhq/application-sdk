@@ -99,7 +99,7 @@ class TemporalExecutorBackend:
                 When provided, the workflow name is ``"{app_name}:{entry_point}"``.
                 When omitted, defaults to the app name (single-entry-point apps).
         """
-        from uuid import uuid4
+        from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 
         input_data._correlation_id = context.correlation_id
 
@@ -162,7 +162,7 @@ class TemporalExecutorBackend:
                 When provided, the workflow name is ``"{app_name}:{entry_point}"``.
                 When omitted, defaults to the app name (single-entry-point apps).
         """
-        from uuid import uuid4
+        from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 
         input_data._correlation_id = context.correlation_id
 
@@ -213,7 +213,9 @@ def _build_tls_config(
         FileNotFoundError: If a specified cert file does not exist.
         ValueError: If client cert is provided without key or vice versa.
     """
-    from temporalio.service import TLSConfig
+    from temporalio.service import (  # noqa: PLC0415 — cold path: TLS reload only when cert paths configured
+        TLSConfig,
+    )
 
     server_root_ca_cert: bytes | None = None
     client_cert: bytes | None = None
@@ -315,13 +317,15 @@ async def create_temporal_client(
                 domain=tls_domain,
             )
         else:
-            from application_sdk.clients.ssl_utils import (  # deferred: only needed when no explicit TLS cert paths are provided
+            from application_sdk.clients.ssl_utils import (  # deferred: only needed when no explicit TLS cert paths are provided  # noqa: PLC0415 — cold path: ssl_utils only when no explicit cert paths
                 get_custom_ca_cert_bytes,
             )
 
             ca_cert_bytes = get_custom_ca_cert_bytes()
             if ca_cert_bytes:
-                from temporalio.service import TLSConfig
+                from temporalio.service import (  # noqa: PLC0415 — cold path: TLS only when reloaded
+                    TLSConfig,
+                )
 
                 tls_config = TLSConfig(server_root_ca_cert=ca_cert_bytes)
             else:

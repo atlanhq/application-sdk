@@ -355,7 +355,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         On the first run (no previous marker) returns an empty ``marker_timestamp``
         and a freshly generated ``next_marker_timestamp``.
         """
-        from application_sdk.common.incremental.marker import fetch_marker_from_storage
+        from application_sdk.common.incremental.marker import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            fetch_marker_from_storage,
+        )
 
         marker, next_marker = await fetch_marker_from_storage(
             connection_qualified_name=input.connection_qualified_name,
@@ -379,7 +381,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         exists (``current_state_available``). On the first run the state does
         not exist and the task returns with ``current_state_available=False``.
         """
-        from application_sdk.common.incremental.state.state_reader import (
+        from application_sdk.common.incremental.state.state_reader import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             download_current_state,
         )
 
@@ -408,18 +410,23 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Returns counts of batches, changed tables, and backfill tables.
         Zero batches means no incremental column extraction is needed.
         """
-        import json
+        import json  # noqa: PLC0415 — stdlib json; lazy use only
 
-        from application_sdk.common.incremental.column_extraction import (
+        from application_sdk.common.incremental.column_extraction import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_backfill_tables,
             get_tables_needing_column_extraction,
         )
-        from application_sdk.common.incremental.helpers import (
+        from application_sdk.common.incremental.helpers import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             download_s3_prefix_with_structure,
             get_persistent_artifacts_path,
         )
-        from application_sdk.execution import get_object_store_prefix
-        from application_sdk.storage.batch import download_prefix, upload_prefix
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            get_object_store_prefix,
+        )
+        from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            download_prefix,
+            upload_prefix,
+        )
 
         if not input.output_path:
             raise FileNotFoundError(
@@ -429,7 +436,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         # Step 1: Download transformed files from S3
         transformed_local_path = os.path.join(input.output_path, "transformed")
         transformed_s3_prefix = get_object_store_prefix(transformed_local_path)
-        import pathlib
+        import pathlib  # noqa: PLC0415 — stdlib pathlib; lazy use only
 
         transformed_dir = pathlib.Path(transformed_local_path)
         transformed_dir.mkdir(parents=True, exist_ok=True)
@@ -568,11 +575,15 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         The SDK handles all orchestration; the connector only needs to implement
         ``build_incremental_column_sql()``.
         """
-        import json
-        import pathlib
+        import json  # noqa: PLC0415 — stdlib json; lazy use only
+        import pathlib  # noqa: PLC0415 — stdlib pathlib; lazy use only
 
-        from application_sdk.execution import get_object_store_prefix
-        from application_sdk.storage.ops import download_file
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            get_object_store_prefix,
+        )
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            download_file,
+        )
 
         if not input.output_path:
             raise ValueError("output_path is required in ExecuteColumnBatchInput")
@@ -680,11 +691,11 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         4. Call ``create_current_state_snapshot()`` (copy + diff + delete detection + upload).
         5. Clean up temporary previous state directory.
         """
-        from application_sdk.common.incremental.helpers import (
+        from application_sdk.common.incremental.helpers import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_persistent_artifacts_path,
             get_persistent_s3_prefix,
         )
-        from application_sdk.common.incremental.state.state_writer import (
+        from application_sdk.common.incremental.state.state_writer import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             cleanup_previous_state,
             create_current_state_snapshot,
             download_transformed_data,
@@ -761,7 +772,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         if not input.next_marker_timestamp:
             return UpdateMarkerOutput(marker_written=False)
 
-        from application_sdk.common.incremental.marker import persist_marker_to_storage
+        from application_sdk.common.incremental.marker import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            persist_marker_to_storage,
+        )
 
         result = await persist_marker_to_storage(
             connection_qualified_name=input.connection_qualified_name,
@@ -787,7 +800,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Override individual tasks to customise connector behaviour; override
         this method only if you need to change the orchestration structure.
         """
-        from temporalio import workflow
+        from temporalio import workflow  # noqa: PLC0415 — defensive: keep inline
 
         workflow_id = input.workflow_id
         run_id = workflow.info().run_id
@@ -797,7 +810,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         # TODO(v3-cleanup): remove credential_guid fallback when all connectors use credential_ref.
         cred_ref = input.credential_ref
         if cred_ref is None and input.credential_guid:
-            from application_sdk.credentials import legacy_credential_ref
+            from application_sdk.credentials import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+                legacy_credential_ref,
+            )
 
             cred_ref = legacy_credential_ref(input.credential_guid)
 

@@ -28,15 +28,17 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 import warnings
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
@@ -293,11 +295,16 @@ async def _get_temporal_client() -> Client:
     if _temporal_client is not None:
         return _temporal_client
 
-    from application_sdk.execution import create_temporal_client
+    from application_sdk.execution import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+        create_temporal_client,
+    )
 
     api_key: str | None = None
     if _workflow_config.auth_enabled:
-        from application_sdk.execution import TemporalAuthConfig, TemporalAuthManager
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+            TemporalAuthConfig,
+            TemporalAuthManager,
+        )
 
         auth_config = TemporalAuthConfig(
             client_id=_workflow_config.auth_client_id,
@@ -311,11 +318,11 @@ async def _get_temporal_client() -> Client:
         logger.info("Acquired auth token for handler Temporal client")
 
     logger.info(
-        "Connecting to Temporal for workflow execution",
-        host=_workflow_config.host,
-        namespace=_workflow_config.namespace,
-        tls_enabled=_workflow_config.tls_enabled,
-        auth_enabled=_workflow_config.auth_enabled,
+        "Connecting to Temporal for workflow execution host=%s namespace=%s tls=%s auth=%s",
+        _workflow_config.host,
+        _workflow_config.namespace,
+        _workflow_config.tls_enabled,
+        _workflow_config.auth_enabled,
     )
 
     _temporal_client = await create_temporal_client(
@@ -431,12 +438,18 @@ def create_app_handler_service(
         auth_scopes=auth_scopes,
     )
 
-    from application_sdk.constants import ENABLE_MCP
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
+        ENABLE_MCP,
+    )
 
     if ENABLE_MCP and app_name:
-        from contextlib import asynccontextmanager
+        from contextlib import (  # noqa: PLC0415 — cold path: lifespan setup, only when MCP enabled
+            asynccontextmanager,
+        )
 
-        from application_sdk.server.mcp import MCPServer
+        from application_sdk.server.mcp import (  # noqa: PLC0415 — cold path: only when ENABLE_MCP set
+            MCPServer,
+        )
 
         _mcp_server = MCPServer(application_name=app_name)
 
@@ -457,7 +470,10 @@ def create_app_handler_service(
     else:
         app = FastAPI(title=title, description=description, version=version)
 
-    from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware
+    from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
+        LogMiddleware,
+        MetricsMiddleware,
+    )
 
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(LogMiddleware)
@@ -782,7 +798,7 @@ def create_app_handler_service(
             input_data.correlation_id = correlation_id
             input_data._correlation_id = correlation_id
 
-            from application_sdk.observability.correlation import (
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
                 CorrelationContext,
                 set_correlation_context,
             )
@@ -901,11 +917,12 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except Exception as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
                         workflow_id,
-                        e,
+                        type(exc).__name__,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -950,11 +967,12 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except Exception as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
                         workflow_id,
-                        e,
+                        type(exc).__name__,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -1069,7 +1087,9 @@ def create_app_handler_service(
             raise ValueError(f"Invalid config_id: {config_id!r}")
         if not _CONFIG_KEY_RE.match(config_type):
             raise ValueError(f"Invalid config_type: {config_type!r}")
-        from application_sdk.constants import APPLICATION_NAME
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app paths
+            APPLICATION_NAME,
+        )
 
         return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
 
@@ -1089,8 +1109,10 @@ def create_app_handler_service(
         try:
             await download_file(key, safe_tmp, _storage)
             return orjson.loads(Path(safe_tmp).read_bytes())
-        except Exception as exc:
-            logger.warning("Object-store config load failed for key=%s: %r", key, exc)
+        except Exception:
+            logger.warning(
+                "Object-store config load failed for key=%s", key, exc_info=True
+            )
             return None
         finally:
             if os.path.exists(safe_tmp):
@@ -1178,12 +1200,9 @@ def create_app_handler_service(
         if _storage is None:
             raise HTTPException(status_code=503, detail="Storage not configured")
 
-        import asyncio
-        import os
-        import shutil
-        from pathlib import PurePosixPath
-
-        from application_sdk.storage.ops import upload_file as _upload_file
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
+            upload_file as _upload_file,
+        )
 
         raw_name = filename or file.filename or "upload"
         # Strip non-alphanumeric chars and cap at 16 chars for object-store key safety.
@@ -1254,7 +1273,9 @@ def create_app_handler_service(
 
     @app.get("/dapr/subscribe")
     async def get_dapr_subscriptions() -> JSONResponse:
-        from application_sdk.constants import EVENT_STORE_NAME
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when emitting events
+            EVENT_STORE_NAME,
+        )
 
         result: list[dict[str, Any]] = []
 
@@ -1587,7 +1608,10 @@ def create_app_handler_service(
         @app.get("/metrics")
         async def prometheus_metrics() -> Response:
             """Expose application metrics in Prometheus exposition format."""
-            from prometheus_client import REGISTRY, generate_latest
+            from prometheus_client import (  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
+                REGISTRY,
+                generate_latest,
+            )
 
             return Response(
                 content=generate_latest(REGISTRY),
@@ -1600,8 +1624,6 @@ def create_app_handler_service(
 
     @app.get("/")
     async def frontend_home() -> HTMLResponse:
-        import os
-
         frontend_html_path = os.path.join(frontend_assets_path, "index.html")
         if os.path.exists(frontend_html_path):
             with open(frontend_html_path, encoding="utf-8") as f:
@@ -1645,7 +1667,7 @@ def run_app_handler_service(
         **kwargs: Additional keyword arguments forwarded to
             ``create_app_handler_service()``.
     """
-    import uvicorn
+    import uvicorn  # noqa: PLC0415 — cold path: uvicorn only when starting standalone server
 
     app = create_app_handler_service(handler, **kwargs)
     uvicorn.run(app, host=host, port=port, log_level=log_level)

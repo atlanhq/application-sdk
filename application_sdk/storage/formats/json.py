@@ -148,7 +148,7 @@ class JsonFileReader(Reader):
     ) -> AsyncIterator["pd.DataFrame"]:
         """Read the data from the JSON files and return as a batched pandas dataframe."""
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -172,7 +172,7 @@ class JsonFileReader(Reader):
     async def _get_dataframe(self) -> "pd.DataFrame":
         """Read the data from the JSON files and return as a single pandas dataframe."""
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -180,9 +180,7 @@ class JsonFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(json_files)
-            logger.info(
-                "Reading JSON files as pandas dataframe", file_count=len(json_files)
-            )
+            logger.info("Reading %d JSON files as pandas dataframe", len(json_files))
 
             return pd.concat(
                 (pd.read_json(json_file, lines=True) for json_file in json_files),
@@ -197,7 +195,7 @@ class JsonFileReader(Reader):
     ) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
         """Read the data from the JSON files and return as a batched daft dataframe."""
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -205,9 +203,7 @@ class JsonFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(json_files)
-            logger.info(
-                "Reading JSON files as daft batches", file_count=len(json_files)
-            )
+            logger.info("Reading %d JSON files as daft batches", len(json_files))
 
             # Yield each discovered file as separate batch with chunking
             for json_file in json_files:
@@ -218,7 +214,7 @@ class JsonFileReader(Reader):
     async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Read the data from the JSON files and return as a single daft dataframe."""
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -432,7 +428,6 @@ class JsonFileWriter(Writer):
                 labels={"type": "daft", "error": str(e)},
                 description="Number of errors while writing to JSON files",
             )
-            logger.error("Error writing daft dataframe to json", exc_info=True)
             raise
 
     async def _flush_daft_buffer(self, buffer: List[str], chunk_part: int):

@@ -145,7 +145,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
 
             # Add Prometheus metric reader if enabled
             if ENABLE_PROMETHEUS_METRICS:
-                from opentelemetry.exporter.prometheus import PrometheusMetricReader
+                from opentelemetry.exporter.prometheus import (  # noqa: PLC0415 — cold path: prometheus exporter only when ENABLE_PROMETHEUS_METRICS
+                    PrometheusMetricReader,
+                )
 
                 self._prometheus_reader = PrometheusMetricReader()
                 metric_readers.append(self._prometheus_reader)

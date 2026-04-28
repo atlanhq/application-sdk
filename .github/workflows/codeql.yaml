@@ -8,6 +8,7 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
+    types: [opened, synchronize, labeled, reopened]
     branches: [ "main" ]
   schedule:
     - cron: '45 12 * * 0'

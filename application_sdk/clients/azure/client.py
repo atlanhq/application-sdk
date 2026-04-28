@@ -137,7 +137,7 @@ class AzureClient(ClientInterface):
 
             # Handle credential resolution
             if "credential_guid" in self.credentials:
-                from application_sdk.infrastructure import (
+                from application_sdk.infrastructure import (  # noqa: PLC0415 — optional dep: dapr (azure-dapr credential pattern)
                     AsyncDaprClient,
                     DaprCredentialVault,
                 )
@@ -205,9 +205,7 @@ class AzureClient(ClientInterface):
                         await service_client.disconnect()
                 except Exception:
                     logger.warning(
-                        "Error closing service client",
-                        service_name=service_name,
-                        exc_info=True,
+                        "Error closing service client %s", service_name, exc_info=True
                     )
 
             # Clear service cache
@@ -266,6 +264,11 @@ class AzureClient(ClientInterface):
                     error=error,
                 )
             except Exception as e:
+                logger.debug(
+                    "Service health check failed for %s",
+                    service_name,
+                    exc_info=True,
+                )
                 health_status.services[service_name] = ServiceHealth(
                     status="error", error=str(e)
                 )
@@ -326,7 +329,9 @@ class AzureClient(ClientInterface):
             loop.create_task(self.close())
         except RuntimeError:
             # No event loop running, can't schedule async cleanup
-            logger.warning("No event loop running, async cleanup not possible")
+            logger.warning(
+                "No event loop running, async cleanup not possible", exc_info=True
+            )
 
     async def __aenter__(self):
         """Async context manager entry."""

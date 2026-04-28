@@ -152,7 +152,7 @@ async def finalize_multidb_results(
 
     if not write_to_file and concatenate:
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             valid_dataframes: List[pd.DataFrame] = []
             for df_generator in dataframe_list:
@@ -275,9 +275,7 @@ async def execute_multidb_flow(
             )
 
             if success:
-                logger.info(
-                    "Successfully processed database", database_name=database_name
-                )
+                logger.info("Successfully processed database %s", database_name)
 
         except Exception:
             logger.error(
@@ -294,9 +292,9 @@ async def execute_multidb_flow(
 
     # Log results
     logger.info(
-        "Successfully processed databases",
-        count=len(successful_databases),
-        databases=successful_databases,
+        "Successfully processed %d databases: %s",
+        len(successful_databases),
+        successful_databases,
     )
 
     # Finalize results

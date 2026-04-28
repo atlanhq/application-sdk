@@ -70,7 +70,7 @@ async def _emit_worker_start_event(
     use_worker_versioning: bool = False,
 ) -> None:
     """Emit a worker_start lifecycle event via the v3 infrastructure event binding."""
-    from application_sdk.constants import (
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup config
         APP_SDK_VERSION,
         APP_TYPE,
         APPLICATION_VERSION,
@@ -78,16 +78,18 @@ async def _emit_worker_start_event(
         RELEASE_CHANNEL,
         RELEASE_ID,
     )
-    from application_sdk.contracts.events import (
+    from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
         ApplicationEventNames,
         Event,
         EventTypes,
         WorkerStartEventData,
     )
-    from application_sdk.execution._temporal.interceptors.events import (
+    from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         _publish_event_via_binding,
     )
-    from application_sdk.infrastructure.bindings import BindingError
+    from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+        BindingError,
+    )
 
     deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
     host_part, _, port_part = host.partition(":")
@@ -122,7 +124,8 @@ async def _emit_worker_start_event(
         await _publish_event_via_binding(event)
     except BindingError:
         logger.warning(
-            "eventstore binding unavailable — worker_start event not emitted"
+            "eventstore binding unavailable — worker_start event not emitted",
+            exc_info=True,
         )
     except Exception:
         logger.warning("Failed to emit worker_start event", exc_info=True)
@@ -176,7 +179,7 @@ def create_worker(
 
     # ExecutionContextInterceptor is always first — it populates the ContextVar that
     # all downstream interceptors and user code read for observability context.
-    from application_sdk.execution._temporal.interceptors.execution_context_interceptor import (
+    from application_sdk.execution._temporal.interceptors.execution_context_interceptor import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         ExecutionContextInterceptor,
     )
 
@@ -184,7 +187,7 @@ def create_worker(
     all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_correlation_interceptor:
-        from application_sdk.execution._temporal.interceptors.correlation_interceptor import (
+        from application_sdk.execution._temporal.interceptors.correlation_interceptor import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             CorrelationContextInterceptor,
         )
 
@@ -196,7 +199,9 @@ def create_worker(
     # Gated behind ATLAN_ENABLE_OTLP_TRACES so apps not using traces pay nothing.
     if os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true":
         try:
-            from temporalio.contrib.opentelemetry import TracingInterceptor
+            from temporalio.contrib.opentelemetry import (  # noqa: PLC0415 — cold path: only when OTel tracing enabled
+                TracingInterceptor,
+            )
 
             all_interceptors.append(TracingInterceptor())
             logger.info(
@@ -206,21 +211,26 @@ def create_worker(
         except ImportError:
             logger.warning(
                 "ATLAN_ENABLE_OTLP_TRACES=true but temporalio.contrib.opentelemetry "
-                "is not available; falling back to empty trace_ids"
+                "is not available; falling back to empty trace_ids",
+                exc_info=True,
             )
 
     # AppVitalsInterceptor — emits lifecycle metrics on workflow/activity completion.
     # Must come after ExecutionContext, CorrelationContext, and TracingInterceptor
     # so ContextVars and span context are set when we emit.
-    from application_sdk.constants import ENABLE_APP_VITALS
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: ENABLE_APP_VITALS guard
+        ENABLE_APP_VITALS,
+    )
 
     if ENABLE_APP_VITALS:
-        from application_sdk.observability.app_vitals import AppVitalsInterceptor
+        from application_sdk.observability.app_vitals import (  # noqa: PLC0415 — cold path: only when ENABLE_APP_VITALS
+            AppVitalsInterceptor,
+        )
 
         all_interceptors.append(AppVitalsInterceptor())
 
     if interceptor_settings.enable_output_interceptor:
-        from application_sdk.execution._temporal.interceptors.outputs import (
+        from application_sdk.execution._temporal.interceptors.outputs import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             OutputInterceptor,
         )
 
@@ -233,7 +243,7 @@ def create_worker(
     )
 
     if interceptor_settings.enable_event_interceptor:
-        from application_sdk.execution._temporal.interceptors.events import (
+        from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             EventInterceptor,
             publish_event,
         )
@@ -241,7 +251,7 @@ def create_worker(
         all_interceptors.append(EventInterceptor())
         task_activities = [*task_activities, publish_event]
 
-    from application_sdk.execution._temporal.interceptors.activity_failure_logging import (
+    from application_sdk.execution._temporal.interceptors.activity_failure_logging import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         TaskFailureLoggingInterceptor,
     )
 
