@@ -56,6 +56,31 @@ def test_load(mock_create_engine: Any, sql_client: BaseSQLClient):
     assert sql_client.connection is None
 
 
+@patch("sqlalchemy.create_engine")
+def test_load_respects_pool_pre_ping_override(
+    mock_create_engine: Any, sql_client: BaseSQLClient
+):
+    assert sql_client.DB_CONFIG is not None
+    sql_client.DB_CONFIG = DatabaseConfig(
+        template="test://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        connect_args={},
+        pool_pre_ping=False,
+    )
+    mock_engine = MagicMock()
+    mock_create_engine.return_value = mock_engine
+
+    asyncio.run(sql_client.load({"username": "test_user", "password": "test_password"}))
+
+    mock_create_engine.assert_called_once_with(
+        sql_client.get_sqlalchemy_connection_string(),
+        connect_args=sql_client.DB_CONFIG.connect_args,
+        pool_pre_ping=False,
+    )
+    assert sql_client.engine == mock_engine
+    assert sql_client.connection is None
+
+
 @pytest.mark.asyncio
 @patch("application_sdk.clients.sql.asyncio.to_thread")
 @patch("sqlalchemy.create_engine")
