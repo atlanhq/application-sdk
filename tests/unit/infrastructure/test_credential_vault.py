@@ -225,6 +225,40 @@ class TestDaprCredentialVaultGetCredentials:
             with pytest.raises(CredentialVaultError, match="Failed to fetch secrets"):
                 await vault.get_credentials("60d7a92a-ac62-4520-9aa1-e78ae991977f")
 
+    async def test_vault_403_surfaces_permission_denied_message(self) -> None:
+        """Vault 403 must produce a clear 'permission denied' error, not
+        a generic 'failed to fetch' message (BLDX-1151)."""
+        import httpx
+
+        config = {"credentialSource": "direct", "host": "cloud.getdbt.com"}
+        mock_client = MagicMock()
+
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        mock_client.invoke_binding = AsyncMock(
+            return_value=BindingResult(data=json.dumps(config).encode(), metadata={})
+        )
+        # Simulate the exact Dapr response for Vault 403
+        # The _get_secret method wraps httpx errors in RuntimeError
+        vault_error = RuntimeError("Failed to fetch secret (component=dbt-secretstore)")
+        vault_error.__cause__ = httpx.HTTPStatusError(
+            "Server error '500 Internal Server Error'",
+            request=httpx.Request(
+                "GET",
+                "http://localhost:3500/v1.0/secrets/dbt-secretstore/guid",
+            ),
+            response=httpx.Response(
+                500,
+                text='{"errorCode":"ERR_SECRET_GET","message":"status code 403, body {\\"errors\\":[\\"permission denied\\"]}"}',
+            ),
+        )
+        mock_client.get_secret = AsyncMock(side_effect=vault_error)
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError, match="permission denied"):
+                await vault.get_credentials("my-guid")
+
     async def test_secret_store_error_includes_credential_guid(self) -> None:
         """Error message must include the credential GUID for debugging."""
         config = {"credentialSource": "direct", "host": "example.com"}

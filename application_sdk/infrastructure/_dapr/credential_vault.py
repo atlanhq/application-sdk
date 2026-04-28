@@ -160,12 +160,44 @@ class DaprCredentialVault:
                         sorted(secret_data.keys()) if secret_data else "(empty)",
                     )
                 except Exception as exc:
+                    # Walk the exception chain to find the httpx response
+                    # with the actual Vault error. Chain is typically:
+                    # RuntimeError (rewrap) → httpx.HTTPStatusError
+                    import httpx as _httpx
+
+                    detail = str(exc)
+                    cause: BaseException | None = exc
+                    while cause is not None:
+                        if isinstance(cause, _httpx.HTTPStatusError):
+                            resp = cause.response
+                            status = resp.status_code
+                            body = resp.text[:500] if resp.text else ""
+                            if "permission denied" in body.lower():
+                                detail = (
+                                    "Vault returned 403 — permission denied. "
+                                    "The Dapr secret store token does not "
+                                    "have read access to the secret path. "
+                                    f"Vault response: {body}"
+                                )
+                            elif "not found" in body.lower():
+                                detail = (
+                                    "Secret not found in Vault. The credential "
+                                    "may not have been written to the secret "
+                                    f"store. Vault response: {body}"
+                                )
+                            else:
+                                detail = (
+                                    f"Vault returned HTTP {status}. "
+                                    f"Response: {body}"
+                                )
+                            break
+                        cause = getattr(cause, "__cause__", None)
+
                     raise CredentialVaultError(
-                        f"Failed to fetch secrets for credential {credential_guid} "
-                        f"from secret store '{self._secret_store_name}' "
-                        f"(key={key_to_fetch}). "
-                        "The workflow cannot proceed without credentials. "
-                        "Check Dapr secret store component logs and Vault connectivity."
+                        f"Failed to fetch secrets for credential "
+                        f"{credential_guid} from secret store "
+                        f"'{self._secret_store_name}' "
+                        f"(key={key_to_fetch}): {detail}"
                     ) from exc
             else:
                 logger.info(
