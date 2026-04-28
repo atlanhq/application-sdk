@@ -854,7 +854,6 @@ class TestFetchTablesHappyPath:
 
     async def test_fetch_tables_returns_tables_and_closes_client(self) -> None:
         from application_sdk.templates.contracts.sql_metadata import (
-            ExtractionTaskInput,
             FetchTablesInput,
             FetchTablesOutput,
         )

@@ -457,7 +457,7 @@ class TestContextManagers:
                 await asyncio.sleep(0)
                 mock_close.assert_awaited_once()
 
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
 
     async def test_async_enter_returns_self(self):
         client = AzureClient()

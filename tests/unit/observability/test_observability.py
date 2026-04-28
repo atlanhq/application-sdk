@@ -593,7 +593,7 @@ class TestAddRecord:
         # Close the captured coro to avoid "never awaited" warnings.
         try:
             captured["coro"].close()
-        except Exception:
+        except Exception:  # noqa: S110 — closing dead test-scaffold coroutine; nothing to log
             pass
 
     def test_add_record_swallows_process_record_exception(

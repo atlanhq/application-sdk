@@ -173,7 +173,7 @@ class TestAutoHeartbeatLoop:
         async def fake_wait_for(coro, timeout):
             try:
                 coro.close()
-            except Exception:
+            except Exception:  # noqa: S110 — closing dead test-scaffold coroutine; nothing to log
                 pass
             stop.set()
             return None  # no TimeoutError → break
@@ -209,7 +209,7 @@ class TestAutoHeartbeatLoop:
             # Cancel the awaitable so no warnings about un-awaited coroutines.
             try:
                 coro.close()
-            except Exception:
+            except Exception:  # noqa: S110 — closing dead test-scaffold coroutine; nothing to log
                 pass
             raise asyncio.TimeoutError()
 

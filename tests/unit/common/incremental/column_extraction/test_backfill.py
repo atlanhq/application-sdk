@@ -54,9 +54,7 @@ def _table_record(qn: str, type_name: str = "Table") -> dict:
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8"
-    )
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +221,7 @@ class TestLoadTablesToDuckDB:
                 count = _load_tables_to_duckdb(conn, base, "t_empty2")
                 assert count is None
                 # Verify the table is empty
-                count_row = conn.execute(
-                    "SELECT COUNT(*) FROM t_empty2"
-                ).fetchone()
+                count_row = conn.execute("SELECT COUNT(*) FROM t_empty2").fetchone()
                 assert count_row[0] == 0
             finally:
                 conn.close()
@@ -259,12 +255,8 @@ class TestLoadTablesToDuckDB:
         """Multiple files → UNION ALL combines them."""
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "base"
-            _write_jsonl(
-                base / "table" / "chunk-0.json", [_table_record("db/s/t1")]
-            )
-            _write_jsonl(
-                base / "table" / "chunk-1.json", [_table_record("db/s/t2")]
-            )
+            _write_jsonl(base / "table" / "chunk-0.json", [_table_record("db/s/t1")])
+            _write_jsonl(base / "table" / "chunk-1.json", [_table_record("db/s/t2")])
             conn = _connect()
             try:
                 count = _load_tables_to_duckdb(conn, base, "t_multi")
@@ -312,9 +304,7 @@ class TestLoadTablesToDuckDB:
             (base / "table").mkdir(parents=True)
             conn = _connect()
             try:
-                with patch.object(
-                    Path, "glob", side_effect=OSError("disk gone")
-                ):
+                with patch.object(Path, "glob", side_effect=OSError("disk gone")):
                     with pytest.raises(Exception, match="Failed to scan JSON files"):
                         _load_tables_to_duckdb(conn, base, "t_oserr")
             finally:
@@ -328,9 +318,7 @@ class TestLoadTablesToDuckDB:
         duckdb_mod = _duckdb_or_skip()
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "base"
-            _write_jsonl(
-                base / "table" / "chunk-0.json", [_table_record("db/s/t1")]
-            )
+            _write_jsonl(base / "table" / "chunk-0.json", [_table_record("db/s/t1")])
             conn = _connect()
             try:
                 # First CREATE succeeds; second will fail with duckdb.Error

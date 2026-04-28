@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import importlib
-import threading
 from typing import Any
 from unittest import mock
 
@@ -511,7 +510,7 @@ class TestProcessQueue:
             # Make sure we don't leak the inner queue.get coroutine.
             try:
                 coro.close()
-            except Exception:
+            except Exception:  # noqa: S110 — closing dead test-scaffold coroutine; nothing to log
                 pass
             if call_count["n"] == 1:
                 # Simulate "queue.get returned a record".
@@ -559,7 +558,7 @@ class TestClose:
             consumed["called"] = True
             try:
                 coro.close()
-            except Exception:
+            except Exception:  # noqa: S110 — closing dead test-scaffold coroutine; nothing to log
                 pass
 
         fake_loop.run_until_complete.side_effect = _consume
@@ -604,7 +603,7 @@ class TestClose:
             # Close the coroutine to avoid "never awaited" warnings.
             try:
                 coro.close()
-            except Exception:
+            except Exception:  # noqa: S110 — closing dead test-scaffold coroutine; nothing to log
                 pass
             captured["called"] = True
             return fake_future
