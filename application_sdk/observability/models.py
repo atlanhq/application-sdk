@@ -40,6 +40,16 @@ class MetricRecord:
     description: Optional[str] = None
     unit: Optional[str] = None
 
+    @property
+    def otel_description(self) -> str:
+        """Return an OpenTelemetry-safe description for instrument creation."""
+        return self.description or ""
+
+    @property
+    def otel_unit(self) -> str:
+        """Return an OpenTelemetry-safe unit for instrument creation."""
+        return self.unit or ""
+
 
 @dataclass
 class TraceRecord:
