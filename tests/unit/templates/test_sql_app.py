@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from typing import Any, ClassVar
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
 
+from application_sdk.credentials.ref import CredentialRef
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     FetchColumnsInput,
@@ -30,9 +31,9 @@ from application_sdk.templates.sql_app import SqlApp
 class FakeSQLClient:
     """Mock SQL client for testing."""
 
-    def __init__(self):
+    def __init__(self, results: pd.DataFrame | None = None):
         self.loaded = False
-        self._results = pd.DataFrame()
+        self._results = results if results is not None else pd.DataFrame()
 
     async def load(self, credentials=None):
         self.loaded = True
@@ -42,6 +43,11 @@ class FakeSQLClient:
 
     async def get_results(self, sql: str) -> pd.DataFrame:
         return self._results
+
+
+def _mock_init_client(results: pd.DataFrame) -> AsyncMock:
+    """Create an AsyncMock that returns a FakeSQLClient with given results."""
+    return AsyncMock(return_value=FakeSQLClient(results=results))
 
 
 class TestSqlApp(SqlApp):
@@ -128,9 +134,9 @@ class TestBuildTaskInput:
 
     def test_builds_with_credential_ref(self):
         src = ExtractionInput(workflow_id="wf-2")
-        mock_ref = MagicMock()
-        result = SqlApp.build_task_input(FetchSchemasInput, src, cred_ref=mock_ref)
-        assert result.credential_ref is mock_ref
+        cred_ref = CredentialRef(credential_guid="test-guid")
+        result = SqlApp.build_task_input(FetchSchemasInput, src, cred_ref=cred_ref)
+        assert result.credential_ref.credential_guid == "test-guid"
 
     def test_builds_different_input_types(self):
         src = ExtractionInput(workflow_id="wf-3")
@@ -153,10 +159,10 @@ class TestFetchTasks:
     """Test SQL metadata fetch tasks."""
 
     async def test_fetch_databases_returns_count(self, app, tmp_path):
-        FakeSQLClient._results = pd.DataFrame({"database_name": ["db1", "db2"]})
+        df = pd.DataFrame({"database_name": ["db1", "db2"]})
         input_ = _make_task_input(FetchDatabasesInput, output_path=str(tmp_path))
 
-        with patch.object(app, "_init_sql_client", return_value=FakeSQLClient()):
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
             result = await app.fetch_databases(input_)
 
         assert result.total_record_count == 2
@@ -170,10 +176,10 @@ class TestFetchTasks:
         assert result.chunk_count == 0
 
     async def test_fetch_schemas_writes_parquet(self, app, tmp_path):
-        FakeSQLClient._results = pd.DataFrame({"schema_name": ["public", "private"]})
+        df = pd.DataFrame({"schema_name": ["public", "private"]})
         input_ = _make_task_input(FetchSchemasInput, output_path=str(tmp_path))
 
-        with patch.object(app, "_init_sql_client", return_value=FakeSQLClient()):
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
             result = await app.fetch_schemas(input_)
 
         assert result.total_record_count == 2
@@ -182,23 +188,19 @@ class TestFetchTasks:
         assert len(list(parquet_dir.glob("*.parquet"))) == 1
 
     async def test_fetch_tables_returns_count(self, app, tmp_path):
-        FakeSQLClient._results = pd.DataFrame(
-            {"table_name": ["users", "orders", "products"]}
-        )
+        df = pd.DataFrame({"table_name": ["users", "orders", "products"]})
         input_ = _make_task_input(FetchTablesInput, output_path=str(tmp_path))
 
-        with patch.object(app, "_init_sql_client", return_value=FakeSQLClient()):
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
             result = await app.fetch_tables(input_)
 
         assert result.total_record_count == 3
 
     async def test_fetch_columns_returns_count(self, app, tmp_path):
-        FakeSQLClient._results = pd.DataFrame(
-            {"column_name": ["id", "name", "email", "created_at"]}
-        )
+        df = pd.DataFrame({"column_name": ["id", "name", "email", "created_at"]})
         input_ = _make_task_input(FetchColumnsInput, output_path=str(tmp_path))
 
-        with patch.object(app, "_init_sql_client", return_value=FakeSQLClient()):
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
             result = await app.fetch_columns(input_)
 
         assert result.total_record_count == 4
@@ -219,10 +221,10 @@ class TestFetchViewsAndProcedures:
 
     async def test_fetch_views_with_sql_returns_count(self, app, tmp_path):
         app.fetch_view_sql = "SELECT view_name FROM views"
-        FakeSQLClient._results = pd.DataFrame({"view_name": ["v1", "v2"]})
+        df = pd.DataFrame({"view_name": ["v1", "v2"]})
         input_ = _make_task_input(FetchViewsInput, output_path=str(tmp_path))
 
-        with patch.object(app, "_init_sql_client", return_value=FakeSQLClient()):
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
             result = await app.fetch_views(input_)
 
         assert result.total_record_count == 2

@@ -586,6 +586,8 @@ class SqlApp(App):
                         entity_bytes = json.dumps(asset.to_nested_dict()).encode()
                     elif hasattr(asset, "model_dump"):
                         entity_bytes = json.dumps(asset.model_dump()).encode()
+                    elif isinstance(asset, dict):
+                        entity_bytes = json.dumps(asset).encode()
                     else:
                         entity_bytes = json.dumps(record).encode()
                     f.write(entity_bytes + b"\n")
