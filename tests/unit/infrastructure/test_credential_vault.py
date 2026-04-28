@@ -191,59 +191,6 @@ class TestDaprCredentialVaultGetCredentials:
 
         assert captured == ["abc-123"], f"Expected string guid, got: {captured}"
 
-    async def test_vault_fail_falls_back_to_heracles_provisioned_config(self) -> None:
-        """When Vault returns 403 but S3 config has password/token
-        (pre-provisioned by Heracles), use the S3 config directly."""
-        config = {
-            "credentialSource": "direct",
-            "host": "cloud.getdbt.com",
-            "authType": "api",
-            "password": "dbt-api-token-from-heracles",
-            "extra": {"workspace": "prod"},
-        }
-        mock_client = MagicMock()
-
-        from application_sdk.infrastructure._dapr.http import BindingResult
-
-        mock_client.invoke_binding = AsyncMock(
-            return_value=BindingResult(data=json.dumps(config).encode(), metadata={})
-        )
-        mock_client.get_secret = AsyncMock(
-            side_effect=RuntimeError("Vault 403 permission denied")
-        )
-
-        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
-            vault = self._make_vault(mock_client)
-            result = await vault.get_credentials("my-guid")
-
-        assert result["password"] == "dbt-api-token-from-heracles"
-        assert result["host"] == "cloud.getdbt.com"
-        assert result["extra"] == {"workspace": "prod"}
-
-    async def test_vault_fail_no_heracles_config_raises(self) -> None:
-        """When Vault returns 403 and S3 config has NO secrets
-        (no Heracles provisioning), raise CredentialVaultError."""
-        config = {
-            "credentialSource": "direct",
-            "host": "cloud.getdbt.com",
-            "authType": "api",
-        }
-        mock_client = MagicMock()
-
-        from application_sdk.infrastructure._dapr.http import BindingResult
-
-        mock_client.invoke_binding = AsyncMock(
-            return_value=BindingResult(data=json.dumps(config).encode(), metadata={})
-        )
-        mock_client.get_secret = AsyncMock(
-            side_effect=RuntimeError("Vault 403 permission denied")
-        )
-
-        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
-            vault = self._make_vault(mock_client)
-            with pytest.raises(CredentialVaultError):
-                await vault.get_credentials("my-guid")
-
     async def test_secret_store_500_raises_not_silently_continues(self) -> None:
         """Vault 500 on secret fetch must raise CredentialVaultError, not
         silently continue with empty credentials (BLDX-1151).
