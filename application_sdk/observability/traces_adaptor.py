@@ -32,6 +32,11 @@ from application_sdk.observability.utils import (
 
 __all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces"]
 
+# SDK logger for module-level diagnostics (init failures, etc.). Uses the SDK
+# logger rather than the root `logging` module so messages are routed through
+# the configured handlers.
+_module_logger = get_logger(__name__)
+
 
 class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
     """A traces adapter for Atlan that extends AtlanObservability.
@@ -87,7 +92,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                     ).start()
                 AtlanTracesAdapter._flush_task_started = True
             except Exception:
-                logging.error("Failed to start traces flush task", exc_info=True)
+                _module_logger.error("Failed to start traces flush task", exc_info=True)
 
     def _setup_otel_traces(self):
         """Set up OpenTelemetry traces exporter and configuration.

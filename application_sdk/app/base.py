@@ -285,9 +285,12 @@ def _get_execution_id_from_task() -> str:
         RuntimeError: If called outside a @task method.
     """
     try:
-        return activity.info().workflow_id or ""
+        wid = activity.info().workflow_id
     except Exception as e:
         raise AppContextError("Cannot access app state outside of task context") from e
+    if not wid:
+        raise AppContextError("activity workflow_id is empty")
+    return wid
 
 
 class TaskStateAccessor:
@@ -564,9 +567,15 @@ class App(ABC):
         try:
             hints = get_type_hints(cls.run)
         except Exception:
-            # Unresolvable annotations (e.g. forward refs) — skip silently.
-            _task_logger.debug(
-                "Skipping run() annotation validation for %s: could not resolve type hints",
+            # Annotations are present but cannot be resolved (e.g. renamed
+            # forward refs, missing imports). Keep the registry tolerant —
+            # don't raise — but make the failure visible so the App doesn't
+            # silently disappear from the registry.
+            _task_logger.warning(
+                "Skipping run() annotation validation for %s: get_type_hints "
+                "failed to resolve annotations (likely an unresolved forward "
+                "reference or missing import). Skipping registration of run() "
+                "type validation; the App will still be registered.",
                 cls.__name__,
                 exc_info=True,
             )
