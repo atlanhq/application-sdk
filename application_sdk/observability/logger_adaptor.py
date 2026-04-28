@@ -508,7 +508,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             record (Any): Input log record, can be a loguru message or pre-built dict.
 
         Returns:
-            Dict[str, Any]: Standardized dictionary representation of the log record.
+            dict[str, Any]: Standardized dictionary representation of the log record.
 
         Raises:
             ValueError: If the record format is not supported.
@@ -604,10 +604,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         Args:
             msg (Any): Original log message
-            kwargs (Dict[str, Any]): Additional logging parameters
+            kwargs (dict[str, Any]): Additional logging parameters
 
         Returns:
-            Tuple[Any, Dict[str, Any]]: Processed message and updated kwargs with context
+            tuple[Any, dict[str, Any]]: Processed message and updated kwargs with context
 
         This method:
         - Adds request context if available
@@ -837,7 +837,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         """Send log record to OpenTelemetry.
 
         Args:
-            record (Dict[str, Any]): Log record dict to send
+            record (dict[str, Any]): Log record dict to send
 
         This method:
         - Creates an OpenTelemetry LogRecord

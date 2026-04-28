@@ -82,7 +82,7 @@ jobs:
         run: |
           python3 -m venv /tmp/bump-venv
           /tmp/bump-venv/bin/pip install semver packaging -q
-          /tmp/bump-venv/bin/python .sdk-scripts/.github/scripts/release.py main "${{ steps.versions.outputs.current }}"
+          /tmp/bump-venv/bin/python .sdk-scripts/.github/scripts/release.py "${{ inputs.target_branch }}" "${{ steps.versions.outputs.current }}"
           uv lock
           NEW=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "new=${NEW}" >> "$GITHUB_OUTPUT"
@@ -107,10 +107,20 @@ jobs:
           git commit -m "chore: bump version to ${{ steps.bump.outputs.new }}"
           git push origin "$BRANCH" --force
 
-          gh pr create \
+          EXISTING=$(gh pr list \
+            --head "$BRANCH" \
             --base "${{ inputs.target_branch }}" \
-            --title "Bump version to ${{ steps.bump.outputs.new }}" \
-            --body "Automated version bump after merge to ${{ inputs.target_branch }}.
+            --state open \
+            --json number \
+            --jq '.[0].number')
+
+          if [ -n "$EXISTING" ]; then
+            echo "PR #${EXISTING} already exists for ${BRANCH}, skipping creation."
+          else
+            gh pr create \
+              --base "${{ inputs.target_branch }}" \
+              --title "Bump version to ${{ steps.bump.outputs.new }}" \
+              --body "Automated version bump after merge to ${{ inputs.target_branch }}.
 
           This PR updates:
           - pyproject.toml
@@ -118,5 +128,5 @@ jobs:
           - CHANGELOG.md
 
           Version: ${{ steps.versions.outputs.current }} → ${{ steps.bump.outputs.new }}" \
-            --label "${{ inputs.release_label }}" \
-          || echo "PR already exists for ${BRANCH}, skipping creation."
+              --label "${{ inputs.release_label }}"
+          fi

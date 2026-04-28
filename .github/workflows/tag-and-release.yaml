@@ -72,10 +72,21 @@ jobs:
           set -euo pipefail
           git config --global user.name 'atlan-ci'
           git config --global user.email 'it@atlan.com'
-          git push origin ":refs/tags/v${{ steps.get_version.outputs.version }}" 2>/dev/null || true
-          git tag -d "v${{ steps.get_version.outputs.version }}" 2>/dev/null || true
-          git tag -a "v${{ steps.get_version.outputs.version }}" -m "Release v${{ steps.get_version.outputs.version }}"
-          git push origin "v${{ steps.get_version.outputs.version }}"
+          TAG="v${{ steps.get_version.outputs.version }}"
+          TARGET="$(git rev-parse HEAD)"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+            EXISTING="$(git rev-parse "${TAG}^{}")"
+            if [ "${EXISTING}" = "${TARGET}" ]; then
+              echo "Tag ${TAG} already exists on ${TARGET}; skipping."
+            else
+              echo "::error::Tag ${TAG} already exists on ${EXISTING}, expected ${TARGET}. Refusing to rewrite a published tag."
+              exit 1
+            fi
+          else
+            git tag -a "${TAG}" -m "Release ${TAG}"
+            git push origin "${TAG}"
+          fi
 
       - name: Delete existing GitHub Release (if any)
         run: gh release delete "v${{ steps.get_version.outputs.version }}" --yes 2>/dev/null || true

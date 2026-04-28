@@ -184,8 +184,15 @@ jobs:
 
           # Release-event tag ladder: version-pinned + :latest (stable) or version-only (pre-release)
           RELEASE_TAG="${{ inputs.release_tag }}"
+          # Strip any accidental whitespace/newlines and validate semver format
+          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
+          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
           RELEASE_TAGS=""
           if [ -n "${RELEASE_TAG}" ]; then
+            if [[ ! "${RELEASE_TAG}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Invalid release_tag format: '${RELEASE_TAG}'"
+              exit 1
+            fi
             VERSION="${RELEASE_TAG#v}"
             MAJOR=$(echo "$VERSION" | cut -d. -f1)
             MINOR=$(echo "$VERSION" | cut -d. -f1-2)
