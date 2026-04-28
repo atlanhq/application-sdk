@@ -197,10 +197,20 @@ markers = [
 ]
 
 [tool.coverage.run]
+# `application_sdk/testing/**` ships test infrastructure for downstream apps
+# (mocks, fixtures) and internal test runners (integration, e2e, hypothesis,
+# parity, scale generation) that are exercised under different markers, not
+# under unit tests. Including them in unit coverage drags the percentage down
+# without representing product-code quality. Keep `mocks.py` and `fixtures.py`
+# in scope since downstream apps consume them as a public testing API.
 omit = [
     "tests/**",
     "application_sdk/test_utils/**",
     "application_sdk/testing/scale_data_generator/**",
+    "application_sdk/testing/integration/**",
+    "application_sdk/testing/e2e/**",
+    "application_sdk/testing/hypothesis/**",
+    "application_sdk/testing/parity/**",
 ]
 source = ["application_sdk"]
 
