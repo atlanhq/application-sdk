@@ -55,6 +55,11 @@ on:
         required: false
         type: boolean
         default: false
+      sdr_poll_timeout_minutes:
+        description: "Max minutes to wait for GM release to become active before failing (SDR apps, publish=true only)"
+        required: false
+        type: string
+        default: "10"
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -91,7 +96,8 @@ jobs:
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
       ghcr_image:       ${{ steps.tags.outputs.ghcr_image }}
       ghcr_branch_tag:  ${{ steps.tags.outputs.ghcr_branch_tag }}
-      dockerhub_image:  ${{ steps.tags.outputs.dockerhub_image }}
+      dockerhub_image:       ${{ steps.tags.outputs.dockerhub_image }}
+      dockerhub_branch_tag:  ${{ steps.tags.outputs.dockerhub_branch_tag }}
 
     steps:
       - name: Checkout
@@ -163,6 +169,7 @@ jobs:
 
           DOCKERHUB_BASE="atlanhq/${REPO}"
           DOCKERHUB_IMAGE="${DOCKERHUB_BASE}:${BRANCH}-${IMAGE_TAG}"
+          DOCKERHUB_BRANCH_TAG="${DOCKERHUB_BASE}:${BRANCH}-latest"
 
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
@@ -170,11 +177,13 @@ jobs:
           echo "ghcr_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
           echo "ghcr_branch_tag=${GHCR_BRANCH_TAG}" >> "$GITHUB_OUTPUT"
           echo "dockerhub_image=${DOCKERHUB_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_branch_tag=${DOCKERHUB_BRANCH_TAG}" >> "$GITHUB_OUTPUT"
 
           echo "Branch: ${BRANCH}"
           echo "Immutable image: ${GHCR_IMAGE}"
           echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
           echo "DockerHub image: ${DOCKERHUB_IMAGE}"
+          echo "DockerHub branch tag: ${DOCKERHUB_BRANCH_TAG}"
 
   # ── Job 2: Build — parallel per architecture ──────────────────────────────────
   build:
@@ -243,14 +252,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
-      - name: Log in to Docker Hub
-        if: needs.prepare.outputs.enable_sdr == 'true'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: docker.io
-          username: atlanhq
-          password: ${{ secrets.DOCKER_HUB_PAT_RW }}
-
       - name: Create and push multi-arch manifest
         env:
           GHCR_BASE:       ${{ needs.prepare.outputs.ghcr_base }}
@@ -268,17 +269,6 @@ jobs:
           echo "Multi-arch manifest pushed:"
           echo "  Immutable: ${GHCR_IMAGE}"
           echo "  Branch:    ${GHCR_BRANCH_TAG}"
-
-      - name: Push to Docker Hub (re-tag, no rebuild)
-        if: needs.prepare.outputs.enable_sdr == 'true'
-        env:
-          GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
-          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
-        run: |
-          docker buildx imagetools create \
-            --tag "${DOCKERHUB_IMAGE}" \
-            "${GHCR_IMAGE}"
-          echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
 
       - name: Summary
         run: |
@@ -306,11 +296,219 @@ jobs:
       fail_on_findings: false
     secrets: inherit
 
-  # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
+  # ── Job 5: Wait for GM release active (SDR + publish only) ──────────────────
+  # Polls GM every 15s until the release becomes active (Phase 3 scan passed +
+  # optionally approved). DockerHub push and deployment dispatch only run after
+  # this succeeds, ensuring no deployment happens before GM security gate clears.
+  #
+  # Non-publish flows (publish=false) and non-SDR apps skip this job.
+  # Timeout (default 10 min): workflow fails with a re-run instruction so
+  # operators know DockerHub push/dispatch did NOT happen.
+  wait-for-release-active:
+    name: Wait for GM Release Active
+    needs: [prepare, publish]
+    if: inputs.publish && needs.prepare.outputs.enable_sdr == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Poll GM release status
+        env:
+          RELEASE_ID:      ${{ needs.publish.outputs.release_id }}
+          BASE_URL:        ${{ inputs.base_url }}
+          APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
+          TIMEOUT_MINUTES: ${{ inputs.sdr_poll_timeout_minutes }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "N/A" ]; then
+            echo "::error::No release_id from publish step — cannot poll status."
+            exit 1
+          fi
+
+          if ! echo "$RELEASE_ID" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+            echo "::error::release_id '${RELEASE_ID}' is not a valid UUID."
+            exit 1
+          fi
+
+          DEADLINE=$(( $(date +%s) + ${TIMEOUT_MINUTES} * 60 ))
+          ATTEMPT=0
+
+          echo "Polling GM for release ${RELEASE_ID} to become active..."
+          echo "Timeout: ${TIMEOUT_MINUTES} minutes | Poll interval: 15s"
+
+          while [ $(date +%s) -lt $DEADLINE ]; do
+            ATTEMPT=$(( ATTEMPT + 1 ))
+
+            HTTP_RESPONSE=$(curl -s \
+              "${BASE_URL}/api/service/marketplace/releases/${RELEASE_ID}/status" \
+              -H "Authorization: Bearer ${APP_PUBLISH_TOKEN}" \
+              -w "\n%{http_code}" 2>/dev/null)
+
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+            BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+            # Network/server error — retry silently
+            if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
+              echo "Attempt ${ATTEMPT}: network error, retrying in 15s..."
+              sleep 15
+              continue
+            fi
+
+            # Release was deleted from GM
+            if [ "$HTTP_CODE" = "404" ]; then
+              echo "::error::Release ${RELEASE_ID} not found in GM — it may have been deleted."
+              echo "DockerHub push and deployment dispatch were skipped."
+              exit 1
+            fi
+
+            # 403 — tenant mismatch or token for wrong tenant, will not resolve on retry
+            if [ "$HTTP_CODE" = "403" ]; then
+              echo "::error::Access denied for release ${RELEASE_ID} (HTTP 403)."
+              echo "Check that APP_PUBLISH_TOKEN belongs to the tenant that created this release."
+              exit 1
+            fi
+
+            # Unexpected server error — retry
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "Attempt ${ATTEMPT}: unexpected HTTP ${HTTP_CODE}, retrying in 15s..."
+              sleep 15
+              continue
+            fi
+
+            STATUS=$(echo "$BODY" | python3 -c \
+              "import json,sys; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null)
+
+            case "$STATUS" in
+              active)
+                echo "✅ Release ${RELEASE_ID} is active. Proceeding."
+                exit 0
+                ;;
+
+              scan_failed)
+                FINDINGS=$(echo "$BODY" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin).get('scan_findings') or {}
+          if d.get('error'):
+              print(f'Infrastructure error: {d[\"error\"]}')
+          else:
+              print(f'Critical: {d.get(\"critical\",0)}, High: {d.get(\"high\",0)}')
+              for c in d.get('cves', []):
+                  fix = c.get('fix_version') or 'No fix available'
+                  print(f'  - {c.get(\"severity\",\"?\")}: {c.get(\"id\",\"?\")} — {c.get(\"package\",\"unknown\")} (fix: {fix})')
+          " 2>/dev/null || echo "(could not parse findings)")
+
+                echo "::error::Security scan failed for release ${RELEASE_ID}."
+                echo "$FINDINGS"
+                echo ""
+                echo "DockerHub push and deployment dispatch were skipped."
+                echo "Fix the CVEs above (or add to base-allowlist with expiry), then create a new release."
+                exit 1
+                ;;
+
+              scan_pending)
+                echo "Attempt ${ATTEMPT}: Snyk scan in progress..."
+                ;;
+
+              draft)
+                ELAPSED=$(( $(date +%s) - (DEADLINE - TIMEOUT_MINUTES * 60) ))
+                REMAINING=$(( DEADLINE - $(date +%s) ))
+                echo "Attempt ${ATTEMPT}: release pending approval (elapsed: ${ELAPSED}s, timeout in: ${REMAINING}s)..."
+                ;;
+
+              *)
+                echo "Attempt ${ATTEMPT}: unexpected status '${STATUS}', retrying..."
+                ;;
+            esac
+
+            sleep 15
+          done
+
+          # Timeout reached
+          cat << EOF
+          ::error::Timed out after ${TIMEOUT_MINUTES} minutes waiting for release ${RELEASE_ID}.
+
+          The release exists in GM but has not become active yet (pending approval or slow scan).
+          DockerHub push and deployment dispatch were NOT run.
+
+          To complete the deployment:
+            1. Approve the release in GM: https://globalmarketplaceui.atlan.com/admin/
+            2. Re-run this workflow job after approval.
+
+          Release ID: ${RELEASE_ID}
+          EOF
+          exit 1
+
+  # ── Job 6: Push to DockerHub ──────────────────────────────────────────────────
+  # For SDR apps only. When publish=true, waits for GM release to be active first.
+  # When publish=false, runs immediately after merge (no release gate needed).
+  push-to-dockerhub:
+    name: Push to DockerHub
+    needs: [prepare, merge, publish, wait-for-release-active]
+    if: |
+      always() &&
+      needs.prepare.outputs.enable_sdr == 'true' &&
+      needs.merge.result == 'success' &&
+      (
+        !inputs.publish ||
+        needs.wait-for-release-active.result == 'success'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: docker.io
+          username: atlanhq
+          password: ${{ secrets.DOCKER_HUB_PAT_RW }}
+
+      - name: Push to Docker Hub (re-tag from GHCR, no rebuild)
+        env:
+          GHCR_IMAGE:             ${{ needs.prepare.outputs.ghcr_image }}
+          DOCKERHUB_IMAGE:        ${{ needs.prepare.outputs.dockerhub_image }}
+          DOCKERHUB_BRANCH_TAG:   ${{ needs.prepare.outputs.dockerhub_branch_tag }}
+          BRANCH:                 ${{ needs.prepare.outputs.branch }}
+          PUBLISH:                ${{ inputs.publish }}
+          CHANNEL:                ${{ inputs.channel }}
+        run: |
+          # Always push the immutable sha-pinned tag
+          TAGS="--tag ${DOCKERHUB_IMAGE}"
+
+          # Push the mutable {branch}-latest tag only for main branch builds
+          # targeting all tenants. For beta/staging/specific channel publishes,
+          # main-latest is not updated — it should reflect all-tenant releases only.
+          # For non-publish builds (publish=false), main-latest is also pushed since
+          # there is no channel restriction.
+          IS_ALL_TENANTS_PUBLISH="false"
+          if [ "${BRANCH}" = "main" ]; then
+            if [ "${PUBLISH}" != "true" ] || [ "${CHANNEL}" = "all" ]; then
+              IS_ALL_TENANTS_PUBLISH="true"
+              TAGS="${TAGS} --tag ${DOCKERHUB_BRANCH_TAG}"
+            fi
+          fi
+
+          docker buildx imagetools create ${TAGS} "${GHCR_IMAGE}"
+          echo "✅ Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+          [ "${IS_ALL_TENANTS_PUBLISH}" = "true" ] && echo "✅ Pushed to DockerHub: ${DOCKERHUB_BRANCH_TAG}" || echo "ℹ️  Skipped main-latest (channel=${CHANNEL:-none}, publish=${PUBLISH})"
+
+  # ── Job 7: Dispatch deployment to atlan-apps-deployment (main only) ───────────
+  # For SDR apps only. When publish=true, waits for GM release to be active first.
+  # When publish=false, runs immediately after merge (no release gate needed).
   app-deployment-dispatcher:
     name: Dispatch App Deployment
-    needs: [prepare, merge, security-scan]
-    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true'
+    needs: [prepare, merge, publish, wait-for-release-active]
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      needs.prepare.outputs.enable_sdr == 'true' &&
+      needs.merge.result == 'success' &&
+      (
+        !inputs.publish ||
+        needs.wait-for-release-active.result == 'success'
+      )
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -335,9 +533,12 @@ jobs:
     if: inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      release_id: ${{ steps.publish_step.outputs.release_id }}
 
     steps:
       - name: Publish version
+        id: publish_step
         env:
           BASE_URL: ${{ inputs.base_url }}
           APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
@@ -409,17 +610,20 @@ jobs:
             -H "Authorization: Bearer ${APP_PUBLISH_TOKEN}" \
             -d "$BODY")
 
-          echo "$RESPONSE" | python3 -c "
+          RELEASE_ID=$(echo "$RESPONSE" | python3 -c "
           import json, sys
           r = json.load(sys.stdin)
           d = r.get('data', {})
           vid = d.get('version_id', 'N/A')
           rid = d.get('release_id', 'N/A')
           aid = d.get('app_id', 'N/A')
-          print(f'Version: {vid}')
-          print(f'Release: {rid}')
-          print(f'App ID:  {aid}')
-          "
+          print(f'Version: {vid}', file=sys.stderr)
+          print(f'Release: {rid}', file=sys.stderr)
+          print(f'App ID:  {aid}', file=sys.stderr)
+          print(rid)
+          ")
+
+          echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
 
           CHANNEL_USED="${CHANNEL:-all}"
           if [ -n "$TENANTS" ]; then
