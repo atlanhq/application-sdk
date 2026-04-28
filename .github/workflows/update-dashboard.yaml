@@ -294,7 +294,8 @@ jobs:
           print(f"  New: {repo_data['new']}")
 
           # Append to history for trend tracking. Includes CVE ID lists so the dashboard can
-          # compute true cross-repo unique counts (instead of inflated per-repo sums).
+          # compute true cross-repo unique counts (instead of inflated per-repo sums) and
+          # honest set-difference deltas per source / severity / status over time.
           history_entry = {
               "date": datetime.now().strftime("%Y-%m-%d"),
               "repo": repo_name,
@@ -309,6 +310,10 @@ jobs:
               "ids": [v["id"] for v in unique],
               "ids_app": [v["id"] for v in unique if v.get("source_type") == "app"],
               "ids_base": [v["id"] for v in unique if v.get("source_type") == "base_image"],
+              "ids_critical": [v["id"] for v in unique if (v.get("severity") or "").upper() == "CRITICAL"],
+              "ids_high": [v["id"] for v in unique if (v.get("severity") or "").upper() == "HIGH"],
+              "ids_new": [v["id"] for v in unique if (v.get("status") or "new") == "new"],
+              "ids_allowlisted": [v["id"] for v in unique if v.get("status") == "allowlisted"],
           }
           os.makedirs("/tmp/dashboard-deploy", exist_ok=True)
           with open(f"/tmp/dashboard-deploy/history_{repo_slug}.jsonl", "a") as f:
