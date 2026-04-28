@@ -112,7 +112,7 @@ async def resolve_agent_credential(
     """
     raw = spec.to_raw_dict()
 
-    if spec.secret_path.strip():
+    if spec.secret_path and spec.secret_path.strip():
         bundle = await _fetch_bundle(secret_store, spec.secret_path.strip())
         resolved_flat = _substitute(raw, bundle)
     else:
