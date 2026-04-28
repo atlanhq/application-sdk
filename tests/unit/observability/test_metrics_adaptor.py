@@ -270,6 +270,36 @@ def test_send_to_otel_histogram():
             mock_histogram.record.assert_called_once_with(42.0, {"test": "label"})
 
 
+def test_send_to_otel_coerces_none_unit_and_description():
+    """``MetricRecord.unit`` / ``description`` default to ``None``; the SDK
+    must coerce them to empty strings before handing off to OTel, otherwise
+    OTel's ``_register_instrument`` does ``",".join((..., unit, description))``
+    and raises ``TypeError``. Regression test for the middleware traceback
+    flood seen against application-sdk 3.3.0.
+    """
+    with create_metrics_adapter() as metrics_adapter:
+        with mock.patch.object(metrics_adapter.meter, "create_counter") as mock_create:
+            mock_create.return_value = mock.MagicMock()
+
+            record = MetricRecord(
+                timestamp=datetime.now().timestamp(),
+                name="http_requests_total",
+                value=1,
+                type=MetricType.COUNTER,
+                labels={"path": "/", "method": "GET", "status": "200"},
+                description=None,
+                unit=None,
+            )
+            # Should not raise — unit/description coerced to "" before OTel call.
+            metrics_adapter._send_to_otel(record)
+
+            mock_create.assert_called_once_with(
+                name="http_requests_total",
+                description="",
+                unit="",
+            )
+
+
 def test_send_to_otel_filters_non_scalar_labels():
     """Test that _send_to_otel() filters out non-scalar label values before passing to OTel."""
     with create_metrics_adapter() as metrics_adapter:

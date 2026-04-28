@@ -247,25 +247,33 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 for k, v in metric_record.labels.items()
                 if isinstance(v, (str, int, float, bool))
             }
+            # OTel's Meter.create_*() builds an instrument identifier via
+            # ``",".join((name, type, unit, description))`` — passing ``None``
+            # for either ``unit`` or ``description`` raises ``TypeError``.
+            # Coerce to empty strings (which OTel treats as "unset"). Without
+            # this guard, every middleware-emitted metric tracebacks because
+            # ``record_metric()`` defaults both kwargs to ``None``.
+            unit = metric_record.unit or ""
+            description = metric_record.description or ""
             if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
-                    description=metric_record.description,
-                    unit=metric_record.unit,
+                    description=description,
+                    unit=unit,
                 )
                 counter.add(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.GAUGE:
                 gauge = self.meter.create_observable_gauge(
                     name=metric_record.name,
-                    description=metric_record.description,
-                    unit=metric_record.unit,
+                    description=description,
+                    unit=unit,
                 )
                 gauge.add(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.HISTOGRAM:
                 histogram = self.meter.create_histogram(
                     name=metric_record.name,
-                    description=metric_record.description,
-                    unit=metric_record.unit,
+                    description=description,
+                    unit=unit,
                 )
                 histogram.record(metric_record.value, otel_attrs)
         except Exception:
