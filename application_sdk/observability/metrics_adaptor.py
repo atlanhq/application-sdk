@@ -242,7 +242,6 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             Exception: If sending fails, logs error and continues
         """
         try:
-            description, unit = self._get_otel_instrument_metadata(metric_record)
             otel_attrs = {
                 k: v
                 for k, v in metric_record.labels.items()
@@ -251,30 +250,26 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
-                    description=description,
-                    unit=unit,
+                    description=metric_record.otel_description,
+                    unit=metric_record.otel_unit,
                 )
                 counter.add(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.GAUGE:
                 gauge = self.meter.create_gauge(
                     name=metric_record.name,
-                    description=description,
-                    unit=unit,
+                    description=metric_record.otel_description,
+                    unit=metric_record.otel_unit,
                 )
                 gauge.set(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.HISTOGRAM:
                 histogram = self.meter.create_histogram(
                     name=metric_record.name,
-                    description=description,
-                    unit=unit,
+                    description=metric_record.otel_description,
+                    unit=metric_record.otel_unit,
                 )
                 histogram.record(metric_record.value, otel_attrs)
         except Exception:
             logging.error("Error sending metric to OpenTelemetry", exc_info=True)
-
-    @staticmethod
-    def _get_otel_instrument_metadata(metric_record: MetricRecord) -> tuple[str, str]:
-        return metric_record.description or "", metric_record.unit or ""
 
     def _log_to_console(self, metric_record: MetricRecord):
         """Log metric to console using the logger.

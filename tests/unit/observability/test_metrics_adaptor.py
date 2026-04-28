@@ -98,6 +98,22 @@ def test_process_record_with_dict():
         assert processed == record
 
 
+def test_metric_record_exposes_otel_safe_metadata():
+    """Unset SDK metric metadata should map to OTel's empty-string defaults."""
+    record = MetricRecord(
+        timestamp=datetime.now().timestamp(),
+        name="test_metric",
+        value=1.0,
+        type=MetricType.COUNTER,
+        labels={},
+    )
+
+    assert record.description is None
+    assert record.unit is None
+    assert record.otel_description == ""
+    assert record.otel_unit == ""
+
+
 @given(
     st.text(min_size=1),
     st.floats(),
