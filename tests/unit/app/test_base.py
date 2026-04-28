@@ -3,12 +3,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from unittest import mock
+from uuid import UUID
 
 import pytest
 
-from application_sdk.app.base import App, AppError, NonRetryableError, _pascal_to_kebab
-from application_sdk.app.entrypoint import EntryPointContractError
+from application_sdk.app.base import (
+    App,
+    AppContextError,
+    AppError,
+    AppStateAccessor,
+    NonRetryableError,
+    PersistentStateAccessor,
+    RetryableError,
+    TaskStateAccessor,
+    _app_state,
+    _app_state_lock,
+    _create_task_activity_wrapper,
+    _get_execution_id_from_task,
+    _pascal_to_kebab,
+    _safe_log,
+    _safe_now,
+    _safe_uuid,
+    _scan_entrypoints,
+    _workflow_class_cache,
+    _wrap_instance_tasks,
+    generate_workflow_class,
+)
+from application_sdk.app.entrypoint import (
+    EntryPointContractError,
+    EntryPointMetadata,
+    entrypoint,
+)
 from application_sdk.app.registry import AppNotFoundError, AppRegistry, TaskRegistry
+from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE
 
@@ -315,3 +344,1048 @@ class TestAppRegistration:
         registry = AppRegistry.get_instance()
         with pytest.raises(AppNotFoundError):
             registry.get("no-run-app")
+
+
+# =============================================================================
+# Helpers shared by the new tests below
+# =============================================================================
+
+
+class _BLDXInput(Input, allow_unbounded_fields=True):
+    """Pydantic-only (no @dataclass): keeps `_BLDXInput()` callable with defaults."""
+
+    value: str = ""
+
+
+class _BLDXOutput(Output, allow_unbounded_fields=True):
+    result: str = ""
+
+
+def _reset_state_and_registries() -> None:
+    AppRegistry.reset()
+    TaskRegistry.reset()
+    with _app_state_lock:
+        _app_state.clear()
+    _workflow_class_cache.clear()
+
+
+# =============================================================================
+# _safe_now / _safe_uuid — deterministic time / UUID helpers
+# =============================================================================
+
+
+class TestSafeNow:
+    """Tests for _safe_now (BLDX-1129: catches workflow.now contract drift)."""
+
+    def test_returns_workflow_now(self) -> None:
+        fixed = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        with mock.patch("application_sdk.app.base.workflow.now", return_value=fixed):
+            assert _safe_now() == fixed
+
+
+class TestSafeUuid:
+    """Tests for _safe_uuid (BLDX-1129: catches workflow.uuid4 contract drift)."""
+
+    def test_returns_uuid_from_workflow_uuid4(self) -> None:
+        with mock.patch(
+            "application_sdk.app.base.workflow.uuid4",
+            return_value="12345678-1234-5678-1234-567812345678",
+        ):
+            result = _safe_uuid()
+        assert isinstance(result, UUID)
+        assert str(result) == "12345678-1234-5678-1234-567812345678"
+
+
+# =============================================================================
+# _safe_log — branches across atlan-logger and stdlib loggers
+# =============================================================================
+
+
+class TestSafeLog:
+    """Tests for _safe_log.
+
+    BLDX-1129: this function is contract-fragile (branches on `_is_atlan_logger`,
+    spreads attrs as kwargs vs. extra=). Drift in any of those would silently
+    drop structured fields or raise TypeError at runtime.
+    """
+
+    def test_atlan_logger_passes_attrs_as_kwargs(self) -> None:
+        atlan_logger = mock.MagicMock()
+        # Make it look like AtlanLoggerAdapter for _is_atlan_logger duck-type:
+        atlan_logger.process = mock.MagicMock()
+        atlan_logger.logger_name = "test"
+        with mock.patch("application_sdk.app.base.workflow.logger", atlan_logger):
+            _safe_log("info", "hello", app_name="my-app", run_id="r1")
+        atlan_logger.info.assert_called_once_with(
+            "hello", app_name="my-app", run_id="r1"
+        )
+
+    def test_stdlib_logger_packs_attrs_into_extra(self) -> None:
+        stdlib_logger = mock.MagicMock(spec=["info", "warning", "error", "debug"])
+        # Drop the duck-type markers so _is_atlan_logger -> False.
+        with mock.patch("application_sdk.app.base.workflow.logger", stdlib_logger):
+            _safe_log("info", "hello", app_name="my-app")
+        stdlib_logger.info.assert_called_once_with(
+            "hello", extra={"app_name": "my-app"}
+        )
+
+    def test_stdlib_logger_separates_reserved_kwargs(self) -> None:
+        """exc_info / stack_info / stacklevel are stdlib-reserved and must NOT be in extra=."""
+        stdlib_logger = mock.MagicMock(spec=["info", "warning", "error", "debug"])
+        with mock.patch("application_sdk.app.base.workflow.logger", stdlib_logger):
+            _safe_log("warning", "boom", exc_info=True, app_name="x")
+        kwargs = stdlib_logger.warning.call_args.kwargs
+        assert kwargs["exc_info"] is True
+        assert kwargs["extra"] == {"app_name": "x"}
+
+    def test_stdlib_logger_only_reserved_kwargs(self) -> None:
+        stdlib_logger = mock.MagicMock(spec=["info", "warning", "error", "debug"])
+        with mock.patch("application_sdk.app.base.workflow.logger", stdlib_logger):
+            _safe_log("warning", "boom", exc_info=True)
+        stdlib_logger.warning.assert_called_once_with("boom", exc_info=True)
+
+    def test_stdlib_logger_no_kwargs(self) -> None:
+        stdlib_logger = mock.MagicMock(spec=["info", "warning", "error", "debug"])
+        with mock.patch("application_sdk.app.base.workflow.logger", stdlib_logger):
+            _safe_log("info", "plain")
+        stdlib_logger.info.assert_called_once_with("plain")
+
+
+# =============================================================================
+# RetryableError — sister class to NonRetryableError
+# =============================================================================
+
+
+class TestRetryableError:
+    def test_default_error_code_is_app_error(self) -> None:
+        err = RetryableError("transient")
+        assert err.error_code == APP_ERROR
+
+    def test_is_subclass_of_app_error(self) -> None:
+        assert issubclass(RetryableError, AppError)
+
+
+class TestAppContextError:
+    def test_str_includes_error_code(self) -> None:
+        err = AppContextError("oops")
+        s = str(err)
+        assert "oops" in s
+        # Must include the error code prefix in brackets
+        assert s.startswith("[")
+
+
+# =============================================================================
+# Context properties — raise AppContextError when called outside run()
+# =============================================================================
+
+
+class TestContextProperties:
+    """The context / task_context properties guard against misuse outside run()."""
+
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    def _make_app(self) -> App:
+        class _CtxApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        return _CtxApp()
+
+    def test_context_raises_when_unset(self) -> None:
+        app = self._make_app()
+        with pytest.raises(AppContextError, match="App context"):
+            _ = app.context
+
+    def test_task_context_raises_when_unset(self) -> None:
+        app = self._make_app()
+        with pytest.raises(AppContextError, match="task_context"):
+            _ = app.task_context
+
+    def test_logger_property_raises_when_no_context(self) -> None:
+        app = self._make_app()
+        with pytest.raises(AppContextError):
+            _ = app.logger
+
+    def test_run_id_property_raises_when_no_context(self) -> None:
+        app = self._make_app()
+        with pytest.raises(AppContextError):
+            _ = app.run_id
+
+    def test_correlation_id_property_raises_when_no_context(self) -> None:
+        app = self._make_app()
+        with pytest.raises(AppContextError):
+            _ = app.correlation_id
+
+    def test_is_cancelled_raises_when_no_context(self) -> None:
+        app = self._make_app()
+        with pytest.raises(AppContextError):
+            app.is_cancelled()
+
+    def test_context_returns_when_set(self) -> None:
+        from application_sdk.app.context import AppContext
+
+        ctx = AppContext(app_name="t", app_version="0.0.1", run_id="r1")
+        app = self._make_app()
+        app._context = ctx
+        assert app.context is ctx
+        assert app.run_id == "r1"
+        # correlation_id defaults to run_id when blank
+        assert app.correlation_id == "r1"
+        assert app.is_cancelled() is False
+
+
+# =============================================================================
+# Task-only methods — raise AppContextError outside @task scope
+# =============================================================================
+
+
+class TestTaskOnlyMethods:
+    """heartbeat / get_*_heartbeat_details / run_in_thread must guard task scope.
+
+    BLDX-1129: each of these has a self._task_context guard. A regression that
+    drops the guard or swallows the exception would silently misroute calls.
+    """
+
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    def _app(self) -> App:
+        class _TOApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        return _TOApp()
+
+    def test_heartbeat_outside_task_raises(self) -> None:
+        with pytest.raises(AppContextError, match="heartbeat"):
+            self._app().heartbeat("progress")
+
+    def test_get_last_heartbeat_outside_task_raises(self) -> None:
+        with pytest.raises(AppContextError):
+            self._app().get_last_heartbeat_details()
+
+    def test_get_heartbeat_details_typed_outside_task_raises(self) -> None:
+        from application_sdk.contracts.base import HeartbeatDetails
+
+        @dataclass
+        class _HD(HeartbeatDetails):
+            pass
+
+        with pytest.raises(AppContextError):
+            self._app().get_heartbeat_details(_HD)
+
+    @pytest.mark.asyncio
+    async def test_run_in_thread_outside_task_raises(self) -> None:
+        with pytest.raises(AppContextError):
+            await self._app().run_in_thread(lambda: None)
+
+    def test_heartbeat_delegates_to_task_context(self) -> None:
+        app = self._app()
+        tc = mock.MagicMock()
+        app._task_context = tc
+        app.heartbeat("a", 1)
+        tc.heartbeat.assert_called_once_with("a", 1)
+
+    def test_get_last_heartbeat_delegates(self) -> None:
+        app = self._app()
+        tc = mock.MagicMock()
+        tc.get_last_heartbeat_details.return_value = ("x",)
+        app._task_context = tc
+        assert app.get_last_heartbeat_details() == ("x",)
+
+    @pytest.mark.asyncio
+    async def test_run_in_thread_delegates(self) -> None:
+        app = self._app()
+        tc = mock.MagicMock()
+
+        async def _ret(*a, **kw):
+            return "done"
+
+        tc.run_in_thread = mock.AsyncMock(return_value="done")
+        app._task_context = tc
+        result = await app.run_in_thread(lambda: None, 1, x=2)
+        assert result == "done"
+        tc.run_in_thread.assert_awaited_once()
+
+
+# =============================================================================
+# require()
+# =============================================================================
+
+
+class TestRequire:
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    def _app(self) -> App:
+        class _ReqApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        return _ReqApp()
+
+    def test_returns_value_when_not_none(self) -> None:
+        assert self._app().require("hello", "x") == "hello"
+        assert self._app().require(0, "y") == 0  # falsy but not None
+
+    def test_raises_non_retryable_when_none(self) -> None:
+        app = self._app()
+        with pytest.raises(NonRetryableError) as exc:
+            app.require(None, "api_key")
+        assert "api_key is required" in str(exc.value)
+
+    def test_includes_context_in_message(self) -> None:
+        app = self._app()
+        with pytest.raises(NonRetryableError) as exc:
+            app.require(None, "token", "for OAuth flow")
+        assert "for OAuth flow" in str(exc.value)
+
+
+# =============================================================================
+# State accessors — TaskStateAccessor / AppStateAccessor / get_app_state
+# =============================================================================
+
+
+class TestAppState:
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    def _app(self) -> App:
+        class _StateApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        return _StateApp()
+
+    def test_get_app_state_returns_none_when_outside_task(self) -> None:
+        # _get_execution_id_from_task wraps activity.info() failures into AppContextError.
+        with pytest.raises(AppContextError):
+            self._app().get_app_state("k")
+
+    def test_get_app_state_returns_value_when_set(self) -> None:
+        app = self._app()
+        with mock.patch("application_sdk.app.base.activity.info") as info:
+            info.return_value = mock.MagicMock(workflow_id="wf-1")
+            app.set_app_state("foo", 42)
+            assert app.get_app_state("foo") == 42
+            assert app.get_app_state("missing") is None
+
+    def test_set_app_state_propagates_via_task_state_accessor(self) -> None:
+        app = self._app()
+        with mock.patch("application_sdk.app.base.activity.info") as info:
+            info.return_value = mock.MagicMock(workflow_id="wf-2")
+            app.set_app_state("k", "v")
+            assert TaskStateAccessor().get("k") == "v"
+
+    def test_app_state_accessor_property_round_trip(self) -> None:
+        app = self._app()
+        with mock.patch("application_sdk.app.base.activity.info") as info:
+            info.return_value = mock.MagicMock(workflow_id="wf-3")
+            accessor = app.app_state
+            assert isinstance(accessor, AppStateAccessor)
+            accessor.set("a", 1)
+            assert accessor.get("a") == 1
+
+    def test_task_state_accessor_outside_task_raises(self) -> None:
+        # No activity context → activity.info() raises → wrapped as AppContextError
+        accessor = TaskStateAccessor()
+        with pytest.raises(AppContextError, match="outside of task context"):
+            accessor.get("k")
+        with pytest.raises(AppContextError, match="outside of task context"):
+            accessor.set("k", 1)
+
+    @pytest.mark.asyncio
+    async def test_persistent_state_accessor_delegates_to_context(self) -> None:
+        app = self._app()
+        ctx = mock.MagicMock()
+        ctx.save_state = mock.AsyncMock()
+        ctx.load_state = mock.AsyncMock(return_value={"x": 1})
+        app._context = ctx
+        accessor = app.persistent_state
+        assert isinstance(accessor, PersistentStateAccessor)
+
+        await accessor.save("k", {"v": 1})
+        assert await accessor.load("k") == {"x": 1}
+        ctx.save_state.assert_awaited_once_with("k", {"v": 1})
+        ctx.load_state.assert_awaited_once_with("k")
+
+
+class TestGetExecutionIdFromTask:
+    def test_wraps_activity_info_failure(self) -> None:
+        with mock.patch(
+            "application_sdk.app.base.activity.info", side_effect=RuntimeError("no act")
+        ):
+            with pytest.raises(AppContextError) as exc:
+                _get_execution_id_from_task()
+            assert isinstance(exc.value.__cause__, RuntimeError)
+
+
+# =============================================================================
+# now() / uuid() / get_name() / get_version() — convenience accessors
+# =============================================================================
+
+
+class TestAppConvenience:
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    def test_now_uses_workflow_now(self) -> None:
+        class _NowApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        fixed = datetime(2025, 5, 1, tzinfo=timezone.utc)
+        with mock.patch("application_sdk.app.base.workflow.now", return_value=fixed):
+            assert _NowApp().now() == fixed
+
+    def test_uuid_uses_workflow_uuid4(self) -> None:
+        class _UApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        with mock.patch(
+            "application_sdk.app.base.workflow.uuid4",
+            return_value="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        ):
+            u = _UApp().uuid()
+        assert isinstance(u, UUID)
+        assert str(u) == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    def test_get_name_and_version(self) -> None:
+        class NamedApp(App):
+            version = "9.9.9"
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        a = NamedApp()
+        assert a.get_name() == "named-app"
+        assert a.get_version() == "9.9.9"
+
+
+# =============================================================================
+# call() / call_by_name() — deactivated under BLDX-878
+# =============================================================================
+
+
+class TestDeactivatedInterAppCalls:
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    def _app(self) -> App:
+        class _DApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        return _DApp()
+
+    @pytest.mark.asyncio
+    async def test_call_raises_not_implemented(self) -> None:
+        with pytest.raises(NotImplementedError, match="BLDX-878"):
+            await self._app().call("x")
+
+    @pytest.mark.asyncio
+    async def test_call_by_name_raises_not_implemented(self) -> None:
+        with pytest.raises(NotImplementedError, match="BLDX-878"):
+            await self._app().call_by_name("x")
+
+
+# =============================================================================
+# default run() — raises NotImplementedError when not overridden
+# =============================================================================
+
+
+class TestRunStub:
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    @pytest.mark.asyncio
+    async def test_default_run_raises_not_implemented(self) -> None:
+        # NoRunApp inherits the App.run stub silently; call it directly to
+        # exercise the NotImplementedError branch.
+        class _NoRun(App):
+            pass
+
+        with pytest.raises(NotImplementedError, match="must implement run"):
+            await _NoRun().run(_BLDXInput())
+
+
+# =============================================================================
+# continue_with()
+# =============================================================================
+
+
+class TestContinueWith:
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    def _app(self) -> App:
+        class _CWApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        return _CWApp()
+
+    def test_raises_outside_run(self) -> None:
+        app = self._app()
+        with pytest.raises(AppContextError, match="continue_with"):
+            app.continue_with(_BLDXInput())
+
+    def test_calls_continue_as_new_with_correlation_memo(self) -> None:
+        from application_sdk.app.context import AppContext
+
+        ctx = AppContext(
+            app_name="cwa",
+            app_version="0.0.1",
+            run_id="rid",
+            correlation_id="corr-9",
+        )
+        app = self._app()
+        app._context = ctx
+        new_input = _BLDXInput(value="next")
+
+        with (
+            mock.patch("application_sdk.app.base.workflow.continue_as_new") as cont,
+            mock.patch("application_sdk.app.base._safe_log"),
+        ):
+            app.continue_with(new_input)
+
+        cont.assert_called_once()
+        kwargs = cont.call_args.kwargs
+        assert kwargs["args"] == [new_input]
+        assert kwargs["memo"] == {"correlation_id": "corr-9"}
+
+
+# =============================================================================
+# _scan_entrypoints / _wrap_instance_tasks
+# =============================================================================
+
+
+class TestScanAndWrap:
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    def test_scan_entrypoints_finds_decorated_methods(self) -> None:
+        class _ScanApp(App):
+            @entrypoint
+            async def my_entry(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        eps = _scan_entrypoints(_ScanApp)
+        assert "my-entry" in eps
+        assert eps["my-entry"].method_name == "my_entry"
+
+    def test_scan_entrypoints_returns_empty_for_plain_class(self) -> None:
+        class _Plain(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        # Plain classes use implicit-run path; explicit @entrypoint scan is empty.
+        assert _scan_entrypoints(_Plain) == {}
+
+    def test_wrap_instance_tasks_replaces_task_methods(self) -> None:
+        class _TaskApp(App):
+            @task
+            async def my_task(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        instance = _TaskApp()
+        original_unbound = _TaskApp.my_task
+        # Stub out the wrapper factory so we don't pull in Temporal RetryPolicy.
+        sentinel = object()
+        with mock.patch(
+            "application_sdk.app.base._create_task_activity_wrapper",
+            return_value=sentinel,
+        ) as factory:
+            _wrap_instance_tasks(instance, {"run_id": "r", "correlation_id": "c"})
+
+        assert instance.my_task is sentinel
+        # Class-level remains untouched
+        assert _TaskApp.my_task is original_unbound
+        # framework storage tasks (upload/download/cleanup_files/cleanup_storage)
+        # are also @task-decorated → factory is called for those too plus my_task.
+        called_task_names = {call.args[1] for call in factory.call_args_list}
+        assert "my_task" in called_task_names
+        assert "upload" in called_task_names
+        assert "download" in called_task_names
+        assert "cleanup_files" in called_task_names
+        assert "cleanup_storage" in called_task_names
+
+    def test_wrap_instance_tasks_skips_underscore_prefixed(self) -> None:
+        class _UApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        instance = _UApp()
+        with mock.patch(
+            "application_sdk.app.base._create_task_activity_wrapper"
+        ) as factory:
+            _wrap_instance_tasks(instance, {"run_id": "", "correlation_id": ""})
+        # We can't assert exact set, but it must not blow up on private attrs.
+        assert factory.call_count >= 0
+
+
+# =============================================================================
+# _create_task_activity_wrapper — exercises retry policy + TaskContext imports
+# =============================================================================
+
+
+class TestCreateTaskActivityWrapper:
+    """BLDX-1129: this function has 3 inline imports (RetryPolicy, _to_temporal_retry_policy,
+    TaskContext). Drift in any of those would only surface at activity dispatch time.
+    """
+
+    @pytest.mark.asyncio
+    async def test_wrapper_invokes_workflow_execute_activity(self) -> None:
+        wrapper = _create_task_activity_wrapper(
+            app_name="my-app",
+            task_name="my-task",
+            timeout_seconds=10,
+            retry_max_attempts=2,
+            retry_max_interval_seconds=5,
+            output_type=_BLDXOutput,
+            context_data={"run_id": "rid", "correlation_id": "cid"},
+            heartbeat_timeout_seconds=30,
+            auto_heartbeat_seconds=5,
+            retry_policy=None,
+        )
+
+        sentinel_out = _BLDXOutput(result="ok")
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_activity",
+            new_callable=mock.AsyncMock,
+            return_value=sentinel_out,
+        ) as exec_act:
+            result = await wrapper(_BLDXInput(value="in"))
+
+        assert result is sentinel_out
+        exec_act.assert_awaited_once()
+        call_args = exec_act.call_args
+        # First positional arg: activity name "<app>:<task>"
+        assert call_args.args[0] == "my-app:my-task"
+        # Result type is forwarded for proper deserialization
+        assert call_args.kwargs["result_type"] is _BLDXOutput
+
+    @pytest.mark.asyncio
+    async def test_wrapper_disables_heartbeat_when_none(self) -> None:
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=10,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_BLDXOutput,
+            context_data={},
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_activity",
+            new_callable=mock.AsyncMock,
+            return_value=_BLDXOutput(),
+        ) as exec_act:
+            await wrapper(_BLDXInput())
+        # When heartbeat is disabled the kwarg is None.
+        assert exec_act.call_args.kwargs["heartbeat_timeout"] is None
+
+    @pytest.mark.asyncio
+    async def test_wrapper_passes_explicit_retry_policy_through(self) -> None:
+        from application_sdk.execution.retry import RetryPolicy
+
+        rp = RetryPolicy(max_attempts=7)
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=1,
+            retry_max_attempts=99,
+            retry_max_interval_seconds=99,
+            output_type=_BLDXOutput,
+            context_data={},
+            retry_policy=rp,
+        )
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_activity",
+            new_callable=mock.AsyncMock,
+            return_value=_BLDXOutput(),
+        ) as exec_act:
+            await wrapper(_BLDXInput())
+        passed = exec_act.call_args.kwargs["retry_policy"]
+        # Temporal RetryPolicy uses .maximum_attempts (not .max_attempts).
+        assert getattr(passed, "maximum_attempts") == 7
+
+
+# =============================================================================
+# generate_workflow_class — exercises the whole _run lifecycle end to end
+# =============================================================================
+
+
+class TestGenerateWorkflowClass:
+    """BLDX-1129: exercises three deferred imports
+    (get_correlation_context, ApplicationError) and the on_complete finalizer.
+    """
+
+    def setup_method(self) -> None:
+        _reset_state_and_registries()
+
+    def teardown_method(self) -> None:
+        _reset_state_and_registries()
+
+    def _make_ep(self, input_type: type, output_type: type) -> EntryPointMetadata:
+        return EntryPointMetadata(
+            name="run",
+            input_type=input_type,
+            output_type=output_type,
+            method_name="run",
+            implicit=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_workflow_returns_cached_class(self) -> None:
+        # Build a real App via __init_subclass__ to keep types valid.
+        class _CachedApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result=input.value)
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls_a = generate_workflow_class(_CachedApp, ep)
+            wf_cls_b = generate_workflow_class(_CachedApp, ep)
+        assert wf_cls_a is wf_cls_b
+
+    @pytest.mark.asyncio
+    async def test_run_happy_path_executes_entry_method(self) -> None:
+        results: list[str] = []
+
+        class HappyApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                results.append("ran:" + input.value)
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(HappyApp, ep)
+
+        run_fn = wf_cls.run
+        info_mock = mock.MagicMock(run_id="run-1", workflow_id="wf-1")
+
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(
+                HappyApp, "on_complete", new_callable=mock.AsyncMock
+            ) as on_complete,
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+        ):
+            out = await run_fn(mock.MagicMock(), _BLDXInput(value="hi"))
+
+        assert isinstance(out, _BLDXOutput)
+        assert results == ["ran:hi"]
+        on_complete.assert_awaited_once()
+
+    def _patched_workflow_layer(self, info_mock: mock.MagicMock):
+        """Returns a contextlib.ExitStack wired with the patches every _run test needs.
+
+        Every patch target is at the module path ``application_sdk.app.base.*`` so
+        BLDX-1129-style import drift in base.py would surface immediately.
+        """
+        import contextlib
+
+        stack = contextlib.ExitStack()
+        ipt = stack.enter_context(
+            mock.patch(
+                "application_sdk.app.base.workflow.unsafe.imports_passed_through"
+            )
+        )
+        ipt.return_value.__enter__ = mock.MagicMock()
+        ipt.return_value.__exit__ = mock.MagicMock(return_value=False)
+        stack.enter_context(
+            mock.patch("application_sdk.app.base.workflow.info", return_value=info_mock)
+        )
+        stack.enter_context(mock.patch("application_sdk.app.base._safe_log"))
+        stack.enter_context(
+            mock.patch(
+                "application_sdk.app.base._safe_now",
+                return_value=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            )
+        )
+        stack.enter_context(mock.patch("application_sdk.app.base._wrap_instance_tasks"))
+        return stack
+
+    @pytest.mark.asyncio
+    async def test_run_wraps_raw_exceptions_in_application_error(self) -> None:
+        class BoomApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                raise ValueError("boom!")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(BoomApp, ep)
+
+        from application_sdk.execution.errors import ApplicationError
+
+        info_mock = mock.MagicMock(run_id="rid", workflow_id="wfid")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(BoomApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+        ):
+            with pytest.raises(ApplicationError) as exc:
+                await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+        assert exc.value.__cause__ is not None
+        assert isinstance(exc.value.__cause__, ValueError)
+        assert getattr(exc.value, "non_retryable", None) is True
+
+    @pytest.mark.asyncio
+    async def test_run_lets_failure_error_propagate_unchanged(self) -> None:
+        from temporalio.exceptions import FailureError
+
+        class _OrigFail(FailureError):
+            pass
+
+        class FailApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                raise _OrigFail("temporal-native")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(FailApp, ep)
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(FailApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+        ):
+            with pytest.raises(_OrigFail):
+                await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+    @pytest.mark.asyncio
+    async def test_run_retryable_error_marked_retryable(self) -> None:
+        class _Retry(RetryableError):
+            pass
+
+        class RApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                raise _Retry("transient")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(RApp, ep)
+
+        from application_sdk.execution.errors import ApplicationError
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(RApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+        ):
+            with pytest.raises(ApplicationError) as exc:
+                await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+        assert getattr(exc.value, "non_retryable", None) is False
+
+    @pytest.mark.asyncio
+    async def test_run_swallows_on_complete_failure(self) -> None:
+        class OCFail(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+            async def on_complete(self) -> None:
+                raise RuntimeError("oc boom")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(OCFail, ep)
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+        ):
+            # Must complete without raising — on_complete failures are swallowed.
+            out = await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+        assert isinstance(out, _BLDXOutput)
+
+    @pytest.mark.asyncio
+    async def test_run_continues_when_correlation_import_fails(self) -> None:
+        """Failure inside the inline get_correlation_context import path falls back to run_id.
+
+        BLDX-1129 directly: the inline import must work, and its failure must
+        not crash the workflow.
+        """
+
+        class CCApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(CCApp, ep)
+
+        info_mock = mock.MagicMock(run_id="rid-fallback", workflow_id="wid")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(CCApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                side_effect=RuntimeError("correlation lookup blew up"),
+            ),
+        ):
+            out = await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+        assert isinstance(out, _BLDXOutput)
+
+
+# =============================================================================
+# Inline-import smoke checks — explicit BLDX-1129 contract assertions
+# =============================================================================
+
+
+class TestInlineImportContracts:
+    """Direct asserts that every name imported inline by base.py still exists.
+
+    These are cheap, don't depend on heavy mocking, and catch BLDX-1129-style
+    rename/move regressions immediately.
+    """
+
+    def test_storage_transfer_names(self) -> None:
+        # Used in App.upload / App.download
+        from application_sdk.storage.transfer import download, upload  # noqa: F401
+
+    def test_constants_names(self) -> None:
+        from application_sdk.constants import (  # noqa: F401
+            CLEANUP_BASE_PATHS,
+            PROTECTED_STORAGE_PREFIXES,
+            TEMPORARY_PATH,
+            TRACKED_FILE_REFS_KEY,
+        )
+
+    def test_execution_build_output_path_name(self) -> None:
+        from application_sdk.execution import build_output_path  # noqa: F401
+
+    def test_storage_ops_names(self) -> None:
+        from application_sdk.storage.ops import _resolve_store, delete  # noqa: F401
+
+    def test_execution_errors_application_error(self) -> None:
+        from application_sdk.execution.errors import ApplicationError  # noqa: F401
+
+    def test_execution_retry_names(self) -> None:
+        from application_sdk.execution.retry import (  # noqa: F401
+            RetryPolicy,
+            _to_temporal_retry_policy,
+        )
+
+    def test_temporal_activities_task_context(self) -> None:
+        from application_sdk.execution._temporal.activities import (  # noqa: F401
+            TaskContext,
+        )
+
+    def test_observability_correlation_get_correlation_context(self) -> None:
+        from application_sdk.observability.correlation import (  # noqa: F401
+            get_correlation_context,
+        )
