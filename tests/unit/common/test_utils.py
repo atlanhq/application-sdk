@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Union
 from unittest.mock import mock_open, patch
@@ -104,8 +105,8 @@ class TestPrepareFilters:
 
         include_regex, exclude_regex = prepare_filters(include_filter, exclude_filter)
 
-        assert "db1\\.schema1|db1\\.schema2|db2\\.schema3" == include_regex
-        assert "db3\\.schema4" == exclude_regex
+        assert "^db1\\.schema1$|^db1\\.schema2$|^db2\\.schema3$" == include_regex
+        assert "^db3\\.schema4$" == exclude_regex
 
     def test_prepare_filters_with_empty_filters(self) -> None:
         """Test prepare_filters with empty filters"""
@@ -124,7 +125,7 @@ class TestPrepareFilters:
 
         include_regex, exclude_regex = prepare_filters(include_filter, exclude_filter)
 
-        assert "db1\\.*" == include_regex
+        assert "^db1\\..*$" == include_regex
         assert "^$" == exclude_regex
 
     def test_prepare_filters_with_empty_include_and_filled_exclude(self) -> None:
@@ -135,7 +136,7 @@ class TestPrepareFilters:
         include_regex, exclude_regex = prepare_filters(include_filter, exclude_filter)
 
         assert ".*" == include_regex
-        assert "db1\\.schema1|db2\\.schema2" == exclude_regex
+        assert "^db1\\.schema1$|^db2\\.schema2$" == exclude_regex
 
 
 class TestNormalizeFilters:
@@ -148,7 +149,7 @@ class TestNormalizeFilters:
         result = normalize_filters(filter_dict, True)
 
         assert sorted(result) == sorted(
-            ["db1\\.schema1", "db1\\.schema2", "db2\\.schema3"]
+            ["^db1\\.schema1$", "^db1\\.schema2$", "^db2\\.schema3$"]
         )
 
     def test_normalize_filters_with_wildcard(self) -> None:
@@ -156,22 +157,99 @@ class TestNormalizeFilters:
         filter_dict: Dict[str, Union[List[str], str]] = {"db1": "*"}
         result = normalize_filters(filter_dict, True)
 
-        assert result == ["db1\\.*"]
+        assert result == ["^db1\\..*$"]
 
     def test_normalize_filters_with_empty_list(self) -> None:
         """Test normalize_filters with empty schema list"""
         filter_dict: Dict[str, Union[List[str], str]] = {"db1": []}
         result = normalize_filters(filter_dict, True)
 
-        assert result == ["db1\\.*"]
+        assert result == ["^db1\\..*$"]
 
     def test_normalize_filters_with_regex_patterns(self) -> None:
-        """Test normalize_filters with regex patterns in database names"""
+        """Test normalize_filters with anchored regex patterns in keys/values."""
         filter_dict: Dict[str, Union[List[str], str]] = {"^db1$": ["^schema1$"]}
         result = normalize_filters(filter_dict, True)
 
-        # The implementation strips ^ from schema names but keeps $
-        assert result == ["db1\\.schema1$"]
+        # ``^``/``$`` are stripped from both the db key and each schema entry,
+        # then re-anchored on the assembled segment.
+        assert result == ["^db1\\.schema1$"]
+
+    def test_normalize_filters_wildcard_and_empty_list_equivalent(self) -> None:
+        """``"*"`` and an empty list both mean "every schema in this db"."""
+        wildcard = normalize_filters({"^db$": "*"}, False)
+        empty = normalize_filters({"^db$": []}, False)
+        assert wildcard == empty == ["^db\\..*$"]
+
+
+class TestNormalizeFiltersSubstringRegression:
+    """Regression tests for the substring-match bug (BLDX/APP-1014).
+
+    Previously ``normalize_filters`` emitted unanchored ``db\\.*`` segments,
+    which when applied via PostgreSQL POSIX ``~`` (substring match) would
+    match any target string containing ``db`` followed by zero literal dots
+    — e.g. excluding ``{"^dev$": []}`` would incorrectly drop a schema named
+    ``atlan_dev`` because the substring ``dev`` appears at the end.
+
+    These tests pin the new anchored ``^db\\..*$`` shape so the bug cannot
+    silently regress.
+    """
+
+    def test_empty_schemas_does_not_substring_match(self) -> None:
+        # Mirrors the exact failure from the redshift v3 crawler.
+        _, exc = prepare_filters("", '{"^dev$": []}')
+        assert exc == "^dev\\..*$"
+        # The whole point: must NOT match a string whose schema *ends* with "dev".
+        assert re.search(exc, "wide_world_importers.atlan_dev") is None
+        # And must still match a target whose database actually IS "dev".
+        assert re.search(exc, "dev.public") is not None
+        assert re.search(exc, "dev.atlan_test_schema") is not None
+
+    def test_atlan_trial_does_not_substring_match(self) -> None:
+        _, exc = prepare_filters("", '{"^atlan_trial$": []}')
+        assert exc == "^atlan_trial\\..*$"
+        assert re.search(exc, "xyz.atlan_trial_archive") is None
+        assert re.search(exc, "wide_world_importers.atlan_trial_old") is None
+        # Database literally named atlan_trial — should match.
+        assert re.search(exc, "atlan_trial.public") is not None
+
+    def test_explicit_schema_is_exact(self) -> None:
+        _, exc = prepare_filters("", '{"^db$": ["^schema$"]}')
+        assert exc == "^db\\.schema$"
+        assert re.search(exc, "db.schema") is not None
+        # Substring siblings must not match.
+        assert re.search(exc, "db.schema_extra") is None
+        assert re.search(exc, "other_db.schema") is None
+        assert re.search(exc, "prefix.db.schema") is None
+
+    def test_wildcard_and_empty_list_produce_same_regex(self) -> None:
+        _, exc_wildcard = prepare_filters("", '{"^db$": "*"}')
+        _, exc_empty = prepare_filters("", '{"^db$": []}')
+        assert exc_wildcard == exc_empty == "^db\\..*$"
+
+    def test_empty_dict_preserves_defaults(self) -> None:
+        # Empty dict input → callers fall back to ``.*`` (include) / ``^$`` (exclude).
+        inc, exc = prepare_filters("{}", "{}")
+        assert inc == ".*"
+        assert exc == "^$"
+        # And ``normalize_filters`` itself returns an empty list for empty input.
+        assert normalize_filters({}, True) == []
+        assert normalize_filters({}, False) == []
+
+    def test_customer_shape_redshift_regression(self) -> None:
+        """The exact filter shape that broke the redshift v3 crawler in prod.
+
+        Customer config: ``{"^atlan_trial$":[],"^dev$":[]}``. This silently
+        dropped schema ``atlan_dev`` (40 tables, 511 cols) because the old
+        unanchored regex ``dev\\.*|atlan_trial\\.*`` substring-matched it.
+        """
+        _, exc = prepare_filters("", '{"^atlan_trial$": [], "^dev$": []}')
+        # No substring leakage from either prefix.
+        assert re.search(exc, "wide_world_importers.atlan_dev") is None
+        assert re.search(exc, "wide_world_importers.atlan_trial_old") is None
+        # Real matches still work.
+        assert re.search(exc, "dev.public") is not None
+        assert re.search(exc, "atlan_trial.foo") is not None
 
 
 class TestExtractDatabaseNamesFromIncludeRegex:
