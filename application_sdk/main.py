@@ -183,10 +183,6 @@ class AppConfig:
         def _env(key: str, default: str = "") -> str:
             return os.environ.get(key, default)
 
-        def _env_int(key: str, default: int) -> int:
-            val = os.environ.get(key)
-            return int(val) if val else default
-
         def _env_bool(key: str, default: bool = False) -> bool:
             val = os.environ.get(key, "").lower()
             return val in ("true", "1", "yes") if val else default
@@ -536,6 +532,89 @@ def _derive_task_queue(app_module: str) -> str:
     if app_name:
         return app_name
     return f"{_derive_service_name(app_module)}-queue"
+
+
+def _env_int(key: str, default: int = 0) -> int:
+    """Read an int env var, returning ``default`` when unset, empty, or unparsable.
+
+    Used uniformly by both :meth:`AppConfig.from_args_and_env` (CLI path)
+    and :func:`_resolve_dev_config` (dev/CI path) so a malformed value like
+    ``ATLAN_HANDLER_PORT="not-a-number"`` falls through to the next key
+    instead of crashing startup.
+    """
+    val = os.environ.get(key)
+    if not val:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        logger.warning(
+            "Ignoring non-integer env var %s=%r; falling back to default %d",
+            key,
+            val,
+            default,
+        )
+        return default
+
+
+@dataclass(frozen=True)
+class _DevConfig:
+    """Resolved connection settings for :func:`run_dev_combined`."""
+
+    host: str
+    port: int
+    temporal_host: str
+    temporal_namespace: str
+    task_queue: str
+
+
+def _resolve_dev_config(
+    *,
+    app_name: str,
+    host: str | None = None,
+    port: int | None = None,
+    temporal_host: str | None = None,
+    temporal_namespace: str | None = None,
+    task_queue: str | None = None,
+) -> _DevConfig:
+    """Resolve ``run_dev_combined`` connection kwargs to concrete values.
+
+    Precedence per field: ``explicit kwarg → env var(s) → built-in default``.
+    Env keys mirror those :meth:`AppConfig.from_args_and_env` reads, so the
+    CLI path and the dev path stay in sync — connectors that ship with a
+    minimal ``python main.py`` get CI-stack overrides for free, without
+    per-call ``os.environ.get`` boilerplate.
+
+    Notes on ``None`` vs falsy:
+
+    * ``port`` uses ``is None`` so an explicit ``port=0`` (let the OS
+      pick an ephemeral port — handy in tests) is honored.
+    * String fields use ``or`` chains since empty strings aren't valid
+      hosts / queue names anyway and treating them as "missing" matches
+      the existing :meth:`AppConfig.from_args_and_env` behavior.
+    """
+    resolved_port = (
+        port
+        if port is not None
+        else _env_int("ATLAN_HANDLER_PORT") or _env_int("ATLAN_APP_HTTP_PORT") or 8000
+    )
+    return _DevConfig(
+        host=host
+        or os.environ.get("ATLAN_HANDLER_HOST")
+        or os.environ.get("ATLAN_APP_HTTP_HOST")
+        or "127.0.0.1",
+        port=resolved_port,
+        temporal_host=temporal_host
+        or os.environ.get("ATLAN_TEMPORAL_HOST")
+        or "localhost:7233",
+        temporal_namespace=temporal_namespace
+        or os.environ.get("ATLAN_TEMPORAL_NAMESPACE")
+        or os.environ.get("ATLAN_WORKFLOW_NAMESPACE")
+        or "default",
+        task_queue=task_queue
+        or os.environ.get("ATLAN_TASK_QUEUE")
+        or f"{app_name}-queue",
+    )
 
 
 async def _flush_observability() -> None:
@@ -1107,52 +1186,24 @@ async def run_dev_combined(
     app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
     app_module = f"{app_class.__module__}:{app_class.__name__}"
 
-    # Resolve connection-shaped kwargs: explicit kwarg → env var → default.
-    # Env keys mirror AppConfig.from_args_and_env so the CLI path and
-    # this dev path stay in sync — connectors that ship with `python main.py`
-    # entry points get CI-stack overrides (ATLAN_HANDLER_PORT,
-    # ATLAN_TASK_QUEUE, etc.) for free, without per-call `os.environ.get`.
-    def _env_int(key: str) -> int:
-        val = os.environ.get(key)
-        try:
-            return int(val) if val else 0
-        except ValueError:
-            return 0
-
-    resolved_host = (
-        host
-        or os.environ.get("ATLAN_HANDLER_HOST")
-        or os.environ.get("ATLAN_APP_HTTP_HOST")
-        or "127.0.0.1"
-    )
-    resolved_port = (
-        port
-        or _env_int("ATLAN_HANDLER_PORT")
-        or _env_int("ATLAN_APP_HTTP_PORT")
-        or 8000
-    )
-    resolved_temporal_host = (
-        temporal_host or os.environ.get("ATLAN_TEMPORAL_HOST") or "localhost:7233"
-    )
-    resolved_temporal_namespace = (
-        temporal_namespace
-        or os.environ.get("ATLAN_TEMPORAL_NAMESPACE")
-        or os.environ.get("ATLAN_WORKFLOW_NAMESPACE")
-        or "default"
-    )
-    resolved_task_queue = (
-        task_queue or os.environ.get("ATLAN_TASK_QUEUE") or f"{app_name}-queue"
+    dev = _resolve_dev_config(
+        app_name=app_name,
+        host=host,
+        port=port,
+        temporal_host=temporal_host,
+        temporal_namespace=temporal_namespace,
+        task_queue=task_queue,
     )
 
     config = AppConfig(
         mode="combined",
         app_module=app_module,
         handler_module=os.environ.get("ATLAN_HANDLER_MODULE") or None,
-        temporal_host=resolved_temporal_host,
-        temporal_namespace=resolved_temporal_namespace,
-        task_queue=resolved_task_queue,
-        handler_host=resolved_host,
-        handler_port=resolved_port,
+        temporal_host=dev.temporal_host,
+        temporal_namespace=dev.temporal_namespace,
+        task_queue=dev.task_queue,
+        handler_host=dev.host,
+        handler_port=dev.port,
         log_level="DEBUG",
         service_name=_derive_service_name(app_module),
         # Dev-friendly: disable Prometheus to avoid port 9464 collision on
