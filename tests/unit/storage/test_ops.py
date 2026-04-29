@@ -247,6 +247,20 @@ class TestListKeys:
         assert "artifacts/run" not in keys
         assert len(keys) == 1
 
+    async def test_list_keys_zero_byte_sibling_not_filtered_as_marker(
+        self, store
+    ) -> None:
+        # "a/b" is zero-byte but is a SIBLING of "a/c", not a parent of any listed
+        # key.  parent_dirs = {"a"} — "a/b" is not in parent_dirs → must be
+        # returned as a legitimate empty file.
+        await _put("a/b", b"", store, normalize=False)
+        await _put("a/c", b"data", store, normalize=False)
+
+        keys = await list_keys("", store, normalize=False)
+        assert "a/b" in keys  # zero-byte but no children → retained
+        assert "a/c" in keys
+        assert len(keys) == 2
+
 
 # ---------------------------------------------------------------------------
 # _compute_part_size: 10 000-part safety floor

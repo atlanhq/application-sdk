@@ -54,6 +54,7 @@ from application_sdk.storage.errors import (
     StorageError,
     StorageNotFoundError,
 )
+from application_sdk.storage.ops import _list_items
 
 # Lazy import: direct get_logger() at module load would create a circular
 # dependency (observability -> storage -> cloud -> observability).
@@ -274,23 +275,15 @@ class CloudStore:
     async def _list_keys(
         self, list_prefix: str, suffix_filter: set[str] | None = None
     ) -> list[str]:
-        from application_sdk.storage.ops import (  # noqa: PLC0415 — deferred to avoid circular import (storage/__init__.py imports both cloud and ops)
-            _list_items,
-        )
-
-        # Normalize suffix filter to lowercase for case-insensitive matching.
-        normalized_filter = (
-            {s.lower() for s in suffix_filter} if suffix_filter else None
-        )
+        # Lowercase once so endswith checks are case-insensitive (e.g. ".JSON" matches ".json").
+        lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
         try:
             items = await _list_items(self._store, list_prefix or None)
-            keys: list[str] = []
-            for path, _ in items:
-                if normalized_filter:
-                    if Path(path).suffix.lower() not in normalized_filter:
-                        continue
-                keys.append(path)
-            return sorted(keys)
+            return sorted(
+                path
+                for path, _ in items
+                if not lfilter or any(path.lower().endswith(s) for s in lfilter)
+            )
         except Exception as exc:
             raise StorageError(
                 f"Failed to list keys with prefix: {list_prefix!r}", cause=exc

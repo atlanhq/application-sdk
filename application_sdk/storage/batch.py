@@ -26,6 +26,7 @@ import obstore
 
 from application_sdk.storage.ops import (
     _list_items,
+    _normalize_listing_prefix,
     _resolve_store,
     download_file,
     normalize_key,
@@ -74,10 +75,7 @@ async def list_keys(
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
-    if normalize and prefix:
-        prefix = normalize_key(prefix)
-        if prefix and not prefix.endswith("/"):
-            prefix = prefix + "/"
+    prefix = _normalize_listing_prefix(prefix, normalize)
 
     try:
         items = await _list_items(resolved, prefix or None)
@@ -126,10 +124,7 @@ async def delete_prefix(
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
-    if normalize and prefix:
-        prefix = normalize_key(prefix)
-        if prefix and not prefix.endswith("/"):
-            prefix = prefix + "/"
+    prefix = _normalize_listing_prefix(prefix, normalize)
 
     # include_markers=True so zero-byte "folder" objects (GCS console markers,
     # manually-created S3 directory entries, etc.) are deleted alongside real

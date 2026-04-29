@@ -116,6 +116,28 @@ def normalize_key(key: str) -> str:
     return "" if normalized == "." else normalized
 
 
+def _normalize_listing_prefix(prefix: str, normalize: bool) -> str:
+    """Return *prefix* normalised for a listing call.
+
+    Applies :func:`normalize_key` when *normalize* is ``True``, then ensures
+    the result ends with ``"/"`` so prefix matching never bleeds into sibling
+    directories (e.g. ``"artifacts"`` cannot match ``"artifacts_backup/"``).
+
+    Args:
+        prefix: Raw prefix string.
+        normalize: When ``True``, normalise via :func:`normalize_key`.
+
+    Returns:
+        Normalised prefix with trailing slash, or the original string if
+        *normalize* is ``False`` or *prefix* is empty.
+    """
+    if normalize and prefix:
+        prefix = normalize_key(prefix)
+        if prefix and not prefix.endswith("/"):
+            prefix = prefix + "/"
+    return prefix
+
+
 def _resolve_store(store: ObjectStore | None) -> ObjectStore:
     """Return *store* if provided, otherwise resolve from the infrastructure context.
 
