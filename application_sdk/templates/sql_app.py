@@ -590,10 +590,12 @@ class SqlApp(App):
             return TransformOutput(total_record_count=0)
 
         connection_qn = ""
+        connection_name = ""
         if hasattr(input, "connection") and input.connection:
             attrs = getattr(input.connection, "attributes", None)
             if attrs:
                 connection_qn = getattr(attrs, "qualified_name", "") or ""
+                connection_name = getattr(attrs, "name", "") or ""
 
         output_dir = Path(output_path) / "transformed" / entity_type
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -606,6 +608,11 @@ class SqlApp(App):
                 for _, row in df.iterrows():
                     record = row.to_dict()
                     asset = mapper_fn(record, connection_qn)
+                    # Inject connectionName if the mapper returned a dict
+                    if isinstance(asset, dict) and connection_name:
+                        asset.setdefault("attributes", {}).setdefault(
+                            "connectionName", connection_name
+                        )
                     # Write as JSONL — asset should support serialization
                     if hasattr(asset, "to_nested_dict"):
                         entity_bytes = json.dumps(asset.to_nested_dict()).encode()
