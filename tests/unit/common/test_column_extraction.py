@@ -7,7 +7,7 @@ Tests cover SDK-generic functions:
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -44,11 +44,42 @@ class TestGetBackfillTables:
         "application_sdk.common.incremental.column_extraction.backfill."
         "DuckDBConnectionManager"
     )
-    def test_duckdb_error_returns_none(self, mock_manager):
-        """Test graceful fallback when DuckDB fails returns None."""
+    def test_duckdb_error_propagates(self, mock_manager):
+        """DuckDB / runtime failures must propagate, not be swallowed.
+
+        The bare ``except Exception`` was previously hiding programming bugs,
+        disk failures, and SQL errors as silent ``None`` returns. After
+        BLDX-1190 the catch is narrowed to ``ValueError`` only, so callers
+        can distinguish "no previous state" (legitimate skip) from
+        "infrastructure error" (real failure).
+        """
         mock_manager.return_value.__enter__ = lambda s: (_ for _ in ()).throw(
             Exception("DuckDB error")
         )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            current_dir = Path(temp_dir) / "current"
+            previous_dir = Path(temp_dir) / "previous"
+            current_dir.mkdir()
+            previous_dir.mkdir()
+
+            with pytest.raises(Exception, match="DuckDB error"):
+                get_backfill_tables(current_dir, previous_dir)
+
+    @patch(
+        "application_sdk.common.incremental.column_extraction.backfill."
+        "_load_tables_to_duckdb"
+    )
+    @patch(
+        "application_sdk.common.incremental.column_extraction.backfill."
+        "DuckDBConnectionManager"
+    )
+    def test_no_transformed_tables_returns_none(self, mock_manager, mock_load_tables):
+        """The ``ValueError("No transformed tables found...")`` skip path
+        is the only swallowed case after BLDX-1190; still returns None."""
+        # Simulate the legitimate skip: current_tables comes back as 0/None.
+        mock_load_tables.return_value = 0
+        mock_manager.return_value.__enter__.return_value.connection = MagicMock()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             current_dir = Path(temp_dir) / "current"

@@ -1,8 +1,8 @@
 import sys
 import warnings
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Dict, Generator
 from unittest import mock
 
 import pytest
@@ -93,7 +93,7 @@ def test_process_with_various_messages(message: str):
 
 
 @given(st.dictionaries(keys=st.text(min_size=1), values=st.text(min_size=1)))
-def test_process_with_various_kwargs(extra_kwargs: Dict[str, str]):
+def test_process_with_various_kwargs(extra_kwargs: dict[str, str]):
     """Test process() method with various keyword arguments."""
     with create_logger_adapter() as logger_adapter:
         _, kwargs = logger_adapter.process("Test message", extra_kwargs)
@@ -221,17 +221,19 @@ def test_process_with_generated_activity_context(activity_info: mock.Mock):
 @given(st.text(min_size=1))
 def test_process_with_generated_request_context(request_id: str):
     """Test process() method with generated request context data."""
-    with create_logger_adapter() as logger_adapter:
-        with mock.patch(
+    with (
+        create_logger_adapter() as logger_adapter,
+        mock.patch(
             "application_sdk.observability.logger_adaptor.request_context"
-        ) as mock_context:
-            mock_context.get.return_value = {"request_id": request_id}
-            msg, kwargs = logger_adapter.process("Test message", {})
+        ) as mock_context,
+    ):
+        mock_context.get.return_value = {"request_id": request_id}
+        msg, kwargs = logger_adapter.process("Test message", {})
 
-            # Verify request_id is copied to kwargs
-            assert kwargs["request_id"] == request_id
-            # Verify the message is preserved
-            assert msg == "Test message"
+        # Verify request_id is copied to kwargs
+        assert kwargs["request_id"] == request_id
+        # Verify the message is preserved
+        assert msg == "Test message"
 
 
 def test_get_logger():
@@ -368,119 +370,133 @@ class TestCorrelationContext:
 
     def test_process_with_correlation_context(self):
         """Test process() when correlation context is set."""
-        with create_logger_adapter() as logger_adapter:
-            with mock.patch(
+        with (
+            create_logger_adapter() as logger_adapter,
+            mock.patch(
                 "application_sdk.observability.logger_adaptor.correlation_context"
-            ) as mock_corr_context:
-                mock_corr_context.get.return_value = {
-                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
-                    self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
-                }
+            ) as mock_corr_context,
+        ):
+            mock_corr_context.get.return_value = {
+                self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
+            }
 
-                msg, kwargs = logger_adapter.process("Test message", {})
+            msg, kwargs = logger_adapter.process("Test message", {})
 
-                assert kwargs["logger_name"] == "test_logger"
-                assert msg == "Test message"
+            assert kwargs["logger_name"] == "test_logger"
+            assert msg == "Test message"
 
     def test_process_without_correlation_context(self):
         """Test process() when correlation context is empty."""
-        with create_logger_adapter() as logger_adapter:
-            with mock.patch(
+        with (
+            create_logger_adapter() as logger_adapter,
+            mock.patch(
                 "application_sdk.observability.logger_adaptor.correlation_context"
-            ) as mock_corr_context:
-                mock_corr_context.get.return_value = {}
+            ) as mock_corr_context,
+        ):
+            mock_corr_context.get.return_value = {}
 
-                msg, kwargs = logger_adapter.process("Test message", {})
+            msg, kwargs = logger_adapter.process("Test message", {})
 
-                assert kwargs["logger_name"] == "test_logger"
-                assert msg == "Test message"
+            assert kwargs["logger_name"] == "test_logger"
+            assert msg == "Test message"
 
     def test_process_extracts_trace_id_from_correlation_context(self):
         """Test process() extracts trace_id from correlation context."""
-        with create_logger_adapter() as logger_adapter:
-            with mock.patch(
+        with (
+            create_logger_adapter() as logger_adapter,
+            mock.patch(
                 "application_sdk.observability.logger_adaptor.correlation_context"
-            ) as mock_corr_context:
-                mock_corr_context.get.return_value = {
-                    "trace_id": self.TRACE_ID,
-                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
-                }
+            ) as mock_corr_context,
+        ):
+            mock_corr_context.get.return_value = {
+                "trace_id": self.TRACE_ID,
+                self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+            }
 
-                msg, kwargs = logger_adapter.process("Test message", {})
+            msg, kwargs = logger_adapter.process("Test message", {})
 
-                assert kwargs["trace_id"] == self.TRACE_ID
-                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+            assert kwargs["trace_id"] == self.TRACE_ID
+            assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
 
     def test_process_extracts_correlation_id_from_correlation_context(self):
         """Test process() extracts correlation_id from correlation context."""
-        with create_logger_adapter() as logger_adapter:
-            with mock.patch(
+        with (
+            create_logger_adapter() as logger_adapter,
+            mock.patch(
                 "application_sdk.observability.logger_adaptor.correlation_context"
-            ) as mock_corr_context:
-                mock_corr_context.get.return_value = {
-                    "trace_id": self.TRACE_ID,
-                    "correlation_id": "app-workflow-run-guid-abc",
-                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
-                }
+            ) as mock_corr_context,
+        ):
+            mock_corr_context.get.return_value = {
+                "trace_id": self.TRACE_ID,
+                "correlation_id": "app-workflow-run-guid-abc",
+                self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+            }
 
-                msg, kwargs = logger_adapter.process("Test message", {})
+            msg, kwargs = logger_adapter.process("Test message", {})
 
-                assert kwargs["trace_id"] == self.TRACE_ID
-                assert kwargs["correlation_id"] == "app-workflow-run-guid-abc"
-                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+            assert kwargs["trace_id"] == self.TRACE_ID
+            assert kwargs["correlation_id"] == "app-workflow-run-guid-abc"
+            assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
 
     def test_process_without_trace_id(self):
         """Test process() when trace_id is not in correlation context."""
-        with create_logger_adapter() as logger_adapter:
-            with mock.patch(
+        with (
+            create_logger_adapter() as logger_adapter,
+            mock.patch(
                 "application_sdk.observability.logger_adaptor.correlation_context"
-            ) as mock_corr_context:
-                mock_corr_context.get.return_value = {
-                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
-                }
+            ) as mock_corr_context,
+        ):
+            mock_corr_context.get.return_value = {
+                self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+            }
 
-                msg, kwargs = logger_adapter.process("Test message", {})
+            msg, kwargs = logger_adapter.process("Test message", {})
 
-                assert "trace_id" not in kwargs
-                assert "correlation_id" not in kwargs
-                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+            assert "trace_id" not in kwargs
+            assert "correlation_id" not in kwargs
+            assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
 
     def test_process_handles_none_correlation_context(self):
         """Test process() gracefully handles None when correlation context is unset."""
-        with create_logger_adapter() as logger_adapter:
-            with mock.patch(
+        with (
+            create_logger_adapter() as logger_adapter,
+            mock.patch(
                 "application_sdk.observability.logger_adaptor.correlation_context"
-            ) as mock_corr_context:
-                # ContextVar returns None when not set
-                mock_corr_context.get.return_value = None
+            ) as mock_corr_context,
+        ):
+            # ContextVar returns None when not set
+            mock_corr_context.get.return_value = None
 
-                # Should not raise exception - None is handled gracefully
-                msg, kwargs = logger_adapter.process("Test message", {})
+            # Should not raise exception - None is handled gracefully
+            msg, kwargs = logger_adapter.process("Test message", {})
 
-                # Verify basic functionality still works
-                assert msg == "Test message"
-                assert kwargs["logger_name"] == "test_logger"
-                # Verify no correlation context data was added
-                assert self.WORKFLOW_NAME_HEADER not in kwargs
-                assert "trace_id" not in kwargs
+            # Verify basic functionality still works
+            assert msg == "Test message"
+            assert kwargs["logger_name"] == "test_logger"
+            # Verify no correlation context data was added
+            assert self.WORKFLOW_NAME_HEADER not in kwargs
+            assert "trace_id" not in kwargs
 
     def test_process_handles_none_request_context(self):
         """Test process() gracefully handles None when request context is unset."""
-        with create_logger_adapter() as logger_adapter:
-            with mock.patch(
+        with (
+            create_logger_adapter() as logger_adapter,
+            mock.patch(
                 "application_sdk.observability.logger_adaptor.request_context"
-            ) as mock_req_context:
-                # ContextVar returns None when not set
-                mock_req_context.get.return_value = None
+            ) as mock_req_context,
+        ):
+            # ContextVar returns None when not set
+            mock_req_context.get.return_value = None
 
-                # Should not raise exception - None is handled gracefully
-                msg, kwargs = logger_adapter.process("Test message", {})
+            # Should not raise exception - None is handled gracefully
+            msg, kwargs = logger_adapter.process("Test message", {})
 
-                # Verify basic functionality still works
-                assert msg == "Test message"
-                assert kwargs["logger_name"] == "test_logger"
-                # Verify no request context data was added
-                assert "request_id" not in kwargs
+            # Verify basic functionality still works
+            assert msg == "Test message"
+            assert kwargs["logger_name"] == "test_logger"
+            # Verify no request context data was added
+            assert "request_id" not in kwargs
 
 
 class TestLogFormatFunction:
@@ -569,24 +585,25 @@ class TestCorrelationContextIntegration:
             )
         )
         try:
-            with create_logger_adapter() as logger_adapter:
-                with mock.patch(
+            with (
+                create_logger_adapter() as logger_adapter,
+                mock.patch(
                     "application_sdk.observability.logger_adaptor.correlation_context"
-                ) as mock_corr_context:
-                    mock_corr_context.get.return_value = {
-                        self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
-                        self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
-                    }
+                ) as mock_corr_context,
+            ):
+                mock_corr_context.get.return_value = {
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                    self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
+                }
 
-                    msg, kwargs = logger_adapter.process("Test message", {})
+                msg, kwargs = logger_adapter.process("Test message", {})
 
-                    assert kwargs["workflow_id"] == self.WORKFLOW_ID
-                    assert (
-                        kwargs["workflow_run_id"]
-                        == "019b04bd-ac10-7989-87d7-06427dc0616c"
-                    )
-                    assert self.WORKFLOW_NAME_HEADER in kwargs
-                    assert self.WORKFLOW_NODE_HEADER in kwargs
+                assert kwargs["workflow_id"] == self.WORKFLOW_ID
+                assert (
+                    kwargs["workflow_run_id"] == "019b04bd-ac10-7989-87d7-06427dc0616c"
+                )
+                assert self.WORKFLOW_NAME_HEADER in kwargs
+                assert self.WORKFLOW_NODE_HEADER in kwargs
         finally:
             set_execution_context(ExecutionContext())
 
@@ -604,21 +621,23 @@ class TestCorrelationContextIntegration:
             )
         )
         try:
-            with create_logger_adapter() as logger_adapter:
-                with mock.patch(
+            with (
+                create_logger_adapter() as logger_adapter,
+                mock.patch(
                     "application_sdk.observability.logger_adaptor.correlation_context"
-                ) as mock_corr_context:
-                    mock_corr_context.get.return_value = {
-                        self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
-                        self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
-                    }
+                ) as mock_corr_context,
+            ):
+                mock_corr_context.get.return_value = {
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                    self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
+                }
 
-                    msg, kwargs = logger_adapter.process("Test message", {})
+                msg, kwargs = logger_adapter.process("Test message", {})
 
-                    assert kwargs["activity_id"] == "fetch_databases"
-                    assert kwargs["workflow_id"] == self.WORKFLOW_ID
-                    assert self.WORKFLOW_NAME_HEADER in kwargs
-                    assert self.WORKFLOW_NODE_HEADER in kwargs
+                assert kwargs["activity_id"] == "fetch_databases"
+                assert kwargs["workflow_id"] == self.WORKFLOW_ID
+                assert self.WORKFLOW_NAME_HEADER in kwargs
+                assert self.WORKFLOW_NODE_HEADER in kwargs
         finally:
             set_execution_context(ExecutionContext())
 
@@ -1048,18 +1067,12 @@ class TestPython314EventLoopCompat:
                     "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
                     side_effect=RuntimeError("no running event loop"),
                 ):
-                    with mock.patch(
-                        "application_sdk.observability.logger_adaptor.threading.Thread"
-                    ) as mock_thread:
-                        mock_thread_instance = mock.MagicMock()
-                        mock_thread.return_value = mock_thread_instance
-
+                    with mock.patch.object(
+                        AtlanLoggerAdapter, "_spawn_flush_thread"
+                    ) as mock_spawn:
                         _ = AtlanLoggerAdapter("test_py314")
 
-                        mock_thread.assert_called_once()
-                        _, kwargs = mock_thread.call_args
-                        assert kwargs.get("daemon") is True
-                        mock_thread_instance.start.assert_called_once()
+                        mock_spawn.assert_called_once()
 
     def test_flush_task_uses_running_loop_when_available(self):
         """When a running event loop exists, the adapter should create
@@ -1083,9 +1096,9 @@ class TestPython314EventLoopCompat:
                     "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
                     return_value=mock_loop,
                 ):
-                    with mock.patch(
-                        "application_sdk.observability.logger_adaptor.threading.Thread"
-                    ) as mock_thread:
+                    with mock.patch.object(
+                        AtlanLoggerAdapter, "_spawn_flush_thread"
+                    ) as mock_spawn:
                         _ = AtlanLoggerAdapter("test_py314_loop")
 
                         mock_loop.create_task.assert_called_once()

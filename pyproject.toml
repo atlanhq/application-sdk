@@ -153,13 +153,14 @@ start-deps.shell = "export DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 && poe start
 stop-deps.shell = "lsof -ti:3000,3500,7233,8233,50001 | xargs kill -9 2>/dev/null || true"
 test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-integ.db &>/tmp/temporal-integ.log & sleep 3 && uv run pytest tests/integration/ -m integration -v --timeout=120; EXIT=$?; kill %1 2>/dev/null; exit $EXIT"
 
+# API docs — must be before any sub-table header ([tool.poe.tasks.*])
+# or TOML nests it inside the sub-table rather than the parent tasks namespace
+generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
+
 # Local credential provisioning
 [tool.poe.tasks.provision-credentials]
 help = "Provision credentials for local development"
 cmd = "python -m application_sdk.tools.provision_credentials"
-
-# API docs
-generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
 
 [build-system]
 requires = ["hatchling"]

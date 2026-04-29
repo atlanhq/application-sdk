@@ -285,9 +285,12 @@ def _get_execution_id_from_task() -> str:
         RuntimeError: If called outside a @task method.
     """
     try:
-        return activity.info().workflow_id or ""
+        wid = activity.info().workflow_id
     except Exception as e:
         raise AppContextError("Cannot access app state outside of task context") from e
+    if not wid:
+        raise AppContextError("activity workflow_id is empty")
+    return wid
 
 
 class TaskStateAccessor:
@@ -564,9 +567,15 @@ class App(ABC):
         try:
             hints = get_type_hints(cls.run)
         except Exception:
-            # Unresolvable annotations (e.g. forward refs) — skip silently.
-            _task_logger.debug(
-                "Skipping run() annotation validation for %s: could not resolve type hints",
+            # Annotations are present but cannot be resolved (e.g. renamed
+            # forward refs, missing imports). Keep the registry tolerant —
+            # don't raise — but make the failure visible so the App doesn't
+            # silently disappear from the registry.
+            _task_logger.warning(
+                "Skipping run() annotation validation for %s: get_type_hints "
+                "failed to resolve annotations (likely an unresolved forward "
+                "reference or missing import). Skipping registration of run() "
+                "type validation; the App will still be registered.",
                 cls.__name__,
                 exc_info=True,
             )
@@ -631,7 +640,7 @@ class App(ABC):
         """Get the current execution context.
 
         Raises:
-            RuntimeError: If accessed outside of run() execution.
+            AppContextError: If accessed outside of run() execution.
         """
         if self._context is None:
             raise AppContextError(
@@ -647,7 +656,7 @@ class App(ABC):
         Only available inside @task methods.
 
         Raises:
-            RuntimeError: If accessed outside of @task method execution.
+            AppContextError: If accessed outside of @task method execution.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -680,7 +689,7 @@ class App(ABC):
         return self.context.is_cancelled()
 
     # =========================================================================
-    # Task-only methods (raise RuntimeError if called outside @task methods)
+    # Task-only methods (raise AppContextError if called outside @task methods)
     # =========================================================================
 
     def heartbeat(self, *details: Any) -> None:
@@ -692,7 +701,7 @@ class App(ABC):
             *details: Serializable progress details.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -710,7 +719,7 @@ class App(ABC):
             Tuple of details from last heartbeat, or empty tuple if none.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -729,7 +738,7 @@ class App(ABC):
             or None if no heartbeat was recorded.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -753,7 +762,7 @@ class App(ABC):
             Result of ``func(*args, **kwargs)``.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -830,7 +839,7 @@ class App(ABC):
             The stored value, or None if not set.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         execution_id = self._get_current_execution_id()
         with _app_state_lock:
@@ -846,7 +855,7 @@ class App(ABC):
             value: Value to store (any Python object).
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         execution_id = self._get_current_execution_id()
         with _app_state_lock:

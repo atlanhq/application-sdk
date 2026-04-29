@@ -17,9 +17,10 @@ from pathlib import Path
 
 import pytest
 
-import application_sdk.constants as constants
+from application_sdk import constants
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
+    clear_infrastructure,
     set_infrastructure,
 )
 from application_sdk.storage.batch import download_prefix, upload_prefix
@@ -111,7 +112,7 @@ def infra(store):
     """Set up infrastructure context with local store."""
     set_infrastructure(InfrastructureContext(storage=store))
     yield
-    set_infrastructure(InfrastructureContext())
+    clear_infrastructure()
 
 
 # ---------------------------------------------------------------------------
