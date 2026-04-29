@@ -20,7 +20,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.storage import ops as ops_module
+from application_sdk.storage.batch import delete_prefix, list_keys
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
+from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
     _compute_part_size,
     _get_bytes,
@@ -33,6 +35,12 @@ from application_sdk.storage.ops import (
     exists,
     upload_file,
 )
+
+
+@pytest.fixture
+def store():
+    return create_memory_store()
+
 
 # ---------------------------------------------------------------------------
 # _log() lazy logger initialisation (inline import)
@@ -75,21 +83,25 @@ class TestResolveStore:
 
     def test_raises_runtime_error_when_no_infra(self) -> None:
         """Exercises the inline import of ``get_infrastructure`` and the error branch."""
-        with patch(
-            "application_sdk.infrastructure.context.get_infrastructure",
-            return_value=None,
+        with (
+            patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            pytest.raises(RuntimeError, match="No ObjectStore provided"),
         ):
-            with pytest.raises(RuntimeError, match="No ObjectStore provided"):
-                _resolve_store(None)
+            _resolve_store(None)
 
     def test_raises_when_infra_storage_is_none(self) -> None:
         infra = SimpleNamespace(storage=None)
-        with patch(
-            "application_sdk.infrastructure.context.get_infrastructure",
-            return_value=infra,
+        with (
+            patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=infra,
+            ),
+            pytest.raises(RuntimeError, match="No ObjectStore provided"),
         ):
-            with pytest.raises(RuntimeError, match="No ObjectStore provided"):
-                _resolve_store(None)
+            _resolve_store(None)
 
     def test_returns_infra_storage_when_set(self) -> None:
         store = MagicMock()
@@ -99,6 +111,173 @@ class TestResolveStore:
             return_value=infra,
         ):
             assert _resolve_store(None) is store
+
+
+# ---------------------------------------------------------------------------
+# delete_prefix: GCS directory marker handling
+# ---------------------------------------------------------------------------
+
+
+class TestDeletePrefix:
+    async def test_delete_prefix_removes_intermediate_directory_markers(
+        self, store
+    ) -> None:
+        # The key scenario: "artifacts/run" is a GCS directory marker (zero-byte,
+        # trailing slash stripped by obstore) that sits WITHIN the deletion prefix
+        # "artifacts/". list_keys would filter it out; delete_prefix must not.
+        await _put("artifacts/run/file.json", b"{}", store, normalize=False)
+        await _put("artifacts/run", b"", store, normalize=False)  # GCS marker
+
+        deleted = await delete_prefix(
+            "artifacts", store
+        )  # normalize=True → "artifacts/"
+
+        assert deleted == 2  # file + intermediate marker both removed
+        assert (
+            await _get_bytes("artifacts/run/file.json", store, normalize=False) is None
+        )
+        assert await _get_bytes("artifacts/run", store, normalize=False) is None
+
+    async def test_delete_prefix_nested_markers_all_removed(self, store) -> None:
+        # Nested markers: "a/b" and "a/b/c" are both zero-byte parents within "a/".
+        await _put("a/b/c/file.json", b"{}", store, normalize=False)
+        await _put("a/b/c", b"", store, normalize=False)  # nested marker
+        await _put("a/b", b"", store, normalize=False)  # outer marker
+
+        deleted = await delete_prefix("a", store)
+
+        assert deleted == 3
+        assert await _get_bytes("a/b/c/file.json", store, normalize=False) is None
+        assert await _get_bytes("a/b/c", store, normalize=False) is None
+        assert await _get_bytes("a/b", store, normalize=False) is None
+
+    async def test_delete_prefix_zero_byte_leaf_file_removed(self, store) -> None:
+        # A legitimate zero-byte file (no children) must also be deleted.
+        await _put("data/empty.json", b"", store, normalize=False)
+        await _put("data/full.json", b"{}", store, normalize=False)
+
+        deleted = await delete_prefix("data", store, normalize=False)
+
+        assert deleted == 2
+        assert await _get_bytes("data/empty.json", store, normalize=False) is None
+        assert await _get_bytes("data/full.json", store, normalize=False) is None
+
+    async def test_delete_prefix_removes_root_directory_marker(self, store) -> None:
+        # Root-marker case: "artifacts/run" (the GCS marker) is at the same path
+        # as the requested prefix itself after normalisation. It lies outside the
+        # "artifacts/run/" listing prefix, so it must be swept by the best-effort
+        # root-marker delete rather than the main batch.
+        await _put("artifacts/run/file.json", b"{}", store, normalize=False)
+        await _put("artifacts/run", b"", store, normalize=False)  # GCS root marker
+
+        deleted = await delete_prefix(
+            "artifacts/run", store
+        )  # → prefix "artifacts/run/"
+
+        assert deleted == 2  # file + root marker both removed
+        assert (
+            await _get_bytes("artifacts/run/file.json", store, normalize=False) is None
+        )
+        assert await _get_bytes("artifacts/run", store, normalize=False) is None
+
+
+# ---------------------------------------------------------------------------
+# list_keys: GCS directory marker handling
+# ---------------------------------------------------------------------------
+
+
+class TestListKeys:
+    async def test_list_all_keys(self, store) -> None:
+        await _put("a/b.txt", b"1", store)
+        await _put("a/c.txt", b"2", store)
+        keys = await list_keys(store=store)
+        assert "a/b.txt" in keys
+        assert "a/c.txt" in keys
+
+    async def test_list_keys_suffix_filter_case_insensitive(self, store) -> None:
+        await _put("data/upper.JSON", b"u", store, normalize=False)
+        await _put("data/lower.json", b"l", store, normalize=False)
+        await _put("data/skip.txt", b"s", store, normalize=False)
+
+        keys = await list_keys("data", store, suffix=".json")
+        assert len(keys) == 2
+        assert "data/upper.JSON" in keys
+        assert "data/lower.json" in keys
+        assert "data/skip.txt" not in keys
+
+    async def test_list_keys_excludes_zero_byte_directory_markers(self, store) -> None:
+        # GCS strips the trailing slash from directory markers so they appear as
+        # bare keys when listing a *parent* prefix (e.g. "run" instead of "run/").
+        # List from an ancestor prefix ("") so the bare marker enters all_items.
+        await _put("run/manifest.json", b'{"version":1}', store, normalize=False)
+        await _put("run/catalog.json", b'{"sources":{}}', store, normalize=False)
+        # Simulate a GCS directory marker: 0-byte object at the bare prefix key.
+        await _put("run", b"", store, normalize=False)
+
+        # Use normalize=False + empty prefix so "run" (the marker) appears in
+        # all_items and the parent_dirs filter has something to act on.
+        keys = await list_keys("", store, normalize=False)
+        assert "run/manifest.json" in keys
+        assert "run/catalog.json" in keys
+        # The zero-byte marker must not appear in results.
+        assert "run" not in keys
+        assert len(keys) == 2
+
+    async def test_list_keys_retains_zero_byte_file_with_no_children(
+        self, store
+    ) -> None:
+        # A zero-byte file that is NOT a parent of any other key is a real
+        # empty file and must be returned by list_keys.
+        await _put("data/results.json", b"{}", store, normalize=False)
+        await _put("data/empty.json", b"", store, normalize=False)
+
+        keys = await list_keys("data", store, suffix=".json")
+        assert "data/results.json" in keys
+        # zero-byte but no children → legitimate file, must be included
+        assert "data/empty.json" in keys
+        assert len(keys) == 2
+
+    async def test_list_keys_excludes_nested_directory_markers(self, store) -> None:
+        # Nested GCS markers: both "run/sub" and "run" are 0-byte parent objects.
+        # List from ancestor prefix so both bare markers enter all_items.
+        await _put("run/sub/file.json", b'{"x":1}', store, normalize=False)
+        await _put("run/sub", b"", store, normalize=False)  # nested dir marker
+        await _put("run", b"", store, normalize=False)  # top-level dir marker
+
+        keys = await list_keys("", store, normalize=False)
+        assert "run/sub/file.json" in keys
+        assert "run/sub" not in keys
+        assert "run" not in keys
+        assert len(keys) == 1
+
+    async def test_list_keys_excludes_intermediate_directory_markers(
+        self, store
+    ) -> None:
+        # The core scenario parent_dirs is designed for: listing under a broad
+        # prefix returns "artifacts/run" (the obstore-stripped form of the GCS
+        # "artifacts/run/" marker) because it starts with "artifacts/".  The
+        # prefix filter does not help here — only parent_dirs catches it.
+        await _put("artifacts/run/file.json", b"{}", store, normalize=False)
+        await _put("artifacts/run", b"", store, normalize=False)
+
+        keys = await list_keys("artifacts", store)
+        assert "artifacts/run/file.json" in keys
+        assert "artifacts/run" not in keys
+        assert len(keys) == 1
+
+    async def test_list_keys_zero_byte_sibling_not_filtered_as_marker(
+        self, store
+    ) -> None:
+        # "a/b" is zero-byte but is a SIBLING of "a/c", not a parent of any listed
+        # key.  parent_dirs = {"a"} — "a/b" is not in parent_dirs → must be
+        # returned as a legitimate empty file.
+        await _put("a/b", b"", store, normalize=False)
+        await _put("a/c", b"data", store, normalize=False)
+
+        keys = await list_keys("", store, normalize=False)
+        assert "a/b" in keys  # zero-byte but no children → retained
+        assert "a/c" in keys
+        assert len(keys) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -154,31 +333,32 @@ class TestIsNotFound:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_put_wraps_failure_as_storage_error() -> None:
     store = MagicMock()
-    with patch(
-        "application_sdk.storage.ops.obstore.put_async",
-        new=AsyncMock(side_effect=RuntimeError("boom")),
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.put_async",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ),
+        pytest.raises(StorageError) as excinfo,
     ):
-        with pytest.raises(StorageError) as excinfo:
-            await _put("k", b"v", store, normalize=False)
+        await _put("k", b"v", store, normalize=False)
     assert excinfo.value.key == "k"
     assert isinstance(excinfo.value.cause, RuntimeError)
 
 
-@pytest.mark.asyncio
 async def test_get_bytes_wraps_non_404_as_storage_error() -> None:
     store = MagicMock()
-    with patch(
-        "application_sdk.storage.ops.obstore.get_async",
-        new=AsyncMock(side_effect=RuntimeError("permission denied")),
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(side_effect=RuntimeError("permission denied")),
+        ),
+        pytest.raises(StorageError),
     ):
-        with pytest.raises(StorageError):
-            await _get_bytes("k", store, normalize=False)
+        await _get_bytes("k", store, normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_get_bytes_returns_none_on_404() -> None:
     store = MagicMock()
     with patch(
@@ -188,18 +368,18 @@ async def test_get_bytes_returns_none_on_404() -> None:
         assert await _get_bytes("missing", store, normalize=False) is None
 
 
-@pytest.mark.asyncio
 async def test_delete_wraps_non_404_failure() -> None:
     store = MagicMock()
-    with patch(
-        "application_sdk.storage.ops.obstore.delete_async",
-        new=AsyncMock(side_effect=RuntimeError("permission denied")),
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.delete_async",
+            new=AsyncMock(side_effect=RuntimeError("permission denied")),
+        ),
+        pytest.raises(StorageError),
     ):
-        with pytest.raises(StorageError):
-            await delete("k", store, normalize=False)
+        await delete("k", store, normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_delete_returns_false_on_404() -> None:
     store = MagicMock()
     with patch(
@@ -209,7 +389,6 @@ async def test_delete_returns_false_on_404() -> None:
         assert await delete("k", store, normalize=False) is False
 
 
-@pytest.mark.asyncio
 async def test_exists_returns_false_on_404() -> None:
     store = MagicMock()
     with patch(
@@ -219,18 +398,18 @@ async def test_exists_returns_false_on_404() -> None:
         assert await exists("k", store, normalize=False) is False
 
 
-@pytest.mark.asyncio
 async def test_exists_wraps_non_404_failure() -> None:
     store = MagicMock()
-    with patch(
-        "application_sdk.storage.ops.obstore.head_async",
-        new=AsyncMock(side_effect=RuntimeError("server error")),
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.head_async",
+            new=AsyncMock(side_effect=RuntimeError("server error")),
+        ),
+        pytest.raises(StorageError),
     ):
-        with pytest.raises(StorageError):
-            await exists("k", store, normalize=False)
+        await exists("k", store, normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_exists_returns_true_on_success() -> None:
     store = MagicMock()
     with patch(
@@ -240,7 +419,6 @@ async def test_exists_returns_true_on_success() -> None:
         assert await exists("k", store, normalize=False) is True
 
 
-@pytest.mark.asyncio
 async def test_upload_file_wraps_failure_as_storage_error(tmp_path) -> None:
     """The writer raises mid-upload; ops must wrap it as StorageError."""
     f = tmp_path / "x.bin"
@@ -253,38 +431,41 @@ async def test_upload_file_wraps_failure_as_storage_error(tmp_path) -> None:
         async def __aexit__(self, *exc) -> None:  # pragma: no cover - not reached
             return None
 
-    with patch(
-        "application_sdk.storage.ops.obstore.open_writer_async",
-        return_value=_BoomCM(),
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            return_value=_BoomCM(),
+        ),
+        pytest.raises(StorageError) as excinfo,
     ):
-        with pytest.raises(StorageError) as excinfo:
-            await upload_file("k", f, MagicMock(), normalize=False)
+        await upload_file("k", f, MagicMock(), normalize=False)
     assert excinfo.value.key == "k"
 
 
-@pytest.mark.asyncio
 async def test_download_file_translates_404_to_not_found(tmp_path) -> None:
     """Download must translate a 404 from obstore into StorageNotFoundError."""
-    with patch(
-        "application_sdk.storage.ops.obstore.get_async",
-        new=AsyncMock(side_effect=RuntimeError("Key not found")),
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(side_effect=RuntimeError("Key not found")),
+        ),
+        pytest.raises(StorageNotFoundError),
     ):
-        with pytest.raises(StorageNotFoundError):
-            await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
+        await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_download_file_wraps_non_404_get_failure(tmp_path) -> None:
-    with patch(
-        "application_sdk.storage.ops.obstore.get_async",
-        new=AsyncMock(side_effect=RuntimeError("permission denied")),
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(side_effect=RuntimeError("permission denied")),
+        ),
+        pytest.raises(StorageError) as excinfo,
     ):
-        with pytest.raises(StorageError) as excinfo:
-            await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
+        await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
     assert not isinstance(excinfo.value, StorageNotFoundError)
 
 
-@pytest.mark.asyncio
 async def test_download_file_wraps_stream_failure(tmp_path) -> None:
     """If streaming raises mid-download, the failure must be wrapped."""
 
@@ -298,15 +479,16 @@ async def test_download_file_wraps_stream_failure(tmp_path) -> None:
     result_obj = MagicMock()
     result_obj.stream.return_value = _BoomStream()
 
-    with patch(
-        "application_sdk.storage.ops.obstore.get_async",
-        new=AsyncMock(return_value=result_obj),
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(return_value=result_obj),
+        ),
+        pytest.raises(StorageError),
     ):
-        with pytest.raises(StorageError):
-            await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
+        await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_upload_file_does_not_delete_when_retain_local_copy_true(
     tmp_path,
 ) -> None:
