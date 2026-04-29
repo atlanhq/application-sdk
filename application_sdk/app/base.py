@@ -647,7 +647,7 @@ class App(ABC):
         Only available inside @task methods.
 
         Raises:
-            RuntimeError: If accessed outside of @task method execution.
+            AppContextError: If accessed outside of @task method execution.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -680,7 +680,7 @@ class App(ABC):
         return self.context.is_cancelled()
 
     # =========================================================================
-    # Task-only methods (raise RuntimeError if called outside @task methods)
+    # Task-only methods (raise AppContextError if called outside @task methods)
     # =========================================================================
 
     def heartbeat(self, *details: Any) -> None:
