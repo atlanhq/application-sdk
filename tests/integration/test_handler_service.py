@@ -37,13 +37,13 @@ from application_sdk.handler.contracts import (
 def _reset_service_globals():
     """Reset handler service module globals and infrastructure context before/after each test."""
     from application_sdk.handler import service as svc
-    from application_sdk.infrastructure.context import _infrastructure_ctx
+    from application_sdk.infrastructure import clear_infrastructure
 
     svc._temporal_client = None
     svc._workflow_config = svc.WorkflowClientConfig()
     svc._secret_store = None
     svc._storage = None
-    _infrastructure_ctx.set(None)
+    clear_infrastructure()
 
     yield
 
@@ -51,7 +51,7 @@ def _reset_service_globals():
     svc._workflow_config = svc.WorkflowClientConfig()
     svc._secret_store = None
     svc._storage = None
-    _infrastructure_ctx.set(None)
+    clear_infrastructure()
 
 
 # ---------------------------------------------------------------------------
@@ -527,17 +527,19 @@ async def test_start_strips_inline_credentials(
 
     app = credential_wf_client
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        async with run_worker():
-            resp = await client.post(
-                "/workflows/v1/start",
-                json={
-                    "name": "cred-test",
-                    "credentials": [{"key": "password", "value": "s3cr3t"}],
-                },
-            )
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client,
+        run_worker(),
+    ):
+        resp = await client.post(
+            "/workflows/v1/start",
+            json={
+                "name": "cred-test",
+                "credentials": [{"key": "password", "value": "s3cr3t"}],
+            },
+        )
 
     assert resp.status_code == 200
     wf_id = resp.json()["data"]["workflow_id"]
@@ -700,3 +702,46 @@ async def test_multi_ep_invalid_workflow_type_returns_400(multi_route_wf_client)
     )
 
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Regression: get_infrastructure() visible inside uvicorn route handlers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_get_infrastructure_visible_in_http_handler():
+    """G6.18: get_infrastructure() returns the configured context inside a FastAPI route.
+
+    Regression for AUT-904: the ContextVar substrate silently returned None inside
+    uvicorn route handlers because uvicorn isolates each request in a fresh
+    contextvars.Context(). The module-level singleton substrate must be visible
+    from any code path, including app-author routes that call get_infrastructure()
+    directly rather than going through create_app_handler_service().
+    """
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    from application_sdk.infrastructure import InfrastructureContext, set_infrastructure
+    from application_sdk.infrastructure.context import get_infrastructure
+
+    # Simulate startup: set infrastructure before the server begins serving.
+    set_infrastructure(InfrastructureContext())
+
+    app = FastAPI()
+
+    @app.get("/infra-check")
+    async def infra_check():
+        infra = get_infrastructure()
+        return JSONResponse({"found": infra is not None})
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/infra-check")
+
+    assert resp.status_code == 200
+    assert resp.json()["found"] is True, (
+        "get_infrastructure() returned None inside a FastAPI route handler — "
+        "the uvicorn ContextVar isolation bug has regressed"
+    )
