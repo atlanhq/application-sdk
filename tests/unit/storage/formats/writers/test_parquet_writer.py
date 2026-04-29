@@ -1,8 +1,8 @@
 import contextlib
 import os
 import shutil
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -10,10 +10,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-import application_sdk.constants as constants
+from application_sdk import constants
 from application_sdk.common.types import DataframeType
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
+    clear_infrastructure,
     set_infrastructure,
 )
 from application_sdk.storage.batch import list_keys
@@ -74,7 +75,7 @@ def mock_consolidation_files():
     """Create a reusable context manager for mocking consolidation files with proper cleanup."""
 
     @contextlib.contextmanager
-    def _create_mock_files(base_path: str, file_names: List[str]):
+    def _create_mock_files(base_path: str, file_names: list[str]):
         """Create temporary files and return proper mock setup."""
         temp_dir = os.path.join(base_path, f"temp_mock_{id(file_names)}")
         os.makedirs(temp_dir, exist_ok=True)
@@ -89,7 +90,7 @@ def mock_consolidation_files():
                 created_files.append(file_path)
 
             # Return a function that creates properly mocked results
-            def create_mock_result(paths: List[str]):
+            def create_mock_result(paths: list[str]):
                 mock_result = MagicMock()
                 mock_result.to_pydict.return_value = {"path": paths}
                 return mock_result
@@ -373,7 +374,7 @@ class TestParquetFileWriterReplacePrefix:
             assert "is_partitioned" in result.columns
             assert "raw_shape_only" not in result.columns
         finally:
-            set_infrastructure(InfrastructureContext())
+            clear_infrastructure()
 
 
 class TestParquetFileWriterWriteDaftDataframe:
