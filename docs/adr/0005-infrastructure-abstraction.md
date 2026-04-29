@@ -75,7 +75,7 @@ Behind the scenes:
    self.uuid()  # wraps workflow.uuid4() — deterministic for Temporal replay
    ```
 
-5. **`InfrastructureContext`**: All infrastructure held in a frozen dataclass stored in a `ContextVar`. Set once at startup; accessed anywhere via `get_infrastructure()`.
+5. **`InfrastructureContext`**: All infrastructure held in a frozen dataclass stored in a module-level singleton. Set once at startup; accessed anywhere via `get_infrastructure()`. A module-level variable is used instead of a `ContextVar` because uvicorn HTTP request handlers run in isolated `contextvars.Context` instances and cannot see `ContextVar` values set in the parent task.
 
 **Pros:**
 - **Low learning curve**: Developers learn `App` and `@task`, not workflows and activities

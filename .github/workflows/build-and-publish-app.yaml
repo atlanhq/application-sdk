@@ -216,7 +216,7 @@ jobs:
           echo "Immutable image: ${GHCR_IMAGE}"
           echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
           echo "DockerHub image: ${DOCKERHUB_IMAGE}"
-          [ -n "${RELEASE_TAGS}" ] && printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"
+          if [ -n "${RELEASE_TAGS}" ]; then printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"; fi
 
   # ── Job 2: Build — parallel per architecture ──────────────────────────────────
   build:
