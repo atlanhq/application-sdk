@@ -162,6 +162,17 @@ class TestNormalizeIntegration:
         all_keys = await list_keys("data", store)
         assert len(all_keys) == 3
 
+    async def test_list_keys_suffix_filter_case_insensitive(self, store) -> None:
+        await _put("data/upper.JSON", b"u", store, normalize=False)
+        await _put("data/lower.json", b"l", store, normalize=False)
+        await _put("data/skip.txt", b"s", store, normalize=False)
+
+        keys = await list_keys("data", store, suffix=".json")
+        assert len(keys) == 2
+        assert "data/upper.JSON" in keys
+        assert "data/lower.json" in keys
+        assert "data/skip.txt" not in keys
+
     async def test_list_keys_excludes_zero_byte_directory_markers(self, store) -> None:
         # GCS console and some tools create 0-byte objects at "prefix/" to
         # simulate directories. obstore strips the trailing slash so they appear

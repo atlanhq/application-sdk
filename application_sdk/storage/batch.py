@@ -80,7 +80,10 @@ async def list_keys(
 
     try:
         items = await _list_items(resolved, prefix or None)
-        return sorted(path for path, _ in items if not suffix or path.endswith(suffix))
+        lsuffix = suffix.lower() if suffix else ""
+        return sorted(
+            path for path, _ in items if not lsuffix or path.lower().endswith(lsuffix)
+        )
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             StorageError,
