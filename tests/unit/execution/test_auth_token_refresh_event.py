@@ -1,9 +1,9 @@
-"""Tests for TemporalAuthManager (BLDX-1129 coverage push).
+"""Tests for TemporalAuthManager.
 
 This file deliberately exercises every inline import in
 ``application_sdk.execution._temporal.auth`` through a real call path so
 that a renamed/removed symbol surfaces as a test failure rather than at
-runtime in production. PR #1543 fixed exactly that bug class.
+runtime in production.
 """
 
 from __future__ import annotations
@@ -205,12 +205,7 @@ class TestEmitTokenRefreshEvent:
 
 
 # ---------------------------------------------------------------------------
-# BLDX-1129: Inline-import contract tests.
-#
-# Every inline `import` inside auth.py MUST be exercised by a real call
-# path. If a symbol referenced by an inline import is renamed/removed,
-# `mock.patch` raises AttributeError at setup time and that test fails —
-# which is exactly the bug class PR #1543 was meant to prevent.
+# Inline-import contract tests.
 # ---------------------------------------------------------------------------
 
 
@@ -516,38 +511,54 @@ class TestStartAndShutdown:
 
 
 class TestCalculateSleepSeconds:
+    @pytest.fixture
+    def fixed_now(self) -> datetime:
+        return datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+
     def test_returns_max_when_expires_at_is_none(self) -> None:
         manager = _make_manager()
         _stub_token_service(manager, expires_at=None)
         assert manager._calculate_sleep_seconds() == 300.0
 
-    def test_returns_zero_when_token_expired(self) -> None:
+    def test_returns_zero_when_token_expired(self, fixed_now: datetime) -> None:
         manager = _make_manager()
-        past = datetime.now(UTC) - timedelta(minutes=5)
+        past = fixed_now - timedelta(minutes=5)
         _stub_token_service(manager, expires_at=past)
-        assert manager._calculate_sleep_seconds() == 0
+        with mock.patch(
+            "application_sdk.execution._temporal.auth.datetime"
+        ) as mock_datetime:
+            mock_datetime.now.return_value = fixed_now
+            assert manager._calculate_sleep_seconds() == 0
 
-    def test_halves_remaining_within_bounds(self) -> None:
+    def test_halves_remaining_within_bounds(self, fixed_now: datetime) -> None:
         manager = _make_manager()
-        # 200 seconds out → halve to 100 → still within [30, 300]
-        future = datetime.now(UTC) + timedelta(seconds=200)
+        future = fixed_now + timedelta(seconds=200)
         _stub_token_service(manager, expires_at=future)
-        sleep = manager._calculate_sleep_seconds()
-        assert 95 <= sleep <= 105  # accounts for ~ms drift
+        with mock.patch(
+            "application_sdk.execution._temporal.auth.datetime"
+        ) as mock_datetime:
+            mock_datetime.now.return_value = fixed_now
+            assert manager._calculate_sleep_seconds() == 100.0
 
-    def test_clamped_to_min(self) -> None:
+    def test_clamped_to_min(self, fixed_now: datetime) -> None:
         manager = _make_manager()
-        # 20s out → halve to 10 → clamped up to MIN (30)
-        future = datetime.now(UTC) + timedelta(seconds=20)
+        future = fixed_now + timedelta(seconds=20)
         _stub_token_service(manager, expires_at=future)
-        assert manager._calculate_sleep_seconds() == 30.0
+        with mock.patch(
+            "application_sdk.execution._temporal.auth.datetime"
+        ) as mock_datetime:
+            mock_datetime.now.return_value = fixed_now
+            assert manager._calculate_sleep_seconds() == 30.0
 
-    def test_clamped_to_max(self) -> None:
+    def test_clamped_to_max(self, fixed_now: datetime) -> None:
         manager = _make_manager()
-        # 1 hour out → halve to 1800 → clamped down to MAX (300)
-        future = datetime.now(UTC) + timedelta(hours=1)
+        future = fixed_now + timedelta(hours=1)
         _stub_token_service(manager, expires_at=future)
-        assert manager._calculate_sleep_seconds() == 300.0
+        with mock.patch(
+            "application_sdk.execution._temporal.auth.datetime"
+        ) as mock_datetime:
+            mock_datetime.now.return_value = fixed_now
+            assert manager._calculate_sleep_seconds() == 300.0
 
 
 # ---------------------------------------------------------------------------

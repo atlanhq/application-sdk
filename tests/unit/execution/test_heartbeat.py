@@ -47,7 +47,7 @@ class TestNoopHeartbeatController:
 
 
 # ---------------------------------------------------------------------------
-# TemporalHeartbeatController — exercises BLDX-1129 inline imports
+# TemporalHeartbeatController
 # ---------------------------------------------------------------------------
 
 
@@ -71,14 +71,14 @@ def fake_temporalio(monkeypatch):
 
 class TestTemporalHeartbeatController:
     def test_heartbeat_calls_activity_heartbeat(self, fake_temporalio) -> None:
-        """BLDX-1129 anchor: function-local `from temporalio import activity`."""
+        """Exercises the function-local import of ``temporalio.activity``."""
         ctl = TemporalHeartbeatController()
         ctl.heartbeat("progress", 1)
         fake_temporalio.heartbeat.assert_called_once_with("progress", 1)
         assert ctl._last_details == ("progress", 1)
 
     def test_keepalive_replays_last_details(self, fake_temporalio) -> None:
-        """BLDX-1129 anchor: function-local `from temporalio import activity`."""
+        """Exercises the keepalive path after importing ``temporalio.activity``."""
         ctl = TemporalHeartbeatController()
         ctl.heartbeat("first", 99)
         fake_temporalio.heartbeat.reset_mock()
@@ -86,7 +86,7 @@ class TestTemporalHeartbeatController:
         fake_temporalio.heartbeat.assert_called_once_with("first", 99)
 
     def test_get_last_heartbeat_details(self, fake_temporalio) -> None:
-        """BLDX-1129 anchor: function-local `from temporalio import activity`."""
+        """Exercises heartbeat-detail lookup through ``temporalio.activity``."""
         ctl = TemporalHeartbeatController()
         details = ctl.get_last_heartbeat_details()
         assert details == ("resumed", 42)

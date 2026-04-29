@@ -6,9 +6,8 @@ Targets:
 - create_temporal_client (TLS branches, connect retry, runtime caching)
 - _get_or_create_runtime (singleton behaviour)
 
-These tests harden the module against BLDX-1129-style inline-import
-regressions: every inline import in this module is exercised through a
-real call path so a renamed symbol fails the test.
+These tests exercise the lazy-import paths in this module through real call
+paths so a renamed symbol fails the test.
 """
 
 from __future__ import annotations
@@ -19,6 +18,8 @@ from unittest import mock
 
 import pytest
 
+# These tests intentionally import a private Temporal backend module because
+# they verify internal client/runtime wiring that is not exposed publicly.
 from application_sdk.execution._temporal import backend as backend_module
 from application_sdk.execution._temporal.backend import (
     TemporalExecutorBackend,

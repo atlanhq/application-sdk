@@ -905,7 +905,7 @@ class TestRunWorkerMode:
 
     @pytest.fixture
     def worker_patches(self):
-        """Patch every inline-imported symbol so import drift is caught here."""
+        """Patch the worker-mode collaborators."""
         infra = MagicMock()
         infra.secret_store = MagicMock()
         infra.storage = MagicMock()
@@ -957,6 +957,19 @@ class TestRunWorkerMode:
                 "health": mock_health,
             }
 
+    @pytest.fixture
+    def auth_manager(self):
+        auth_mgr = MagicMock()
+        auth_mgr.acquire_initial_token = AsyncMock(return_value="api-key-xyz")
+        auth_mgr.start_background_refresh = MagicMock()
+        auth_mgr.shutdown = AsyncMock()
+        return auth_mgr
+
+    @pytest.fixture
+    def wait_patch(self):
+        with patch.object(asyncio.Event, "wait", new=AsyncMock(return_value=None)):
+            yield
+
     async def test_runs_through_to_completion(self, worker_patches) -> None:
         """Worker mode wires infra, loads app, creates client, awaits shutdown."""
         cfg = AppConfig(mode="worker", app_module="pkg:FakeApp")
@@ -975,7 +988,9 @@ class TestRunWorkerMode:
         worker_patches["close_infra"].assert_awaited_once()
         worker_patches["health"].assert_called_once()
 
-    async def test_auth_enabled_acquires_token(self, worker_patches) -> None:
+    async def test_auth_enabled_acquires_token(
+        self, worker_patches, auth_manager, wait_patch
+    ) -> None:
         """When auth_enabled=True, TemporalAuthManager is used and shutdown is awaited."""
         cfg = AppConfig(
             mode="worker",
@@ -986,22 +1001,17 @@ class TestRunWorkerMode:
             auth_token_url="https://example.com/token",
             auth_base_url="https://example.com",
         )
-        auth_mgr = MagicMock()
-        auth_mgr.acquire_initial_token = AsyncMock(return_value="api-key-xyz")
-        auth_mgr.start_background_refresh = MagicMock()
-        auth_mgr.shutdown = AsyncMock()
         with (
             patch(
                 "application_sdk.execution._temporal.auth.TemporalAuthManager",
-                return_value=auth_mgr,
+                return_value=auth_manager,
             ),
             patch("application_sdk.execution._temporal.auth.TemporalAuthConfig"),
-            patch.object(asyncio.Event, "wait", new=AsyncMock(return_value=None)),
         ):
             await run_worker_mode(cfg)
-        auth_mgr.acquire_initial_token.assert_awaited_once()
-        auth_mgr.start_background_refresh.assert_called_once()
-        auth_mgr.shutdown.assert_awaited_once()
+        auth_manager.acquire_initial_token.assert_awaited_once()
+        auth_manager.start_background_refresh.assert_called_once()
+        auth_manager.shutdown.assert_awaited_once()
 
     async def test_failure_in_create_client_propagates(self, worker_patches) -> None:
         """If create_temporal_client raises, the exception bubbles up (not swallowed)."""
@@ -1034,8 +1044,7 @@ class TestRunHandlerMode:
                 "application_sdk.execution._temporal.converter.create_data_converter_for_app"
             ),
             patch("application_sdk.infrastructure.context.set_infrastructure"),
-            # PR #1608 (BLDX-1161) added validate_app_class() to handler mode;
-            # these tests use a MagicMock for App, so stub the validator.
+            # These tests use a MagicMock for App, so stub the validator.
             patch("application_sdk.main.validate_app_class"),
         )
 
@@ -1389,17 +1398,12 @@ class TestRunDevCombined:
 
 
 # --------------------------------------------------------------------------- #
-# Inline-import drift safety net                                              #
+# Inline-import safety net                                                    #
 # --------------------------------------------------------------------------- #
 
 
 class TestInlineImportSymbols:
-    """Catch the BLDX-1129 bug class: inline imports referencing missing symbols.
-
-    Every symbol imported lazily inside a function in main.py must still
-    resolve at the public source module path. If a symbol is renamed or
-    removed upstream, this test fails fast — even before any run mode runs.
-    """
+    """Verify that symbols imported lazily inside main.py still exist."""
 
     @pytest.mark.parametrize(
         "module_path,symbol_name",

@@ -36,7 +36,7 @@ from application_sdk.app.entrypoint import (
     EntryPointMetadata,
     entrypoint,
 )
-from application_sdk.app.registry import AppNotFoundError, AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppNotFoundError, AppRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE
@@ -148,16 +148,6 @@ class TestNonRetryableError:
 
 class TestAppRegistration:
     """Tests for App auto-registration via __init_subclass__."""
-
-    def setup_method(self) -> None:
-        """Reset registries before each test."""
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        """Reset registries after each test."""
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def test_concrete_app_auto_registers(self) -> None:
         """A concrete App subclass is automatically registered."""
@@ -361,9 +351,12 @@ class _BLDXOutput(Output, allow_unbounded_fields=True):
     result: str = ""
 
 
-def _reset_state_and_registries() -> None:
-    AppRegistry.reset()
-    TaskRegistry.reset()
+@pytest.fixture(autouse=True)
+def _reset_app_base_state(clean_app_registry, clean_task_registry):
+    with _app_state_lock:
+        _app_state.clear()
+    _workflow_class_cache.clear()
+    yield
     with _app_state_lock:
         _app_state.clear()
     _workflow_class_cache.clear()
@@ -375,7 +368,7 @@ def _reset_state_and_registries() -> None:
 
 
 class TestSafeNow:
-    """Tests for _safe_now (BLDX-1129: catches workflow.now contract drift)."""
+    """Tests for _safe_now."""
 
     def test_returns_workflow_now(self) -> None:
         fixed = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -384,7 +377,7 @@ class TestSafeNow:
 
 
 class TestSafeUuid:
-    """Tests for _safe_uuid (BLDX-1129: catches workflow.uuid4 contract drift)."""
+    """Tests for _safe_uuid."""
 
     def test_returns_uuid_from_workflow_uuid4(self) -> None:
         with mock.patch(
@@ -402,12 +395,7 @@ class TestSafeUuid:
 
 
 class TestSafeLog:
-    """Tests for _safe_log.
-
-    BLDX-1129: this function is contract-fragile (branches on `_is_atlan_logger`,
-    spreads attrs as kwargs vs. extra=). Drift in any of those would silently
-    drop structured fields or raise TypeError at runtime.
-    """
+    """Tests for _safe_log."""
 
     def test_atlan_logger_passes_attrs_as_kwargs(self) -> None:
         atlan_logger = mock.MagicMock()
@@ -482,12 +470,6 @@ class TestAppContextError:
 class TestContextProperties:
     """The context / task_context properties guard against misuse outside run()."""
 
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
-
     def _make_app(self) -> App:
         class _CtxApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -495,35 +477,21 @@ class TestContextProperties:
 
         return _CtxApp()
 
-    def test_context_raises_when_unset(self) -> None:
+    @pytest.mark.parametrize(
+        ("accessor", "match"),
+        [
+            (lambda app: app.context, "App context"),
+            (lambda app: app.task_context, "task_context"),
+            (lambda app: app.logger, None),
+            (lambda app: app.run_id, None),
+            (lambda app: app.correlation_id, None),
+            (lambda app: app.is_cancelled(), None),
+        ],
+    )
+    def test_properties_raise_when_unset(self, accessor, match: str | None) -> None:
         app = self._make_app()
-        with pytest.raises(AppContextError, match="App context"):
-            _ = app.context
-
-    def test_task_context_raises_when_unset(self) -> None:
-        app = self._make_app()
-        with pytest.raises(AppContextError, match="task_context"):
-            _ = app.task_context
-
-    def test_logger_property_raises_when_no_context(self) -> None:
-        app = self._make_app()
-        with pytest.raises(AppContextError):
-            _ = app.logger
-
-    def test_run_id_property_raises_when_no_context(self) -> None:
-        app = self._make_app()
-        with pytest.raises(AppContextError):
-            _ = app.run_id
-
-    def test_correlation_id_property_raises_when_no_context(self) -> None:
-        app = self._make_app()
-        with pytest.raises(AppContextError):
-            _ = app.correlation_id
-
-    def test_is_cancelled_raises_when_no_context(self) -> None:
-        app = self._make_app()
-        with pytest.raises(AppContextError):
-            app.is_cancelled()
+        with pytest.raises(AppContextError, match=match):
+            accessor(app)
 
     def test_context_returns_when_set(self) -> None:
         from application_sdk.app.context import AppContext
@@ -544,17 +512,7 @@ class TestContextProperties:
 
 
 class TestTaskOnlyMethods:
-    """heartbeat / get_*_heartbeat_details / run_in_thread must guard task scope.
-
-    BLDX-1129: each of these has a self._task_context guard. A regression that
-    drops the guard or swallows the exception would silently misroute calls.
-    """
-
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
+    """heartbeat / get_*_heartbeat_details / run_in_thread must guard task scope."""
 
     def _app(self) -> App:
         class _TOApp(App):
@@ -563,23 +521,29 @@ class TestTaskOnlyMethods:
 
         return _TOApp()
 
-    def test_heartbeat_outside_task_raises(self) -> None:
-        with pytest.raises(AppContextError, match="heartbeat"):
-            self._app().heartbeat("progress")
-
-    def test_get_last_heartbeat_outside_task_raises(self) -> None:
-        with pytest.raises(AppContextError):
-            self._app().get_last_heartbeat_details()
-
-    def test_get_heartbeat_details_typed_outside_task_raises(self) -> None:
+    @pytest.fixture
+    def heartbeat_details_type(self):
         from application_sdk.contracts.base import HeartbeatDetails
 
         @dataclass
         class _HD(HeartbeatDetails):
             pass
 
+        return _HD
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda app, _hd: app.heartbeat("progress"),
+            lambda app, _hd: app.get_last_heartbeat_details(),
+            lambda app, hd: app.get_heartbeat_details(hd),
+        ],
+    )
+    def test_sync_methods_outside_task_raise(
+        self, call, heartbeat_details_type
+    ) -> None:
         with pytest.raises(AppContextError):
-            self._app().get_heartbeat_details(_HD)
+            call(self._app(), heartbeat_details_type)
 
     @pytest.mark.asyncio
     async def test_run_in_thread_outside_task_raises(self) -> None:
@@ -621,12 +585,6 @@ class TestTaskOnlyMethods:
 
 
 class TestRequire:
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
-
     def _app(self) -> App:
         class _ReqApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -657,12 +615,6 @@ class TestRequire:
 
 
 class TestAppState:
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
-
     def _app(self) -> App:
         class _StateApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -739,12 +691,6 @@ class TestGetExecutionIdFromTask:
 
 
 class TestAppConvenience:
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
-
     def test_now_uses_workflow_now(self) -> None:
         class _NowApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -780,17 +726,11 @@ class TestAppConvenience:
 
 
 # =============================================================================
-# call() / call_by_name() — deactivated under BLDX-878
+# call() / call_by_name() — currently disabled
 # =============================================================================
 
 
 class TestDeactivatedInterAppCalls:
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
-
     def _app(self) -> App:
         class _DApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -800,12 +740,12 @@ class TestDeactivatedInterAppCalls:
 
     @pytest.mark.asyncio
     async def test_call_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError, match="BLDX-878"):
+        with pytest.raises(NotImplementedError, match="deactivated pending"):
             await self._app().call("x")
 
     @pytest.mark.asyncio
     async def test_call_by_name_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError, match="BLDX-878"):
+        with pytest.raises(NotImplementedError, match="deactivated pending"):
             await self._app().call_by_name("x")
 
 
@@ -815,12 +755,6 @@ class TestDeactivatedInterAppCalls:
 
 
 class TestRunStub:
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
-
     @pytest.mark.asyncio
     async def test_default_run_raises_not_implemented(self) -> None:
         # NoRunApp inherits the App.run stub silently; call it directly to
@@ -838,12 +772,6 @@ class TestRunStub:
 
 
 class TestContinueWith:
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
-
     def _app(self) -> App:
         class _CWApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -887,12 +815,6 @@ class TestContinueWith:
 
 
 class TestScanAndWrap:
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
-
     def test_scan_entrypoints_finds_decorated_methods(self) -> None:
         class _ScanApp(App):
             @entrypoint
@@ -962,9 +884,7 @@ class TestScanAndWrap:
 
 
 class TestCreateTaskActivityWrapper:
-    """BLDX-1129: this function has 3 inline imports (RetryPolicy, _to_temporal_retry_policy,
-    TaskContext). Drift in any of those would only surface at activity dispatch time.
-    """
+    """Tests for _create_task_activity_wrapper."""
 
     @pytest.mark.asyncio
     async def test_wrapper_invokes_workflow_execute_activity(self) -> None:
@@ -1051,15 +971,7 @@ class TestCreateTaskActivityWrapper:
 
 
 class TestGenerateWorkflowClass:
-    """BLDX-1129: exercises three deferred imports
-    (get_correlation_context, ApplicationError) and the on_complete finalizer.
-    """
-
-    def setup_method(self) -> None:
-        _reset_state_and_registries()
-
-    def teardown_method(self) -> None:
-        _reset_state_and_registries()
+    """Tests for generate_workflow_class."""
 
     def _make_ep(self, input_type: type, output_type: type) -> EntryPointMetadata:
         return EntryPointMetadata(
@@ -1133,11 +1045,7 @@ class TestGenerateWorkflowClass:
         on_complete.assert_awaited_once()
 
     def _patched_workflow_layer(self, info_mock: mock.MagicMock):
-        """Returns a contextlib.ExitStack wired with the patches every _run test needs.
-
-        Every patch target is at the module path ``application_sdk.app.base.*`` so
-        BLDX-1129-style import drift in base.py would surface immediately.
-        """
+        """Returns a contextlib.ExitStack wired with the patches every _run test needs."""
         import contextlib
 
         stack = contextlib.ExitStack()
@@ -1305,11 +1213,7 @@ class TestGenerateWorkflowClass:
 
     @pytest.mark.asyncio
     async def test_run_continues_when_correlation_import_fails(self) -> None:
-        """Failure inside the inline get_correlation_context import path falls back to run_id.
-
-        BLDX-1129 directly: the inline import must work, and its failure must
-        not crash the workflow.
-        """
+        """Failure inside the inline get_correlation_context import path falls back to run_id."""
 
         class CCApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -1342,16 +1246,12 @@ class TestGenerateWorkflowClass:
 
 
 # =============================================================================
-# Inline-import smoke checks — explicit BLDX-1129 contract assertions
+# Inline-import smoke checks
 # =============================================================================
 
 
 class TestInlineImportContracts:
-    """Direct asserts that every name imported inline by base.py still exists.
-
-    These are cheap, don't depend on heavy mocking, and catch BLDX-1129-style
-    rename/move regressions immediately.
-    """
+    """Direct asserts that every name imported inline by base.py still exists."""
 
     def test_storage_transfer_names(self) -> None:
         # Used in App.upload / App.download
@@ -1381,6 +1281,7 @@ class TestInlineImportContracts:
         )
 
     def test_temporal_activities_task_context(self) -> None:
+        # This reaches into a private module because App wraps task activities via that path.
         from application_sdk.execution._temporal.activities import (  # noqa: F401
             TaskContext,
         )

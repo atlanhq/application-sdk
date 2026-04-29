@@ -1,4 +1,4 @@
-"""Extra unit tests for application_sdk.observability.traces_adaptor.
+"""Unit tests for application_sdk.observability.traces_adaptor.
 
 Targets the uncovered branches:
 - _reset_for_testing (ClassVar reset).
@@ -134,12 +134,7 @@ class TestSetupOtelTraces:
 
 class TestSetupConsoleOnlyTraces:
     def test_console_only_setup_swallows_failure(self) -> None:
-        """If everything in console-only setup blows up, the constructor still
-        returns. PR #1607 (BLDX-1188) pre-assigns ``tracer_provider`` and
-        ``tracer`` to ``None`` BEFORE the try block so the half-initialised
-        adapter no longer ``AttributeError``s on subsequent calls — it now
-        cleanly reports ``None``.
-        """
+        """If everything in console-only setup blows up, the constructor still returns."""
         AtlanTracesAdapter._flush_task_started = True
 
         with (

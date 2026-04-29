@@ -13,6 +13,9 @@ from application_sdk.contracts.events import (
     EventTypes,
     WorkflowStates,
 )
+
+# These tests intentionally import private Temporal interceptors because they
+# validate internal event publication behavior wired into the worker runtime.
 from application_sdk.execution._temporal.interceptors import events as events_module
 from application_sdk.execution._temporal.interceptors.events import (
     EventActivityInboundInterceptor,
@@ -181,8 +184,7 @@ class TestPublishEventActivity:
 
 
 # ---------------------------------------------------------------------------
-# Tests added under BLDX-1129 to harden the module against inline-import
-# regressions and to lift coverage on the cold paths that surround auth.
+# Additional coverage for auth-adjacent and lazy-import code paths.
 # ---------------------------------------------------------------------------
 
 
@@ -195,13 +197,7 @@ def _reset_event_token_service():
 
 
 class TestGetEventTokenService:
-    """Tests for the BLDX-1129-adjacent _get_event_token_service singleton.
-
-    Exercises the inline imports of `application_sdk.constants`,
-    `application_sdk.credentials.oauth`, `application_sdk.credentials.types`,
-    and `application_sdk.infrastructure.secrets` — a regression in any of
-    those symbols will make these tests fail.
-    """
+    """Tests for the _get_event_token_service singleton."""
 
     @pytest.mark.asyncio
     async def test_returns_none_when_auth_disabled(
@@ -341,11 +337,7 @@ class TestEnrichEventMetadata:
 
 
 class TestSendLifecycleEventToSegment:
-    """Tests for _send_lifecycle_event_to_segment.
-
-    Exercises the inline imports of metrics_adaptor (MetricRecord, MetricType,
-    get_metrics) and the constants module — BLDX-1129 anchor.
-    """
+    """Tests for _send_lifecycle_event_to_segment."""
 
     def test_skips_non_lifecycle_events(self) -> None:
         event = Event(

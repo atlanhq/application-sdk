@@ -13,6 +13,9 @@ from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
+
+# These tests intentionally import private Temporal helpers because they verify
+# the task-to-activity adapter used internally by the SDK.
 from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
     TaskContext,
@@ -454,7 +457,7 @@ class TestGetActivityOptions:
 
 
 # ---------------------------------------------------------------------------
-# BLDX-1129 hardening: tests added to lift coverage and pin inline-import paths.
+# Additional activity wrapper coverage.
 # These exercise the activity_fn body, which holds 11 inline imports.
 # ---------------------------------------------------------------------------
 

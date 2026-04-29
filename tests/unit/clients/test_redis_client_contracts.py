@@ -1,4 +1,4 @@
-"""BLDX-1129 follow-up unit tests for ``application_sdk.clients.redis``.
+"""Unit tests for ``application_sdk.clients.redis``.
 
 Goal: surface bug classes that escape current tests — runtime-import errors,
 contract drift, swallowed exceptions, connection-leak paths — and exercise
@@ -14,7 +14,7 @@ focuses on:
   sync and async clients (mocking the ``redis``/``redis.asyncio`` SDK).
 * ``close`` behaviour: idempotency, exception swallowing.
 * Lock operations against an unconnected client (early ``ClientError``).
-* Symbol contracts at module load (BLDX-1129 anchor).
+* Symbol contracts at module load.
 
 All tests mock ``redis``/``redis.asyncio`` — no real I/O.
 """
@@ -36,7 +36,7 @@ from application_sdk.clients.redis import (
 from application_sdk.common.error_codes import ClientError
 
 # ---------------------------------------------------------------------------
-# Module-level symbol contract (BLDX-1129 anchor)
+# Module-level symbol contract
 # ---------------------------------------------------------------------------
 
 
@@ -46,9 +46,8 @@ class TestModuleSymbolContract:
     def test_public_symbols_importable(self):
         """All public names used elsewhere must be importable.
 
-        BLDX-1129 root cause was a missing/renamed symbol surfacing only at
-        runtime. This test fails at collection time if any public symbol
-        disappears or is renamed.
+        This test fails at collection time if any public symbol disappears or
+        is renamed.
         """
         from application_sdk.clients import redis as redis_mod
 
@@ -602,6 +601,5 @@ class TestHandleRedisErrorChaining:
         assert ei.value.__cause__ is original
 
 
-# BLDX-1129 stub for this bug was dropped after the fix landed via
-# PR #1602 (BLDX-1165). Real regression coverage lives in
+# Regression coverage for this client-error path lives in
 # tests/unit/clients/test_clienterror_preservation.py.

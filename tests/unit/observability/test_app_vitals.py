@@ -33,14 +33,16 @@ class TestExtractAssetsProcessed:
         obj = SimpleNamespace(assets_processed=42)
         assert av._extract_assets_processed(obj) == 42
 
-    def test_dict_total_record_count(self):
-        assert av._extract_assets_processed({"total_record_count": 7}) == 7
-
-    def test_dict_record_count_alias(self):
-        assert av._extract_assets_processed({"record_count": 5}) == 5
-
-    def test_dict_records_processed_alias(self):
-        assert av._extract_assets_processed({"records_processed": 9}) == 9
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            ({"total_record_count": 7}, 7),
+            ({"record_count": 5}, 5),
+            ({"records_processed": 9}, 9),
+        ],
+    )
+    def test_dict_aliases(self, payload: dict[str, int], expected: int):
+        assert av._extract_assets_processed(payload) == expected
 
     def test_first_recognized_attribute_wins(self):
         # `assets_processed` is checked before `total_record_count`.
@@ -88,12 +90,7 @@ class TestFormatStackTrace:
         assert len(out) <= 2000
 
     def test_format_failure_falls_back_to_empty_string(self):
-        """BLDX-1129 anchor: inline `from ...logger_adaptor import get_logger`.
-
-        Force the outer try to fail so the except handler runs. We don't
-        need the deferred logger to do anything — patching it is enough
-        to keep the import a no-op.
-        """
+        """Force the outer try to fail so the fallback logger path runs."""
         bad = mock.MagicMock(spec=BaseException)
         # __traceback__ access will raise
         type(bad).__traceback__ = mock.PropertyMock(side_effect=RuntimeError("t"))
@@ -131,35 +128,27 @@ class TestComputeErrorFingerprint:
 
 
 class TestGetCorrelationId:
-    """BLDX-1129 anchor: inline import of `get_correlation_context`."""
-
-    def test_returns_correlation_id_when_set(self):
-        with mock.patch(
-            "application_sdk.observability.correlation.get_correlation_context"
-        ) as gcc:
-            gcc.return_value = mock.Mock(correlation_id="cid-1")
-            assert av._get_correlation_id() == "cid-1"
-
-    def test_returns_empty_when_no_context(self):
-        with mock.patch(
-            "application_sdk.observability.correlation.get_correlation_context"
-        ) as gcc:
-            gcc.return_value = None
-            assert av._get_correlation_id() == ""
-
-    def test_returns_empty_on_exception(self):
+    @pytest.mark.parametrize(
+        ("return_value", "side_effect", "expected"),
+        [
+            (mock.Mock(correlation_id="cid-1"), None, "cid-1"),
+            (None, None, ""),
+            (mock.Mock(correlation_id=""), None, ""),
+            (None, RuntimeError("boom"), ""),
+        ],
+    )
+    def test_get_correlation_id(
+        self,
+        return_value: Any,
+        side_effect: Exception | None,
+        expected: str,
+    ) -> None:
         with mock.patch(
             "application_sdk.observability.correlation.get_correlation_context",
-            side_effect=RuntimeError("boom"),
+            return_value=return_value,
+            side_effect=side_effect,
         ):
-            assert av._get_correlation_id() == ""
-
-    def test_returns_empty_when_correlation_id_blank(self):
-        with mock.patch(
-            "application_sdk.observability.correlation.get_correlation_context"
-        ) as gcc:
-            gcc.return_value = mock.Mock(correlation_id="")
-            assert av._get_correlation_id() == ""
+            assert av._get_correlation_id() == expected
 
 
 class TestBuildCommonAttrs:
@@ -285,7 +274,7 @@ class TestDetectCircuitBreaker:
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# _emit_log_event — BLDX-1129 anchor: inline import of get_logger
+# _emit_log_event
 # ───────────────────────────────────────────────────────────────────────────
 
 
@@ -633,8 +622,7 @@ class TestExecuteWorkflow:
 
     @pytest.mark.asyncio
     async def test_workflow_info_unavailable_in_finally_skips_completion(self):
-        """BLDX-1129 anchor: inline `from ...logger_adaptor import get_logger as _gl`
-        in the except handler when workflow.info() fails."""
+        """Covers the fallback logger path when workflow.info() fails in cleanup."""
         next_ = mock.MagicMock()
         next_.execute_workflow = mock.AsyncMock(return_value="ok")
         inbound = av._AppVitalsWorkflowInboundInterceptor(next_)
@@ -711,8 +699,7 @@ class TestExecuteActivity:
 
     @pytest.mark.asyncio
     async def test_activity_info_failure_skips_emission_and_runs(self):
-        """BLDX-1129 anchor: inline `from ...logger_adaptor import get_logger as _gl`
-        on the failure path inside `execute_activity`."""
+        """Covers the fallback logger path when activity.info() lookup fails."""
         next_ = mock.MagicMock()
         next_.execute_activity = mock.AsyncMock(return_value="ok")
         inbound = av._AppVitalsActivityInboundInterceptor(next_)

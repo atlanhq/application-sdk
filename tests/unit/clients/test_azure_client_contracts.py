@@ -1,7 +1,6 @@
-"""BLDX-1129 follow-up unit tests for ``application_sdk.clients.azure.client``.
+"""Unit tests for ``application_sdk.clients.azure.client``.
 
-The motivating ticket was a missing inline import that surfaced only at
-runtime. ``AzureClient.load`` contains exactly that pattern at line ~140::
+``AzureClient.load`` contains a function-local import at line ~140::
 
     from application_sdk.infrastructure import (
         AsyncDaprClient, DaprCredentialVault,
@@ -9,9 +8,8 @@ runtime. ``AzureClient.load`` contains exactly that pattern at line ~140::
 
 These tests:
 
-* Exercise the inline import on the ``credential_guid`` branch (BLDX-1129
-  anchor) and assert the symbols *exist* on the package — so a future rename
-  or removal fails immediately, not at deploy time.
+* Exercise the inline import on the ``credential_guid`` branch and assert the
+  symbols *exist* on the package.
 * Cover ``load`` error mapping for every documented exception type.
 * Cover ``close`` happy-path and exception-swallowing for service clients
   with ``close``, ``disconnect``, neither, and one that raises.
@@ -39,17 +37,12 @@ from application_sdk.clients.azure.client import (
 from application_sdk.common.error_codes import ClientError
 
 # ---------------------------------------------------------------------------
-# BLDX-1129 anchor: inline-import contract
+# Inline-import contract
 # ---------------------------------------------------------------------------
 
 
 class TestInfrastructureSymbolContract:
-    """The inline import in ``load()`` is the BLDX-1129 anchor.
-
-    If anybody renames or removes ``AsyncDaprClient`` / ``DaprCredentialVault``
-    from ``application_sdk.infrastructure``, this test fails at collection,
-    *before* a deploy hits the runtime ImportError that motivated the ticket.
-    """
+    """The inline import in ``load()`` should resolve via the public package."""
 
     def test_async_dapr_client_importable_from_infrastructure(self):
         from application_sdk.infrastructure import AsyncDaprClient  # noqa: F401
@@ -64,7 +57,7 @@ class TestInfrastructureSymbolContract:
         of the package* — that's how ``from application_sdk.infrastructure
         import X`` resolves them at call time. If either name is renamed in
         the source, the inline import line raises ImportError and this test
-        fails loudly — exactly the BLDX-1129 bug class.
+        fails loudly instead of surfacing only at runtime.
         """
         client = AzureClient(credentials={"credential_guid": "g-456"})
         client.auth_provider = MagicMock()
@@ -513,6 +506,5 @@ class TestModels:
         assert d["overall_health"] is False
 
 
-# BLDX-1129 stub tests for these bugs were dropped after the fix landed via
-# PR #1602 (BLDX-1163, BLDX-1164). Real regression coverage now lives in
+# Regression coverage for these client-error paths lives in
 # tests/unit/clients/test_clienterror_preservation.py.
