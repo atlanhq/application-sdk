@@ -50,26 +50,22 @@ $env:Path += ";$env:USERPROFILE\.temporalio\bin"
 temporal --version
 ```
 
-### 3. Install DAPR CLI
+### 3. Install daprd
 
-Install DAPR using PowerShell:
+daprd is the Dapr sidecar runtime (Distributed Application Runtime):
 
 ```powershell
-# Set required execution policy
-Set-ExecutionPolicy RemoteSigned -scope CurrentUser
-
-# Install DAPR CLI
-$script=iwr -useb https://raw.githubusercontent.com/dapr/cli/master/install/install.ps1; $block=[ScriptBlock]::Create($script); invoke-command -ScriptBlock $block -ArgumentList 1.17.1, "$env:USERPROFILE\.dapr\bin\"
+$DAPRD_VERSION = "1.17.3"
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.daprd\bin"
+Invoke-WebRequest -Uri "https://github.com/dapr/dapr/releases/download/v${DAPRD_VERSION}/daprd_windows_amd64.zip" -OutFile "$env:TEMP\daprd.zip"
+Expand-Archive -Path "$env:TEMP\daprd.zip" -DestinationPath "$env:USERPROFILE\.daprd\bin" -Force
 
 # Add to PATH
-$env:Path += ";$env:USERPROFILE\.dapr\bin\"
+$env:Path += ";$env:USERPROFILE\.daprd\bin"
 [Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::User)
 
-# Initialize DAPR (slim mode)
-dapr init --runtime-version 1.17.3 --slim
-
 # Verify installation
-dapr --version
+daprd --version
 ```
 
 > [!NOTE]
