@@ -2144,3 +2144,297 @@ class TestProvisionLocalVault:
             assert all_secrets[guid] == {"username": "u"}
         finally:
             self._restore(restore)
+
+
+# ---------------------------------------------------------------------------
+# BLDX-1158 / BLDX-1173 / BLDX-1174 — workflow status reporting correctness
+# ---------------------------------------------------------------------------
+
+
+class TestGetResultStatusCorrectness:
+    """Regression tests for the /workflows/v1/result endpoint.
+
+    Locks the contract that:
+      * non-COMPLETED workflow statuses produce envelopes with success=False
+        (BLDX-1158)
+      * a `WorkflowFailureError` raised during result decoding still produces
+        the existing "Workflow execution failed." payload (BLDX-1173 — real
+        workflow failure path)
+      * any other exception during decoding produces a distinct
+        `result_decode_failed` payload (BLDX-1173 — output-type drift path)
+      * a Temporal `RPCError(NOT_FOUND)` translates to HTTP 404 even when
+        the message text changes across SDK versions (BLDX-1174)
+    """
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _routed_client(self):
+        """Build a TestClient with a single-entry-point app + mocked Temporal."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+
+        class _ResultApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="result-test",
+            app_class=_ResultApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        return TestClient(svc, raise_server_exceptions=False), mock_client, patcher
+
+    def test_failed_status_returns_success_false_envelope(self) -> None:
+        """BLDX-1158: a Temporal status of FAILED produces success=False."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        client, mock_client, patcher = self._routed_client()
+        try:
+            mock_handle = MagicMock()
+            mock_desc = MagicMock()
+            mock_desc.status.name = "FAILED"
+            mock_handle.describe = AsyncMock(return_value=mock_desc)
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+            response = client.get("/workflows/v1/result/wf-123")
+            assert response.status_code == 200
+            body = response.json()
+            assert (
+                body["success"] is False
+            ), "BLDX-1158: failed workflow must produce success=False envelope"
+            assert body["data"]["status"] == "failed"
+        finally:
+            patcher.stop()
+
+    def test_terminated_canceled_timed_out_return_success_false(self) -> None:
+        """BLDX-1158: TERMINATED / CANCELED / TIMED_OUT also produce
+        success=False (the same _wrap_response path as FAILED)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        for status_name in ("TERMINATED", "CANCELED", "TIMED_OUT"):
+            client, mock_client, patcher = self._routed_client()
+            try:
+                mock_handle = MagicMock()
+                mock_desc = MagicMock()
+                mock_desc.status.name = status_name
+                mock_handle.describe = AsyncMock(return_value=mock_desc)
+                mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+                response = client.get("/workflows/v1/result/wf-123")
+                assert response.status_code == 200, status_name
+                body = response.json()
+                assert (
+                    body["success"] is False
+                ), f"BLDX-1158 regressed for status={status_name}"
+                assert body["data"]["status"] == "failed"
+            finally:
+                patcher.stop()
+
+    def test_workflow_failure_error_produces_failed_payload(self) -> None:
+        """BLDX-1173: a real `WorkflowFailureError` from the Temporal client
+        produces `{"status": "failed", ...}` with success=False."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from temporalio.client import WorkflowFailureError
+
+        client, mock_client, patcher = self._routed_client()
+        try:
+            mock_handle = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_workflow_result",
+                new=AsyncMock(
+                    side_effect=WorkflowFailureError(
+                        cause=RuntimeError("workflow-died")
+                    )
+                ),
+            ):
+                response = client.get("/workflows/v1/result/wf-123?wait=true")
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["success"] is False
+            assert body["data"]["status"] == "failed"
+            assert body["data"]["error"] == "Workflow execution failed."
+        finally:
+            patcher.stop()
+
+    def test_generic_exception_produces_result_decode_failed_payload(self) -> None:
+        """BLDX-1173: any non-WorkflowFailureError exception during result
+        retrieval (e.g. an Output type was renamed/removed and
+        deserialisation failed) yields `result_decode_failed`, distinct from
+        a real workflow failure. Carries error_type for triage."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        client, mock_client, patcher = self._routed_client()
+        try:
+            mock_handle = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_workflow_result",
+                new=AsyncMock(side_effect=AttributeError("missing attr")),
+            ):
+                response = client.get("/workflows/v1/result/wf-123?wait=true")
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["success"] is False
+            assert body["data"]["status"] == "result_decode_failed", (
+                "BLDX-1173: deserialization drift must surface as a distinct "
+                "status, not as 'failed'"
+            )
+            assert body["data"]["error_type"] == "AttributeError"
+        finally:
+            patcher.stop()
+
+    def test_rpc_error_not_found_translates_to_404(self) -> None:
+        """BLDX-1174: a typed `RPCError(NOT_FOUND)` from Temporal must
+        translate to HTTP 404 — independent of the message text."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import temporalio.service
+
+        client, mock_client, patcher = self._routed_client()
+        try:
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(
+                side_effect=temporalio.service.RPCError(
+                    "wording will change in some sdk version",
+                    status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                    raw_grpc_status=None,
+                )
+            )
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+            response = client.get("/workflows/v1/result/wf-unknown")
+            assert (
+                response.status_code == 404
+            ), "BLDX-1174: RPCError(NOT_FOUND) must translate to HTTP 404"
+        finally:
+            patcher.stop()
+
+
+class TestStopWorkflowNotFound:
+    """BLDX-1174 regression for /workflows/v1/stop — typed RPCError(NOT_FOUND)
+    must produce HTTP 404 independent of the error message text."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_stop_returns_404_on_rpc_not_found(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import temporalio.service
+
+        from application_sdk.app.base import App
+
+        class _StopApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="stop-test",
+            app_class=_StopApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.terminate = AsyncMock(
+            side_effect=temporalio.service.RPCError(
+                "underlying message can change",
+                status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                raw_grpc_status=None,
+            )
+        )
+        mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.post("/workflows/v1/stop/wf-unknown/run-x")
+            assert response.status_code == 404
+
+
+class TestGetWorkflowStatusNotFound:
+    """BLDX-1174 regression for /workflows/v1/status."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_status_returns_404_on_rpc_not_found(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import temporalio.service
+
+        from application_sdk.app.base import App
+
+        class _StatusApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="status-test",
+            app_class=_StatusApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.describe = AsyncMock(
+            side_effect=temporalio.service.RPCError(
+                "underlying message can change",
+                status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                raw_grpc_status=None,
+            )
+        )
+        mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/status/wf-unknown/run-x")
+            assert response.status_code == 404

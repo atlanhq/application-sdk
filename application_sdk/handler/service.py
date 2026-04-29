@@ -43,12 +43,14 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
 import orjson
+import temporalio.service
 from fastapi import FastAPI, File, Form, HTTPException
 from fastapi import Path as PathParam
 from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
+from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import (
@@ -872,8 +874,10 @@ def create_app_handler_service(
                 content={"success": True, "message": "Workflow terminated successfully"}
             )
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
@@ -881,7 +885,7 @@ def create_app_handler_service(
                 "Failed to stop workflow %s run %s: %s",
                 workflow_id,
                 run_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -917,9 +921,9 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as exc:
+                except WorkflowFailureError as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
+                        "Workflow execution failed for workflow_id=%s error_type=%s",
                         workflow_id,
                         type(exc).__name__,
                         exc_info=True,
@@ -932,6 +936,25 @@ def create_app_handler_service(
                                 "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
+                            success=False,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Workflow result decode failed for workflow_id=%s error_type=%s",
+                        workflow_id,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content=_wrap_response(
+                            {
+                                "status": "result_decode_failed",
+                                "workflow_id": workflow_id,
+                                "error_type": type(exc).__name__,
+                            },
+                            message="Workflow result could not be decoded",
+                            success=False,
                         )
                     )
 
@@ -967,9 +990,9 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as exc:
+                except WorkflowFailureError as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
+                        "Workflow execution failed for workflow_id=%s error_type=%s",
                         workflow_id,
                         type(exc).__name__,
                         exc_info=True,
@@ -982,6 +1005,25 @@ def create_app_handler_service(
                                 "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
+                            success=False,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Workflow result decode failed for workflow_id=%s error_type=%s",
+                        workflow_id,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content=_wrap_response(
+                            {
+                                "status": "result_decode_failed",
+                                "workflow_id": workflow_id,
+                                "error_type": type(exc).__name__,
+                            },
+                            message="Workflow result could not be decoded",
+                            success=False,
                         )
                     )
             elif status in ("FAILED", "TERMINATED", "CANCELED", "TIMED_OUT"):
@@ -993,6 +1035,7 @@ def create_app_handler_service(
                             "error": f"Workflow {status.lower()}",
                         },
                         message="Workflow failed",
+                        success=False,
                     )
                 )
             else:
@@ -1008,15 +1051,17 @@ def create_app_handler_service(
                 )
 
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
             logger.error(
                 "Failed to get workflow result for %s: %s",
                 workflow_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -1058,8 +1103,10 @@ def create_app_handler_service(
                 )
             )
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
@@ -1067,7 +1114,7 @@ def create_app_handler_service(
                 "Failed to get workflow status for %s run %s: %s",
                 workflow_id,
                 run_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -1530,12 +1577,6 @@ def create_app_handler_service(
         if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
             raise HTTPException(status_code=403, detail="Dev-only endpoint")
 
-        if not _CONFIG_KEY_RE.match(guid):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid guid — must match %s" % _CONFIG_KEY_PATTERN,
-            )
-
         sensitive: dict[str, Any] = {}
         non_sensitive: dict[str, Any] = {}
         for key, value in body.items():
@@ -1554,7 +1595,27 @@ def create_app_handler_service(
         if secrets_file.exists():
             all_secrets = orjson.loads(secrets_file.read_bytes())
         all_secrets[guid] = sensitive
-        secrets_file.write_bytes(orjson.dumps(all_secrets))
+
+        # Atomic write: stage to a sibling temp file, then rename. This avoids
+        # a partial/truncated secrets.json if the process is killed mid-write.
+        tmp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=str(secrets_dir),
+                delete=False,
+                mode="wb",
+                suffix=".json.tmp",
+            ) as tmp:
+                tmp.write(orjson.dumps(all_secrets))
+                tmp_path = tmp.name
+            os.replace(tmp_path, str(secrets_file))
+            tmp_path = None  # ownership transferred to secrets_file
+        finally:
+            if tmp_path is not None and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
         # Write non-sensitive fields to object storage
         non_sensitive["credentialSource"] = non_sensitive.get(
