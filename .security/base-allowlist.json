@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-04-24",
+  "_updated": "2026-04-29",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -214,6 +214,13 @@
     "package": "github.com/moby/spdystream",
     "severity": "HIGH",
     "reason": "Base image — Go dependency, fix available in 0.5.1",
+    "expires": "2026-05-23",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GITHUBCOMMOBYSPDYSTREAMSPDY-16304822": {
+    "package": "github.com/moby/spdystream/spdy",
+    "severity": "HIGH",
+    "reason": "Base image — Go dependency. Same underlying issue as CVE-2026-35469 reported under Snyk's ID. Fix available in 0.5.1, awaiting SDK base rebuild.",
     "expires": "2026-05-23",
     "added_by": "mananjain99"
   },
