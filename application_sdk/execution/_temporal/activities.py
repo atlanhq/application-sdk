@@ -21,12 +21,41 @@ from temporalio import activity
 
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
-from application_sdk.constants import TRACKED_FILE_REFS_KEY
+from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def _build_classified_failure_details(exc: BaseException) -> list[dict[str, Any]]:
+    """Build the ApplicationError.details payload from a typed exception.
+
+    Returns a single-item list of structured fields when the exception carries
+    the failure-attribution convention (owner + code class attributes). Returns
+    an empty list otherwise — preserving backwards compatibility with existing
+    NonRetryableError subclasses that do not follow the convention.
+
+    The payload travels with the workflow record (Temporal stores it on the
+    failure event), so consumers like the Automation Engine can read structured
+    failure attribution without parsing the exception message string.
+    """
+    if not (hasattr(exc, "owner") and hasattr(exc, "code")):
+        return []
+    return [
+        {
+            "owner": getattr(exc, "owner", None),
+            "sub_category": getattr(exc, "sub_category", None),
+            "code": getattr(exc, "code", None),
+            "customer_message": getattr(exc, "customer_message", None),
+            "internal_message": getattr(exc, "internal_message", str(exc)),
+            "source_app": APPLICATION_NAME,
+            "tenant_id": APP_TENANT_ID,
+            "evidence": getattr(exc, "evidence", {}) or {},
+            "cause": str(exc.__cause__) if exc.__cause__ is not None else None,
+        }
+    ]
 
 
 @dataclasses.dataclass
@@ -219,10 +248,15 @@ def create_activity_from_task(
                     ApplicationError,
                 )
 
+                # Failure attribution: surface structured fields in
+                # ApplicationError.details when the exception follows the
+                # convention. Backwards compatible — exceptions without
+                # owner/code get an empty details list.
                 raise ApplicationError(
                     str(e),
                     type=type(e).__name__,
                     non_retryable=True,
+                    details=_build_classified_failure_details(e),
                 ) from e
             raise
 
