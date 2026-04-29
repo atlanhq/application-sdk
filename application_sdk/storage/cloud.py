@@ -7,10 +7,9 @@ This is distinct from the tenant's own Dapr-configured store (``storage.ops``).
 Use ``CloudStore`` when an app needs to access a customer's cloud bucket
 using credentials they provide (e.g., cloud-sourced spec files, data imports).
 
-Note: File I/O (read_bytes/write_bytes) is synchronous within async methods.
-This is acceptable for typical use cases (spec files, config files) but not
-suitable for multi-GB payloads. For large file streaming, use the underlying
-``store`` property with obstore's streaming APIs directly.
+File transfers (``upload`` / ``download``) use obstore's streaming APIs so
+arbitrarily large objects are transferred without materialising the full payload
+in memory.  The event loop is not blocked.
 
 Usage::
 
@@ -54,7 +53,7 @@ from application_sdk.storage.errors import (
     StorageError,
     StorageNotFoundError,
 )
-from application_sdk.storage.ops import _list_items
+from application_sdk.storage.ops import _list_items, download_file, upload_file
 
 # Lazy import: direct get_logger() at module load would create a circular
 # dependency (observability -> storage -> cloud -> observability).
@@ -223,13 +222,10 @@ class CloudStore:
         )
 
     async def _download_single(self, key: str, output: Path) -> list[Path]:
-        """Download a single file."""
+        """Download a single file by streaming to disk without buffering."""
         local_path = output / Path(key).name
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-
-        data = await self.get_bytes(key)
-        local_path.write_bytes(data)
-        _log().info("Downloaded key=%s size=%d local=%s", key, len(data), local_path)
+        await download_file(key, local_path, store=self._store, normalize=False)
+        _log().info("Downloaded key=%s local=%s", key, local_path)
         return [local_path]
 
     async def _download_prefix(
@@ -265,9 +261,9 @@ class CloudStore:
                 # Prevent path traversal from malicious remote keys
                 if not local_path.is_relative_to(resolved_output):
                     raise StorageError(f"Path traversal detected in key: {obj_key!r}")
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                data = await self.get_bytes(obj_key)
-                local_path.write_bytes(data)
+                await download_file(
+                    obj_key, local_path, store=self._store, normalize=False
+                )
                 return local_path
 
         results = await asyncio.gather(*[_dl(k) for k in keys])
@@ -322,7 +318,7 @@ class CloudStore:
         local_path: str | Path,
         key: str,
     ) -> int:
-        """Upload a local file to the cloud store.
+        """Upload a local file to the cloud store by streaming without buffering.
 
         Args:
             local_path: Path to the local file.
@@ -331,14 +327,18 @@ class CloudStore:
         Returns:
             Number of bytes uploaded.
         """
+        path = Path(local_path)
         try:
-            path = Path(local_path)
-            data = path.read_bytes()
-            await obs.put_async(self._store, key, data)
+            size = path.stat().st_size
+            await upload_file(
+                key, path, store=self._store, normalize=False, retain_local_copy=True
+            )
+        except StorageError:
+            raise
         except Exception as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
-        _log().info("Uploaded key=%s size=%d", key, len(data))
-        return len(data)
+        _log().info("Uploaded key=%s size=%d", key, size)
+        return size
 
     async def upload_bytes(self, key: str, data: bytes) -> int:
         """Upload raw bytes to the cloud store.
