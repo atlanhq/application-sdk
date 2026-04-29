@@ -45,8 +45,8 @@ jobs:
 **What it does:**
 - Reads the new version from `pyproject.toml`.
 - Extracts the matching section from `CHANGELOG.md` as release notes.
-- Creates and pushes an annotated git tag `v<VERSION>` (idempotent — deletes any existing tag first).
-- Creates a GitHub Release (pre-release flag set for versions containing `rc`).
+- Creates and pushes an annotated git tag `v<VERSION>` (idempotent — skips if the tag already exists on the correct commit; errors if it points at a different commit).
+- Creates a GitHub Release (pre-release flag set for versions containing a `-` suffix, e.g. `1.2.3-rc1`, `1.2.3-alpha.1`).
 
 The GitHub Release `published` event fires Stage 3.
 

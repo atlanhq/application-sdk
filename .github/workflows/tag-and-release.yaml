@@ -106,5 +106,5 @@ jobs:
           name: "v${{ steps.get_version.outputs.version }}"
           body_path: .github/release_notes.md
           draft: false
-          prerelease: ${{ contains(steps.get_version.outputs.version, 'rc') }}
+          prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
           token: ${{ secrets.ORG_PAT_GITHUB }}
