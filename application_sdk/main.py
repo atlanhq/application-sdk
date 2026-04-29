@@ -257,23 +257,19 @@ class AppConfig:
             handler_host=getattr(args, "handler_host", None)
             or _env("ATLAN_HANDLER_HOST")
             or _env("ATLAN_APP_HTTP_HOST", "0.0.0.0"),
-            handler_port=(
-                getattr(args, "handler_port", None)
-                if getattr(args, "handler_port", None) is not None
-                else (
-                    _env_int("ATLAN_HANDLER_PORT", 0)
-                    or _env_int("ATLAN_APP_HTTP_PORT", 0)
-                    or 8000
-                )
+            handler_port=_handler_port_arg
+            if (_handler_port_arg := getattr(args, "handler_port", None)) is not None
+            else (
+                _env_int("ATLAN_HANDLER_PORT", 0)
+                or _env_int("ATLAN_APP_HTTP_PORT", 0)
+                or 8000
             ),
             log_level=getattr(args, "log_level", None)
             or _env("ATLAN_LOG_LEVEL")
             or _env("LOG_LEVEL", "INFO"),
-            health_port=(
-                getattr(args, "health_port", None)
-                if getattr(args, "health_port", None) is not None
-                else _env_int("ATLAN_HEALTH_PORT", 8081)
-            ),
+            health_port=_health_port_arg
+            if (_health_port_arg := getattr(args, "health_port", None)) is not None
+            else _env_int("ATLAN_HEALTH_PORT", 8081),
             service_name=service_name,
             # TLS
             tls_enabled=_env_bool("ATLAN_TEMPORAL_TLS_ENABLED"),

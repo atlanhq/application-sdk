@@ -92,6 +92,9 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                     ).start()
                 AtlanTracesAdapter._flush_task_started = True
             except Exception:
+                # BLDX-1189: switched from root `logging.error` to the SDK
+                # logger here. Six other `logging.*` call sites in this file
+                # still use the root logger; tracked for a follow-up sweep.
                 _module_logger.error("Failed to start traces flush task", exc_info=True)
 
     def _setup_otel_traces(self):
