@@ -36,14 +36,14 @@ The `app-runtime-base` image provides the runtime environment (Python, Dapr, OS 
 Images are published to Harbor on every [release](https://github.com/atlanhq/application-sdk/releases):
 
 ```bash
-# Latest stable release
-docker pull registry.atlan.com/public/app-runtime-base:latest
-
-# Specific version (recommended for reproducible builds)
-docker pull registry.atlan.com/public/app-runtime-base:3.3.0
+# Major-version alias — tracks the latest v3.x release (recommended for app Dockerfiles)
+docker pull registry.atlan.com/public/app-runtime-base:3
 
 # Minor-version alias (always points to the latest patch release)
 docker pull registry.atlan.com/public/app-runtime-base:3.3
+
+# Specific version (pinned, fully reproducible)
+docker pull registry.atlan.com/public/app-runtime-base:3.3.0
 
 # Immutable commit-pinned tag
 docker pull registry.atlan.com/public/app-runtime-base:sha-49c027f

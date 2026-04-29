@@ -370,13 +370,13 @@ await app.start()
 startup if it is not set. Set it in your app's `Dockerfile` — it should never be left to Helm
 values or runtime defaults.
 
-The base image (`registry.atlan.com/public/app-runtime-base:latest`) includes
+The base image (`registry.atlan.com/public/app-runtime-base:3`) includes
 the `application-sdk` CLI, Dapr, and the entrypoint. You do **not** need a custom `ENTRYPOINT`
 or `entrypoint.sh`. The base image handles mode selection at runtime:
 
 ```dockerfile
 # Application-sdk v3 base image (Chainguard-based)
-FROM registry.atlan.com/public/app-runtime-base:latest
+FROM registry.atlan.com/public/app-runtime-base:3
 
 WORKDIR /app
 
