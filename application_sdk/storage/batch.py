@@ -22,9 +22,8 @@ import os
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-import obstore
-
 from application_sdk.storage.ops import (
+    _list_items,
     _resolve_store,
     delete,
     download_file,
@@ -73,47 +72,15 @@ async def list_keys(
         StorageError: If the listing fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
-    import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
-
     resolved = _resolve_store(store)
     if normalize and prefix:
         prefix = normalize_key(prefix)
         if prefix and not prefix.endswith("/"):
             prefix = prefix + "/"
 
-    def _collect() -> list[str]:
-        # Materialise all items so we can identify GCS-style directory markers
-        # before deciding which keys to return.
-        all_items: list[tuple[str, int]] = []
-        for batch in obstore.list(resolved, prefix=prefix or None):
-            for item in batch:
-                all_items.append((str(item["path"]), item["size"]))
-
-        # Build the set of all ancestor path segments from every listed key.
-        # A zero-byte object whose own path appears in this set is a GCS
-        # directory marker — it has at least one child and was created by the
-        # GCS console (or a similar tool) to represent a "folder".  obstore
-        # strips the trailing slash from those marker paths (e.g. "prefix/" →
-        # "prefix"), so without this guard the bare key would be returned and
-        # any subsequent download_file call would 404.
-        # Zero-byte objects whose paths are NOT in parent_dirs are real
-        # empty files and must be returned normally.
-        parent_dirs: set[str] = set()
-        for path, _ in all_items:
-            segments = path.split("/")
-            for i in range(1, len(segments)):
-                parent_dirs.add("/".join(segments[:i]))
-
-        keys: list[str] = []
-        for path, size in all_items:
-            if size == 0 and path in parent_dirs:
-                continue  # GCS-style directory marker — skip
-            if not suffix or path.endswith(suffix):
-                keys.append(path)
-        return sorted(keys)
-
     try:
-        return await asyncio.to_thread(_collect)
+        items = await _list_items(resolved, prefix or None)
+        return sorted(path for path, _ in items if not suffix or path.endswith(suffix))
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             StorageError,

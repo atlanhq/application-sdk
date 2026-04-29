@@ -149,6 +149,39 @@ def _is_not_found(exc: Exception) -> bool:
     )
 
 
+async def _list_items(store: ObjectStore, prefix: str | None) -> list[tuple[str, int]]:
+    """Collect listing results under *prefix*, filtering GCS directory markers.
+
+    Iterates the obstore ListStream asynchronously (no thread wrapping needed).
+    A zero-byte object is excluded when its path is a strict path-prefix of at
+    least one other listed key — the structural signature of a GCS-console
+    "folder" marker that obstore returns after stripping the trailing slash.
+
+    Args:
+        store: An obstore-compatible store instance.
+        prefix: Key prefix, or ``None`` to list everything.
+
+    Returns:
+        ``(path, size)`` tuples for real objects only, in listing order.
+    """
+    all_items: list[tuple[str, int]] = []
+    async for batch in obstore.list(store, prefix=prefix):
+        for item in batch:
+            all_items.append((str(item["path"]), int(item["size"])))
+
+    parent_dirs: set[str] = set()
+    for path, _ in all_items:
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            parent_dirs.add("/".join(parts[:i]))
+
+    return [
+        (path, size)
+        for path, size in all_items
+        if not (size == 0 and path in parent_dirs)
+    ]
+
+
 def _compute_part_size(file_size: int, chunk_size: int) -> int:
     """Compute effective upload part size to stay under S3's 10,000-part limit.
 

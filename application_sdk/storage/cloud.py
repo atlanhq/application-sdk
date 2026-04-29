@@ -271,38 +271,23 @@ class CloudStore:
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
-    def _list_keys_sync(
+    async def _list_keys(
         self, list_prefix: str, suffix_filter: set[str] | None = None
     ) -> list[str]:
-        """Synchronous key listing helper (run via asyncio.to_thread)."""
-        # Normalize suffix filter to lowercase for case-insensitive matching
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — deferred to avoid circular import (storage/__init__.py imports both cloud and ops)
+            _list_items,
+        )
+
+        # Normalize suffix filter to lowercase for case-insensitive matching.
         normalized_filter = (
             {s.lower() for s in suffix_filter} if suffix_filter else None
         )
         try:
-            all_items: list[tuple[str, int]] = []
-            for batch in obs.list(self._store, prefix=list_prefix or None):
-                for item in batch:
-                    all_items.append((str(item["path"]), item["size"]))
-
-            # Build the set of all ancestor path segments from every listed key.
-            # A zero-byte object at path P is a GCS directory marker if P appears
-            # as an ancestor of any other listed key.  obstore strips trailing
-            # slashes ("prefix/" → "prefix"), so without this guard bare marker
-            # keys would be returned and subsequent downloads would 404.
-            parent_dirs: set[str] = set()
-            for path, _ in all_items:
-                segments = path.split("/")
-                for i in range(1, len(segments)):
-                    parent_dirs.add("/".join(segments[:i]))
-
+            items = await _list_items(self._store, list_prefix or None)
             keys: list[str] = []
-            for path, size in all_items:
-                if size == 0 and path in parent_dirs:
-                    continue  # GCS-style directory marker — skip
+            for path, _ in items:
                 if normalized_filter:
-                    ext = Path(path).suffix.lower()
-                    if ext not in normalized_filter:
+                    if Path(path).suffix.lower() not in normalized_filter:
                         continue
                 keys.append(path)
             return sorted(keys)
@@ -310,12 +295,6 @@ class CloudStore:
             raise StorageError(
                 f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
             ) from exc
-
-    async def _list_keys(
-        self, list_prefix: str, suffix_filter: set[str] | None = None
-    ) -> list[str]:
-        """Async wrapper for key listing."""
-        return await asyncio.to_thread(self._list_keys_sync, list_prefix, suffix_filter)
 
     async def list(self, prefix: str = "", *, suffix: str = "") -> list[str]:
         """List object keys under a prefix.
