@@ -44,6 +44,7 @@ async def list_keys(
     *,
     suffix: str = "",
     normalize: bool = True,
+    include_markers: bool = False,
 ) -> list[str]:
     """List all object keys under *prefix*.
 
@@ -63,14 +64,20 @@ async def list_keys(
             (e.g. ``".parquet"``).  The match is case-insensitive.
         normalize: When ``True`` (default), normalise *prefix* before use.
             Pass ``False`` to use *prefix* exactly as supplied.
+        include_markers: When ``False`` (default), zero-byte objects that act
+            as GCS-style directory markers (i.e. they have at least one child
+            key under them) are excluded from results.  Pass ``True`` to
+            bypass this filter and receive every object including markers —
+            useful when the caller needs to operate on all objects regardless
+            of size (e.g. ``delete_prefix``).
 
     Returns:
-        Sorted list of matching object keys.  Zero-byte objects that act as
-        GCS-style directory markers (i.e. they have at least one child key
-        under them) are excluded; zero-byte files with no children are
-        returned normally.  Marker detection is single-pass: a zero-byte
-        object is only identified as a marker if its children appear in the
-        same listing call (i.e. they share the requested *prefix*).
+        Sorted list of matching object keys.  By default, zero-byte objects
+        that act as GCS-style directory markers are excluded; zero-byte files
+        with no children are returned normally.  Marker detection is
+        single-pass: a zero-byte object is only identified as a marker if its
+        children appear in the same listing call (i.e. they share the
+        requested *prefix*).
 
     Raises:
         StorageError: If the listing fails.
@@ -80,7 +87,9 @@ async def list_keys(
     prefix = _normalize_listing_prefix(prefix, normalize)
 
     try:
-        items = await _list_items(resolved, prefix or None)
+        items = await _list_items(
+            resolved, prefix or None, include_markers=include_markers
+        )
         lsuffix = suffix.lower() if suffix else ""
         return sorted(
             path for path, _ in items if not lsuffix or path.lower().endswith(lsuffix)

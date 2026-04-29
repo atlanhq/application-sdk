@@ -103,12 +103,29 @@ class TestDeletePrefix:
         async def boom(*args, **kwargs):
             raise RuntimeError("simulated GCS not-found")
 
-        with patch(
-            "application_sdk.storage.batch.obstore.delete_async", side_effect=boom
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async", side_effect=boom
+            ),
+            pytest.raises(StorageError) as exc_info,
         ):
-            with pytest.raises(StorageError) as exc_info:
-                await delete_prefix("q/", store, normalize=False)
+            await delete_prefix("q/", store, normalize=False)
         assert "Failed to delete" in str(exc_info.value)
+
+    async def test_head_probe_non404_raises_storage_error(self, store) -> None:
+        """If head_async raises a non-404 error during root-marker probe,
+        delete_prefix surfaces it as StorageError rather than silently skipping."""
+        await _put("r/a.txt", b"1", store, normalize=False)
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("permission denied")
+
+        with (
+            patch("application_sdk.storage.batch.obstore.head_async", side_effect=boom),
+            pytest.raises(StorageError) as exc_info,
+        ):
+            await delete_prefix("r", store)
+        assert "Failed to check root marker" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

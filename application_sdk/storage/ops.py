@@ -179,8 +179,8 @@ async def _list_items(
 ) -> list[tuple[str, int]]:
     """Collect listing results under *prefix*, optionally filtering GCS directory markers.
 
-    Makes a single network listing call (``obstore.list`` returns a native async
-    ``ListStream`` — no thread wrapping needed).  When *include_markers* is
+    Makes a single listing operation (``obstore.list`` returns a native async
+    ``ListStream`` that pages internally — no thread wrapping needed).  When *include_markers* is
     ``False``, two additional in-memory passes are applied: one to build the set of
     ancestor path segments, and one to filter out zero-byte objects whose path is one
     of those ancestors (the structural signature of a GCS-console "folder" marker).

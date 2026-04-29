@@ -333,7 +333,6 @@ class TestIsNotFound:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_put_wraps_failure_as_storage_error() -> None:
     store = MagicMock()
     with (
@@ -348,7 +347,6 @@ async def test_put_wraps_failure_as_storage_error() -> None:
     assert isinstance(excinfo.value.cause, RuntimeError)
 
 
-@pytest.mark.asyncio
 async def test_get_bytes_wraps_non_404_as_storage_error() -> None:
     store = MagicMock()
     with (
@@ -361,7 +359,6 @@ async def test_get_bytes_wraps_non_404_as_storage_error() -> None:
         await _get_bytes("k", store, normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_get_bytes_returns_none_on_404() -> None:
     store = MagicMock()
     with patch(
@@ -371,7 +368,6 @@ async def test_get_bytes_returns_none_on_404() -> None:
         assert await _get_bytes("missing", store, normalize=False) is None
 
 
-@pytest.mark.asyncio
 async def test_delete_wraps_non_404_failure() -> None:
     store = MagicMock()
     with (
@@ -384,7 +380,6 @@ async def test_delete_wraps_non_404_failure() -> None:
         await delete("k", store, normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_delete_returns_false_on_404() -> None:
     store = MagicMock()
     with patch(
@@ -394,7 +389,6 @@ async def test_delete_returns_false_on_404() -> None:
         assert await delete("k", store, normalize=False) is False
 
 
-@pytest.mark.asyncio
 async def test_exists_returns_false_on_404() -> None:
     store = MagicMock()
     with patch(
@@ -404,7 +398,6 @@ async def test_exists_returns_false_on_404() -> None:
         assert await exists("k", store, normalize=False) is False
 
 
-@pytest.mark.asyncio
 async def test_exists_wraps_non_404_failure() -> None:
     store = MagicMock()
     with (
@@ -417,7 +410,6 @@ async def test_exists_wraps_non_404_failure() -> None:
         await exists("k", store, normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_exists_returns_true_on_success() -> None:
     store = MagicMock()
     with patch(
@@ -427,7 +419,6 @@ async def test_exists_returns_true_on_success() -> None:
         assert await exists("k", store, normalize=False) is True
 
 
-@pytest.mark.asyncio
 async def test_upload_file_wraps_failure_as_storage_error(tmp_path) -> None:
     """The writer raises mid-upload; ops must wrap it as StorageError."""
     f = tmp_path / "x.bin"
@@ -451,7 +442,6 @@ async def test_upload_file_wraps_failure_as_storage_error(tmp_path) -> None:
     assert excinfo.value.key == "k"
 
 
-@pytest.mark.asyncio
 async def test_download_file_translates_404_to_not_found(tmp_path) -> None:
     """Download must translate a 404 from obstore into StorageNotFoundError."""
     with (
@@ -464,7 +454,6 @@ async def test_download_file_translates_404_to_not_found(tmp_path) -> None:
         await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_download_file_wraps_non_404_get_failure(tmp_path) -> None:
     with (
         patch(
@@ -477,7 +466,6 @@ async def test_download_file_wraps_non_404_get_failure(tmp_path) -> None:
     assert not isinstance(excinfo.value, StorageNotFoundError)
 
 
-@pytest.mark.asyncio
 async def test_download_file_wraps_stream_failure(tmp_path) -> None:
     """If streaming raises mid-download, the failure must be wrapped."""
 
@@ -501,7 +489,6 @@ async def test_download_file_wraps_stream_failure(tmp_path) -> None:
         await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
 
 
-@pytest.mark.asyncio
 async def test_upload_file_does_not_delete_when_retain_local_copy_true(
     tmp_path,
 ) -> None:
