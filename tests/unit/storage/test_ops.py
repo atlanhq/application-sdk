@@ -8,7 +8,7 @@ from unittest.mock import patch
 import orjson
 import pytest
 
-import application_sdk.constants as constants
+from application_sdk import constants
 from application_sdk.storage.batch import download_prefix, list_keys
 from application_sdk.storage.errors import StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
@@ -202,6 +202,21 @@ class TestNormalizeIntegration:
         assert "run/sub/file.json" in keys
         assert "run/sub" not in keys
         assert "run" not in keys
+        assert len(keys) == 1
+
+    async def test_list_keys_excludes_intermediate_directory_markers(
+        self, store
+    ) -> None:
+        # The core scenario parent_dirs is designed for: listing under a broad
+        # prefix returns "artifacts/run" (the obstore-stripped form of the GCS
+        # "artifacts/run/" marker) because it starts with "artifacts/".  The
+        # prefix filter does not help here — only parent_dirs catches it.
+        await _put("artifacts/run/file.json", b"{}", store, normalize=False)
+        await _put("artifacts/run", b"", store, normalize=False)
+
+        keys = await list_keys("artifacts", store)
+        assert "artifacts/run/file.json" in keys
+        assert "artifacts/run" not in keys
         assert len(keys) == 1
 
 

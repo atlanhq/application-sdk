@@ -280,15 +280,31 @@ class CloudStore:
             {s.lower() for s in suffix_filter} if suffix_filter else None
         )
         try:
-            keys: list[str] = []
+            all_items: list[tuple[str, int]] = []
             for batch in obs.list(self._store, prefix=list_prefix or None):
                 for item in batch:
-                    obj_path = str(item["path"])
-                    if normalized_filter:
-                        ext = Path(obj_path).suffix.lower()
-                        if ext not in normalized_filter:
-                            continue
-                    keys.append(obj_path)
+                    all_items.append((str(item["path"]), item["size"]))
+
+            # Build the set of all ancestor path segments from every listed key.
+            # A zero-byte object at path P is a GCS directory marker if P appears
+            # as an ancestor of any other listed key.  obstore strips trailing
+            # slashes ("prefix/" → "prefix"), so without this guard bare marker
+            # keys would be returned and subsequent downloads would 404.
+            parent_dirs: set[str] = set()
+            for path, _ in all_items:
+                segments = path.split("/")
+                for i in range(1, len(segments)):
+                    parent_dirs.add("/".join(segments[:i]))
+
+            keys: list[str] = []
+            for path, size in all_items:
+                if size == 0 and path in parent_dirs:
+                    continue  # GCS-style directory marker — skip
+                if normalized_filter:
+                    ext = Path(path).suffix.lower()
+                    if ext not in normalized_filter:
+                        continue
+                keys.append(path)
             return sorted(keys)
         except Exception as exc:
             raise StorageError(

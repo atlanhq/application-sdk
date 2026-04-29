@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 async def list_keys(
     prefix: str = "",
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     *,
     suffix: str = "",
     normalize: bool = True,
@@ -65,7 +65,9 @@ async def list_keys(
         Sorted list of matching object keys.  Zero-byte objects that act as
         GCS-style directory markers (i.e. they have at least one child key
         under them) are excluded; zero-byte files with no children are
-        returned normally.
+        returned normally.  Marker detection is single-pass: a zero-byte
+        object is only identified as a marker if its children appear in the
+        same listing call (i.e. they share the requested *prefix*).
 
     Raises:
         StorageError: If the listing fails.
@@ -124,7 +126,7 @@ async def list_keys(
 
 async def delete_prefix(
     prefix: str,
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> int:
@@ -157,8 +159,8 @@ async def delete_prefix(
 
 async def download_prefix(
     prefix: str,
-    local_dir: "str | Path",
-    store: "ObjectStore | None" = None,
+    local_dir: str | Path,
+    store: ObjectStore | None = None,
     *,
     suffix: str = "",
     normalize: bool = True,
@@ -203,9 +205,9 @@ async def download_prefix(
 
 
 async def upload_prefix(
-    local_dir: "str | Path",
+    local_dir: str | Path,
     prefix: str,
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     *,
     normalize: bool = True,
     retain_local_copy: bool = True,
@@ -267,7 +269,7 @@ async def upload_prefix(
 async def upload_file_from_bytes(
     key: str,
     content: bytes,
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> str:
