@@ -601,3 +601,46 @@ def test_get_sqlalchemy_connection_string_omits_none_parameters(
     conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
     assert "None" not in conn_str
     assert "ssl_mode" not in conn_str
+
+
+# ---------------------------------------------------------------------------
+# BLDX-1160: per-instance credential state
+# ---------------------------------------------------------------------------
+
+
+def test_sql_client_credentials_are_per_instance_not_class_shared() -> None:
+    """Two `BaseSQLClient` instances must not share `credentials` state.
+
+    Before BLDX-1160, `credentials: Dict = {}` and `resolved_credentials:
+    Dict = {}` were class-level defaults — mutating one instance's dict
+    leaked into every other instance. Regression guard locks the
+    None-sentinel + per-instance assignment in `__init__`.
+    """
+    a = BaseSQLClient()
+    b = BaseSQLClient()
+
+    a.credentials["api_key"] = "tenant-a-secret"
+    a.resolved_credentials["resolved"] = "value-a"
+
+    assert b.credentials == {}, (
+        "BaseSQLClient.credentials leaked across instances — class-level "
+        "mutable default regressed (BLDX-1160)"
+    )
+    assert b.resolved_credentials == {}, (
+        "BaseSQLClient.resolved_credentials leaked across instances — "
+        "class-level mutable default regressed (BLDX-1160)"
+    )
+
+    # Sanity: the instance that set the keys still has them
+    assert a.credentials == {"api_key": "tenant-a-secret"}
+    assert a.resolved_credentials == {"resolved": "value-a"}
+
+
+def test_sql_client_credentials_kwarg_does_not_share_default_dict() -> None:
+    """Calling `BaseSQLClient()` without `credentials=` must not yield the
+    same dict object across instances. The fix replaced `credentials={}`
+    in the signature with `credentials=None` + lazy init.
+    """
+    a = BaseSQLClient()
+    b = BaseSQLClient()
+    assert a.credentials is not b.credentials

@@ -327,10 +327,17 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation.
 
+        Public test hook: any new ClassVar or module-level cache associated
+        with logger initialization MUST be reset here so test isolation
+        stays correct. Currently resets ``_initialized``, ``_flush_task_started``,
+        and clears the module-level ``_logger_instances`` cache.
+
         This method should only be used in tests to allow fresh sink setup
         for each test case.
         """
         cls._initialized = False
+        cls._flush_task_started = False
+        _logger_instances.clear()
 
     def __init__(self, logger_name: str) -> None:
         """Initialize the AtlanLoggerAdapter with enhanced configuration.

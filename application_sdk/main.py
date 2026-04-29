@@ -257,15 +257,19 @@ class AppConfig:
             handler_host=getattr(args, "handler_host", None)
             or _env("ATLAN_HANDLER_HOST")
             or _env("ATLAN_APP_HTTP_HOST", "0.0.0.0"),
-            handler_port=getattr(args, "handler_port", None)
-            or _env_int("ATLAN_HANDLER_PORT", 0)
-            or _env_int("ATLAN_APP_HTTP_PORT", 0)
-            or 8000,
+            handler_port=_handler_port_arg
+            if (_handler_port_arg := getattr(args, "handler_port", None)) is not None
+            else (
+                _env_int("ATLAN_HANDLER_PORT", 0)
+                or _env_int("ATLAN_APP_HTTP_PORT", 0)
+                or 8000
+            ),
             log_level=getattr(args, "log_level", None)
             or _env("ATLAN_LOG_LEVEL")
             or _env("LOG_LEVEL", "INFO"),
-            health_port=getattr(args, "health_port", None)
-            or _env_int("ATLAN_HEALTH_PORT", 8081),
+            health_port=_health_port_arg
+            if (_health_port_arg := getattr(args, "health_port", None)) is not None
+            else _env_int("ATLAN_HEALTH_PORT", 8081),
             service_name=service_name,
             # TLS
             tls_enabled=_env_bool("ATLAN_TEMPORAL_TLS_ENABLED"),
@@ -777,6 +781,7 @@ def run_handler_mode(config: AppConfig) -> None:
     )
 
     app_class = load_app_class(config.app_module)
+    validate_app_class(app_class)
     app_name = app_class._app_name  # type: ignore[attr-defined]
 
     handler_class = load_handler_class(
@@ -822,6 +827,12 @@ def run_handler_mode(config: AppConfig) -> None:
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
     )
+
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        close_infrastructure,
+    )
+
+    asyncio.run(close_infrastructure())
     asyncio.run(_flush_observability())
 
 
