@@ -59,15 +59,15 @@ class BaseSQLClient(ClientInterface):
 
     connection = None
     engine = None
-    credentials: Dict[str, Any] = {}
-    resolved_credentials: Dict[str, Any] = {}
+    credentials: Dict[str, Any]
+    resolved_credentials: Dict[str, Any]
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
     DB_CONFIG: Optional[DatabaseConfig] = None
 
     def __init__(
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
-        credentials: Dict[str, Any] = {},
+        credentials: Optional[Dict[str, Any]] = None,
         chunk_size: int = 5000,
     ):
         """
@@ -76,10 +76,12 @@ class BaseSQLClient(ClientInterface):
         Args:
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
                 Defaults to USE_SERVER_SIDE_CURSOR.
-            credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
+            credentials (Optional[Dict[str, Any]], optional): Database credentials.
+                Defaults to None, which is treated as an empty dict.
         """
         self.use_server_side_cursor = use_server_side_cursor
-        self.credentials = credentials
+        self.credentials = credentials if credentials is not None else {}
+        self.resolved_credentials = {}
         self.chunk_size = chunk_size
 
     async def load(self, credentials: Dict[str, Any]) -> None:
