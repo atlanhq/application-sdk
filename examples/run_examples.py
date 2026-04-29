@@ -216,6 +216,8 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
     # Force-set (not setdefault) so a stale system-level DAPR_COMPONENTS_PATH
     # never leaks in and points daprd at the wrong component directory.
     env["DAPR_COMPONENTS_PATH"] = str(_REPO_ROOT / "components")
+    # Ensure UTF-8 output on Windows (avoid cp1252 garbling in logs).
+    env["PYTHONUTF8"] = "1"
 
     extra_kwargs: dict[str, Any] = {}
     if sys.platform == "win32":
@@ -231,8 +233,16 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
     # Import the module under its real name (not __main__) so Temporal's
     # sandbox can resolve workflow classes via the module path rather than
     # falling back to the unresolvable __temporal_main__.
+    #
+    # On Windows, asyncio defaults to ProactorEventLoop (IOCP-based) which
+    # can deadlock when uvicorn.Server.serve() is awaited inside asyncio.gather()
+    # alongside a running Temporal worker.  WindowsSelectorEventLoopPolicy
+    # switches to the select()-based SelectorEventLoop, matching the
+    # epoll/kqueue behaviour on Linux/macOS and letting uvicorn start cleanly.
     launcher = (
         "import sys, importlib.util, asyncio\n"
+        "if sys.platform == 'win32':\n"
+        "    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n"
         "sys.path.insert(0, '.')\n"
         f"sys.path.insert(0, {_examples_dir!r})\n"
         f"spec = importlib.util.spec_from_file_location({example.module!r}, {_module_path!r})\n"
@@ -252,12 +262,13 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
         "asyncio.run(run_dev_combined(_app_cls))\n"
     )
     proc = subprocess.Popen(
-        [sys.executable, "-c", launcher],
+        [sys.executable, "-u", "-c", launcher],
         env=env,
         cwd=str(_REPO_ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
         **extra_kwargs,
     )
 
