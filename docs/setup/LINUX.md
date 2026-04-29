@@ -51,19 +51,20 @@ export PATH="$HOME/.temporalio/bin:$PATH"
 echo 'export PATH="$HOME/.temporalio/bin:$PATH"' >> ~/.bashrc
 ```
 
-### 4. Install DAPR CLI
+### 4. Install daprd
 
-Install DAPR using the following commands:
+daprd is the Dapr sidecar runtime (Distributed Application Runtime):
 
 ```bash
-# Install DAPR CLI
-wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.16.2
-
-# Initialize DAPR (slim mode)
-dapr init --runtime-version 1.16.0 --slim
+DAPRD_VERSION=1.17.3
+mkdir -p "$HOME/.daprd/bin"
+wget -q "https://github.com/dapr/dapr/releases/download/v${DAPRD_VERSION}/daprd_linux_amd64.tar.gz" -O /tmp/daprd.tar.gz
+tar -xzf /tmp/daprd.tar.gz -C "$HOME/.daprd/bin" daprd
+chmod +x "$HOME/.daprd/bin/daprd"
+echo 'export PATH="$HOME/.daprd/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 
 # Verify installation
-dapr --version
+daprd --version
 ```
 
 > [!NOTE]

@@ -44,11 +44,15 @@ jobs:
           pip install testcontainers psutil
 
 
-      # Install Dapr
-      - name: Install Dapr CLI
+      # Install daprd
+      - name: Install daprd
         run: |
-          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.16.2
-          dapr init --runtime-version 1.16.0 --slim
+          DAPRD_VERSION=1.17.3
+          mkdir -p "$HOME/.daprd/bin"
+          wget -q "https://github.com/dapr/dapr/releases/download/v${DAPRD_VERSION}/daprd_linux_amd64.tar.gz" -O /tmp/daprd.tar.gz
+          tar -xzf /tmp/daprd.tar.gz -C "$HOME/.daprd/bin" daprd
+          chmod +x "$HOME/.daprd/bin/daprd"
+          echo "$HOME/.daprd/bin" >> $GITHUB_PATH
 
       # Install Temporal
       - name: Install Temporal CLI and Start Server

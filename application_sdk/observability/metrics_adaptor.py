@@ -12,6 +12,9 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 
 from application_sdk.constants import (
+    APP_SDK_VERSION,
+    APP_TYPE,
+    APPLICATION_VERSION,
     ENABLE_OTLP_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
@@ -23,6 +26,9 @@ from application_sdk.constants import (
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
+    PUBLISHED_AT,
+    RELEASE_CHANNEL,
+    RELEASE_ID,
     SEGMENT_API_URL,
     SEGMENT_BATCH_SIZE,
     SEGMENT_BATCH_TIMEOUT_SECONDS,
@@ -136,6 +142,20 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 resource_attributes["service.name"] = SERVICE_NAME
             if "service.version" not in resource_attributes:
                 resource_attributes["service.version"] = SERVICE_VERSION
+
+            # App vitals metadata from Local Marketplace
+            if APPLICATION_VERSION:
+                resource_attributes["app.version"] = APPLICATION_VERSION
+            if RELEASE_ID:
+                resource_attributes["app.release_id"] = RELEASE_ID
+            if RELEASE_CHANNEL:
+                resource_attributes["app.release_channel"] = RELEASE_CHANNEL
+            if APP_SDK_VERSION:
+                resource_attributes["app.sdk_version"] = APP_SDK_VERSION
+            if APP_TYPE:
+                resource_attributes["app.type"] = APP_TYPE
+            if PUBLISHED_AT:
+                resource_attributes["app.published_at"] = PUBLISHED_AT
 
             # Add workflow node name if running in Argo
             if workflow_node_name:
@@ -270,27 +290,36 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             Exception: If sending fails, logs error and continues
         """
         try:
+            # OTel attributes only accept primitive types (str, int, float, bool).
+            # Filter out complex values (lists, dicts) that are valid in Segment
+            # but unsupported by the OTel metrics SDK.
+            otel_attrs = {
+                k: v
+                for k, v in metric_record.labels.items()
+                if isinstance(v, (str, int, float, bool))
+            }
+
             if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
                     description=metric_record.description,
                     unit=metric_record.unit,
                 )
-                counter.add(metric_record.value, metric_record.labels)
+                counter.add(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.GAUGE:
                 gauge = self.meter.create_observable_gauge(
                     name=metric_record.name,
                     description=metric_record.description,
                     unit=metric_record.unit,
                 )
-                gauge.add(metric_record.value, metric_record.labels)
+                gauge.add(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.HISTOGRAM:
                 histogram = self.meter.create_histogram(
                     name=metric_record.name,
                     description=metric_record.description,
                     unit=metric_record.unit,
                 )
-                histogram.record(metric_record.value, metric_record.labels)
+                histogram.record(metric_record.value, otel_attrs)
         except Exception as e:
             logging.error(f"Error sending metric to OpenTelemetry: {e}")
 
@@ -330,7 +359,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         name: str,
         value: float,
         metric_type: MetricType,
-        labels: Dict[str, str],
+        labels: Dict[str, Any],
         description: Optional[str] = None,
         unit: Optional[str] = None,
     ):
@@ -340,7 +369,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             name (str): Name of the metric
             value (float): Numeric value of the metric
             metric_type (str): Type of metric (counter, gauge, or histogram)
-            labels (Dict[str, str]): Key-value pairs for metric dimensions
+            labels (Dict[str, Any]): Key-value pairs for metric dimensions
             description (Optional[str]): Optional description of the metric
             unit (Optional[str]): Optional unit of measurement
 

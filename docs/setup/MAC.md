@@ -47,13 +47,18 @@ Temporal is the workflow orchestration platform:
 brew install temporal
 ```
 
-### 4. Install DAPR CLI
+### 4. Install daprd
 
-DAPR (Distributed Application Runtime) simplifies microservice development:
+daprd is the Dapr sidecar runtime (Distributed Application Runtime):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | /bin/bash -s 1.16.2
-dapr init --runtime-version 1.16.0 --slim
+DAPRD_VERSION=1.17.3
+ARCH=$(uname -m)
+if [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; elif [ "$ARCH" = "arm64" ]; then ARCH="arm64"; fi
+mkdir -p "$HOME/.daprd/bin"
+curl -fsSL "https://github.com/dapr/dapr/releases/download/v${DAPRD_VERSION}/daprd_darwin_${ARCH}.tar.gz" | tar -xz -C "$HOME/.daprd/bin" daprd
+chmod +x "$HOME/.daprd/bin/daprd"
+echo 'export PATH="$HOME/.daprd/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
 > [!NOTE]

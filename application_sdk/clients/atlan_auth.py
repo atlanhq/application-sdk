@@ -5,6 +5,7 @@ from typing import Dict, Optional
 
 import aiohttp
 
+from application_sdk.clients.ssl_utils import get_ssl_context
 from application_sdk.common.error_codes import ClientError
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -94,6 +95,7 @@ class AtlanAuthClient:
         # Refresh token
         logger.info("Refreshing OAuth2 token")
 
+        ssl_context = get_ssl_context()
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 self.auth_url,
@@ -103,6 +105,7 @@ class AtlanAuthClient:
                     "client_secret": self.credentials["client_secret"],
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
+                ssl=ssl_context,
             ) as response:
                 if not response.ok:
                     # Clear cached credentials and token on auth failure in case they're stale
