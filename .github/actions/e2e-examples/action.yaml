@@ -86,9 +86,11 @@ runs:
       shell: pwsh
       run: echo "$env:USERPROFILE\.dapr\bin" >> $env:GITHUB_PATH
 
-    # Start services sequentially: Temporal first (to avoid port-binding race with Dapr)
-    - name: Start Platform Services (Linux/macOS)
-      if: runner.os != 'Windows'
+    # Start services sequentially: Temporal first (to avoid port-binding race with Dapr).
+    # Uses bash on all platforms — Git Bash is available on Windows runners and correctly
+    # passes empty-string arguments (PowerShell Start-Process drops them, corrupting
+    # --placement-host-address and --scheduler-host-address flags).
+    - name: Start Platform Services
       shell: bash
       run: |
         temporal server start-dev --db-filename /tmp/temporal-e2e.db &
@@ -105,7 +107,7 @@ runs:
           echo "Temporal failed to become ready after 40 seconds"
           exit 1
         fi
-        $HOME/.dapr/bin/daprd \
+        daprd \
           --app-id e2e-examples \
           --dapr-http-port 3500 \
           --dapr-grpc-port 50001 \
@@ -126,35 +128,6 @@ runs:
           echo "Dapr failed to become ready after 60 seconds"
           exit 1
         fi
-
-    - name: Start Platform Services (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        Start-Process -FilePath "temporal" -ArgumentList "server", "start-dev", "--db-filename", "$env:TEMP\temporal-e2e.db" -NoNewWindow
-        $ready = $false
-        for ($i = 1; $i -le 20; $i++) {
-          $result = temporal workflow list --namespace default 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Temporal is ready"
-            $ready = $true
-            break
-          }
-          Start-Sleep 2
-        }
-        if (-not $ready) { Write-Error "Temporal failed to become ready"; exit 1 }
-        Start-Process -FilePath "$env:USERPROFILE\.dapr\bin\daprd.exe" `
-          -ArgumentList "--app-id", "e2e-examples", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--resources-path", ".\components", "--placement-host-address", "", "--scheduler-host-address", "", "--log-level", "warn" `
-          -NoNewWindow
-        $ready = $false
-        for ($i = 1; $i -le 30; $i++) {
-          try {
-            $r = Invoke-WebRequest -Uri "http://localhost:3500/v1.0/healthz" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-            if ($r.StatusCode -eq 204) { Write-Host "Dapr is ready"; $ready = $true; break }
-          } catch {}
-          Start-Sleep 2
-        }
-        if (-not $ready) { Write-Error "Dapr failed to become ready after 60 seconds"; exit 1 }
 
     # Make API call and capture workflow/run IDs for each example
     - name: Start the workflows
