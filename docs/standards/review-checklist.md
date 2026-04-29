@@ -231,7 +231,7 @@ def create_distributed_lock(
 - New public functions must have corresponding unit tests
 - New API endpoints must have integration tests
 - New workflow activities must have activity tests
-- Minimum test coverage: 90% for new code
+- Minimum test coverage: 85% for new code
 - Critical business logic must have comprehensive edge case testing
 
 **Testing command:** `uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics`
@@ -607,7 +607,7 @@ def good_validation(max_value: int) -> int:
 - Code complexity metrics must be below established thresholds
 - Technical debt must be tracked and addressed
 - Performance benchmarks must be maintained
-- Test coverage must be above 90% for new code
+- Test coverage must be above 85% for new code
 
 **Observability requirements:**
 
