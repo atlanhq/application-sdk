@@ -1025,6 +1025,15 @@ class TestTemporalAttributePassthrough:
         assert len(tenant_keys) == 0
 
 
+# BLDX-1129 follow-up: these two tests patch
+# `application_sdk.observability.logger_adaptor.threading.Thread`, which is the
+# threading module reference and patches Thread globally. OTel SDK batch
+# processors spawn their own threads on adapter construction and get caught by
+# the mock, breaking assert_called_once / assert_not_called. Real fix is to
+# Tests now mock the injectable `_spawn_flush_thread()` boundary directly
+# (added to `AtlanLoggerAdapter` on main as part of BLDX-1129's BLDX-1172),
+# so they no longer need to patch `threading.Thread` globally and no longer
+# leak into OTel SDK background threads.
 class TestPython314EventLoopCompat:
     """Tests for Python 3.14 compatibility where asyncio.get_event_loop()
     raises RuntimeError when no current event loop exists.
@@ -1090,3 +1099,451 @@ class TestPython314EventLoopCompat:
 
                         mock_loop.create_task.assert_called_once()
                         mock_spawn.assert_not_called()
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# BLDX-1129 follow-up tests: pure helpers and inline-import / sink coverage.
+# These tests do NOT construct AtlanLoggerAdapter beyond the existing helper
+# (`create_logger_adapter`) which is shielded by `ENABLE_OTLP_LOGS=false` +
+# localhost endpoint. No real threads, no real asyncio loops, no real network.
+# ───────────────────────────────────────────────────────────────────────────
+
+
+from application_sdk.observability.logger_adaptor import (  # noqa: E402
+    _build_extra_dict,
+    _extract_exception_attributes,
+    _format_exception_stacktrace,
+    _format_printf_args,
+    _has_remote_otlp_endpoint,
+    _normalize_log_extra_value,
+)
+
+
+class TestHasRemoteOtlpEndpoint:
+    """`_has_remote_otlp_endpoint` decides between local-noop and remote-export.
+
+    BLDX-1129 anchor: the function performs an inline `from urllib.parse
+    import urlparse`. These tests force that path to execute.
+    """
+
+    def test_empty_endpoint_returns_false(self):
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.OTEL_EXPORTER_OTLP_ENDPOINT",
+            "",
+        ):
+            assert _has_remote_otlp_endpoint() is False
+
+    def test_whitespace_only_endpoint_returns_false(self):
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.OTEL_EXPORTER_OTLP_ENDPOINT",
+            "   ",
+        ):
+            assert _has_remote_otlp_endpoint() is False
+
+    def test_localhost_returns_false(self):
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://localhost:4317",
+        ):
+            assert _has_remote_otlp_endpoint() is False
+
+    def test_loopback_ipv4_returns_false(self):
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://127.0.0.1:4317",
+        ):
+            assert _has_remote_otlp_endpoint() is False
+
+    def test_loopback_ipv6_returns_false(self):
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://[::1]:4317",
+        ):
+            assert _has_remote_otlp_endpoint() is False
+
+    def test_real_remote_returns_true(self):
+        """Inline `from urllib.parse import urlparse` exercised here (BLDX-1129)."""
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.OTEL_EXPORTER_OTLP_ENDPOINT",
+            "https://otel.atlan.example.com:4317",
+        ):
+            assert _has_remote_otlp_endpoint() is True
+
+    def test_endpoint_check_swallows_exceptions_and_returns_false(self):
+        """Any failure in URL parsing must downgrade to 'local' / False."""
+        # Replace endpoint with an object whose .strip() raises.
+        bad = mock.MagicMock()
+        bad.strip.side_effect = RuntimeError("boom")
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.OTEL_EXPORTER_OTLP_ENDPOINT",
+            bad,
+        ):
+            assert _has_remote_otlp_endpoint() is False
+
+
+class TestFormatPrintfArgs:
+    """`_format_printf_args` bridges `%`-style and `{}`-style log args."""
+
+    def test_printf_substitution_consumes_args(self):
+        msg, args = _format_printf_args("hello %s", ("world",))
+        assert msg == "hello world"
+        assert args == ()
+
+    def test_braces_message_keeps_args(self):
+        msg, args = _format_printf_args("hello {}", ("world",))
+        assert msg == "hello {}"
+        assert args == ("world",)
+
+    def test_no_args_returns_message_unchanged(self):
+        msg, args = _format_printf_args("hello", ())
+        assert msg == "hello"
+        assert args == ()
+
+    def test_typeerror_in_substitution_returns_original_args(self):
+        # Too many args for a single %s -> TypeError -> fallback path.
+        msg, args = _format_printf_args("hello %s", ("a", "b"))
+        assert msg == "hello %s"
+        assert args == ("a", "b")
+
+    def test_value_error_in_substitution_returns_original_args(self):
+        # Invalid format spec triggers ValueError -> fallback.
+        msg, args = _format_printf_args("hello %z", ("world",))
+        assert msg == "hello %z"
+        assert args == ("world",)
+
+
+class TestNormalizeLogExtraValue:
+    def test_attempt_int_normalized_to_string(self):
+        assert _normalize_log_extra_value("attempt", 3) == "3"
+
+    def test_attempt_none_passes_through(self):
+        # The function only stringifies when value is not None.
+        assert _normalize_log_extra_value("attempt", None) is None
+
+    def test_other_keys_pass_through_unchanged(self):
+        assert _normalize_log_extra_value("status", "succeeded") == "succeeded"
+        assert _normalize_log_extra_value("duration_ms", 12.5) == 12.5
+
+
+class TestExtractExceptionAttributes:
+    def test_none_exception_returns_empty_dict(self):
+        assert _extract_exception_attributes(None) == {}
+
+    def test_missing_exc_type_returns_empty_dict(self):
+        rec = mock.Mock(type=None, value=None, traceback=None)
+        assert _extract_exception_attributes(rec) == {}
+
+    def test_extracts_module_qualname_and_message(self):
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            t, v, tb = sys.exc_info()
+        rec = mock.Mock(type=t, value=v, traceback=tb)
+        attrs = _extract_exception_attributes(rec)
+        assert attrs["exception.type"] == "builtins.ValueError"
+        assert attrs["exception.message"] == "boom"
+        assert "Traceback" in attrs["exception.stacktrace"]
+
+
+class TestFormatExceptionStacktrace:
+    def test_none_returns_empty_string(self):
+        assert _format_exception_stacktrace(None) == ""
+
+    def test_missing_type_returns_empty_string(self):
+        rec = mock.Mock(type=None, value=None, traceback=None)
+        assert _format_exception_stacktrace(rec) == ""
+
+
+class TestBuildExtraDict:
+    """Public-shape contract tests for `_build_extra_dict`.
+
+    The known-keys allowlist plus prefix allowlist controls what data
+    flows through to OTel attributes; this is a security-relevant boundary.
+    """
+
+    def test_known_key_kept(self):
+        out = _build_extra_dict({"workflow_id": "wf-1"})
+        assert out == {"workflow_id": "wf-1"}
+
+    def test_unknown_key_dropped(self):
+        out = _build_extra_dict({"some_random_key": "leak-me"})
+        assert "some_random_key" not in out
+
+    def test_logger_name_excluded(self):
+        # logger_name is intentionally suppressed even though present in records
+        out = _build_extra_dict({"logger_name": "test_logger"})
+        assert "logger_name" not in out
+
+    def test_atlan_prefix_kept(self):
+        out = _build_extra_dict({"atlan-tenant": "acme"})
+        assert out["atlan-tenant"] == "acme"
+
+    def test_temporal_prefix_kept(self):
+        out = _build_extra_dict({"temporal.activity.type": "fetch"})
+        assert out["temporal.activity.type"] == "fetch"
+
+    def test_tenant_prefix_kept(self):
+        out = _build_extra_dict({"tenant.id": "acme-1"})
+        assert out["tenant.id"] == "acme-1"
+
+    def test_atlan_prefix_with_none_value_dropped(self):
+        out = _build_extra_dict({"atlan-tenant": None})
+        assert "atlan-tenant" not in out
+
+    def test_non_primitive_prefixed_value_coerced_to_string(self):
+        out = _build_extra_dict({"atlan-payload": {"k": "v"}})
+        assert isinstance(out["atlan-payload"], str)
+
+    def test_attempt_normalized_via_known_key_path(self):
+        out = _build_extra_dict({"attempt": 7})
+        assert out["attempt"] == "7"
+
+
+class TestCreateLogRecord:
+    """Tests for `_create_log_record` covering branches in extra-attribute handling."""
+
+    def test_error_code_promoted_to_error_dot_code(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        rec = {
+            "timestamp": 1.0,
+            "level": "ERROR",
+            "message": "boom",
+            "file": "f.py",
+            "line": 1,
+            "function": "fn",
+            "extra": {"error_code": "E_DB_CONN"},
+        }
+        otel = logger_adapter._create_log_record(rec)
+        assert otel.attributes["error.code"] == "E_DB_CONN"
+        # original error_code should be filtered out (already handled)
+        assert "error_code" not in otel.attributes
+
+    def test_non_primitive_extra_value_stringified(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        rec = {
+            "timestamp": 1.0,
+            "level": "INFO",
+            "message": "x",
+            "file": "f.py",
+            "line": 1,
+            "function": "fn",
+            "extra": {"payload": {"a": 1}},
+        }
+        otel = logger_adapter._create_log_record(rec)
+        # Non-primitive coerced to str
+        assert isinstance(otel.attributes["payload"], str)
+        assert "a" in otel.attributes["payload"]
+
+    def test_unknown_severity_falls_back_to_unspecified(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        from opentelemetry._logs import SeverityNumber
+
+        rec = {
+            "timestamp": 1.0,
+            "level": "MYSTERIOUS_LEVEL",
+            "message": "x",
+            "file": "f.py",
+            "line": 1,
+            "function": "fn",
+            "extra": {},
+        }
+        otel = logger_adapter._create_log_record(rec)
+        assert otel.severity_number == SeverityNumber.UNSPECIFIED
+
+
+class TestLoggingMethodsForwardToLoguru:
+    """The level-specific methods must call into the loguru logger correctly.
+
+    These are smoke tests against a mocked `self.logger` so we exercise
+    the `bind().<level>(...)` and `bind().opt(exception=...).<level>(...)`
+    branches without any real I/O.
+    """
+
+    def _wire_mock(self, adapter: AtlanLoggerAdapter):
+        mocked = mock.MagicMock()
+        bound = mock.MagicMock()
+        opt = mock.MagicMock()
+        mocked.bind.return_value = bound
+        bound.opt.return_value = opt
+        adapter.logger = mocked
+        return mocked, bound, opt
+
+    def test_debug_no_exc_info(self, logger_adapter: AtlanLoggerAdapter):
+        _, bound, _ = self._wire_mock(logger_adapter)
+        logger_adapter.debug("hello %s", "world")
+        bound.debug.assert_called_once()
+
+    def test_info_with_exc_info(self, logger_adapter: AtlanLoggerAdapter):
+        _, bound, opt = self._wire_mock(logger_adapter)
+        logger_adapter.info("oops", exc_info=True)
+        bound.opt.assert_called_once_with(exception=True)
+        opt.info.assert_called_once()
+
+    def test_critical_forces_sync_flush(self, logger_adapter: AtlanLoggerAdapter):
+        self._wire_mock(logger_adapter)
+        with mock.patch.object(logger_adapter, "_sync_flush") as fl:
+            logger_adapter.critical("die")
+            fl.assert_called_once()
+
+    def test_error_forces_sync_flush(self, logger_adapter: AtlanLoggerAdapter):
+        self._wire_mock(logger_adapter)
+        with mock.patch.object(logger_adapter, "_sync_flush") as fl:
+            logger_adapter.error("nope")
+            fl.assert_called_once()
+
+    def test_activity_logs_with_activity_log_type(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        _, bound, _ = self._wire_mock(logger_adapter)
+        logger_adapter.activity("act-msg")
+        # bind() should have received log_type=activity
+        _, bind_kwargs = bound.log.call_args if bound.log.call_args else ((), {})
+        called_with = logger_adapter.logger.bind.call_args.kwargs
+        assert called_with.get("log_type") == "activity"
+        bound.log.assert_called_once()
+        assert bound.log.call_args.args[0] == "ACTIVITY"
+
+    def test_metric_logs_with_metric_log_type(self, logger_adapter: AtlanLoggerAdapter):
+        _, bound, _ = self._wire_mock(logger_adapter)
+        logger_adapter.metric("m")
+        called_with = logger_adapter.logger.bind.call_args.kwargs
+        assert called_with.get("log_type") == "metric"
+        assert bound.log.call_args.args[0] == "METRIC"
+
+    def test_tracing_logs_with_trace_log_type(self, logger_adapter: AtlanLoggerAdapter):
+        _, bound, _ = self._wire_mock(logger_adapter)
+        logger_adapter.tracing("t")
+        called_with = logger_adapter.logger.bind.call_args.kwargs
+        assert called_with.get("log_type") == "trace"
+        assert bound.log.call_args.args[0] == "TRACING"
+
+    def test_debug_logging_swallows_internal_exceptions(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        # Make `process` blow up; debug() must not propagate.
+        with mock.patch.object(
+            logger_adapter, "process", side_effect=RuntimeError("explode")
+        ):
+            with mock.patch.object(logger_adapter, "_sync_flush") as fl:
+                # Should not raise
+                logger_adapter.debug("x")
+                fl.assert_called_once()
+
+
+class TestProcessV3CorrelationBridge:
+    """`process()` falls back to v3 CorrelationContext when legacy ctx empty.
+
+    BLDX-1129 anchor: this exercises the inline import
+    `from application_sdk.observability.correlation import get_correlation_context`.
+    """
+
+    def test_v3_bridge_populates_correlation_id(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        # Legacy correlation_context returns nothing of interest.
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.correlation_context"
+        ) as legacy:
+            legacy.get.return_value = {}
+            # Inline import target
+            with mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context"
+            ) as v3:
+                v3.return_value = mock.Mock(correlation_id="v3-cid")
+                _, kwargs = logger_adapter.process("m", {})
+                assert kwargs["correlation_id"] == "v3-cid"
+
+    def test_v3_bridge_no_context_keeps_correlation_id_absent(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.correlation_context"
+        ) as legacy:
+            legacy.get.return_value = {}
+            with mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context"
+            ) as v3:
+                v3.return_value = None
+                _, kwargs = logger_adapter.process("m", {})
+                assert "correlation_id" not in kwargs
+
+
+class TestProcessRecord:
+    """`process_record` distinguishes loguru messages, dicts, and rejects others."""
+
+    def test_dict_passes_through_unchanged(self, logger_adapter: AtlanLoggerAdapter):
+        d = {"hello": "world"}
+        assert logger_adapter.process_record(d) is d
+
+    def test_unsupported_type_raises_value_error(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        with pytest.raises(ValueError):
+            logger_adapter.process_record(12345)
+
+    def test_loguru_like_record_is_normalized(self, logger_adapter: AtlanLoggerAdapter):
+        msg = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "INFO"
+        msg.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {"logger_name": "x"},
+            "message": "hi",
+            "file": mock.MagicMock(path="a.py"),
+            "line": 5,
+            "function": "f",
+        }
+        out = logger_adapter.process_record(msg)
+        assert out["message"] == "hi"
+        assert out["level"] == "INFO"
+        assert out["function"] == "f"
+
+
+class TestExportRecordIsNoOp:
+    def test_returns_none(self, logger_adapter: AtlanLoggerAdapter):
+        assert logger_adapter.export_record({"any": "thing"}) is None
+
+
+class TestOtlpSinkErrorPath:
+    """`otlp_sink` must swallow processing errors and never raise."""
+
+    def test_otlp_sink_without_provider_does_not_raise(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        # `_send_to_otel` will be called and (likely) blow up because no
+        # logger_provider has been wired up — must be swallowed.
+        msg = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "INFO"
+        msg.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {"logger_name": "x"},
+            "message": "m",
+            "file": mock.MagicMock(path="a.py"),
+            "line": 1,
+            "function": "f",
+        }
+        # Should not raise even if provider missing or anything else fails.
+        logger_adapter.otlp_sink(msg)
+
+
+class TestSendToOtelSwallowsErrors:
+    def test_send_to_otel_swallows_exceptions(self, logger_adapter: AtlanLoggerAdapter):
+        # Force `_create_log_record` to raise; method must swallow.
+        with mock.patch.object(
+            logger_adapter, "_create_log_record", side_effect=RuntimeError("x")
+        ):
+            # Must not raise.
+            logger_adapter._send_to_otel({"any": "record"})
+
+
+def test_reset_for_testing_also_resets_flush_task_started():
+    """Documents the leak between tests in the class-level flush task flag."""
+    AtlanLoggerAdapter._flush_task_started = True
+    AtlanLoggerAdapter._reset_for_testing()
+    assert AtlanLoggerAdapter._flush_task_started is False
