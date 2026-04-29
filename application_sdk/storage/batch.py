@@ -311,7 +311,7 @@ async def upload_file_from_bytes(
     store: ObjectStore | None = None,
     *,
     normalize: bool = True,
-) -> str | None:
+) -> str:
     """Upload bytes directly to *key* in the store.
 
     Writes content to a temporary file, uploads it, then cleans up.

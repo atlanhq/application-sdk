@@ -192,7 +192,6 @@ async def persist_file_reference(
             relative = str(file_path.relative_to(local)).replace(os.sep, "/")
             file_key = f"{prefix}{relative}"
             sha256 = await upload_file(file_key, file_path, store, normalize=False)
-            assert sha256 is not None  # compute_hash=True by default; never None here
             # Write remote sidecar for this file.
             try:
                 await _put(
@@ -217,7 +216,6 @@ async def persist_file_reference(
         storage_path = key or _make_storage_path(ref, output_path=output_path)
 
         sha256 = await upload_file(storage_path, local, store, normalize=False)
-        assert sha256 is not None  # compute_hash=True by default; never None here
 
         # Upload sha256 sidecar to store so any worker can verify the file.
         try:

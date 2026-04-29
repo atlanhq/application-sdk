@@ -93,7 +93,6 @@ async def _upload_one(
     else:
         sha256 = await upload_file(store_key, local_file, store, normalize=False)
 
-    assert sha256 is not None  # compute_hash=True by default; never None here
     await _put_remote_sha256(store, store_key, sha256)
     return True, "uploaded"
 
