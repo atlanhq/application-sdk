@@ -22,10 +22,11 @@ import os
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
+import obstore
+
 from application_sdk.storage.ops import (
     _list_items,
     _resolve_store,
-    delete,
     download_file,
     normalize_key,
     upload_file,
@@ -102,7 +103,13 @@ async def delete_prefix(
 ) -> int:
     """Delete all objects whose key starts with *prefix*.
 
-    Lists all matching keys then deletes each one individually.
+    Uses the store's native bulk-delete API where available (S3 batches up to
+    1 000 keys per request; Azure up to 256; GCS issues 10 parallel individual
+    DELETE requests).  A not-found error on GCS or Azure after a fresh listing
+    indicates concurrent modification of the same prefix and is surfaced as a
+    ``StorageError`` rather than silently retried — such a failure almost
+    certainly signals an unexpected interaction between two apps sharing the
+    same prefix, which is a bug worth making explicit.
 
     Args:
         prefix: Key prefix — all objects under this prefix are deleted.
@@ -139,11 +146,22 @@ async def delete_prefix(
             f"Failed to list keys with prefix '{prefix}'", cause=exc
         ) from exc
 
-    count = 0
-    for path, _ in items:
-        if await delete(path, resolved, normalize=False):
-            count += 1
-    return count
+    paths = [path for path, _ in items]
+    if not paths:
+        return 0
+
+    try:
+        await obstore.delete_async(resolved, paths)
+    except Exception as exc:
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
+
+        raise StorageError(
+            f"Failed to delete {len(paths)} objects with prefix '{prefix}'", cause=exc
+        ) from exc
+
+    return len(paths)
 
 
 async def download_prefix(

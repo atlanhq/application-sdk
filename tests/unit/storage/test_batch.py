@@ -95,6 +95,21 @@ class TestDeletePrefix:
         n = await delete_prefix("missing/", store, normalize=False)
         assert n == 0
 
+    async def test_delete_async_failure_raises_storage_error(self, store) -> None:
+        """If obstore.delete_async raises (e.g. GCS 404 on concurrent modification),
+        delete_prefix wraps it as StorageError rather than swallowing or retrying."""
+        await _put("q/a.txt", b"1", store, normalize=False)
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("simulated GCS not-found")
+
+        with patch(
+            "application_sdk.storage.batch.obstore.delete_async", side_effect=boom
+        ):
+            with pytest.raises(StorageError) as exc_info:
+                await delete_prefix("q/", store, normalize=False)
+        assert "Failed to delete" in str(exc_info.value)
+
 
 # ---------------------------------------------------------------------------
 # download_prefix
@@ -225,12 +240,14 @@ class TestStoreResolution:
     async def test_list_keys_no_store_raises_runtime_error(self) -> None:
         """When no store is supplied AND no infra context is set, raise."""
         # _resolve_store raises RuntimeError under these conditions; surfaces as StorageError-wrapped or RuntimeError
-        with patch(
-            "application_sdk.storage.batch._resolve_store",
-            side_effect=RuntimeError("no store"),
+        with (
+            patch(
+                "application_sdk.storage.batch._resolve_store",
+                side_effect=RuntimeError("no store"),
+            ),
+            pytest.raises(RuntimeError),
         ):
-            with pytest.raises(RuntimeError):
-                await list_keys("p/", None)
+            await list_keys("p/", None)
 
     async def test_download_prefix_passes_store_through(self, store, tmp_path) -> None:
         """download_prefix delegates list_keys with the user-supplied store.
