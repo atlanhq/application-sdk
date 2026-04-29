@@ -174,16 +174,17 @@ class TestNormalizeIntegration:
         assert "data/skip.txt" not in keys
 
     async def test_list_keys_excludes_zero_byte_directory_markers(self, store) -> None:
-        # GCS console and some tools create 0-byte objects at "prefix/" to
-        # simulate directories. obstore strips the trailing slash so they appear
-        # as "prefix" in the listing. Without filtering these would be returned
-        # by list_keys and any subsequent download_file would 404.
+        # GCS strips the trailing slash from directory markers so they appear as
+        # bare keys when listing a *parent* prefix (e.g. "run" instead of "run/").
+        # List from an ancestor prefix ("") so the bare marker enters all_items.
         await _put("run/manifest.json", b'{"version":1}', store, normalize=False)
         await _put("run/catalog.json", b'{"sources":{}}', store, normalize=False)
-        # Simulate a GCS directory marker: 0-byte object at the prefix path.
+        # Simulate a GCS directory marker: 0-byte object at the bare prefix key.
         await _put("run", b"", store, normalize=False)
 
-        keys = await list_keys("run", store)
+        # Use normalize=False + empty prefix so "run" (the marker) appears in
+        # all_items and the parent_dirs filter has something to act on.
+        keys = await list_keys("", store, normalize=False)
         assert "run/manifest.json" in keys
         assert "run/catalog.json" in keys
         # The zero-byte marker must not appear in results.
@@ -202,14 +203,16 @@ class TestNormalizeIntegration:
         assert "data/results.json" in keys
         # zero-byte but no children → legitimate file, must be included
         assert "data/empty.json" in keys
+        assert len(keys) == 2
 
     async def test_list_keys_excludes_nested_directory_markers(self, store) -> None:
         # Nested GCS markers: both "run/sub" and "run" are 0-byte parent objects.
+        # List from ancestor prefix so both bare markers enter all_items.
         await _put("run/sub/file.json", b'{"x":1}', store, normalize=False)
         await _put("run/sub", b"", store, normalize=False)  # nested dir marker
         await _put("run", b"", store, normalize=False)  # top-level dir marker
 
-        keys = await list_keys("run", store)
+        keys = await list_keys("", store, normalize=False)
         assert "run/sub/file.json" in keys
         assert "run/sub" not in keys
         assert "run" not in keys
