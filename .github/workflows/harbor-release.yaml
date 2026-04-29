@@ -58,31 +58,6 @@ jobs:
         id: get_sha
         run: echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
-      - name: Compute image tags
-        id: image_tags
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          TAG_PREFIX: ${{ steps.tag_prefix.outputs.value }}
-          VERSION: ${{ steps.get_version.outputs.version }}
-          SHORT_SHA: ${{ steps.get_sha.outputs.sha }}
-        run: |
-          {
-            echo 'tags<<TAGS_EOF'
-            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-              # Manual dispatch on release/v2: narrow build, only the runtime-base
-              # image with the literal tag_prefix and a sha tag — no -latest, no
-              # version aliases, no application-sdk tags.
-              echo "registry.atlan.com/public/app-runtime-base:${TAG_PREFIX}"
-              echo "registry.atlan.com/public/app-runtime-base:sha-${SHORT_SHA}"
-            else
-              # Release event from main: preserve existing application-sdk tag set.
-              echo "registry.atlan.com/public/application-sdk:${TAG_PREFIX}-latest"
-              echo "registry.atlan.com/public/application-sdk:${TAG_PREFIX}-${VERSION}"
-              echo "registry.atlan.com/public/application-sdk:sha-${SHORT_SHA}"
-            fi
-            echo TAGS_EOF
-          } >> "$GITHUB_OUTPUT"
-
       - name: Log in to Atlan Harbor Registry
         uses: docker/login-action@v3
         with:
@@ -111,7 +86,9 @@ jobs:
           file: ./Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.image_tags.outputs.tags }}
+          tags: |
+            registry.atlan.com/public/app-runtime-base:${{ steps.tag_prefix.outputs.value }}
+            registry.atlan.com/public/app-runtime-base:sha-${{ steps.get_sha.outputs.sha }}
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
