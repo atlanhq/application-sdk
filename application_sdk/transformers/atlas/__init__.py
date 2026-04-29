@@ -6,6 +6,8 @@ into Atlas entities using the pyatlan library.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional, Type
 
@@ -107,7 +109,14 @@ class AtlasTransformer(TransformerInterface):
                     transformed_metadata_list.append(transformed_metadata)
                 else:
                     logger.warning(
-                        "Skipped invalid data: typename=%s row=%s", typename, row
+                        "Skipped invalid data: typename=%s keys=%s sha=%s",
+                        typename,
+                        sorted(row.keys()) if isinstance(row, dict) else None,
+                        hashlib.sha256(
+                            json.dumps(row, sort_keys=True, default=str).encode("utf-8")
+                        ).hexdigest()[:16]
+                        if isinstance(row, dict)
+                        else None,
                     )
             except Exception:
                 logger.error("Error processing row: %s", typename, exc_info=True)
