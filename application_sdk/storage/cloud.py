@@ -9,7 +9,9 @@ using credentials they provide (e.g., cloud-sourced spec files, data imports).
 
 File transfers (``upload`` / ``download``) use obstore's streaming APIs so
 arbitrarily large objects are transferred without materialising the full payload
-in memory.  The event loop is not blocked.
+in memory.  Network I/O is fully async; local disk reads and writes use
+synchronous chunked I/O (~8–10 MiB per chunk), which is standard Python
+async-library practice.
 
 Usage::
 
@@ -331,7 +333,12 @@ class CloudStore:
         try:
             size = path.stat().st_size
             await upload_file(
-                key, path, store=self._store, normalize=False, retain_local_copy=True
+                key,
+                path,
+                store=self._store,
+                normalize=False,
+                retain_local_copy=True,
+                compute_hash=False,
             )
         except StorageError:
             raise
