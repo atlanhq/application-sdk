@@ -216,7 +216,7 @@ jobs:
           echo "Immutable image: ${GHCR_IMAGE}"
           echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
           echo "DockerHub image: ${DOCKERHUB_IMAGE}"
-          [ -n "${RELEASE_TAGS}" ] && printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"
+          if [ -n "${RELEASE_TAGS}" ]; then printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"; fi
 
   # ── Job 2: Build — parallel per architecture ──────────────────────────────────
   build:
@@ -321,7 +321,7 @@ jobs:
           echo "  Branch:    ${GHCR_BRANCH_TAG}"
           if [ -n "${RELEASE_TAGS}" ]; then
             echo "  Release tags:"
-            while IFS= read -r tag; do [ -n "$tag" ] && echo "    ${tag}"; done <<< "${RELEASE_TAGS}"
+            while IFS= read -r tag; do if [ -n "$tag" ]; then echo "    ${tag}"; fi; done <<< "${RELEASE_TAGS}"
           fi
 
       - name: Push to Docker Hub (re-tag, no rebuild)
@@ -406,6 +406,7 @@ jobs:
           ENTRYPOINTS: ${{ needs.prepare.outputs.entrypoints }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           GITHUB_ACTOR: ${{ github.triggering_actor }}
         run: |
@@ -419,10 +420,14 @@ jobs:
           BODY=$(python3 - <<'PYEOF'
           import json, os
 
+          # Prefer release_tag (e.g. v0.2.0) over commit SHA for the version
+          release_tag = os.environ.get("RELEASE_TAG", "").strip().lstrip("v")
+          version = release_tag if release_tag else os.environ["IMAGE_TAG"]
+
           body = {
               "app_id": os.environ["APP_ID"],
               "image": os.environ["GHCR_IMAGE"],
-              "version": os.environ["IMAGE_TAG"],
+              "version": version,
               "branch": os.environ["BRANCH"],
               "repo": os.environ["REPO_URL"],
               "source": "ci_publish",
