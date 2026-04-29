@@ -176,3 +176,6 @@ temporal.db
 
 # Claude Code plans (local working files, not for version control)
 .claude/plans/
+
+# Claude Code runtime lock files
+.claude/scheduled_tasks.lock
