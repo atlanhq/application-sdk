@@ -62,7 +62,8 @@ async def list_keys(
             Pass ``False`` to use *prefix* exactly as supplied.
 
     Returns:
-        Sorted list of matching object keys.
+        Sorted list of matching object keys.  Zero-byte objects (GCS directory
+        markers) are always excluded regardless of *suffix*.
 
     Raises:
         StorageError: If the listing fails.
@@ -80,6 +81,12 @@ async def list_keys(
         keys: list[str] = []
         for batch in obstore.list(resolved, prefix=prefix or None):
             for item in batch:
+                if item["size"] == 0:
+                    # Skip zero-byte directory marker objects created by GCS console
+                    # and similar tools. obstore strips the trailing slash from paths
+                    # like "prefix/" → "prefix", so without this guard the bare prefix
+                    # key would be returned and any subsequent download would 404.
+                    continue
                 key = str(item["path"])
                 if not suffix or key.endswith(suffix):
                     keys.append(key)

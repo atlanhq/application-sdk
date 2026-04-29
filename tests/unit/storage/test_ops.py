@@ -162,6 +162,34 @@ class TestNormalizeIntegration:
         all_keys = await list_keys("data", store)
         assert len(all_keys) == 3
 
+    async def test_list_keys_excludes_zero_byte_directory_markers(self, store) -> None:
+        # GCS console and some tools create 0-byte objects at "prefix/" to
+        # simulate directories. obstore strips the trailing slash so they appear
+        # as "prefix" in the listing. Without filtering these would be returned
+        # by list_keys and any subsequent download_file would 404.
+        await _put("run/manifest.json", b'{"version":1}', store, normalize=False)
+        await _put("run/catalog.json", b'{"sources":{}}', store, normalize=False)
+        # Simulate a GCS directory marker: 0-byte object at the prefix path.
+        await _put("run", b"", store, normalize=False)
+
+        keys = await list_keys("run", store)
+        assert "run/manifest.json" in keys
+        assert "run/catalog.json" in keys
+        # The zero-byte marker must not appear in results.
+        assert "run" not in keys
+        assert len(keys) == 2
+
+    async def test_list_keys_excludes_zero_byte_objects_regardless_of_suffix(
+        self, store
+    ) -> None:
+        await _put("data/results.json", b"{}", store, normalize=False)
+        # A zero-byte object that happens to end in .json should still be excluded.
+        await _put("data/empty.json", b"", store, normalize=False)
+
+        keys = await list_keys("data", store, suffix=".json")
+        assert "data/results.json" in keys
+        assert "data/empty.json" not in keys
+
 
 class TestUploadFile:
     async def test_upload_file_roundtrip(self, store, tmp_path) -> None:
