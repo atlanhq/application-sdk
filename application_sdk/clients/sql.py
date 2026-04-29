@@ -7,6 +7,7 @@ database operations, supporting batch processing and server-side cursors.
 
 import asyncio
 import concurrent
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
     TYPE_CHECKING,
@@ -58,15 +59,15 @@ class BaseSQLClient(ClientInterface):
 
     connection = None
     engine = None
-    credentials: Dict[str, Any] = {}
-    resolved_credentials: Dict[str, Any] = {}
+    credentials: Dict[str, Any]
+    resolved_credentials: Dict[str, Any]
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
     DB_CONFIG: Optional[DatabaseConfig] = None
 
     def __init__(
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
-        credentials: Dict[str, Any] = {},
+        credentials: Optional[Dict[str, Any]] = None,
         chunk_size: int = 5000,
     ):
         """
@@ -75,10 +76,12 @@ class BaseSQLClient(ClientInterface):
         Args:
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
                 Defaults to USE_SERVER_SIDE_CURSOR.
-            credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
+            credentials (Optional[Dict[str, Any]], optional): Database credentials.
+                Defaults to None, which is treated as an empty dict.
         """
         self.use_server_side_cursor = use_server_side_cursor
-        self.credentials = credentials
+        self.credentials = credentials if credentials is not None else {}
+        self.resolved_credentials = {}
         self.chunk_size = chunk_size
 
     async def load(self, credentials: Dict[str, Any]) -> None:
@@ -277,23 +280,6 @@ class BaseSQLClient(ClientInterface):
 
         return connection_string
 
-    def get_supported_sqlalchemy_url(self, sqlalchemy_url: str) -> str:
-        """Update the dialect in the URL if it is different from the installed dialect.
-
-        Args:
-            url (str): The URL to update.
-
-        Returns:
-            str: The updated URL with the dialect.
-        """
-        if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
-        installed_dialect = self.DB_CONFIG.template.split("://")[0]
-        url_dialect = sqlalchemy_url.split("://")[0]
-        if installed_dialect != url_dialect:
-            sqlalchemy_url = sqlalchemy_url.replace(url_dialect, installed_dialect)
-        return sqlalchemy_url
-
     def get_sqlalchemy_connection_string(self) -> str:
         """Generate a SQLAlchemy connection string for database connection.
 
@@ -311,12 +297,6 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
         extra = parse_credentials_extra(self.credentials)
-
-        # TODO: Uncomment this when the native deployment is ready
-        # If the compiled_url is present, use it directly
-        # sqlalchemy_url = extra.get("compiled_url")
-        # if sqlalchemy_url:
-        #     return self.get_supported_sqlalchemy_url(sqlalchemy_url)
 
         auth_token = self.get_auth_token()
 
@@ -374,7 +354,11 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("Engine is not initialized. Call load() first.")
 
         loop = asyncio.get_running_loop()
-        logger.debug("Running query: %s", query)
+        logger.debug(
+            "Running query (sha=%s, len=%d)",
+            hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
+            len(query),
+        )
 
         # Use context manager for automatic connection cleanup
         with self.engine.connect() as connection:
@@ -607,8 +591,6 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 connect_args=self.DB_CONFIG.connect_args,
                 pool_pre_ping=True,
             )
-            if not self.engine:
-                raise ValueError("Failed to create async engine")
 
             # Test connection briefly to validate credentials
             async with self.engine.connect() as _:
@@ -622,7 +604,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ValueError(str(e)) from e
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}") from e
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""
@@ -654,7 +636,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.engine:
             raise ValueError("Engine is not initialized. Call load() first.")
 
-        logger.debug("Running query: %s", query)
+        logger.debug(
+            "Running query (sha=%s, len=%d)",
+            hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
+            len(query),
+        )
         use_server_side_cursor = self.use_server_side_cursor
 
         # Use async context manager for automatic connection cleanup

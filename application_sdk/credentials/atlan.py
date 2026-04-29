@@ -53,7 +53,7 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
             await client.user.get_current()
         except Exception as exc:
             raise CredentialValidationError(
-                f"AtlanApiToken validation failed: {exc}",
+                f"AtlanApiToken validation failed: {type(exc).__name__}",
                 credential_name="atlan_api_token",
                 cause=exc,
             ) from exc
@@ -171,7 +171,7 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
             await client.user.get_current()
         except Exception as exc:
             raise CredentialValidationError(
-                f"AtlanOAuthClient validation failed: {exc}",
+                f"AtlanOAuthClient validation failed: {type(exc).__name__}",
                 credential_name="atlan_oauth_client",
                 cause=exc,
             ) from exc

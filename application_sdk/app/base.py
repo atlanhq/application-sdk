@@ -640,7 +640,7 @@ class App(ABC):
         """Get the current execution context.
 
         Raises:
-            RuntimeError: If accessed outside of run() execution.
+            AppContextError: If accessed outside of run() execution.
         """
         if self._context is None:
             raise AppContextError(
@@ -656,7 +656,7 @@ class App(ABC):
         Only available inside @task methods.
 
         Raises:
-            RuntimeError: If accessed outside of @task method execution.
+            AppContextError: If accessed outside of @task method execution.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -689,7 +689,7 @@ class App(ABC):
         return self.context.is_cancelled()
 
     # =========================================================================
-    # Task-only methods (raise RuntimeError if called outside @task methods)
+    # Task-only methods (raise AppContextError if called outside @task methods)
     # =========================================================================
 
     def heartbeat(self, *details: Any) -> None:
@@ -701,7 +701,7 @@ class App(ABC):
             *details: Serializable progress details.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -719,7 +719,7 @@ class App(ABC):
             Tuple of details from last heartbeat, or empty tuple if none.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -738,7 +738,7 @@ class App(ABC):
             or None if no heartbeat was recorded.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -762,7 +762,7 @@ class App(ABC):
             Result of ``func(*args, **kwargs)``.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -839,7 +839,7 @@ class App(ABC):
             The stored value, or None if not set.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         execution_id = self._get_current_execution_id()
         with _app_state_lock:
@@ -855,7 +855,7 @@ class App(ABC):
             value: Value to store (any Python object).
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         execution_id = self._get_current_execution_id()
         with _app_state_lock:
