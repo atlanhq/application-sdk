@@ -114,7 +114,7 @@ def _record_error_observability(
                 {
                     "name": f"{func_name}_failure",
                     "timestamp": time.time(),
-                    "attributes": {"error": str(error)},
+                    "attributes": {"error": type(error).__name__},
                 }
             ],
             duration_ms=duration_ms,
@@ -129,7 +129,7 @@ def _record_error_observability(
             name=f"{func_name}_failure",
             value=1,
             metric_type=MetricType.COUNTER,
-            labels={"function": func_name, "error": str(error)},
+            labels={"function": func_name, "error": type(error).__name__},
             description=f"Failed {func_name}",
             unit="count",
         )
