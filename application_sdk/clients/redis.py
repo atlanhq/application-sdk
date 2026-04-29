@@ -299,6 +299,11 @@ class RedisClient(BaseRedisClient):
                 _LOCK_RELEASE_LUA_SCRIPT, 1, resource_id, owner_id
             )
             return self._process_lock_release_result(result, resource_id)
+        except ClientError:
+            # `_process_lock_release_result` raises ClientError on unexpected
+            # results (carries a structured error code). Re-raise unchanged
+            # instead of letting `_handle_redis_error` re-wrap it.
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
 
@@ -332,6 +337,13 @@ class RedisClientAsync(BaseRedisClient):
             await self.redis_client.ping()
             logger.info("Async Redis connection established for strict locking")
 
+        except ClientError:
+            # Internal ClientError raised above (e.g. REDIS_CONNECTION_ERROR
+            # for missing redis_client) carries a structured error code that
+            # callers depend on. Re-raise unchanged instead of letting
+            # `_handle_redis_error` re-wrap it. Mirrors the sync `_connect`
+            # fix from BLDX-1165.
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
 
@@ -448,5 +460,10 @@ class RedisClientAsync(BaseRedisClient):
                 _LOCK_RELEASE_LUA_SCRIPT, 1, resource_id, owner_id
             )
             return self._process_lock_release_result(result, resource_id)
+        except ClientError:
+            # `_process_lock_release_result` raises ClientError on unexpected
+            # results (carries a structured error code). Re-raise unchanged
+            # instead of letting `_handle_redis_error` re-wrap it.
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
