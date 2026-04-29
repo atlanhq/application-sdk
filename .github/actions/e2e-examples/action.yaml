@@ -56,28 +56,31 @@ runs:
         $env:Path += ";$env:USERPROFILE\.dapr\bin\"
         dapr init --runtime-version 1.17.3 --slim
 
-    - name: Install Temporal CLI and Start Server
+    - name: Install Temporal CLI (Linux/macOS)
       if: runner.os != 'Windows'
       shell: bash
       run: |
-        curl -sSf https://temporal.download/cli.sh | sh
-        export PATH="$HOME/.temporalio/bin:$PATH"
+        TEMPORAL_VERSION="1.3.0"
+        mkdir -p "$HOME/.temporalio/bin"
+        OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+        esac
+        curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_VERSION}/temporal_cli_${TEMPORAL_VERSION}_${OS}_${ARCH}.tar.gz" \
+          -o /tmp/temporal.tar.gz
+        tar -xzf /tmp/temporal.tar.gz -C "$HOME/.temporalio/bin"
+        chmod +x "$HOME/.temporalio/bin/temporal"
 
-    - name: Install Temporal CLI and Start Server (Windows)
+    - name: Install Temporal CLI (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        # Create a directory for Temporal CLI
+        $TemporalVersion = "1.3.0"
         New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.temporalio\bin"
-
-        # Download Temporal CLI
-        Invoke-WebRequest -Uri "https://temporal.download/cli/archive/latest?platform=windows&arch=amd64" -OutFile "$env:USERPROFILE\.temporalio\temporal.zip"
-
-        # Extract and install
-        Expand-Archive -Path "$env:USERPROFILE\.temporalio\temporal.zip" -DestinationPath "$env:USERPROFILE\.temporalio\bin" -Force
-
-        # Add to PATH
-        $env:Path += ";$env:USERPROFILE\.temporalio\bin"
+        Invoke-WebRequest -Uri "https://github.com/temporalio/cli/releases/download/v$TemporalVersion/temporal_cli_${TemporalVersion}_windows_amd64.zip" -OutFile "$env:TEMP\temporal.zip"
+        Expand-Archive -Path "$env:TEMP\temporal.zip" -DestinationPath "$env:USERPROFILE\.temporalio\bin" -Force
 
     - name: Set up Python 3.11
       uses: actions/setup-python@v5
@@ -108,12 +111,75 @@ runs:
         echo "$env:USERPROFILE\.dapr\bin" >> $env:GITHUB_PATH
         echo "$env:USERPROFILE\.temporalio\bin" >> $env:GITHUB_PATH
 
-    # Start all services
-    - name: Start Platform Services
+    # Start services sequentially: Temporal first (to avoid port-binding race with Dapr)
+    - name: Start Platform Services (Linux/macOS)
+      if: runner.os != 'Windows'
       shell: bash
       run: |
-        uv run poe start-deps
-        sleep 10  # Give services time to start up
+        temporal server start-dev --db-filename /tmp/temporal-e2e.db &
+        ready=false
+        for i in $(seq 1 20); do
+          if temporal workflow list --namespace default 2>/dev/null; then
+            echo "Temporal is ready"
+            ready=true
+            break
+          fi
+          sleep 2
+        done
+        if [ "$ready" != "true" ]; then
+          echo "Temporal failed to become ready after 40 seconds"
+          exit 1
+        fi
+        $HOME/.dapr/bin/daprd \
+          --app-id e2e-examples \
+          --dapr-http-port 3500 \
+          --dapr-grpc-port 50001 \
+          --resources-path ./components \
+          --placement-host-address '' \
+          --scheduler-host-address '' \
+          --log-level warn &
+        ready=false
+        for i in $(seq 1 15); do
+          if curl -sf http://localhost:3500/v1.0/metadata > /dev/null 2>&1; then
+            echo "Dapr is ready"
+            ready=true
+            break
+          fi
+          sleep 2
+        done
+        if [ "$ready" != "true" ]; then
+          echo "Dapr failed to become ready after 30 seconds"
+          exit 1
+        fi
+
+    - name: Start Platform Services (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Start-Process -FilePath "temporal" -ArgumentList "server", "start-dev", "--db-filename", "$env:TEMP\temporal-e2e.db" -NoNewWindow
+        $ready = $false
+        for ($i = 1; $i -le 20; $i++) {
+          $result = temporal workflow list --namespace default 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Temporal is ready"
+            $ready = $true
+            break
+          }
+          Start-Sleep 2
+        }
+        if (-not $ready) { Write-Error "Temporal failed to become ready"; exit 1 }
+        Start-Process -FilePath "$env:USERPROFILE\.dapr\bin\daprd.exe" `
+          -ArgumentList "--app-id", "e2e-examples", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--resources-path", ".\components", "--placement-host-address", "", "--scheduler-host-address", "", "--log-level", "warn" `
+          -NoNewWindow
+        $ready = $false
+        for ($i = 1; $i -le 15; $i++) {
+          try {
+            $r = Invoke-WebRequest -Uri "http://localhost:3500/v1.0/metadata" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            if ($r.StatusCode -eq 200) { Write-Host "Dapr is ready"; $ready = $true; break }
+          } catch {}
+          Start-Sleep 2
+        }
+        if (-not $ready) { Write-Error "Dapr failed to become ready"; exit 1 }
 
     # Make API call and capture workflow/run IDs for each example
     - name: Start the workflows
