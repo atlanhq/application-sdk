@@ -277,23 +277,6 @@ class BaseSQLClient(ClientInterface):
 
         return connection_string
 
-    def get_supported_sqlalchemy_url(self, sqlalchemy_url: str) -> str:
-        """Update the dialect in the URL if it is different from the installed dialect.
-
-        Args:
-            url (str): The URL to update.
-
-        Returns:
-            str: The updated URL with the dialect.
-        """
-        if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
-        installed_dialect = self.DB_CONFIG.template.split("://")[0]
-        url_dialect = sqlalchemy_url.split("://")[0]
-        if installed_dialect != url_dialect:
-            sqlalchemy_url = sqlalchemy_url.replace(url_dialect, installed_dialect)
-        return sqlalchemy_url
-
     def get_sqlalchemy_connection_string(self) -> str:
         """Generate a SQLAlchemy connection string for database connection.
 
@@ -311,12 +294,6 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
         extra = parse_credentials_extra(self.credentials)
-
-        # TODO: Uncomment this when the native deployment is ready
-        # If the compiled_url is present, use it directly
-        # sqlalchemy_url = extra.get("compiled_url")
-        # if sqlalchemy_url:
-        #     return self.get_supported_sqlalchemy_url(sqlalchemy_url)
 
         auth_token = self.get_auth_token()
 
@@ -607,8 +584,6 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 connect_args=self.DB_CONFIG.connect_args,
                 pool_pre_ping=True,
             )
-            if not self.engine:
-                raise ValueError("Failed to create async engine")
 
             # Test connection briefly to validate credentials
             async with self.engine.connect() as _:

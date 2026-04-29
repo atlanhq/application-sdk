@@ -1530,12 +1530,6 @@ def create_app_handler_service(
         if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
             raise HTTPException(status_code=403, detail="Dev-only endpoint")
 
-        if not _CONFIG_KEY_RE.match(guid):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid guid — must match %s" % _CONFIG_KEY_PATTERN,
-            )
-
         sensitive: dict[str, Any] = {}
         non_sensitive: dict[str, Any] = {}
         for key, value in body.items():
