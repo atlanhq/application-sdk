@@ -37,6 +37,10 @@ class ExampleConfig:
     name: str
     module: str
     workflow_input: dict[str, Any]
+    # Credentials to provision before starting the workflow (mimics Heracles).
+    # If set, POSTed to /workflows/v1/dev/local-vault and the returned
+    # credential_guid is injected into the workflow start call.
+    credentials: dict[str, Any] | None = None
     skip_if_missing_env: list[str] = field(default_factory=list)
     # Set to True for skeleton/stub examples that should never be run in CI.
     is_stub: bool = False
@@ -63,18 +67,18 @@ def _build_examples() -> list[ExampleConfig]:
         ExampleConfig(
             name="application_sql",
             module="application_sql",
+            credentials={
+                "host": postgres_host,
+                "username": "postgres",
+                "password": postgres_password,
+                "port": "5432",
+                "database": "postgres",
+            },
             workflow_input={
                 "connection": {
                     "connection_name": "test-connection",
                     "connection_qualified_name": "default/postgres/1728518400",
                 },
-                "credentials": [
-                    {"key": "host", "value": postgres_host},
-                    {"key": "username", "value": "postgres"},
-                    {"key": "password", "value": postgres_password},
-                    {"key": "port", "value": "5432"},
-                    {"key": "database", "value": "postgres"},
-                ],
             },
             skip_if_missing_env=["POSTGRES_HOST", "POSTGRES_PASSWORD"],
         ),
@@ -151,6 +155,15 @@ def _wait_for_health(timeout: int) -> bool:
             return True
         time.sleep(2)
     return False
+
+
+def _provision_credentials(credentials: dict[str, Any]) -> str | None:
+    response = _http_post(f"{BASE_URL}/workflows/v1/dev/local-vault", credentials)
+    data = response.get("data", {})
+    guid = data.get("credential_guid") or response.get("credential_guid")
+    if not guid:
+        print(f"    provision response: {response}", flush=True)
+    return guid or None
 
 
 def _start_workflow(workflow_input: dict[str, Any]) -> tuple[str, str] | None:
@@ -245,8 +258,16 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
         if not _wait_for_health(HEALTH_TIMEOUT):
             return "SERVER_TIMEOUT", time.monotonic() - start
 
+        # Provision credentials before starting (mirrors Heracles → local-vault → start).
+        workflow_input = dict(example.workflow_input)
+        if example.credentials:
+            cred_guid = _provision_credentials(example.credentials)
+            if cred_guid is None:
+                return "PROVISION_FAILED", time.monotonic() - start
+            workflow_input["credential_guid"] = cred_guid
+
         print("  server ready, starting workflow...", flush=True)
-        ids = _start_workflow(example.workflow_input)
+        ids = _start_workflow(workflow_input)
         if ids is None:
             return "START_FAILED", time.monotonic() - start
 
