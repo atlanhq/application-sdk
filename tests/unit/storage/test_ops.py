@@ -179,16 +179,30 @@ class TestNormalizeIntegration:
         assert "run" not in keys
         assert len(keys) == 2
 
-    async def test_list_keys_excludes_zero_byte_objects_regardless_of_suffix(
+    async def test_list_keys_retains_zero_byte_file_with_no_children(
         self, store
     ) -> None:
+        # A zero-byte file that is NOT a parent of any other key is a real
+        # empty file and must be returned by list_keys.
         await _put("data/results.json", b"{}", store, normalize=False)
-        # A zero-byte object that happens to end in .json should still be excluded.
         await _put("data/empty.json", b"", store, normalize=False)
 
         keys = await list_keys("data", store, suffix=".json")
         assert "data/results.json" in keys
-        assert "data/empty.json" not in keys
+        # zero-byte but no children → legitimate file, must be included
+        assert "data/empty.json" in keys
+
+    async def test_list_keys_excludes_nested_directory_markers(self, store) -> None:
+        # Nested GCS markers: both "run/sub" and "run" are 0-byte parent objects.
+        await _put("run/sub/file.json", b'{"x":1}', store, normalize=False)
+        await _put("run/sub", b"", store, normalize=False)  # nested dir marker
+        await _put("run", b"", store, normalize=False)  # top-level dir marker
+
+        keys = await list_keys("run", store)
+        assert "run/sub/file.json" in keys
+        assert "run/sub" not in keys
+        assert "run" not in keys
+        assert len(keys) == 1
 
 
 class TestUploadFile:

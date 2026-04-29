@@ -62,8 +62,10 @@ async def list_keys(
             Pass ``False`` to use *prefix* exactly as supplied.
 
     Returns:
-        Sorted list of matching object keys.  Zero-byte objects (GCS directory
-        markers) are always excluded regardless of *suffix*.
+        Sorted list of matching object keys.  Zero-byte objects that act as
+        GCS-style directory markers (i.e. they have at least one child key
+        under them) are excluded; zero-byte files with no children are
+        returned normally.
 
     Raises:
         StorageError: If the listing fails.
@@ -78,18 +80,34 @@ async def list_keys(
             prefix = prefix + "/"
 
     def _collect() -> list[str]:
-        keys: list[str] = []
+        # Materialise all items so we can identify GCS-style directory markers
+        # before deciding which keys to return.
+        all_items: list[tuple[str, int]] = []
         for batch in obstore.list(resolved, prefix=prefix or None):
             for item in batch:
-                if item["size"] == 0:
-                    # Skip zero-byte directory marker objects created by GCS console
-                    # and similar tools. obstore strips the trailing slash from paths
-                    # like "prefix/" → "prefix", so without this guard the bare prefix
-                    # key would be returned and any subsequent download would 404.
-                    continue
-                key = str(item["path"])
-                if not suffix or key.endswith(suffix):
-                    keys.append(key)
+                all_items.append((str(item["path"]), item["size"]))
+
+        # Build the set of all ancestor path segments from every listed key.
+        # A zero-byte object whose own path appears in this set is a GCS
+        # directory marker — it has at least one child and was created by the
+        # GCS console (or a similar tool) to represent a "folder".  obstore
+        # strips the trailing slash from those marker paths (e.g. "prefix/" →
+        # "prefix"), so without this guard the bare key would be returned and
+        # any subsequent download_file call would 404.
+        # Zero-byte objects whose paths are NOT in parent_dirs are real
+        # empty files and must be returned normally.
+        parent_dirs: set[str] = set()
+        for path, _ in all_items:
+            segments = path.split("/")
+            for i in range(1, len(segments)):
+                parent_dirs.add("/".join(segments[:i]))
+
+        keys: list[str] = []
+        for path, size in all_items:
+            if size == 0 and path in parent_dirs:
+                continue  # GCS-style directory marker — skip
+            if not suffix or path.endswith(suffix):
+                keys.append(path)
         return sorted(keys)
 
     try:
