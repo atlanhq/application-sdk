@@ -7,6 +7,7 @@ database operations, supporting batch processing and server-side cursors.
 
 import asyncio
 import concurrent
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
     TYPE_CHECKING,
@@ -351,7 +352,11 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("Engine is not initialized. Call load() first.")
 
         loop = asyncio.get_running_loop()
-        logger.debug("Running query: %s", query)
+        logger.debug(
+            "Running query (sha=%s, len=%d)",
+            hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
+            len(query),
+        )
 
         # Use context manager for automatic connection cleanup
         with self.engine.connect() as connection:
@@ -629,7 +634,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.engine:
             raise ValueError("Engine is not initialized. Call load() first.")
 
-        logger.debug("Running query: %s", query)
+        logger.debug(
+            "Running query (sha=%s, len=%d)",
+            hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
+            len(query),
+        )
         use_server_side_cursor = self.use_server_side_cursor
 
         # Use async context manager for automatic connection cleanup
