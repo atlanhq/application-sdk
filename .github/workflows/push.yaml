@@ -45,6 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/setup-deps"
 
       - name: Install Temporal CLI
@@ -63,9 +64,6 @@ jobs:
 
       - name: Wait for Temporal to be ready
         run: |
-          # Use `temporal workflow list` (gRPC API layer) rather than `nc -z 7233`
-          # (TCP port) — Temporal binds the port before gRPC finishes initializing,
-          # so a TCP-only check produces false positives.
           ready=false
           for i in $(seq 1 20); do
             if temporal workflow list --namespace default 2>/dev/null; then

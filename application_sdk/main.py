@@ -993,6 +993,11 @@ async def run_combined_mode(config: AppConfig) -> None:
             host=config.handler_host,
             port=config.handler_port,
             log_level=config.log_level.lower(),
+            # Skip uvicorn's logging.config.dictConfig() call — it can deadlock
+            # with background gRPC threads from the Temporal SDK on Windows.
+            # Uvicorn logs still flow through Python's root logger to our
+            # structlog/loguru setup via the installed InterceptHandler.
+            log_config=None,
         )
     )
 
