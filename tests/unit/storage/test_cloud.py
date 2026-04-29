@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from obstore.store import LocalStore
+from obstore.store import LocalStore, MemoryStore
 
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
@@ -285,7 +285,6 @@ class TestCloudStoreOps:
         # MemoryStore is a flat key-value store, so "data/run" and
         # "data/run/file.json" can coexist — matching what GCS returns after
         # obstore strips the trailing slash from the "data/run/" marker.
-        from obstore.store import MemoryStore
 
         store = CloudStore(MemoryStore(), provider="memory")
         await store.upload_bytes("data/run/file.json", b"{}")

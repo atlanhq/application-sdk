@@ -149,25 +149,42 @@ def _is_not_found(exc: Exception) -> bool:
     )
 
 
-async def _list_items(store: ObjectStore, prefix: str | None) -> list[tuple[str, int]]:
-    """Collect listing results under *prefix*, filtering GCS directory markers.
+async def _list_items(
+    store: ObjectStore,
+    prefix: str | None,
+    *,
+    include_markers: bool = False,
+) -> list[tuple[str, int]]:
+    """Collect listing results under *prefix*, optionally filtering GCS directory markers.
 
-    Iterates the obstore ListStream asynchronously (no thread wrapping needed).
-    A zero-byte object is excluded when its path is a strict path-prefix of at
-    least one other listed key — the structural signature of a GCS-console
-    "folder" marker that obstore returns after stripping the trailing slash.
+    Makes a single network listing call (``obstore.list`` returns a native async
+    ``ListStream`` — no thread wrapping needed).  When *include_markers* is
+    ``False``, two additional in-memory passes are applied: one to build the set of
+    ancestor path segments, and one to filter out zero-byte objects whose path is one
+    of those ancestors (the structural signature of a GCS-console "folder" marker).
+
+    A zero-byte object is excluded when its path is a strict path-prefix of at least
+    one other listed key — i.e. it acts as a parent directory for real files.
 
     Args:
         store: An obstore-compatible store instance.
         prefix: Key prefix, or ``None`` to list everything.
+        include_markers: When ``True``, skip the directory-marker filter and return
+            every object including zero-byte markers.  Use this when the caller must
+            operate on *all* objects (e.g. ``delete_prefix``) so that no orphan
+            objects are left behind on any store backend.
 
     Returns:
-        ``(path, size)`` tuples for real objects only, in listing order.
+        ``(path, size)`` tuples in listing order.  Directory markers are excluded
+        unless *include_markers* is ``True``.
     """
     all_items: list[tuple[str, int]] = []
-    async for batch in obstore.list(store, prefix=prefix):
+    async for batch in obstore.list(store, prefix=prefix):  # native async ListStream
         for item in batch:
             all_items.append((str(item["path"]), int(item["size"])))
+
+    if include_markers:
+        return all_items
 
     parent_dirs: set[str] = set()
     for path, _ in all_items:

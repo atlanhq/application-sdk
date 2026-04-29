@@ -9,7 +9,7 @@ import orjson
 import pytest
 
 from application_sdk import constants
-from application_sdk.storage.batch import download_prefix, list_keys
+from application_sdk.storage.batch import delete_prefix, download_prefix, list_keys
 from application_sdk.storage.errors import StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
@@ -60,6 +60,51 @@ class TestDelete:
         # MemoryStore silently succeeds on delete of non-existent key
         result = await delete("not-there", store)
         assert isinstance(result, bool)
+
+
+class TestDeletePrefix:
+    async def test_delete_prefix_removes_intermediate_directory_markers(
+        self, store
+    ) -> None:
+        # The key scenario: "artifacts/run" is a GCS directory marker (zero-byte,
+        # trailing slash stripped by obstore) that sits WITHIN the deletion prefix
+        # "artifacts/". list_keys would filter it out; delete_prefix must not.
+        await _put("artifacts/run/file.json", b"{}", store, normalize=False)
+        await _put("artifacts/run", b"", store, normalize=False)  # GCS marker
+
+        deleted = await delete_prefix(
+            "artifacts", store
+        )  # normalize=True → "artifacts/"
+
+        assert deleted == 2  # file + intermediate marker both removed
+        assert (
+            await _get_bytes("artifacts/run/file.json", store, normalize=False) is None
+        )
+        assert await _get_bytes("artifacts/run", store, normalize=False) is None
+
+    async def test_delete_prefix_nested_markers_all_removed(self, store) -> None:
+        # Nested markers: "a/b" and "a/b/c" are both zero-byte parents within "a/".
+        await _put("a/b/c/file.json", b"{}", store, normalize=False)
+        await _put("a/b/c", b"", store, normalize=False)  # nested marker
+        await _put("a/b", b"", store, normalize=False)  # outer marker
+
+        deleted = await delete_prefix("a", store)
+
+        assert deleted == 3
+        assert await _get_bytes("a/b/c/file.json", store, normalize=False) is None
+        assert await _get_bytes("a/b/c", store, normalize=False) is None
+        assert await _get_bytes("a/b", store, normalize=False) is None
+
+    async def test_delete_prefix_zero_byte_leaf_file_removed(self, store) -> None:
+        # A legitimate zero-byte file (no children) must also be deleted.
+        await _put("data/empty.json", b"", store, normalize=False)
+        await _put("data/full.json", b"{}", store, normalize=False)
+
+        deleted = await delete_prefix("data", store, normalize=False)
+
+        assert deleted == 2
+        assert await _get_bytes("data/empty.json", store, normalize=False) is None
+        assert await _get_bytes("data/full.json", store, normalize=False) is None
 
 
 class TestListKeys:

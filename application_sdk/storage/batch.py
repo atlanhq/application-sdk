@@ -119,10 +119,29 @@ async def delete_prefix(
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
-    keys = await list_keys(prefix, resolved, normalize=normalize)
+    if normalize and prefix:
+        prefix = normalize_key(prefix)
+        if prefix and not prefix.endswith("/"):
+            prefix = prefix + "/"
+
+    # include_markers=True so zero-byte "folder" objects (GCS console markers,
+    # manually-created S3 directory entries, etc.) are deleted alongside real
+    # files — list_keys filters them for read callers, but delete_prefix must
+    # remove every object to leave no orphans behind on any store backend.
+    try:
+        items = await _list_items(resolved, prefix or None, include_markers=True)
+    except Exception as exc:
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
+
+        raise StorageError(
+            f"Failed to list keys with prefix '{prefix}'", cause=exc
+        ) from exc
+
     count = 0
-    for key in keys:
-        if await delete(key, resolved, normalize=False):
+    for path, _ in items:
+        if await delete(path, resolved, normalize=False):
             count += 1
     return count
 
