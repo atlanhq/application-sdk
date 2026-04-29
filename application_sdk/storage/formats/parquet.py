@@ -101,14 +101,16 @@ class ParquetFileReader(Reader):
                 f"Either provide a directory path with file_names, or specify the exact file path without file_names."
             )
 
+        # Initialise the Reader base class so `_is_closed` and
+        # `_downloaded_files` are per-instance state (not shared via the old
+        # class-level mutable defaults). Required after BLDX-1167.
+        super().__init__()
         self.path = path
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
         self.file_names = file_names
         self.dataframe_type = dataframe_type
         self.cleanup_on_close = cleanup_on_close
-        self._is_closed = False
-        self._downloaded_files: List[str] = []
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """Read the data from the parquet files and return as a single DataFrame.

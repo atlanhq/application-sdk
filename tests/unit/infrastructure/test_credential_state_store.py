@@ -14,12 +14,9 @@ from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 def _clean_infrastructure():
     """Reset infrastructure context after each test to prevent cross-test pollution."""
     yield
-    from application_sdk.infrastructure.context import (
-        InfrastructureContext,
-        set_infrastructure,
-    )
+    from application_sdk.infrastructure.context import clear_infrastructure
 
-    set_infrastructure(InfrastructureContext())
+    clear_infrastructure()
 
 
 class TestMockProtocolCompliance:

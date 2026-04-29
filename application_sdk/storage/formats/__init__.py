@@ -80,9 +80,19 @@ class Reader(ABC):
     """
 
     path: str
-    _is_closed: bool = False
-    _downloaded_files: List[str] = []
+    _is_closed: bool
+    _downloaded_files: List[str]
     cleanup_on_close: bool = True
+
+    def __init__(self) -> None:
+        """Initialize per-instance mutable state.
+
+        Subclasses that override ``__init__`` should call ``super().__init__()``
+        to ensure ``_downloaded_files`` and ``_is_closed`` are not shared across
+        instances via class-level mutable defaults.
+        """
+        self._downloaded_files: List[str] = []
+        self._is_closed: bool = False
 
     async def __aenter__(self) -> "Reader":
         """Enter the async context manager.
