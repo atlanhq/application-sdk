@@ -602,7 +602,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ValueError(str(e)) from e
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}") from e
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""
