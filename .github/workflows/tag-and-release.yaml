@@ -24,6 +24,12 @@ name: Tag and Release
 
 on:
   workflow_call:
+    inputs:
+      sdk_scripts_ref:
+        description: "Ref of atlanhq/application-sdk to pull helper scripts from (default: main)"
+        required: false
+        type: string
+        default: "main"
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -48,7 +54,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ inputs.sdk_scripts_ref }}
           path: .sdk-scripts
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false

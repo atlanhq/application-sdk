@@ -36,6 +36,11 @@ on:
         required: false
         type: string
         default: "release"
+      sdk_scripts_ref:
+        description: "Ref of atlanhq/application-sdk to pull helper scripts from (default: main)"
+        required: false
+        type: string
+        default: "main"
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -61,7 +66,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ inputs.sdk_scripts_ref }}
           path: .sdk-scripts
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
@@ -105,7 +110,9 @@ jobs:
           git checkout -b "$BRANCH"
           git add pyproject.toml uv.lock CHANGELOG.md
           git commit -m "chore: bump version to ${{ steps.bump.outputs.new }}"
-          git push origin "$BRANCH" --force
+          # --force-with-lease: safer than --force — fails if another CI run pushed
+          # to this bot-owned bump branch concurrently, which is the correct behavior.
+          git push origin "$BRANCH" --force-with-lease
 
           EXISTING=$(gh pr list \
             --head "$BRANCH" \
