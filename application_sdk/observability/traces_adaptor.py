@@ -101,6 +101,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
 
         Falls back to console-only tracing if setup fails.
         """
+        # Pre-assign so attributes always exist if setup fails before they are
+        # bound. Downstream callers must check for None.
+        self.tracer_provider = None
+        self.tracer = None
         try:
             # Create resource
             resource = build_otel_resource()
@@ -165,6 +169,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         - Initializes tracer provider
         - Creates tracer for the service
         """
+        # Pre-assign so attributes always exist if setup fails before they are
+        # bound. Downstream callers must check for None.
+        self.tracer_provider = None
+        self.tracer = None
         try:
             # Create resource with basic attributes
             resource = build_otel_resource()
@@ -298,6 +306,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         Raises:
             Exception: If sending fails, logs error and continues
         """
+        if self.tracer is None:
+            # Setup failed and left the adapter without a tracer; skip silently
+            # rather than AttributeError on every emit.
+            return
         try:
             # Convert string kind to SpanKind enum
             span_kind = self._str_to_span_kind(trace_record.kind)

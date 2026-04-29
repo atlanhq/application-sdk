@@ -1207,5 +1207,5 @@ class TagAttachment(assets.TagAttachment):
                 "custom_attributes": tag_attachment_custom_attributes,
                 "entity_class": TagAttachment,
             }
-        except Exception as e:
+        except AssertionError as e:
             raise ValueError(f"Error creating TagAttachment Entity: {str(e)}") from e
