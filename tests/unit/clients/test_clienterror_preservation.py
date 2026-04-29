@@ -17,7 +17,6 @@ import pytest
 
 from application_sdk.common.error_codes import ClientError
 
-
 # ---------------------------------------------------------------------------
 # BLDX-1180 — async SQL load() raises ClientError, not ValueError
 # ---------------------------------------------------------------------------
@@ -141,9 +140,11 @@ class TestRedisSyncClientErrorContract:
 
         # Force the no-redis_client branch inside _connect so the internal
         # ClientError(REDIS_CONNECTION_ERROR) is raised.
-        with patch.object(client, "_connect_standalone", return_value=None), patch(
-            "application_sdk.clients.redis.IS_LOCKING_DISABLED", False
-        ), patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""):
+        with (
+            patch.object(client, "_connect_standalone", return_value=None),
+            patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
+            patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""),
+        ):
             client.redis_client = None
             with pytest.raises(ClientError) as exc_info:
                 client._connect()
@@ -161,9 +162,7 @@ class TestRedisSyncClientErrorContract:
             f"{ClientError.REDIS_CONNECTION_ERROR}: unexpected lock release result"
         )
         client.redis_client.eval = MagicMock(return_value="garbage")
-        with patch.object(
-            client, "_process_lock_release_result", side_effect=sentinel
-        ):
+        with patch.object(client, "_process_lock_release_result", side_effect=sentinel):
             with pytest.raises(ClientError) as exc_info:
                 client._release_lock("rid", "oid")
 
@@ -185,10 +184,10 @@ class TestRedisAsyncClientErrorContract:
         async def _noop():
             return None
 
-        with patch.object(
-            client, "_connect_standalone", side_effect=_noop
-        ), patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False), patch(
-            "application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""
+        with (
+            patch.object(client, "_connect_standalone", side_effect=_noop),
+            patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
+            patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""),
         ):
             client.redis_client = None
             with pytest.raises(ClientError) as exc_info:
@@ -206,9 +205,7 @@ class TestRedisAsyncClientErrorContract:
         sentinel = ClientError(
             f"{ClientError.REDIS_CONNECTION_ERROR}: unexpected lock release result"
         )
-        with patch.object(
-            client, "_process_lock_release_result", side_effect=sentinel
-        ):
+        with patch.object(client, "_process_lock_release_result", side_effect=sentinel):
             with pytest.raises(ClientError) as exc_info:
                 await client._release_lock("rid", "oid")
 
