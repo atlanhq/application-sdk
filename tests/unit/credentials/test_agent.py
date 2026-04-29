@@ -134,6 +134,18 @@ class TestAgentCredentialSpec:
         with pytest.raises(CredentialParseError, match="must be a JSON object"):
             AgentCredentialSpec.model_validate(json.dumps(["a", "b"]))
 
+    def test_secret_path_strips_whitespace_from_dict(self) -> None:
+        spec = AgentCredentialSpec.model_validate({"secret-path": "  atlan/dev/foo  "})
+        assert spec.secret_path == "atlan/dev/foo"
+
+    def test_secret_path_whitespace_only_normalizes_to_empty(self) -> None:
+        spec = AgentCredentialSpec.model_validate({"secret-path": "   "})
+        assert spec.secret_path == ""
+
+    def test_secret_path_strips_whitespace_from_json_string(self) -> None:
+        spec = AgentCredentialSpec.model_validate('{"secret-path": " padded "}')
+        assert spec.secret_path == "padded"
+
 
 # ---------------------------------------------------------------------------
 # resolve_agent_json — happy path
@@ -194,7 +206,7 @@ class TestResolveAgentJsonHappyPath:
                 "gcp-wif.extra.service_account_email": "sa@gcp.iam",
             }
         )
-        store = _store_with(**{"p": _bundle()})
+        store = _store_with(p=_bundle())
         r = await resolve_agent_json(agent_json, store)
 
         assert isinstance(r["extra"], dict)
@@ -222,15 +234,13 @@ class TestResolveAgentJsonHappyPath:
         # Bundle contains a key `literal.example.com` — but ``host`` is
         # in _LITERAL_KEYS so it should never be treated as a ref.
         store = _store_with(
-            **{
-                "bundle": _bundle(
-                    **{
-                        "literal.example.com": "SHOULD_NOT_WIN",
-                        "ap-south-1": "SHOULD_NOT_WIN",
-                        "username": "real_user",
-                    }
-                )
-            }
+            bundle=_bundle(
+                **{
+                    "literal.example.com": "SHOULD_NOT_WIN",
+                    "ap-south-1": "SHOULD_NOT_WIN",
+                    "username": "real_user",
+                }
+            )
         )
 
         resolved = await resolve_agent_json(agent_json, store)
@@ -254,7 +264,7 @@ class TestResolveAgentJsonHappyPath:
                 "basic.password": "password",  # MISSING from bundle
             }
         )
-        store = _store_with(**{"bundle": _bundle(username="real_user")})
+        store = _store_with(bundle=_bundle(username="real_user"))
 
         resolved = await resolve_agent_json(agent_json, store)
 
@@ -281,11 +291,7 @@ class TestResolveAgentJsonHappyPath:
             }
         )
         store = _store_with(
-            **{
-                "bundle": _bundle(
-                    user_ref="real_user", pass_ref="real_pw", db_ref="real_db"
-                )
-            }
+            bundle=_bundle(user_ref="real_user", pass_ref="real_pw", db_ref="real_db")
         )
 
         resolved = await resolve_agent_json(agent_json, store)
@@ -384,7 +390,7 @@ class TestResolveAgentJsonErrorPaths:
     async def test_bundle_not_valid_json_raises_parse_error(self) -> None:
         import pytest
 
-        store = _store_with(**{"bundle": "not-json-at-all"})
+        store = _store_with(bundle="not-json-at-all")
         agent_json = json.dumps(
             {"agent-name": "test", "secret-path": "bundle", "basic.username": "u"}
         )
@@ -394,7 +400,7 @@ class TestResolveAgentJsonErrorPaths:
     async def test_bundle_not_a_dict_raises_parse_error(self) -> None:
         import pytest
 
-        store = _store_with(**{"bundle": json.dumps(["a", "b"])})
+        store = _store_with(bundle=json.dumps(["a", "b"]))
         agent_json = json.dumps(
             {"agent-name": "test", "secret-path": "bundle", "basic.username": "u"}
         )
@@ -736,7 +742,7 @@ class TestCredentialResolverAgentBranch:
         from application_sdk.credentials.resolver import CredentialResolver
         from application_sdk.credentials.types import BasicCredential
 
-        store = _store_with(**{"p": _bundle(username="real_user", password="real_pw")})
+        store = _store_with(p=_bundle(username="real_user", password="real_pw"))
         agent_json = json.dumps(
             {
                 "agent-name": "test-agent",
