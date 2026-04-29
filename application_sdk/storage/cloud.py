@@ -304,7 +304,11 @@ class CloudStore:
             suffix: Optional extension filter (e.g. ``".json"``).
 
         Returns:
-            Sorted list of matching object keys.
+            Sorted list of matching object keys.  Zero-byte objects that act as
+            GCS-style directory markers (i.e. they have at least one child key
+            under them) are excluded; zero-byte files with no children are
+            returned normally.  For raw access including markers, use the
+            underlying :attr:`store` property directly.
         """
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
         suffix_filter = {suffix} if suffix else None
