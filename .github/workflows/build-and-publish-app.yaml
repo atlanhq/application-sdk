@@ -216,7 +216,7 @@ jobs:
           echo "Immutable image: ${GHCR_IMAGE}"
           echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
           echo "DockerHub image: ${DOCKERHUB_IMAGE}"
-          [ -n "${RELEASE_TAGS}" ] && printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"
+          if [ -n "${RELEASE_TAGS}" ]; then printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"; fi
 
   # ── Job 2: Build — parallel per architecture ──────────────────────────────────
   build:
@@ -321,7 +321,7 @@ jobs:
           echo "  Branch:    ${GHCR_BRANCH_TAG}"
           if [ -n "${RELEASE_TAGS}" ]; then
             echo "  Release tags:"
-            while IFS= read -r tag; do [ -n "$tag" ] && echo "    ${tag}"; done <<< "${RELEASE_TAGS}"
+            while IFS= read -r tag; do if [ -n "$tag" ]; then echo "    ${tag}"; fi; done <<< "${RELEASE_TAGS}"
           fi
 
       - name: Push to Docker Hub (re-tag, no rebuild)
