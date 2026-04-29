@@ -196,8 +196,11 @@ class CloudStore:
             key: Specific object key to download (single file mode).
             output_dir: Local directory to write files into.
             prefix: Object key prefix for listing (multi-file mode).
-            suffix_filter: Only download files with these extensions
-                (e.g. ``{".json", ".yaml"}``). Ignored in single-file mode.
+            suffix_filter: Only download files whose key ends with one of
+                these strings (e.g. ``{".json", ".yaml"}``).  Matches are
+                case-insensitive and use ``endswith`` — handles multi-part
+                extensions (e.g. ``".tar.gz"``) correctly.  Ignored in
+                single-file mode.
             max_concurrency: Maximum parallel downloads (default 4).
 
         Returns:
@@ -294,7 +297,10 @@ class CloudStore:
 
         Args:
             prefix: Key prefix to filter by.
-            suffix: Optional extension filter (e.g. ``".json"``).
+            suffix: Optional extension or tail filter (e.g. ``".json"``).
+                Matched case-insensitively against the full key using
+                ``endswith`` — handles multi-part extensions
+                (e.g. ``".tar.gz"``) correctly.
 
         Returns:
             Sorted list of matching object keys.  Zero-byte objects that act as

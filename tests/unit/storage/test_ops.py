@@ -162,6 +162,24 @@ class TestDeletePrefix:
         assert await _get_bytes("data/empty.json", store, normalize=False) is None
         assert await _get_bytes("data/full.json", store, normalize=False) is None
 
+    async def test_delete_prefix_removes_root_directory_marker(self, store) -> None:
+        # Root-marker case: "artifacts/run" (the GCS marker) is at the same path
+        # as the requested prefix itself after normalisation. It lies outside the
+        # "artifacts/run/" listing prefix, so it must be swept by the best-effort
+        # root-marker delete rather than the main batch.
+        await _put("artifacts/run/file.json", b"{}", store, normalize=False)
+        await _put("artifacts/run", b"", store, normalize=False)  # GCS root marker
+
+        deleted = await delete_prefix(
+            "artifacts/run", store
+        )  # → prefix "artifacts/run/"
+
+        assert deleted == 2  # file + root marker both removed
+        assert (
+            await _get_bytes("artifacts/run/file.json", store, normalize=False) is None
+        )
+        assert await _get_bytes("artifacts/run", store, normalize=False) is None
+
 
 # ---------------------------------------------------------------------------
 # list_keys: GCS directory marker handling

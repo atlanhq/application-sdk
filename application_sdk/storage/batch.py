@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 import obstore
 
 from application_sdk.storage.ops import (
+    _is_not_found,
     _list_items,
     _normalize_listing_prefix,
     _resolve_store,
@@ -58,7 +59,8 @@ async def list_keys(
         store: An obstore-compatible store instance, or ``None`` to use the
             store from the current infrastructure context.
         suffix: Optional file extension or suffix filter.  When set, only
-            keys ending with this string are returned (e.g. ``".parquet"``).
+            keys whose path ends with this string are returned
+            (e.g. ``".parquet"``).  The match is case-insensitive.
         normalize: When ``True`` (default), normalise *prefix* before use.
             Pass ``False`` to use *prefix* exactly as supplied.
 
@@ -126,10 +128,12 @@ async def delete_prefix(
     resolved = _resolve_store(store)
     prefix = _normalize_listing_prefix(prefix, normalize)
 
-    # include_markers=True so zero-byte "folder" objects (GCS console markers,
-    # manually-created S3 directory entries, etc.) are deleted alongside real
-    # files — list_keys filters them for read callers, but delete_prefix must
-    # remove every object to leave no orphans behind on any store backend.
+    # include_markers=True so intermediate zero-byte "folder" objects within
+    # the requested prefix (e.g. "artifacts/run/sub" when deleting "artifacts/")
+    # are deleted alongside real files.  Note: the marker *at* the prefix root
+    # (e.g. "artifacts/run" when prefix = "artifacts/run/") sits outside the
+    # prefix-filtered listing due to trailing-slash normalisation and is handled
+    # separately below via a best-effort delete of the bare root key.
     try:
         items = await _list_items(resolved, prefix or None, include_markers=True)
     except Exception as exc:
@@ -142,6 +146,30 @@ async def delete_prefix(
         ) from exc
 
     paths = [path for path, _ in items]
+
+    # Also delete the directory marker at the prefix root itself (e.g. the GCS
+    # object "artifacts/run" when prefix = "artifacts/run/").  obstore strips
+    # trailing slashes from all keys, so the marker for the requested directory
+    # never starts with the slash-terminated prefix and is not returned by the
+    # listing above.  Probe with HEAD first (rather than DELETE-and-swallow)
+    # because some backends (MemoryStore, S3) silently succeed on deleting a
+    # non-existent key, which would inflate the count.
+    root_marker = prefix.rstrip("/")
+    if root_marker and root_marker not in paths:
+        try:
+            await obstore.head_async(resolved, root_marker)
+            paths.append(root_marker)
+        except Exception as exc:
+            if not _is_not_found(exc):
+                from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                    StorageError,
+                )
+
+                raise StorageError(
+                    f"Failed to check root marker '{root_marker}'", cause=exc
+                ) from exc
+            # not-found → no marker exists, nothing to add
+
     if not paths:
         return 0
 
