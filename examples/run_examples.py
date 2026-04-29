@@ -213,12 +213,20 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
 
     env = os.environ.copy()
     env["ATLAN_LOCAL_DEVELOPMENT"] = "true"
-    # Components live in the repo root, not in examples/
-    env.setdefault("DAPR_COMPONENTS_PATH", str(_REPO_ROOT / "components"))
+    # Force-set (not setdefault) so a stale system-level DAPR_COMPONENTS_PATH
+    # never leaks in and points daprd at the wrong component directory.
+    env["DAPR_COMPONENTS_PATH"] = str(_REPO_ROOT / "components")
 
     extra_kwargs: dict[str, Any] = {}
     if sys.platform == "win32":
         extra_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    # Run the subprocess from the repo root so that all relative paths
+    # (./components, ./local/dapr/objectstore, ./local/dapr/secrets, etc.)
+    # resolve to the same locations used by the daprd sidecar, which is
+    # also started from the repo root.
+    _examples_dir = str(_REPO_ROOT / "examples")
+    _module_path = str(_REPO_ROOT / "examples" / (example.module + ".py"))
 
     # Import the module under its real name (not __main__) so Temporal's
     # sandbox can resolve workflow classes via the module path rather than
@@ -226,7 +234,8 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
     launcher = (
         "import sys, importlib.util, asyncio\n"
         "sys.path.insert(0, '.')\n"
-        f"spec = importlib.util.spec_from_file_location({example.module!r}, {example.module!r} + '.py')\n"
+        f"sys.path.insert(0, {_examples_dir!r})\n"
+        f"spec = importlib.util.spec_from_file_location({example.module!r}, {_module_path!r})\n"
         f"mod = importlib.util.module_from_spec(spec)\n"
         f"sys.modules[{example.module!r}] = mod\n"
         "spec.loader.exec_module(mod)\n"
@@ -245,6 +254,7 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
     proc = subprocess.Popen(
         [sys.executable, "-c", launcher],
         env=env,
+        cwd=str(_REPO_ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
