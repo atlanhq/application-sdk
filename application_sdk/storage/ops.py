@@ -40,13 +40,13 @@ import hashlib
 import math
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING
 
 import obstore
 import orjson
 
 if TYPE_CHECKING:
-    from typing import Any, Literal
+    from typing import Any
 
     from obstore.store import ObjectStore
 
@@ -233,32 +233,6 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
         more than 9,900 parts would be needed (safety margin below 10,000).
     """
     return max(chunk_size, math.ceil(file_size / 9900))
-
-
-@overload
-async def upload_file(
-    key: str,
-    local_path: str | Path,
-    store: ObjectStore | None = ...,
-    *,
-    chunk_size: int = ...,
-    normalize: bool = ...,
-    retain_local_copy: bool = ...,
-    compute_hash: Literal[True] = ...,
-) -> str: ...
-
-
-@overload
-async def upload_file(
-    key: str,
-    local_path: str | Path,
-    store: ObjectStore | None = ...,
-    *,
-    chunk_size: int = ...,
-    normalize: bool = ...,
-    retain_local_copy: bool = ...,
-    compute_hash: Literal[False],
-) -> None: ...
 
 
 async def upload_file(
