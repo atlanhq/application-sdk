@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 import orjson
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AgentCredentialSpec(BaseModel):
@@ -73,6 +73,13 @@ class AgentCredentialSpec(BaseModel):
 
     secret_path: str = Field(default="", alias="secret-path")
     """Path / ARN / name of the secret in the external secret manager."""
+
+    @field_validator("secret_path", mode="before")
+    @classmethod
+    def _strip_secret_path(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
     auth_type: str = Field(default="", alias="auth-type")
     """Authentication strategy: ``basic``, ``noauth``, ``gcp-wif``,
