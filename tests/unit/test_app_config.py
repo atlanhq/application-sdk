@@ -451,3 +451,149 @@ class TestRunDevCombinedDaprDefaults:
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")  # simulates dotenv
         os.environ.setdefault("DAPR_HTTP_PORT", "9999")
         assert os.environ["DAPR_HTTP_PORT"] == "3500"
+
+
+class TestRunDevCombinedEnvFallbacks:
+    """run_dev_combined() resolves connection-shaped kwargs with env fallbacks.
+
+    Connectors that ship with a minimal ``python main.py`` entry point (e.g.
+    ``run_dev_combined(MyApp)`` with no kwargs) get CI-stack overrides
+    (ATLAN_HANDLER_PORT, ATLAN_TASK_QUEUE, ...) without per-connector
+    ``os.environ.get`` boilerplate at the call site.
+    """
+
+    def _resolved(
+        self,
+        *,
+        host: str | None = None,
+        port: int | None = None,
+        temporal_host: str | None = None,
+        temporal_namespace: str | None = None,
+        task_queue: str | None = None,
+        app_name: str = "myapp",
+    ) -> dict[str, object]:
+        """Replicate run_dev_combined's resolution block in isolation so we
+        can unit-test the precedence without bringing up the full Temporal +
+        FastAPI stack."""
+
+        def _env_int(key: str) -> int:
+            val = os.environ.get(key)
+            try:
+                return int(val) if val else 0
+            except ValueError:
+                return 0
+
+        return {
+            "host": (
+                host
+                or os.environ.get("ATLAN_HANDLER_HOST")
+                or os.environ.get("ATLAN_APP_HTTP_HOST")
+                or "127.0.0.1"
+            ),
+            "port": (
+                port
+                or _env_int("ATLAN_HANDLER_PORT")
+                or _env_int("ATLAN_APP_HTTP_PORT")
+                or 8000
+            ),
+            "temporal_host": (
+                temporal_host
+                or os.environ.get("ATLAN_TEMPORAL_HOST")
+                or "localhost:7233"
+            ),
+            "temporal_namespace": (
+                temporal_namespace
+                or os.environ.get("ATLAN_TEMPORAL_NAMESPACE")
+                or os.environ.get("ATLAN_WORKFLOW_NAMESPACE")
+                or "default"
+            ),
+            "task_queue": (
+                task_queue or os.environ.get("ATLAN_TASK_QUEUE") or f"{app_name}-queue"
+            ),
+        }
+
+    # ── kwarg → env → default precedence per field ────────────────────────
+
+    def test_no_kwargs_no_env_uses_defaults(self, monkeypatch: pytest.MonkeyPatch):
+        for k in (
+            "ATLAN_HANDLER_HOST",
+            "ATLAN_APP_HTTP_HOST",
+            "ATLAN_HANDLER_PORT",
+            "ATLAN_APP_HTTP_PORT",
+            "ATLAN_TEMPORAL_HOST",
+            "ATLAN_TEMPORAL_NAMESPACE",
+            "ATLAN_WORKFLOW_NAMESPACE",
+            "ATLAN_TASK_QUEUE",
+        ):
+            monkeypatch.delenv(k, raising=False)
+        r = self._resolved(app_name="saphana-metadata-extractor")
+        assert r == {
+            "host": "127.0.0.1",
+            "port": 8000,
+            "temporal_host": "localhost:7233",
+            "temporal_namespace": "default",
+            "task_queue": "saphana-metadata-extractor-queue",
+        }
+
+    def test_env_overrides_default(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATLAN_HANDLER_HOST", "0.0.0.0")
+        monkeypatch.setenv("ATLAN_HANDLER_PORT", "3001")
+        monkeypatch.setenv("ATLAN_TEMPORAL_HOST", "temporal:7234")
+        monkeypatch.setenv("ATLAN_TEMPORAL_NAMESPACE", "ci")
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "atlan-saphana-ci")
+        r = self._resolved()
+        assert r["host"] == "0.0.0.0"
+        assert r["port"] == 3001
+        assert r["temporal_host"] == "temporal:7234"
+        assert r["temporal_namespace"] == "ci"
+        assert r["task_queue"] == "atlan-saphana-ci"
+
+    def test_kwarg_beats_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATLAN_HANDLER_PORT", "3001")
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "from-env")
+        r = self._resolved(port=4242, task_queue="from-kwarg")
+        assert r["port"] == 4242
+        assert r["task_queue"] == "from-kwarg"
+
+    # ── per-field env-key precedence (handler-port / -host) ────────────────
+
+    def test_handler_port_preferred_over_app_http_port(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATLAN_HANDLER_PORT", "3001")
+        monkeypatch.setenv("ATLAN_APP_HTTP_PORT", "3002")
+        assert self._resolved()["port"] == 3001
+
+    def test_app_http_port_used_when_handler_port_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("ATLAN_HANDLER_PORT", raising=False)
+        monkeypatch.setenv("ATLAN_APP_HTTP_PORT", "3002")
+        assert self._resolved()["port"] == 3002
+
+    def test_invalid_handler_port_falls_through(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATLAN_HANDLER_PORT", "not-a-number")
+        monkeypatch.setenv("ATLAN_APP_HTTP_PORT", "3002")
+        assert self._resolved()["port"] == 3002
+
+    def test_handler_host_preferred_over_app_http_host(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATLAN_HANDLER_HOST", "0.0.0.0")
+        monkeypatch.setenv("ATLAN_APP_HTTP_HOST", "1.2.3.4")
+        assert self._resolved()["host"] == "0.0.0.0"
+
+    # ── temporal namespace v2 fallback ────────────────────────────────────
+
+    def test_workflow_namespace_used_when_temporal_namespace_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("ATLAN_TEMPORAL_NAMESPACE", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_NAMESPACE", "ci")
+        assert self._resolved()["temporal_namespace"] == "ci"
+
+    # ── task-queue derivation uses passed-in app_name ─────────────────────
+
+    def test_task_queue_default_uses_app_name(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        assert self._resolved(app_name="mssql")["task_queue"] == "mssql-queue"

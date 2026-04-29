@@ -1034,17 +1034,25 @@ async def run_dev_combined(
     credential_stores: Mapping[str, SecretStore] | None = None,
     credentials: dict[str, Any] | None = None,
     example_input: dict[str, Any] | None = None,
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    temporal_host: str = "localhost:7233",
-    temporal_namespace: str = "default",
-    task_queue: str = "",
+    host: str | None = None,
+    port: int | None = None,
+    temporal_host: str | None = None,
+    temporal_namespace: str | None = None,
+    task_queue: str | None = None,
 ) -> None:
     """Run worker + handler in a single process for local development.
 
     Dev-friendly wrapper around ``run_combined_mode()`` that accepts a
     Python class and keyword arguments directly. Use it in ``run_dev.py``
     scripts; production containers use ``run_combined_mode()`` via CLI flags.
+
+    All five connection-shaped kwargs (``host``, ``port``, ``temporal_host``,
+    ``temporal_namespace``, ``task_queue``) follow the same precedence:
+    explicit kwarg → env var → built-in default. The env-var keys mirror
+    those read by :meth:`AppConfig.from_args_and_env` so the CLI path and the
+    ``run_dev_combined`` path stay in sync — no per-connector
+    ``os.environ.get(...)`` boilerplate at the call site is needed to wire
+    up CI-stack overrides like ``ATLAN_HANDLER_PORT`` or ``ATLAN_TASK_QUEUE``.
 
     Args:
         app_class: The App class to serve (must already be imported).
@@ -1058,11 +1066,17 @@ async def run_dev_combined(
         example_input: Optional dict used as the workflow input. If ``credentials``
             is also provided, ``credential_guid`` is auto-injected before the
             workflow starts.
-        host: Bind host (default: "127.0.0.1").
-        port: Handler HTTP port.
-        temporal_host: Temporal server address.
-        temporal_namespace: Temporal namespace.
-        task_queue: Task queue name (default: "{app_name}-queue").
+        host: Bind host. Default precedence: kwarg → ``ATLAN_HANDLER_HOST`` →
+            ``ATLAN_APP_HTTP_HOST`` → ``"127.0.0.1"``.
+        port: Handler HTTP port. Default precedence: kwarg →
+            ``ATLAN_HANDLER_PORT`` → ``ATLAN_APP_HTTP_PORT`` → ``8000``.
+        temporal_host: Temporal server address. Default precedence: kwarg →
+            ``ATLAN_TEMPORAL_HOST`` → ``"localhost:7233"``.
+        temporal_namespace: Temporal namespace. Default precedence: kwarg →
+            ``ATLAN_TEMPORAL_NAMESPACE`` → ``ATLAN_WORKFLOW_NAMESPACE`` →
+            ``"default"``.
+        task_queue: Task queue name. Default precedence: kwarg →
+            ``ATLAN_TASK_QUEUE`` → ``"{app_name}-queue"``.
 
     Example::
 
@@ -1091,18 +1105,54 @@ async def run_dev_combined(
     os.environ.setdefault("DAPR_GRPC_PORT", "50001")
 
     app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
-    effective_task_queue = task_queue or f"{app_name}-queue"
     app_module = f"{app_class.__module__}:{app_class.__name__}"
+
+    # Resolve connection-shaped kwargs: explicit kwarg → env var → default.
+    # Env keys mirror AppConfig.from_args_and_env so the CLI path and
+    # this dev path stay in sync — connectors that ship with `python main.py`
+    # entry points get CI-stack overrides (ATLAN_HANDLER_PORT,
+    # ATLAN_TASK_QUEUE, etc.) for free, without per-call `os.environ.get`.
+    def _env_int(key: str) -> int:
+        val = os.environ.get(key)
+        try:
+            return int(val) if val else 0
+        except ValueError:
+            return 0
+
+    resolved_host = (
+        host
+        or os.environ.get("ATLAN_HANDLER_HOST")
+        or os.environ.get("ATLAN_APP_HTTP_HOST")
+        or "127.0.0.1"
+    )
+    resolved_port = (
+        port
+        or _env_int("ATLAN_HANDLER_PORT")
+        or _env_int("ATLAN_APP_HTTP_PORT")
+        or 8000
+    )
+    resolved_temporal_host = (
+        temporal_host or os.environ.get("ATLAN_TEMPORAL_HOST") or "localhost:7233"
+    )
+    resolved_temporal_namespace = (
+        temporal_namespace
+        or os.environ.get("ATLAN_TEMPORAL_NAMESPACE")
+        or os.environ.get("ATLAN_WORKFLOW_NAMESPACE")
+        or "default"
+    )
+    resolved_task_queue = (
+        task_queue or os.environ.get("ATLAN_TASK_QUEUE") or f"{app_name}-queue"
+    )
 
     config = AppConfig(
         mode="combined",
         app_module=app_module,
         handler_module=os.environ.get("ATLAN_HANDLER_MODULE") or None,
-        temporal_host=temporal_host,
-        temporal_namespace=temporal_namespace,
-        task_queue=effective_task_queue,
-        handler_host=host,
-        handler_port=port,
+        temporal_host=resolved_temporal_host,
+        temporal_namespace=resolved_temporal_namespace,
+        task_queue=resolved_task_queue,
+        handler_host=resolved_host,
+        handler_port=resolved_port,
         log_level="DEBUG",
         service_name=_derive_service_name(app_module),
         # Dev-friendly: disable Prometheus to avoid port 9464 collision on
