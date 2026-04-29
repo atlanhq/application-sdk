@@ -1595,7 +1595,27 @@ def create_app_handler_service(
         if secrets_file.exists():
             all_secrets = orjson.loads(secrets_file.read_bytes())
         all_secrets[guid] = sensitive
-        secrets_file.write_bytes(orjson.dumps(all_secrets))
+
+        # Atomic write: stage to a sibling temp file, then rename. This avoids
+        # a partial/truncated secrets.json if the process is killed mid-write.
+        tmp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=str(secrets_dir),
+                delete=False,
+                mode="wb",
+                suffix=".json.tmp",
+            ) as tmp:
+                tmp.write(orjson.dumps(all_secrets))
+                tmp_path = tmp.name
+            os.replace(tmp_path, str(secrets_file))
+            tmp_path = None  # ownership transferred to secrets_file
+        finally:
+            if tmp_path is not None and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
         # Write non-sensitive fields to object storage
         non_sensitive["credentialSource"] = non_sensitive.get(
