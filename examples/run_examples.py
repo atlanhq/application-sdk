@@ -10,11 +10,13 @@ Usage (from examples/):
     python run_examples.py
 """
 
+import collections
 import json
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -272,6 +274,19 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
         **extra_kwargs,
     )
 
+    # Drain stdout in a background thread so the child never blocks on a full
+    # pipe buffer (Windows default: 4 KB; Linux: 64 KB).  Keep the last 200
+    # lines so we can print them on failure.
+    output_buf: collections.deque[str] = collections.deque(maxlen=200)
+
+    def _reader() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            output_buf.append(line.rstrip("\n"))
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
     status = "UNKNOWN"
     start = time.monotonic()
     try:
@@ -300,14 +315,12 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
         return status, elapsed
     finally:
         _kill(proc)
+        reader_thread.join(timeout=5)
         if status not in ("COMPLETED", "SKIPPED"):
-            try:
-                out = proc.stdout.read() if proc.stdout else ""
-            except Exception:
-                out = ""
-            if out:
+            lines = list(output_buf)
+            if lines:
                 print("  --- child output (last 200 lines) ---", flush=True)
-                for line in out.splitlines()[-200:]:
+                for line in lines:
                     print(f"  | {line}", flush=True)
                 print("  ---", flush=True)
 
