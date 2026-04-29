@@ -308,8 +308,8 @@ async def materialize_file_reference(
                 # File is intact — stamp local sidecar and reuse.
                 _write_local_sidecar(ref.local_path, local_hash)
                 return ref
-                # Hash mismatch — file is corrupt; fall through to re-download.
-            # else: no stored sidecar → conservative: re-download (cannot verify).
+            # Otherwise (no stored sidecar OR hash mismatch) fall through
+            # to re-download — conservative since we cannot verify.
 
         # Determine output path.
         if ref.local_path is not None:
