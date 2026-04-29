@@ -2417,8 +2417,14 @@ class TestStopWorkflowEndpoint:
         try:
             svc = self._make_routed_client()
             mock_handle = MagicMock()
+            import temporalio.service
+
             mock_handle.terminate = AsyncMock(
-                side_effect=RuntimeError("workflow not found")
+                side_effect=temporalio.service.RPCError(
+                    "wording can change",
+                    status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                    raw_grpc_status=None,
+                )
             )
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
@@ -2575,10 +2581,18 @@ class TestGetWorkflowStatusEndpoint:
     def test_status_not_found_returns_404(self) -> None:
         from unittest.mock import AsyncMock, MagicMock, patch
 
+        import temporalio.service
+
         try:
             svc = self._setup()
             mock_handle = MagicMock()
-            mock_handle.describe = AsyncMock(side_effect=RuntimeError("not found"))
+            mock_handle.describe = AsyncMock(
+                side_effect=temporalio.service.RPCError(
+                    "wording can change",
+                    status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                    raw_grpc_status=None,
+                )
+            )
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
             with patch(
@@ -2772,8 +2786,11 @@ class TestGetResultEndpoint:
             self._teardown()
 
     def test_result_wait_failure_returns_failed_envelope(self) -> None:
-        """If the workflow result errors with wait=true, the response reports
-        status=failed without leaking the underlying exception."""
+        """A non-WorkflowFailureError raised during result decoding produces
+        the new ``result_decode_failed`` status (PR #1603 / BLDX-1173) —
+        distinct from a real workflow failure. Both still set
+        ``success=false`` and must not leak the underlying exception text.
+        """
         from unittest.mock import AsyncMock, MagicMock, patch
 
         try:
@@ -2794,20 +2811,31 @@ class TestGetResultEndpoint:
                 client = TestClient(svc)
                 response = client.get("/workflows/v1/result/wf-wait-fail?wait=true")
             assert response.status_code == 200
-            data = response.json()["data"]
-            assert data["status"] == "failed"
-            # Generic message — must not leak the raw exception
-            assert "internal-error-xxx" not in str(response.json())
+            body = response.json()
+            data = body["data"]
+            # Generic exception during decode → new distinct status.
+            assert data["status"] == "result_decode_failed"
+            assert body["success"] is False
+            # Generic message — must not leak the raw exception text.
+            assert "internal-error-xxx" not in str(body)
         finally:
             self._teardown()
 
     def test_result_not_found_returns_404(self) -> None:
         from unittest.mock import AsyncMock, MagicMock, patch
 
+        import temporalio.service
+
         try:
             svc = self._setup()
             mock_handle = MagicMock()
-            mock_handle.describe = AsyncMock(side_effect=RuntimeError("not found"))
+            mock_handle.describe = AsyncMock(
+                side_effect=temporalio.service.RPCError(
+                    "wording can change",
+                    status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                    raw_grpc_status=None,
+                )
+            )
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
             with patch(

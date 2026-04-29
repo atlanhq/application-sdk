@@ -528,15 +528,11 @@ class TestContextManagers:
 
 
 # ---------------------------------------------------------------------------
-# SHARED MUTABLE-DEFAULT BUG (skipped). Documented for reviewer.
+# Per-instance state — `Reader._downloaded_files` must NOT be shared via a
+# class-level mutable default (locked in by PR #1606 / BLDX-1167).
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="Reader._downloaded_files is a class-level mutable list. Two instances "
-    "that don't reassign in __init__ share state. Flagged in 'Bugs found' for "
-    "BLDX-1129; do not modify source."
-)
 def test_class_level_mutable_default_is_shared() -> None:  # pragma: no cover
     class _Bare(Reader):
         async def read(self):  # pragma: no cover

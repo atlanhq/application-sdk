@@ -377,19 +377,21 @@ class TestParseAtlanOAuthClient:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason=(
-        "BUG: AtlanApiToken.validate / AtlanOAuthClient.validate interpolate "
-        "the underlying pyatlan exception via f-string into the error message. "
-        "If pyatlan's exception repr ever embeds the token/secret, this leaks "
-        "credentials into logs. Flagged in BLDX-1129 review."
-    )
-)
 @pytest.mark.asyncio
 async def test_validate_does_not_leak_token_in_error_message(
     restore_pyatlan_modules,
 ):
-    """Skipped: documents potential credential leak via exception interpolation."""
+    """The user-facing CredentialValidationError ``.message`` must not
+    embed the underlying pyatlan exception text — that text could include
+    the api_key/access_token. Locks the BLDX-1166 fix on PR #1601 which
+    switched to ``type(exc).__name__`` in the message.
+
+    Note: ``CredentialError.__str__`` still composes ``cause`` into the
+    full string repr, so ``str(exc.value)`` is allowed to contain the
+    secret transitively. Logger / response-handler code is responsible
+    for using ``.message`` (or the structured error code), not the full
+    str representation.
+    """
     secret = "super-secret-token-do-not-leak"
     _install_fake_pyatlan(
         get_current_side_effect=RuntimeError(f"401 with key {secret}")
@@ -397,4 +399,6 @@ async def test_validate_does_not_leak_token_in_error_message(
     cred = AtlanApiToken(token=secret, base_url="https://x.atlan.com")
     with pytest.raises(CredentialValidationError) as exc:
         await cred.validate()
-    assert secret not in str(exc.value)
+    # The message itself is structured + redacted — uses type name only.
+    assert secret not in exc.value.message
+    assert "RuntimeError" in exc.value.message

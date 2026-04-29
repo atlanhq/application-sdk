@@ -778,25 +778,9 @@ async def test_run_query_raises_when_cursor_unsupported(
 # ---------- get_supported_sqlalchemy_url ----------
 
 
-def test_get_supported_sqlalchemy_url_rewrites_dialect(sql_client_with_db_config):
-    url = "postgresql+psycopg2://u:p@h/db"
-    out = sql_client_with_db_config.get_supported_sqlalchemy_url(url)
-    assert out.startswith("postgresql+psycopg://")
-    assert "://u:p@h/db" in out
-
-
-def test_get_supported_sqlalchemy_url_unchanged_when_dialect_matches(
-    sql_client_with_db_config,
-):
-    url = "postgresql+psycopg://u:p@h/db"
-    assert sql_client_with_db_config.get_supported_sqlalchemy_url(url) == url
-
-
-def test_get_supported_sqlalchemy_url_requires_db_config():
-    client = BaseSQLClient()
-    client.DB_CONFIG = None
-    with pytest.raises(ValueError, match="DB_CONFIG is not configured"):
-        client.get_supported_sqlalchemy_url("postgresql://u:p@h/db")
+# `get_supported_sqlalchemy_url` was deleted as dead code via PR #1600
+# (BLDX-1183) — it had no production callers and its only call site was
+# already commented out. Tests for it removed here.
 
 
 def test_get_sqlalchemy_connection_string_requires_db_config():
@@ -1074,8 +1058,8 @@ async def test_async_load_raises_when_db_config_missing():
 async def test_async_load_disposes_engine_on_failure(
     mock_create: MagicMock, async_sql_client_local: AsyncBaseSQLClient
 ):
-    """Async load() must dispose the engine and re-raise as ValueError if the
-    initial connection probe fails."""
+    """Async load() must dispose the engine and re-raise as ClientError
+    (consistent with sync load() — locked in by PR #1602 / BLDX-1180)."""
     mock_engine = AsyncMock()
     mock_engine.dispose = AsyncMock()
 
@@ -1089,8 +1073,9 @@ async def test_async_load_disposes_engine_on_failure(
     mock_engine.connect = MagicMock(return_value=_FailingCtx())
     mock_create.return_value = mock_engine
 
-    with pytest.raises(ValueError, match="auth failed"):
+    with pytest.raises(ClientError) as exc_info:
         await async_sql_client_local.load({"username": "u", "password": "p"})
+    assert str(ClientError.SQL_CLIENT_AUTH_ERROR) in str(exc_info.value)
 
     mock_engine.dispose.assert_awaited_once()
     assert async_sql_client_local.engine is None

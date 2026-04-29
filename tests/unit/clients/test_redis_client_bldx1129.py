@@ -602,21 +602,6 @@ class TestHandleRedisErrorChaining:
         assert ei.value.__cause__ is original
 
 
-# ---------------------------------------------------------------------------
-# BLDX-1129 SKIPs — bug shapes (NOT modifying source)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skip(
-    reason="BLDX-1129: _connect re-wraps its own ClientError via `except Exception` "
-    "→ _handle_redis_error, masking the original error code path. "
-    "Bug filed as TBD."
-)
-def test_bug_connect_rewraps_internal_client_error_skip():
-    """When ``_connect`` raises ``ClientError(REDIS_CONNECTION_ERROR)``
-    because ``self.redis_client`` is falsy after a connect helper, the broad
-    ``except (... Exception)`` two lines later catches it and re-routes
-    through ``_handle_redis_error``, which falls into the generic branch and
-    re-raises a fresh ``ClientError`` with the same code but a wrapped cause —
-    making the chain confusing for callers and obscuring the true control flow.
-    """
+# BLDX-1129 stub for this bug was dropped after the fix landed via
+# PR #1602 (BLDX-1165). Real regression coverage lives in
+# tests/unit/clients/test_clienterror_preservation.py.

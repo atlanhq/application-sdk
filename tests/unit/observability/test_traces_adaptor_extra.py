@@ -135,7 +135,11 @@ class TestSetupOtelTraces:
 class TestSetupConsoleOnlyTraces:
     def test_console_only_setup_swallows_failure(self) -> None:
         """If everything in console-only setup blows up, the constructor still
-        returns (caller path: _setup_otel_traces caught the outer error too)."""
+        returns. PR #1607 (BLDX-1188) pre-assigns ``tracer_provider`` and
+        ``tracer`` to ``None`` BEFORE the try block so the half-initialised
+        adapter no longer ``AttributeError``s on subsequent calls — it now
+        cleanly reports ``None``.
+        """
         AtlanTracesAdapter._flush_task_started = True
 
         with (
@@ -152,8 +156,9 @@ class TestSetupConsoleOnlyTraces:
             # Constructor returns without re-raising — both setup methods swallow.
             adapter = AtlanTracesAdapter()
 
-        # Tracer provider attribute was never successfully assigned.
-        assert not hasattr(adapter, "tracer_provider")
+        # Tracer provider attribute exists but is None (no half-init).
+        assert adapter.tracer_provider is None
+        assert adapter.tracer is None
 
 
 # ---------------------------------------------------------------------------

@@ -165,9 +165,12 @@ class TestGetBackfillTablesDiff:
             result = get_backfill_tables(current, previous)
         assert result == {"db/s/x"}
 
-    def test_swallows_duckdb_failure_and_returns_none(self):
-        """If DuckDB raises (e.g., import or sql failure), bare except
-        catches and returns None. Flagged as a bug.
+    def test_propagates_duckdb_failure(self):
+        """DuckDB / runtime failures must propagate, not be swallowed.
+
+        Locks the BLDX-1190 fix on PR #1609: the bare ``except Exception``
+        was narrowed to ``except ValueError`` so DuckDB / SQL / disk
+        errors surface to the caller instead of returning silent ``None``.
         """
         with patch(
             "application_sdk.common.incremental.column_extraction.backfill."
@@ -185,7 +188,8 @@ class TestGetBackfillTablesDiff:
                     previous / "table" / "chunk-0.json",
                     [_table_record("db/s/t1")],
                 )
-                assert get_backfill_tables(current, previous) is None
+                with pytest.raises(RuntimeError, match="boom"):
+                    get_backfill_tables(current, previous)
 
 
 # ---------------------------------------------------------------------------

@@ -513,33 +513,6 @@ class TestModels:
         assert d["overall_health"] is False
 
 
-# ---------------------------------------------------------------------------
-# BLDX-1129 SKIPs — bug shapes (NOT modifying source)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skip(
-    reason="BLDX-1129: load() catches ClientError raised by _test_connection "
-    "(no credential branch) inside its broad `except Exception` and re-wraps "
-    "as CLIENT_AUTH_ERROR 'Unexpected error - ...', dropping the original "
-    "AUTH_CREDENTIALS_ERROR (-401-04) code. Bug filed as TBD."
-)
-async def test_bug_load_rewraps_internal_client_error_skip():
-    """If ``credential is None`` after ``create_credential`` returns,
-    ``_test_connection`` raises ``ClientError(AUTH_CREDENTIALS_ERROR)``.
-    ``load`` then swallows this in ``except Exception`` and emits a fresh
-    ``ClientError`` with the wrong code, masking the real diagnostic."""
-
-
-@pytest.mark.skip(
-    reason="BLDX-1129: close() shuts down the ThreadPoolExecutor with "
-    "wait=True — cannot be re-loaded after close, but no test confirms or "
-    "documents this. Re-call to load() will silently submit work to a dead "
-    "executor when service health checks run synchronously. Bug filed as TBD."
-)
-async def test_bug_close_then_load_uses_dead_executor_skip():
-    """``close`` calls ``self._executor.shutdown(wait=True)``. There is no
-    code path that re-creates the executor on ``load``, so any future
-    blocking call submitted via ``self._executor.submit`` would raise
-    ``RuntimeError: cannot schedule new futures after shutdown``. Worth
-    triaging — fix is either re-create on load or fail-fast on closed state."""
+# BLDX-1129 stub tests for these bugs were dropped after the fix landed via
+# PR #1602 (BLDX-1163, BLDX-1164). Real regression coverage now lives in
+# tests/unit/clients/test_clienterror_preservation.py.

@@ -1030,14 +1030,10 @@ class TestTemporalAttributePassthrough:
 # threading module reference and patches Thread globally. OTel SDK batch
 # processors spawn their own threads on adapter construction and get caught by
 # the mock, breaking assert_called_once / assert_not_called. Real fix is to
-# refactor `AtlanLoggerAdapter` to expose an injectable `_schedule_flush()`
-# boundary so the test can mock that, not raw threading. Skipping with a clear
-# TODO until that refactor lands; covered in adjacent tests via the running-loop
-# path which doesn't have this mock-scope issue.
-@pytest.mark.skip(
-    reason="Skipped pending logger_adaptor refactor; threading.Thread mock is "
-    "globally scoped and catches OTel SDK threads. See BLDX-1129."
-)
+# Tests now mock the injectable `_spawn_flush_thread()` boundary directly
+# (added to `AtlanLoggerAdapter` on main as part of BLDX-1129's BLDX-1172),
+# so they no longer need to patch `threading.Thread` globally and no longer
+# leak into OTel SDK background threads.
 class TestPython314EventLoopCompat:
     """Tests for Python 3.14 compatibility where asyncio.get_event_loop()
     raises RuntimeError when no current event loop exists.
@@ -1102,7 +1098,7 @@ class TestPython314EventLoopCompat:
                         _ = AtlanLoggerAdapter("test_py314_loop")
 
                         mock_loop.create_task.assert_called_once()
-                        mock_thread.assert_not_called()
+                        mock_spawn.assert_not_called()
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -1546,13 +1542,6 @@ class TestSendToOtelSwallowsErrors:
             logger_adapter._send_to_otel({"any": "record"})
 
 
-@pytest.mark.skip(
-    reason=(
-        "BLDX-1129: AtlanLoggerAdapter._reset_for_testing() does not reset "
-        "_flush_task_started or module-level _logger_instances cache, leaking "
-        "state between tests — bug filed as TBD"
-    )
-)
 def test_reset_for_testing_also_resets_flush_task_started():
     """Documents the leak between tests in the class-level flush task flag."""
     AtlanLoggerAdapter._flush_task_started = True

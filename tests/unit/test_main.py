@@ -1034,6 +1034,9 @@ class TestRunHandlerMode:
                 "application_sdk.execution._temporal.converter.create_data_converter_for_app"
             ),
             patch("application_sdk.infrastructure.context.set_infrastructure"),
+            # PR #1608 (BLDX-1161) added validate_app_class() to handler mode;
+            # these tests use a MagicMock for App, so stub the validator.
+            patch("application_sdk.main.validate_app_class"),
         )
 
     def _make_infra(self) -> MagicMock:
@@ -1045,7 +1048,7 @@ class TestRunHandlerMode:
     def test_uses_default_handler_when_no_custom_loaded(self) -> None:
         """When load_handler_class returns None, DefaultHandler is instantiated."""
         infra = self._make_infra()
-        p_infra, p_load_app, p_conv, p_set = self._common_patches(infra)
+        p_infra, p_load_app, p_conv, p_set, p_validate = self._common_patches(infra)
 
         # asyncio.run must execute coroutines (so _create_infrastructure returns infra)
         # but we don't want _flush_observability's coroutine to run real code.
@@ -1054,6 +1057,7 @@ class TestRunHandlerMode:
             p_load_app,
             p_conv,
             p_set,
+            p_validate,
             patch(
                 "application_sdk.main.load_handler_class",
                 return_value=None,
@@ -1077,7 +1081,7 @@ class TestRunHandlerMode:
     def test_uses_custom_handler_when_loaded(self) -> None:
         """When load_handler_class returns a class, that class is instantiated."""
         infra = self._make_infra()
-        p_infra, p_load_app, p_conv, p_set = self._common_patches(infra)
+        p_infra, p_load_app, p_conv, p_set, p_validate = self._common_patches(infra)
         custom_cls = MagicMock()
         custom_cls.__name__ = "MyCustomHandler"
         custom_cls.return_value = MagicMock()
@@ -1087,6 +1091,7 @@ class TestRunHandlerMode:
             p_load_app,
             p_conv,
             p_set,
+            p_validate,
             patch(
                 "application_sdk.main.load_handler_class",
                 return_value=custom_cls,
@@ -1102,22 +1107,16 @@ class TestRunHandlerMode:
 
         custom_cls.assert_called_once()
 
-    @pytest.mark.skip(
-        reason=(
-            "BLDX-1129: handler mode does not call validate_app_class — "
-            "potential bug where invalid apps fail late with AttributeError; "
-            "bug filed as TBD"
-        )
-    )
     def test_handler_mode_validates_app_class(self) -> None:
         """run_handler_mode must validate the loaded app class — currently it does not."""
         infra = self._make_infra()
-        p_infra, p_load_app, p_conv, p_set = self._common_patches(infra)
+        p_infra, p_load_app, p_conv, p_set, p_validate = self._common_patches(infra)
         with (
             p_infra,
             p_load_app,
             p_conv,
             p_set,
+            p_validate,
             patch("application_sdk.main.validate_app_class") as mock_validate,
             patch("application_sdk.main.load_handler_class", return_value=None),
             patch("application_sdk.handler.DefaultHandler"),
@@ -1131,21 +1130,16 @@ class TestRunHandlerMode:
             run_handler_mode(cfg)
         mock_validate.assert_called_once()
 
-    @pytest.mark.skip(
-        reason=(
-            "BLDX-1129: handler mode does not call close_infrastructure on exit — "
-            "worker and combined do; potential resource leak; bug filed as TBD"
-        )
-    )
     def test_handler_mode_closes_infrastructure(self) -> None:
         """Handler mode should close infrastructure on exit (parity with worker/combined)."""
         infra = self._make_infra()
-        p_infra, p_load_app, p_conv, p_set = self._common_patches(infra)
+        p_infra, p_load_app, p_conv, p_set, p_validate = self._common_patches(infra)
         with (
             p_infra,
             p_load_app,
             p_conv,
             p_set,
+            p_validate,
             patch("application_sdk.main.load_handler_class", return_value=None),
             patch("application_sdk.handler.DefaultHandler"),
             patch("application_sdk.handler.run_app_handler_service"),

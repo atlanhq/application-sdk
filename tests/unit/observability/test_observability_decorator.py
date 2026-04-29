@@ -67,9 +67,11 @@ class TestSyncWrapper:
 
         traces.record_trace.assert_called_once()
         assert traces.record_trace.call_args.kwargs["status_code"] == "ERROR"
-        # Error event encodes the exception message in attributes.
+        # PR #1601 (BLDX-1186, BLDX-1187): trace event "error" attribute now
+        # carries the exception class name, not the raw message — avoids
+        # leaking PII / credentials embedded in the original message.
         events = traces.record_trace.call_args.kwargs["events"]
-        assert events[0]["attributes"]["error"] == "kaput"
+        assert events[0]["attributes"]["error"] == "ValueError"
 
         metrics.record_metric.assert_called_once()
         assert metrics.record_metric.call_args.kwargs["name"] == "boom_failure"
@@ -139,8 +141,11 @@ class TestAsyncWrapper:
         assert traces.record_trace.call_args.kwargs["status_code"] == "ERROR"
         metrics.record_metric.assert_called_once()
         assert metrics.record_metric.call_args.kwargs["name"] == "boom_failure"
+        # PR #1601 (BLDX-1186): metric "error" label now carries the
+        # exception class name, not the raw message — avoids leaking
+        # PII / credentials and prevents high-cardinality blow-up.
         labels = metrics.record_metric.call_args.kwargs["labels"]
-        assert labels["error"] == "async-kaput"
+        assert labels["error"] == "RuntimeError"
 
     @pytest.mark.asyncio
     async def test_async_swallows_trace_failure_in_error_path(self) -> None:

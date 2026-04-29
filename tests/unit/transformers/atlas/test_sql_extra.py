@@ -530,11 +530,6 @@ def test_tag_attachment_creator_with_explicit_connection_qualified_name():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="BUG: sql.py:280 uses bool(obj.get('is_partition', False)); the string "
-    "'NO' evaluates truthy, inconsistent with Column's 'YES' equality check at "
-    "line 611. Documented for fix; do not modify source per task constraints."
-)
 def test_bug_table_is_partition_string_no_is_truthy():
     from pyatlan.model import assets
 
@@ -546,26 +541,25 @@ def test_bug_table_is_partition_string_no_is_truthy():
     assert result["entity_class"] is not assets.TablePartition
 
 
-@pytest.mark.skip(
-    reason="BUG: sql.py:1210 uses bare `except Exception` rather than "
-    "`except AssertionError`, so any unexpected runtime error inside "
-    "TagAttachment.get_attributes is silently re-wrapped as a validation error."
-)
 def test_bug_tag_attachment_swallows_non_assertion_errors():
+    """PR #1607 (BLDX-1169) narrowed `except Exception` to
+    `except AssertionError` in `TagAttachment.get_attributes`. Other
+    runtime errors (e.g. wrongly-typed `classification_defs`) now
+    propagate with their original type instead of being re-wrapped as
+    `ValueError("Error creating TagAttachment Entity: ...")`.
+    """
     obj = _tag_base()
-    # classification_defs of wrong type triggers TypeError, not AssertionError
+    # A string for classification_defs triggers AttributeError ('str'.get)
+    # inside the body — must NOT be re-wrapped as ValueError.
     obj["classification_defs"] = "not-a-list"
-    with pytest.raises(TypeError):
+    with pytest.raises((AttributeError, TypeError)):
         TagAttachment.get_attributes(obj)
 
 
-@pytest.mark.skip(
-    reason="BUG: sql.py:907 strips first/last chars unconditionally; "
-    "argument_signature='AB' yields a one-char field 'B' instead of failing."
-)
 def test_bug_function_argument_signature_without_parens_corrupts_arguments():
     obj = _function_base()
     obj["argument_signature"] = "AB"
-    result = Function.get_attributes(obj)
-    # Current behavior: ['B']; expected: validated/rejected.
-    assert result["attributes"]["function_arguments"] != ["B"]
+    # Fix raises ValueError on malformed input rather than silently
+    # producing a one-char field "B".
+    with pytest.raises(ValueError, match="Malformed argument_signature"):
+        Function.get_attributes(obj)
