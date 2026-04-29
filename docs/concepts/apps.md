@@ -225,7 +225,11 @@ Test `@task` methods directly without Temporal or Dapr:
 ```python
 import pytest
 from application_sdk.testing import MockSecretStore, MockStateStore
-from application_sdk.infrastructure import InfrastructureContext, set_infrastructure
+from application_sdk.infrastructure import (
+    InfrastructureContext,
+    clear_infrastructure,
+    set_infrastructure,
+)
 from application_sdk.testing.fixtures import clean_app_registry  # noqa: F401
 
 @pytest.fixture
@@ -235,7 +239,8 @@ def infra():
         state_store=MockStateStore(),
     )
     set_infrastructure(ctx)
-    return ctx
+    yield ctx
+    clear_infrastructure()
 
 async def test_fetch(infra):
     connector = MyConnector()
