@@ -232,11 +232,13 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
     proc = subprocess.Popen(
         [sys.executable, "-c", launcher],
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
         **extra_kwargs,
     )
 
+    status = "UNKNOWN"
     start = time.monotonic()
     try:
         print("  waiting for server...", flush=True)
@@ -256,6 +258,16 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
         return status, elapsed
     finally:
         _kill(proc)
+        if status not in ("COMPLETED", "SKIPPED"):
+            try:
+                out = proc.stdout.read() if proc.stdout else ""
+            except Exception:
+                out = ""
+            if out:
+                print("  --- child output (last 200 lines) ---", flush=True)
+                for line in out.splitlines()[-200:]:
+                    print(f"  | {line}", flush=True)
+                print("  ---", flush=True)
 
 
 def main() -> None:
