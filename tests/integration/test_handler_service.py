@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from application_sdk.app.base import App
+from application_sdk.app.entrypoint import entrypoint
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
@@ -611,8 +612,6 @@ async def test_prometheus_metrics_not_exposed_when_disabled():
 # them.  Routing validation (workflow_type checks) fires before the Temporal
 # call, so G6.16 and G6.17 don't require a running worker.
 
-from application_sdk.app.entrypoint import entrypoint  # noqa: E402
-
 
 class RouteAInput(Input):
     value: int = 0
@@ -719,6 +718,8 @@ async def test_get_infrastructure_visible_in_http_handler():
     from any code path, including app-author routes that call get_infrastructure()
     directly rather than going through create_app_handler_service().
     """
+    import contextvars
+
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
 
@@ -728,6 +729,25 @@ async def test_get_infrastructure_visible_in_http_handler():
     # Simulate startup: set infrastructure before the server begins serving.
     set_infrastructure(InfrastructureContext())
 
+    # --- Core regression guard ---
+    # httpx.ASGITransport runs in the same inherited context, so it would pass even
+    # with a ContextVar-backed implementation.  Run get_infrastructure() in a
+    # completely fresh Context (no inherited ContextVar values) — exactly what uvicorn
+    # creates per request — to ensure a ContextVar regression would be caught.
+    fresh_ctx = contextvars.Context()
+    result: dict[str, bool] = {}
+
+    def _check_in_fresh_ctx() -> None:
+        result["found"] = get_infrastructure() is not None
+
+    fresh_ctx.run(_check_in_fresh_ctx)
+
+    assert result.get("found"), (
+        "get_infrastructure() returned None in a fresh contextvars.Context() — "
+        "the uvicorn ContextVar isolation bug has regressed"
+    )
+
+    # --- End-to-end smoke test through the FastAPI stack ---
     app = FastAPI()
 
     @app.get("/infra-check")
@@ -741,7 +761,4 @@ async def test_get_infrastructure_visible_in_http_handler():
         resp = await client.get("/infra-check")
 
     assert resp.status_code == 200
-    assert resp.json()["found"] is True, (
-        "get_infrastructure() returned None inside a FastAPI route handler — "
-        "the uvicorn ContextVar isolation bug has regressed"
-    )
+    assert resp.json()["found"] is True
