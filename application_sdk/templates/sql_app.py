@@ -48,12 +48,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
 from application_sdk.common.sql_filters import normalize_filters
+from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.execution import build_output_path
 from application_sdk.infrastructure.context import get_infrastructure
@@ -182,8 +184,9 @@ class SqlApp(App):
             count = len(result) if result is not None else 0
             logger.info("Fetched %d databases", count)
             # Write to output
-            if count > 0 and input.output_path:
-                output_dir = Path(input.output_path) / "raw" / "database"
+            output_path = self._resolve_output_path(input)
+            if count > 0 and output_path:
+                output_dir = Path(output_path) / "raw" / "database"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
             return FetchDatabasesOutput(
@@ -207,8 +210,9 @@ class SqlApp(App):
             result = await client.get_results(sql)
             count = len(result) if result is not None else 0
             logger.info("Fetched %d schemas", count)
-            if count > 0 and input.output_path:
-                output_dir = Path(input.output_path) / "raw" / "schema"
+            output_path = self._resolve_output_path(input)
+            if count > 0 and output_path:
+                output_dir = Path(output_path) / "raw" / "schema"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
             return FetchSchemasOutput(
@@ -232,8 +236,9 @@ class SqlApp(App):
             result = await client.get_results(sql)
             count = len(result) if result is not None else 0
             logger.info("Fetched %d tables", count)
-            if count > 0 and input.output_path:
-                output_dir = Path(input.output_path) / "raw" / "table"
+            output_path = self._resolve_output_path(input)
+            if count > 0 and output_path:
+                output_dir = Path(output_path) / "raw" / "table"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
             return FetchTablesOutput(
@@ -257,8 +262,9 @@ class SqlApp(App):
             result = await client.get_results(sql)
             count = len(result) if result is not None else 0
             logger.info("Fetched %d columns", count)
-            if count > 0 and input.output_path:
-                output_dir = Path(input.output_path) / "raw" / "column"
+            output_path = self._resolve_output_path(input)
+            if count > 0 and output_path:
+                output_dir = Path(output_path) / "raw" / "column"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
             return FetchColumnsOutput(
@@ -281,8 +287,9 @@ class SqlApp(App):
             result = await client.get_results(sql)
             count = len(result) if result is not None else 0
             logger.info("Fetched %d views", count)
-            if count > 0 and input.output_path:
-                output_dir = Path(input.output_path) / "raw" / "view"
+            output_path = self._resolve_output_path(input)
+            if count > 0 and output_path:
+                output_dir = Path(output_path) / "raw" / "view"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
             return FetchViewsOutput(
@@ -307,8 +314,9 @@ class SqlApp(App):
             result = await client.get_results(sql)
             count = len(result) if result is not None else 0
             logger.info("Fetched %d procedures", count)
-            if count > 0 and input.output_path:
-                output_dir = Path(input.output_path) / "raw" / "procedure"
+            output_path = self._resolve_output_path(input)
+            if count > 0 and output_path:
+                output_dir = Path(output_path) / "raw" / "procedure"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
             return FetchProceduresOutput(
@@ -367,11 +375,12 @@ class SqlApp(App):
     )
     async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
         """Upload transformed output to the upstream Atlan store."""
-        if not input.output_path:
+        output_path = input.output_path or os.path.join(TEMPORARY_PATH, build_output_path())
+        if not output_path:
             return UploadOutput(migrated_files=0, total_files=0)
 
         result = await transfer_upload(
-            local_path=input.output_path,
+            local_path=output_path,
             storage_path=build_output_path(),
         )
         file_count = result.ref.file_count if result.ref else 0
@@ -461,12 +470,12 @@ class SqlApp(App):
             await self.transform_data(transform_input)
 
         # ── Upload ──────────────────────────────────────────────────────
-        if input.output_path:
-            upload_input = UploadInput(
-                output_path=input.output_path,
-                output_prefix=input.output_prefix,
-            )
-            await self.upload_to_atlan(upload_input)
+        # Always call upload — upload_to_atlan auto-resolves output_path in activity context.
+        upload_input = UploadInput(
+            output_path=input.output_path,
+            output_prefix=input.output_prefix,
+        )
+        await self.upload_to_atlan(upload_input)
 
         return ExtractionOutput(
             databases_extracted=db_result.total_record_count,
@@ -478,6 +487,15 @@ class SqlApp(App):
     # =====================================================================
     # Internal helpers
     # =====================================================================
+
+    @staticmethod
+    def _resolve_output_path(input: ExtractionTaskInput) -> str:
+        """Resolve output_path — auto-set from build_output_path() in activity context."""
+        if not input.output_path:
+            resolved = build_output_path()
+            logger.info("Auto-resolved output_path: %s", resolved)
+            return os.path.join(TEMPORARY_PATH, resolved)
+        return input.output_path
 
     async def _init_sql_client(self, input: ExtractionTaskInput) -> BaseSQLClient:
         """Initialize and return a SQL client from credentials."""
@@ -559,8 +577,9 @@ class SqlApp(App):
         """Generic per-entity transform: read raw parquet → mapper → JSONL."""
         import pandas as pd  # noqa: PLC0415
 
+        output_path = self._resolve_output_path(input)
         raw_dir = (
-            Path(input.output_path) / "raw" / entity_type if input.output_path else None
+            Path(output_path) / "raw" / entity_type if output_path else None
         )
         if raw_dir is None or not raw_dir.exists():
             return TransformOutput(total_record_count=0)
@@ -572,9 +591,11 @@ class SqlApp(App):
 
         connection_qn = ""
         if hasattr(input, "connection") and input.connection:
-            connection_qn = getattr(input.connection, "qualified_name", "") or ""
+            attrs = getattr(input.connection, "attributes", None)
+            if attrs:
+                connection_qn = getattr(attrs, "qualified_name", "") or ""
 
-        output_dir = Path(input.output_path) / "transformed" / entity_type
+        output_dir = Path(output_path) / "transformed" / entity_type
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.jsonl"
 
