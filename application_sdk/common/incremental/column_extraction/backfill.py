@@ -101,8 +101,12 @@ def get_backfill_tables(
 
             return backfill_qns
 
-    except Exception:
-        logger.error("DuckDB analysis failed, returning None", exc_info=True)
+    except ValueError:
+        logger.warning(
+            "Backfill analysis: legitimate skip (no transformed tables); "
+            "returning None",
+            exc_info=True,
+        )
         return None
 
 
