@@ -910,7 +910,7 @@ The Dockerfile MUST follow this exact pattern. Do NOT deviate from the base imag
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM registry.atlan.com/public/app-runtime-base:main-latest
+FROM registry.atlan.com/public/app-runtime-base:3
 
 # git is required for uv to fetch git-sourced dependencies (atlan-application-sdk)
 USER root
@@ -936,7 +936,7 @@ ENV APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR=false
 ```
 
 Key rules:
-- Base image: `registry.atlan.com/public/app-runtime-base:main-latest` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
+- Base image: `registry.atlan.com/public/app-runtime-base:3` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
 - `COPY app/ app/` — only app code, NOT the entire repo
 - `ATLAN_APP_MODULE` — always a single `module:ClassName` entry; use `@entrypoint` methods to expose multiple workflows (comma-separated multi-app is not supported)
 - No `CMD` — the base image handles mode via `APPLICATION_MODE` env var set by Helm
