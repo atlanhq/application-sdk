@@ -57,7 +57,7 @@ Evolution:
 """
 
 import hashlib
-import logging
+import posixpath
 import re
 from enum import StrEnum
 from typing import (
@@ -78,8 +78,9 @@ from pydantic_core import PydanticUndefined
 
 from application_sdk.contracts.types import MaxItems  # noqa: TC001
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
+from application_sdk.observability.logger_adaptor import get_logger
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 # =============================================================================
 # Serializable Enum Base Class
@@ -158,7 +159,24 @@ class Input(BaseModel):
     model_config = ConfigDict()
 
     workflow_id: str = ""
-    """Temporal workflow ID for the current run. Populated by the framework at dispatch time."""
+    """Temporal workflow ID for the current run.
+
+    Populated by the framework at dispatch time
+    (``application_sdk.handler.service`` sets this before the workflow
+    starts).  This is the **canonical way** for apps to access the
+    workflow ID inside a task — read it from the input parameter rather
+    than importing helpers from ``application_sdk.execution._temporal``::
+
+        @task(timeout_seconds=300)
+        async def extract(self, input: ExtractInput) -> ExtractOutput:
+            wf_id = input.workflow_id   # ← do this
+            # not: from application_sdk.execution._temporal.activity_utils
+            #      import get_workflow_id
+
+    See the ``atlan-openapi-app`` reference connector for the canonical
+    pattern, including how to compose run-scoped object-store paths from
+    ``input.workflow_id``.
+    """
 
     correlation_id: str = ""
     """Caller-supplied correlation ID for tracing across systems."""
@@ -714,9 +732,9 @@ class PublishInputMixin(BaseModel):
     include a ``publish`` step in their AE manifest should use this
     as a mixin alongside their own output fields.
 
-    ``publish_state_prefix`` and ``current_state_prefix`` are auto-derived
-    from ``connection_qualified_name`` via a model validator. Apps only
-    need to set ``connection_qualified_name`` and ``transformed_data_prefix``.
+    ``publish_state_prefix``, ``staging_data_prefix``, and ``current_state_prefix``
+    are auto-derived from ``connection_qualified_name`` via a model validator.
+    Apps only need to set ``connection_qualified_name`` and ``transformed_data_prefix``.
 
     Example::
 
@@ -732,6 +750,9 @@ class PublishInputMixin(BaseModel):
     PUBLISH_STATE_PREFIX_TEMPLATE: ClassVar[str] = (
         "persistent-artifacts/apps/atlan-publish-app/state"
         "/{connection_qn}/publish-state"
+    )
+    STAGING_DATA_PREFIX_TEMPLATE: ClassVar[str] = (
+        "persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}"
     )
     CURRENT_STATE_PREFIX_TEMPLATE: ClassVar[str] = (
         "argo-artifacts/{connection_qn}/current-state"
@@ -757,20 +778,25 @@ class PublishInputMixin(BaseModel):
     publish_state_prefix: str = ""
     """Auto-derived from ``connection_qualified_name`` if not set."""
 
+    staging_data_prefix: str = ""
+    """Auto-derived from ``connection_qualified_name`` if not set.
+    Same as ``publish_state_prefix`` but only up to the connection QN
+    (without the ``/publish-state`` suffix)."""
+
     current_state_prefix: str = ""
     """Auto-derived from ``connection_qualified_name`` if not set."""
 
     @model_validator(mode="after")
     def _derive_publish_paths(self) -> "PublishInputMixin":
         """Auto-derive all publish-related paths."""
-        import posixpath
-
         # Auto-resolve output_path from Temporal context if not set
         if not self.output_path:
             try:
-                from temporalio import workflow as _wf
+                from temporalio import (  # noqa: PLC0415 — defensive: try/except wraps "not in Temporal context"
+                    workflow as _wf,
+                )
 
-                from application_sdk.constants import (
+                from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
                     APPLICATION_NAME,
                     WORKFLOW_OUTPUT_PATH_TEMPLATE,
                 )
@@ -780,7 +806,7 @@ class PublishInputMixin(BaseModel):
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )
-            except Exception:
+            except Exception:  # noqa: S110
                 pass  # Not in Temporal context — output_path stays empty
 
         # Derive transformed_data_prefix from output_path
@@ -798,6 +824,10 @@ class PublishInputMixin(BaseModel):
             return self
         if not self.publish_state_prefix:
             self.publish_state_prefix = self.PUBLISH_STATE_PREFIX_TEMPLATE.format(
+                connection_qn=cqn
+            )
+        if not self.staging_data_prefix:
+            self.staging_data_prefix = self.STAGING_DATA_PREFIX_TEMPLATE.format(
                 connection_qn=cqn
             )
         if not self.current_state_prefix:

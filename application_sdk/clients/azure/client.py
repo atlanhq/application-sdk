@@ -113,7 +113,9 @@ class AzureClient(ClientInterface):
         self.credential: Optional[TokenCredential] = None
         self.auth_provider = AzureAuthProvider()
         self._services: Dict[str, Any] = {}
-        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
+            max_workers=max_workers
+        )
         self._connection_health = False
         self._kwargs = kwargs
 
@@ -132,12 +134,17 @@ class AzureClient(ClientInterface):
         if credentials:
             self.credentials = credentials
 
+        if self._executor is None:
+            raise ClientError(
+                f"{ClientError.CLIENT_AUTH_ERROR}: client has been closed; instantiate a new AzureClient"
+            )
+
         try:
             logger.info("Loading Azure client...")
 
             # Handle credential resolution
             if "credential_guid" in self.credentials:
-                from application_sdk.infrastructure import (
+                from application_sdk.infrastructure import (  # noqa: PLC0415 — optional dep: dapr (azure-dapr credential pattern)
                     AsyncDaprClient,
                     DaprCredentialVault,
                 )
@@ -186,6 +193,8 @@ class AzureClient(ClientInterface):
             raise ClientError(
                 f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameter types - {str(e)}"
             ) from e
+        except ClientError:
+            raise
         except Exception as e:
             raise ClientError(
                 f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
@@ -205,16 +214,16 @@ class AzureClient(ClientInterface):
                         await service_client.disconnect()
                 except Exception:
                     logger.warning(
-                        "Error closing service client",
-                        service_name=service_name,
-                        exc_info=True,
+                        "Error closing service client %s", service_name, exc_info=True
                     )
 
             # Clear service cache
             self._services.clear()
 
             # Shutdown executor
-            self._executor.shutdown(wait=True)
+            if self._executor is not None:
+                self._executor.shutdown(wait=True)
+                self._executor = None
 
             # Reset connection health
             self._connection_health = False
@@ -266,6 +275,11 @@ class AzureClient(ClientInterface):
                     error=error,
                 )
             except Exception as e:
+                logger.debug(
+                    "Service health check failed for %s",
+                    service_name,
+                    exc_info=True,
+                )
                 health_status.services[service_name] = ServiceHealth(
                     status="error", error=str(e)
                 )
@@ -326,7 +340,9 @@ class AzureClient(ClientInterface):
             loop.create_task(self.close())
         except RuntimeError:
             # No event loop running, can't schedule async cleanup
-            logger.warning("No event loop running, async cleanup not possible")
+            logger.warning(
+                "No event loop running, async cleanup not possible", exc_info=True
+            )
 
     async def __aenter__(self):
         """Async context manager entry."""

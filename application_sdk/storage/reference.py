@@ -59,7 +59,9 @@ def _make_storage_path(ref: FileReference, *, output_path: str | None = None) ->
 
     Delegates to :meth:`StorageTier._make_file_ref_path`.
     """
-    from application_sdk.constants import APPLICATION_NAME
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        APPLICATION_NAME,
+    )
 
     suffix = Path(ref.local_path).suffix if ref.local_path else ""
     return ref.tier._make_file_ref_path(
@@ -74,7 +76,9 @@ def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) 
 
     Delegates to :meth:`StorageTier._make_file_ref_prefix`.
     """
-    from application_sdk.constants import APPLICATION_NAME
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        APPLICATION_NAME,
+    )
 
     return ref.tier._make_file_ref_prefix(
         run_prefix=output_path or "",
@@ -94,9 +98,11 @@ def _sha256_hex_file(path: Path) -> str:
     return h.hexdigest()
 
 
-async def _get_stored_sidecar(storage_path: str, store: "ObjectStore") -> str | None:
+async def _get_stored_sidecar(storage_path: str, store: ObjectStore) -> str | None:
     """Fetch the stored sha256 sidecar for *storage_path*, or None if absent."""
-    from application_sdk.storage.ops import _get_bytes
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _get_bytes,
+    )
 
     try:
         raw = await _get_bytes(storage_path + ".sha256", store)
@@ -117,7 +123,7 @@ def _write_local_sidecar(local_path: str, sha256: str) -> None:
 
 
 async def persist_file_reference(
-    store: "ObjectStore",
+    store: ObjectStore,
     ref: FileReference,
     *,
     key: str | None = None,
@@ -151,8 +157,13 @@ async def persist_file_reference(
         ValueError: If ``ref.tier`` is ``RETAINED`` and *output_path* is not
             provided.
     """
-    from application_sdk.storage.errors import StorageError
-    from application_sdk.storage.ops import _put, upload_file
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _put,
+        upload_file,
+    )
 
     if ref.is_durable:
         return ref  # already persisted — nothing to do
@@ -228,7 +239,7 @@ async def persist_file_reference(
 
 
 async def materialize_file_reference(
-    store: "ObjectStore",
+    store: ObjectStore,
     ref: FileReference,
     *,
     local_dir: str | None = None,
@@ -259,9 +270,17 @@ async def materialize_file_reference(
         StorageNotFoundError: If the key does not exist in the store.
         StorageError: If the downloaded data does not match the stored sidecar.
     """
-    from application_sdk.storage.batch import list_keys
-    from application_sdk.storage.errors import StorageError, StorageNotFoundError
-    from application_sdk.storage.ops import download_file
+    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        list_keys,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+        StorageNotFoundError,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        download_file,
+        exists,
+    )
 
     if not ref.is_durable or ref.storage_path is None:
         return ref  # nothing to materialise
@@ -285,13 +304,12 @@ async def materialize_file_reference(
             local_hash = _sha256_hex_file(Path(ref.local_path))
             stored_hash = await _get_stored_sidecar(ref.storage_path, store)
 
-            if stored_hash is not None:
-                if local_hash == stored_hash:
-                    # File is intact — stamp local sidecar and reuse.
-                    _write_local_sidecar(ref.local_path, local_hash)
-                    return ref
-                # Hash mismatch — file is corrupt; fall through to re-download.
-            # else: no stored sidecar → conservative: re-download (cannot verify).
+            if stored_hash is not None and local_hash == stored_hash:
+                # File is intact — stamp local sidecar and reuse.
+                _write_local_sidecar(ref.local_path, local_hash)
+                return ref
+            # Otherwise (no stored sidecar OR hash mismatch) fall through
+            # to re-download — conservative since we cannot verify.
 
         # Determine output path.
         if ref.local_path is not None:
@@ -305,6 +323,23 @@ async def materialize_file_reference(
             else:
                 fd, out_path = tempfile.mkstemp(suffix=suffix)
             os.close(fd)  # close immediately; download_file will overwrite
+
+        # list_keys() with empty result alone cannot distinguish "single
+        # file at this exact key" from "no objects under this prefix":
+        # list_keys appends a trailing slash so a real single file always
+        # lists empty here, AND some stores (notably GCS with conditional
+        # IAM) silently return an empty listing when the caller lacks
+        # permission. Without this HEAD, that ambiguity collapses into a
+        # misleading 404 from download_file on a bare prefix.
+        if not await exists(ref.storage_path, store, normalize=False):
+            raise StorageNotFoundError(
+                f"FileReference path '{ref.storage_path}' resolved to no "
+                f"objects under the prefix and no single file at the exact "
+                f"key. Either the upstream writer has not deposited files "
+                f"yet, the path is wrong, or the store credentials lack "
+                f"list/read permission on this location.",
+                key=ref.storage_path,
+            )
 
         sha256 = await download_file(
             ref.storage_path, out_path, store, compute_hash=True, normalize=False
@@ -348,7 +383,7 @@ async def materialize_file_reference(
 
         prefix = ref.storage_path.rstrip("/") + "/"
         for key in data_keys:
-            rel = key[len(prefix) :] if key.startswith(prefix) else key
+            rel = key.removeprefix(prefix)
             dest = os.path.join(local_directory, rel)
             await download_file(key, dest, store, compute_hash=False, normalize=False)
 

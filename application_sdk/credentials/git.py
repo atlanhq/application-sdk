@@ -27,7 +27,9 @@ class GitSshCredential(CertificateCredential, frozen=True):
         return "git_ssh"
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialValidationError,
+        )
 
         if not self.key_data:
             raise CredentialValidationError(
@@ -49,7 +51,9 @@ class GitTokenCredential(BearerTokenCredential, frozen=True):
         return "git_token"
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialValidationError,
+        )
 
         if not self.token:
             raise CredentialValidationError(

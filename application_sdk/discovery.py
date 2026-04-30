@@ -18,16 +18,15 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from application_sdk.app.base import App
+from application_sdk.app.registry import AppRegistry
 from application_sdk.errors import DISCOVERY_ERROR, ErrorCode
+from application_sdk.handler.base import Handler
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-if TYPE_CHECKING:
-    from application_sdk.app.base import App
-    from application_sdk.handler.base import Handler
 
 
 class DiscoveryError(Exception):
@@ -129,15 +128,11 @@ def _import_class(module_name: str, class_name: str) -> type[Any]:
 
 def _is_app_class(cls: type[Any]) -> bool:
     """Return True if cls is an App subclass (not App itself)."""
-    from application_sdk.app.base import App
-
     return isinstance(cls, type) and issubclass(cls, App) and cls is not App
 
 
 def _is_handler_class(cls: type[Any]) -> bool:
     """Return True if cls is a Handler subclass (not Handler itself)."""
-    from application_sdk.handler.base import Handler
-
     return isinstance(cls, type) and issubclass(cls, Handler) and cls is not Handler
 
 
@@ -208,9 +203,9 @@ def load_handler_class(
             )
 
         logger.info(
-            "Loaded handler class from explicit path",
-            handler_module_path=handler_module_path,
-            handler_class=class_name,
+            "Loaded handler class from explicit path handler_module_path=%s class=%s",
+            handler_module_path,
+            class_name,
         )
         return cls  # type: ignore[return-value]
 
@@ -227,28 +222,26 @@ def load_handler_class(
         cls = getattr(module, handler_class_name)
         if _is_handler_class(cls):
             logger.info(
-                "Loaded handler class by convention",
-                module_path=module_path,
-                handler_class=handler_class_name,
+                "Loaded handler class by convention module_path=%s class=%s",
+                module_path,
+                handler_class_name,
             )
             return cls  # type: ignore[return-value]
 
     # Fall back to scanning for any Handler subclass
-    from application_sdk.handler.base import Handler
-
     for name, obj in inspect.getmembers(module, inspect.isclass):
         if issubclass(obj, Handler) and obj is not Handler:
             logger.info(
-                "Found handler class by type inspection",
-                module_path=module_path,
-                handler_class=name,
+                "Found handler class by type inspection module_path=%s class=%s",
+                module_path,
+                name,
             )
             return obj  # type: ignore[return-value]
 
     logger.debug(
-        "No handler class found for app",
-        module_path=module_path,
-        tried_class_name=handler_class_name,
+        "No handler class found for app module_path=%s tried_class=%s",
+        module_path,
+        handler_class_name,
     )
     return None
 
@@ -277,8 +270,6 @@ def validate_app_class(cls: type[App]) -> None:
             "Ensure it inherits from App correctly."
         )
 
-    from application_sdk.app.registry import AppRegistry
-
     registry = AppRegistry.get_instance()
     app_name = cls._app_name  # type: ignore[attr-defined]
 
@@ -289,7 +280,7 @@ def validate_app_class(cls: type[App]) -> None:
         )
 
     logger.debug(
-        "App class validated",
-        app_name=app_name,
-        app_version=cls._app_version,  # type: ignore[attr-defined]
+        "App class validated app_name=%s version=%s",
+        app_name,
+        cls._app_version,  # type: ignore[attr-defined]
     )

@@ -94,15 +94,15 @@ async def resolve_credential_file(
         with open(file_path, "wb") as f:
             f.write(decoded_bytes)
         logger.info(
-            "Resolved credential file from base64 content",
-            path=file_path,
-            credential_filename=filename,
+            "Resolved credential file from base64 content: path=%s filename=%s",
+            file_path,
+            filename,
         )
         return file_path
     except Exception:
         logger.error(
-            "Failed to resolve credential file from base64 content",
-            credential_filename=filename,
+            "Failed to resolve credential file from base64 content: filename=%s",
+            filename,
             exc_info=True,
         )
         return None

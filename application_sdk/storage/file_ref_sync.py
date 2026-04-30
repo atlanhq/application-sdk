@@ -149,7 +149,7 @@ async def _replace_refs(
         A new object tree with replaced FileReference instances (original
         objects are never mutated).
     """
-    from application_sdk.storage.reference import (
+    from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         materialize_file_reference,
         persist_file_reference,
     )

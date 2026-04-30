@@ -35,12 +35,17 @@ def get_commits_since_last_tag(current_version):
     if tag in result.stdout:
         range_spec = f"{tag}...HEAD"
     else:
-        old_tag = "v0.1.0-rc.1"
-        # If no tag exists, get commits from beginning (as v0.1.0-rc.1)
+        old_tag = subprocess.check_output(
+            ["git", "rev-list", "--max-parents=0", "HEAD"],
+            text=True,
+        ).strip()
         range_spec = f"{old_tag}...HEAD"
 
-    # Hardcode to the correct repo to fetch commits from
-    owner, repo = "atlanhq", "application-sdk"
+    # Read the repo from the environment so this script works for any downstream app
+    # (GITHUB_REPOSITORY is always set in GitHub Actions; default to application-sdk for local runs)
+    owner, repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk").split(
+        "/", 1
+    )
     compare_path = f"repos/{owner}/{repo}/compare/{range_spec}"
 
     # Use a standard pipe '|' delimiter to avoid encoding issues.
@@ -72,8 +77,9 @@ def categorize_commits(commits):
     """
     categories = {"features": [], "fixes": [], "chores": [], "other": []}
 
-    # Hardcode to the correct repo for generating commit links
-    owner, repo = "atlanhq", "application-sdk"
+    owner, repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk").split(
+        "/", 1
+    )
 
     for commit in commits:
         if not commit:
@@ -106,8 +112,9 @@ def get_full_changelog_url(current_version, new_version):
     """
     Generate the full changelog URL for GitHub comparison.
     """
-    # Hardcode to the correct repo for generating the full changelog link
-    owner, repo = "atlanhq", "application-sdk"
+    owner, repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk").split(
+        "/", 1
+    )
     return (
         f"https://github.com/{owner}/{repo}/compare/v{current_version}...v{new_version}"
     )

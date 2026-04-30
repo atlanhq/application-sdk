@@ -1,10 +1,11 @@
-"""Unit tests for CredentialRef and factory functions."""
+"""Unit tests for CredentialRef, factory functions, and CredentialRef.resolve()."""
 
 import pytest
 from pydantic import ValidationError
 
 from application_sdk.credentials.ref import (
     CredentialRef,
+    CredentialResolvable,
     api_key_ref,
     atlan_api_token_ref,
     atlan_oauth_client_ref,
@@ -16,6 +17,8 @@ from application_sdk.credentials.ref import (
     legacy_credential_ref,
     oauth_client_ref,
 )
+from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.templates.contracts.sql_metadata import ExtractionInput
 
 
 class TestCredentialRefConstruction:
@@ -127,3 +130,72 @@ class TestTemporalSerialization:
         restored = CredentialRef(**data)
         assert restored == ref
         assert restored.credential_guid == "abc-123"
+
+
+class TestCredentialResolvableProtocol:
+    def test_extraction_input_satisfies_protocol(self):
+        inp = ExtractionInput(credential_guid="abc-123")
+        assert isinstance(inp, CredentialResolvable)
+
+    def test_plain_object_does_not_satisfy(self):
+        assert not isinstance("not-an-input", CredentialResolvable)
+
+
+class TestCredentialRefResolve:
+    def test_resolve_agent_with_populated_spec(self):
+        spec = AgentCredentialSpec.model_validate(
+            {
+                "agent-name": "cloudsql-postgres-agent",
+                "secret-manager": "awssecretmanager",
+                "secret-path": "atlan/dev/test",
+                "auth-type": "basic",
+                "basic.username": "username",
+                "basic.password": "password",
+            }
+        )
+        inp = ExtractionInput(
+            extraction_method="agent",
+            agent_json=spec,
+        )
+        ref = CredentialRef.resolve(inp)
+        assert ref.agent_spec is not None
+        assert ref.credential_guid == ""
+
+    def test_resolve_direct_with_guid(self):
+        inp = ExtractionInput(
+            extraction_method="direct",
+            credential_guid="abc-123",
+        )
+        ref = CredentialRef.resolve(inp)
+        assert ref.credential_guid == "abc-123"
+        assert ref.agent_spec is None
+
+    def test_resolve_empty_method_defaults_to_direct(self):
+        inp = ExtractionInput(
+            extraction_method="",
+            credential_guid="abc-123",
+        )
+        ref = CredentialRef.resolve(inp)
+        assert ref.credential_guid == "abc-123"
+
+    def test_resolve_no_credential_source_raises(self):
+        inp = ExtractionInput(
+            extraction_method="direct",
+            credential_guid="",
+        )
+        with pytest.raises(ValueError, match="No routable credential source"):
+            CredentialRef.resolve(inp)
+
+    def test_resolve_non_resolvable_raises_type_error(self):
+        with pytest.raises(TypeError, match="Expected a CredentialResolvable"):
+            CredentialRef.resolve("not-a-model")  # type: ignore[arg-type]
+
+    def test_resolve_agent_with_empty_spec_and_guid_falls_through(self):
+        """Agent mode with unpopulated agent_json but valid guid should fail
+        because resolve() requires explicit direct mode for GUID resolution."""
+        inp = ExtractionInput(
+            extraction_method="agent",
+            credential_guid="abc-123",
+        )
+        with pytest.raises(ValueError, match="No routable credential source"):
+            CredentialRef.resolve(inp)

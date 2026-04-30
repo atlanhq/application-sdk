@@ -1,22 +1,19 @@
 """
-Writer Data Integrity Tests - Prevents data loss regression in JsonFileWriter.
+Writer Data Integrity Tests - Prevents data loss regression in file writers.
 
-This test suite verifies that both pandas and daft writers maintain data integrity
-when multiple write() calls are made. It specifically guards against a bug where
-the daft writer would lose data due to:
-1. Not uploading files at the end of each write() call
-2. Not incrementing chunk_count after each write() call
-3. File name collisions causing overwrites in object store
+This test suite verifies that writers maintain data integrity when multiple
+write() calls are made and when DataFrames exceed buffer_size.
 
-The bug manifested when using retain_local_copy=False (production default):
-- Write 1: uploads chunk-0-part0.json with records 0-99
-- Write 2: resets chunk_part, creates NEW chunk-0-part0.json with records 100-199
-- Result: records 0-99 are overwritten and lost
+Guards against two classes of bugs:
+1. JSON/daft writer: file name collisions across write() calls (fixed earlier)
+2. Parquet writer: pq.write_table() overwrites within a single write() call
+   when DataFrame exceeds buffer_size, since parquet cannot append (HYP-773)
 
 Run with:
-    uv run pytest tests/unit/io/test_writer_data_integrity.py -v -s
+    uv run pytest tests/unit/storage/formats/test_writer_data_integrity.py -v -s
 """
 
+import glob
 import json
 import os
 import shutil
@@ -50,7 +47,7 @@ class TestWriterDataIntegrity:
                 try:
                     record = json.loads(line)
                     ids.add(record.get("id"))
-                except Exception:
+                except Exception:  # noqa: S110  # skip non-JSON lines; test assertions validate id completeness
                     pass
         return ids
 
@@ -267,3 +264,170 @@ class TestWriterDataIntegrity:
             duplicates = {f: c for f, c in counts.items() if c > 1}
 
             assert not duplicates, f"Duplicate file uploads detected: {duplicates}"
+
+
+class TestParquetWriterDataIntegrity:
+    """Verify ParquetFileWriter preserves all data on disk AND in object store.
+
+    Parquet's pq.write_table() overwrites the target file (unlike JSON which
+    appends). The _flush_buffer override in ParquetFileWriter ensures each
+    sub-chunk gets a unique filename and is uploaded immediately. See HYP-773.
+
+    All tests use buffer_size=50 and verify:
+    - Disk: all rows readable from local parquet files
+    - Upload: all rows sent to object store via _upload_file
+    """
+
+    BUFFER_SIZE = 50
+
+    @pytest.fixture
+    def temp_dir(self):
+        temp_path = tempfile.mkdtemp(prefix="parquet_integrity_")
+        yield temp_path
+        shutil.rmtree(temp_path, ignore_errors=True)
+
+    async def _run_write_scenario(
+        self, temp_dir: str, row_count: int, num_writes: int = 1
+    ) -> dict:
+        """Run a write scenario and return disk + upload results."""
+        from application_sdk.storage.formats.parquet import ParquetFileWriter
+
+        upload_calls: List[tuple] = []
+
+        async def mock_upload(source: str, destination: str = "", **kwargs):
+            if os.path.exists(source):
+                with open(source, "rb") as f:
+                    upload_calls.append((source, f.read()))
+
+        with patch(
+            "application_sdk.storage.formats._upload_file",
+            new_callable=AsyncMock,
+            side_effect=mock_upload,
+        ):
+            writer = ParquetFileWriter(
+                path=temp_dir,
+                typename="test_entity",
+                buffer_size=self.BUFFER_SIZE,
+                use_consolidation=False,
+            )
+
+            rows_per_write = row_count // num_writes
+            total = 0
+            for batch_idx in range(num_writes):
+                start = batch_idx * rows_per_write
+                df = pd.DataFrame({"id": list(range(start, start + rows_per_write))})
+                await writer.write(df)
+                total += rows_per_write
+
+            await writer.close()
+
+        # Disk: read back all parquet files
+        parquet_files = glob.glob(
+            os.path.join(temp_dir, "test_entity", "**", "*.parquet"),
+            recursive=True,
+        )
+        if parquet_files:
+            disk_df = pd.concat(
+                [pd.read_parquet(f) for f in parquet_files], ignore_index=True
+            )
+        else:
+            disk_df = pd.DataFrame()
+
+        # Upload: reconstruct rows from captured upload content
+        upload_rows = 0
+        upload_ids: Set[int] = set()
+        for source, content in upload_calls:
+            if not source.endswith(".parquet") or "statistics" in source:
+                continue
+            tmp = os.path.join(temp_dir, "_up_" + os.path.basename(source))
+            with open(tmp, "wb") as f:
+                f.write(content)
+            chunk_df = pd.read_parquet(tmp)
+            upload_rows += len(chunk_df)
+            upload_ids.update(chunk_df["id"].tolist())
+
+        return {
+            "disk_rows": len(disk_df),
+            "disk_ids": set(disk_df["id"].tolist()) if len(disk_df) > 0 else set(),
+            "upload_rows": upload_rows,
+            "upload_ids": upload_ids,
+            "expected": total,
+        }
+
+    def _assert_no_data_loss(self, r: dict, expected: int) -> None:
+        """Assert zero data loss on both disk and object store."""
+        expected_ids = set(range(expected))
+        assert (
+            r["disk_rows"] == expected
+        ), f"Disk data loss: {r['disk_rows']}/{expected} rows"
+        assert r["disk_ids"] == expected_ids, "Disk: missing IDs detected"
+        assert (
+            r["upload_rows"] == expected
+        ), f"Upload data loss: {r['upload_rows']}/{expected} rows"
+        assert r["upload_ids"] == expected_ids, "Upload: missing IDs detected"
+
+    # --- Single write() scenarios ---
+
+    async def test_single_row(self, temp_dir: str):
+        """1 row: minimal case, well under buffer_size."""
+        r = await self._run_write_scenario(temp_dir, row_count=1)
+        self._assert_no_data_loss(r, 1)
+
+    async def test_rows_less_than_buffer_size(self, temp_dir: str):
+        """30 rows < buffer_size=50: single sub-chunk, no splitting."""
+        r = await self._run_write_scenario(temp_dir, row_count=30)
+        self._assert_no_data_loss(r, 30)
+
+    async def test_rows_equal_to_buffer_size(self, temp_dir: str):
+        """50 rows == buffer_size=50: exactly one sub-chunk, boundary."""
+        r = await self._run_write_scenario(temp_dir, row_count=50)
+        self._assert_no_data_loss(r, 50)
+
+    async def test_rows_just_over_buffer_size(self, temp_dir: str):
+        """51 rows: 2 sub-chunks (50+1). First overwrite scenario."""
+        r = await self._run_write_scenario(temp_dir, row_count=51)
+        self._assert_no_data_loss(r, 51)
+
+    async def test_rows_double_buffer_size(self, temp_dir: str):
+        """100 rows == 2x buffer_size: exactly 2 sub-chunks (50+50)."""
+        r = await self._run_write_scenario(temp_dir, row_count=100)
+        self._assert_no_data_loss(r, 100)
+
+    async def test_rows_exceeding_buffer_size(self, temp_dir: str):
+        """120 rows: 3 sub-chunks (50+50+20). Core HYP-773 regression case.
+
+        Before the fix, all three sub-chunks wrote to chunk-0-part0.parquet
+        and only the last 20 rows survived (83% data loss).
+        """
+        r = await self._run_write_scenario(temp_dir, row_count=120)
+        self._assert_no_data_loss(r, 120)
+
+    async def test_rows_many_sub_chunks(self, temp_dir: str):
+        """501 rows: 11 sub-chunks (10x50 + 1). Stress test for part numbering."""
+        r = await self._run_write_scenario(temp_dir, row_count=501)
+        self._assert_no_data_loss(r, 501)
+
+    # --- Multiple write() scenarios ---
+
+    async def test_multiple_small_writes(self, temp_dir: str):
+        """5 writes of 30 rows each: all under buffer_size, tests chunk_count."""
+        r = await self._run_write_scenario(temp_dir, row_count=150, num_writes=5)
+        self._assert_no_data_loss(r, 150)
+
+    async def test_multiple_writes_each_exceeding_buffer_size(self, temp_dir: str):
+        """3 writes of 200 rows each: tests correctness across write() calls.
+
+        Each write() produces 4 sub-chunks (50+50+50+50). Verifies data is
+        preserved both within each write() and across write() calls.
+        """
+        r = await self._run_write_scenario(temp_dir, row_count=600, num_writes=3)
+        self._assert_no_data_loss(r, 600)
+
+    async def test_multiple_writes_mixed_sizes(self, temp_dir: str):
+        """4 writes of 75 rows each: 2 sub-chunks per write (50+25).
+
+        Tests that chunk_count advances correctly across write() calls
+        when each write produces a partial last sub-chunk.
+        """
+        r = await self._run_write_scenario(temp_dir, row_count=300, num_writes=4)
+        self._assert_no_data_loss(r, 300)

@@ -29,7 +29,9 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
         return "atlan_api_token"
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialValidationError,
+        )
 
         if not self.token:
             raise CredentialValidationError(
@@ -42,14 +44,16 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
                 credential_name="atlan_api_token",
             )
         # Lazy import — avoids hard dependency for apps that don't use Atlan creds.
-        from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]
+        from pyatlan_v9.client.aio import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
+            AsyncAtlanClient,
+        )
 
         client = AsyncAtlanClient(base_url=self.base_url, api_key=self.token)
         try:
             await client.user.get_current()
         except Exception as exc:
             raise CredentialValidationError(
-                f"AtlanApiToken validation failed: {exc}",
+                f"AtlanApiToken validation failed: {type(exc).__name__}",
                 credential_name="atlan_api_token",
                 cause=exc,
             ) from exc
@@ -133,7 +137,9 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
         )
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import CredentialValidationError
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            CredentialValidationError,
+        )
 
         if not self.client_id:
             raise CredentialValidationError(
@@ -156,14 +162,16 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
                 credential_name="atlan_oauth_client",
             )
         # Lazy import — avoids hard dependency for apps that don't use Atlan creds.
-        from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]
+        from pyatlan_v9.client.aio import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
+            AsyncAtlanClient,
+        )
 
         client = AsyncAtlanClient(base_url=self.base_url, api_key=self.access_token)
         try:
             await client.user.get_current()
         except Exception as exc:
             raise CredentialValidationError(
-                f"AtlanOAuthClient validation failed: {exc}",
+                f"AtlanOAuthClient validation failed: {type(exc).__name__}",
                 credential_name="atlan_oauth_client",
                 cause=exc,
             ) from exc

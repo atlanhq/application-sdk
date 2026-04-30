@@ -30,14 +30,19 @@ def create_async_atlan_client(cred: "Credential") -> "object":
     Raises:
         TypeError: If ``cred`` is not a supported Atlan credential type.
     """
-    from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]
+    from pyatlan_v9.client.aio import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
+        AsyncAtlanClient,
+    )
 
-    from application_sdk.credentials.atlan import AtlanApiToken, AtlanOAuthClient
+    from application_sdk.credentials.atlan import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        AtlanApiToken,
+        AtlanOAuthClient,
+    )
 
     logger.debug(
-        "creating AsyncAtlanClient",
-        credential_type=type(cred).__name__,
-        base_url=getattr(cred, "base_url", None),
+        "creating AsyncAtlanClient credential_type=%s base_url=%s",
+        type(cred).__name__,
+        getattr(cred, "base_url", None),
     )
     if isinstance(cred, AtlanApiToken):
         return AsyncAtlanClient(base_url=cred.base_url, api_key=cred.token)
@@ -95,8 +100,7 @@ class AtlanClientMixin:
         cached = self.app_state.get(cache_key)  # type: ignore[attr-defined]
         if cached is not None:
             logger.debug(
-                "reusing cached Atlan async client",
-                credential_name=credential.name,
+                "reusing cached Atlan async client credential=%s", credential.name
             )
             return cached
 
@@ -106,8 +110,8 @@ class AtlanClientMixin:
             self.app_state.set(_VALIDATED_ASYNC_CLIENT_KEY, None)  # type: ignore[attr-defined]
             self.app_state.set(cache_key, validated)  # type: ignore[attr-defined]
             logger.debug(
-                "reusing validated Atlan async client",
-                credential_name=credential.name,
+                "reusing validated Atlan async client credential=%s",
+                credential.name,
             )
             return validated
 
@@ -116,8 +120,8 @@ class AtlanClientMixin:
         client = create_async_atlan_client(cred)
         self.app_state.set(cache_key, client)  # type: ignore[attr-defined]
         logger.debug(
-            "Atlan async client created and cached",
-            credential_name=credential.name,
-            credential_type=type(cred).__name__,
+            "Atlan async client created and cached credential=%s type=%s",
+            credential.name,
+            type(cred).__name__,
         )
         return client
