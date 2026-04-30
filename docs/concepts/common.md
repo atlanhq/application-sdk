@@ -22,7 +22,7 @@ def my_function(data):
         logger.error("processing_failed", exc_info=True)
 ```
 
-Use `%`-style format strings — do not pass extra kwargs as structured fields (they are an anti-pattern in this codebase and can break log exporters).
+Use `%`-style format strings in message bodies. Reserve extra kwargs for `exc_info=True` and framework-bound fields (such as `run_id=`, `correlation_id=`); do not encode user or business data in kwargs.
 
 ### Configuration
 
@@ -38,9 +38,14 @@ Logging is configured via environment variables:
 
 The SDK provides a standardized error system with error codes and categories.
 
-### Error Code Format
+The SDK has two error-code namespaces:
 
-Error codes follow the format: `Atlan-{Component}-{HTTP_Code}-{Unique_ID}`
+- **`application_sdk.common.error_codes`** — categorised HTTP-style codes for client-facing errors. Format: `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` (e.g. `ATLAN-CLIENT-403-00`).
+- **`application_sdk.errors`** — app-framework codes for Temporal / monitoring signals. Format: `AAF-{COMP}-{NNN}` (e.g. `AAF-APP-001`).
+
+### Error Code Format (`application_sdk.common.error_codes`)
+
+Error codes follow the format: `ATLAN-{Component}-{HTTP_Code}-{Unique_ID}`
 
 Example: `ATLAN-CLIENT-403-00` for a request validation error.
 
@@ -61,7 +66,7 @@ from application_sdk.common.error_codes import ClientError
 try:
     validate_input(data)
 except ValidationError as e:
-    raise ClientError(f"{ClientError.INPUT_VALIDATION_ERROR}: {e}") from e
+    raise ClientError(f"{ClientError.REQUEST_VALIDATION_ERROR}: {e}") from e
 ```
 
 For application-level error codes, use the top-level `application_sdk.errors` module:

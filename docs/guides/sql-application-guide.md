@@ -410,10 +410,10 @@ Each `@task` method becomes a Temporal activity. The `run()` method orchestrates
 
 | Method | Input | Output | Default behavior |
 |--------|-------|--------|-----------------|
-| `fetch_databases` | `FetchDatabasesInput` | `FetchDatabasesOutput` | Required --- raises `NotImplementedError` |
-| `fetch_schemas` | `FetchSchemasInput` | `FetchSchemasOutput` | Required --- raises `NotImplementedError` |
-| `fetch_tables` | `FetchTablesInput` | `FetchTablesOutput` | Required --- raises `NotImplementedError` |
-| `fetch_columns` | `FetchColumnsInput` | `FetchColumnsOutput` | Required --- raises `NotImplementedError` |
+| `fetch_databases` | `FetchDatabasesInput` | `FetchDatabasesOutput` | Default uses `sql_client_class` + `fetch_database_sql`; raises `NotImplementedError` if those are unset |
+| `fetch_schemas` | `FetchSchemasInput` | `FetchSchemasOutput` | Default uses `sql_client_class` + `fetch_schema_sql`; raises `NotImplementedError` if those are unset |
+| `fetch_tables` | `FetchTablesInput` | `FetchTablesOutput` | Default uses `sql_client_class` + `fetch_table_sql`; raises `NotImplementedError` if those are unset |
+| `fetch_columns` | `FetchColumnsInput` | `FetchColumnsOutput` | Default uses `sql_client_class` + `fetch_column_sql`; raises `NotImplementedError` if those are unset |
 | `fetch_views` | `FetchViewsInput` | `FetchViewsOutput` | Optional --- add for databases with views |
 | `transform_data` | `TransformInput` | `TransformOutput` | Override to map raw results via asset mapper |
 

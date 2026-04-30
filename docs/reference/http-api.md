@@ -56,7 +56,7 @@ Run preflight checks (connectivity, permission, schema access).
 }
 ```
 
-Each check in `PreflightOutput.checks` becomes a camelCase key in `data`.
+Each check in `PreflightOutput.checks` is mapped to a key in `data` by lower-casing the first character of the check name (e.g. `"AuthCheck"` → `"authCheck"`). Names are not fully camelCased; spaces and inner capitals are preserved.
 
 Delegates to `Handler.preflight_check(PreflightInput)`.
 
@@ -154,6 +154,8 @@ Poll workflow execution status.
 
 `status` values are raw Temporal status names (uppercase): `RUNNING`, `COMPLETED`, `FAILED`, `CANCELED`, `TERMINATED`, `TIMED_OUT`, `UNKNOWN`.
 
+> **Note:** `/status` returns uppercase Temporal state names; `/result` (below) returns its own lowercase normalized values. The two endpoints have different casing conventions.
+
 ---
 
 ### `GET /workflows/v1/result/{workflow_id}`
@@ -162,7 +164,7 @@ Fetch the most recent run result for a workflow.
 
 **Query params:** `wait` (bool, default `false`) — when `true`, blocks until the workflow reaches a terminal state before returning.
 
-**Response:**
+**Response (completed):**
 ```json
 {
   "data": {
@@ -173,7 +175,7 @@ Fetch the most recent run result for a workflow.
 }
 ```
 
-`status` values in the response body: `running`, `completed`, `failed`, `result_decode_failed`. Temporal's `CANCELED`, `TERMINATED`, `TIMED_OUT` states all map to `failed` in the response.
+`status` values in the response body: `running`, `completed`, `failed`, `result_decode_failed`. Temporal's `CANCELED`, `TERMINATED`, `TIMED_OUT` states all map to `failed` in the response. When `wait=false` and the workflow is still running, the body has a `message` field instead of `result`. On failure the body has an `error` field instead of `result`.
 
 ---
 
@@ -213,6 +215,8 @@ List all available configmap IDs.
 
 Return the Automation Engine DAG manifest (from `app/generated/manifest.json`).
 
+> **Legacy alias:** An unversioned `GET /manifest` route is also registered for backward compatibility with older AE clients (`include_in_schema=false`). New callers should use `/workflows/v1/manifest`; the unversioned alias is scheduled for removal (BLDX-804).
+
 **Query param:** `?entrypoint=<name>` (optional). When provided, returns the per-entry-point manifest from `app/generated/<name>/manifest.json`. When omitted, falls back to the root `app/generated/manifest.json`.
 
 **Response:** `AppManifest` JSON — see [Multi-App Coordination](../guides/multi-app-coordination.md).
@@ -233,7 +237,7 @@ Upload a file to be used as workflow input (e.g. CSV for file-based connectors).
   "id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
   "version": "1",
   "isActive": true,
-  "fileName": "upload.csv",
+  "fileName": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.csv",
   "rawName": "upload.csv",
   "key": "workflow_file_upload/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4/upload.csv",
   "extension": "csv",
@@ -285,7 +289,7 @@ This endpoint requires `ATLAN_DEPLOYMENT_NAME=local` — requests with any other
 
 ### `GET /health` · `GET /server/health`
 
-Handler liveness check. Returns `200 OK` when the handler is ready.
+Handler liveness check. Returns `200 OK` unconditionally when the FastAPI process is responding — this is a process-up probe, not a dependency-health check. No downstream services (Temporal, Dapr, Redis) are verified.
 
 ```json
 { "status": "healthy" }

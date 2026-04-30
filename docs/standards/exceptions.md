@@ -182,12 +182,12 @@ finally:
 
 ## Module-Specific Guidelines
 
-### **Handlers (`application_sdk/handlers/`)**
+### **Handlers (`application_sdk/handler/`)**
 - **Critical**: Always re-raise exceptions after logging
 - **Include operation context** in error messages
 - **Use specific exception types** for different error scenarios
 
-### **I/O Module (`application_sdk/io/`)**
+### **Storage (`application_sdk/storage/`) and Outputs (`application_sdk/outputs/`)**
 - **Critical**: Re-raise exceptions for data reading/writing operations
 - **Include file/connection context** in error messages
 - **Handle specific I/O exceptions** appropriately

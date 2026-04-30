@@ -22,7 +22,7 @@ application-sdk --mode {worker,handler,combined} --app MODULE:CLASS [options]
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--app` | `-a` | App class path in `module:ClassName` form (e.g. `app.connector:PostgresApp`). Apps expose multiple workflows via `@entrypoint` methods. Also accepts `ATLAN_APP_MODULE` env var. |
+| `--app` | `-a` | App class path in `module:ClassName` form (e.g. `app.connector:PostgresApp`). Apps expose multiple workflows via `@entrypoint` methods. Also accepts `ATLAN_APP_MODULE` env var. Required — enforced by config validation (not by argparse), so `--help` will not mark it as required. |
 
 ---
 
@@ -51,8 +51,8 @@ application-sdk --mode {worker,handler,combined} --app MODULE:CLASS [options]
 
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
-| `--mode` | `ATLAN_APP_MODE` | `combined` | Execution mode: `worker`, `handler`, or `combined`. Falls back to `APPLICATION_MODE` (v2 legacy). |
-| `--log-level` | `ATLAN_LOG_LEVEL` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `--mode` | `ATLAN_APP_MODE` | `combined` | Execution mode: `worker`, `handler`, or `combined`. Falls back to `APPLICATION_MODE` (v2 legacy). Default is resolved by `AppConfig`, so `--help` shows no default. |
+| `--log-level` | `ATLAN_LOG_LEVEL` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. `CRITICAL` is accepted via the `ATLAN_LOG_LEVEL` env var but not via this flag. |
 | `--service-name` | `ATLAN_SERVICE_NAME`, `OTEL_SERVICE_NAME` | _(derived from app)_ | Service name for observability |
 
 ---

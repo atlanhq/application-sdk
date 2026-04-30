@@ -40,7 +40,7 @@ All transformers operate on [Daft](https://www.getdaft.io/) DataFrames — a col
 
 ### `AtlasTransformer`
 
-Converts metadata into Atlas entities (the native Atlan format) using `pyatlan` model classes.
+Converts metadata into Atlas entities (the native Atlan format) using `pyatlan` model classes. Note: the built-in transformers still depend on `pyatlan` (legacy); new connector code should use `pyatlan_v9` import paths instead.
 
 ```python
 from application_sdk.transformers.atlas import AtlasTransformer

@@ -9,8 +9,8 @@ The SDK uses `obstore` for all object storage operations, bypassing the Dapr sid
 ```python
 from application_sdk.storage import upload_file, download_file
 
-# Upload a local file to object storage
-await upload_file(
+# Upload a local file to object storage (returns the SHA-256 hex digest of the uploaded file)
+digest = await upload_file(
     "artifacts/my-app/output.json",  # key: destination object-store path
     "/tmp/output.json",              # local_path: source local file
 )
@@ -97,7 +97,7 @@ from application_sdk.contracts import UploadInput, DownloadInput, StorageTier
 
 class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
-        # Upload a local directory; returns UploadOutput with FileReference list
+        # Upload a local directory; returns UploadOutput with a single FileReference
         up = await self.upload(
             UploadInput(
                 local_path="/tmp/output/",

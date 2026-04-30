@@ -43,7 +43,7 @@ class HelloInput(Input):
 
 
 class HelloOutput(Output):
-    message: str
+    message: str = ""
 
 
 class HelloApp(App):
