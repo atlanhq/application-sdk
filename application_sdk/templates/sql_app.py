@@ -599,7 +599,7 @@ class SqlApp(App):
 
         output_dir = Path(output_path) / "transformed" / entity_type
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_file = output_dir / "entities.jsonl"
+        output_file = output_dir / "entities.json"
 
         count = 0
         with open(output_file, "wb") as f:

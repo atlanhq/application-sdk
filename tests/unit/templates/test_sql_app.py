@@ -254,7 +254,7 @@ class TestPerEntityTransforms:
         result = await app.transform_tables(input_)
 
         assert result.total_record_count == 2
-        output_file = tmp_path / "transformed" / "table" / "entities.jsonl"
+        output_file = tmp_path / "transformed" / "table" / "entities.json"
         assert output_file.exists()
 
         lines = output_file.read_text().strip().split("\n")
