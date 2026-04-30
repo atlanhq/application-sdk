@@ -266,37 +266,41 @@ All FAIL checks should pass at this point. If any remain, address them before mo
 **Positive-idiom checks (manual — the migration checker does not enforce these).** Each one corresponds to a review finding that blocked the MSSQL v3 PR. Each must come up clean before Phase 3 — if any returns matches, refactor per the "v3 Task Idioms" section below.
 
 ```bash
-# 1) No imports from private SDK modules
-grep -rn "from application_sdk\.[a-zA-Z0-9_.]*\._[a-zA-Z0-9_]" <target-path>/app/ \
+# 1) No imports from private SDK modules (any segment starting with `_`).
+#    Catches both top-level (application_sdk._x) and nested (application_sdk.foo._y).
+grep -rEn "from application_sdk[A-Za-z0-9_.]*\._[A-Za-z0-9_]" <target-path>/app/ \
   && echo "FAIL: private SDK import" || echo "OK: no private SDK imports"
 
 # 2) No asyncio.to_thread inside @task code (use self.run_in_thread)
 grep -rn "asyncio\.to_thread\b" <target-path>/app/ \
   && echo "FAIL: replace with self.run_in_thread" || echo "OK"
 
-# 3) No os.environ.get reads in app code (only allowed in entry points / AppConfig)
-grep -rn "os\.environ\.get\|os\.getenv\b" <target-path>/app/ \
+# 3) No os.environ reads in app/ — entry points (main.py / run_dev.py) live OUTSIDE
+#    the app/ dir or under a clearly-marked boundary. If your repo puts them under
+#    app/, exclude those paths explicitly.
+grep -rEn "os\.environ\.get\b|os\.environ\[|os\.getenv\b" <target-path>/app/ \
   && echo "FAIL: move config to Input contract or AppConfig" || echo "OK"
 
 # 4) No full-result materialization (cursor.fetchall / pd.read_sql_query)
 grep -rEn "\.fetchall\b|pd\.read_sql_query\b|read_sql_query\b" <target-path>/app/ \
   && echo "FAIL: stream via fetchmany() instead" || echo "OK"
 
-# 5) No raw context.get_secret(<guid>) — use CredentialRef.resolve(input)
+# 5) No raw context.get_secret(<guid>) for credentials — use CredentialRef.resolve(input).
+#    (Legitimate non-credential secret lookups are rare; if you have one, document it.)
 grep -rn "context\.get_secret\b" <target-path>/app/ \
-  && echo "FAIL: use CredentialRef.resolve(input)" || echo "OK"
+  && echo "FAIL: use CredentialRef.resolve(input) for credentials" || echo "OK"
 
 # 6) No hand-rolled obstore / ParquetFileWriter / JsonFileWriter usage
 grep -rEn "ParquetFileWriter\b|JsonFileWriter\b|obstore\." <target-path>/app/ \
   && echo "FAIL: use FileReference + self.upload()" || echo "OK"
 
-# 7) allow_unbounded_fields is only on top-level run() Input model, not subclasses
-grep -rn "allow_unbounded_fields=True" <target-path>/app/ | \
-  grep -v "ExtractionInput\|RunInput\|TopLevel" \
-  && echo "WARN: review allow_unbounded_fields on inter-task contract" || echo "OK"
+# 7) allow_unbounded_fields is only on the top-level run() Input model — inheriting
+#    classes must not redeclare it.
+grep -rn "allow_unbounded_fields=True" <target-path>/app/ \
+  && echo "WARN: confirm only top-level run() Input declares allow_unbounded_fields=True" || echo "OK"
 ```
 
-These are guardrails, not blockers — a connector with a legitimate reason for any of these patterns may still ship, but it must be called out in the Phase 5 summary's manual-follow-up list with the reason. Default stance: refactor.
+These are guardrails, not blockers — a connector with a legitimate reason for any of these patterns may still ship, but it must be called out in the Phase 5 summary's manual-follow-up list with the reason. Default stance: refactor. Note: check #3 will hit any `os.environ` read inside `app/`; if the connector's entry point lives under `app/main.py` or `app/run_dev.py`, exclude those paths from the grep before treating a hit as a FAIL.
 
 ---
 
@@ -907,9 +911,9 @@ Reference: `atlan-openapi-app/app/connector.py`. SQL connectors use the same pip
 
 Anything under a `_`-prefixed package or module is private and may be removed without warning. The MSSQL v3 PR was flagged for importing `application_sdk.execution._temporal.activity_utils.get_object_store_prefix`. The right fix is to expose `FileReference` outputs (above), not to import the private helper.
 
-A grep check that should pass on a clean upgrade:
+A grep check that should pass on a clean upgrade (catches both top-level `application_sdk._x` and nested `application_sdk.foo._y`):
 ```bash
-grep -rn "from application_sdk\.[a-zA-Z0-9_]*\._" <target-path>/app/ && echo FAIL || echo OK
+grep -rEn "from application_sdk[A-Za-z0-9_.]*\._[A-Za-z0-9_]" <target-path>/app/ && echo FAIL || echo OK
 ```
 If this returns matches, refactor before merging — there is always a public API for what you need.
 
@@ -1030,12 +1034,14 @@ v3 handler endpoints receive credentials as `list[HandlerCredential]` (`[{key, v
 **Do NOT** convert these to `dict[str, Any]` and pass the dict downstream. The connector should define a `Credential` subclass for its connector and flow that typed object end-to-end — through the handler, into the client, into every `@task` that needs auth. Reviewers on the MSSQL v3 PR (#89) flagged the typed→dict→typed roundtrip as the single most repeated anti-pattern: it loses static type information, defeats payload-safety, and forces every consumer to re-validate the same shape.
 
 ```python
-from application_sdk.credentials import Credential
+# `Credential` (in application_sdk.credentials) is a runtime-checkable Protocol.
+# Subclass one of the concrete BaseModel-based built-ins (BasicCredential,
+# ApiKeyCredential, BearerTokenCredential, OAuthClientCredential, CertificateCredential)
+# and add connector-specific fields, OR define your own pydantic BaseModel that
+# satisfies the Protocol (i.e. provides `credential_type` and `async validate()`).
+from application_sdk.credentials import BasicCredential
 
-class MyCredential(Credential):
-    host: str
-    username: str
-    password: str
+class MyCredential(BasicCredential):
     workspace: str = ""
 
 # Single parser — accepts list[HandlerCredential] or v2 nested dict; returns typed.
@@ -1048,8 +1054,11 @@ class MyHandler(Handler):
         ...
 
     async def _build_client(self, cred: MyCredential) -> MyClient:
+        # `load_with_credential` is a connector-defined factory on YOUR client class;
+        # the SDK does not require a specific name. The point is a single typed entry
+        # point — not a `dict[str, Any]` round-trip.
         client = MyClient()
-        await client.load_with_credential(cred)   # typed in, typed out
+        await client.load_with_credential(cred)
         return client
 ```
 
@@ -1289,7 +1298,10 @@ v3 uses `CredentialRef` (from `application_sdk.credentials`) as a portable crede
 from application_sdk.credentials.ref import CredentialRef
 
 cred_ref = CredentialRef.resolve(input)         # typed; routes direct + agent (SDR) flows
-client = MyClient.from_credential_ref(cred_ref)  # or your equivalent typed factory
+# `from_credential_ref` is a connector-defined factory; the SDK does not ship a
+# canonical name. Pair the resolved `cred_ref` with whichever typed entry point
+# your client class exposes — the point is to keep the ref typed end-to-end.
+client = MyClient.from_credential_ref(cred_ref)
 ```
 
 `CredentialRef.resolve(input)` is the strongly-typed routing helper added in SDK PR #1550 (3.3.0+). It handles both `extraction_method == "direct"` (with `credential_guid`) and `extraction_method == "agent"` (with `agent_json`) internally — so the connector does not branch on extraction method.
