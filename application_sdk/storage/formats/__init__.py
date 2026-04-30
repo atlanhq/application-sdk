@@ -496,7 +496,7 @@ class Writer(ABC):
                 labels={
                     "type": "pandas",
                     "mode": WriteMode.APPEND.value,
-                    "error": str(e),
+                    "error_type": type(e).__name__,
                 },
                 description="Number of errors while writing to files",
             )
@@ -661,7 +661,7 @@ class Writer(ABC):
                 labels={
                     "type": "output",
                     "mode": WriteMode.APPEND.value,
-                    "error": str(e),
+                    "error_type": type(e).__name__,
                 },
                 description="Number of errors while writing to files",
             )
