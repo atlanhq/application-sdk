@@ -70,7 +70,6 @@ asyncio.run(
             "authType": "basic",
             "username": "myuser",
             "password": "mypassword",
-            "connectorConfigName": "my-connector",
             "extra": {"database": "mydb"},
         },
         example_input={

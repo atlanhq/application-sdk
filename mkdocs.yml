@@ -85,8 +85,13 @@ nav:
 
       # Best practices & testing
       - Best Practices: guides/best-practices.md
+      - Integration Testing: guides/integration-testing.md
   - Concepts:
       - Apps: concepts/apps.md
+      - Contracts: concepts/contracts.md
+      - Credentials: concepts/credentials.md
+      - Infrastructure: concepts/infrastructure.md
+      - Storage: concepts/storage.md
       - Entry Points: concepts/entry-points.md
       - Tasks: concepts/tasks.md
       - Server: concepts/server.md

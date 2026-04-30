@@ -71,15 +71,15 @@ class SnowflakeClient(BaseSQLClient):
 
 `BaseSQLClient` establishes the connection and holds the SQLAlchemy engine, which is used by `@task` methods to execute queries.
 
-*   **Role of `SQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` / `execute_query` methods to other components.
+*   **Role of `SQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` method to other components.
 *   **Role of `@task` methods:**
     *   Tasks (e.g., `fetch_tables`, `fetch_columns` in your `SqlMetadataExtractor` subclass) orchestrate the extraction process.
-    *   They create a client instance and call `load()` with credentials.
-    *   They call methods on the client (like `execute_query`) to run queries and get data.
+    *   They create a client instance and call `load()` with a credentials dict.
+    *   They call `client.run_query(query)` to execute queries and yield row batches.
     *   They process the resulting data (e.g., pass to asset mappers for transformation).
 
 **Simplified Flow:**
-`@task method` -> creates `SQLClient` -> calls `client.load(credential_ref=...)` -> calls `client.execute_query(query=...)` -> receives data -> maps via asset mapper.
+`@task method` → creates `SQLClient` → `client.load(credentials=cred_dict)` → `client.run_query(query=...)` → yields row batches → asset mapper.
 
 ## Base Client (`base.py`)
 
@@ -176,6 +176,52 @@ class MyApiClient(BaseClient):
         self.http_retry_transport = RetryTransport(retry=retry)
         # The RetryTransport can be overridden with a custom transport from libraries like `httpx-retries` through methods like `_retry_operation_async`. Check the library for more details.
 ```
+
+## Redis Client (`redis.py`)
+
+`RedisClient` wraps `redis.asyncio` for apps that use Redis as a fast key-value store or distributed lock backend.
+
+```python
+from application_sdk.clients.redis import RedisClient
+
+client = RedisClient()
+await client.load(credentials={"host": "localhost", "port": "6379"})
+await client.set("key", "value", ex=300)
+value = await client.get("key")
+```
+
+Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/configuration.md` for the full list including sentinel and lock settings.
+
+## Azure Client (`azure/`)
+
+`application_sdk.clients.azure` provides an Azure-specific client layer:
+
+- `AzureClient` (`azure/client.py`) — base client for Azure service interactions.
+- `AzureAuthHelper` (`azure/auth.py`) — handles Azure credential strategies including managed identity, service principal, and connection-string authentication.
+
+```python
+from application_sdk.clients.azure import AzureClient
+```
+
+## SSL Utilities (`ssl_utils.py`)
+
+`application_sdk.clients.ssl_utils` provides helpers for constructing SSL contexts from PEM certificates stored in credentials:
+
+```python
+from application_sdk.clients.ssl_utils import build_ssl_context
+
+ssl_ctx = build_ssl_context(
+    ca_cert=credentials.get("ssl_ca"),
+    client_cert=credentials.get("ssl_cert"),
+    client_key=credentials.get("ssl_key"),
+)
+```
+
+Pass the resulting `ssl.SSLContext` via `DB_CONFIG.connect_args={"ssl": ssl_ctx}` for mutual-TLS database connections.
+
+## Prometheus Metrics
+
+Every application that uses `create_temporal_client()` automatically exposes ~40 built-in Temporal SDK metrics at `0.0.0.0:9464/metrics`. See [`docs/concepts/monitoring.md`](monitoring.md) for details.
 
 ## Summary
 

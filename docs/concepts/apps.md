@@ -188,28 +188,32 @@ class MyConnector(App):
 
 Two cleanup tasks are available on every `App`:
 
-- `cleanup_files()` -- removes local temporary files whose paths are tracked via `FileReference` objects from task outputs.
-- `cleanup_storage()` -- removes object store artifacts uploaded with `StorageTier.TRANSIENT`. Files with `StorageTier.RETAINED` or `StorageTier.PERSISTENT` are left untouched.
+- `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **and** convention-based temp directories (from `input.extra_paths` or `ATLAN_CLEANUP_BASE_PATHS`).
+- `cleanup_storage()` — removes object store artifacts by tier:
+  - `StorageTier.TRANSIENT` refs are always removed.
+  - `StorageTier.PERSISTENT` refs are always left untouched.
+  - `StorageTier.RETAINED` refs under the run-scoped prefix are removed **only** when `input.include_prefix_cleanup=True` is set (opt-in); otherwise they are left untouched.
 
 Both can also be called mid-run to reclaim space after large intermediate steps.
 
 ## Passthrough Modules
 
-If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as class parameters:
+If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as a class-level attribute:
 
 ```python
-class MyConnector(App, passthrough_modules=["my_connector", "third_party_lib"]):
+class MyConnector(App):
+    passthrough_modules = ["my_connector", "third_party_lib"]
     ...
 ```
 
-In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the class definition.
+In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`.
 
 ## Customizing SQL Queries
 
 For SQL template apps, override SQL query class attributes or load from files:
 
 ```python
-from application_sdk.common.utils import read_sql_files
+from application_sdk.common.sql_filters import read_sql_files
 
 SQL_QUERIES = read_sql_files("/path/to/queries")
 
@@ -256,3 +260,117 @@ Use the `clean_app_registry` fixture to prevent `App` subclass registrations fro
 # conftest.py
 from application_sdk.testing.fixtures import clean_app_registry  # noqa: F401
 ```
+
+For testing credential resolution, use `MockCredentialStore`:
+
+```python
+from application_sdk.testing import MockCredentialStore
+
+store = MockCredentialStore()
+ref = store.add_api_key("my-service", api_key="secret123")
+# Or: store.add_basic("db", username="user", password="pass")
+# Or: store.add_bearer_token("svc", token="tok")
+
+ctx = InfrastructureContext(secret_store=store.secret_store)
+set_infrastructure(ctx)
+```
+
+For testing tasks that emit heartbeats, use `MockHeartbeatController`:
+
+```python
+from application_sdk.testing import MockHeartbeatController
+
+controller = MockHeartbeatController()
+# Pass to AppContext or inject via fixture; inspect calls after the task runs:
+calls = controller.get_heartbeat_calls()
+```
+
+---
+
+## App State
+
+`app_state` is in-memory state scoped to the current workflow execution. Use it to pass values between tasks without encoding them in task contracts.
+
+```python
+class MyConnector(App):
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+        out = await self.fetch_databases(FetchDbInput(connection_id=input.connection_id))
+        # Store for later tasks to read:
+        self.app_state.set("db_list", out.databases)
+        return await self.transform_data(TransformInput(...))
+
+    @task
+    async def transform_data(self, input: TransformInput) -> TransformOutput:
+        dbs = self.app_state.get("db_list")
+        ...
+```
+
+`persistent_state` provides durable access to state stored externally (object store). It survives workflow restarts and is shared across runs.
+
+---
+
+## Continuing with New Input
+
+`continue_with()` restarts the current App with new input while preserving correlation context. It truncates the Temporal workflow history and starts a new run — useful for long-running Apps that accumulate too much history.
+
+```python
+class IncrementalExtractor(App):
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+        out = await self.fetch_batch(FetchInput(cursor=input.cursor))
+        if out.has_more:
+            # Restart with the next cursor — never accumulates unbounded history
+            self.continue_with(ExtractionInput(cursor=out.next_cursor))
+        return ExtractionOutput(total=out.count)
+```
+
+`continue_with()` does not return — it raises a framework signal internally.
+
+---
+
+## Retry Policies
+
+Pass a `RetryPolicy` to `@task` via `retry_policy` to override the default (3 attempts, exponential backoff up to 5 minutes):
+
+```python
+from application_sdk.execution import RetryPolicy
+
+NO_RETRY = RetryPolicy(max_attempts=1)
+AGGRESSIVE = RetryPolicy(
+    max_attempts=10,
+    initial_interval=timedelta(seconds=5),
+    max_interval=timedelta(minutes=2),
+    backoff_coefficient=1.5,
+)
+
+class MyConnector(App):
+    @task(retry_policy=NO_RETRY)
+    async def send_webhook(self, input: WebhookInput) -> WebhookOutput: ...
+
+    @task(retry_policy=AGGRESSIVE)
+    async def fetch_flaky_api(self, input: FetchInput) -> FetchOutput: ...
+```
+
+`RetryPolicy` is a frozen dataclass with fluent builder methods:
+
+```python
+policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
+```
+
+---
+
+## Atlan Client Mixin
+
+Mix in `AtlanClientMixin` when your App needs to call the Atlan API. It provides `get_or_create_async_atlan_client()`, which caches the `AsyncAtlanClient` per execution and reuses any client already created during `validate()`.
+
+```python
+from application_sdk.credentials import AtlanClientMixin
+
+class MyConnector(AtlanClientMixin, App):
+    @task
+    async def update_lineage(self, input: LineageInput) -> LineageOutput:
+        client = await self.get_or_create_async_atlan_client(input.credential)
+        await client.asset.upsert(...)
+        return LineageOutput(updated=True)
+```
+
+Import path: `application_sdk.credentials.AtlanClientMixin`.

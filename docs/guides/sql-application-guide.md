@@ -115,7 +115,8 @@ Extend `BaseSQLClient` to define the connection string template for your databas
 
 ```python
 # app/clients.py
-from application_sdk.clients.sql import BaseSQLClient, DatabaseConfig
+from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.models import DatabaseConfig
 
 
 class PostgresClient(BaseSQLClient):
@@ -171,12 +172,14 @@ class PostgresHandler(Handler):
         client = PostgresClient()
         await client.load(credentials=cred.to_dict())
 
-        rows = await client.execute_query(
+        rows = []
+        async for batch in client.run_query(
             "SELECT catalog_name AS TABLE_CATALOG, schema_name AS TABLE_SCHEMA "
             "FROM information_schema.schemata "
             "WHERE schema_name NOT LIKE 'pg_%' "
             "AND schema_name != 'information_schema'"
-        )
+        ):
+            rows.extend(batch)
         objects = [
             SqlMetadataObject(TABLE_CATALOG=r["TABLE_CATALOG"], TABLE_SCHEMA=r["TABLE_SCHEMA"])
             for r in rows
@@ -200,7 +203,7 @@ v3 uses Python mapper functions to transform raw extraction results into pyatlan
 
 ```python
 # app/asset_mapper.py
-from pyatlan_v9.model.assets import Database, Schema, Table, Column
+from pyatlan.model.assets import Database, Schema, Table, Column
 
 
 def map_database(row: dict, connection_qualified_name: str) -> Database:
@@ -264,6 +267,7 @@ from application_sdk.templates import SqlMetadataExtractor
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
+    ExtractionTaskInput,
     FetchDatabasesInput,
     FetchDatabasesOutput,
     FetchSchemasInput,
@@ -272,33 +276,47 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchTablesOutput,
     FetchColumnsInput,
     FetchColumnsOutput,
-    TransformInput,
-    TransformOutput,
 )
 from application_sdk.app import task
 from application_sdk.observability.logger_adaptor import get_logger
 
 from app.clients import PostgresClient
 from app.contracts import MyCredential, MetadataConfig, MyFetchInput
-from app.asset_mapper import (
-    map_database, map_schema, map_table, map_column, serialize_entity,
-)
 
 logger = get_logger(__name__)
 
 
+def _make_task_input(cls, src: ExtractionInput, **extra):
+    """Build a typed task input from the top-level extraction input."""
+    return cls(
+        workflow_id=src.workflow_id,
+        connection=src.connection,
+        credential_guid=src.credential_guid,
+        credential_ref=src.credential_ref,
+        output_prefix=src.output_prefix,
+        output_path=src.output_path,
+        exclude_filter=src.exclude_filter,
+        include_filter=src.include_filter,
+        temp_table_regex=src.temp_table_regex,
+        **extra,
+    )
+
+
 class PostgresApp(SqlMetadataExtractor):
+    sql_client_class = PostgresClient  # enables default credential loading via super()
+
     @task(timeout_seconds=1800)
     async def fetch_databases(self, input: MyFetchInput) -> FetchDatabasesOutput:
         """Fetch the current database name from PostgreSQL."""
-        client = PostgresClient()
-        await client.load(credential_ref=input.credential_ref)
+        client = await self._load_sql_client(input)  # resolves credentials via context
 
-        rows = await client.execute_query(
+        rows = []
+        async for batch in client.run_query(
             "SELECT datname AS database_name FROM pg_database WHERE datname = current_database()"
-        )
-        databases = [r["database_name"] for r in rows]
+        ):
+            rows.extend(batch)
 
+        databases = [r["database_name"] for r in rows]
         return FetchDatabasesOutput(
             databases=databases,
             chunk_count=1,
@@ -307,21 +325,19 @@ class PostgresApp(SqlMetadataExtractor):
 
     @task(timeout_seconds=1800)
     async def fetch_schemas(self, input: MyFetchInput) -> FetchSchemasOutput:
-        """Fetch non-system schemas, applying include/exclude filters."""
-        client = PostgresClient()
-        await client.load(credential_ref=input.credential_ref)
-        cfg = input.metadata_config
+        """Fetch non-system schemas."""
+        client = await self._load_sql_client(input)
 
-        rows = await client.execute_query(f"""
+        rows = []
+        async for batch in client.run_query("""
             SELECT s.schema_name
             FROM information_schema.schemata s
             WHERE s.schema_name NOT LIKE 'pg_%'
               AND s.schema_name != 'information_schema'
-              AND concat(s.catalog_name, '.', s.schema_name) !~ '{cfg.exclude_filter}'
-              AND concat(s.catalog_name, '.', s.schema_name) ~ '{cfg.include_filter}'
-        """)
-        schemas = [r["schema_name"] for r in rows]
+        """):
+            rows.extend(batch)
 
+        schemas = [r["schema_name"] for r in rows]
         return FetchSchemasOutput(
             schemas=schemas,
             chunk_count=1,
@@ -330,23 +346,18 @@ class PostgresApp(SqlMetadataExtractor):
 
     @task(timeout_seconds=1800)
     async def fetch_tables(self, input: MyFetchInput) -> FetchTablesOutput:
-        """Fetch tables matching the configured filters."""
-        client = PostgresClient()
-        await client.load(credential_ref=input.credential_ref)
-        cfg = input.metadata_config
+        """Fetch tables from information_schema."""
+        client = await self._load_sql_client(input)
 
-        sql = f"""
-            SELECT t.table_schema, t.table_name, t.table_type
+        rows = []
+        async for batch in client.run_query("""
+            SELECT t.table_schema, t.table_name
             FROM information_schema.tables t
-            WHERE concat(current_database(), '.', t.table_schema) !~ '{cfg.exclude_filter}'
-              AND concat(current_database(), '.', t.table_schema) ~ '{cfg.include_filter}'
-        """
-        if cfg.temp_table_regex:
-            sql += f" AND t.table_name !~ '{cfg.temp_table_regex}'"
+            WHERE t.table_type = 'BASE TABLE'
+        """):
+            rows.extend(batch)
 
-        rows = await client.execute_query(sql)
         tables = [f"{r['table_schema']}.{r['table_name']}" for r in rows]
-
         return FetchTablesOutput(
             tables=tables,
             chunk_count=1,
@@ -355,59 +366,28 @@ class PostgresApp(SqlMetadataExtractor):
 
     @task(timeout_seconds=3600)
     async def fetch_columns(self, input: MyFetchInput) -> FetchColumnsOutput:
-        """Fetch column metadata for all matching tables."""
-        client = PostgresClient()
-        await client.load(credential_ref=input.credential_ref)
-        cfg = input.metadata_config
+        """Fetch column metadata."""
+        client = await self._load_sql_client(input)
 
-        sql = f"""
+        count = 0
+        async for batch in client.run_query("""
             SELECT c.table_schema, c.table_name, c.column_name,
-                   c.data_type, c.ordinal_position, c.is_nullable
+                   c.data_type, c.ordinal_position
             FROM information_schema.columns c
-            WHERE concat(current_database(), '.', c.table_schema) !~ '{cfg.exclude_filter}'
-              AND concat(current_database(), '.', c.table_schema) ~ '{cfg.include_filter}'
-        """
-        if cfg.temp_table_regex:
-            sql += f" AND c.table_name !~ '{cfg.temp_table_regex}'"
+        """):
+            count += len(batch)
 
-        rows = await client.execute_query(sql)
-
-        return FetchColumnsOutput(
-            chunk_count=1,
-            total_record_count=len(rows),
-        )
-
-    @task(timeout_seconds=3600)
-    async def transform(self, input: TransformInput) -> TransformOutput:
-        """Transform raw extraction results into pyatlan entities using asset mappers."""
-        conn_qn = input.connection_qualified_name
-
-        # Map raw rows to pyatlan entity objects, then serialize for publishing
-        entities = []
-        for db_row in input.databases:
-            entities.append(serialize_entity(map_database(db_row, conn_qn)))
-        for schema_row in input.schemas:
-            entities.append(serialize_entity(map_schema(schema_row, conn_qn, schema_row["database"])))
-        for table_row in input.tables:
-            entities.append(serialize_entity(map_table(table_row, conn_qn)))
-        for col_row in input.columns:
-            entities.append(serialize_entity(map_column(col_row, conn_qn)))
-
-        return TransformOutput(entity_count=len(entities))
+        return FetchColumnsOutput(chunk_count=1, total_record_count=count)
 
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
-        """Orchestrate the full extraction + transformation pipeline."""
-        # Phase 1: Fetch metadata in parallel
-        db_result, schema_result, table_result, col_result = await asyncio.gather(
-            self.fetch_databases(MyFetchInput.from_extraction(input)),
-            self.fetch_schemas(MyFetchInput.from_extraction(input)),
-            self.fetch_tables(MyFetchInput.from_extraction(input)),
-            self.fetch_columns(MyFetchInput.from_extraction(input)),
-        )
+        """Orchestrate the full extraction pipeline."""
+        task_input = _make_task_input(MyFetchInput, input)
 
-        # Phase 2: Transform using asset mappers
-        transform_result = await self.transform(
-            TransformInput(workflow_id=input.workflow_id, connection=input.connection)
+        db_result, schema_result, table_result, col_result = await asyncio.gather(
+            self.fetch_databases(task_input),
+            self.fetch_schemas(task_input),
+            self.fetch_tables(task_input),
+            self.fetch_columns(task_input),
         )
 
         return ExtractionOutput(
@@ -458,15 +438,8 @@ class PostgresApp(SqlMetadataExtractor):
         """Override run() to include views in the extraction."""
         result = await super().run(input)
 
-        views_result = await self.fetch_views(
-            MyFetchInput.from_extraction(input)
-        )
+        views_result = await self.fetch_views(_make_task_input(MyFetchInput, input))
         result.views_extracted = views_result.total_record_count
-
-        # Transform all results (including views) via asset mappers
-        await self.transform(TransformInput(
-            workflow_id=input.workflow_id, connection=input.connection,
-        ))
         return result
 ```
 
@@ -486,20 +459,20 @@ All SQL metadata extraction contracts live in `application_sdk.templates.contrac
 ExtractionInput          -- top-level input to run()
 ExtractionOutput         -- top-level output from run()
 ExtractionTaskInput      -- shared fields for all per-task inputs
-  FetchDatabasesInput
-  FetchSchemasInput
-  FetchTablesInput
-  FetchColumnsInput
-  FetchProceduresInput
-  FetchViewsInput
-  TransformInput
-FetchDatabasesOutput
-FetchSchemasOutput
-FetchTablesOutput
-FetchColumnsOutput
-FetchProceduresOutput
-FetchViewsOutput
-TransformOutput
+  FetchDatabasesInput    -- passed to fetch_databases()
+  FetchSchemasInput      -- passed to fetch_schemas()
+  FetchTablesInput       -- passed to fetch_tables()
+  FetchColumnsInput      -- passed to fetch_columns()
+  FetchProceduresInput   -- passed to fetch_procedures()
+  FetchViewsInput        -- passed to fetch_views()
+  TransformInput         -- passed to transform(); carries typename, file_names, chunk_start
+FetchDatabasesOutput     -- databases: list[str], chunk_count, total_record_count
+FetchSchemasOutput       -- schemas: list[str], chunk_count, total_record_count
+FetchTablesOutput        -- tables: list[str], chunk_count, total_record_count
+FetchColumnsOutput       -- chunk_count, total_record_count
+FetchProceduresOutput    -- chunk_count, total_record_count
+FetchViewsOutput         -- chunk_count, total_record_count
+TransformOutput          -- typename, total_record_count, chunk_count
 ```
 
 ### Bounded collections
@@ -617,7 +590,7 @@ v3 provides in-memory mock implementations of infrastructure services so you can
 ```python
 # tests/test_extractor.py
 import pytest
-from application_sdk.testing.mocks import MockStateStore, MockSecretStore
+from application_sdk.testing import MockStateStore, MockSecretStore
 from application_sdk.templates.contracts.sql_metadata import (
     FetchDatabasesInput,
     FetchDatabasesOutput,
@@ -727,7 +700,7 @@ dapr:
 4. **Use `FileReference` for large data.** If a task produces output larger than ~1 MB, store it in object storage via `FileReference` rather than passing it through Temporal.
 5. **Load credentials via `credential_ref`.** Use `input.credential_ref` (the typed `CredentialRef`) in `@task` methods. In handlers, use typed credential models to normalize `input.credentials`.
 6. **Log with the SDK logger.** Use `application_sdk.observability.logger_adaptor.get_logger` for structured logging that integrates with Temporal.
-7. **Test without sidecars.** Use `MockStateStore` and `MockSecretStore` from `application_sdk.testing.mocks` to test your connector and handler without Dapr or Temporal running.
+7. **Test without sidecars.** Use `MockStateStore` and `MockSecretStore` from `application_sdk.testing` to test your connector and handler without Dapr or Temporal running.
 8. **Set `ATLAN_APP_MODULE` in the Dockerfile.** This locks the app module to the image and avoids runtime misconfiguration.
 9. **Use `on_complete` for cleanup.** Override `on_complete()` for post-run cleanup (see [Upgrade Guide Step 12](../upgrade-guide-v3.md#step-12-app-lifecycle-hooks)).
 

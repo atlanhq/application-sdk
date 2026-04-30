@@ -75,16 +75,16 @@ This starts both the Temporal worker and the HTTP handler service in a single pr
 
 ### Custom Secrets for Local Dev
 
-Pass mock infrastructure for local development without a Dapr sidecar:
+Pass credentials directly for local development — `run_dev_combined` auto-provisions them
+through the local vault so the flow mirrors production exactly:
 
 ```python
-from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyExtractor,
-    secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
-    state_store=MockStateStore(),
+    credentials={"host": "localhost", "port": "5432", "authType": "basic",
+                 "username": "dev", "password": "dev-secret"},
 ))
 ```
 
@@ -98,11 +98,10 @@ You no longer register workflow or activity classes explicitly. The worker disco
 If you need a worker handle directly (for integration tests):
 
 ```python
-from application_sdk.execution import create_worker
-from application_sdk.execution._temporal.backend import create_temporal_client
+from application_sdk.execution import create_temporal_client, create_worker
 
-client = await create_temporal_client()  # reads TEMPORAL_HOST, TEMPORAL_NAMESPACE, etc.
-worker = await create_worker(client)     # discovers all App subclasses automatically
+client = await create_temporal_client()  # defaults to localhost:7233; set ATLAN_TEMPORAL_HOST to override
+worker = create_worker(client)           # discovers all App subclasses automatically
 await worker.run()
 ```
 
@@ -112,8 +111,8 @@ await worker.run()
 |----------|----------|-------------|
 | `ATLAN_APP_MODULE` | Yes (production) | Python module path, e.g. `app.app:MyExtractor` |
 | `ATLAN_CONTRACT_GENERATED_DIR` | Recommended | Path to generated contract JSON files |
-| `TEMPORAL_HOST` | Yes | Temporal server host |
-| `TEMPORAL_NAMESPACE` | Yes | Temporal namespace |
+| `ATLAN_TEMPORAL_HOST` | Yes | Temporal server host (fallback: `TEMPORAL_HOST`) |
+| `ATLAN_TEMPORAL_NAMESPACE` | Yes | Temporal namespace (fallback: `TEMPORAL_NAMESPACE`) |
 
 ---
 

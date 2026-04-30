@@ -1,120 +1,175 @@
-# Getting Started with Application SDK
+# Getting Started
 
-This guide will help you get started with Application SDK development. Follow these steps sequentially, skipping any steps you've already completed.
+This guide walks you through building and running your first application on the Atlan Application SDK — from an empty directory to a workflow visible in the Temporal UI.
 
-## Core Dependencies
+---
 
-The Application SDK requires the following core dependencies:
+## Prerequisites
 
-- [**Python 3.11**](https://www.python.org/downloads/release/python-31110/): The runtime environment for the SDK
-- [**UV**](https://docs.astral.sh/uv/): Modern Python package manager and build system for fast, reproducible installations
-- [**Dapr**](https://docs.dapr.io/): Distributed Application Runtime that simplifies microservice development with built-in state management, pub/sub, and more
-- [**Temporal**](https://docs.temporal.io/): Workflow engine that handles complex, long-running processes with built-in reliability
+You need the following tools installed:
 
-> [!NOTE]
-> Dapr and Temporal work together to provide a complete platform - Dapr handles microservice communication and state management, while Temporal orchestrates complex workflows and ensures their reliability.
+| Tool | Minimum version | Install |
+|------|----------------|---------|
+| Python | 3.11 | [python.org](https://www.python.org/downloads/) |
+| uv | latest | [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) |
+| Temporal CLI | latest | [docs.temporal.io/cli](https://docs.temporal.io/cli#install) |
+| Dapr CLI | 1.14+ | [docs.dapr.io/getting-started/install-dapr-cli/](https://docs.dapr.io/getting-started/install-dapr-cli/) |
 
-## Step 1: Set Up Development Environment
+For platform-specific setup instructions see the [macOS](../setup/MAC.md), [Linux](../setup/LINUX.md), or [Windows](../setup/WINDOWS.md) setup guides.
 
-> [!TIP]
-> If you already have Python 3.11, UV, Dapr, and Temporal installed, you can skip to Step 2.
+---
 
-Choose your platform-specific setup guide to install all required dependencies:
+## Step 1: Create a new project
 
-- [macOS Setup Guide](../setup/MAC.md)
-- [Linux Setup Guide](../setup/LINUX.md)
-- [Windows Setup Guide](../setup/WINDOWS.md)
+```bash
+uv init my-app
+cd my-app
+uv add atlan-application-sdk
+```
 
-## Step 2: Set Up Your First Application
+---
 
-After setting up your development environment, you can create your first application using the Atlan Application SDK.
+## Step 2: Write your first app
 
-1. Clone the sample application repository:
+Create `app.py`:
 
-   The Atlan team provides sample applications to help you get started quickly. Clone the repository to your local machine:
-
-   ```bash
-   git clone https://github.com/atlanhq/atlan-sample-apps.git
-   cd atlan-sample-apps
-   ```
-
-2. Navigate to the sample application directory:
-
-   ```bash
-   cd quickstart/hello_world  # or any other app directory
-   ```
-
-## Step 3: Run Your First Application
-
-### Setting Up Project Dependencies
-
-1. Install project dependencies:
-   ```bash
-   uv sync --all-extras --all-groups
-   ```
-
-2. Set up pre-commit hooks:
-   ```bash
-   uv run pre-commit install
-   ```
-
-3. Verify Dapr components are present:
-   ```bash
-   uv run poe download-components
-   ```
-
-### Running the Example
-
-1. Start the dependencies (in a separate terminal):
-   ```bash
-   uv run poe start-deps
-   ```
-
-2. Run an example application:
-   ```bash
-   uv run python examples/application_hello_world.py
-   ```
-
-3. Navigate to [localhost:8233](http://localhost:8233) to see a completed workflow :sparkles:
+```python
+from application_sdk.app import App, task
+from application_sdk.contracts import Input, Output
 
 
-4. (optional) once you're done, stop the dependencies if you don't need them anymore:
-   ```bash
-   uv run poe stop-deps
-   ```
+class HelloInput(Input):
+    name: str = "world"
 
-5. (optional) run the unit tests:
-   ```bash
-   uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics
-   ```
 
-## Step 4: Advanced Configuration (Optional)
+class HelloOutput(Output):
+    message: str
 
-> [!NOTE]
-> This step is only needed if you're:
-> - Connecting to remote Temporal or Dapr services
-> - Need custom configuration for your development environment
-> - Setting up production environments
 
-If you need to customize your environment:
+class HelloApp(App):
+    @task(timeout_seconds=60)
+    async def greet(self, input: HelloInput) -> HelloOutput:
+        msg = f"Hello, {input.name}!"
+        self.logger.info("greeting name=%s", input.name)
+        return HelloOutput(message=msg)
 
-1. Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
+    async def run(self, input: HelloInput) -> HelloOutput:
+        return await self.greet(input)
+```
 
-2. Configure your environment variables in `.env`:
-   - Set Temporal connection details (for remote Temporal service)
-   - Configure Dapr endpoints (for custom Dapr setup)
-   - Adjust any other required settings
+---
 
-For detailed configuration options, refer to our [Configuration Guide](../configuration.md).
+## Step 3: Add Dapr components
 
-## Next Steps
+The SDK uses Dapr for state, secrets, and pub/sub. Copy the ready-made component definitions into your project:
 
-After successfully running your first application, explore these resources to learn more:
+```bash
+# If you have the SDK repo cloned locally:
+cp -r /path/to/application-sdk/components ./components
 
-- Explore our [SQL Application Guide](./sql-application-guide.md) for building data applications
-- Learn about our [Architecture](./architecture.md)
-- Review our [Best Practices](./best-practices.md)
-- Check out our [Integration Testing Guide](./integration-testing.md) for testing your applications
+# Otherwise, download them directly:
+curl -sL https://github.com/atlanhq/application-sdk/archive/refs/heads/main.tar.gz \
+  | tar -xz --strip-components=2 application-sdk-main/components
+```
+
+Your project should now look like:
+
+```
+my-app/
+├── app.py
+├── components/       # Dapr component YAMLs
+├── pyproject.toml
+└── .python-version
+```
+
+---
+
+## Step 4: Start local infrastructure
+
+Open two terminal tabs.
+
+**Tab 1 — Temporal:**
+```bash
+temporal server start-dev --db-filename temporal.db
+```
+
+**Tab 2 — Dapr sidecar:**
+```bash
+dapr run \
+  --app-id app \
+  --app-port 8000 \
+  --dapr-http-port 3500 \
+  --dapr-grpc-port 50001 \
+  --scheduler-host-address '' \
+  --placement-host-address '' \
+  --max-body-size 1024Mi \
+  --config components/configuration.yaml \
+  --resources-path components
+```
+
+---
+
+## Step 5: Run your app
+
+Back in your project directory, run the combined handler + worker:
+
+```bash
+DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 \
+  uv run application-sdk --mode combined --app app:HelloApp
+```
+
+The SDK starts:
+- A **handler** (FastAPI) on `http://localhost:8000`
+- A **worker** connected to Temporal on `localhost:7233`
+
+---
+
+## Step 6: Trigger a workflow
+
+In a new terminal, send a workflow start request:
+
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/start \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Atlan"}'
+```
+
+Then open [http://localhost:8233](http://localhost:8233) in your browser to see the completed workflow in the Temporal UI.
+
+---
+
+## Step 7: (optional) Use run_dev_combined
+
+For iterative local development, `run_dev_combined()` is more convenient than the CLI. It starts the handler and worker in one process, auto-provisions credentials, and kicks off a workflow automatically.
+
+Create `run_dev.py`:
+
+```python
+import asyncio
+from application_sdk.main import run_dev_combined
+from app import HelloApp
+
+asyncio.run(
+    run_dev_combined(
+        HelloApp,
+        example_input={"name": "Atlan"},
+    )
+)
+```
+
+Run with Dapr sidecar already started (Step 4):
+
+```bash
+DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 uv run python run_dev.py
+```
+
+---
+
+## Next steps
+
+- **Build a SQL connector** → [SQL Application Guide](./sql-application-guide.md)
+- **Understand the architecture** → [Architecture](./architecture.md)
+- **Deep-dive on Apps and tasks** → [Apps](../concepts/apps.md) · [Tasks](../concepts/tasks.md)
+- **Configuration reference** → [Configuration](../configuration.md)
+- **Integration testing** → [Integration Testing Guide](./integration-testing.md)
+- **More end-to-end examples** → [atlan-sample-apps](https://github.com/atlanhq/atlan-sample-apps)

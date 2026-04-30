@@ -125,7 +125,7 @@ Every app deployment consists of two components with different lifecycles:
 ```
 Handler Deployment (always-on, min 1 replica)
 ├── FastAPI on :8000
-├── /auth, /preflight, /metadata, /health
+├── /workflows/v1/auth, /workflows/v1/check, /workflows/v1/metadata, /health
 └── Handles synchronous HTTP requests from the UI
 
 Worker Deployment (scale 0→N via KEDA)
@@ -261,23 +261,83 @@ application_sdk/
 ├── credentials/            # Typed credential system
 │   ├── ref.py              # CredentialRef and helper constructors
 │   ├── types.py            # Credential types (BasicCredential, etc.)
+│   ├── registry.py         # CredentialTypeRegistry for custom credential types
+│   ├── utils.py            # parse_credentials_extra and credential helpers
 │   ├── resolver.py         # CredentialResolver
 │   └── atlan_client.py     # AtlanClientMixin
+│
+├── clients/                # External-system client base classes and utilities
+│   ├── base.py             # BaseClient ABC
+│   ├── sql.py              # BaseSQLClient (load, run_query, run_count_query)
+│   ├── models.py           # DatabaseConfig and shared client models
+│   ├── redis.py            # RedisClient
+│   ├── azure/              # Azure-specific auth and client helpers
+│   └── ssl_utils.py        # Custom CA certificate loading for httpx/aiohttp
+│
+├── common/                 # Shared utilities (not SDK-specific)
+│   ├── sql_filters.py      # SQL escaping, identifier quoting, read_sql_files
+│   ├── concurrency.py      # get_safe_num_threads()
+│   ├── path.py             # Path normalisation helpers
+│   ├── file_ops.py         # File-system utilities
+│   ├── file_converter.py   # Format conversion helpers
+│   ├── transforms.py       # Data transformation utilities
+│   ├── types.py            # Shared type aliases
+│   ├── models.py           # Shared Pydantic models
+│   ├── utils.py            # Miscellaneous utilities
+│   ├── aws_utils.py        # AWS credential and session helpers
+│   └── incremental/        # Incremental-extraction helpers (DuckDB, markers)
 │
 ├── storage/                # obstore-backed object storage
 │   ├── ops.py              # upload_file, download_file, delete, exists
 │   ├── factory.py          # create_local_store, create_memory_store, etc.
 │   └── binding.py          # Dapr YAML → obstore config parsing
 │
+├── observability/          # Logging, tracing, and metrics adaptors
+│   ├── logger_adaptor.py   # AtlanLoggerAdapter (loguru-backed)
+│   ├── traces_adaptor.py   # OTel TracerProvider setup
+│   ├── metrics_adaptor.py  # OTel MeterProvider setup
+│   ├── app_vitals.py       # App Vitals lifecycle interceptor
+│   ├── segment_client.py   # Segment analytics client
+│   ├── trace_context.py    # Correlation ID propagation
+│   └── context.py          # Observability context carrier
+│
+├── server/                 # Internal FastAPI / health-check servers
+│   ├── health.py           # /health and /ready endpoints
+│   ├── fastapi/            # FastAPI app factory helpers
+│   └── middleware/         # Logging, auth, and CORS middleware
+│
 ├── templates/              # High-level connector templates
 │   ├── sql_metadata_extractor.py
 │   ├── sql_query_extractor.py
 │   └── incremental_sql_metadata_extractor.py
 │
+├── transformers/           # Asset transformation pipelines (internal)
+│   ├── atlas/              # Atlas entity transformers
+│   ├── query/              # Query log transformers
+│   └── common/             # Shared transformer utilities
+│
+├── outputs/                # Output writer utilities
+│   ├── collector.py        # Batch collector for output records
+│   └── models.py           # Output model definitions
+│
+├── tools/                  # CLI and utility tools
+│   └── provision_credentials.py  # Credential provisioning helper
+│
+├── decorators/             # Miscellaneous class and function decorators
+│
+├── docgen/                 # Contract documentation generation
+│
 ├── testing/                # In-memory mocks and pytest fixtures
-│   ├── mocks.py            # MockStateStore, MockSecretStore, etc.
+│   ├── mocks.py            # MockStateStore, MockSecretStore, MockPubSub, etc.
 │   └── fixtures.py         # pytest fixtures (clean_app_registry, etc.)
 │
+├── test_utils/             # Integration test helpers
+│   └── integration/        # Integration test runner and fixtures
+│
+├── discovery.py            # Auto-discovery helpers for apps and handlers
+├── errors.py               # ErrorCode constants (AAF-{COMPONENT}-{ID} format)
+├── constants.py            # Import-time configuration (env vars, path templates)
+├── version.py              # Package version (__version__)
 └── main.py                 # Unified CLI entry point (--mode worker|handler|combined)
 ```
 

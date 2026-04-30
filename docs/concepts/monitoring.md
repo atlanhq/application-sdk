@@ -78,7 +78,26 @@ ports:
 
 ### Singleton Runtime
 
-The Temporal `Runtime` that binds the metrics port is a process-level singleton (`_prometheus_runtime` in `backend.py`). Multiple client instances or repeated `create_temporal_client()` calls within the same process reuse the same `Runtime` — the port is bound exactly once per process. See [Clients](clients.md#prometheus-metrics) for implementation details.
+The Temporal `Runtime` that binds the metrics port is a process-level singleton (`_prometheus_runtime` in `backend.py`). Multiple client instances or repeated `create_temporal_client()` calls within the same process reuse the same `Runtime` — the port is bound exactly once per process. See [Clients](clients.md#prometheus-metrics) for additional context.
+
+## Application Metrics (Handler Service)
+
+The handler service can expose an additional Prometheus endpoint at `/metrics` for application-level metrics (request counts, latency, error rates):
+
+```bash
+ATLAN_ENABLE_PROMETHEUS_METRICS=true  # default: true
+```
+
+When enabled, the handler service mounts a `/metrics` route served by `prometheus_client`. Scrape it alongside the Temporal metrics endpoint:
+
+```yaml
+scrape_configs:
+  - job_name: app-handler
+    static_configs:
+      - targets:
+          - <handler-host>:8000
+    metrics_path: /metrics
+```
 
 ### Recommended Alerts
 

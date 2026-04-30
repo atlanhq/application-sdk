@@ -554,20 +554,20 @@ Worker setup is fully automatic when you use the CLI or `run_dev_combined()`. If
 a worker handle directly (e.g., in integration tests):
 
 ```python
-from application_sdk.execution import create_worker
-from application_sdk.execution._temporal.backend import create_temporal_client
+from application_sdk.execution import create_temporal_client, create_worker
 
-client = await create_temporal_client()  # reads TEMPORAL_HOST, TEMPORAL_NAMESPACE, etc.
+client = await create_temporal_client()  # defaults to localhost:7233; set ATLAN_TEMPORAL_HOST to override
 
 # All registered App subclasses auto-discovered — no explicit list
-worker = await create_worker(client)
+worker = create_worker(client)
 await worker.run()
 ```
 
-Passthrough modules are declared on the `App` class itself, not at worker startup:
+Passthrough modules are declared on the `App` class itself as a `ClassVar`, not as a class-kwarg:
 
 ```python
-class MyConnector(App, passthrough_modules=["my_connector", "third_party_lib"]):
+class MyConnector(App):
+    passthrough_modules = ["my_connector", "third_party_lib"]
     ...
 ```
 
@@ -719,17 +719,17 @@ summary = await AtlanStorage(store, atlan_store).migrate_from_objectstore_to_atl
 await self.upload(UploadInput(local_path="output/"))
 ```
 
-### Local development with custom secrets
+### Local development with credentials
 
-Provide a seeded secret store for local dev by passing `MockSecretStore` from `application_sdk.testing.mocks`. For production-equivalent local testing, run the Dapr sidecar (`uv run poe start-deps`) and let the app pick it up automatically via `DAPR_HTTP_PORT`.
+For production-equivalent local testing, run the Dapr sidecar (`uv run poe start-deps`) and let the app pick it up automatically via `DAPR_HTTP_PORT`. For quick local runs without a sidecar, pass credentials directly — `run_dev_combined` auto-provisions them via the local vault:
 
 ```python
-from application_sdk.testing.mocks import MockSecretStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyApp,
-    secret_store=MockSecretStore({"my-api-key": "test-value"}),
+    credentials={"host": "localhost", "authType": "basic",
+                 "username": "dev", "password": "test-value"},
 ))
 ```
 
@@ -1074,18 +1074,17 @@ controller = MockHeartbeatController()
 # controller.recorded_heartbeats contains all calls made
 ```
 
-### Running locally with mock infrastructure
+### Running locally with credentials
 
-For quick local runs without a Dapr sidecar, pass mock infrastructure from `application_sdk.testing.mocks`:
+For quick local runs without a Dapr sidecar, pass credentials directly — `run_dev_combined` provisions them via the local vault, exactly as production does. For test isolation with typed mock infrastructure, use `InfrastructureContext` directly in pytest fixtures (see testing section above).
 
 ```python
-from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
-    secret_store=MockSecretStore({"my-api-key": "test-value"}),
-    state_store=MockStateStore(),
+    credentials={"host": "localhost", "authType": "basic",
+                 "username": "dev", "password": "test-value"},
 ))
 ```
 

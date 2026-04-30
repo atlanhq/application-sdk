@@ -159,9 +159,9 @@ on the class:
 # v2 — at worker startup
 Worker(workflow_client=client, passthrough_modules=["my_connector"])
 
-# v3 — on the class
-class MyConnector(App, passthrough_modules=["my_connector", "third_party_lib"]):
-    ...
+# v3 — class-level attribute
+class MyConnector(App):
+    passthrough_modules = ["my_connector", "third_party_lib"]
 ```
 
 **SQL template apps** get an even bigger reduction. The whole
@@ -333,15 +333,15 @@ keys = await list_keys(prefix="output/")
 await delete("output/old.parquet")
 ```
 
-**Local dev with custom secrets:**
+**Local dev with credentials:**
 
 ```python
-from application_sdk.testing.mocks import MockSecretStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
-    secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
+    credentials={"host": "localhost", "authType": "basic",
+                 "username": "dev", "password": "dev-secret"},
 ))
 ```
 
@@ -471,11 +471,10 @@ asyncio.run(run_dev_combined(MyExtractor))
 `App` subclasses are defined) and registers everything automatically:
 
 ```python
-from application_sdk.execution import create_worker
-from application_sdk.execution._temporal.backend import create_temporal_client
+from application_sdk.execution import create_temporal_client, create_worker
 
-client = await create_temporal_client()  # reads TEMPORAL_HOST, TEMPORAL_NAMESPACE etc.
-worker = await create_worker(client)     # discovers all App subclasses automatically
+client = await create_temporal_client()  # defaults to localhost:7233; set ATLAN_TEMPORAL_HOST to override
+worker = create_worker(client)           # discovers all App subclasses automatically
 await worker.run()
 ```
 

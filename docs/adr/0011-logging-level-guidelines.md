@@ -5,7 +5,7 @@
 
 ## Context
 
-The SDK uses structlog with JSON output, forwarded to an OpenTelemetry collector and stored in Loki (or equivalent) for querying by correlation ID, workflow ID, or structured field values.
+The SDK uses **loguru** (via `AtlanLoggerAdapter`) with structured output, forwarded to an OpenTelemetry collector and stored in Loki (or equivalent) for querying by correlation ID, workflow ID, or structured field values.
 
 Without a shared definition of what belongs at each level, developers make inconsistent choices: DEBUG entries appear in production INFO streams (noisy, expensive), transient issues get logged at ERROR (drowning real alerts), and non-recoverable failures are sometimes swallowed entirely.
 
@@ -106,27 +106,27 @@ self.logger.warning("Redis unavailable, using local capacity pool", exc_info=Tru
 - A required external call failed after all retries are exhausted
 - An unrecoverable state was detected for a specific unit of work (but not the whole process)
 
-**Always include `exc_info=True`** (or use `logger.exception()` which sets it automatically):
+**Always include `exc_info=True`:**
 ```python
-self.logger.error("Batch failed, continuing", batch_num=n, exc_info=True)
-self.logger.error("Request failed", path=request.path, status_code=500, exc_info=True)
+self.logger.error("Batch failed, continuing; batch_num=%s", n, exc_info=True)
+self.logger.error("Request failed; path=%s status=%s", request.path, 500, exc_info=True)
 ```
 
-**`logger.exception()` vs `logger.error(..., exc_info=True)`:**
-Use `logger.exception()` only inside an `except` block where you are not re-raising:
+**Never use `logger.exception()`** — always use `logger.error(..., exc_info=True)` instead. This keeps the level mental model clean: `{debug, info, warning, error, critical}` with no aliases.
+
 ```python
-# GOOD — terminal handling
+# GOOD
 try:
     run_main(config)
 except Exception as e:
-    logger.exception("Fatal error", error=str(e))
+    logger.error("Fatal error: %s", e, exc_info=True)
     sys.exit(1)
 
 # GOOD — re-raising after logging
 try:
     result = do_work()
-except SomeError:
-    logger.error("Work failed, will retry", exc_info=True)
+except SomeError as e:
+    logger.error("Work failed, will retry: %s", e, exc_info=True)
     raise
 ```
 

@@ -1,6 +1,6 @@
 # Project Structure
 
-- `application_sdk/` is the core SDK package (clients, handlers, activities, workflows).
+- `application_sdk/` is the core SDK package (app, tasks, clients, handlers, execution).
 - `tests/` contains the test suite (currently organized under `tests/unit/`).
 - `docs/` holds documentation sources (guides, concepts, setup).
 - `components/` stores Dapr/Temporal configs used by local dev tasks.

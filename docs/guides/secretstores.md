@@ -1,130 +1,208 @@
-# Credential Management with Secret Stores
+# Secret Stores and Credentials
 
-## Introduction
+This guide covers the full credential lifecycle in the Application SDK: how credentials flow from Dapr secret stores into typed Python objects that your app code uses safely.
 
-The Application SDK Framework provides built-in support for retrieving credentials from external secret stores. When building apps with this framework, developers can offer users the option to securely store and retrieve their database credentials from supported secret management services instead of entering them directly into the application.
+For the concise API reference, see [Credentials](../concepts/credentials.md).
 
-Using secret stores offers several advantages:
+---
 
-- **Enhanced Security**: Credentials are stored and managed in a specialized secure service
-- **Centralized Management**: Credentials can be rotated and updated in one place
-- **Access Control**: Secret stores provide fine-grained access controls and audit logging
-- **Compliance**: Help meet regulatory requirements for credential management
+## How Credentials Flow
 
-## Supported Secret Stores
+```
+External store           Dapr sidecar         SDK resolver          App code
+(Vault, K8s, AWS SM) ──► DaprSecretStore ──► CredentialResolver ──► BasicCredential
+                                                                      ApiKeyCredential
+                                                                      ...
+```
 
-The Application SDK Framework currently supports the following secret stores:
+1. Helm / Kubernetes provisions a Dapr secret-store component pointing at the external store.
+2. The SDK's `DaprSecretStore` calls the Dapr sidecar API to read the secret JSON.
+3. `CredentialResolver` deserialises the JSON into a typed `Credential` model.
+4. App code receives a strongly-typed object — no `dict["password"]` access patterns.
+
+---
+
+## Typed Credentials
+
+All credential types are frozen Pydantic models available from `application_sdk.credentials`:
+
+| Type | Fields | Factory ref |
+|------|--------|-------------|
+| `BasicCredential` | `username`, `password` | `basic_ref(name)` |
+| `ApiKeyCredential` | `api_key`, `header_name`, `prefix` | `api_key_ref(name)` |
+| `BearerTokenCredential` | `token`, `token_type` | `bearer_token_ref(name)` |
+| `OAuthClientCredential` | `client_id`, `client_secret`, `token_url`, `scopes`, `access_token` | `oauth_client_ref(name)` |
+| `CertificateCredential` | `cert_pem`, `key_pem`, `ca_pem` | `certificate_ref(name)` |
+| `AtlanApiToken` | `api_token`, `base_url` | `atlan_api_token_ref(name)` |
+| `AtlanOAuthClient` | `client_id`, `client_secret`, `base_url` | `atlan_oauth_client_ref(name)` |
+| `GitSshCredential` | `private_key`, `passphrase` | `git_ssh_ref(name)` |
+| `GitTokenCredential` | `token` | `git_token_ref(name)` |
+| `RawCredential` | `extra` (raw dict) | `legacy_credential_ref(guid)` — migration only |
+
+### Using credentials in a task
+
+```python
+from application_sdk.credentials import basic_ref, BasicCredential
+from application_sdk.app import App, task
+
+class MyConnector(App):
+    @task
+    async def fetch_data(self, input: FetchInput) -> FetchOutput:
+        ref = basic_ref("my-db-creds")
+        cred: BasicCredential = await self.context.resolve_credential(ref)
+        conn = await connect(host=input.host, user=cred.username, password=cred.password)
+        ...
+```
+
+`self.context.resolve_credential(ref)` reads from the injected `SecretStore` (Dapr in production, `MockSecretStore` in tests) and returns the typed object.
+
+---
+
+## Dapr Component Configuration
+
+In production, Dapr components map component names to external secret backends. The SDK reads from a component named `secretstore` by default (`SECRET_STORE_NAME` env var).
+
+### Kubernetes Secrets (default for local / CI)
+
+```yaml
+# components/secretstore.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: secretstore
+spec:
+  type: secretstores.kubernetes
+  version: v1
+```
 
 ### AWS Secrets Manager
 
-AWS Secrets Manager is a secure service that helps store, retrieve, and rotate database credentials, API keys, and other secrets throughout their lifecycle.
-
-## Implementation Guide for App Developers
-
-If you're developing an app using the Application SDK Framework, you can integrate secret store support by following these guidelines:
-
-1. **Add credential source selection to your UI**:
-   - Include a dropdown or similar control that allows users to select where their credentials are stored
-   - Provide options for direct input and any supported secret stores (e.g., AWS Secrets Manager)
-
-2. **Collect necessary metadata for the selected secret store**:
-   - For AWS Secrets Manager: Secret ARN and AWS Region
-   - Add appropriate form fields to collect this information
-
-3. **Handle credential resolution**:
-   - When processing credentials, use the framework's credential provider system
-   - The framework will automatically resolve actual credentials based on the source selected
-
-4. **Provide user guidance**:
-   - Include information in your app about how to format and enter credential references
-
-## Example UI Implementation
-
-The code sample below shows how to implement a credential source dropdown in your app:
-
-```html
-<div class="form-group">
-  <label>Where are your credentials stored? *</label>
-  <select id="credentialSource" onchange="handleCredentialSourceChange()">
-    <option value="direct">I will enter them below</option>
-    <option value="aws-secrets">AWS Secrets Manager</option>
-  </select>
-</div>
-
-<!-- AWS Secrets Manager Section (hidden by default) -->
-<div id="aws-secrets-section" style="display: none;">
-  <div class="form-group">
-    <label>AWS Secret ARN *</label>
-    <input type="text" id="aws-secret-arn" placeholder="arn:aws:secretsmanager:..." />
-  </div>
-  <div class="form-group">
-    <label>AWS Region *</label>
-    <input type="text" id="aws-secret-region" placeholder="us-east-1" />
-  </div>
-</div>
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: secretstore
+spec:
+  type: secretstores.aws.secretsmanager
+  version: v1
+  metadata:
+    - name: region
+      value: "us-east-1"
+    - name: accessKey
+      secretKeyRef:
+        name: aws-creds
+        key: access_key_id
+    - name: secretKey
+      secretKeyRef:
+        name: aws-creds
+        key: secret_access_key
 ```
 
-## End-User Guide to AWS Secrets Manager
+### HashiCorp Vault
 
-### Setting Up AWS Secrets Manager
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: secretstore
+spec:
+  type: secretstores.hashicorp.vault
+  version: v1
+  metadata:
+    - name: vaultAddr
+      value: "https://vault.internal:8200"
+    - name: vaultToken
+      secretKeyRef:
+        name: vault-token
+        key: token
+```
 
-End users of your app can set up their credentials in AWS Secrets Manager by following these steps:
+See the [Dapr secret store documentation](https://docs.dapr.io/reference/components-reference/supported-secret-stores/) for the full list of supported backends.
 
-1. **Log in to the AWS Console**:
-   - Navigate to the AWS Management Console
-   - Open the AWS Secrets Manager service
+---
 
-2. **Create a New Secret**:
-   - Click "Store a new secret"
-   - Select "Other type of secret"
-   - Enter credentials as key-value pairs:
-     - For Basic authentication: Add keys for `username` and `password`
-     - For IAM User authentication: Add keys for `username`, `access-key-id` and `secret-access-key`
-     - For IAM Role authentication: Add keys for `username`, `role-arn` and `external-id`
+## Deployment Secrets
 
-3. **Configure Secret Settings**:
-   - Give the secret a descriptive name
-   - Configure rotation settings if desired
+A second secret store, `deployment-secret-store` (`DEPLOYMENT_SECRET_STORE_NAME`), holds environment-specific secrets such as Temporal auth credentials. The SDK reads from it automatically when `ATLAN_AUTH_ENABLED=true`.
 
-4. **Copy the Secret ARN**:
-   - Once created, copy the ARN of the secret, which will look like: `arn:aws:secretsmanager:region:account-id:secret:secret-name-xxx`
-   - Note the AWS region where the secret is stored
+The key names within the deployment secret are configurable:
 
-### Using Credentials from AWS Secrets Manager
+```bash
+ATLAN_AUTH_CLIENT_ID_KEY=ATLAN_AUTH_CLIENT_ID      # default
+ATLAN_AUTH_CLIENT_SECRET_KEY=ATLAN_AUTH_CLIENT_SECRET
+```
 
-When users set up a connection in your app, they should:
+---
 
-1. **Select AWS Secrets Manager** as the credential source
-2. **Enter the Secret ARN and Region**
-3. **Use key names as references**:
-   - Instead of entering actual credentials, users should enter the key names from their secret
-   - For example, if their secret contains a key named `postgres_password`, they would enter `postgres_password` in the Password field
-4. The framework will automatically retrieve and use the actual values from AWS Secrets Manager
+## Testing Without Dapr
 
-## Troubleshooting
+Inject a `MockSecretStore` in tests to avoid needing a Dapr sidecar:
 
-Common issues users might encounter:
+```python
+import pytest
+from application_sdk.testing import MockSecretStore
+from application_sdk.infrastructure import InfrastructureContext, set_infrastructure, clear_infrastructure
 
-- **Connection Failures**:
-  - Verify the Secret ARN is correct and accessible
-  - Ensure the AWS region is correctly specified
-  - Check that key names in the form exactly match the keys in the AWS secret
-  - Verify that the platform/environment running the app has the appropriate IAM role or permissions to access the secret
-  - Check AWS CloudTrail logs for any access denied errors
+@pytest.fixture
+def infra():
+    ctx = InfrastructureContext(
+        secret_store=MockSecretStore({
+            "my-db-creds": '{"type":"basic","username":"admin","password":"secret"}',
+        }),
+    )
+    set_infrastructure(ctx)
+    yield ctx
+    clear_infrastructure()
 
-- **Invalid Credentials**:
-  - Ensure the secret contains all required credential fields
-  - Verify that credential values in the secret store are correct and up-to-date
+async def test_connect(infra):
+    connector = MyConnector()
+    output = await connector.fetch_data(FetchInput(host="localhost"))
+    assert output.rows > 0
+```
 
-## Technical Details for Framework Developers
+For richer credential test data, use `MockCredentialStore`:
 
-The credential resolution process follows these steps:
+```python
+from application_sdk.testing import MockCredentialStore
+from application_sdk.infrastructure import InfrastructureContext, set_infrastructure
 
-1. The application collects credential information from the user interface
-2. Based on the credential source, the appropriate credential provider is selected
-3. For secret store providers, the necessary metadata (like ARN and region) is extracted
-4. The provider connects to the secret store service and retrieves the actual credentials
-5. Retrieved values are substituted for key references in the original credential object
-6. The resolved credentials are used for the database connection
+store = MockCredentialStore()
+ref = store.add_basic("my-db-creds", username="admin", password="secret")
+ctx = InfrastructureContext(secret_store=store.secret_store)
+set_infrastructure(ctx)
+```
 
-Future extensions to support additional secret stores should implement the credential store interface provided by the SDK.
+---
+
+## End-User Guide: AWS Secrets Manager
+
+If your app supports AWS Secrets Manager as an external credential source through the Atlan UI, users can set it up as follows.
+
+### Creating a secret
+
+1. Open AWS Secrets Manager in the AWS Console.
+2. Click **Store a new secret** → **Other type of secret**.
+3. Add key-value pairs matching the credential fields your connector expects:
+   - Basic auth: `username`, `password`
+   - IAM User: `username`, `access-key-id`, `secret-access-key`
+   - IAM Role: `username`, `role-arn`, `external-id`
+4. Give the secret a descriptive name and save.
+5. Copy the Secret ARN (format: `arn:aws:secretsmanager:region:account-id:secret:name`).
+
+### Configuring in the Atlan UI
+
+In your connector's configuration form:
+1. Select **AWS Secrets Manager** as the credential source.
+2. Enter the Secret ARN and AWS Region.
+3. Map form fields to key names within the secret (e.g. `password` → `db_password` if your secret uses that key).
+
+The platform will retrieve and inject the credential values at workflow start time.
+
+### Troubleshooting AWS credential failures
+
+- **Access denied**: The IAM role used by the Dapr sidecar must have `secretsmanager:GetSecretValue` permission for the secret ARN.
+- **Wrong region**: The region in the Dapr component config must match the secret's region.
+- **Key name mismatch**: Form field key names must exactly match the keys inside the AWS secret.
+- **Stale cache**: Dapr caches secrets for a configurable TTL. Rotate secrets and wait for the cache to expire, or restart the Dapr sidecar.
+
+Check AWS CloudTrail for access-denied audit events.
