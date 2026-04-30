@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
@@ -568,6 +569,26 @@ class SqlApp(App):
             return legacy_credential_ref(input.credential_guid)
         return None
 
+    @staticmethod
+    def _sanitize_value(v: Any) -> Any:
+        """Sanitize a single value for JSON serialization."""
+        if isinstance(v, float):
+            if math.isnan(v) or math.isinf(v):
+                return None
+        # pandas NaT / NaN types
+        if hasattr(v, "__class__") and v.__class__.__name__ in ("NaTType", "NAType"):
+            return None
+        return v
+
+    @classmethod
+    def _sanitize_nan(cls, obj: Any) -> Any:
+        """Recursively replace NaN, Inf, NaT with None for valid JSON."""
+        if isinstance(obj, dict):
+            return {k: cls._sanitize_nan(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [cls._sanitize_nan(v) for v in obj]
+        return cls._sanitize_value(obj)
+
     async def _transform_entity(
         self,
         entity_type: str,
@@ -613,7 +634,10 @@ class SqlApp(App):
                         asset.setdefault("attributes", {}).setdefault(
                             "connectionName", connection_name
                         )
-                    # Write as JSONL — asset should support serialization
+                    # Write as JSONL — sanitize NaN/Inf before serialization.
+                    # pandas converts SQL NULLs to NaN which is invalid JSON.
+                    if isinstance(asset, dict):
+                        asset = self._sanitize_nan(asset)
                     if hasattr(asset, "to_nested_dict"):
                         entity_bytes = json.dumps(asset.to_nested_dict()).encode()
                     elif hasattr(asset, "model_dump"):
