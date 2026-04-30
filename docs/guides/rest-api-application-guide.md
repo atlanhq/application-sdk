@@ -29,45 +29,34 @@ Define input, output, and credential types in `app/contracts.py`:
 ```python
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
 from application_sdk.contracts.base import Input, Output
-from application_sdk.credentials.types import ApiKeyCredential
-
-
-# --- Credential model ---
-
-class MyApiCredential(ApiKeyCredential):
-    """Credential for My API. api_token maps to the API key."""
-    base_url: str = "https://api.example.com"
 
 
 # --- Workflow contracts ---
 
-@dataclass
 class ExtractionInput(Input):
+    credential_guid: str = ""
     output_path: str = ""
     days_back: int = 30
 
 
-@dataclass
 class ExtractionOutput(Output):
     output_path: str = ""
     record_count: int = 0
 
 
-@dataclass
 class FetchEntitiesInput(Input):
     credential_guid: str = ""
     output_path: str = ""
     days_back: int = 30
 
 
-@dataclass
 class FetchEntitiesOutput(Output):
     output_path: str = ""
     record_count: int = 0
 ```
+
+`Input` and `Output` are Pydantic `BaseModel` subclasses — do not use `@dataclass` on them.
 
 ## HTTP Client
 
@@ -82,10 +71,10 @@ from app.contracts import MyApiCredential
 
 
 class MyApiClient:
-    def __init__(self, credential: MyApiCredential) -> None:
+    def __init__(self, api_token: str, base_url: str = "https://api.example.com") -> None:
         self._client = httpx.AsyncClient(
-            base_url=credential.base_url,
-            headers={"Authorization": f"Bearer {credential.api_token}"},
+            base_url=base_url,
+            headers={"Authorization": f"Bearer {api_token}"},
             timeout=30,
         )
 
@@ -107,29 +96,33 @@ from __future__ import annotations
 
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
-    AuthInput, AuthOutput,
-    PreflightInput, PreflightOutput,
+    AuthInput, AuthOutput, AuthStatus,
+    PreflightInput, PreflightOutput, PreflightStatus,
 )
-from application_sdk.credentials import resolve_credentials
 
 from app.clients import MyApiClient
-from app.contracts import MyApiCredential
 
 
 class MyConnectorHandler(Handler):
     async def test_auth(self, input: AuthInput) -> AuthOutput:
-        credential = await resolve_credentials(
-            input.credential_guid, MyApiCredential
+        # Credentials arrive as a list of key/value pairs.
+        api_token = next((c.value for c in input.credentials if c.key == "api_token"), "")
+        base_url = next(
+            (c.value for c in input.credentials if c.key == "base_url"),
+            "https://api.example.com",
         )
-        client = MyApiClient(credential)
+        client = MyApiClient(api_token=api_token, base_url=base_url)
         try:
             entities = await client.get_entities(page=1)
-            return AuthOutput(success=True, count=len(entities))
+            return AuthOutput(
+                status=AuthStatus.SUCCESS,
+                message=f"Connected: {len(entities)} entities found",
+            )
         finally:
             await client.close()
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(success=True)
+        return PreflightOutput(status=PreflightStatus.READY, message="OK")
 ```
 
 ## App (Connector)
@@ -143,13 +136,11 @@ import json
 import os
 import tempfile
 
-from application_sdk.app.task import task
-from application_sdk.credentials import resolve_credentials
+from application_sdk.app import App, task
+from application_sdk.credentials import CredentialResolver
+from application_sdk.credentials.ref import api_key_ref
+from application_sdk.infrastructure import get_infrastructure
 from application_sdk.storage import upload_file
-from application_sdk.templates import BaseMetadataExtractor
-from application_sdk.templates.contracts.base_metadata_extraction import (
-    UploadInput,
-)
 
 from app.clients import MyApiClient
 from app.contracts import (
@@ -157,12 +148,10 @@ from app.contracts import (
     ExtractionOutput,
     FetchEntitiesInput,
     FetchEntitiesOutput,
-    MyApiCredential,
 )
 
 
-class MyConnectorApp(BaseMetadataExtractor):
-    handler_class = None  # set in atlan.yaml or via --handler flag
+class MyConnectorApp(App):
 
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
         fetch_out = await self.fetch_entities(
@@ -171,9 +160,6 @@ class MyConnectorApp(BaseMetadataExtractor):
                 output_path=input.output_path,
                 days_back=input.days_back,
             )
-        )
-        await self.upload_to_atlan(
-            UploadInput(output_path=fetch_out.output_path)
         )
         return ExtractionOutput(
             output_path=fetch_out.output_path,
@@ -184,10 +170,14 @@ class MyConnectorApp(BaseMetadataExtractor):
     async def fetch_entities(
         self, input: FetchEntitiesInput
     ) -> FetchEntitiesOutput:
-        credential = await resolve_credentials(
-            input.credential_guid, MyApiCredential
+        infra = get_infrastructure()
+        resolver = CredentialResolver(secret_store=infra.secret_store)
+        ref = api_key_ref(input.credential_guid)
+        raw = await resolver.resolve_raw(ref)
+        client = MyApiClient(
+            api_token=raw.get("api_token", ""),
+            base_url=raw.get("base_url", "https://api.example.com"),
         )
-        client = MyApiClient(credential)
 
         output_file = os.path.join(input.output_path, "entities.jsonl")
         record_count = 0
@@ -234,9 +224,7 @@ def _transform_entity(raw: dict) -> dict:
     }
 ```
 
-### Why `BaseMetadataExtractor`?
-
-`BaseMetadataExtractor` is an `App` subclass that adds a single built-in task: `upload_to_atlan`. This task copies files from your deployment object store to Atlan's upstream store, which is what triggers ingestion. You don't need to inherit it if you handle file transfer yourself, but it saves boilerplate for the typical REST connector.
+The connector above inherits directly from `App`. For connectors that need to push output to Atlan's upstream store, `BaseMetadataExtractor` (a subclass of `App`) provides a built-in `upload_to_atlan` task that handles the transfer. Both patterns are supported; the direct `App` approach shown here gives more explicit control.
 
 ## Local Development
 
@@ -312,9 +300,8 @@ If any of your task inputs or outputs could be large, use `FileReference` instea
 
 ```python
 from application_sdk.contracts.base import Input
-from application_sdk.contracts.storage import FileReference, StorageTier
+from application_sdk.contracts import FileReference, StorageTier
 
-@dataclass
 class FetchEntitiesInput(Input):
     credential_guid: str = ""
     output_path: str = ""
@@ -336,30 +323,32 @@ async def fetch_entities(self, input: FetchEntitiesInput) -> FetchEntitiesOutput
 For tasks where you want manual control (e.g. to include progress in the heartbeat):
 
 ```python
-from temporalio.activity import heartbeat
-
 @task(timeout_seconds=7200)
 async def fetch_entities(self, input: FetchEntitiesInput) -> FetchEntitiesOutput:
     for page in range(total_pages):
         # process page...
-        heartbeat({"page": page, "total": total_pages})
+        self.task_context.heartbeat({"page": page, "total": total_pages})
 ```
+
+Never import from `temporalio` directly — use `self.task_context.heartbeat()` which wraps the Temporal primitive.
 
 ## Error Handling
 
-Raise `ActivityError` for failures that should mark the task as failed in Temporal:
+Raise `NonRetryableError` for failures that should permanently fail the task in Temporal (no retries):
 
 ```python
-from application_sdk.common.error_codes import ActivityError
+from application_sdk.app import NonRetryableError
 
 @task(timeout_seconds=3600)
 async def fetch_entities(self, input: FetchEntitiesInput) -> FetchEntitiesOutput:
     try:
         ...
     except httpx.HTTPStatusError as e:
-        raise ActivityError(
-            f"API request failed: {e.response.status_code}"
-        ) from e
+        if e.response.status_code in (400, 401, 403, 404):
+            raise NonRetryableError(
+                f"API request failed permanently: {e.response.status_code}"
+            ) from e
+        raise  # let Temporal retry transient errors (5xx, network)
 ```
 
 ## Testing
@@ -367,6 +356,7 @@ async def fetch_entities(self, input: FetchEntitiesInput) -> FetchEntitiesOutput
 Use `MockSecretStore` and `MockCredentialStore` to test without real credentials:
 
 ```python
+import json
 import pytest
 from application_sdk.infrastructure import set_infrastructure, clear_infrastructure
 from application_sdk.infrastructure.context import InfrastructureContext
@@ -374,14 +364,15 @@ from application_sdk.testing import MockSecretStore
 
 @pytest.fixture(autouse=True)
 def infra(tmp_path):
+    # MockSecretStore stores secrets as JSON strings (same as the real Dapr secret store).
     set_infrastructure(
         InfrastructureContext(
             secret_store=MockSecretStore({
-                "my-test-cred": {
-                    "authType": "api_key",
+                "my-test-cred": json.dumps({
+                    "type": "api_key",
                     "api_token": "test-token",
                     "base_url": "http://localhost",
-                }
+                })
             })
         )
     )

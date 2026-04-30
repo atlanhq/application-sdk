@@ -49,7 +49,7 @@ dapr:
     enabled: true
 ```
 
-The Dapr component name is `atlan-state-store` by default (read at module import time from `DAPR_STATE_STORE_COMPONENT_NAME`).
+The Dapr component name is `statestore` by default (read at module import time from `STATE_STORE_NAME`).
 
 **Testing without Dapr:**
 
@@ -67,7 +67,7 @@ mock_state.list_keys = AsyncMock(return_value=[])
 
 ## SecretStore
 
-Provides access to secrets at runtime. The SDK uses this internally to resolve credential GUIDs — your app typically does not call `SecretStore` directly; use `resolve_credentials()` instead (see [Credentials](credentials.md)).
+Provides access to secrets at runtime. The SDK uses this internally to resolve credential GUIDs — your app typically does not call `SecretStore` directly; use `CredentialResolver` instead (see [Credentials](credentials.md)).
 
 **Protocol:**
 
@@ -76,6 +76,7 @@ class SecretStore(Protocol):
     async def get(self, name: str) -> str: ...
     async def get_optional(self, name: str) -> str | None: ...
     async def get_bulk(self, names: list[str]) -> dict[str, str]: ...
+    async def list_names(self) -> list[str]: ...
 ```
 
 **Two built-in implementations:**
@@ -88,14 +89,16 @@ class SecretStore(Protocol):
 **Injecting for tests:**
 
 ```python
+import json
 from application_sdk.testing import MockSecretStore
 
 secret_store = MockSecretStore({
-    "my-credential-guid": {
+    "my-credential-name": json.dumps({
+        "type": "basic",
         "username": "admin",
         "password": "secret",
         "host": "localhost",
-    }
+    })
 })
 ```
 
@@ -123,26 +126,24 @@ class PubSub(Protocol):
         self,
         topic: str,
         handler: MessageHandler,
-        *,
-        metadata: dict[str, str] | None = None,
     ) -> Subscription: ...
 ```
 
 **Publishing a message:**
 
+`PubSub` is not part of `InfrastructureContext`. Access it through the Dapr client directly or via the SDK's Dapr pub/sub wrapper. Example using the Dapr SDK:
+
 ```python
-from application_sdk.infrastructure import get_infrastructure
+from application_sdk.infrastructure import AsyncDaprClient
 
 @task(timeout_seconds=60)
 async def notify_complete(self, input: NotifyInput) -> NotifyOutput:
-    pubsub = get_infrastructure().pubsub
-    if pubsub is None:
-        raise RuntimeError("PubSub not configured")
-
-    await pubsub.publish(
-        topic="extraction-complete",
-        data={"run_id": input.run_id, "record_count": input.record_count},
-    )
+    async with AsyncDaprClient() as dapr:
+        await dapr.publish_event(
+            pubsub_name="eventstore",  # matches EVENT_STORE_NAME env var (default: "eventstore")
+            topic_name="extraction-complete",
+            data={"run_id": input.run_id, "record_count": input.record_count},
+        )
     return NotifyOutput()
 ```
 
@@ -165,7 +166,7 @@ dapr:
     enabled: true
 ```
 
-The component name is read from `DAPR_PUBSUB_COMPONENT_NAME` at module import time.
+The component name is read from `EVENT_STORE_NAME` at module import time (default: `eventstore`).
 
 **Testing without Dapr:**
 
@@ -194,7 +195,6 @@ class Binding(Protocol):
         self,
         operation: str,
         data: bytes | None = None,
-        *,
         metadata: dict[str, str] | None = None,
     ) -> BindingResponse: ...
 
@@ -202,19 +202,21 @@ class Binding(Protocol):
 class InputBinding(Protocol):
     """Receives data from an external source (e.g. a queue)."""
     @property
-    def topic(self) -> str: ...
+    def name(self) -> str: ...
 
-    async def receive(self) -> Message: ...
+    async def read(self) -> tuple[bytes, dict[str, str]]: ...
 
 
 class OutputBinding(Protocol):
     """Sends data to an external target (e.g. an HTTP endpoint or email)."""
-    async def send(
+    @property
+    def name(self) -> str: ...
+
+    async def write(
         self,
         data: bytes,
-        *,
         metadata: dict[str, str] | None = None,
-    ) -> BindingResponse: ...
+    ) -> None: ...
 ```
 
 **Request/response types:**
@@ -242,33 +244,44 @@ The `CapacityPool` Protocol governs concurrency limits — for example, capping 
 
 ```python
 class CapacityPool(Protocol):
-    async def acquire(self, count: int = 1) -> None: ...
-    async def release(self, count: int = 1) -> None: ...
+    async def acquire(
+        self,
+        pool_name: str,
+        requested: int,
+        *,
+        min_useful: int = 1,
+        holder_id: str = "",
+        ttl_seconds: int = 120,
+    ) -> int: ...   # returns slots granted
 
-    @property
-    def available(self) -> int: ...
+    async def release(self, pool_name: str, holder_id: str) -> None: ...
 
-    @property
-    def capacity(self) -> int: ...
+    async def renew(
+        self, pool_name: str, holder_id: str, ttl_seconds: int = 120
+    ) -> bool: ...
 ```
+
+`CapacityPool` is accessed as a module-level singleton (not part of `InfrastructureContext`). Use `get_capacity_pool()`:
 
 **Using a capacity pool:**
 
 ```python
-from application_sdk.infrastructure import get_infrastructure
+import uuid
+from application_sdk.infrastructure.capacity import get_capacity_pool
 
 @task(timeout_seconds=3600)
 async def parallel_fetch(self, input: FetchInput) -> FetchOutput:
-    pool = get_infrastructure().capacity_pool
+    pool = get_capacity_pool()
 
     async def fetch_one(item_id: str) -> dict:
+        holder = str(uuid.uuid4())
         if pool:
-            await pool.acquire()
+            await pool.acquire("fetch-pool", requested=1, holder_id=holder)
         try:
             return await self._fetch_item(item_id)
         finally:
             if pool:
-                await pool.release()
+                await pool.release("fetch-pool", holder_id=holder)
 
     results = await asyncio.gather(*(fetch_one(i) for i in input.item_ids))
     return FetchOutput(results=results)
@@ -284,33 +297,29 @@ async def parallel_fetch(self, input: FetchInput) -> FetchOutput:
 **Configuring `RedisCapacityPool`:**
 
 ```python
+import redis
 from application_sdk.infrastructure.capacity import configure_capacity_pool
 from application_sdk.infrastructure._redis.capacity import RedisCapacityPool
 
-configure_capacity_pool(
-    RedisCapacityPool(
-        redis_url=os.environ["REDIS_URL"],
-        pool_name="my-connector-pool",
-        capacity=10,
-    )
-)
+redis_client = redis.Redis(host="localhost", port=6379)
+configure_capacity_pool(RedisCapacityPool(redis_client=redis_client, max_permits=10))
 ```
 
-Or set via env vars and the pool is configured automatically (see [Configuration](../configuration.md)).
+Or set `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` env vars and the pool is configured automatically (see [Configuration](../configuration.md)).
 
 ---
 
 ## Infrastructure Summary
 
-| Protocol | Dapr Component | Mock | Purpose |
-|---|---|---|---|
-| `StateStore` | `atlan-state-store` | `MagicMock` | Checkpoint / resume |
-| `SecretStore` | Dapr secret store | `MockSecretStore` | Credential resolution |
-| `PubSub` | `atlan-pubsub` | `MagicMock` | Event emission/subscription |
-| `Binding` | Dapr binding | `MagicMock` | External I/O |
-| `CapacityPool` | Redis (optional) | `LocalCapacityPool` | Concurrency limits |
+| Protocol | Dapr Component | Mock | Access | Purpose |
+|---|---|---|---|---|
+| `StateStore` | `statestore` (`STATE_STORE_NAME`) | `MagicMock` | `get_infrastructure().state_store` | Checkpoint / resume |
+| `SecretStore` | Dapr secret store | `MockSecretStore` | `get_infrastructure().secret_store` | Credential resolution |
+| `Binding` | Dapr binding | `MagicMock` | `get_infrastructure().event_binding` | External I/O |
+| `PubSub` | `eventstore` (`EVENT_STORE_NAME`) | `MagicMock` | Dapr client directly | Event emission/subscription |
+| `CapacityPool` | Redis (optional) | `LocalCapacityPool` | `get_capacity_pool()` | Concurrency limits |
 
-All five are held in `InfrastructureContext` and accessed via `get_infrastructure()`. See [Infrastructure](infrastructure.md) for the test fixture pattern and `set_infrastructure()` / `clear_infrastructure()` usage.
+`StateStore`, `SecretStore`, and `Binding` are held in `InfrastructureContext` and accessed via `get_infrastructure()`. `PubSub` is accessed via the Dapr client directly. `CapacityPool` is a separate module-level singleton accessed via `get_capacity_pool()`. See [Infrastructure](infrastructure.md) for the test fixture pattern and `set_infrastructure()` / `clear_infrastructure()` usage.
 
 ## See Also
 

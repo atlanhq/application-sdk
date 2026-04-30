@@ -106,6 +106,8 @@ When apps coordinate via AE, the downstream app receives inputs via the `args` b
 For large intermediate files, use `FileReference` with `StorageTier.RETAINED`:
 
 ```python
+from application_sdk.contracts.storage import UploadInput, StorageTier
+
 class ExtractionOutput(Output):
     parquet_file: FileReference   # StorageTier.RETAINED — kept for downstream
 
@@ -114,8 +116,8 @@ class MyExtractor(App):
     async def transform(self, input: TransformInput) -> ExtractionOutput:
         path = "/tmp/output.parquet"
         write_parquet(path, records)
-        refs = await self.upload(local_dir="/tmp/", tier=StorageTier.RETAINED)
-        return ExtractionOutput(parquet_file=refs[0])
+        up = await self.upload(UploadInput(local_path=path, tier=StorageTier.RETAINED))
+        return ExtractionOutput(parquet_file=up.ref)
 ```
 
 The downstream app receives the `FileReference.key` (object-store path) via the AE args substitution and downloads it before processing.

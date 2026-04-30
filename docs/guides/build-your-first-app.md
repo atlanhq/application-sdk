@@ -33,33 +33,18 @@ Create `app/contracts.py`:
 ```python
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
 from application_sdk.contracts.base import Input, Output
-from application_sdk.credentials.types import BearerTokenCredential
 
 
-# --- Credential type ---
+# --- Workflow contracts ---
 
-class GitHubCredential(BearerTokenCredential):
-    """GitHub personal access token credential.
-
-    The `token` field comes from BearerTokenCredential and holds
-    the raw PAT. We add `org` to scope requests to a single org.
-    """
-    org: str = ""
-
-
-# --- Handler contracts ---
-
-@dataclass
 class RepoFetchInput(Input):
     credential_guid: str = ""
+    org: str = ""
     output_path: str = ""
     max_pages: int = 10
 
 
-@dataclass
 class RepoFetchOutput(Output):
     output_path: str = ""
     record_count: int = 0
@@ -69,11 +54,10 @@ class RepoFetchOutput(Output):
 
 | Type | Purpose |
 |---|---|
-| `GitHubCredential` | Maps credential store fields to typed attributes; resolved from the secret store by GUID at runtime |
 | `RepoFetchInput` | Passed to the `@task`; everything the task needs to do its work |
 | `RepoFetchOutput` | Returned from the `@task`; tells the caller where output landed and how many records |
 
-The `Input` and `Output` base classes are plain dataclasses. Field defaults matter: every field must have a default for schema evolution (adding a field to a deployed connector can't break existing callers).
+`Input` and `Output` are Pydantic `BaseModel` subclasses. Never use `@dataclass` on them — Pydantic handles construction, validation, and Temporal serialization. Field defaults matter: every field must have a default for schema evolution (adding a field to a deployed connector can't break existing callers).
 
 ---
 
@@ -88,36 +72,37 @@ from __future__ import annotations
 
 import httpx
 
-from application_sdk.credentials import resolve_credentials
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
+    AuthStatus,
     PreflightInput,
     PreflightOutput,
+    PreflightStatus,
 )
-
-from app.contracts import GitHubCredential
 
 
 class GitHubHandler(Handler):
     async def test_auth(self, input: AuthInput) -> AuthOutput:
-        credential = await resolve_credentials(input.credential_guid, GitHubCredential)
+        # Credentials arrive as a list of key/value pairs from Atlan.
+        token = next((c.value for c in input.credentials if c.key == "token"), "")
+        org = next((c.value for c in input.credentials if c.key == "org"), "")
 
         async with httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {credential.token}"},
+            headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         ) as client:
-            resp = await client.get("https://api.github.com/user/orgs")
+            resp = await client.get(f"https://api.github.com/orgs/{org}/repos")
             resp.raise_for_status()
 
-        return AuthOutput(success=True)
+        return AuthOutput(status=AuthStatus.SUCCESS, message="Authentication successful")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(success=True)
+        return PreflightOutput(status=PreflightStatus.READY, message="OK")
 ```
 
-`resolve_credentials(guid, CredentialType)` looks up the raw credential dict from the secret store and returns a typed `GitHubCredential` instance. The handler never sees a raw `dict` — just typed fields.
+The handler receives credentials as `input.credentials: list[HandlerCredential]` — a list of opaque key/value pairs sent by Atlan. Extract the fields you need by key name.
 
 ---
 
@@ -137,40 +122,42 @@ import tempfile
 import httpx
 
 from application_sdk.app import App, task
-from application_sdk.credentials import resolve_credentials
+from application_sdk.credentials import CredentialResolver
+from application_sdk.credentials.ref import bearer_token_ref
+from application_sdk.infrastructure import get_infrastructure
 from application_sdk.storage import upload_file
 
-from app.contracts import (
-    GitHubCredential,
-    RepoFetchInput,
-    RepoFetchOutput,
-)
-from app.handler import GitHubHandler
+from app.contracts import RepoFetchInput, RepoFetchOutput
 
 
 class GitHubConnector(App):
-    handler_class = GitHubHandler
 
     async def run(self, input: RepoFetchInput) -> RepoFetchOutput:
         return await self.fetch_repos(input)
 
     @task(timeout_seconds=3600, auto_heartbeat_seconds=30)
     async def fetch_repos(self, input: RepoFetchInput) -> RepoFetchOutput:
-        credential = await resolve_credentials(input.credential_guid, GitHubCredential)
+        # Resolve credentials from the secret store by name.
+        infra = get_infrastructure()
+        resolver = CredentialResolver(secret_store=infra.secret_store)
+        ref = bearer_token_ref(input.credential_guid)
+        raw = await resolver.resolve_raw(ref)
+        token = raw.get("token", "")
+        org = raw.get("org", input.org)
 
-        output_file = os.path.join(input.output_path or ".", "repos.jsonl")
+        output_file = f"artifacts/github-connector/{input.credential_guid}/repos.jsonl"
         record_count = 0
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as tmp:
             tmp_path = tmp.name
             try:
                 async with httpx.AsyncClient(
-                    headers={"Authorization": f"Bearer {credential.token}"},
+                    headers={"Authorization": f"Bearer {token}"},
                     timeout=30,
                 ) as client:
                     for page in range(1, input.max_pages + 1):
                         resp = await client.get(
-                            f"https://api.github.com/orgs/{credential.org}/repos",
+                            f"https://api.github.com/orgs/{org}/repos",
                             params={"page": page, "per_page": 100},
                         )
                         resp.raise_for_status()
@@ -183,7 +170,7 @@ class GitHubConnector(App):
                                 "typeName": "Schema",
                                 "attributes": {
                                     "name": repo["name"],
-                                    "qualifiedName": f"github/{credential.org}/{repo['name']}",
+                                    "qualifiedName": f"github/{org}/{repo['name']}",
                                     "description": repo.get("description") or "",
                                 },
                             }
@@ -195,7 +182,7 @@ class GitHubConnector(App):
         await upload_file(output_file, tmp_path)
         os.unlink(tmp_path)
 
-        return RepoFetchOutput(output_path=input.output_path or ".", record_count=record_count)
+        return RepoFetchOutput(output_path=output_file, record_count=record_count)
 ```
 
 ### Key patterns
@@ -204,7 +191,7 @@ class GitHubConnector(App):
 
 **Write to a temp file, then `upload_file`** — tasks run inside the Temporal worker process. Don't accumulate large lists in memory; write to a local temp file and upload it to object storage. The framework guarantees the upload path is accessible to downstream tasks.
 
-**`resolve_credentials` inside the task, not in `run()`** — tasks may be retried on a different worker pod. Resolve credentials at the top of each task so every retry gets a fresh, valid credential.
+**Resolve credentials inside the task, not in `run()`** — tasks may be retried on a different worker pod. Resolve credentials at the top of each task so every retry gets a fresh, valid credential. Use `bearer_token_ref(name)` + `CredentialResolver.resolve_raw()` for the named-credential path (works with `MockSecretStore` in tests).
 
 ---
 
@@ -290,14 +277,15 @@ from app.contracts import RepoFetchInput
 
 @pytest.fixture(autouse=True)
 def infra():
+    # MockSecretStore stores secrets as JSON strings keyed by credential name.
     set_infrastructure(
         InfrastructureContext(
             secret_store=MockSecretStore({
-                "test-cred": {
-                    "authType": "bearer",
+                "test-cred": json.dumps({
+                    "type": "bearer_token",
                     "token": "fake-token",
                     "org": "test-org",
-                }
+                })
             })
         )
     )
@@ -323,17 +311,12 @@ async def test_fetch_repos(httpx_mock, tmp_path):
     result = await connector.fetch_repos(
         RepoFetchInput(
             credential_guid="test-cred",
-            output_path=str(tmp_path),
+            org="test-org",
             max_pages=5,
         )
     )
 
     assert result.record_count == 2
-
-    lines = (tmp_path / "repos.jsonl").read_text().splitlines()
-    entities = [json.loads(l) for l in lines]
-    assert entities[0]["attributes"]["name"] == "repo-a"
-    assert entities[1]["attributes"]["qualifiedName"] == "github/test-org/repo-b"
 ```
 
 Run:
@@ -344,9 +327,8 @@ uv run pytest tests/ -v
 
 ### What the test demonstrates
 
-- **`MockSecretStore`** intercepts `resolve_credentials()` without any Dapr sidecar. The dict you pass maps credential GUIDs to raw field dicts.
+- **`MockSecretStore`** intercepts credential resolution without any Dapr sidecar. The dict maps credential names to JSON strings, which `CredentialResolver` parses the same way it would parse a real secret-store response.
 - **`set_infrastructure` / `clear_infrastructure`** swap the infrastructure context in and out per test. Always call `clear_infrastructure()` in teardown (the `yield` fixture pattern handles this).
-- **`tmp_path`** (pytest built-in) gives each test an isolated temp directory. `upload_file` in tests writes to the local filesystem instead of object storage.
 - The task is called directly as a coroutine (`await connector.fetch_repos(...)`) — no Temporal worker needed.
 
 ---

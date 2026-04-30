@@ -31,7 +31,7 @@ ref = api_key_ref("my-service")
 | `git_token_ref(name)` | `GitTokenCredential` | `token` |
 | `atlan_api_token_ref(name)` | `AtlanApiToken` | `api_token`, `base_url` |
 | `atlan_oauth_client_ref(name)` | `AtlanOAuthClient` | `client_id`, `client_secret`, `base_url` |
-| `legacy_credential_ref(guid)` | `RawCredential` | `extra` (raw dict, legacy fallback) |
+| `legacy_credential_ref(guid, credential_type="unknown")` | `RawCredential` | `extra` (raw dict, legacy fallback) — **deprecated**, emits `DeprecationWarning` |
 
 All factory functions accept an optional `store_name` keyword argument (default: `"default"`) to route to a specific `SecretStore`.
 
@@ -198,6 +198,7 @@ For connectors that receive credentials as a flat dict (e.g. from Heracles), use
 from application_sdk.credentials.utils import parse_credentials_extra
 
 raw = {"host": "db.example.com", "extra": '{"schema": "public"}'}
-parsed = parse_credentials_extra(raw)
-# parsed["schema"] == "public"
+extra = parse_credentials_extra(raw)
+# extra == {"schema": "public"}   ← returns the parsed extra dict only, not the full credentials
+schema = extra.get("schema", "public")
 ```

@@ -75,6 +75,7 @@ Used by the Temporal Worker Deployment controller (TWD). Leave empty unless your
 | `ATLAN_HANDLER_PORT` | `8000` | HTTP port for the handler. Fallback: `ATLAN_APP_HTTP_PORT`. |
 | `ATLAN_HEALTH_PORT` | `8081` | Port for the worker health endpoint. |
 | `ATLAN_HANDLER_MODULE` | _(empty)_ | Handler class to load (`module:ClassName`). Auto-discovered from the app module when unset. |
+| `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` | `5` | Seconds to drain in-flight requests before the worker shuts down. |
 
 ---
 
@@ -141,7 +142,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` | `true` | Use server-side cursors for SQL queries. Reduces memory for large result sets by streaming data row-by-row. |
+| `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` | `true` | Use server-side cursors for SQL queries. Reduces memory for large result sets by streaming data row-by-row. Same truthy caveat as `ATLAN_LOG_CLEANUP_ENABLED` — unset or empty to disable. |
 
 ---
 
@@ -162,7 +163,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_LOG_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
 | `ATLAN_LOG_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between parquet sink flushes. |
 | `ATLAN_LOG_RETENTION_DAYS` | `30` | Days to retain parquet log files before cleanup. |
-| `ATLAN_LOG_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old log files. |
+| `ATLAN_LOG_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old log files. Any non-empty string value (including `"false"`) is treated as `true` by `bool()`; unset or empty to disable. |
 | `ATLAN_LOG_FILE_NAME` | `log.parquet` | Parquet log file name. |
 
 ---
@@ -175,7 +176,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
 | `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between parquet sink flushes. |
 | `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain parquet metric files. |
-| `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. |
+| `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Same truthy caveat as `ATLAN_LOG_CLEANUP_ENABLED`. |
 | `ATLAN_ENABLE_PROMETHEUS_METRICS` | `true` | Expose a Prometheus `/metrics` endpoint on the handler at port `ATLAN_HANDLER_PORT`. See [Monitoring](concepts/monitoring.md). |
 
 ---

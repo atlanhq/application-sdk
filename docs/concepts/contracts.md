@@ -135,7 +135,7 @@ class DeployInput(Input):
     repo: GitReference
 ```
 
-`GitReference` fields: `url`, `ref` (branch/tag/SHA), optional `credentials` (`CredentialRef`).
+`GitReference` fields: `repo_url` (required), `branch` (default `"main"`), `path` (default `""`), `tag` (default `""`), `commit` (default `""`), optional `credential` (`CredentialRef | None`). Checkout precedence: commit > tag > branch.
 
 ---
 

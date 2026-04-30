@@ -175,7 +175,7 @@ except Exception:
 | DEBUG | Off (`ATLAN_LOG_LEVEL=INFO`) | No (add manually if needed) | Very high — per-item |
 | INFO | On | No | Low — per-phase |
 | WARNING | On | Yes (`exc_info=True`) | Very low — per-anomaly |
-| ERROR | On | Yes (`exc_info=True` or `logger.exception()`) | Near-zero — per-failure |
+| ERROR | On | Yes (`exc_info=True`) | Near-zero — per-failure |
 
 ## Consequences
 

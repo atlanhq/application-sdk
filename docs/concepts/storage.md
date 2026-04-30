@@ -55,7 +55,9 @@ ref = FileReference(
 |-------|------|-------------|
 | `storage_path` | `str \| None` | Object-store key (single file) or prefix (directory) |
 | `local_path` | `str \| None` | Local filesystem path, set after download |
-| `tier` | `StorageTier` | Cleanup tier (see below) |
+| `tier` | `StorageTier` | Cleanup tier (see below); default `TRANSIENT` |
+| `is_durable` | `bool` | `True` once the file has been uploaded to the object store |
+| `file_count` | `int` | Number of files this reference covers (default `1`) |
 
 `FileReference` is safe to include in `Output` models because it is small (a path string + an enum). The actual file stays in object storage.
 

@@ -89,6 +89,8 @@ Delegates to `Handler.fetch_metadata(MetadataInput)`.
 
 Start a workflow run.
 
+**Query param:** `?entrypoint=<name>` (optional). When omitted, the default `run()` entry point is used. When set, it selects a specific `@entrypoint`-decorated method.
+
 **Request body:**
 ```json
 {
@@ -96,12 +98,16 @@ Start a workflow run.
   "connection": {
     "connection_name": "my-db",
     "connection_qualified_name": "default/postgres/1234567890"
-  },
-  "entrypoint": "extract_metadata"
+  }
 }
 ```
 
-`entrypoint` is optional. When omitted, the default `run()` entry point is used. When set, it selects a specific `@entrypoint`-decorated method.
+Example with entrypoint:
+```
+POST /workflows/v1/start?entrypoint=extract_metadata
+```
+
+> **Note:** `workflow_type` body field is supported as a deprecated fallback (planned removal in v3.1.0). Always use `?entrypoint=` for new code.
 
 **Response:**
 ```json

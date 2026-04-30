@@ -179,17 +179,22 @@ class MyApiClient(BaseClient):
 
 ## Redis Client (`redis.py`)
 
-`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement an acquire/release lock protocol via Redis, not a general-purpose key/value API. Use them as context managers to guard a critical section:
+`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement a low-level acquire/release lock protocol via Redis. Use them as context managers to connect to Redis, then call `_acquire_lock` to claim a named lock:
 
 ```python
 from application_sdk.clients.redis import RedisClientAsync
 
-async with RedisClientAsync(resource_id="my-lock", ttl=30) as lock:
-    # exclusive section — only one pod holds this lock at a time
-    ...
+async with RedisClientAsync() as client:
+    acquired = await client._acquire_lock("my-lock", owner_id="pod-1", ttl_seconds=30)
+    if acquired:
+        try:
+            # exclusive section — only one pod holds this lock at a time
+            ...
+        finally:
+            await client._release_lock("my-lock", owner_id="pod-1")
 ```
 
-For the `CapacityPool` abstraction (which uses Redis locks internally), see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool).
+For the higher-level `CapacityPool` abstraction (which manages concurrency slots across pods), see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool).
 
 Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/configuration.md` for the full list including sentinel and lock settings.
 
@@ -198,7 +203,7 @@ Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/
 `application_sdk.clients.azure` provides an Azure-specific client layer:
 
 - `AzureClient` (`azure/client.py`) — base client for Azure service interactions.
-- `AzureAuthHelper` (`azure/auth.py`) — handles Azure credential strategies including managed identity, service principal, and connection-string authentication.
+- `AzureAuthProvider` (`azure/auth.py`) — handles Azure credential strategies including managed identity, service principal, and connection-string authentication.
 
 ```python
 from application_sdk.clients.azure import AzureClient
@@ -206,16 +211,21 @@ from application_sdk.clients.azure import AzureClient
 
 ## SSL Utilities (`ssl_utils.py`)
 
-`application_sdk.clients.ssl_utils` provides helpers for constructing SSL contexts from PEM certificates stored in credentials:
+`application_sdk.clients.ssl_utils` provides helpers for constructing SSL contexts from PEM certificates stored in a directory:
 
 ```python
-from application_sdk.clients.ssl_utils import build_ssl_context
+from application_sdk.clients.ssl_utils import create_ssl_context_with_custom_certs
 
-ssl_ctx = build_ssl_context(
-    ca_cert=credentials.get("ssl_ca"),
-    client_cert=credentials.get("ssl_cert"),
-    client_key=credentials.get("ssl_key"),
-)
+# cert_dir must contain ca.crt, client.crt, client.key files
+ssl_ctx = create_ssl_context_with_custom_certs(cert_dir="/etc/ssl/my-app")
+```
+
+Use `get_ssl_context()` to let the SDK discover the certificate directory automatically from the `SSL_CERT_DIR` environment variable:
+
+```python
+from application_sdk.clients.ssl_utils import get_ssl_context
+
+ssl_ctx = get_ssl_context()   # returns False if SSL_CERT_DIR is not set
 ```
 
 Pass the resulting `ssl.SSLContext` via `DB_CONFIG.connect_args={"ssl": ssl_ctx}` for mutual-TLS database connections.
