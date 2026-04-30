@@ -28,6 +28,15 @@ class LakehouseWriter:
         self._client = catalog_client
         self._app_namespace = app_namespace
 
+    @classmethod
+    def from_env(cls, app_namespace: str) -> LakehouseWriter:
+        """Build a writer using the catalog credentials from the environment.
+
+        See :func:`application_sdk.lakehouse.catalog_client.load_catalog_from_env`
+        for the env vars consumed.
+        """
+        return cls(CatalogClient.from_env(), app_namespace)
+
     @property
     def app_namespace(self) -> str:
         return self._app_namespace

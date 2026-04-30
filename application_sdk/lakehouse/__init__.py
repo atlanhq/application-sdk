@@ -1,23 +1,28 @@
 """Lakehouse integration for SDK apps.
 
-Apps construct a :class:`LakehouseInterface` once with their catalog and the
-namespace they own. The interface bundles a generic :class:`LakehouseReader`
-(read from any namespace) and a namespace-bound :class:`LakehouseWriter`
-(writes target the app's own namespace; cross-namespace writes log a
-warning).
+Two public surfaces:
 
-For event-driven apps triggered by the automation engine, use
-:class:`EventTriggeredConsumer` to fetch + dispatch in one shot from a
-Temporal activity, and :class:`EventAckWriter` to publish the Parquet ack
-back to AE.
+* :class:`LakehouseReader` and :class:`LakehouseWriter` — generic Iceberg
+  read/write primitives. ``LakehouseReader`` reads from any namespace.
+  ``LakehouseWriter`` is bound to one ``app_namespace`` and warns on
+  cross-namespace writes. Both ship ``.from_env()`` factories.
+
+* :class:`EventsConsumer` — an event-trigger wrapper for AE-driven apps. The
+  caller passes only a :class:`BatchProcessor`; the consumer self-constructs
+  its lakehouse reader from environment credentials. The lakehouse is a
+  blackbox to the events consumer's caller.
+
+For publishing the AE Parquet ack after a batch, use :class:`EventAckWriter`.
 
 Install with: ``pip install atlan-application-sdk[lakehouse]``
 """
 
-from application_sdk.lakehouse.catalog_client import CatalogClient
+from application_sdk.lakehouse.catalog_client import (
+    CatalogClient,
+    load_catalog_from_env,
+)
 from application_sdk.lakehouse.event_ack import EventAckWriter
-from application_sdk.lakehouse.event_consumer import EventTriggeredConsumer
-from application_sdk.lakehouse.interface import LakehouseInterface
+from application_sdk.lakehouse.events_consumer import EventsConsumer
 from application_sdk.lakehouse.models import ProcessingResult
 from application_sdk.lakehouse.protocols import BatchProcessor
 from application_sdk.lakehouse.reader import LakehouseReader
@@ -27,9 +32,9 @@ __all__ = [
     "BatchProcessor",
     "CatalogClient",
     "EventAckWriter",
-    "EventTriggeredConsumer",
-    "LakehouseInterface",
+    "EventsConsumer",
     "LakehouseReader",
     "LakehouseWriter",
     "ProcessingResult",
+    "load_catalog_from_env",
 ]

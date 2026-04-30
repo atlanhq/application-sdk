@@ -24,6 +24,15 @@ class LakehouseReader:
     def __init__(self, catalog_client: CatalogClient) -> None:
         self._client = catalog_client
 
+    @classmethod
+    def from_env(cls) -> LakehouseReader:
+        """Build a reader using the catalog credentials from the environment.
+
+        See :func:`application_sdk.lakehouse.catalog_client.load_catalog_from_env`
+        for the env vars consumed.
+        """
+        return cls(CatalogClient.from_env())
+
     def load_table(self, namespace: str, table_name: str) -> Table:
         return self._client.load_table(namespace, table_name)
 
