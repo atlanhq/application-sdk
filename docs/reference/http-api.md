@@ -32,7 +32,7 @@ Test connectivity and authentication with the target system.
 }
 ```
 
-`status` values: `success`, `failed`. HTTP status mirrors the auth result (200 / 401).
+`status` values: `success`, `failed`, `expired`, `invalid_credentials`. All non-success values return HTTP 401.
 
 Delegates to `Handler.test_auth(AuthInput)`.
 
@@ -112,13 +112,17 @@ POST /workflows/v1/start?entrypoint=extract-metadata
 **Response:**
 ```json
 {
+  "success": true,
+  "message": "Workflow started successfully",
   "data": {
     "workflow_id": "my-connector-abc123",
     "run_id": "run-xyz"
   },
-  "success": true
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
+
+`correlation_id` is echoed from the caller-supplied `correlation_id` body field if present; otherwise a new UUID is generated. Use it to correlate logs and traces across services.
 
 ---
 
@@ -156,6 +160,8 @@ Poll workflow execution status.
 
 Fetch the most recent run result for a workflow.
 
+**Query params:** `wait` (bool, default `false`) — when `true`, blocks until the workflow reaches a terminal state before returning.
+
 **Response:**
 ```json
 {
@@ -177,9 +183,13 @@ Fetch the most recent run result for a workflow.
 
 Retrieve a named configuration object from the state store.
 
+**Query params:** `type` (string, default `"workflows"`) — namespace key used to scope the config in the state store.
+
 ### `POST /workflows/v1/config/{config_id}`
 
 Store a named configuration object.
+
+**Query params:** `type` (string, default `"workflows"`) — namespace key. Using `type=workflows` is deprecated; pass a specific config type instead.
 
 **Request body:** Any JSON object.
 

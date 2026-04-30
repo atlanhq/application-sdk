@@ -65,7 +65,7 @@ All routes registered by `create_app_handler_service()`:
 | `/workflows/v1/dev/local-vault` | POST | Provision credentials in the local dev vault |
 | `/dapr/subscribe` | GET | Dapr pub/sub subscription list |
 | `/events/v1/event/{event_id}` | POST | Handle a Dapr event |
-| `/events/v1/drop` | POST | Drop all pending events |
+| `/events/v1/drop` | POST | Return a Dapr `DROP` status, instructing the sidecar to drop the received event without retry or dead-lettering |
 | `/health`, `/server/health` | GET | Liveness probe |
 | `/ready`, `/server/ready` | GET | Readiness probe |
 | `/metrics` | GET | Prometheus metrics (enabled when `ATLAN_ENABLE_PROMETHEUS_METRICS=true`) |

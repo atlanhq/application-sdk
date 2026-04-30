@@ -120,7 +120,7 @@ Or manually add to `app/generated/manifest.json`:
     "app_name": "{app-name}",
     "inputs": {
       "workflow_type": "{entrypoint_name}",
-      "task_queue": "{app-name}-queue",
+      "task_queue": "atlan-{app-name}-{deployment-name}",
       "args": {
         "credential_guid": "{{credential}}",
         "connection_qualified_name": "{{connection}}"

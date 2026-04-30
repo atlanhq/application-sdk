@@ -226,7 +226,7 @@ Use `get_ssl_context()` to let the SDK discover the certificate directory automa
 ```python
 from application_sdk.clients.ssl_utils import get_ssl_context
 
-ssl_ctx = get_ssl_context()   # returns False if SSL_CERT_DIR is not set
+ssl_ctx = get_ssl_context()   # returns True (default cert verification) if SSL_CERT_DIR is not set
 ```
 
 Pass the resulting `ssl.SSLContext` via `DB_CONFIG.connect_args={"ssl": ssl_ctx}` for mutual-TLS database connections.

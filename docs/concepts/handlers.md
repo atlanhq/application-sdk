@@ -107,13 +107,24 @@ from application_sdk.handler.contracts import (
 
 ### DefaultHandler
 
-`DefaultHandler` is a pre-built `Handler` subclass that implements all three methods with sensible no-op responses. Useful for apps that only need workflow orchestration and don't expose auth/preflight/metadata UI:
+`DefaultHandler` is a pre-built `Handler` subclass that implements all three methods with sensible no-op responses. Useful for apps that only need workflow orchestration and don't expose auth/preflight/metadata UI.
+
+Handler selection is convention-based: the SDK looks for `{AppClassName}Handler` in the same module as your `App`, then scans for any `Handler` subclass, and finally falls back to `DefaultHandler` automatically. There is no `handler_class` attribute on `App` — to rely on `DefaultHandler`, simply don't define a `Handler` subclass.
+
+To specify a handler explicitly, use the `--handler` CLI flag or `ATLAN_HANDLER_MODULE` env var (see [CLI reference](../reference/cli.md)):
+
+```bash
+application-sdk --mode handler --handler myapp.handlers:MyHandler
+```
+
+To define a custom handler using the convention-based approach:
 
 ```python
-from application_sdk.handler.base import DefaultHandler
+from application_sdk.handler.base import Handler, AuthInput, AuthOutput
 
-class MyApp(App):
-    handler_class = DefaultHandler
+class MyAppHandler(Handler):   # name must be {AppClassName}Handler
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        ...
 ```
 
 ## Context Injection

@@ -46,17 +46,9 @@ Converts metadata into Atlas entities (the native Atlan format) using `pyatlan` 
 from application_sdk.transformers.atlas import AtlasTransformer
 ```
 
-Supports these `typename` values out of the box: `DATABASE`, `SCHEMA`, `TABLE`, `COLUMN`, `PROCEDURE`, `FUNCTION`, and tag attachments.
+Supports these `typename` values out of the box: `DATABASE`, `SCHEMA`, `TABLE`, `VIEW`, `COLUMN`, `MATERIALIZED VIEW`, `PROCEDURE`, `FUNCTION`, and `TAG_REF` (tag attachments).
 
-This transformer is used by `SqlMetadataExtractor`. If you subclass `SqlMetadataExtractor`, you can swap it out:
-
-```python
-from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.transformers.atlas import AtlasTransformer
-
-class MyConnectorApp(SqlMetadataExtractor):
-    transformer_class = AtlasTransformer   # default; override to customize
-```
+This transformer is used inside `SqlMetadataExtractor.transform_data()`, which subclasses must implement. There is no `transformer_class` class attribute — to use a different transformer, instantiate it inside your `transform_data()` override.
 
 ### `QueryBasedTransformer`
 
@@ -123,11 +115,19 @@ class MyTransformer(TransformerInterface):
         raise ValueError(f"Unsupported typename: {typename}")
 ```
 
-Wire it into `SqlMetadataExtractor`:
+Wire it into `SqlMetadataExtractor` by overriding `transform_data()`:
 
 ```python
+from application_sdk.app import task
+from application_sdk.templates.contracts.sql_metadata_extraction import TransformInput, TransformOutput
+
 class MyConnectorApp(SqlMetadataExtractor):
-    transformer_class = MyTransformer
+    @task(timeout_seconds=1800)
+    async def transform_data(self, input: TransformInput) -> TransformOutput:
+        transformer = MyTransformer()
+        # call transformer.transform_metadata() per typename as needed
+        ...
+        return TransformOutput(...)
 ```
 
 ## Daft Dependency
@@ -142,6 +142,6 @@ Transformers import Daft lazily at call time (`import daft` inside methods) so t
 
 ## See Also
 
-- [Apps](apps.md) — `SqlMetadataExtractor` and the `transformer_class` attribute
+- [Apps](apps.md) — `SqlMetadataExtractor` and the `transform_data` task
 - [Creating an SQL Application](../guides/sql-application-guide.md) — end-to-end SQL connector guide
 - [Building a REST API Connector](../guides/rest-api-application-guide.md) — non-SQL connector without transformers

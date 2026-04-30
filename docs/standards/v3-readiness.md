@@ -16,14 +16,14 @@ An app is **v3-ready** when every item below is either ✅ (done) or ➖ (not ap
 
 Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migration.py`. Run the checker (see §5) and fix every `FAIL` before continuing.
 
-- [ ] **SDK pinned to `==3.0.0`** — `pyproject.toml` must pin the exact version (optionally with extras):
+- [ ] **SDK pinned to `>=3.0.0,<4.0.0`** — `pyproject.toml` must constrain to the v3 major (optionally with extras):
   ```toml
   [project]
   dependencies = [
-      "atlan-application-sdk[workflows]==3.0.0",
+      "atlan-application-sdk[workflows]>=3.0.0,<4.0.0",
   ]
   ```
-  `[tool.uv.sources]` overrides **are allowed** (e.g. to resolve from a git ref or an internal mirror) — the constraint is on the resolved version, not the source. Verify with `uv tree | grep atlan-application-sdk` and confirm the resolved version is exactly `3.0.0`.
+  `[tool.uv.sources]` overrides **are allowed** (e.g. to resolve from a git ref or an internal mirror) — the constraint is on the resolved major version, not the source. Verify with `uv tree | grep atlan-application-sdk` and confirm the resolved version is `3.x`.
 - [ ] **No deprecated imports** — no `application_sdk.{application,worker,workflows,activities,handlers,services,interceptors,test_utils}` or `application_sdk.clients.{atlan,temporal,workflow}` anywhere (including tests). Rewrite with `python -m tools.migrate_v3.rewrite_imports`.
 - [ ] **App subclass** — exactly one class inherits from `App` (or a template: `SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`, `SqlQueryExtractor`, `BaseMetadataExtractor`). Class-level `name: ClassVar[str]` is set.
 - [ ] **`@task` only** — no `@workflow.defn`, `@activity.defn`, `@auto_heartbeater` decorators. No `workflow.execute_activity_method()` calls. No `from temporalio import workflow / activity` in app code.
@@ -47,11 +47,11 @@ The SDK generates workflow/credential/manifest/input artifacts from a single `co
 
 ## 3 — Dockerfile & deployment
 
-- [ ] **Base image is `app-runtime-base:3.0.0`** — the Dockerfile must pin to
+- [ ] **Base image is `app-runtime-base:3`** — the Dockerfile must use the v3 major tag:
   ```dockerfile
-  FROM registry.atlan.com/public/app-runtime-base:3.0.0
+  FROM registry.atlan.com/public/app-runtime-base:3
   ```
-  No `*-latest` tags, no dev-branch tags (e.g. `refactor-v3-latest`), no other `app-runtime-base` image. Bump this pin in lockstep with the SDK `>=3.0.0,<4.0.0` major version.
+  No `*-latest` tags, no dev-branch tags (e.g. `refactor-v3-latest`), no other `app-runtime-base` image. The `:3` major tag tracks the latest v3 patch, matching the `>=3.0.0,<4.0.0` SDK constraint.
 - [ ] **Non-root `appuser`** runs the app process.
 - [ ] **No secrets in build layers** — credentials resolved at runtime via Dapr / `SecretStore`.
 - [ ] **No `ENTRYPOINT` / `CMD` override** — the app Dockerfile inherits the base image's entrypoint (`/usr/local/bin/entrypoint.sh`, which launches `python -m application_sdk.main` and co-runs `daprd` with graceful-shutdown handling). The app only needs `ENV ATLAN_APP_MODULE=<module>:<AppClass>`; the runtime mode (`worker`/`handler`/`combined`) is supplied by Helm via `ATLAN_APP_MODE`.
@@ -64,7 +64,7 @@ The SDK generates workflow/credential/manifest/input artifacts from a single `co
 
   ✅ Correct — inherit everything from the base image:
   ```dockerfile
-  FROM registry.atlan.com/public/app-runtime-base:3.0.0
+  FROM registry.atlan.com/public/app-runtime-base:3
   ENV ATLAN_APP_MODULE=app.connector:OpenAPIConnector
   # (no CMD or ENTRYPOINT)
   ```
@@ -163,7 +163,7 @@ Paste this into the description of the PR that declares an app v3-ready. Reviewe
 ## v3-readiness sign-off (docs/standards/v3-readiness.md)
 
 ### App shape (§1)
-- [ ] `pyproject.toml` pins `atlan-application-sdk[...]==3.0.0` (exact version); `uv tree` confirms the resolved version is `3.0.0` (any source allowed — `[tool.uv.sources]` OK)
+- [ ] `pyproject.toml` pins `atlan-application-sdk[...]>=3.0.0,<4.0.0`; `uv tree` confirms the resolved version is `3.x` (any source allowed — `[tool.uv.sources]` OK)
 - [ ] `python -m tools.migrate_v3.check_migration` reports zero FAILs
 - [ ] One `App` subclass, `@task`-only, typed Input/Output at every boundary
 
@@ -172,7 +172,7 @@ Paste this into the description of the PR that declares an app v3-ready. Reviewe
 - [ ] `poe generate` produces no diff on a clean checkout
 
 ### Deployment (§3)
-- [ ] Dockerfile `FROM registry.atlan.com/public/app-runtime-base:3.0.0` (exact tag)
+- [ ] Dockerfile `FROM registry.atlan.com/public/app-runtime-base:3` (v3 major tag)
 - [ ] No `CMD`/`ENTRYPOINT` override; `ENV ATLAN_APP_MODULE` set; mode comes from `ATLAN_APP_MODE` at runtime
 
 ### Tests (§4)

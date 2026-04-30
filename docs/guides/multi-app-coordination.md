@@ -39,7 +39,7 @@ A two-phase manifest looks like:
       "app_name": "my-connector",
       "inputs": {
         "workflow_type": "extract_metadata",
-        "task_queue": "my-connector-queue",
+        "task_queue": "atlan-my-connector-{deployment-name}",
         "args": {
           "connection_qualified_name": "{{connection}}",
           "credential_guid": "{{credential}}"
@@ -52,7 +52,7 @@ A two-phase manifest looks like:
       "app_name": "atlan-loader",
       "inputs": {
         "workflow_type": "load",
-        "task_queue": "atlan-loader-queue",
+        "task_queue": "atlan-loader-{deployment-name}",
         "args": {
           "output_path": "$.extract.outputs.output_path"
         }
