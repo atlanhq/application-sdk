@@ -65,12 +65,9 @@ class SafeFileOps:
     def rmtree(
         path: Union[str, Path],
         ignore_errors: bool = False,
-        onerror: Optional[Any] = None,
     ) -> None:
         """Safely remove a directory tree, supporting long paths on Windows."""
-        shutil.rmtree(
-            convert_to_extended_path(path), ignore_errors=ignore_errors, onerror=onerror
-        )
+        shutil.rmtree(convert_to_extended_path(path), ignore_errors=ignore_errors)
 
     @staticmethod
     def copy(

@@ -164,6 +164,18 @@ docs/reference/*.rst
 # Interrogate coverage report
 docstring-cov.md
 
+# vscode settings
+.vscode
+
 # local
 local/
 temporal.db
+
+# Claude Code worktrees
+.claude/worktrees/
+
+# Claude Code plans (local working files, not for version control)
+.claude/plans/
+
+# Claude Code runtime lock files
+.claude/scheduled_tasks.lock

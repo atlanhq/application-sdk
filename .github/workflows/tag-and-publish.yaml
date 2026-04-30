@@ -51,8 +51,17 @@ jobs:
           git config --global user.name 'atlan-ci'
           git config --global user.email 'it@atlan.com'
 
+          # Delete existing tag if present (idempotent re-runs)
+          git push origin :refs/tags/"v${{ env.VERSION }}" 2>/dev/null || true
+          git tag -d "v${{ env.VERSION }}" 2>/dev/null || true
+
           git tag -a "v${{ env.VERSION }}" -m "Release v${{ env.VERSION }}"
           git push origin "v${{ env.VERSION }}"
+
+      - name: Delete existing GitHub Release (if any)
+        run: gh release delete "v${{ env.VERSION }}" --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Create GitHub Release
         id: create_release

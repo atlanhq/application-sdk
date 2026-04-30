@@ -11,6 +11,8 @@ from httpx._types import (
 )
 
 from application_sdk.clients import ClientInterface
+from application_sdk.clients.ssl_utils import get_ssl_context
+from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -100,8 +102,11 @@ class BaseClient(ClientInterface):
         self.credentials = credentials
         self.http_headers = http_headers
 
-        # Use httpx default transport (no retries on status codes)
-        self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport()
+        # Use httpx default transport with pool limits to prevent CLOSE_WAIT
+        # zombie socket accumulation (see BLDX-1153).
+        self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(
+            limits=_HTTP_POOL_LIMITS,
+        )
 
     async def load(self, **kwargs: Any) -> None:
         """
@@ -184,8 +189,11 @@ class BaseClient(ClientInterface):
             ...     params={"limit": 100}
             ... )
         """
+        ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
-            timeout=timeout, transport=self.http_retry_transport
+            timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
+            transport=self.http_retry_transport,
+            verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
@@ -200,10 +208,12 @@ class BaseClient(ClientInterface):
                 )
                 return response
             except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error for {url}: {e.response.status_code}")
+                logger.error(
+                    "HTTP error for %s: %s", url, e.response.status_code, exc_info=True
+                )
                 return None
-            except Exception as e:
-                logger.error(f"Request failed for {url}: {e}")
+            except Exception:
+                logger.error("Request failed for %s", url, exc_info=True)
                 return None
 
     async def execute_http_post_request(
@@ -218,7 +228,6 @@ class BaseClient(ClientInterface):
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[AuthTypes] = None,
         follow_redirects: bool = True,
-        verify: bool = True,
         timeout: int = 30,
     ) -> Optional[httpx.Response]:
         """
@@ -239,7 +248,6 @@ class BaseClient(ClientInterface):
             cookies (Optional[Dict[str, str]]): Cookies to include in the request
             auth (Optional[AuthTypes]): Authentication to use for the request. Supports BasicAuth, DigestAuth, custom auth classes, or tuples for basic auth.
             follow_redirects (bool): Whether to follow HTTP redirects. Defaults to True.
-            verify (bool): Whether to verify SSL certificates. Defaults to True.
             timeout (int): Request timeout in seconds. Defaults to 30.
 
         Returns:
@@ -264,8 +272,11 @@ class BaseClient(ClientInterface):
             ...         auth=("username", "password")
             ... )
         """
+        ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
-            timeout=timeout, transport=self.http_retry_transport, verify=verify
+            timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
+            transport=self.http_retry_transport,
+            verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
@@ -286,8 +297,10 @@ class BaseClient(ClientInterface):
                 )
                 return response
             except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error for {url}: {e.response.status_code}")
+                logger.error(
+                    "HTTP error for %s: %s", url, e.response.status_code, exc_info=True
+                )
                 return None
-            except Exception as e:
-                logger.error(f"Request failed for {url}: {e}")
+            except Exception:
+                logger.error("Request failed for %s", url, exc_info=True)
                 return None

@@ -4,6 +4,10 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag_prefix:
+        description: 'Tag prefix to use (e.g. "refactor-v3"). Defaults to the branch name.'
+        required: false
 
 permissions:
   contents: read
@@ -23,25 +27,80 @@ jobs:
 
       - name: Set up Buildx
         id: buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Compute tag prefix
+        id: tag_prefix
+        env:
+          TAG_PREFIX_INPUT: ${{ inputs.tag_prefix }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # Release builds use 'main' as the branch label for the Snyk import gate.
+            # Actual image tags are computed separately in the 'Compute image tags' step.
+            echo "value=main" >> "$GITHUB_OUTPUT"
+          elif [ -n "${TAG_PREFIX_INPUT:-}" ]; then
+            if ! printf '%s' "$TAG_PREFIX_INPUT" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+              echo "Invalid tag_prefix: must match ^[A-Za-z0-9._-]+$" >&2
+              exit 1
+            fi
+            echo "value=${TAG_PREFIX_INPUT}" >> "$GITHUB_OUTPUT"
+          else
+            # Sanitize branch name: replace any char not in [A-Za-z0-9._-] with '-'
+            sanitized=$(printf '%s' "${GITHUB_REF_NAME}" | tr -cs 'A-Za-z0-9._-' '-')
+            echo "value=${sanitized}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Get SDK version
         id: get_version
-        run: echo "version=$(awk -F'"' '/^version = / {print $2}' pyproject.toml)" >> $GITHUB_OUTPUT
+        run: echo "version=$(awk -F'"' '/^version = / {print $2}' pyproject.toml)" >> "$GITHUB_OUTPUT"
 
       - name: Get short commit SHA
         id: get_sha
-        run: echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute image tags
+        id: image_tags
+        env:
+          VERSION: ${{ steps.get_version.outputs.version }}
+          PREFIX: ${{ steps.tag_prefix.outputs.value }}
+          SHA: ${{ steps.get_sha.outputs.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f1-2)
+          if [ "$EVENT_NAME" = "release" ] && echo "$VERSION" | grep -qvF '-'; then
+            # Stable release: publish full alias ladder (exact, minor, major, latest) + immutable sha
+            printf '%s\n' \
+              "registry.atlan.com/public/app-runtime-base:latest" \
+              "registry.atlan.com/public/app-runtime-base:${VERSION}" \
+              "registry.atlan.com/public/app-runtime-base:${MINOR}" \
+              "registry.atlan.com/public/app-runtime-base:${MAJOR}" \
+              "registry.atlan.com/public/app-runtime-base:sha-${SHA}" > /tmp/tags.txt
+          elif [ "$EVENT_NAME" = "release" ]; then
+            # Pre-release (rc/alpha/beta): exact version + sha only — no aliases that could
+            # cause :latest or major/minor tags to point at a non-stable image
+            printf '%s\n' \
+              "registry.atlan.com/public/app-runtime-base:${VERSION}" \
+              "registry.atlan.com/public/app-runtime-base:sha-${SHA}" > /tmp/tags.txt
+          else
+            # workflow_dispatch: prefix-scoped tags for branch/dev builds
+            printf '%s\n' \
+              "registry.atlan.com/public/app-runtime-base:${PREFIX}-latest" \
+              "registry.atlan.com/public/app-runtime-base:${PREFIX}-${VERSION}" \
+              "registry.atlan.com/public/app-runtime-base:sha-${SHA}" > /tmp/tags.txt
+          fi
+          DELIM=$(openssl rand -hex 8)
+          { echo "value<<${DELIM}"; cat /tmp/tags.txt; echo "${DELIM}"; } >> "$GITHUB_OUTPUT"
 
       - name: Log in to Atlan Harbor Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: registry.atlan.com
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
 
       - name: Log in to Chainguard Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: cgr.dev
           username: ${{ secrets.CHAINGUARD_USERNAME }}
@@ -51,7 +110,7 @@ jobs:
         id: harbor_docker_build
         uses: ./.github/actions/secure-build-push-apps
         with:
-          branch: main
+          branch: ${{ steps.tag_prefix.outputs.value }}
           snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
           snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTEGRATION_ID }}
@@ -61,10 +120,7 @@ jobs:
           file: ./Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            registry.atlan.com/public/application-sdk:main-latest
-            registry.atlan.com/public/application-sdk:main-${{ steps.get_version.outputs.version }}
-            registry.atlan.com/public/application-sdk:sha-${{ steps.get_sha.outputs.sha }}
+          tags: ${{ steps.image_tags.outputs.value }}
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}

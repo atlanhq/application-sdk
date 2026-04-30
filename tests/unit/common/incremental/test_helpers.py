@@ -5,23 +5,23 @@ Tests cover public functions with real business logic:
 - get_persistent_s3_prefix: S3 path construction from workflow args
 - normalize_marker_timestamp: Nanosecond stripping from timestamps
 - prepone_marker_timestamp: Datetime arithmetic for clock skew handling
-- is_incremental_run: Multi-condition prerequisite check
 - count_json_files_recursive: Recursive file counting
 - copy_directory_parallel: Parallel file copy operations
 """
 
+import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
+    download_s3_prefix_with_structure,
     extract_epoch_id_from_qualified_name,
     get_persistent_s3_prefix,
-    is_incremental_run,
     normalize_marker_timestamp,
     prepone_marker_timestamp,
 )
@@ -79,33 +79,22 @@ class TestExtractEpochId:
 class TestGetPersistentS3Prefix:
     """Tests for get_persistent_s3_prefix (S3 path construction)."""
 
-    def _make_workflow_args(self, qualified_name, app_name=None):
-        args = {
-            "connection": {"connection_qualified_name": qualified_name},
-        }
-        if app_name:
-            args["application_name"] = app_name
-        return args
-
     def test_constructs_correct_prefix(self):
         """Constructs S3 prefix from connection qualified name and app name."""
-        args = self._make_workflow_args("default/oracle/1764230875", app_name="oracle")
-        result = get_persistent_s3_prefix(args)
+        result = get_persistent_s3_prefix("default/oracle/1764230875", "oracle")
         assert result == "persistent-artifacts/apps/oracle/connection/1764230875"
 
     def test_uses_env_app_name_as_fallback(self):
         """Falls back to ATLAN_APPLICATION_NAME env var when not in args."""
-        args = self._make_workflow_args("tenant/ch/999")
         with patch.dict("os.environ", {"ATLAN_APPLICATION_NAME": "clickhouse"}):
-            result = get_persistent_s3_prefix(args)
+            result = get_persistent_s3_prefix("tenant/ch/999")
         assert "clickhouse" in result
         assert "999" in result
 
     def test_missing_qualified_name_raises(self):
         """Raises ValueError when connection_qualified_name is empty."""
-        args = self._make_workflow_args("")
         with pytest.raises(ValueError):
-            get_persistent_s3_prefix(args)
+            get_persistent_s3_prefix("")
 
 
 # ---------------------------------------------------------------------------
@@ -167,66 +156,6 @@ class TestPreponeMarkerTimestamp:
         """Invalid timestamp format raises ValueError."""
         with pytest.raises(ValueError):
             prepone_marker_timestamp("not-a-timestamp", 1)
-
-
-# ---------------------------------------------------------------------------
-# is_incremental_run
-# ---------------------------------------------------------------------------
-
-
-class TestIsIncrementalRun:
-    """Tests for is_incremental_run (multi-condition prerequisite check)."""
-
-    def test_all_conditions_met(self):
-        """Returns True when all three conditions are met."""
-        args = {
-            "metadata": {
-                "incremental-extraction": True,
-                "marker_timestamp": "2025-01-15T10:30:00Z",
-                "current_state_available": True,
-            }
-        }
-        assert is_incremental_run(args) is True
-
-    def test_incremental_extraction_disabled(self):
-        """Returns False when incremental_extraction is False."""
-        args = {
-            "metadata": {
-                "incremental-extraction": False,
-                "marker_timestamp": "2025-01-15T10:30:00Z",
-                "current_state_available": True,
-            }
-        }
-        assert is_incremental_run(args) is False
-
-    def test_no_marker_timestamp(self):
-        """Returns False when marker_timestamp is absent (first run)."""
-        args = {
-            "metadata": {
-                "incremental-extraction": True,
-                "current_state_available": True,
-            }
-        }
-        assert is_incremental_run(args) is False
-
-    def test_current_state_not_available(self):
-        """Returns False when current_state_available is False."""
-        args = {
-            "metadata": {
-                "incremental-extraction": True,
-                "marker_timestamp": "2025-01-15T10:30:00Z",
-                "current_state_available": False,
-            }
-        }
-        assert is_incremental_run(args) is False
-
-    def test_empty_metadata(self):
-        """Returns False when metadata section is empty."""
-        assert is_incremental_run({"metadata": {}}) is False
-
-    def test_missing_metadata(self):
-        """Returns False when metadata section is missing entirely."""
-        assert is_incremental_run({}) is False
 
 
 # ---------------------------------------------------------------------------
@@ -321,3 +250,122 @@ class TestCopyDirectoryParallel:
 
             count = copy_directory_parallel(src, Path(temp_dir) / "dest")
             assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# download_s3_prefix_with_structure
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadS3PrefixWithStructure:
+    """Tests for parallel S3 prefix download with structure preservation."""
+
+    async def test_downloads_all_listed_files_to_correct_paths(self):
+        """All listed files are downloaded to correct local paths preserving structure."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_dest = Path(temp_dir) / "output"
+            s3_prefix = "bucket/tenant/data/"
+            file_list = [
+                "bucket/tenant/data/subdir/file1.json",
+                "bucket/tenant/data/file2.json",
+            ]
+
+            mock_download = AsyncMock()
+            mock_list_keys = AsyncMock(return_value=file_list)
+
+            with (
+                patch(
+                    "application_sdk.common.incremental.helpers.list_keys",
+                    mock_list_keys,
+                ),
+                patch(
+                    "application_sdk.common.incremental.helpers.download_file",
+                    mock_download,
+                ),
+            ):
+                await download_s3_prefix_with_structure(s3_prefix, local_dest)
+
+            mock_list_keys.assert_awaited_once_with(prefix=s3_prefix)
+            assert mock_download.await_count == 2
+            mock_download.assert_any_await(
+                key="bucket/tenant/data/subdir/file1.json",
+                local_path=str(local_dest / "subdir" / "file1.json"),
+            )
+            mock_download.assert_any_await(
+                key="bucket/tenant/data/file2.json",
+                local_path=str(local_dest / "file2.json"),
+            )
+
+    async def test_concurrency_bounded_by_semaphore(self):
+        """No more than MAX_CONCURRENT_STORAGE_TRANSFERS (4) concurrent downloads run at once."""
+
+        max_concurrent = 0
+        current_concurrent = 0
+        lock = asyncio.Lock()
+
+        async def _tracking_download(**kwargs):
+            nonlocal max_concurrent, current_concurrent
+            async with lock:
+                current_concurrent += 1
+                if current_concurrent > max_concurrent:
+                    max_concurrent = current_concurrent
+            await asyncio.sleep(0.01)
+            async with lock:
+                current_concurrent -= 1
+
+        file_list = [f"prefix/file{i}.json" for i in range(50)]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch(
+                    "application_sdk.common.incremental.helpers.list_keys",
+                    AsyncMock(return_value=file_list),
+                ),
+                patch(
+                    "application_sdk.common.incremental.helpers.download_file",
+                    side_effect=_tracking_download,
+                ),
+            ):
+                await download_s3_prefix_with_structure("prefix/", Path(temp_dir))
+
+        assert max_concurrent <= 4
+
+    async def test_empty_file_list(self):
+        """No downloads when prefix has no files."""
+        mock_download = AsyncMock()
+        with (
+            patch(
+                "application_sdk.common.incremental.helpers.list_keys",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.download_file",
+                mock_download,
+            ),
+        ):
+            await download_s3_prefix_with_structure("prefix/", Path("/tmp/out"))
+
+        mock_download.assert_not_awaited()
+
+    async def test_path_without_prefix_used_as_is(self):
+        """Files not starting with the prefix are used as relative path directly."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_dest = Path(temp_dir) / "output"
+            mock_download = AsyncMock()
+
+            with (
+                patch(
+                    "application_sdk.common.incremental.helpers.list_keys",
+                    AsyncMock(return_value=["other/path/file.json"]),
+                ),
+                patch(
+                    "application_sdk.common.incremental.helpers.download_file",
+                    mock_download,
+                ),
+            ):
+                await download_s3_prefix_with_structure("prefix/", local_dest)
+
+            mock_download.assert_awaited_once_with(
+                key="other/path/file.json",
+                local_path=str(local_dest / "other" / "path" / "file.json"),
+            )

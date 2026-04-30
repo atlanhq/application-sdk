@@ -7,6 +7,7 @@ database operations, supporting batch processing and server-side cursors.
 
 import asyncio
 import concurrent
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
     TYPE_CHECKING,
@@ -21,9 +22,6 @@ from typing import (
 )
 from urllib.parse import quote_plus
 
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
-from temporalio import activity
-
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.common.aws_utils import (
@@ -31,16 +29,17 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_user,
 )
 from application_sdk.common.error_codes import ClientError, CommonError
-from application_sdk.common.utils import parse_credentials_extra
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
+from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-activity.logger = logger
 
 if TYPE_CHECKING:
     import daft
     import pandas as pd
+    from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
 
 
@@ -60,15 +59,15 @@ class BaseSQLClient(ClientInterface):
 
     connection = None
     engine = None
-    credentials: Dict[str, Any] = {}
-    resolved_credentials: Dict[str, Any] = {}
+    credentials: Dict[str, Any]
+    resolved_credentials: Dict[str, Any]
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
     DB_CONFIG: Optional[DatabaseConfig] = None
 
     def __init__(
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
-        credentials: Dict[str, Any] = {},
+        credentials: Optional[Dict[str, Any]] = None,
         chunk_size: int = 5000,
     ):
         """
@@ -77,10 +76,12 @@ class BaseSQLClient(ClientInterface):
         Args:
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
                 Defaults to USE_SERVER_SIDE_CURSOR.
-            credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
+            credentials (Optional[Dict[str, Any]], optional): Database credentials.
+                Defaults to None, which is treated as an empty dict.
         """
         self.use_server_side_cursor = use_server_side_cursor
-        self.credentials = credentials
+        self.credentials = credentials if credentials is not None else {}
+        self.resolved_credentials = {}
         self.chunk_size = chunk_size
 
     async def load(self, credentials: Dict[str, Any]) -> None:
@@ -100,30 +101,40 @@ class BaseSQLClient(ClientInterface):
 
         self.credentials = credentials  # Update the instance credentials
         try:
-            from sqlalchemy import create_engine
+            from sqlalchemy import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                create_engine,
+            )
 
             # Create engine but no persistent connection
             self.engine = create_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.DB_CONFIG.connect_args,
-                pool_pre_ping=True,
+                pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
 
-            # Test connection briefly to validate credentials
-            with self.engine.connect() as _:
-                pass  # Connection test successful
+            # Test connection briefly to validate credentials.
+            # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
+            # engine.connect() blocks the event loop — critical for Temporal
+            # activities where blocking starves the auto-heartbeat.
+            # Capture engine in a local variable so the closure doesn't need to
+            # re-read self.engine (which is typed Optional) and pyright can narrow it.
+            _engine = self.engine
+
+            def _ping() -> None:
+                with _engine.connect() as _:
+                    pass  # Connection test successful
+
+            await asyncio.to_thread(_ping)
 
             # Don't store persistent connection
             self.connection = None
 
         except Exception as e:
-            logger.error(
-                f"{ClientError.SQL_CLIENT_AUTH_ERROR}: Error loading SQL client: {str(e)}"
-            )
+            logger.error("Error loading SQL client", exc_info=True)
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}") from e
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -269,23 +280,6 @@ class BaseSQLClient(ClientInterface):
 
         return connection_string
 
-    def get_supported_sqlalchemy_url(self, sqlalchemy_url: str) -> str:
-        """Update the dialect in the URL if it is different from the installed dialect.
-
-        Args:
-            url (str): The URL to update.
-
-        Returns:
-            str: The updated URL with the dialect.
-        """
-        if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
-        installed_dialect = self.DB_CONFIG.template.split("://")[0]
-        url_dialect = sqlalchemy_url.split("://")[0]
-        if installed_dialect != url_dialect:
-            sqlalchemy_url = sqlalchemy_url.replace(url_dialect, installed_dialect)
-        return sqlalchemy_url
-
     def get_sqlalchemy_connection_string(self) -> str:
         """Generate a SQLAlchemy connection string for database connection.
 
@@ -303,12 +297,6 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
         extra = parse_credentials_extra(self.credentials)
-
-        # TODO: Uncomment this when the native deployment is ready
-        # If the compiled_url is present, use it directly
-        # sqlalchemy_url = extra.get("compiled_url")
-        # if sqlalchemy_url:
-        #     return self.get_supported_sqlalchemy_url(sqlalchemy_url)
 
         auth_token = self.get_auth_token()
 
@@ -333,10 +321,12 @@ class BaseSQLClient(ClientInterface):
         if self.DB_CONFIG.parameters:
             parameter_keys = self.DB_CONFIG.parameters
             parameter_values = {
-                key: self.credentials.get(key) or extra.get(key)
+                key: value
                 for key in parameter_keys
+                if (value := self.credentials.get(key) or extra.get(key)) is not None
             }
-            conn_str = self.add_connection_params(conn_str, parameter_values)
+            if parameter_values:
+                conn_str = self.add_connection_params(conn_str, parameter_values)
 
         return conn_str
 
@@ -364,7 +354,11 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("Engine is not initialized. Call load() first.")
 
         loop = asyncio.get_running_loop()
-        logger.info(f"Running query: {query}")
+        logger.debug(
+            "Running query (sha=%s, len=%d)",
+            hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
+            len(query),
+        )
 
         # Use context manager for automatic connection cleanup
         with self.engine.connect() as connection:
@@ -372,31 +366,27 @@ class BaseSQLClient(ClientInterface):
                 connection = connection.execution_options(yield_per=batch_size)
 
             with ThreadPoolExecutor() as pool:
-                try:
-                    from sqlalchemy import text
+                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
-                    cursor = await loop.run_in_executor(
-                        pool, connection.execute, text(query)
+                cursor = await loop.run_in_executor(
+                    pool, connection.execute, text(query)
+                )
+                if not cursor or not cursor.cursor:
+                    raise ValueError("Cursor is not supported")
+                column_names: List[str] = [
+                    description.name.lower()
+                    for description in cursor.cursor.description
+                ]
+
+                while True:
+                    rows = await loop.run_in_executor(
+                        pool, cursor.fetchmany, batch_size
                     )
-                    if not cursor or not cursor.cursor:
-                        raise ValueError("Cursor is not supported")
-                    column_names: List[str] = [
-                        description.name.lower()
-                        for description in cursor.cursor.description
-                    ]
+                    if not rows:
+                        break
 
-                    while True:
-                        rows = await loop.run_in_executor(
-                            pool, cursor.fetchmany, batch_size
-                        )
-                        if not rows:
-                            break
-
-                        results = [dict(zip(column_names, row)) for row in rows]
-                        yield results
-                except Exception as e:
-                    logger.error("Error running query in batch: {error}", error=str(e))
-                    raise e
+                    results = [dict(zip(column_names, row)) for row in rows]
+                    yield results
             # Connection automatically closed by context manager
 
         logger.info("Query execution completed")
@@ -417,9 +407,11 @@ class BaseSQLClient(ClientInterface):
             Union["pd.DataFrame", Iterator["pd.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
-        import pandas as pd
-        from pandas.compat._optional import import_optional_dependency
-        from sqlalchemy import text
+        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+        from pandas.compat._optional import (  # noqa: PLC0415 — optional dep: pandas
+            import_optional_dependency,
+        )
+        from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
         if import_optional_dependency("sqlalchemy", errors="ignore"):
             return pd.read_sql_query(text(query), conn, chunksize=chunksize)
@@ -454,7 +446,7 @@ class BaseSQLClient(ClientInterface):
         # Daft uses ConnectorX to read data from SQL by default for supported connectors
         # If a connection string is passed, it will use ConnectorX to read data
         # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-        import daft
+        import daft  # noqa: PLC0415 — optional dep: daft
 
         if not self.engine:
             raise ValueError("Engine is not initialized. Call load() first.")
@@ -485,11 +477,16 @@ class BaseSQLClient(ClientInterface):
         if isinstance(self.engine, str):
             raise ValueError("Engine should be an SQLAlchemy engine object")
 
-        from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+        from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
+            AsyncEngine,
+            AsyncSession,
+        )
 
         async_session = None
         if self.engine and isinstance(self.engine, AsyncEngine):
-            from sqlalchemy.orm import sessionmaker
+            from sqlalchemy.orm import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                sessionmaker,
+            )
 
             async_session = sessionmaker(
                 self.engine, expire_on_commit=False, class_=AsyncSession
@@ -503,7 +500,7 @@ class BaseSQLClient(ClientInterface):
         else:
             # Run the blocking operation in a thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_event_loop().run_in_executor(
+                return await asyncio.get_running_loop().run_in_executor(
                     executor, self._execute_query, query, chunksize
                 )
 
@@ -525,8 +522,7 @@ class BaseSQLClient(ClientInterface):
             result = await self._execute_async_read_operation(query, self.chunk_size)
             return cast(Iterator["pd.DataFrame"], result)
         except Exception as e:
-            logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
-            raise
+            raise rewrap(e, "Error reading batched data(pandas) from SQL") from e
 
     async def get_results(self, query: str) -> "pd.DataFrame":
         """Get all query results as a single pandas DataFrame asynchronously.
@@ -540,15 +536,14 @@ class BaseSQLClient(ClientInterface):
         """
         try:
             result = await self._execute_async_read_operation(query, None)
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             if isinstance(result, pd.DataFrame):
                 return result
             raise Exception("Unable to get pandas dataframe from SQL query results")
 
         except Exception as e:
-            logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
-            raise e
+            raise rewrap(e, "Error reading data(pandas) from SQL") from e
 
 
 class AsyncBaseSQLClient(BaseSQLClient):
@@ -586,16 +581,16 @@ class AsyncBaseSQLClient(BaseSQLClient):
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
         try:
-            from sqlalchemy.ext.asyncio import create_async_engine
+            from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                create_async_engine,
+            )
 
             # Create async engine but no persistent connection
             self.engine = create_async_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.DB_CONFIG.connect_args,
-                pool_pre_ping=True,
+                pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
-            if not self.engine:
-                raise ValueError("Failed to create async engine")
 
             # Test connection briefly to validate credentials
             async with self.engine.connect() as _:
@@ -605,11 +600,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
             self.connection = None
 
         except Exception as e:
-            logger.error(f"Error establishing database connection: {str(e)}")
+            logger.error("Error establishing database connection", exc_info=True)
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ValueError(str(e))
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}") from e
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""
@@ -641,16 +636,22 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.engine:
             raise ValueError("Engine is not initialized. Call load() first.")
 
-        logger.info(f"Running query: {query}")
+        logger.debug(
+            "Running query (sha=%s, len=%d)",
+            hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
+            len(query),
+        )
         use_server_side_cursor = self.use_server_side_cursor
 
         # Use async context manager for automatic connection cleanup
         async with self.engine.connect() as connection:
             try:
-                from sqlalchemy import text
+                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
                 if use_server_side_cursor:
-                    connection = connection.execution_options(yield_per=batch_size)
+                    connection = await connection.execution_options(
+                        yield_per=batch_size
+                    )
 
                 result = (
                     await connection.stream(text(query))
@@ -673,8 +674,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                     yield [dict(zip(column_names, row)) for row in rows]
 
             except Exception as e:
-                logger.error(f"Error executing query: {str(e)}")
-                raise
+                raise rewrap(e, "Error executing query") from e
             # Async connection automatically closed by context manager
 
         logger.info("Query execution completed")

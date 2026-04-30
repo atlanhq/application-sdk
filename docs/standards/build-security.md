@@ -1,0 +1,24 @@
+# Build & Security Scanning
+
+> **IMPORTANT**: Always run security scans after Dockerfile changes or dependency updates. CI will block HIGH/CRITICAL vulnerabilities.
+
+## Quick Reference
+
+- **Image base**: `cgr.dev/chainguard-private/python` -> golden images -> SDK -> apps
+- **Dapr runtime**: Installed via Chainguard APK (0 CVEs), configured in Dockerfile
+- **Registries**: Harbor (`registry.atlan.com`) for production, GHCR for CI
+
+## Build & Scan Commands
+
+```bash
+# Build image locally
+docker build -t application-sdk:local .
+
+# Scan image
+trivy image application-sdk:local
+grype application-sdk:local
+
+# Scan dependencies
+trivy fs uv.lock
+snyk test --file=requirements.txt  # requires: uv export --frozen --no-hashes --no-header -o requirements.txt
+```

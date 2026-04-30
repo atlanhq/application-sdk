@@ -37,10 +37,13 @@ class DatabaseConfig(BaseModel):
         default_factory=dict,
         description="Additional connection arguments to be passed to SQLAlchemy. ex: {'sslmode': 'require'}",
     )
+    pool_pre_ping: bool = Field(
+        default=True,
+        description="Whether SQLAlchemy should test pooled connections for liveness before checkout. Disable for dialects or endpoints where the driver's ping/close path is unsafe.",
+    )
 
-    class Config:
-        """Pydantic configuration for the DatabaseConfig model."""
-
-        extra = "forbid"  # Prevent additional fields
-        validate_assignment = True  # Validate on assignment
-        use_enum_values = True  # Use enum values instead of enum objects
+    model_config = {
+        "extra": "forbid",
+        "validate_assignment": True,
+        "use_enum_values": True,
+    }

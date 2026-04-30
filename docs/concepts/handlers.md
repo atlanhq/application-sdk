@@ -1,310 +1,198 @@
 # Handlers
 
-This module provides the crucial link between the generic components of the Application SDK (like `Application` and `Activities`) and the specific logic required to interact with a particular target system (e.g., a specific database, API, or service). Handlers encapsulate this system-specific interaction logic.
+Handlers implement the API contract for your application's HTTP endpoints: authentication testing, preflight checks, and metadata browsing. In v3, handlers use the `Handler` ABC with typed contracts and automatic context injection, replacing v2's `HandlerInterface` with its untyped `*args/**kwargs` signatures and manual `load()` method.
 
-## Purpose and Role of Handlers
-
-Handlers serve as the core implementation layer for a connector. Their primary responsibilities include:
-
-1.  **System Interaction Logic:** Containing the methods that perform actions specific to the target system, such as validating credentials, performing health checks, fetching metadata lists, or executing specific queries/API calls needed by activities.
-2.  **Client Management:** Often managing the lifecycle (loading, closing) of the specific `ClientInterface` implementation needed to communicate with the target system.
-3.  **API Implementation:** Providing the concrete implementation for the standard API endpoints exposed by `application_sdk.server.fastapi.Application` (like `/test_auth`, `/metadata`, `/preflight_check`).
-4.  **Activity Logic Delegation:** Providing methods that activities can call (via the shared activity state) to perform tasks related to the target system.
-
-Essentially, while `Clients` provide the *connection* abstraction, `Handlers` provide the *operational* abstraction for a specific data source type.
-
-## `HandlerInterface` (`application_sdk.handlers.__init__.py`)
-
-This is the abstract base class defining the contract that all handlers must fulfill. It ensures a consistent interface for the `Application` and potentially `Activities` to interact with any handler, regardless of the underlying system.
-
-### Required Methods
-
-Subclasses **must** implement the following asynchronous methods:
-
-*   **`load(*args, **kwargs)`**:
-    *   **Purpose:** Initialize the handler and any required resources, typically including loading the associated `ClientInterface` with credentials often passed via `kwargs`.
-*   **`test_auth(*args, **kwargs)`**:
-    *   **Purpose:** Verify that the provided credentials (usually in `kwargs`) are valid for authenticating against the target system. Should return `True` for success, `False` or raise an exception for failure.
-    *   **Used By:** The `/workflows/v1/test_auth` endpoint in `Application`.
-*   **`preflight_check(*args, **kwargs)`**:
-    *   **Purpose:** Perform necessary checks before starting a main workflow execution. This often includes verifying connectivity, checking permissions, validating configuration (e.g., include/exclude filters passed via `kwargs`), or checking for the existence of required resources (like tables or schemas). Should return a dictionary summarizing the check results, typically indicating overall success and details for each check performed.
-    *   **Used By:** The `/workflows/v1/preflight_check` endpoint in `Application` and often called as the first step in standard workflows.
-*   **`fetch_metadata(*args, **kwargs)`**:
-    *   **Purpose:** Fetch metadata from the target system. The specific type and format of metadata depend on the implementation and the arguments passed (e.g., fetching databases vs. schemas). Should return the fetched metadata, often as a list of dictionaries.
-    *   **Used By:** The `/workflows/v1/metadata` endpoint in `Application`.
-
-## `BaseHandler` (`application_sdk.handlers.base.py`)
-
-This is a concrete implementation of `HandlerInterface` specifically designed for interacting with non-SQL data sources.
-
-### Key Features
-
-*   **Uses `BaseClient`:** It requires an instance of a `BaseClient` subclass (passed during initialization) to communicate with the target system.
-*   **Client Management:** Automatically manages the lifecycle of the associated `BaseClient` instance.
-*   **Default Implementation:** Provides a basic implementation of the `load()` method that initializes the client with credentials.
-*   **Extensibility:** Designed to be subclassed for specific non-SQL data sources (e.g., REST APIs).
-
-### Default Implementation
-
-The `BaseHandler` provides a basic implementation that:
-
-*   **`__init__(client=None)`:** Initializes the handler with an optional `BaseClient` instance. If no client is provided, it creates a default `BaseClient()`.
-*   **`load(credentials)`:** Calls `load()` on the associated client with the provided credentials.
-
-### Example `BaseHandler` Subclass
+## Defining a Handler
 
 ```python
-# Example for a hypothetical REST API source
-# In my_api_connector/handlers.py
-from typing import Any, Dict, List
-# Absolute imports
-from application_sdk.handlers.base import BaseHandler
-# Assuming you have a client for this API
-from .clients import MyApiClient
+from application_sdk.handler import Handler
+from application_sdk.handler.contracts import (
+    AuthInput, AuthOutput, AuthStatus,
+    PreflightInput, PreflightOutput, PreflightStatus, PreflightCheck,
+    MetadataInput, SqlMetadataOutput, SqlMetadataObject,
+)
 
-class MyApiHandler(BaseHandler):
-    def __init__(self, client: MyApiClient = None):
-        """Initialize the handler with a custom API client."""
-        super().__init__(client or MyApiClient())
+class MyHandler(Handler):
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        api_key = self.context.get_credential("api_key")
+        ok = await verify_key(api_key)
+        return AuthOutput(
+            status=AuthStatus.SUCCESS if ok else AuthStatus.FAILED,
+        )
 
-    async def test_auth(self, **kwargs: Any) -> bool:
-        """Test API authentication using the client."""
-        try:
-            # Use the client to validate credentials against the API
-            response = await self.client.execute_http_get_request(
-                url="https://api.example.com/auth/test",
-                headers={"Authorization": f"Bearer {kwargs.get('api_token')}"}
-            )
-            return response is not None and response.status_code == 200
-        except Exception as e:
-            logger.error(f"Authentication test failed: {e}")
-            return False
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY)
 
-    async def preflight_check(self, **kwargs: Any) -> Dict[str, Any]:
-        """Perform API preflight checks."""
-        try:
-            # Test connectivity
-            ping_response = await self.client.execute_http_get_request(
-                url="https://api.example.com/health"
-            )
-            connectivity_ok = ping_response is not None and ping_response.status_code == 200
-
-            # Test permissions
-            permissions_response = await self.client.execute_http_get_request(
-                url="https://api.example.com/permissions"
-            )
-            permissions_ok = permissions_response is not None and permissions_response.status_code == 200
-
-            if connectivity_ok and permissions_ok:
-                return {
-                        "connectivityCheck": {"success": connectivity_ok, "successMessage": "API reachable", "failureMessage": ""},
-                        "permissionCheck": {"success": permissions_ok, "successMessage": "Read access verified", "failureMessage": ""}
-                    }
-            else:
-                return {
-                    "connectivityCheck": {"success": connectivity_ok, "successMessage": "", "failureMessage": "API not reachable"},
-                    "permissionCheck": {"success": permissions_ok, "successMessage": "", "failureMessage": "Read access not verified"}
-                }
-        except Exception as e:
-            logger.error(f"Preflight check failed: {e}")
-            return {
-                "connectivityCheck": {"success": connectivity_ok, "successMessage": "", "failureMessage": "API not reachable"},
-                "permissionCheck": {"success": permissions_ok, "successMessage": "", "failureMessage": "Read access not verified"}
-            }
-
-    async def fetch_metadata(self, **kwargs: Any) -> Any:
-        """Fetch metadata from the API."""
-        try:
-            # Use the client to fetch metadata (e.g., list available datasets)
-            metadata_type = kwargs.get("metadata_type", "datasets")
-
-            response = await self.client.execute_http_get_request(
-                url=f"https://api.example.com/metadata/{metadata_type}",
-                params=kwargs.get("filters", {})
-            )
-
-            if response and response.status_code == 200:
-                return response.json()
-            else:
-                return []
-        except Exception as e:
-            logger.error(f"Failed to fetch metadata: {e}")
-            return []
-
-# Usage: Pass an instance of MyApiHandler to Application or Activities
+    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
+        return SqlMetadataOutput(objects=[
+            SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="ANALYTICS"),
+        ])
 ```
 
-## `BaseSQLHandler` (`application_sdk.handlers.sql.py`)
+## Typed Contracts
 
-This is a concrete implementation of `HandlerInterface` specifically designed for interacting with SQL-based data sources.
+Every handler method takes a single typed `Input` and returns a single typed `Output`. The contracts are defined in `application_sdk.handler.contracts`:
 
-### Key Features
-
-*   **Uses `SQLClient`:** It requires an instance of a `BaseSQLClient` subclass (passed during initialization) to communicate with the database.
-*   **SQL Query Driven:** Much of its default behavior relies on executing predefined SQL queries.
-*   **Configurable SQL Queries:** Provides class attributes to hold SQL query strings for common operations. These are often loaded from `.sql` files (using `read_sql_files` looking in `app/sql` by default) but can be overridden in subclasses:
-    *   `test_authentication_sql`: Query to test connection/authentication (default: `SELECT 1;`).
-    *   `client_version_sql`: Query to fetch the database client version (used in `check_client_version`).
-    *   `metadata_sql`: Query to fetch database and schema names together (used by `prepare_metadata` which is called by the default `fetch_metadata` implementation).
-    *   `tables_check_sql`: Query to count tables based on filters (used by `tables_check` within `preflight_check`).
-    *   `fetch_databases_sql`: Query to fetch only database names.
-    *   `fetch_schemas_sql`: Query to fetch schema names for a given database.
-*   **Default Implementations:**
-    *   `load()`: Calls `load()` on the provided `sql_client`.
-    *   `test_auth()`: Executes `test_authentication_sql` using the SQL client's `run_query` method.
-    *   `fetch_metadata()`: Based on the `metadata_type` argument, calls `prepare_metadata`, `fetch_databases`, or `fetch_schemas`. `prepare_metadata` executes `metadata_sql` using the SQL client.
-    *   `preflight_check()`: Orchestrates several checks:
-        *   `check_schemas_and_databases()`: Executes `metadata_sql` and validates include/exclude filters against the results.
-        *   `tables_check()`: Executes `tables_check_sql` (prepared with filters) to count tables.
-        *   `check_client_version()`: Executes `client_version_sql` and checks against `SQL_SERVER_MIN_VERSION`.
-
-## How Handlers are Used
-
-1.  **By the `Application`:**
-    *   When you create an instance of `application_sdk.server.fastapi.APIServer`, you pass your custom handler instance to its constructor (e.g., `app = APIServer(handler=MyConnectorHandler())`).
-    *   The `APIServer`'s default API endpoints (`/test_auth`, `/metadata`, `/preflight_check`) directly call the corresponding methods (`test_auth`, `fetch_metadata`, `preflight_check`) on the provided handler instance to perform the actual work.
-
-2.  **By `Activities`:**
-    *   Standard activity base classes (like `BaseSQLMetadataExtractionActivities`) typically expect a specific handler type (e.g., `BaseSQLHandler`).
-    *   During activity initialization (usually within the overridden `_set_state` method of the activity class), the appropriate handler is instantiated (often passing the corresponding client).
-    *   This handler instance is stored in the `ActivitiesState` object associated with the workflow run.
-    *   Activity methods then access this handler via `state.handler` (e.g., `state = await self._get_state(...)`, `await state.handler.some_custom_check()`) to execute system-specific logic required for that activity step.
-
-## Extending Handlers
-
-Creating a new connector requires creating a custom handler.
-
-### 1. Subclassing `HandlerInterface` (for non-SQL sources)
-
-If your target system is not SQL-based (e.g., a REST API, NoSQL database), inherit directly from `HandlerInterface` and implement all required abstract methods (`load`, `test_auth`, `fetch_metadata`, `preflight_check`) using the appropriate client for that system.
+### AuthInput / AuthOutput
 
 ```python
-# Example for a hypothetical REST API source
-# In my_api_connector/handlers.py
-from typing import Any, Dict, List
-# Absolute imports
-from application_sdk.handlers import HandlerInterface
-# Assuming you have a client for this API
-from .clients import MyApiClient
+class AuthInput:
+    credentials: list[HandlerCredential] = []  # credential key/value pairs
+    connection_id: str = ""                     # optional connection ID
+    timeout_seconds: int = 30                   # max wait time
 
-class MyApiHandler(HandlerInterface):
-    api_client: MyApiClient
-
-    async def load(self, **kwargs: Any) -> None:
-        print("Loading MyApiHandler")
-        self.api_client = MyApiClient()
-        # Pass credentials from kwargs to the client's load/connect method
-        await self.api_client.connect(credentials=kwargs.get("credentials", {}))
-
-    async def test_auth(self, **kwargs: Any) -> bool:
-        print("Testing API Authentication")
-        # Use the client to validate credentials against the API
-        return await self.api_client.check_token()
-
-    async def preflight_check(self, **kwargs: Any) -> Any:
-        print("Performing API Preflight Checks")
-        # Use the client to check connectivity, permissions etc.
-        ping_ok = await self.api_client.ping()
-        read_perms_ok = await self.api_client.can_read_data()
-        return {
-            "success": ping_ok and read_perms_ok,
-            "data": {
-                 "connectivityCheck": {"success": ping_ok, "message": "API reachable"},
-                 "permissionCheck": {"success": read_perms_ok, "message": "Read access verified"}
-            }
-        }
-
-    async def fetch_metadata(self, **kwargs: Any) -> List[Dict[str, str]]:
-        print("Fetching API Metadata")
-        # Use the client to fetch metadata (e.g., list available datasets)
-        # Example: metadata_type might be passed in kwargs
-        if kwargs.get("metadata_type") == "datasets":
-            return await self.api_client.list_datasets()
-        else:
-            return []
-
-# Usage: Pass an instance of MyApiHandler to Application or Activities
+class AuthOutput:
+    status: AuthStatus       # SUCCESS, FAILED, EXPIRED, or INVALID_CREDENTIALS
+    message: str = ""        # optional detail message
+    identities: list[str] = []  # verified identities (usernames, roles)
+    scopes: list[str] = []     # authorized scopes or permissions
+    expires_at: str = ""       # ISO-8601 expiry timestamp
 ```
 
-### 2. Subclassing `BaseSQLHandler` (for SQL sources)
+Each `HandlerCredential` has a `key: str` and `value: str`.
 
-If your target is a SQL database, inherit from `BaseSQLHandler`. You'll typically need to:
-*   Provide the appropriate `SQLClient` subclass during initialization.
-*   Override specific methods (`test_auth`, `preflight_check`, etc.) if the default SQL-based logic isn't sufficient or needs modification.
-*   Override SQL query class attributes (`test_authentication_sql`, `metadata_sql`, etc.) if the default queries (from `app/sql`) are incorrect for your specific SQL dialect.
+### PreflightInput / PreflightOutput
 
 ```python
-# Example for a specific SQL database (e.g., PostgreSQL)
-# In my_postgres_connector/handlers.py
-from typing import Dict, Any
-# Absolute imports
-from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.observability.logger_adaptor import get_logger
-# Import your specific SQL client
-from .clients import PostgreSQLClient
+class PreflightInput:
+    credentials: list[HandlerCredential] = []  # credentials for preflight
+    connection_config: dict[str, Any] = {}     # host, port, database, etc.
+    checks_to_run: list[str] = []              # specific checks (empty = all)
+    timeout_seconds: int = 60                  # max wait time
 
-logger = get_logger(__name__)
-
-class MyPostgresHandler(BaseSQLHandler):
-    # Override specific SQL queries if needed (or rely on defaults loaded from app/sql)
-    # Example: Using a slightly different query for version check
-    client_version_sql = "SELECT version();"
-
-    # Constructor typically just passes the client to the base class
-    def __init__(self, sql_client: PostgreSQLClient):
-         # Ensure the correct client type is passed
-         super().__init__(sql_client)
-
-    # Override test_auth if the default 'SELECT 1;' isn't enough
-    async def test_auth(self, **kwargs: Any) -> bool:
-        logger.info("Running PostgreSQL specific test_auth")
-        try:
-            # Reuse the base class logic which runs test_authentication_sql
-            # Or add more specific checks here if needed
-            return await super().test_auth(**kwargs)
-        except Exception as e:
-            logger.error(f"PostgreSQL auth failed: {e}")
-            return False
-
-    # Override preflight_check if you need different checks or messages
-    async def preflight_check(self, payload: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
-        logger.info("Running PostgreSQL specific preflight_check")
-        # You could call super().preflight_check() and modify the result,
-        # or implement entirely custom checks.
-        # Example: Add a check for a specific extension
-        base_checks = await super().preflight_check(payload, **kwargs)
-
-        # Add custom check
-        extension_check = await self.check_pg_extension("uuid-ossp")
-        base_checks["extensionCheck"] = extension_check
-        # Update overall success based on custom check
-        base_checks["success"] = base_checks["success"] and extension_check["success"]
-
-        if not base_checks["success"]:
-             logger.warning("PostgreSQL preflight checks failed.")
-             base_checks["error"] = "Preflight check failed (see details)" # Add/Modify error
-
-        return base_checks
-
-    async def check_pg_extension(self, extension_name: str) -> Dict[str, Any]:
-        # Custom method using self.sql_client to run a query
-        query = f"SELECT 1 FROM pg_extension WHERE extname = '{extension_name}';"
-        try:
-             async for batch in self.sql_client.run_query(query):
-                 if batch: # If query returned rows, extension exists
-                      return {"success": True, "message": f"Extension '{extension_name}' found."}
-             # If no rows returned
-             return {"success": False, "message": f"Required extension '{extension_name}' not found."}
-        except Exception as e:
-             logger.error(f"Error checking extension {extension_name}: {e}")
-             return {"success": False, "message": f"Error checking extension: {e}"}
-
-# Usage:
-# 1. Instantiate your client: pg_client = PostgreSQLClient()
-# 2. Instantiate your handler: pg_handler = MyPostgresHandler(pg_client)
-# 3. Pass pg_handler to Application or use within Activities
+class PreflightOutput:
+    status: PreflightStatus           # READY, NOT_READY, or PARTIAL
+    checks: list[PreflightCheck] = [] # individual check results
+    message: str = ""                 # human-readable summary
+    total_duration_ms: float = 0.0    # total time for all checks
 ```
 
-## Summary
+### MetadataInput / MetadataOutput
 
-Handlers are essential components that contain the specific logic for interacting with a target data source. They implement the `HandlerInterface` contract and are used by both the `Application` (for standard API endpoints) and `Activities` (for workflow steps). For SQL sources, subclassing `BaseSQLHandler` provides a convenient starting point, while non-SQL sources require either subclassing `BaseHandler` or implementing `HandlerInterface` directly.
+```python
+class MetadataInput:
+    credentials: list[HandlerCredential] = []  # credentials for discovery
+    connection_config: dict[str, Any] = {}     # connection configuration
+    object_filter: str = ""                    # filter pattern (e.g. 'public.*')
+    include_fields: bool = True                # include field/column details
+    max_objects: int = 1000                    # max objects to return
+    timeout_seconds: int = 120                 # max wait time
+
+class MetadataOutput:
+    objects: list[Any] = []  # base class — use SqlMetadataOutput or ApiMetadataOutput
+
+class SqlMetadataOutput(MetadataOutput):
+    objects: list[SqlMetadataObject] = []  # for sqltree widget
+
+class ApiMetadataOutput(MetadataOutput):
+    objects: list[ApiMetadataObject] = []  # for apitree widget
+```
+
+## Context Injection
+
+There is no `load()` method in v3. The service layer injects `self.context` before each handler method call and clears it after. This makes handlers stateless and safe for concurrent requests.
+
+Access infrastructure through `self.context`:
+
+```python
+class MyHandler(Handler):
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        # Get a credential value by key from the request credentials
+        api_key = self.context.get_credential("api_key")
+
+        # Get a secret from the secret store
+        secret = await self.context.get_secret("my-secret-name")
+
+        # Access all credentials as a list
+        all_creds = self.context.credentials
+
+        # Check if a credential exists
+        if self.context.has_credential("api_key"):
+            ...
+```
+
+## Error Handling with HandlerError
+
+Raise `HandlerError` to return a structured HTTP error response:
+
+```python
+from application_sdk.handler import Handler, HandlerError
+
+class MyHandler(Handler):
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        api_key = await self.context.get_secret("my-api-key")
+        if not api_key:
+            raise HandlerError(
+                message="API key not configured",
+                http_status=400,
+            )
+        ...
+```
+
+`HandlerError` is translated by the server into an HTTP response with the specified status code and a JSON body containing the error message.
+
+## SQL Handler Pattern
+
+For SQL-based connectors, your handler typically delegates to a SQL client:
+
+```python
+from application_sdk.handler.contracts import (
+    AuthInput, AuthOutput, AuthStatus,
+    MetadataInput, SqlMetadataOutput, SqlMetadataObject,
+)
+
+class MySQLHandler(Handler):
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        host = self.context.get_credential("host")
+        username = self.context.get_credential("username")
+        password = self.context.get_credential("password")
+        try:
+            async with create_connection(host, username, password) as conn:
+                await conn.execute("SELECT 1")
+            return AuthOutput(status=AuthStatus.SUCCESS)
+        except Exception:
+            return AuthOutput(
+                status=AuthStatus.FAILED, message="Connection failed"
+            )
+
+    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
+        host = self.context.get_credential("host")
+        username = self.context.get_credential("username")
+        password = self.context.get_credential("password")
+        async with create_connection(host, username, password) as conn:
+            rows = await conn.execute(
+                "SELECT TABLE_CATALOG, TABLE_SCHEMA "
+                "FROM information_schema.schemata"
+            )
+            return SqlMetadataOutput(objects=[
+                SqlMetadataObject(
+                    TABLE_CATALOG=r["TABLE_CATALOG"],
+                    TABLE_SCHEMA=r["TABLE_SCHEMA"],
+                )
+                for r in rows
+            ])
+```
+
+## Testing Handlers
+
+Test handlers by injecting mock infrastructure:
+
+```python
+import pytest
+from application_sdk.testing import MockSecretStore
+from application_sdk.infrastructure import InfrastructureContext, set_infrastructure
+from application_sdk.handler.contracts import AuthInput, AuthStatus
+
+@pytest.fixture
+def infra():
+    ctx = InfrastructureContext(
+        secret_store=MockSecretStore({"my-api-key": "test-secret"}),
+    )
+    set_infrastructure(ctx)
+    return ctx
+
+async def test_auth_success(infra):
+    handler = MyHandler()
+    result = await handler.test_auth(AuthInput(credentials=[]))
+    assert result.status == AuthStatus.SUCCESS
+```

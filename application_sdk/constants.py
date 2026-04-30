@@ -1,29 +1,60 @@
 """Application SDK configuration constants.
 
-This module contains all the configuration constants used throughout the Application SDK.
-Constants are primarily loaded from environment variables with sensible defaults.
+This module provides **import-time** configuration — values read from environment
+variables once at module import, before ``AppConfig`` is constructed. They are used
+by code that initialises at import time (observability stack, OTEL exporters,
+logging.basicConfig, Dapr component names).
 
-The constants are organized into the following categories:
-- Application Configuration
-- Workflow Configuration
-- SQL Client Configuration
-- DAPR Configuration
-- Logging Configuration
-- OpenTelemetry Configuration
+**When to use constants.py vs AppConfig:**
+
+* ``constants.py`` — for values consumed at **module level** (top of file, class
+  body, default parameters). These run before ``main()`` or ``run_dev_combined()``
+  and cannot wait for ``AppConfig``.
+* ``AppConfig`` (in ``main.py``) — for values consumed at **runtime** inside
+  functions and methods. ``AppConfig`` is the single authoritative config object
+  passed through the call chain.
+
+Both read from the **same environment variables with the same defaults** so they
+stay in sync. The env var is the single source of truth — it is set once by
+Helm/Docker/.env before the process starts and both readers see the same value.
+
+**Why not move everything to AppConfig?**
+The observability layer (``logger_adaptor``, ``traces_adaptor``, ``metrics_adaptor``)
+calls ``logging.basicConfig(level=LOG_LEVEL)`` and creates ``MeterProvider`` /
+``TracerProvider`` at **module import time** — before ``main()`` parses CLI args and
+constructs ``AppConfig``. Moving these to AppConfig would require making the entire
+observability stack lazy-initializing (defer setup until first use), which is a large
+refactor with the following risks:
+
+- **Lost early logs**: any log emitted before ``configure()`` is called would be
+  silently dropped or go to a default handler with wrong level/format. This makes
+  startup failures harder to diagnose — exactly when logs matter most.
+- **Thread safety**: lazy init requires double-checked locking or ``threading.Once``
+  to avoid races when multiple threads (Temporal worker, health server, handler)
+  trigger first-use concurrently.
+- **Import-order sensitivity**: if any module happens to log during import (common
+  for dependency warnings, deprecation notices), the lazy guard must handle the
+  "not yet configured" state gracefully without crashing or losing the message.
+- **Test isolation**: every test that touches logging/metrics/traces would need to
+  reset the lazy singleton, adding fragile teardown logic across ~100 test files.
+
+Until the observability stack is refactored, constants.py provides the import-time
+values it needs. The env var is the single source of truth for both readers.
+
+**Adding new config:**
+If the consumer runs at import time → add to ``constants.py``.
+If the consumer runs at runtime → add to ``AppConfig`` only.
+If both → add to both with the same env var and default, and document the link.
 
 Example:
-    >>> from application_sdk.constants import APPLICATION_NAME, WORKFLOW_HOST
-    >>> print(f"Running application {APPLICATION_NAME} on {WORKFLOW_HOST}")
-
-Note:
-    Most constants can be configured via environment variables. See the .env.example
-    file for all available configuration options.
+    >>> from application_sdk.constants import APPLICATION_NAME
+    >>> print(f"Running application {APPLICATION_NAME}")
 """
 
 import os
-from datetime import timedelta
 from enum import Enum
 
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=".env")
@@ -36,22 +67,28 @@ LOCAL_ENVIRONMENT = "local"
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
-#: Host address for the application's HTTP server
-APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0"))
-#: Port number for the application's HTTP server
-APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
+# REMOVED: APP_HOST, APP_PORT — use AppConfig.handler_host / handler_port
 #: Tenant ID for multi-tenant applications
 APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
 # Domain Name of the tenant
 DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
-#: Host address for the application's dashboard
-APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
-#: Port number for the application's dashboard
-APP_DASHBOARD_PORT = int(os.getenv("ATLAN_APP_DASHBOARD_PORT", "8000"))
-#: Minimum required SQL Server version
-SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
-#: Path to the SQL queries directory
-SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
+
+# App Vitals / Release metadata (injected by Local Marketplace into HelmRelease).
+# Naming aligned with Anuj's LM-integration PR so they merge cleanly.
+#: Semantic version of the app release (e.g., "1.2.3")
+APPLICATION_VERSION = os.getenv("ATLAN_APPLICATION_VERSION", "")
+#: Release UUID from Global Marketplace
+RELEASE_ID = os.getenv("ATLAN_RELEASE_ID", "")
+#: Release channel (all, beta, staging, specific)
+RELEASE_CHANNEL = os.getenv("ATLAN_RELEASE_CHANNEL", "")
+#: SDK version used to build this app image
+APP_SDK_VERSION = os.getenv("ATLAN_SDK_VERSION", "")
+#: App type from Global Marketplace (connector, system, etc.)
+APP_TYPE = os.getenv("ATLAN_APP_TYPE", "")
+#: Release publication timestamp from Global Marketplace (ISO 8601)
+PUBLISHED_AT = os.getenv("ATLAN_PUBLISHED_AT", "")
+# REMOVED: APP_DASHBOARD_HOST, APP_DASHBOARD_PORT, SQL_SERVER_MIN_VERSION,
+# SQL_QUERIES_PATH — unused internally, v2-only external consumers.
 
 # Output Path Constants
 #: Output path format for workflows.
@@ -64,6 +101,11 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
+# Directory where contract-toolkit generated files (configmaps, manifest, Python types) live.
+# Convention: app/generated/ inside the repo (importable as app.generated).
+# In Docker (WORKDIR=/app, app code at /app/app/) this resolves to /app/app/generated.
+CONTRACT_GENERATED_DIR = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
+
 # Cleanup Paths (custom paths for cleanup operations, supports multiple paths separated by comma)
 # If empty, cleanup activities will default to workflow-specific paths at runtime
 CLEANUP_BASE_PATHS = [
@@ -71,6 +113,13 @@ CLEANUP_BASE_PATHS = [
     for path in os.getenv("ATLAN_CLEANUP_BASE_PATHS", "").split(",")
     if path.strip()
 ]
+
+# Key used to store tracked FileReference objects in _app_state during a workflow run
+TRACKED_FILE_REFS_KEY = "_tracked_file_refs"
+
+# Object-store prefixes that must never be deleted by cleanup_storage.
+# These store cross-run persistent state (connection configs, incremental markers, etc.)
+PROTECTED_STORAGE_PREFIXES = ("persistent-artifacts/",)
 
 # State Store Constants
 #: Path template for state store files.
@@ -90,43 +139,40 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
     "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
 )
 
-#: Enable structured failure logging for Temporal activities with context
-#: (tenant, retries, timeouts). Opt-in per application.
-ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
-    os.getenv("ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING", "false").lower() == "true"
+# REMOVED: ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING, WORKFLOW_UI_HOST,
+# WORKFLOW_UI_PORT, WORKFLOW_MAX_TIMEOUT_HOURS, WORKFLOW_HOST, WORKFLOW_PORT,
+# WORKFLOW_NAMESPACE — unused or moved to AppConfig.
+# REMOVED: MAX_CONCURRENT_ACTIVITIES — unused, see ExecutionSettings.max_concurrent_activities
+
+#: Maximum concurrent object-store transfers (uploads / downloads)
+MAX_CONCURRENT_STORAGE_TRANSFERS = int(
+    os.getenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "4")
 )
 
-# Workflow Client Constants
-#: Host address for the Temporal server
-WORKFLOW_HOST = os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
-#: Port number for the Temporal server
-WORKFLOW_PORT = os.getenv("ATLAN_WORKFLOW_PORT", "7233")
-#: Namespace for Temporal workflows
-WORKFLOW_NAMESPACE = os.getenv("ATLAN_WORKFLOW_NAMESPACE", "default")
-#: Host address for the Temporal UI
-WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
-#: Port number for the Temporal UI
-WORKFLOW_UI_PORT = os.getenv("ATLAN_WORKFLOW_UI_PORT", "8233")
+#: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
+#: When set, workers identify themselves with this build ID so the Temporal server can
+#: route tasks to the correct version during versioned deployments.
+APP_BUILD_ID = os.getenv("ATLAN_APP_BUILD_ID") or os.getenv("TEMPORAL_BUILD_ID", "")
 
-#: Maximum timeout duration for workflows
-WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
-    hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))
+#: Worker Deployment name (injected by TWD controller).
+#: Format: "<namespace>/<twd-name>". When set together with APP_BUILD_ID,
+#: workers register as a Worker Deployment version instead of using legacy Build ID versioning.
+APP_DEPLOYMENT_NAME = os.getenv("ATLAN_APP_DEPLOYMENT_NAME") or os.getenv(
+    "TEMPORAL_DEPLOYMENT_NAME", ""
 )
-#: Maximum number of activities that can run concurrently
-MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
 
 
 #: Name of the deployment secrets in the secret store
 DEPLOYMENT_SECRET_PATH = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
 )
+#: Used by events interceptor at import time (before AppConfig exists).
+#: AppConfig.auth_enabled is the runtime equivalent — this constant remains
+#: because the interceptor reads it at module level.
 AUTH_ENABLED = os.getenv("ATLAN_AUTH_ENABLED", "false").lower() == "true"
 #: OAuth2 authentication URL for workflow services
 AUTH_URL = os.getenv("ATLAN_AUTH_URL")
-#: Whether to enable TLS for Temporal workflow connections
-WORKFLOW_TLS_ENABLED = (
-    os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
-)
+# REMOVED: WORKFLOW_TLS_ENABLED — v2-only consumers, v3 is a breaking release.
 
 # Deployment Secret Store Key Names
 #: Key name for OAuth2 client ID in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_ID_KEY)
@@ -138,25 +184,10 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
     "ATLAN_AUTH_CLIENT_SECRET_KEY", "ATLAN_AUTH_CLIENT_SECRET"
 )
 
-# Workflow Constants
-#: Timeout duration for activity heartbeats
-HEARTBEAT_TIMEOUT = timedelta(
-    seconds=int(os.getenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 300))  # 5 minutes
-)
-#: Maximum duration an activity can run before timing out
-START_TO_CLOSE_TIMEOUT = timedelta(
-    seconds=int(
-        os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 2 * 60 * 60)
-    )  # 2 hours
-)
-
-#: Graceful shutdown timeout for workers
-#: This is the maximum time the worker will wait for in-flight activities to complete
-#: before forcing shutdown when receiving SIGTERM/SIGINT signals.
-#: The worker will exit early if all activities complete before this timeout.
-GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = int(
-    os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 12 * 60 * 60)  # 12 hours
-)
+# REMOVED: HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT, GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
+# These were never used. See ExecutionSettings for the actual runtime values:
+#   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
+#   - @task(timeout_seconds=..., heartbeat_timeout_seconds=...) for per-task timeouts
 
 #: Delay before initiating worker shutdown after receiving a termination signal.
 #: This gives the event loop time to flush in-flight activity completions
@@ -190,6 +221,18 @@ DAPR_BINDING_OPERATION_CREATE = "create"
 #: Version of worker start events used in the application
 WORKER_START_EVENT_VERSION = "v1"
 
+# HTTP Connection Pool Configuration (BLDX-1153).
+# Prevents CLOSE_WAIT zombie socket accumulation and infinite blocking.
+# keepalive_expiry=30s < nginx keepalive_timeout=75s → client retires idle
+# connections before nginx sends FIN that httpcore can't detect.
+# pool timeout=30s → threads raise PoolTimeout instead of blocking forever.
+_HTTP_POOL_LIMITS = httpx.Limits(
+    max_connections=50,
+    max_keepalive_connections=10,
+    keepalive_expiry=30.0,
+)
+_HTTP_POOL_TIMEOUT_SECONDS = 30.0
+
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 # Dapr Client Configuration
@@ -206,20 +249,39 @@ DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
 )
 
 # Logger Constants
-#: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-#: Service name for OpenTelemetry
+#: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+#: Used by logger_adaptor.py at module level (logging.basicConfig runs at
+#: import time, before AppConfig exists). AppConfig.log_level is the runtime
+#: equivalent for code that has access to the config instance.
+LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")).upper()
+#: Service name for OpenTelemetry.
+#: Used by traces_adaptor.py and metrics_adaptor.py at module level for
+#: tracer/meter initialization. AppConfig.service_name is the runtime equivalent.
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
 #: Service version for OpenTelemetry
-SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
+SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "")
+if not SERVICE_VERSION:
+    from application_sdk.version import __version__
+
+    SERVICE_VERSION = __version__
 #: Additional resource attributes for OpenTelemetry
 OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 #: Endpoint for the OpenTelemetry collector
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
+#: Secondary endpoint for workflow logs (optional, for dual export to tenant-level collector)
+OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to enable workflow logs export to secondary endpoint (for S3 archival + live streaming)
+ENABLE_OTLP_WORKFLOW_LOGS: bool = (
+    os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
+)
+
+# App Vitals
+#: Enable App Vitals interceptor for automatic lifecycle metrics
+ENABLE_APP_VITALS: bool = os.getenv("ATLAN_ENABLE_APP_VITALS", "true").lower() == "true"
 
 # OTEL Constants
 #: Node name for workflow telemetry
@@ -232,7 +294,6 @@ OTEL_BATCH_DELAY_MS = int(os.getenv("OTEL_BATCH_DELAY_MS", "5000"))
 OTEL_BATCH_SIZE = int(os.getenv("OTEL_BATCH_SIZE", "512"))
 #: Maximum size of the export queue
 OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
-
 
 # AWS Constants
 #: AWS Session Name
@@ -248,10 +309,7 @@ LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
-# Hive Partitioning Configuration
-ENABLE_HIVE_PARTITIONING = (
-    os.getenv("ATLAN_ENABLE_HIVE_PARTITIONING", "true").lower() == "true"
-)
+# REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
 # Metrics Configuration
 ENABLE_OTLP_METRICS = os.getenv("ATLAN_ENABLE_OTLP_METRICS", "false").lower() == "true"
@@ -264,6 +322,9 @@ METRICS_CLEANUP_ENABLED = (
     os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
 METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
+ENABLE_PROMETHEUS_METRICS = (
+    os.getenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "true").lower() == "true"
+)
 
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
@@ -291,17 +352,18 @@ TRACES_CLEANUP_ENABLED = (
 )
 TRACES_FILE_NAME = "traces.parquet"
 
-# Dapr Sink Configuration
-ENABLE_OBSERVABILITY_DAPR_SINK = (
-    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
+# Store Sink Configuration (defaults to enabled)
+ENABLE_OBSERVABILITY_STORE_SINK: bool = (
+    os.getenv(
+        "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
+        os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true"),
+    ).lower()
+    == "true"
 )
 
-# atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
-ATLAN_API_TOKEN_GUID = os.getenv("API_TOKEN_GUID")
+# REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
+# ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")
-ATLAN_API_KEY = os.getenv("ATLAN_API_KEY")
-ATLAN_CLIENT_ID = os.getenv("CLIENT_ID")
-ATLAN_CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 # Lock Configuration
 LOCK_METADATA_KEY = "__lock_metadata__"
 
@@ -329,6 +391,11 @@ MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
 #: Windows extended-length path prefix
 WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
+
+# SSL Configuration
+#: Custom SSL certificate directory path.
+#: When set, httpx and aiohttp clients will use certificates from this directory.
+SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
 
 
 class ApplicationMode(str, Enum):
@@ -380,7 +447,15 @@ DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
 #: Default memory limit for DuckDB (fixed for K8s pods)
 DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
 
-# Disable Analytics Configuration for DAFT
-os.environ["DO_NOT_TRACK"] = "true"
-os.environ["SCARF_NO_ANALYTICS"] = "true"
-os.environ["DAFT_ANALYTICS_ENABLED"] = "0"
+SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
+"""Custom SSL/TLS certificate directory for corporate/private CAs.
+
+If set and points to a directory, all .pem/.crt/.cer/.ca-bundle files
+in that directory are trusted in addition to system CAs.
+"""
+
+# Daft analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
+# SCARF_NO_ANALYTICS, DAFT_ANALYTICS_ENABLED). They must NOT be set here at
+# module level — os.environ assignments call os.putenv(), which Temporal's
+# workflow sandbox flags as non-deterministic, causing worker eviction loops.
+# See: https://github.com/atlanhq/application-sdk/pull/1129
