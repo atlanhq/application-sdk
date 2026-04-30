@@ -13,6 +13,7 @@ Key types:
 from __future__ import annotations
 
 import dataclasses
+import uuid
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, TypeVar
@@ -107,8 +108,6 @@ class StorageTier(StrEnum):
             run_prefix: Run-scoped base prefix.  Required for ``RETAINED``.
             app_name: Application name.  Used by ``PERSISTENT``.
         """
-        import uuid
-
         base = self._file_ref_base(run_prefix=run_prefix, app_name=app_name)
         return f"{base}/{uuid.uuid4().hex}{suffix}"
 
@@ -122,8 +121,6 @@ class StorageTier(StrEnum):
             Uses ``uuid.uuid4()`` internally — **activity-context only**.
             See :meth:`_make_file_ref_path` for details.
         """
-        import uuid
-
         base = self._file_ref_base(run_prefix=run_prefix, app_name=app_name)
         return f"{base}/{uuid.uuid4().hex}/"
 
@@ -322,7 +319,9 @@ class ConnectionRef(BaseModel, frozen=True):
         Returns:
             A ConnectionRef with normalized snake_case fields.
         """
-        from pyatlan_v9.model.transform import to_atlas_format  # type: ignore[import]
+        from pyatlan_v9.model.transform import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
+            to_atlas_format,
+        )
 
         return ConnectionRef.model_validate(to_atlas_format(conn))
 
@@ -336,6 +335,8 @@ class ConnectionRef(BaseModel, frozen=True):
         Returns:
             A pyatlan_v9 Connection msgspec.Struct instance.
         """
-        from pyatlan_v9.model.transform import from_atlas_format  # type: ignore[import]
+        from pyatlan_v9.model.transform import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
+            from_atlas_format,
+        )
 
         return from_atlas_format(self.model_dump(by_alias=True))

@@ -55,7 +55,9 @@ def _sha256_file(path: Path) -> str:
 
 async def _get_remote_sha256(store: "ObjectStore", key: str) -> str | None:
     """Fetch the stored SHA-256 sidecar for *key*, or ``None`` if absent."""
-    from application_sdk.storage.ops import _get_bytes
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _get_bytes,
+    )
 
     data = await _get_bytes(_sidecar_key(key), store, normalize=False)
     return data.decode() if data else None
@@ -63,7 +65,9 @@ async def _get_remote_sha256(store: "ObjectStore", key: str) -> str | None:
 
 async def _put_remote_sha256(store: "ObjectStore", key: str, digest: str) -> None:
     """Write the SHA-256 sidecar for *key*."""
-    from application_sdk.storage.ops import _put
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _put,
+    )
 
     await _put(_sidecar_key(key), digest.encode(), store, normalize=False)
 
@@ -76,7 +80,9 @@ async def _upload_one(
     skip_if_exists: bool,
 ) -> tuple[bool, str]:
     """Upload a single file.  Returns ``(transferred, reason)``."""
-    from application_sdk.storage.ops import upload_file
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        upload_file,
+    )
 
     if skip_if_exists:
         local_digest = _sha256_file(local_file)
@@ -99,7 +105,9 @@ async def _download_one(
     skip_if_exists: bool,
 ) -> tuple[bool, str]:
     """Download a single file.  Returns ``(transferred, reason)``."""
-    from application_sdk.storage.ops import download_file
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        download_file,
+    )
 
     if skip_if_exists and local_file.exists():
         remote_digest = await _get_remote_sha256(store, store_key)
@@ -197,8 +205,13 @@ async def upload(
     Returns:
         :class:`~application_sdk.contracts.storage.UploadOutput`
     """
-    from application_sdk.contracts.storage import UploadOutput
-    from application_sdk.storage.ops import _resolve_store, normalize_key
+    from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        UploadOutput,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _resolve_store,
+        normalize_key,
+    )
 
     resolved = _resolve_store(store)
     src = Path(local_path)
@@ -207,7 +220,9 @@ async def upload(
     _validate_upload_path(src)
 
     if storage_subdir:
-        from pathlib import PurePosixPath
+        from pathlib import (  # noqa: PLC0415 — stdlib pathlib; lazy use only
+            PurePosixPath,
+        )
 
         cleaned = storage_subdir.strip("/")
         if (
@@ -291,7 +306,9 @@ async def upload(
         return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
 
     else:
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"local_path does not exist or is not a file/directory: {local_path}"
@@ -320,9 +337,16 @@ async def download(
     Returns:
         :class:`~application_sdk.contracts.storage.DownloadOutput`
     """
-    from application_sdk.contracts.storage import DownloadOutput
-    from application_sdk.storage.batch import list_keys
-    from application_sdk.storage.ops import _resolve_store, normalize_key
+    from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        DownloadOutput,
+    )
+    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        list_keys,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _resolve_store,
+        normalize_key,
+    )
 
     resolved = _resolve_store(store)
     norm_path = normalize_key(storage_path)

@@ -57,6 +57,7 @@ Evolution:
 """
 
 import hashlib
+import posixpath
 import re
 from enum import StrEnum
 from typing import (
@@ -788,14 +789,14 @@ class PublishInputMixin(BaseModel):
     @model_validator(mode="after")
     def _derive_publish_paths(self) -> "PublishInputMixin":
         """Auto-derive all publish-related paths."""
-        import posixpath
-
         # Auto-resolve output_path from Temporal context if not set
         if not self.output_path:
             try:
-                from temporalio import workflow as _wf
+                from temporalio import (  # noqa: PLC0415 — defensive: try/except wraps "not in Temporal context"
+                    workflow as _wf,
+                )
 
-                from application_sdk.constants import (
+                from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
                     APPLICATION_NAME,
                     WORKFLOW_OUTPUT_PATH_TEMPLATE,
                 )

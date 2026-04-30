@@ -28,25 +28,29 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 import warnings
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
 import orjson
+import temporalio.service
 from fastapi import FastAPI, File, Form, HTTPException
 from fastapi import Path as PathParam
 from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
+from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import (
@@ -293,11 +297,16 @@ async def _get_temporal_client() -> Client:
     if _temporal_client is not None:
         return _temporal_client
 
-    from application_sdk.execution import create_temporal_client
+    from application_sdk.execution import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+        create_temporal_client,
+    )
 
     api_key: str | None = None
     if _workflow_config.auth_enabled:
-        from application_sdk.execution import TemporalAuthConfig, TemporalAuthManager
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+            TemporalAuthConfig,
+            TemporalAuthManager,
+        )
 
         auth_config = TemporalAuthConfig(
             client_id=_workflow_config.auth_client_id,
@@ -431,12 +440,18 @@ def create_app_handler_service(
         auth_scopes=auth_scopes,
     )
 
-    from application_sdk.constants import ENABLE_MCP
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
+        ENABLE_MCP,
+    )
 
     if ENABLE_MCP and app_name:
-        from contextlib import asynccontextmanager
+        from contextlib import (  # noqa: PLC0415 — cold path: lifespan setup, only when MCP enabled
+            asynccontextmanager,
+        )
 
-        from application_sdk.server.mcp import MCPServer
+        from application_sdk.server.mcp import (  # noqa: PLC0415 — cold path: only when ENABLE_MCP set
+            MCPServer,
+        )
 
         _mcp_server = MCPServer(application_name=app_name)
 
@@ -457,7 +472,10 @@ def create_app_handler_service(
     else:
         app = FastAPI(title=title, description=description, version=version)
 
-    from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware
+    from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
+        LogMiddleware,
+        MetricsMiddleware,
+    )
 
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(LogMiddleware)
@@ -782,7 +800,7 @@ def create_app_handler_service(
             input_data.correlation_id = correlation_id
             input_data._correlation_id = correlation_id
 
-            from application_sdk.observability.correlation import (
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
                 CorrelationContext,
                 set_correlation_context,
             )
@@ -856,8 +874,10 @@ def create_app_handler_service(
                 content={"success": True, "message": "Workflow terminated successfully"}
             )
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
@@ -865,7 +885,7 @@ def create_app_handler_service(
                 "Failed to stop workflow %s run %s: %s",
                 workflow_id,
                 run_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -901,9 +921,9 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as exc:
+                except WorkflowFailureError as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
+                        "Workflow execution failed for workflow_id=%s error_type=%s",
                         workflow_id,
                         type(exc).__name__,
                         exc_info=True,
@@ -916,6 +936,25 @@ def create_app_handler_service(
                                 "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
+                            success=False,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Workflow result decode failed for workflow_id=%s error_type=%s",
+                        workflow_id,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content=_wrap_response(
+                            {
+                                "status": "result_decode_failed",
+                                "workflow_id": workflow_id,
+                                "error_type": type(exc).__name__,
+                            },
+                            message="Workflow result could not be decoded",
+                            success=False,
                         )
                     )
 
@@ -951,9 +990,9 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as exc:
+                except WorkflowFailureError as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s error_type=%s",
+                        "Workflow execution failed for workflow_id=%s error_type=%s",
                         workflow_id,
                         type(exc).__name__,
                         exc_info=True,
@@ -966,6 +1005,25 @@ def create_app_handler_service(
                                 "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
+                            success=False,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Workflow result decode failed for workflow_id=%s error_type=%s",
+                        workflow_id,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content=_wrap_response(
+                            {
+                                "status": "result_decode_failed",
+                                "workflow_id": workflow_id,
+                                "error_type": type(exc).__name__,
+                            },
+                            message="Workflow result could not be decoded",
+                            success=False,
                         )
                     )
             elif status in ("FAILED", "TERMINATED", "CANCELED", "TIMED_OUT"):
@@ -977,6 +1035,7 @@ def create_app_handler_service(
                             "error": f"Workflow {status.lower()}",
                         },
                         message="Workflow failed",
+                        success=False,
                     )
                 )
             else:
@@ -992,15 +1051,17 @@ def create_app_handler_service(
                 )
 
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
             logger.error(
                 "Failed to get workflow result for %s: %s",
                 workflow_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -1042,8 +1103,10 @@ def create_app_handler_service(
                 )
             )
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
@@ -1051,7 +1114,7 @@ def create_app_handler_service(
                 "Failed to get workflow status for %s run %s: %s",
                 workflow_id,
                 run_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -1071,7 +1134,9 @@ def create_app_handler_service(
             raise ValueError(f"Invalid config_id: {config_id!r}")
         if not _CONFIG_KEY_RE.match(config_type):
             raise ValueError(f"Invalid config_type: {config_type!r}")
-        from application_sdk.constants import APPLICATION_NAME
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app paths
+            APPLICATION_NAME,
+        )
 
         return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
 
@@ -1182,12 +1247,9 @@ def create_app_handler_service(
         if _storage is None:
             raise HTTPException(status_code=503, detail="Storage not configured")
 
-        import asyncio
-        import os
-        import shutil
-        from pathlib import PurePosixPath
-
-        from application_sdk.storage.ops import upload_file as _upload_file
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
+            upload_file as _upload_file,
+        )
 
         raw_name = filename or file.filename or "upload"
         # Strip non-alphanumeric chars and cap at 16 chars for object-store key safety.
@@ -1258,7 +1320,9 @@ def create_app_handler_service(
 
     @app.get("/dapr/subscribe")
     async def get_dapr_subscriptions() -> JSONResponse:
-        from application_sdk.constants import EVENT_STORE_NAME
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when emitting events
+            EVENT_STORE_NAME,
+        )
 
         result: list[dict[str, Any]] = []
 
@@ -1513,12 +1577,6 @@ def create_app_handler_service(
         if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
             raise HTTPException(status_code=403, detail="Dev-only endpoint")
 
-        if not _CONFIG_KEY_RE.match(guid):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid guid — must match %s" % _CONFIG_KEY_PATTERN,
-            )
-
         sensitive: dict[str, Any] = {}
         non_sensitive: dict[str, Any] = {}
         for key, value in body.items():
@@ -1537,7 +1595,27 @@ def create_app_handler_service(
         if secrets_file.exists():
             all_secrets = orjson.loads(secrets_file.read_bytes())
         all_secrets[guid] = sensitive
-        secrets_file.write_bytes(orjson.dumps(all_secrets))
+
+        # Atomic write: stage to a sibling temp file, then rename. This avoids
+        # a partial/truncated secrets.json if the process is killed mid-write.
+        tmp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=str(secrets_dir),
+                delete=False,
+                mode="wb",
+                suffix=".json.tmp",
+            ) as tmp:
+                tmp.write(orjson.dumps(all_secrets))
+                tmp_path = tmp.name
+            os.replace(tmp_path, str(secrets_file))
+            tmp_path = None  # ownership transferred to secrets_file
+        finally:
+            if tmp_path is not None and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
         # Write non-sensitive fields to object storage
         non_sensitive["credentialSource"] = non_sensitive.get(
@@ -1591,7 +1669,10 @@ def create_app_handler_service(
         @app.get("/metrics")
         async def prometheus_metrics() -> Response:
             """Expose application metrics in Prometheus exposition format."""
-            from prometheus_client import REGISTRY, generate_latest
+            from prometheus_client import (  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
+                REGISTRY,
+                generate_latest,
+            )
 
             return Response(
                 content=generate_latest(REGISTRY),
@@ -1604,8 +1685,6 @@ def create_app_handler_service(
 
     @app.get("/")
     async def frontend_home() -> HTMLResponse:
-        import os
-
         frontend_html_path = os.path.join(frontend_assets_path, "index.html")
         if os.path.exists(frontend_html_path):
             with open(frontend_html_path, encoding="utf-8") as f:
@@ -1649,7 +1728,7 @@ def run_app_handler_service(
         **kwargs: Additional keyword arguments forwarded to
             ``create_app_handler_service()``.
     """
-    import uvicorn
+    import uvicorn  # noqa: PLC0415 — cold path: uvicorn only when starting standalone server
 
     app = create_app_handler_service(handler, **kwargs)
     uvicorn.run(app, host=host, port=port, log_level=log_level)
