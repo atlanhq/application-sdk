@@ -33,20 +33,30 @@ def _build_classified_failure_details(exc: BaseException) -> list[dict[str, Any]
     """Build the ApplicationError.details payload from a typed exception.
 
     Returns a single-item list of structured fields when the exception carries
-    the failure-attribution convention (owner + code class attributes). Returns
-    an empty list otherwise — preserving backwards compatibility with existing
-    NonRetryableError subclasses that do not follow the convention.
+    the failure-attribution convention (``category`` + ``code`` class
+    attributes). Returns an empty list otherwise — preserving backwards
+    compatibility with existing NonRetryableError subclasses that do not
+    follow the convention.
+
+    The taxonomy of categories is defined in
+    ``application_sdk.observability.failures.FailureCategory``. App teams
+    pick a category by inheriting from one of the typed bases there
+    (e.g. ``SourceAuthFailedError``); they cannot invent new categories.
+    Apps own the leaf ``code`` and ``customer_message`` strings.
 
     The payload travels with the workflow record (Temporal stores it on the
-    failure event), so consumers like the Automation Engine can read structured
-    failure attribution without parsing the exception message string.
+    failure event), so consumers like the Automation Engine can read
+    structured failure attribution without parsing the exception message
+    string. The category prefix encodes direction (SOURCE_*, DEPENDENCY_*,
+    THIRD_PARTY_*, PLATFORM_*, UPSTREAM_*, TRANSIENT_*, UNKNOWN), so
+    routing layers do not need a separate ``owner`` field.
     """
-    if not (hasattr(exc, "owner") and hasattr(exc, "code")):
+    if not (hasattr(exc, "category") and hasattr(exc, "code")):
         return []
+    category = getattr(exc, "category", None)
     return [
         {
-            "owner": getattr(exc, "owner", None),
-            "sub_category": getattr(exc, "sub_category", None),
+            "category": str(category) if category is not None else None,
             "code": getattr(exc, "code", None),
             "customer_message": getattr(exc, "customer_message", None),
             "internal_message": getattr(exc, "internal_message", str(exc)),
