@@ -295,6 +295,68 @@ def _discover_compute_manifest(entrypoint: str):
     return fn if callable(fn) else None
 
 
+def _entrypoint_from_connector(connector: str) -> str:
+    """Extract the entrypoint name embedded in a marketplace connector identifier.
+
+    Heracles sends ``connector = "{bundle_name}-{entrypoint.name}"`` (e.g.
+    ``csa-uber-csa-hello-a``). The bundle name (from ``atlan.yaml.name``)
+    can differ from the Python app name (``ATLAN_APPLICATION_NAME``), so
+    we can't reliably strip a single known prefix.
+
+    Instead, match against the set of known entrypoints — subdirectories
+    of ``CONTRACT_GENERATED_DIR`` that contain a ``manifest.json``. Pick
+    the longest entrypoint name that appears as a hyphen-suffix of
+    ``connector``. Returns ``""`` for empty connector, no contract dir,
+    or no matching entrypoint (single-entrypoint apps fall through to the
+    app-level ``Handler`` instance).
+    """
+    if not connector:
+        return ""
+    try:
+        entrypoints = [
+            p.parent.name for p in CONTRACT_GENERATED_DIR.glob("*/manifest.json")
+        ]
+    except OSError:
+        return ""
+    best = ""
+    for ep in entrypoints:
+        suffix = f"-{ep}"
+        if connector.endswith(suffix) and len(ep) > len(best):
+            best = ep
+    return best
+
+
+def _discover_handler_fn(entrypoint: str, fn_name: str):
+    """Look for a per-entrypoint handler function.
+
+    Convention: ``app.<entrypoint_snake>.handler.<fn_name>`` where
+    ``entrypoint_snake = entrypoint.replace("-", "_")`` and ``fn_name`` is
+    one of ``"test_auth"``, ``"preflight_check"``, ``"fetch_metadata"``.
+    Multi-entrypoint apps that need *per-entrypoint* lifecycle hooks drop
+    a ``handler.py`` next to their package's hand-written code with::
+
+        async def test_auth(input: AuthInput, ctx: HandlerContext) -> AuthOutput: ...
+        async def preflight_check(input: PreflightInput, ctx: HandlerContext) -> PreflightOutput: ...
+        async def fetch_metadata(input: MetadataInput, ctx: HandlerContext) -> MetadataOutput: ...
+
+    The dispatch is best-effort: if the per-entrypoint module / attribute
+    is absent, the route falls through to the app-level ``Handler`` instance
+    (``DefaultHandler`` if no custom handler is configured), preserving
+    today's single-entrypoint behavior 1:1.
+
+    Returns the callable or ``None`` if absent.
+    """
+    import importlib  # noqa: PLC0415 — cold path: only loaded for /workflows/v1/{auth,check,metadata}
+
+    snake = entrypoint.replace("-", "_")
+    try:
+        module = importlib.import_module(f"app.{snake}.handler")
+    except (ModuleNotFoundError, ImportError):
+        return None
+    fn = getattr(module, fn_name, None)
+    return fn if callable(fn) else None
+
+
 def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
     """Decode the ``fe_inputs`` query payload (JSON, sent URL-encoded by
     Heracles for dynamic-manifest apps). Returns ``{}`` when absent;
@@ -551,7 +613,18 @@ def create_app_handler_service(
             logger.info(
                 "Auth test started: app=%s request=%s", app_name, context.request_id_str
             )
-            result = await handler.test_auth(auth_input)
+            # Per-entrypoint dispatch: multi-entrypoint apps may ship
+            # `app.<entrypoint_snake>.handler.test_auth`. When `connector`
+            # resolves to a known per-entrypoint module, route to it; else
+            # fall through to the app-level `Handler` instance.
+            entrypoint = _entrypoint_from_connector(auth_input.connector)
+            ep_fn = (
+                _discover_handler_fn(entrypoint, "test_auth") if entrypoint else None
+            )
+            if ep_fn is not None:
+                result = await ep_fn(auth_input, context)
+            else:
+                result = await handler.test_auth(auth_input)
             logger.info(
                 "Auth test completed: app=%s request=%s status=%s",
                 app_name,
@@ -610,7 +683,17 @@ def create_app_handler_service(
                 app_name,
                 context.request_id_str,
             )
-            result = await handler.preflight_check(preflight_input)
+            # Per-entrypoint dispatch (see test_auth above for rationale).
+            entrypoint = _entrypoint_from_connector(preflight_input.connector)
+            ep_fn = (
+                _discover_handler_fn(entrypoint, "preflight_check")
+                if entrypoint
+                else None
+            )
+            if ep_fn is not None:
+                result = await ep_fn(preflight_input, context)
+            else:
+                result = await handler.preflight_check(preflight_input)
             logger.info(
                 "Preflight check completed: app=%s request=%s status=%s checks=%d",
                 app_name,
@@ -680,7 +763,17 @@ def create_app_handler_service(
                 app_name,
                 context.request_id_str,
             )
-            result = await handler.fetch_metadata(metadata_input)
+            # Per-entrypoint dispatch (see test_auth above for rationale).
+            entrypoint = _entrypoint_from_connector(metadata_input.connector)
+            ep_fn = (
+                _discover_handler_fn(entrypoint, "fetch_metadata")
+                if entrypoint
+                else None
+            )
+            if ep_fn is not None:
+                result = await ep_fn(metadata_input, context)
+            else:
+                result = await handler.fetch_metadata(metadata_input)
 
             # Both SqlMetadataOutput and ApiMetadataOutput expose
             # .objects — model_dump() produces the correct shape for

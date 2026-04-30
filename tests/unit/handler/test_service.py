@@ -3635,3 +3635,260 @@ class TestComputeManifestHook:
             assert response.json() == {"computed": True}
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestPerEntrypointHandlerHook:
+    """Per-entrypoint handler discovery for /workflows/v1/{auth,check,metadata}.
+
+    Multi-entrypoint apps drop ``app.<entrypoint_snake>.handler`` modules
+    that expose plain async ``test_auth``, ``preflight_check``,
+    ``fetch_metadata`` functions. Heracles sends the entrypoint identifier
+    as the ``connector`` field (``{bundle_name}-{entrypoint.name}``); the
+    SDK matches the suffix against known entrypoints (subdirs of
+    ``CONTRACT_GENERATED_DIR``) and dispatches to the per-entrypoint module
+    when present, falling through to the app-level ``Handler`` instance
+    otherwise.
+
+    Tests inject fake modules into ``sys.modules`` to simulate the
+    discovery convention, and point ``CONTRACT_GENERATED_DIR`` at a
+    ``tmp_path`` populated with empty manifest files so the connector
+    suffix-match has known entrypoints to find.
+    """
+
+    @staticmethod
+    def _install_fake_handler(
+        monkeypatch: pytest.MonkeyPatch, entrypoint: str, **fns: object
+    ) -> None:
+        """Register ``app.<snake>.handler`` exposing the given async fns."""
+        import sys
+        import types
+
+        snake = entrypoint.replace("-", "_")
+        for parent in ("app", f"app.{snake}"):
+            if parent not in sys.modules:
+                pkg = types.ModuleType(parent)
+                pkg.__path__ = []  # type: ignore[attr-defined]
+                monkeypatch.setitem(sys.modules, parent, pkg)
+        handler_mod = types.ModuleType(f"app.{snake}.handler")
+        for name, fn in fns.items():
+            setattr(handler_mod, name, fn)
+        monkeypatch.setitem(sys.modules, f"app.{snake}.handler", handler_mod)
+
+    @staticmethod
+    def _set_contract_dir(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, entrypoints: list[str]
+    ) -> None:
+        """Point CONTRACT_GENERATED_DIR at tmp_path with empty manifests for each EP."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        for ep in entrypoints:
+            ep_dir = contract_dir / ep
+            ep_dir.mkdir(parents=True, exist_ok=True)
+            (ep_dir / "manifest.json").write_text("{}")
+        monkeypatch.setattr(svc_module, "CONTRACT_GENERATED_DIR", contract_dir)
+
+    # ------------------------------------------------------------------
+    # /workflows/v1/auth
+    # ------------------------------------------------------------------
+
+    def test_auth_dispatches_to_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Per-entrypoint test_auth is awaited; its return drives the response."""
+        captured: dict[str, object] = {}
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            captured["connector"] = input.connector
+            captured["app_name"] = ctx.app_name
+            return AuthOutput(status=AuthStatus.FAILED, message="entrypoint says no")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+        # Bundle name in connector ("test-bundle") differs from app_name
+        # ("test-app") to prove the suffix-match works regardless of prefix.
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-a"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"connector": "test-bundle-csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["data"]["status"] == "failed"
+        assert body["data"]["message"] == "entrypoint says no"
+        assert captured["connector"] == "test-bundle-csa-hello-a"
+        assert captured["app_name"] == "test-app"
+
+    def test_auth_falls_back_when_no_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """No app.<snake>.handler module → app-level Handler.test_auth runs."""
+        # Contract dir contains "csa-hello-a" but we won't install its module.
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-a"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"connector": "test-bundle-csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 200
+        # _TestHandler returns SUCCESS with "auth ok"
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_falls_back_when_connector_empty(self) -> None:
+        """Empty connector → app-level Handler.test_auth runs (single-entrypoint compat)."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"connector": "", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_falls_back_when_connector_matches_no_known_entrypoint(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Connector suffix doesn't match any contract-dir entrypoint → fallback."""
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            raise AssertionError("entrypoint dispatch should not happen")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+        # Contract dir lists only csa-hello-a; the connector ends in
+        # csa-hello-z, which has no matching entrypoint.
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-a"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"connector": "test-bundle-csa-hello-z", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    # ------------------------------------------------------------------
+    # /workflows/v1/check
+    # ------------------------------------------------------------------
+
+    def test_check_dispatches_to_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Per-entrypoint preflight_check is awaited; its checks render in response."""
+        from application_sdk.handler.contracts import PreflightCheck
+
+        async def preflight_check(input: PreflightInput, ctx) -> PreflightOutput:
+            assert input.connector == "test-bundle-csa-hello-b"
+            assert ctx.app_name == "test-app"
+            return PreflightOutput(
+                status=PreflightStatus.NOT_READY,
+                checks=[
+                    PreflightCheck(
+                        name="recipientCheck",
+                        passed=False,
+                        message="recipient missing",
+                    )
+                ],
+            )
+
+        self._install_fake_handler(
+            monkeypatch, "csa-hello-b", preflight_check=preflight_check
+        )
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-b"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check",
+            json={"connector": "test-bundle-csa-hello-b", "credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["data"]["recipientCheck"] == {
+            "success": False,
+            "message": "recipient missing",
+        }
+
+    def test_check_falls_back_when_no_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """No app.<snake>.handler module → app-level Handler.preflight_check runs."""
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-b"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check",
+            json={"connector": "test-bundle-csa-hello-b", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    # ------------------------------------------------------------------
+    # /workflows/v1/metadata
+    # ------------------------------------------------------------------
+
+    def test_metadata_dispatches_to_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Per-entrypoint fetch_metadata is awaited; its objects render in response."""
+
+        async def fetch_metadata(input: MetadataInput, ctx) -> SqlMetadataOutput:
+            assert input.connector == "test-bundle-csa-hello-d"
+            return SqlMetadataOutput(
+                objects=[
+                    SqlMetadataObject(TABLE_CATALOG="cat", TABLE_SCHEMA="sch1"),
+                    SqlMetadataObject(TABLE_CATALOG="cat", TABLE_SCHEMA="sch2"),
+                ]
+            )
+
+        self._install_fake_handler(
+            monkeypatch, "csa-hello-d", fetch_metadata=fetch_metadata
+        )
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-d"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"connector": "test-bundle-csa-hello-d", "credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["data"]) == 2
+        assert body["data"][0] == {"TABLE_CATALOG": "cat", "TABLE_SCHEMA": "sch1"}
+
+    def test_metadata_falls_back_when_no_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """No app.<snake>.handler module → app-level Handler.fetch_metadata runs."""
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-d"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"connector": "test-bundle-csa-hello-d", "credentials": []},
+        )
+        assert response.status_code == 200
+        # _TestHandler returns empty SqlMetadataOutput
+        assert response.json()["data"] == []
+
+    # ------------------------------------------------------------------
+    # Errors
+    # ------------------------------------------------------------------
+
+    def test_entrypoint_fn_raising_surfaces_as_500(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Per-entrypoint fn raising unexpected exception → 500 (same as Handler.<fn>)."""
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            raise RuntimeError("entrypoint blew up")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-a"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"connector": "test-bundle-csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 500
