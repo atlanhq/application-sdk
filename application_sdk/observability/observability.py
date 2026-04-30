@@ -6,7 +6,7 @@ import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from time import time
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Generic, List, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 import orjson
 
@@ -188,7 +188,7 @@ class AtlanObservability(Generic[T], ABC):
         self.parquet_path = os.path.join(partition_path, "data.parquet")
 
     @abstractmethod
-    def process_record(self, record: T) -> Dict[str, Any]:
+    def process_record(self, record: T) -> dict[str, Any]:
         """Process a record into a dictionary format.
 
         Args:
@@ -199,7 +199,6 @@ class AtlanObservability(Generic[T], ABC):
 
         This is an abstract method that must be implemented by subclasses.
         """
-        pass
 
     @abstractmethod
     def export_record(self, record: T) -> None:
@@ -210,7 +209,6 @@ class AtlanObservability(Generic[T], ABC):
 
         This is an abstract method that must be implemented by subclasses.
         """
-        pass
 
     async def _periodic_flush(self):
         """Periodically flush the buffer to storage.
@@ -253,7 +251,7 @@ class AtlanObservability(Generic[T], ABC):
         if buffer_copy:
             await self._flush_records(buffer_copy)
 
-    async def _flush_records(self, records: List[Dict[str, Any]]):
+    async def _flush_records(self, records: list[dict[str, Any]]):
         """Flush records to json.gz files and upload to object stores.
 
         Args:
@@ -273,7 +271,9 @@ class AtlanObservability(Generic[T], ABC):
         # File I/O is restricted inside Temporal's workflow sandbox — skip the
         # store sink there; records are still exported via OTLP/console.
         try:
-            from temporalio.workflow import unsafe as _wf_unsafe
+            from temporalio.workflow import (  # noqa: PLC0415 — defensive: try/except detects temporal sandbox / non-temporal context
+                unsafe as _wf_unsafe,
+            )
 
             if _wf_unsafe.in_sandbox():
                 return
@@ -281,7 +281,7 @@ class AtlanObservability(Generic[T], ABC):
             pass
         try:
             # Group records by partition using record's own timestamp
-            partition_records: Dict[str, List[Dict[str, Any]]] = {}
+            partition_records: dict[str, list[dict[str, Any]]] = {}
             for record in records:
                 record_time = datetime.fromtimestamp(record["timestamp"])
                 partition_path = self._get_partition_path(record_time)
@@ -379,7 +379,9 @@ class AtlanObservability(Generic[T], ABC):
         - Updates last cleanup time after successful cleanup
         """
         try:
-            from application_sdk.infrastructure.context import get_infrastructure
+            from application_sdk.infrastructure.context import (  # noqa: PLC0415 — circular: infrastructure imports observability
+                get_infrastructure,
+            )
 
             infra = get_infrastructure()
             state_store = infra.state_store if infra else None
@@ -432,7 +434,7 @@ class AtlanObservability(Generic[T], ABC):
                 year = int(year_dir.split("=")[1])
                 if year < cutoff_date.year:
                     # Delete entire year directory
-                    import shutil
+                    import shutil  # noqa: PLC0415 — stdlib shutil; lazy use only when computing disk usage
 
                     shutil.rmtree(year_path)
                     continue

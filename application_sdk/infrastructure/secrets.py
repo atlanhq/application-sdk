@@ -1,5 +1,6 @@
 """Secrets management abstraction."""
 
+import os
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
@@ -26,7 +27,7 @@ async def get_deployment_secret(key: str) -> Any:
     Returns:
         The value for *key*, or ``None`` if unavailable.
     """
-    from application_sdk.constants import (
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on secret resolution
         DEPLOYMENT_NAME,
         DEPLOYMENT_SECRET_PATH,
         DEPLOYMENT_SECRET_STORE_NAME,
@@ -37,7 +38,9 @@ async def get_deployment_secret(key: str) -> Any:
         return None
 
     try:
-        from application_sdk.infrastructure._dapr.http import AsyncDaprClient
+        from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            AsyncDaprClient,
+        )
 
         client = AsyncDaprClient()
         try:
@@ -193,7 +196,6 @@ class EnvironmentSecretStore:
 
     async def get(self, name: str) -> str:
         """Get a secret from environment."""
-        import os
 
         env_name = f"{self._prefix}{name}"
         value = os.environ.get(env_name)
@@ -206,14 +208,12 @@ class EnvironmentSecretStore:
 
     async def get_optional(self, name: str) -> str | None:
         """Get a secret from environment, returning None if not set."""
-        import os
 
         env_name = f"{self._prefix}{name}"
         return os.environ.get(env_name)
 
     async def get_bulk(self, names: list[str]) -> dict[str, str]:
         """Get multiple secrets from environment."""
-        import os
 
         result = {}
         missing = []
@@ -240,7 +240,6 @@ class EnvironmentSecretStore:
 
     async def list_names(self) -> list[str]:
         """List environment variables with the configured prefix."""
-        import os
 
         if not self._prefix:
             return list(os.environ.keys())

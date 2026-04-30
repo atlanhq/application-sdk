@@ -3,7 +3,7 @@ import atexit
 import logging
 import threading
 from time import time
-from typing import Any, ClassVar, Dict, Optional
+from typing import Any, ClassVar
 
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
@@ -113,7 +113,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         writes to.
         """
         try:
-            from opentelemetry.exporter.prometheus import PrometheusMetricReader
+            from opentelemetry.exporter.prometheus import (  # noqa: PLC0415 — cold path: prometheus exporter only loaded during MeterProvider setup
+                PrometheusMetricReader,
+            )
 
             self._prometheus_reader = PrometheusMetricReader()
             self.meter_provider = MeterProvider(
@@ -134,7 +136,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         """
         asyncio.run(self._periodic_flush())
 
-    def process_record(self, record: Any) -> Dict[str, Any]:
+    def process_record(self, record: Any) -> dict[str, Any]:
         """Process a metric record into a standardized dictionary format.
 
         Args:
@@ -207,22 +209,22 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
-                    description=metric_record.description,
-                    unit=metric_record.unit,
+                    description=metric_record.otel_description,
+                    unit=metric_record.otel_unit,
                 )
                 counter.add(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.GAUGE:
-                gauge = self.meter.create_observable_gauge(
+                gauge = self.meter.create_gauge(
                     name=metric_record.name,
-                    description=metric_record.description,
-                    unit=metric_record.unit,
+                    description=metric_record.otel_description,
+                    unit=metric_record.otel_unit,
                 )
-                gauge.add(metric_record.value, otel_attrs)
+                gauge.set(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.HISTOGRAM:
                 histogram = self.meter.create_histogram(
                     name=metric_record.name,
-                    description=metric_record.description,
-                    unit=metric_record.unit,
+                    description=metric_record.otel_description,
+                    unit=metric_record.otel_unit,
                 )
                 histogram.record(metric_record.value, otel_attrs)
         except Exception:
@@ -264,9 +266,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         name: str,
         value: float,
         metric_type: MetricType,
-        labels: Dict[str, Any],
-        description: Optional[str] = None,
-        unit: Optional[str] = None,
+        labels: dict[str, Any],
+        description: str | None = None,
+        unit: str | None = None,
     ):
         """Record a metric with the given parameters.
 
@@ -308,7 +310,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
 
 
 # Create a singleton instance of the metrics adapter
-_metrics_instance: Optional[AtlanMetricsAdapter] = None
+_metrics_instance: AtlanMetricsAdapter | None = None
 
 
 def get_metrics() -> AtlanMetricsAdapter:

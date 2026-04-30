@@ -43,7 +43,7 @@ class TraceInterceptor(Interceptor):
         self._delegate: Any = None
         if _traces_enabled():
             try:
-                from temporalio.contrib.opentelemetry import (
+                from temporalio.contrib.opentelemetry import (  # noqa: PLC0415 — optional dependency soft-import; ImportError handled below
                     TracingInterceptor as _TracingInterceptor,
                 )
 

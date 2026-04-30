@@ -42,6 +42,7 @@ from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage import (
     create_store_from_binding,
     download_file,
@@ -52,6 +53,8 @@ from application_sdk.templates.contracts.base_metadata_extraction import (
     UploadInput,
     UploadOutput,
 )
+
+logger = get_logger(__name__)
 
 
 class BaseMetadataExtractor(App):
@@ -95,13 +98,20 @@ class BaseMetadataExtractor(App):
                 await upload_file(file_path, tmp_path, store=upstream_store)
                 migrated_files += 1
             except Exception as e:
+                logger.warning(
+                    "Failed to migrate file %s during atlan-storage upload",
+                    file_path,
+                    exc_info=True,
+                )
                 failures.append({"file": file_path, "error": str(e)})
             finally:
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
 
         if failures:
-            from application_sdk.common.error_codes import ActivityError
+            from application_sdk.common.error_codes import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+                ActivityError,
+            )
 
             failed = len(failures)
             raise ActivityError(

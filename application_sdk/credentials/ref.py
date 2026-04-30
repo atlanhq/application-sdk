@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any
+import warnings
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.observability.logger_adaptor import get_logger
+
+
+@runtime_checkable
+class CredentialResolvable(Protocol):
+    """Protocol for inputs that carry credential routing fields.
+
+    Any Pydantic model (e.g. ``ExtractionInput``) that declares these
+    three fields satisfies this protocol automatically.
+    """
+
+    extraction_method: str
+    credential_guid: str
+    agent_json: AgentCredentialSpec | None
+
 
 logger = get_logger(__name__)
 
@@ -91,12 +106,66 @@ class CredentialRef(BaseModel, frozen=True):
         )
 
     # ------------------------------------------------------------------
-    # Factory — build the right ref from a Temporal workflow payload
+    # Factory — build the right ref from workflow input
     # ------------------------------------------------------------------
+
+    @classmethod
+    def resolve(cls, source: CredentialResolvable) -> "CredentialRef":
+        """Resolve a :class:`CredentialRef` from a workflow input.
+
+        Routes to agent resolution (via ``agent_json``) or direct GUID
+        resolution (via ``credential_guid``) based on ``extraction_method``.
+        Input must satisfy :class:`CredentialResolvable` — ``ExtractionInput``
+        and subclasses work automatically.
+
+        Args:
+            source: A model satisfying :class:`CredentialResolvable` with
+                ``extraction_method``, ``agent_json``, and
+                ``credential_guid`` attributes.
+
+        Returns:
+            A :class:`CredentialRef` with exactly one routing field populated.
+
+        Raises:
+            TypeError: If *source* does not satisfy :class:`CredentialResolvable`.
+            ValueError: If no routable credential source is present.
+        """
+        if not isinstance(source, CredentialResolvable):
+            raise TypeError(
+                f"Expected a CredentialResolvable (with extraction_method, "
+                f"agent_json, credential_guid), got {type(source).__name__}"
+            )
+
+        method = (source.extraction_method or "direct").strip().lower()
+        agent = source.agent_json
+
+        agent_populated = agent is not None and agent.is_populated()
+
+        if method == "agent" and agent_populated:
+            return cls(agent_spec=agent)
+
+        guid = source.credential_guid or ""
+        if method == "direct" and guid:
+            return cls(
+                name=guid,
+                credential_type="unknown",
+                credential_guid=guid,
+            )
+
+        raise ValueError(
+            "No routable credential source: need either "
+            "extraction_method='agent' with a non-empty agent_json, "
+            "or extraction_method='direct' with a non-empty credential_guid"
+        )
 
     @classmethod
     def from_workflow_args(cls, workflow_args: dict[str, Any]) -> "CredentialRef":
         """Build a :class:`CredentialRef` from a Temporal workflow payload.
+
+        .. deprecated::
+            Use :meth:`CredentialRef.resolve` instead. This method has
+            loose routing (falls through to GUID regardless of
+            extraction_method) and will be removed in a future release.
 
         This is the canonical adapter for the Atlan Argo marketplace
         template contract.  It inspects ``extraction_method``,
@@ -135,7 +204,16 @@ class CredentialRef(BaseModel, frozen=True):
         Raises:
             ValueError: If no routable credential source is present.
         """
-        from application_sdk.credentials.spec import AgentCredentialSpec
+        warnings.warn(
+            "CredentialRef.from_workflow_args() is deprecated and will be removed "
+            "in a future release. Use CredentialRef.resolve(input) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        from application_sdk.credentials.spec import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            AgentCredentialSpec,
+        )
 
         method = (workflow_args.get("extraction_method") or "").strip().lower()
         raw_agent = workflow_args.get("agent_json")
@@ -239,20 +317,16 @@ def atlan_oauth_client_ref(name: str, *, store_name: str = "default") -> Credent
 def legacy_credential_ref(guid: str, credential_type: str = "unknown") -> CredentialRef:
     """Create a CredentialRef from a platform-issued credential GUID.
 
-    Wraps a ``credential_guid`` string (issued by the Atlan platform or
-    generated in-process by the handler layer) so that templates and
-    connectors can resolve it through the standard ``CredentialResolver``
-    path.
-
-    The resolver checks the local secret store first (in-process inline
-    credentials), then falls back to ``DaprCredentialVault`` for GUIDs
-    that only exist in the upstream platform secret store.
-
-    Args:
-        guid: The credential GUID.
-        credential_type: The credential type hint; defaults to ``"unknown"``
-            which causes the resolver to return a ``RawCredential``.
+    .. deprecated::
+        Use :meth:`CredentialRef.resolve` instead. This function only
+        supports direct (GUID) mode and will be removed in a future release.
     """
+    warnings.warn(
+        "legacy_credential_ref() is deprecated and will be removed in a "
+        "future release. Use CredentialRef.resolve(input) instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return CredentialRef(
         name=guid, credential_type=credential_type, credential_guid=guid
     )

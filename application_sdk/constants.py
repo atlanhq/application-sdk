@@ -54,6 +54,7 @@ Example:
 import os
 from enum import Enum
 
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=".env")
@@ -227,6 +228,18 @@ EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 DAPR_BINDING_OPERATION_CREATE = "create"
 #: Version of worker start events used in the application
 WORKER_START_EVENT_VERSION = "v1"
+
+# HTTP Connection Pool Configuration (BLDX-1153).
+# Prevents CLOSE_WAIT zombie socket accumulation and infinite blocking.
+# keepalive_expiry=30s < nginx keepalive_timeout=75s → client retires idle
+# connections before nginx sends FIN that httpcore can't detect.
+# pool timeout=30s → threads raise PoolTimeout instead of blocking forever.
+_HTTP_POOL_LIMITS = httpx.Limits(
+    max_connections=50,
+    max_keepalive_connections=10,
+    keepalive_expiry=30.0,
+)
+_HTTP_POOL_TIMEOUT_SECONDS = 30.0
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"

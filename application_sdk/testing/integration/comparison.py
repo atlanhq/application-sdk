@@ -215,7 +215,7 @@ def compare_metadata(
             name = _get_asset_name(expected_asset)
             if not name:
                 logger.warning(
-                    f"Expected {asset_type} asset has no attributes.name, skipping"  # noqa: G004
+                    "Expected %s asset has no attributes.name, skipping", asset_type
                 )
                 continue
 
@@ -365,11 +365,12 @@ def load_actual_output(
         sub_path = os.path.join(output_dir, subdirectory)
         if os.path.isdir(sub_path):
             search_dir = sub_path
-            logger.info(f"Reading actual output from subdirectory: {search_dir}")  # noqa: G004
+            logger.info("Reading actual output from subdirectory: %s", search_dir)
         else:
             logger.warning(
-                f"Subdirectory '{subdirectory}' not found in {output_dir}, "  # noqa: G004
-                f"falling back to full directory"  # noqa: G004
+                "Subdirectory '%s' not found in %s, falling back to full directory",
+                subdirectory,
+                output_dir,
             )
 
     records: List[Dict[str, Any]] = []
@@ -387,7 +388,7 @@ def load_actual_output(
             f"No metadata records found in output directory: {output_dir}"
         )
 
-    logger.info(f"Loaded {len(records)} actual metadata records from {output_dir}")  # noqa: G004
+    logger.info("Loaded %d actual metadata records from %s", len(records), output_dir)
     return records
 
 

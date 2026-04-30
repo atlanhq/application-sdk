@@ -163,21 +163,21 @@ class RedisCapacityPool:
 
         if granted > 0:
             logger.info(
-                "Acquired capacity permits",
-                pool=pool_name,
-                holder=holder_id,
-                requested=requested,
-                granted=granted,
-                max_permits=self._max_permits,
+                "Acquired capacity permits pool=%s holder=%s requested=%d granted=%d max=%d",
+                pool_name,
+                holder_id,
+                requested,
+                granted,
+                self._max_permits,
             )
         else:
             logger.warning(
-                "No capacity permits available",
-                pool=pool_name,
-                holder=holder_id,
-                requested=requested,
-                min_useful=min_useful,
-                max_permits=self._max_permits,
+                "No capacity permits available pool=%s holder=%s requested=%d min_useful=%d max=%d",
+                pool_name,
+                holder_id,
+                requested,
+                min_useful,
+                self._max_permits,
             )
 
         return granted
@@ -195,11 +195,7 @@ class RedisCapacityPool:
             ttl_key,
         )
 
-        logger.info(
-            "Released capacity permits",
-            pool=pool_name,
-            holder=holder_id,
-        )
+        logger.info("Released capacity permits pool=%s holder=%s", pool_name, holder_id)
 
     async def renew(
         self, pool_name: str, holder_id: str, ttl_seconds: int = 120
@@ -220,9 +216,9 @@ class RedisCapacityPool:
 
         if not renewed:
             logger.warning(
-                "Failed to renew capacity permits (holder not found)",
-                pool=pool_name,
-                holder=holder_id,
+                "Failed to renew capacity permits (holder not found) pool=%s holder=%s",
+                pool_name,
+                holder_id,
             )
 
         return renewed

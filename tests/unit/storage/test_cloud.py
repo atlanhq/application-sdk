@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from obstore.store import LocalStore
+from obstore.store import LocalStore, MemoryStore
 
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
@@ -280,3 +280,17 @@ class TestCloudStoreOps:
         store = self._make_store(tmp_path)
         with pytest.raises(StorageError):
             await store.upload(tmp_path / "does-not-exist.txt", "key.txt")
+
+    async def test_list_excludes_zero_byte_directory_markers(self):
+        # MemoryStore is a flat key-value store, so "data/run" and
+        # "data/run/file.json" can coexist — matching what GCS returns after
+        # obstore strips the trailing slash from the "data/run/" marker.
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("data/run/file.json", b"{}")
+        await store.upload_bytes("data/run", b"")  # GCS directory marker
+
+        keys = await store.list(prefix="data")
+        assert "data/run/file.json" in keys
+        assert "data/run" not in keys
+        assert len(keys) == 1

@@ -183,3 +183,6 @@ temporal.db
 .atlan/journal/.drafts/
 .atlan/cache/
 # <<< atlan-builders <<<
+
+# Claude Code runtime lock files
+.claude/scheduled_tasks.lock

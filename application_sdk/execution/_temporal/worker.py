@@ -153,7 +153,7 @@ async def _emit_worker_start_event(
     use_worker_versioning: bool = False,
 ) -> None:
     """Emit a worker_start lifecycle event via the v3 infrastructure event binding."""
-    from application_sdk.constants import (
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup config
         APP_SDK_VERSION,
         APP_TYPE,
         APPLICATION_VERSION,
@@ -161,16 +161,18 @@ async def _emit_worker_start_event(
         RELEASE_CHANNEL,
         RELEASE_ID,
     )
-    from application_sdk.contracts.events import (
+    from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
         ApplicationEventNames,
         Event,
         EventTypes,
         WorkerStartEventData,
     )
-    from application_sdk.execution._temporal.interceptors.events import (
+    from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         _publish_event_via_binding,
     )
-    from application_sdk.infrastructure.bindings import BindingError
+    from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+        BindingError,
+    )
 
     deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
     host_part, _, port_part = host.partition(":")
@@ -205,7 +207,8 @@ async def _emit_worker_start_event(
         await _publish_event_via_binding(event)
     except BindingError:
         logger.warning(
-            "eventstore binding unavailable — worker_start event not emitted"
+            "eventstore binding unavailable — worker_start event not emitted",
+            exc_info=True,
         )
     except Exception:
         logger.warning("Failed to emit worker_start event", exc_info=True)
@@ -267,7 +270,7 @@ def create_worker(
     # The three observability interceptors are unconditional and run first so
     # ContextVars (ExecutionContext, CorrelationContext) and tracing spans are
     # set before product-feature interceptors or user code observe them.
-    from application_sdk.execution._temporal.interceptors import (
+    from application_sdk.execution._temporal.interceptors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         LogInterceptor,
         MetricsInterceptor,
         TraceInterceptor,
@@ -281,7 +284,7 @@ def create_worker(
     all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_output_interceptor:
-        from application_sdk.execution._temporal.interceptors.outputs import (
+        from application_sdk.execution._temporal.interceptors.outputs import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             OutputInterceptor,
         )
 
@@ -294,7 +297,7 @@ def create_worker(
     )
 
     if interceptor_settings.enable_event_interceptor:
-        from application_sdk.execution._temporal.interceptors.events import (
+        from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             EventInterceptor,
             publish_event,
         )
