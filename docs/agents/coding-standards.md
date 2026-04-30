@@ -2,6 +2,7 @@
 
 - Primary coding standards live in `docs/standards/coding.md` (formatting, naming, docstrings for all functions/classes/modules).
 - Logging, exception, and performance guidance are in `docs/standards/logging.md`, `docs/standards/exceptions.md`, and `docs/standards/performance.md`.
+- Metric / Prometheus label cardinality rules are in `docs/standards/metrics.md` — read before adding a `record_metric()` call or a new OTel instrument.
 - Tooling enforcement is defined in `.pre-commit-config.yaml` (ruff, isort, pyright).
 
 ## Key Rules Enforced by Pre-commit
