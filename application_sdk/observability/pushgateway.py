@@ -19,9 +19,11 @@ along with every push.
 from __future__ import annotations
 
 import asyncio
+import re
 import socket
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
+from urllib.error import HTTPError
 
 import httpx
 from prometheus_client import (
@@ -30,6 +32,7 @@ from prometheus_client import (
     delete_from_gateway,
     push_to_gateway,
 )
+from prometheus_client.exposition import default_handler
 from prometheus_client.parser import text_string_to_metric_families
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -71,6 +74,42 @@ def _default_grouping_key(task_queue: str) -> dict[str, str]:
     # as a metric label, and the Pushgateway rejects pushes where a label appears
     # in both the metric body and the grouping-key URL path (400 Bad Request).
     return {"instance": socket.gethostname()}
+
+
+def _log_push_failure(error: HTTPError, request_body: bytes) -> None:
+    """Log a Pushgateway 4xx with the response body and the offending request lines.
+
+    The bare HTTPError discards the response body, which is where Pushgateway
+    puts the rejection reason (e.g. "second TYPE line for metric name 'x'",
+    "invalid metric name in comment"). When the reason references a line
+    number, also include a ±2 line slice of the request body to make the
+    cause visible without re-running.
+
+    Wrapped so a bug in the diagnostic itself never replaces the HTTPError
+    that ``_run`` expects to catch and retry.
+    """
+    try:
+        resp = ""
+        try:
+            resp = error.read().decode("utf-8", errors="replace")[:2000]
+        except Exception:  # noqa: S110 — diagnostic-only
+            pass
+        msg = (
+            f"Pushgateway PUT {error.url} returned {error.code}: {resp or error.reason}"
+        )
+        m = re.search(r"line (\d+)", resp)
+        if m and request_body:
+            line_no = int(m.group(1))
+            lines = request_body.decode("utf-8", errors="replace").splitlines()
+            lo, hi = max(0, line_no - 3), min(len(lines), line_no + 2)
+            snippet = "\n".join(
+                f"{'>>>' if (lo + i + 1) == line_no else '   '} {lo + i + 1}: {ln}"
+                for i, ln in enumerate(lines[lo:hi])
+            )
+            msg += f"\n{snippet}"
+        logger.warning(msg)
+    except Exception:
+        logger.warning("Pushgateway PUT failed (%s)", error, exc_info=True)
 
 
 class PushGatewayClient:
@@ -173,12 +212,23 @@ class PushGatewayClient:
             return
 
     def _push_blocking(self) -> None:
-        push_to_gateway(
-            self._url,
-            job=self._job,
-            registry=self._registry,
-            grouping_key=self._grouping_key,
-        )
+        captured: dict[str, bytes] = {"data": b""}
+
+        def capturing_handler(url, method, timeout, headers, data):
+            captured["data"] = data
+            return default_handler(url, method, timeout, headers, data)
+
+        try:
+            push_to_gateway(
+                self._url,
+                job=self._job,
+                registry=self._registry,
+                grouping_key=self._grouping_key,
+                handler=capturing_handler,
+            )
+        except HTTPError as error:
+            _log_push_failure(error, captured["data"])
+            raise
 
     def _delete_blocking(self) -> None:
         delete_from_gateway(

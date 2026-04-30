@@ -8,20 +8,9 @@ import gc
 import inspect
 import os
 from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    AsyncIterator,
-    Dict,
-    Generator,
-    Iterator,
-    List,
-    Optional,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Union, cast
 
 import orjson
 
@@ -81,7 +70,7 @@ class Reader(ABC):
 
     path: str
     _is_closed: bool
-    _downloaded_files: List[str]
+    _downloaded_files: list[str]
     cleanup_on_close: bool = True
 
     def __init__(self) -> None:
@@ -91,7 +80,7 @@ class Reader(ABC):
         to ensure ``_downloaded_files`` and ``_is_closed`` are not shared across
         instances via class-level mutable defaults.
         """
-        self._downloaded_files: List[str] = []
+        self._downloaded_files: list[str] = []
         self._is_closed: bool = False
 
     async def __aenter__(self) -> "Reader":
@@ -162,12 +151,12 @@ class Reader(ABC):
     @abstractmethod
     def read_batches(
         self,
-    ) -> Union[
-        Iterator["pd.DataFrame"],
-        AsyncIterator["pd.DataFrame"],
-        Iterator["daft.DataFrame"],
-        AsyncIterator["daft.DataFrame"],
-    ]:
+    ) -> (
+        Iterator["pd.DataFrame"]
+        | AsyncIterator["pd.DataFrame"]
+        | Iterator["daft.DataFrame"]
+        | AsyncIterator["daft.DataFrame"]
+    ):
         """Get an iterator of batched pandas DataFrames.
 
         Returns:
@@ -243,11 +232,11 @@ class Writer(ABC):
     max_file_size_bytes: int
     current_buffer_size: int
     current_buffer_size_bytes: int
-    partitions: List[int]
+    partitions: list[int]
     extension: str
     dataframe_type: DataframeType
     _is_closed: bool = False
-    _statistics: Optional[TaskStatistics] = None
+    _statistics: TaskStatistics | None = None
 
     async def __aenter__(self) -> "Writer":
         """Enter the async context manager.
@@ -270,7 +259,7 @@ class Writer(ABC):
     def _convert_to_dataframe(
         self,
         data: Union[
-            "pd.DataFrame", "daft.DataFrame", Dict[str, Any], List[Dict[str, Any]]
+            "pd.DataFrame", "daft.DataFrame", dict[str, Any], list[dict[str, Any]]
         ],
     ) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """Convert input data to a DataFrame if needed.
@@ -347,7 +336,7 @@ class Writer(ABC):
     async def write(
         self,
         data: Union[
-            "pd.DataFrame", "daft.DataFrame", Dict[str, Any], List[Dict[str, Any]]
+            "pd.DataFrame", "daft.DataFrame", dict[str, Any], list[dict[str, Any]]
         ],
         **kwargs: Any,
     ) -> None:
@@ -379,12 +368,10 @@ class Writer(ABC):
 
     async def write_batches(
         self,
-        dataframe: Union[
-            AsyncGenerator["pd.DataFrame", None],
-            Generator["pd.DataFrame", None, None],
-            AsyncGenerator["daft.DataFrame", None],
-            Generator["daft.DataFrame", None, None],
-        ],
+        dataframe: AsyncGenerator["pd.DataFrame", None]
+        | Generator["pd.DataFrame", None, None]
+        | AsyncGenerator["daft.DataFrame", None]
+        | Generator["daft.DataFrame", None, None],
     ) -> None:
         """Write batched DataFrames to the output destination.
 
@@ -406,9 +393,8 @@ class Writer(ABC):
 
     async def _write_batched_dataframe(
         self,
-        batched_dataframe: Union[
-            AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]
-        ],
+        batched_dataframe: AsyncGenerator["pd.DataFrame", None]
+        | Generator["pd.DataFrame", None, None],
     ):
         """Write a batched pandas DataFrame to Output.
 
@@ -518,10 +504,8 @@ class Writer(ABC):
 
     async def _write_batched_daft_dataframe(
         self,
-        batched_dataframe: Union[
-            AsyncGenerator["daft.DataFrame", None],  # noqa: F821
-            Generator["daft.DataFrame", None, None],  # noqa: F821
-        ],
+        batched_dataframe: AsyncGenerator["daft.DataFrame", None]
+        | Generator["daft.DataFrame", None, None],
     ):
         """Write a batched daft DataFrame to JSON files.
 
@@ -543,7 +527,7 @@ class Writer(ABC):
                 # Cast to Generator since we've confirmed it's not an AsyncGenerator
                 sync_generator = cast(
                     Generator["daft.DataFrame", None, None], batched_dataframe
-                )  # noqa: F821
+                )
                 for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
                         await self._write_daft_dataframe(dataframe)
@@ -551,14 +535,13 @@ class Writer(ABC):
             raise rewrap(e, "Error writing batched daft dataframe") from e
 
     @abstractmethod
-    async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):  # noqa: F821
+    async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):
         """Write a daft DataFrame to the output destination.
 
         Args:
             dataframe (daft.DataFrame): The DataFrame to write.
             **kwargs: Additional parameters passed through from write().
         """
-        pass
 
     @property
     def statistics(self) -> TaskStatistics:
@@ -583,7 +566,6 @@ class Writer(ABC):
         Override this method in subclasses to perform any final flush operations,
         upload remaining files, etc. This is called by close() before writing statistics.
         """
-        pass
 
     async def close(self) -> TaskStatistics:
         """Close the writer, flush buffers, upload files, and return statistics.
@@ -666,7 +648,7 @@ class Writer(ABC):
                     name="chunks_written",
                     value=1,
                     metric_type=MetricType.COUNTER,
-                    labels={"type": "output"},
+                    labels={"type": "output", "mode": WriteMode.APPEND.value},
                     description="Number of chunks written to files",
                 )
 
@@ -676,14 +658,18 @@ class Writer(ABC):
                 name="write_errors",
                 value=1,
                 metric_type=MetricType.COUNTER,
-                labels={"type": "output", "error": str(e)},
+                labels={
+                    "type": "output",
+                    "mode": WriteMode.APPEND.value,
+                    "error": str(e),
+                },
                 description="Number of errors while writing to files",
             )
             raise
 
     async def _write_statistics(
-        self, typename: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+        self, typename: str | None = None
+    ) -> dict[str, Any] | None:
         """Write statistics about the output to a JSON file.
 
         Internal method called by close() to persist statistics.
