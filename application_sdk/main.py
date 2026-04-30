@@ -1333,7 +1333,7 @@ def main() -> NoReturn:
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception:
-        logger.exception("Fatal error")
+        logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())
         except Exception:  # noqa: S110

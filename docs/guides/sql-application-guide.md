@@ -562,7 +562,7 @@ RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
 COPY --chown=appuser:appuser . .
 
 # App-specific environment variables
-ENV ATLAN_APP_HTTP_PORT=8000
+ENV ATLAN_HANDLER_PORT=8000
 ENV ATLAN_APP_MODULE=app.connector:PostgresApp
 ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
 ```
@@ -578,7 +578,7 @@ Key points:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `ATLAN_APP_MODULE` | Yes | Python import path to your `App` subclass (e.g., `app.connector:PostgresApp`) |
-| `ATLAN_APP_HTTP_PORT` | Recommended | HTTP port for the handler service (default: `8000`) |
+| `ATLAN_HANDLER_PORT` | Recommended | HTTP port for the handler service (default: `8000`). Fallback: `ATLAN_APP_HTTP_PORT`. |
 | `ATLAN_CONTRACT_GENERATED_DIR` | Recommended | Path to Pkl-generated contract JSON files (default: `app/generated`) |
 
 The base image entrypoint hard-fails at startup if `ATLAN_APP_MODULE` is not set.
@@ -675,7 +675,7 @@ RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
 
 COPY --chown=appuser:appuser . .
 
-ENV ATLAN_APP_HTTP_PORT=8000
+ENV ATLAN_HANDLER_PORT=8000
 ENV ATLAN_APP_MODULE=app.connector:PostgresApp
 ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
 ```

@@ -189,6 +189,10 @@ Store a named configuration object.
 
 Retrieve a generated configmap JSON (from `app/generated/{id}.json`).
 
+**Error responses:**
+
+- `404 {"detail": "ConfigMap '<id>' not found"}` — no matching file exists under `app/generated/`.
+
 ### `GET /workflows/v1/configmaps`
 
 List all available configmap IDs.

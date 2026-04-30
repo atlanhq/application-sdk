@@ -95,7 +95,7 @@ Handler Deployment (min 1 replica, max N)
 Worker Deployment (KEDA ScaledObject, scales 0 → N)
 ├── command: application-sdk --mode worker --app app.connector:PostgresApp
 ├── Port 8081  — Worker health check endpoint
-└── Connects to Temporal task queue: {app_id}-queue
+└── Connects to Temporal task queue: atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME} (auto-derived)
 ```
 
 Workers scale to zero when the Temporal task queue is empty. Each new workflow run wakes a worker pod.

@@ -54,7 +54,7 @@ The `[workflows]` extra is now an empty backwards-compatibility shim.
 **API-based connector (no SQL deps needed):**
 
 ```dockerfile
-FROM cgr.dev/atlan.com/app-framework-golden:3.13
+FROM registry.atlan.com/public/app-runtime-base:3
 # ... (see Dockerfile for full setup)
 RUN uv pip install atlan-application-sdk
 ENV ATLAN_APP_MODULE=app.app:MyOpenApiApp
@@ -63,7 +63,7 @@ ENV ATLAN_APP_MODULE=app.app:MyOpenApiApp
 **SQL connector:**
 
 ```dockerfile
-FROM cgr.dev/atlan.com/app-framework-golden:3.13
+FROM registry.atlan.com/public/app-runtime-base:3
 RUN uv pip install "atlan-application-sdk[sql]"
 ENV ATLAN_APP_MODULE=app.app:MyDatabaseConnector
 ```
@@ -71,7 +71,7 @@ ENV ATLAN_APP_MODULE=app.app:MyDatabaseConnector
 **Incremental SQL connector:**
 
 ```dockerfile
-FROM cgr.dev/atlan.com/app-framework-golden:3.13
+FROM registry.atlan.com/public/app-runtime-base:3
 RUN uv pip install "atlan-application-sdk[incremental]"
 ENV ATLAN_APP_MODULE=app.app:MyIncrementalConnector
 ```

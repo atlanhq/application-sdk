@@ -75,7 +75,7 @@ Used by the Temporal Worker Deployment controller (TWD). Leave empty unless your
 | `ATLAN_HANDLER_PORT` | `8000` | HTTP port for the handler. Fallback: `ATLAN_APP_HTTP_PORT`. |
 | `ATLAN_HEALTH_PORT` | `8081` | Port for the worker health endpoint. |
 | `ATLAN_HANDLER_MODULE` | _(empty)_ | Handler class to load (`module:ClassName`). Auto-discovered from the app module when unset. |
-| `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` | `5` | Seconds to drain in-flight requests before the worker shuts down. |
+| `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` | `5` | Event-loop yield (seconds) before tearing down the worker transport, giving in-flight activity completion RPCs a chance to flush. Distinct from `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT`. |
 
 ---
 
