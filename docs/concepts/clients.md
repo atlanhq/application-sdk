@@ -179,16 +179,17 @@ class MyApiClient(BaseClient):
 
 ## Redis Client (`redis.py`)
 
-`RedisClient` wraps `redis.asyncio` for apps that use Redis as a fast key-value store or distributed lock backend.
+`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement an acquire/release lock protocol via Redis, not a general-purpose key/value API. Use them as context managers to guard a critical section:
 
 ```python
-from application_sdk.clients.redis import RedisClient
+from application_sdk.clients.redis import RedisClientAsync
 
-client = RedisClient()
-await client.load(credentials={"host": "localhost", "port": "6379"})
-await client.set("key", "value", ex=300)
-value = await client.get("key")
+async with RedisClientAsync(resource_id="my-lock", ttl=30) as lock:
+    # exclusive section — only one pod holds this lock at a time
+    ...
 ```
+
+For the `CapacityPool` abstraction (which uses Redis locks internally), see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool).
 
 Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/configuration.md` for the full list including sentinel and lock settings.
 

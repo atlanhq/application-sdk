@@ -23,11 +23,12 @@ from application_sdk.infrastructure import (
 |-------|----------|--------------|-----------|
 | `secret_store` | `SecretStore` | `DaprSecretStore` | `MockSecretStore` |
 | `state_store` | `StateStore` | `DaprStateStore` | `MockStateStore` |
-| `pubsub` | `PubSub` | `DaprPubSub` | `MockPubSub` |
-| `binding` | `Binding` | `DaprBinding` | `MockBinding` |
-| `capacity_pool` | `CapacityPool` | Redis-backed | `LocalCapacityPool` |
+| `storage` | `ObjectStore` | obstore S3/GCS/Azure | local filesystem |
+| `event_binding` | `Binding` | `DaprBinding` | `MagicMock` |
 
-All fields are optional. When a field is `None`, the corresponding feature raises a configuration error at runtime.
+All fields are optional (`None` by default). Accessing a `None` field raises a configuration error at runtime.
+
+`PubSub` and `CapacityPool` are separate infrastructure capabilities managed by their own module-level singletons — see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md) for usage.
 
 ---
 
@@ -73,10 +74,10 @@ Call `clear_infrastructure()` in teardown so other tests start with a clean slat
 
 ```python
 class StateStore(Protocol):
-    async def save(self, key: str, value: Any, store_name: str = ...) -> None: ...
-    async def load(self, key: str, store_name: str = ...) -> Any: ...
-    async def delete(self, key: str, store_name: str = ...) -> None: ...
-    async def list_keys(self, prefix: str, store_name: str = ...) -> list[str]: ...
+    async def save(self, key: str, value: dict[str, Any]) -> None: ...
+    async def load(self, key: str) -> dict[str, Any] | None: ...
+    async def delete(self, key: str) -> bool: ...
+    async def list_keys(self, prefix: str = "") -> list[str]: ...
 ```
 
 Used by `App.persistent_state` to store durable workflow data across runs.
@@ -85,39 +86,27 @@ Used by `App.persistent_state` to store durable workflow data across runs.
 
 ```python
 class SecretStore(Protocol):
-    async def get(self, key: str, store_name: str = ...) -> dict: ...
-    async def get_optional(self, key: str, store_name: str = ...) -> dict | None: ...
-    async def get_bulk(self, keys: list[str], store_name: str = ...) -> dict[str, dict]: ...
+    async def get(self, name: str) -> str: ...
+    async def get_optional(self, name: str) -> str | None: ...
+    async def get_bulk(self, names: list[str]) -> dict[str, str]: ...
 ```
 
-Used by `CredentialResolver` to fetch raw credential payloads. See [Credentials](credentials.md).
-
-### PubSub
-
-```python
-class PubSub(Protocol):
-    async def publish(self, topic: str, data: Any, pubsub_name: str = ...) -> None: ...
-    async def subscribe(self, topic: str, pubsub_name: str = ...) -> AsyncIterator[Any]: ...
-```
-
-Used by event-driven apps to publish and consume messages.
+Returns raw string values (often JSON-encoded). Used by `CredentialResolver` to fetch raw credential payloads. See [Credentials](credentials.md).
 
 ### Binding
 
 ```python
 class Binding(Protocol):
-    async def invoke(self, name: str, operation: str, data: Any = None) -> Any: ...
+    async def invoke(
+        self,
+        operation: str,
+        data: bytes | None = None,
+        *,
+        metadata: dict[str, str] | None = None,
+    ) -> BindingResponse: ...
 ```
 
-Wraps Dapr output bindings (queues, storage, SMTP, etc.).
-
-### CapacityPool
-
-```python
-class CapacityPool(Protocol):
-    async def acquire(self, key: str, slots: int = 1) -> str: ...  # returns lock token
-    async def release(self, key: str, token: str) -> None: ...
-    async def renew(self, key: str, token: str) -> None: ...
+Wraps Dapr output bindings (queues, storage, SMTP, etc.). Accessed via `get_infrastructure().event_binding`.
 ```
 
 Distributes concurrency slots across workers. `RedisCapacityPool` (production) uses Redis for cross-pod coordination; `LocalCapacityPool` uses an in-process semaphore.

@@ -1,6 +1,6 @@
 # Credentials
 
-The Application SDK provides a typed credential system that eliminates `dict["password"]`-style access patterns. Credentials are stored in a `SecretStore`, resolved at runtime into strongly-typed objects, and cached per execution.
+The Application SDK provides a typed credential system that eliminates `dict["password"]`-style access patterns. Credentials are stored in a `SecretStore` and resolved at runtime into strongly-typed objects via `resolve_credentials()`.
 
 ---
 
@@ -154,10 +154,12 @@ class MyConnector(AtlanClientMixin, App):
 from application_sdk.infrastructure import SecretStore
 
 class SecretStore(Protocol):
-    async def get(self, key: str, store_name: str) -> dict: ...
-    async def get_optional(self, key: str, store_name: str) -> dict | None: ...
-    async def get_bulk(self, keys: list[str], store_name: str) -> dict[str, dict]: ...
+    async def get(self, name: str) -> str: ...
+    async def get_optional(self, name: str) -> str | None: ...
+    async def get_bulk(self, names: list[str]) -> dict[str, str]: ...
 ```
+
+Methods return raw string values (often JSON-encoded). `CredentialResolver` parses the string into the requested typed model.
 
 ### Production
 
@@ -170,8 +172,8 @@ Reads secrets from environment variables — useful for simple local setups or C
 ```python
 from application_sdk.infrastructure import EnvironmentSecretStore
 
-store = EnvironmentSecretStore()
-# Reads env vars prefixed by the store_name
+# Optional prefix — e.g. prefix="MYAPP_" maps secret "DB_PASSWORD" → env var "MYAPP_DB_PASSWORD"
+store = EnvironmentSecretStore(prefix="")
 ```
 
 ### `MockSecretStore` (tests)

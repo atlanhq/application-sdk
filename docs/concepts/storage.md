@@ -11,26 +11,26 @@ from application_sdk.storage import upload_file, download_file
 
 # Upload a local file to object storage
 await upload_file(
-    source="/tmp/output.json",
-    key="artifacts/my-app/output.json",
+    "artifacts/my-app/output.json",  # key: destination object-store path
+    "/tmp/output.json",              # local_path: source local file
 )
 
 # Download from object storage to a local file
 await download_file(
-    key="artifacts/my-app/output.json",
-    destination="/tmp/output.json",
+    "artifacts/my-app/output.json",  # key: source object-store path
+    "/tmp/output.json",              # local_path: destination local file
 )
 ```
 
-`key` is the object-store path (no leading slash). `source`/`destination` are local filesystem paths.
+`key` is the object-store path (no leading slash). `local_path` is the local filesystem path.
 
 ### Additional operations
 
 ```python
-from application_sdk.storage import delete_file, file_exists, list_keys
+from application_sdk.storage import delete, exists, list_keys
 
-await delete_file("artifacts/my-app/output.json")
-exists = await file_exists("artifacts/my-app/output.json")
+await delete("artifacts/my-app/output.json")
+found = await exists("artifacts/my-app/output.json")
 keys = await list_keys("artifacts/my-app/")  # returns list[str]
 ```
 
@@ -44,7 +44,7 @@ keys = await list_keys("artifacts/my-app/")  # returns list[str]
 from application_sdk.contracts import FileReference, StorageTier
 
 ref = FileReference(
-    key="artifacts/my-app/batch-001.parquet",
+    storage_path="artifacts/my-app/batch-001.parquet",
     tier=StorageTier.TRANSIENT,
 )
 ```
@@ -53,9 +53,9 @@ ref = FileReference(
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `key` | `str` | Object-store path |
+| `storage_path` | `str \| None` | Object-store key (single file) or prefix (directory) |
+| `local_path` | `str \| None` | Local filesystem path, set after download |
 | `tier` | `StorageTier` | Cleanup tier (see below) |
-| `local_path` | `str \| None` | Optional cached local path after download |
 
 `FileReference` is safe to include in `Output` models because it is small (a path string + an enum). The actual file stays in object storage.
 
@@ -75,33 +75,41 @@ ref = FileReference(
 from application_sdk.contracts import StorageTier
 
 # Intermediate working file — deleted at end of every run
-FileReference(key="…", tier=StorageTier.TRANSIENT)
+FileReference(storage_path="…", tier=StorageTier.TRANSIENT)
 
 # Output artifact — kept for downstream consumers, removed on opt-in cleanup
-FileReference(key="…", tier=StorageTier.RETAINED)
+FileReference(storage_path="…", tier=StorageTier.RETAINED)
 
 # Connection config or incremental marker — kept forever
-FileReference(key="…", tier=StorageTier.PERSISTENT)
+FileReference(storage_path="…", tier=StorageTier.PERSISTENT)
 ```
 
 ---
 
 ## App-Level Upload / Download
 
-`App` provides two built-in `@task` methods for directory-level transfers with automatic `FileReference` tracking:
+`App` provides two built-in methods for directory-level transfers with automatic `FileReference` tracking. Both accept `UploadInput` / `DownloadInput` objects:
 
 ```python
+from application_sdk.contracts.storage import UploadInput, DownloadInput, StorageTier
+
 class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
-        # Upload a local directory; returns a list of FileReference objects
-        refs = await self.upload(
-            local_dir="/tmp/output/",
-            prefix="artifacts/my-app/run-001/",
-            tier=StorageTier.TRANSIENT,
+        # Upload a local directory; returns UploadOutput with FileReference list
+        up = await self.upload(
+            UploadInput(
+                local_path="/tmp/output/",
+                tier=StorageTier.TRANSIENT,
+            )
         )
 
-        # Later, download back to a local path
-        await self.download(refs, local_dir="/tmp/downloaded/")
+        # Later, download back to a local path using a FileReference
+        dl = await self.download(
+            DownloadInput(
+                ref=up.ref,
+                local_path="/tmp/downloaded/",
+            )
+        )
         ...
 ```
 

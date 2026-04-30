@@ -100,8 +100,8 @@ If you need a worker handle directly (for integration tests):
 ```python
 from application_sdk.execution import create_temporal_client, create_worker
 
-client = await create_temporal_client()  # defaults to localhost:7233; set ATLAN_TEMPORAL_HOST to override
-worker = create_worker(client)           # discovers all App subclasses automatically
+client = await create_temporal_client(host="localhost:7233")  # pass host/namespace explicitly
+worker = create_worker(client)                                 # discovers all App subclasses automatically
 await worker.run()
 ```
 
@@ -111,8 +111,8 @@ await worker.run()
 |----------|----------|-------------|
 | `ATLAN_APP_MODULE` | Yes (production) | Python module path, e.g. `app.app:MyExtractor` |
 | `ATLAN_CONTRACT_GENERATED_DIR` | Recommended | Path to generated contract JSON files |
-| `ATLAN_TEMPORAL_HOST` | Yes | Temporal server host (fallback: `TEMPORAL_HOST`) |
-| `ATLAN_TEMPORAL_NAMESPACE` | Yes | Temporal namespace (fallback: `TEMPORAL_NAMESPACE`) |
+| `ATLAN_TEMPORAL_HOST` | Yes | Temporal server host (v2 fallback: `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT`) |
+| `ATLAN_TEMPORAL_NAMESPACE` | Yes | Temporal namespace (v2 fallback: `ATLAN_WORKFLOW_NAMESPACE`) |
 
 ---
 

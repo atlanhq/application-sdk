@@ -159,9 +159,9 @@ on the class:
 # v2 — at worker startup
 Worker(workflow_client=client, passthrough_modules=["my_connector"])
 
-# v3 — class-level attribute
+# v3 — class-level attribute (set, not list)
 class MyConnector(App):
-    passthrough_modules = ["my_connector", "third_party_lib"]
+    passthrough_modules = {"my_connector", "third_party_lib"}
 ```
 
 **SQL template apps** get an even bigger reduction. The whole
@@ -473,8 +473,8 @@ asyncio.run(run_dev_combined(MyExtractor))
 ```python
 from application_sdk.execution import create_temporal_client, create_worker
 
-client = await create_temporal_client()  # defaults to localhost:7233; set ATLAN_TEMPORAL_HOST to override
-worker = create_worker(client)           # discovers all App subclasses automatically
+client = await create_temporal_client(host="localhost:7233")  # pass host/namespace explicitly
+worker = create_worker(client)                                 # discovers all App subclasses automatically
 await worker.run()
 ```
 

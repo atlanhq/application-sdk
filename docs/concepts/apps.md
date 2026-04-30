@@ -202,11 +202,11 @@ If your app imports third-party libraries that must be available inside the Temp
 
 ```python
 class MyConnector(App):
-    passthrough_modules = ["my_connector", "third_party_lib"]
+    passthrough_modules = {"my_connector", "third_party_lib"}
     ...
 ```
 
-In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`.
+The type is `ClassVar[set[str] | None]` — use a set literal, not a list. In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`.
 
 ## Customizing SQL Queries
 

@@ -556,18 +556,18 @@ a worker handle directly (e.g., in integration tests):
 ```python
 from application_sdk.execution import create_temporal_client, create_worker
 
-client = await create_temporal_client()  # defaults to localhost:7233; set ATLAN_TEMPORAL_HOST to override
+client = await create_temporal_client(host="localhost:7233")  # pass host/namespace explicitly
 
 # All registered App subclasses auto-discovered — no explicit list
 worker = create_worker(client)
 await worker.run()
 ```
 
-Passthrough modules are declared on the `App` class itself as a `ClassVar`, not as a class-kwarg:
+Passthrough modules are declared on the `App` class itself as a `ClassVar` (a `set`, not a list), not as a class-kwarg:
 
 ```python
 class MyConnector(App):
-    passthrough_modules = ["my_connector", "third_party_lib"]
+    passthrough_modules = {"my_connector", "third_party_lib"}
     ...
 ```
 
