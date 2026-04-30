@@ -44,8 +44,9 @@ from uuid import uuid4
 
 import orjson
 import temporalio.service
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException
 from fastapi import Path as PathParam
+from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
@@ -471,7 +472,10 @@ def create_app_handler_service(
         FastAPIInstrumentor,
     )
 
-    from application_sdk.server.middleware import EXCLUDED_LOG_PATHS, LogMiddleware
+    from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
+        EXCLUDED_LOG_PATHS,
+        LogMiddleware,
+    )
 
     # Auto-instrument HTTP server with OTel: emits http.server.duration,
     # http.server.active_requests, etc. with route-templated http.route labels
@@ -1686,13 +1690,15 @@ def create_app_handler_service(
             generate_latest,
         )
 
-        from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when /metrics is hit
+            TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+        )
 
         body = generate_latest(REGISTRY)
 
         if TEMPORAL_PROMETHEUS_BIND_ADDRESS:
             try:
-                import httpx
+                import httpx  # noqa: PLC0415 — cold path: only when Temporal Rust-core proxy enabled
 
                 async with httpx.AsyncClient(timeout=2.0) as client:
                     resp = await client.get(

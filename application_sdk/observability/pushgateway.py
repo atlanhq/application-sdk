@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from typing import TYPE_CHECKING, Iterable
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import httpx
 from prometheus_client import (
@@ -53,7 +54,7 @@ class TemporalCoreCollector:
         self._url = url
         self._timeout_s = timeout_s
 
-    def collect(self) -> Iterable["Metric"]:
+    def collect(self) -> Iterable[Metric]:
         try:
             with httpx.Client(timeout=self._timeout_s) as client:
                 resp = client.get(self._url)
@@ -136,7 +137,7 @@ class PushGatewayClient:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: S110 — task cancellation is the goal; surface nothing on shutdown
                 pass
             self._task = None
 
@@ -160,7 +161,7 @@ class PushGatewayClient:
                     await asyncio.wait_for(
                         self._stopped.wait(), timeout=self._interval_s
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
                 if self._stopped.is_set():
                     return

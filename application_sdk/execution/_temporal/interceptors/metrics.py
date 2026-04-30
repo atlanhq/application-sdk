@@ -118,7 +118,7 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             try:
                 _workflow_executions().add(1, tagged)
                 _workflow_duration().record(duration_s, tagged)
-            except Exception:
+            except Exception:  # noqa: S110 — best-effort observability; never block the workflow on metric emission
                 pass
 
 
@@ -152,7 +152,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                             "exception.type": error_type or "Unknown",
                         },
                     )
-            except Exception:
+            except Exception:  # noqa: S110 — best-effort observability; never block the activity on metric emission
                 pass
 
 
@@ -173,7 +173,7 @@ class MetricsInterceptor(Interceptor):
 
     def workflow_interceptor_class(
         self,
-        input: WorkflowInterceptorClassInput,  # noqa: ARG002
+        input: WorkflowInterceptorClassInput,
     ) -> type[WorkflowInboundInterceptor] | None:
         return _MetricsWorkflowInboundInterceptor
 

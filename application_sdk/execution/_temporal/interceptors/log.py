@@ -110,7 +110,7 @@ class _LogWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
         super().__init__(next_)
         self._inbound = inbound
 
-    def _inject(self, headers: "Mapping[str, Payload]") -> dict[str, "Payload"]:
+    def _inject(self, headers: Mapping[str, Payload]) -> dict[str, Payload]:
         correlation_id = self._inbound._correlation_id
         if not correlation_id:
             return dict(headers)
@@ -209,8 +209,8 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         try:
             logger.info("workflow.started", **identity)
-        except Exception:
-            pass  # never block the workflow on logging
+        except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
+            pass
 
         start_ns = time.monotonic_ns()
         status = "OK"
@@ -234,7 +234,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     logger.error("workflow.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("workflow.ended", **ended_attrs)
-            except Exception:
+            except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
                 pass
 
 
@@ -296,7 +296,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
 
         try:
             logger.info("activity.started", **identity)
-        except Exception:
+        except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
             pass
 
         start_ns = time.monotonic_ns()
@@ -321,7 +321,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                     logger.error("activity.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("activity.ended", **ended_attrs)
-            except Exception:
+            except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
                 pass
 
 
@@ -343,7 +343,7 @@ class LogInterceptor(Interceptor):
 
     def workflow_interceptor_class(
         self,
-        input: WorkflowInterceptorClassInput,  # noqa: ARG002
+        input: WorkflowInterceptorClassInput,
     ) -> type[WorkflowInboundInterceptor] | None:
         return _LogWorkflowInboundInterceptor
 

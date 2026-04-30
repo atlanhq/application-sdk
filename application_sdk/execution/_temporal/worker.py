@@ -67,7 +67,7 @@ class AppWorker:
     async def _start_metrics_push(self) -> None:
         if not self._enable_pushgateway:
             return
-        from application_sdk.constants import (
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: pushgateway env config only when worker mode enabled
             PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN,
             PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS,
             PROMETHEUS_PUSHGATEWAY_URL,
@@ -81,9 +81,9 @@ class AppWorker:
                 "or run in combined mode (server + worker in one process)."
             )
 
-        from prometheus_client import REGISTRY
+        from prometheus_client import REGISTRY  # noqa: PLC0415 — pushgateway cold path
 
-        from application_sdk.observability.pushgateway import (
+        from application_sdk.observability.pushgateway import (  # noqa: PLC0415 — pushgateway cold path
             PushGatewayClient,
             TemporalCoreCollector,
         )
