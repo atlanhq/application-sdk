@@ -1,4 +1,4 @@
-"""Protocols for the lakehouse consumer framework."""
+"""Protocols implemented by source apps for event-triggered lakehouse processing."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from application_sdk.lakehouse.models import ProcessingResult
 
 @runtime_checkable
 class BatchProcessor(Protocol):
-    """Protocol that source apps implement to process lakehouse events."""
+    """Implemented by source apps to process a batch of lakehouse events."""
 
     async def setup(self) -> None: ...
 

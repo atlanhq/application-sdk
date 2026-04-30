@@ -1,39 +1,54 @@
-"""Polaris catalog client for snapshot change detection."""
+"""Catalog client wrapping a PyIceberg Catalog.
+
+Hides the catalog backend (Polaris, Nessie, Glue, etc.) behind a small surface
+focused on identifier resolution and table loading. Apps do not need to know
+which REST catalog is in use.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pyiceberg.catalog import Catalog
-    from pyiceberg.table import Table
+from pyiceberg.catalog import Catalog
+from pyiceberg.table import Table
 
 logger = logging.getLogger(__name__)
 
 
-class PolarisCatalogClient:
-    """Thin wrapper for snapshot change detection. Each has_changed() call
-    issues one GET to Polaris REST catalog. No S3/ADLS access needed."""
+class CatalogClient:
+    """Resolves dotted namespaces and loads Iceberg tables from a catalog."""
 
-    def __init__(self, catalog: "Catalog", namespace: str, table_name: str) -> None:
+    def __init__(self, catalog: Catalog) -> None:
         self._catalog = catalog
-        # Support nested namespaces like "apps.databricks" → ("apps", "databricks", table)
-        ns_parts = tuple(namespace.split("."))
-        self._identifier = (*ns_parts, table_name)
 
-    def load_table(self) -> "Table":
-        return self._catalog.load_table(self._identifier)
+    @property
+    def catalog(self) -> Catalog:
+        return self._catalog
 
-    def get_current_snapshot_id(self) -> int | None:
-        table = self.load_table()
-        snapshot = table.current_snapshot()
-        if snapshot is None:
-            return None
-        return snapshot.snapshot_id
+    @staticmethod
+    def identifier(namespace: str, table_name: str) -> tuple[str, ...]:
+        """Build a fully-qualified identifier tuple.
 
-    def has_changed(self, last_snapshot_id: int | None) -> bool:
-        current = self.get_current_snapshot_id()
-        if current is None:
+        Supports nested namespaces written with dots, e.g. ``"apps.databricks"``
+        becomes ``("apps", "databricks", table_name)``.
+        """
+        ns_parts = tuple(part for part in namespace.split(".") if part)
+        return (*ns_parts, table_name)
+
+    def load_table(self, namespace: str, table_name: str) -> Table:
+        return self._catalog.load_table(self.identifier(namespace, table_name))
+
+    def table_exists(self, namespace: str, table_name: str) -> bool:
+        try:
+            self.load_table(namespace, table_name)
+            return True
+        except Exception:
             return False
-        return current != last_snapshot_id
+
+    def ensure_namespace(self, namespace: str) -> None:
+        """Create the namespace if it doesn't exist; no-op if it already does."""
+        try:
+            ns_parts = tuple(part for part in namespace.split(".") if part)
+            self._catalog.create_namespace(ns_parts)
+        except Exception as exc:
+            logger.debug("Namespace %s likely exists: %s", namespace, exc)

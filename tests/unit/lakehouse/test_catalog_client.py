@@ -1,58 +1,52 @@
 import unittest
 from unittest.mock import MagicMock
 
-from application_sdk.lakehouse.catalog_client import PolarisCatalogClient
+from application_sdk.lakehouse.catalog_client import CatalogClient
 
 
-class TestPolarisCatalogClient(unittest.TestCase):
+class TestCatalogClient(unittest.TestCase):
     def setUp(self):
         self.mock_catalog = MagicMock()
-        self.client = PolarisCatalogClient(
-            catalog=self.mock_catalog,
-            namespace="metadata_actions",
-            table_name="test_table",
+        self.client = CatalogClient(self.mock_catalog)
+
+    def test_identifier_handles_flat_namespace(self):
+        self.assertEqual(
+            CatalogClient.identifier("samples", "events"), ("samples", "events")
         )
 
-    def test_get_current_snapshot_id_returns_id(self):
-        mock_table = MagicMock()
-        mock_snapshot = MagicMock()
-        mock_snapshot.snapshot_id = 12345
-        mock_table.current_snapshot.return_value = mock_snapshot
-        self.mock_catalog.load_table.return_value = mock_table
-        self.assertEqual(self.client.get_current_snapshot_id(), 12345)
+    def test_identifier_splits_dotted_namespace(self):
+        self.assertEqual(
+            CatalogClient.identifier("apps.databricks", "audit"),
+            ("apps", "databricks", "audit"),
+        )
 
-    def test_get_current_snapshot_id_returns_none_when_no_snapshot(self):
-        mock_table = MagicMock()
-        mock_table.current_snapshot.return_value = None
-        self.mock_catalog.load_table.return_value = mock_table
-        self.assertIsNone(self.client.get_current_snapshot_id())
+    def test_identifier_strips_empty_parts(self):
+        self.assertEqual(
+            CatalogClient.identifier(".apps..databricks.", "t"),
+            ("apps", "databricks", "t"),
+        )
 
-    def test_has_changed_true_when_different(self):
-        mock_table = MagicMock()
-        mock_snapshot = MagicMock()
-        mock_snapshot.snapshot_id = 200
-        mock_table.current_snapshot.return_value = mock_snapshot
-        self.mock_catalog.load_table.return_value = mock_table
-        self.assertTrue(self.client.has_changed(100))
+    def test_load_table_uses_identifier_tuple(self):
+        self.client.load_table("apps.databricks", "audit")
+        self.mock_catalog.load_table.assert_called_once_with(
+            ("apps", "databricks", "audit")
+        )
 
-    def test_has_changed_false_when_same(self):
-        mock_table = MagicMock()
-        mock_snapshot = MagicMock()
-        mock_snapshot.snapshot_id = 100
-        mock_table.current_snapshot.return_value = mock_snapshot
-        self.mock_catalog.load_table.return_value = mock_table
-        self.assertFalse(self.client.has_changed(100))
+    def test_table_exists_true(self):
+        self.mock_catalog.load_table.return_value = MagicMock()
+        self.assertTrue(self.client.table_exists("samples", "events"))
 
-    def test_has_changed_true_when_last_was_none(self):
-        mock_table = MagicMock()
-        mock_snapshot = MagicMock()
-        mock_snapshot.snapshot_id = 100
-        mock_table.current_snapshot.return_value = mock_snapshot
-        self.mock_catalog.load_table.return_value = mock_table
-        self.assertTrue(self.client.has_changed(None))
+    def test_table_exists_false_on_load_failure(self):
+        self.mock_catalog.load_table.side_effect = Exception("not found")
+        self.assertFalse(self.client.table_exists("samples", "events"))
 
-    def test_has_changed_false_when_table_empty(self):
-        mock_table = MagicMock()
-        mock_table.current_snapshot.return_value = None
-        self.mock_catalog.load_table.return_value = mock_table
-        self.assertFalse(self.client.has_changed(None))
+    def test_ensure_namespace_swallows_already_exists(self):
+        self.mock_catalog.create_namespace.side_effect = Exception("exists")
+        self.client.ensure_namespace("samples")
+        self.mock_catalog.create_namespace.assert_called_once_with(("samples",))
+
+    def test_ensure_namespace_passes_tuple_for_dotted(self):
+        self.client.ensure_namespace("apps.databricks")
+        self.mock_catalog.create_namespace.assert_called_once_with(
+            ("apps", "databricks")
+        )
