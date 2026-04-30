@@ -67,9 +67,6 @@ from __future__ import annotations
 
 import httpx
 
-from app.contracts import MyApiCredential
-
-
 class MyApiClient:
     def __init__(self, api_token: str, base_url: str = "https://api.example.com") -> None:
         self._client = httpx.AsyncClient(
@@ -134,6 +131,7 @@ class MyConnectorHandler(Handler):
 The App subclasses `BaseMetadataExtractor`, which provides the `upload_to_atlan` task:
 
 ```python
+# app/connector.py
 from __future__ import annotations
 
 import json

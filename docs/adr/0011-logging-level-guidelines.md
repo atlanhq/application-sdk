@@ -34,14 +34,13 @@ self.logger.debug("Atlan async client created", credential_type=type(cred).__nam
 self.logger.debug("Type discovered", type_name=typename, asset_count=count)
 ```
 
-**Performance note**: Avoid computing expensive values just to pass to `logger.debug()`:
+**Performance note**: Avoid computing expensive values just to pass to `logger.debug()`. The project logger is loguru-backed and does not expose stdlib's `isEnabledFor()`. Use lazy evaluation via `opt(lazy=True)` instead:
 ```python
 # BAD — serializes the full record even when DEBUG is disabled
 self.logger.debug("record", data=json.dumps(record))
 
-# GOOD — skip expensive work when not needed
-if self.logger.isEnabledFor(logging.DEBUG):
-    self.logger.debug("record", data=json.dumps(record))
+# GOOD — loguru evaluates the lambda only when DEBUG is enabled
+self.logger.opt(lazy=True).debug("record {data}", data=lambda: json.dumps(record))
 ```
 
 **Anti-patterns:**

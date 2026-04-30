@@ -216,19 +216,19 @@ Upload a file to be used as workflow input (e.g. CSV for file-based connectors).
 **Response:** `FileUploadResponse` serialized with camelCase aliases:
 ```json
 {
-  "id": "",
+  "id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
   "version": "1",
   "isActive": true,
   "fileName": "upload.csv",
   "rawName": "upload.csv",
-  "key": "workflow_file_upload/uuid/upload.csv",
+  "key": "workflow_file_upload/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4/upload.csv",
   "extension": "csv",
   "contentType": "text/csv",
   "fileSize": 1234,
   "isUploaded": true,
   "uploadedAt": "2025-01-01T10:00:00Z",
-  "createdAt": 0,
-  "updatedAt": 0
+  "createdAt": 1735729200000,
+  "updatedAt": 1735729200000
 }
 ```
 
@@ -263,7 +263,7 @@ Provision credentials into the local in-memory vault for local development. Used
 { "credential_guid": "dev-abc123" }
 ```
 
-This endpoint is only available when running in `combined` mode locally. It should never be exposed in production.
+This endpoint requires `ATLAN_DEPLOYMENT_NAME=local` — requests with any other deployment name receive HTTP 403. It should never be exposed in production.
 
 ---
 
@@ -279,7 +279,7 @@ Handler liveness check. Returns `200 OK` when the handler is ready.
 
 ### `GET /ready` · `GET /server/ready`
 
-Handler readiness check. Returns `200` once the Temporal client is connected.
+Handler readiness check. Returns `200 OK` with `{"status": "ok"}` when the process is up.
 
 ### `GET /metrics`
 

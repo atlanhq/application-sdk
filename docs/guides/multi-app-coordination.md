@@ -85,7 +85,7 @@ class MyConnector(App):
         return await self.fetch_queries(input)
 ```
 
-Each `@entrypoint` is a separate Temporal workflow (`my-connector:extract_metadata`, `my-connector:mine_queries`). They can be triggered independently via `POST /workflows/v1/start?entrypoint=extract_metadata`.
+Each `@entrypoint` is a separate Temporal workflow (`my-connector:extract-metadata`, `my-connector:mine-queries`). They can be triggered independently via `POST /workflows/v1/start?entrypoint=extract-metadata`.
 
 This pattern works well when both entry points share the same credentials, handler, and configuration, but need to be triggered at different times or frequencies.
 
@@ -93,7 +93,7 @@ This pattern works well when both entry points share the same credentials, handl
 
 ## Direct Inter-App Calls (Deactivated)
 
-> **Note:** `App.context.call_by_name()` is **deactivated** pending resolution of [BLDX-878](https://linear.app/atlan-epd/issue/BLDX-878/clarify-inter-app-calls-in-sdk-v3). Do not use it in new connectors. Use the Automation Engine DAG pattern instead.
+> **Note:** `App.call_by_name()` is **deactivated** pending resolution of [BLDX-878](https://linear.app/atlan-epd/issue/BLDX-878/clarify-inter-app-calls-in-sdk-v3). Do not use it in new connectors. Use the Automation Engine DAG pattern instead.
 
 The SDK originally supported direct child-workflow invocation as described in [ADR-0007](../adr/0007-apps-as-coordination-unit.md). This was deactivated to avoid duplication with the AE DAG orchestration layer.
 

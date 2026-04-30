@@ -88,7 +88,7 @@ E2E coverage is **not** limited to the happy path. Every user-observable scenari
 
 - [ ] **Boot probe** — start the app via `run_dev_combined` in-process (or as a subprocess) and confirm:
   - `GET /health` returns 200
-  - `GET /manifest` returns the committed `app/generated/manifest.json` verbatim
+  - `GET /workflows/v1/manifest` returns the committed `app/generated/manifest.json` verbatim
   - `GET /workflows/v1/configmap/{name}` returns the committed workflow config
 - [ ] **Golden contract drift** — re-run `poe generate` in CI and `git diff --exit-code app/generated/ app/generated/_input.py` must be clean.
 - [ ] **Scenario matrix** — one E2E test per supported scenario. Each drives `POST /workflows/v1/start` with a realistic payload and asserts the final outcome (NDJSON artifacts, uploaded object-store keys, publish-app state, response codes). Cover at minimum:
@@ -140,7 +140,7 @@ trap "kill $APP_PID" EXIT
 until curl -sf http://127.0.0.1:8000/health; do sleep 1; done
 
 # Fetch manifest + configmaps and diff against committed artifacts
-curl -sf http://127.0.0.1:8000/manifest | diff - app/generated/manifest.json
+curl -sf http://127.0.0.1:8000/workflows/v1/manifest | diff - app/generated/manifest.json
 ```
 
 Mismatches mean the SDK serves something different from what the repo committed — a readiness failure.
@@ -178,7 +178,7 @@ Paste this into the description of the PR that declares an app v3-ready. Reviewe
 ### Tests (§4)
 - [ ] Unit tests cover App instantiation, every `@task`, and contract round-trips
 - [ ] E2E scenario matrix documented (`tests/e2e/README.md`) and **every listed scenario has a passing E2E test** — happy path + each branch of `run()` + each `Handler` flow + error/edge cases + multi-tenant isolation
-- [ ] Boot probe verifies `/health`, `/manifest`, and `/workflows/v1/configmap/{name}` match committed artifacts
+- [ ] Boot probe verifies `/health`, `/workflows/v1/manifest`, and `/workflows/v1/configmap/{name}` match committed artifacts
 - [ ] Replay test pinned for every workflow that runs in production
 
 ### SDK-triggered checks (§5)

@@ -230,7 +230,7 @@ application_sdk/
 │   ├── base.py             # App class, run() wrapper, determinism helpers
 │   ├── client.py           # App client bootstrap helpers
 │   ├── context.py          # AppContext, logging, infra/credential access
-│   ├── entrypoint.py       # @entrypoint and @on_event decorators
+│   ├── entrypoint.py       # @entrypoint decorator
 │   ├── registry.py         # AppRegistry, TaskRegistry singletons
 │   └── task.py             # @task decorator, signature validation
 │

@@ -21,7 +21,7 @@ The SDK's handler auto-serves these files:
 |---|---|
 | `{name}.json` | `GET /workflows/v1/configmap/{name}` |
 | `atlan-connectors-{name}.json` | `GET /workflows/v1/configmap/atlan-connectors-{name}` |
-| `manifest.json` | `GET /manifest` |
+| `manifest.json` | `GET /workflows/v1/manifest` |
 
 No handler overrides needed. Just commit the generated files.
 
