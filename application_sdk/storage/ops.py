@@ -116,6 +116,28 @@ def normalize_key(key: str) -> str:
     return "" if normalized == "." else normalized
 
 
+def _normalize_listing_prefix(prefix: str, normalize: bool) -> str:
+    """Return *prefix* normalised for a listing call.
+
+    Applies :func:`normalize_key` when *normalize* is ``True``, then ensures
+    the result ends with ``"/"`` so prefix matching never bleeds into sibling
+    directories (e.g. ``"artifacts"`` cannot match ``"artifacts_backup/"``).
+
+    Args:
+        prefix: Raw prefix string.
+        normalize: When ``True``, normalise via :func:`normalize_key`.
+
+    Returns:
+        Normalised prefix with trailing slash, or the original string if
+        *normalize* is ``False`` or *prefix* is empty.
+    """
+    if normalize and prefix:
+        prefix = normalize_key(prefix)
+        if prefix and not prefix.endswith("/"):
+            prefix = prefix + "/"
+    return prefix
+
+
 def _resolve_store(store: ObjectStore | None) -> ObjectStore:
     """Return *store* if provided, otherwise resolve from the infrastructure context.
 
@@ -147,6 +169,56 @@ def _is_not_found(exc: Exception) -> bool:
         or "404" in msg
         or "key not found" in msg
     )
+
+
+async def _list_items(
+    store: ObjectStore,
+    prefix: str | None,
+    *,
+    include_markers: bool = False,
+) -> list[tuple[str, int]]:
+    """Collect listing results under *prefix*, optionally filtering GCS directory markers.
+
+    Makes a single listing operation (``obstore.list`` returns a native async
+    ``ListStream`` that pages internally — no thread wrapping needed).  When *include_markers* is
+    ``False``, two additional in-memory passes are applied: one to build the set of
+    ancestor path segments, and one to filter out zero-byte objects whose path is one
+    of those ancestors (the structural signature of a GCS-console "folder" marker).
+
+    A zero-byte object is excluded when its path is a strict path-prefix of at least
+    one other listed key — i.e. it acts as a parent directory for real files.
+
+    Args:
+        store: An obstore-compatible store instance.
+        prefix: Key prefix, or ``None`` to list everything.
+        include_markers: When ``True``, skip the directory-marker filter and return
+            every object including zero-byte markers.  Use this when the caller must
+            operate on *all* objects (e.g. ``delete_prefix``) so that no orphan
+            objects are left behind on any store backend.
+
+    Returns:
+        ``(path, size)`` tuples in listing order.  Directory markers are excluded
+        unless *include_markers* is ``True``.
+    """
+    all_items: list[tuple[str, int]] = []
+    async for batch in obstore.list(store, prefix=prefix):  # native async ListStream
+        for item in batch:
+            all_items.append((str(item["path"]), int(item["size"])))
+
+    if include_markers:
+        return all_items
+
+    parent_dirs: set[str] = set()
+    for path, _ in all_items:
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            parent_dirs.add("/".join(parts[:i]))
+
+    return [
+        (path, size)
+        for path, size in all_items
+        if not (size == 0 and path in parent_dirs)
+    ]
 
 
 def _compute_part_size(file_size: int, chunk_size: int) -> int:

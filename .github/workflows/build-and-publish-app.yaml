@@ -406,6 +406,7 @@ jobs:
           ENTRYPOINTS: ${{ needs.prepare.outputs.entrypoints }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           GITHUB_ACTOR: ${{ github.triggering_actor }}
         run: |
@@ -419,10 +420,15 @@ jobs:
           BODY=$(python3 - <<'PYEOF'
           import json, os
 
+          # Prefer release_tag (e.g. 0.2.0) over commit SHA for the GM version.
+          # Backward compatible: apps that don't pass release_tag get SHA as before.
+          release_tag = os.environ.get("RELEASE_TAG", "").strip()
+          version = release_tag if release_tag else os.environ["IMAGE_TAG"]
+
           body = {
               "app_id": os.environ["APP_ID"],
               "image": os.environ["GHCR_IMAGE"],
-              "version": os.environ["IMAGE_TAG"],
+              "version": version,
               "branch": os.environ["BRANCH"],
               "repo": os.environ["REPO_URL"],
               "source": "ci_publish",
