@@ -108,11 +108,14 @@ All infrastructure is accessed through Protocol-based interfaces, not concrete i
 |----------|---------|-----------------|-----------|
 | `StateStore` | `save`, `load`, `delete`, `list_keys` | `DaprStateStore` | `MockStateStore` |
 | `SecretStore` | `get`, `get_optional`, `get_bulk` | `DaprSecretStore` | `MockSecretStore`, `EnvironmentSecretStore` |
-| `PubSub` | `publish`, `subscribe` | `DaprPubSub` | `MockPubSub` |
+| `ObjectStore` | `put`, `get`, `delete`, `list` | `obstore`-backed | (injected via `InfrastructureContext`) |
 | `Binding` | `invoke` | `DaprBinding` | `MockBinding` |
+| `PubSub` | `publish`, `subscribe` | `DaprPubSub` | `MockPubSub` |
 | `CapacityPool` | `acquire`, `release`, `renew` | Redis-backed | `LocalCapacityPool` |
 
-An `InfrastructureContext` (frozen dataclass) holds all of these, stored in a module-level singleton. Set once at startup via `application_sdk.main`; accessed anywhere via `get_infrastructure()`. A module-level variable is used rather than a `ContextVar` because uvicorn HTTP request handlers run in isolated `contextvars.Context` instances and would silently receive `None` if the value were stored in a `ContextVar`.
+`InfrastructureContext` (a frozen dataclass) holds the four services that every handler and worker needs: `state_store`, `secret_store`, `storage` (ObjectStore), and `event_binding` (Binding). It is stored in a module-level singleton, set once at startup via `application_sdk.main`, and accessed anywhere via `get_infrastructure()`. A module-level variable is used rather than a `ContextVar` because uvicorn HTTP request handlers run in isolated `contextvars.Context` instances and would silently receive `None` if the value were stored in a `ContextVar`.
+
+`PubSub` and `CapacityPool` are accessed directly from `application_sdk.infrastructure` — they are not fields on `InfrastructureContext`.
 
 This means **unit tests never need a Dapr sidecar or Temporal server** — inject `MockStateStore`, `MockSecretStore`, etc. from `application_sdk.testing.mocks` and run pure Python. See [ADR-0005](../adr/0005-infrastructure-abstraction.md).
 
@@ -312,6 +315,7 @@ application_sdk/
 │   ├── errors.py           # Storage error types
 │   ├── factory.py          # create_local_store, create_memory_store, etc.
 │   ├── file_ref_sync.py    # FileReference synchronisation helpers
+│   ├── formats/            # Serialisation helpers (Parquet, JSON lines, etc.)
 │   ├── ops.py              # upload_file, download_file, delete, exists
 │   ├── reference.py        # FileReference tracker
 │   └── transfer.py         # High-level transfer orchestration

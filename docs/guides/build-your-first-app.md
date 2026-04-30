@@ -77,9 +77,12 @@ from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
+    MetadataInput,
+    MetadataOutput,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    SqlMetadataOutput,
 )
 
 
@@ -101,9 +104,9 @@ class GitHubHandler(Handler):
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         return PreflightOutput(status=PreflightStatus.READY, message="OK")
 
-    async def fetch_metadata(self, input, **kwargs):
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         # Metadata extraction is driven by the App, not the handler.
-        pass
+        return SqlMetadataOutput(objects=[])
 ```
 
 The handler receives credentials as `input.credentials: list[HandlerCredential]` — a list of opaque key/value pairs sent by Atlan. Extract the fields you need by key name.

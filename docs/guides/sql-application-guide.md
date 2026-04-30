@@ -174,14 +174,15 @@ class PostgresHandler(Handler):
 
         rows = []
         async for batch in client.run_query(
-            "SELECT catalog_name AS TABLE_CATALOG, schema_name AS TABLE_SCHEMA "
+            "SELECT catalog_name AS table_catalog, schema_name AS table_schema "
             "FROM information_schema.schemata "
             "WHERE schema_name NOT LIKE 'pg_%' "
             "AND schema_name != 'information_schema'"
         ):
             rows.extend(batch)
+        # BaseSQLClient.run_query lowercases all column names; use lowercase keys here.
         objects = [
-            SqlMetadataObject(TABLE_CATALOG=r["TABLE_CATALOG"], TABLE_SCHEMA=r["TABLE_SCHEMA"])
+            SqlMetadataObject(TABLE_CATALOG=r["table_catalog"], TABLE_SCHEMA=r["table_schema"])
             for r in rows
         ]
         return SqlMetadataOutput(objects=objects)
@@ -200,6 +201,12 @@ class PostgresHandler(Handler):
 ## Asset Mapper
 
 v3 uses Python mapper functions to transform raw extraction results into pyatlan entity objects. This replaces the v2 YAML-based `AtlasTransformer` / `QueryBasedTransformer` approach with direct, testable Python code.
+
+> **Note:** The examples below import from the legacy `pyatlan` package (consistent with the
+> built-in `AtlasTransformer` transformers, which still depend on `pyatlan`). If you are
+> building a new connector that uses the `pyatlan_v9` client elsewhere, prefer
+> `from pyatlan_v9.model.assets import ...` and use the v9 serialisation API instead of
+> `.dict()`.
 
 ```python
 # app/asset_mapper.py

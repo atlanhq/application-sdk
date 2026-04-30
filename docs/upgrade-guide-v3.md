@@ -6,7 +6,7 @@ Application SDK v3.0 introduces three major improvements:
 2. **Infrastructure abstraction** — Protocol-based interfaces decouple services from Dapr
 3. **Temporal abstraction** — `App` + `@task` replace `@workflow.defn` + `@activity.defn`
 
-v3.0 is a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. Update all imports to their v3 equivalents using the quick reference below.
+v3.0 is a clean break from v2. All v2 Python module paths raise `ImportError` — update all imports to their v3 equivalents using the quick reference below. A set of environment-variable aliases remain to ease the infrastructure rollout (e.g. Helm charts that still set `ATLAN_WORKFLOW_HOST` or `APPLICATION_MODE`) — see [Configuration](configuration.md) for the full alias list. One legacy helper, `application_sdk.common.error_codes`, is retained for back-compat; prefer `application_sdk.errors` for new code.
 
 > **Shipping an app?** Run through [`standards/v3-readiness.md`](standards/v3-readiness.md) before declaring the upgrade complete — it's the sign-off checklist for app owners and reviewers.
 
@@ -39,7 +39,7 @@ Starting with v3.1.0, `duckdb`, `duckdb-engine`, `pandas`, and `pyarrow` (~300 M
 **removed from core** and moved to an optional `[sql]` extra. `dapr`, `temporalio`, and
 `orjson` are **promoted to core** (they were already eagerly imported by every app).
 
-The `[workflows]` extra is now an empty backwards-compatibility shim.
+The `[workflows]` extra is a backwards-compatibility shim — the packages it pins (`temporalio`, `orjson`) are already promoted to core in v3.1 so the extra is functionally redundant. Keep it only if your install tooling requires it.
 
 ### Install by app type
 

@@ -116,7 +116,7 @@ curl -s -X POST http://localhost:8000/workflows/v1/dev/local-vault \
   -d '{"host": "localhost", "port": "5432", "authType": "basic",
        "username": "myuser", "password": "mypassword",
        "extra": {"database": "mydb"}}'
-# Returns: {"credential_guid": "..."}
+# Returns: {"data": {"credential_guid": "..."}, "success": true, "message": "Credentials provisioned successfully"}
 
 # Start the workflow
 curl -s -X POST http://localhost:8000/workflows/v1/start \

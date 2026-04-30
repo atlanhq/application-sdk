@@ -20,7 +20,7 @@ Three interlocking changes define v3:
 | **Data contracts** | `Dict[str, Any]` everywhere | Typed `Input` / `Output` Pydantic models |
 | **Infrastructure** | Direct Dapr/Temporal SDK calls | Protocol-based interfaces via `self.context` |
 
-v3.0 is a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. Update all imports to their v3 equivalents before upgrading.
+v3.0 is a clean break from v2. All v2 Python module paths raise `ImportError` — update all imports to their v3 equivalents before upgrading. A set of environment-variable aliases remain to ease the infrastructure rollout (Helm charts that still set `ATLAN_WORKFLOW_HOST` or `APPLICATION_MODE` continue to work); see [Configuration](configuration.md) for the full alias list.
 
 **Import mapping (v2 → v3):**
 

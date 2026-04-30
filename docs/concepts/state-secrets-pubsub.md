@@ -131,6 +131,7 @@ class PubSub(Protocol):
 `PubSub` is not part of `InfrastructureContext`. Access it through the Dapr client directly or via the SDK's Dapr pub/sub wrapper. Example using the Dapr SDK:
 
 ```python
+import json
 from application_sdk.infrastructure import AsyncDaprClient
 
 @task(timeout_seconds=60)
@@ -138,8 +139,8 @@ async def notify_complete(self, input: NotifyInput) -> NotifyOutput:
     async with AsyncDaprClient() as dapr:
         await dapr.publish_event(
             pubsub_name="eventstore",  # matches EVENT_STORE_NAME env var (default: "eventstore")
-            topic_name="extraction-complete",
-            data={"run_id": input.run_id, "record_count": input.record_count},
+            topic="extraction-complete",
+            data=json.dumps({"run_id": input.run_id, "record_count": input.record_count}),
         )
     return NotifyOutput()
 ```

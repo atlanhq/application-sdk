@@ -278,7 +278,11 @@ Provision credentials into the local in-memory vault for local development. Used
 
 **Response:**
 ```json
-{ "credential_guid": "dev-abc123" }
+{
+  "data": { "credential_guid": "dev-abc123" },
+  "success": true,
+  "message": "Credentials provisioned successfully"
+}
 ```
 
 This endpoint requires `ATLAN_DEPLOYMENT_NAME=local` — requests with any other deployment name receive HTTP 403. It should never be exposed in production.

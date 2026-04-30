@@ -197,7 +197,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OTEL_SERVICE_NAME` | _(derived from app module)_ | Service name in telemetry data. At runtime, `ATLAN_SERVICE_NAME` takes priority (resolved in `AppConfig`). Import-time telemetry (traces/metrics adaptors) reads only `OTEL_SERVICE_NAME` directly. |
+| `OTEL_SERVICE_NAME` | `atlan-application-sdk` | Service name in telemetry data. At runtime, `AppConfig` overrides this with `ATLAN_SERVICE_NAME` (if set) or a name derived from the `--app` module; import-time telemetry (traces/metrics adaptors) reads only `OTEL_SERVICE_NAME` directly. |
 | `OTEL_SERVICE_VERSION` | _(SDK version)_ | Service version in telemetry data. |
 | `OTEL_RESOURCE_ATTRIBUTES` | _(empty)_ | Additional OTel resource attributes (key=value pairs). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint. Set to the node IP collector in Kubernetes: `$(K8S_NODE_IP):4317`. |
