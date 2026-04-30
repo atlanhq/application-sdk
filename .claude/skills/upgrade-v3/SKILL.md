@@ -174,11 +174,12 @@ Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the co
 - Forbidden: `async def test_auth(self, *args, **kwargs):`
 - The checker will FAIL if `*args`/`**kwargs` appear in a Handler subclass method.
 
-**Constraint — `allow_unbounded_fields=True` must be used sparingly:**
+**Constraint — `allow_unbounded_fields=True` must not appear in connector contracts:**
 
-- Needed on top-level `run()` input models that receive arbitrary dicts from AE/Heracles (e.g. `connection: dict[str, Any]`, `metadata: dict[str, Any]`).
+- The `connection` field should use `ConnectionRef` from `application_sdk.contracts.types` — the SDK provides this typed model for the well-known connection shape from AE/Heracles.
+- `metadata: dict[str, Any]` is a contracting failure — the connector must know the shape of its inputs; type them explicitly.
 - Must NOT be used on inter-task Input/Output contracts — use `Annotated[list[T], MaxItems(N)]` or `FileReference` instead.
-- The checker will WARN if `allow_unbounded_fields=True` appears on task-level contracts.
+- The checker will WARN on any `allow_unbounded_fields=True`; reviewers will reject it.
 
 Apply changes in this order:
 
@@ -294,10 +295,10 @@ grep -rn "context\.get_secret\b" <target-path>/app/ \
 grep -rEn "ParquetFileWriter\b|JsonFileWriter\b|obstore\." <target-path>/app/ \
   && echo "FAIL: use FileReference + self.upload()" || echo "OK"
 
-# 7) allow_unbounded_fields is only on the top-level run() Input model — inheriting
-#    classes must not redeclare it.
+# 7) allow_unbounded_fields should not appear — use ConnectionRef for connection fields,
+#    typed fields for metadata. Reviewers will reject dict[str, Any] escapes.
 grep -rn "allow_unbounded_fields=True" <target-path>/app/ \
-  && echo "WARN: confirm only top-level run() Input declares allow_unbounded_fields=True" || echo "OK"
+  && echo "WARN: avoid allow_unbounded_fields; use ConnectionRef / typed fields instead" || echo "OK"
 ```
 
 These are guardrails, not blockers — a connector with a legitimate reason for any of these patterns may still ship, but it must be called out in the Phase 5 summary's manual-follow-up list with the reason. Default stance: refactor. Note: check #3 will hit any `os.environ` read inside `app/`; if the connector's entry point lives under `app/main.py` or `app/run_dev.py`, exclude those paths from the grep before treating a hit as a FAIL.
@@ -838,8 +839,8 @@ These are the **positive** rules — what idiomatic v3 task code looks like. The
 A `@task` MUST NOT build a fresh client (engine, pool, auth round-trip) on every call. The first task that needs a client builds it, stores it on `self.app_state`, and every later task in the same worker reuses it. A final `dispose_client` `@task` closes it in the run's `finally` block.
 
 ```python
-class MyApp(SqlMetadataExtractor):
-    async def _get_client(self, input: ExtractionInput) -> MyClient:
+class MyApp(App):  # SQL connectors: replace App with SqlMetadataExtractor
+    async def _get_client(self, input: MyInput) -> MyClient:
         cached = self.get_app_state("client")
         if cached is not None:
             return cached
@@ -856,12 +857,14 @@ class MyApp(SqlMetadataExtractor):
             await cached.close()
             self.set_app_state("client", None)
 
-    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+    async def run(self, input: MyInput) -> MyOutput:
         try:
-            ...   # fetch_databases / fetch_schemas / fetch_tables / ...
+            ...   # your fetch tasks here
         finally:
             await self.dispose_client()
 ```
+
+> **SQL connectors:** use `SqlMetadataExtractor` as the base class (it provides `run()` and SQL-specific task scaffolding). The client-caching pattern above is identical regardless of base class.
 
 `get_app_state` / `set_app_state` are only callable inside `@task` methods — see the corresponding gotcha. Putting the cached object on `app_state` (not a module-level global) is what makes the cache worker-local rather than process-global, which matters when the worker pool runs multiple connectors.
 
@@ -871,6 +874,7 @@ The handler runs in the HTTP service process and the extractor runs in the Tempo
 
 If a step has no async-native API (e.g. `pyodbc`, `pymssql`, sync SQLAlchemy, `requests`, anything that calls a C library that blocks the event loop), wrap it in `self.run_in_thread()`. It is the SDK's heartbeat-pumping executor — `asyncio.to_thread` is **not** equivalent. Using `asyncio.to_thread` from inside a `@task` risks heartbeat failures and event-loop deadlocks; the activity will fail Temporal heartbeat checks under load.
 
+For example, in a SQL connector:
 ```python
 rows = await self.run_in_thread(_stream_query_into_writer, cursor, query, output_file)
 ```
@@ -879,7 +883,7 @@ If you find yourself reaching for threads in a hot loop, reconsider — fully-as
 
 ### `self.upload()` + `FileReference` — never hand-roll uploads
 
-Each fetch task writes to a local file and returns a typed `FileReference` on its output:
+Each fetch task writes to a local file and returns a typed `FileReference` on its output. For example, in a SQL connector:
 
 ```python
 @task
@@ -891,11 +895,13 @@ async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
     )
 ```
 
-Downstream tasks accept `FileReference` on their typed input and read via `input.tables_file.local_path`. At publish time, `run()` calls:
+The task names, input/output contracts, and write helper differ per connector type; the `FileReference` shape is the same for all. Downstream tasks accept `FileReference` on their typed input and read via `input.tables_file.local_path`. As the final app step prior to handing off to the Publish (or other) system app, explicitly call `self.upload()` on the final output:
 
 ```python
 await self.upload(UploadInput(local_path=output_file_path, storage_path=storage_path))
 ```
+
+Note that this is NOT necessary inside each task — task-to-task uploading/downloading of files within the same app is handled _automatically_ purely by virtue of a `FileReference` being included in the Output of a task (automatically uploaded, if not already in the object store) or the Input of a task (automatically downloaded, if not already present in the worker).
 
 Reasons every connector must use this shape:
 
@@ -927,11 +933,16 @@ Configuration must come from **either** the contract `Input` model **or** `AppCo
 
 Reviewers on the MSSQL v3 PR rejected mixed configuration ("two paths to drive the app") as a top-level design smell. The fix is to remove the env-var reads, not to document them.
 
-### Dropping `allow_unbounded_fields` when inherited
+### Avoid `allow_unbounded_fields` everywhere
 
-`allow_unbounded_fields=True` belongs on the **top-level** input model that takes arbitrary AE/Heracles dicts (`connection: dict[str, Any]`, `metadata: dict[str, Any]`). Most connector-specific subclasses (`MyExtractionInput(ExtractionInput)`) only add typed fields and inherit the flag from `ExtractionInput` — re-declaring it is redundant and a code smell. Drop it from the subclass unless the subclass adds **its own** `dict[str, Any]` field that the parent doesn't have (and consider whether that field could be typed instead).
+`allow_unbounded_fields=True` does not belong in connector contracts. The tempting examples are not valid use cases:
 
-Inter-task contracts must never use `allow_unbounded_fields=True` — use typed fields, `Annotated[list[T], MaxItems(N)]`, or `FileReference`. The checker WARNs on this; reviewers will REJECT it.
+- **`connection: dict[str, Any]`** — the SDK provides `ConnectionRef` in `application_sdk.contracts.types`, a typed model covering the well-known AE/Heracles connection shape (<10 attributes). Use it.
+- **`metadata: dict[str, Any]`** — a `dict[str, Any]` field is a contracting failure. The connector must know the shape of its inputs; if it doesn't, the contract is incompletely defined. If it does, the field can and should be typed.
+
+If you encounter a base class that already declares `allow_unbounded_fields=True`, do not re-declare it in the subclass — but also do not rely on it as justification for adding new `dict[str, Any]` fields. Add typed fields only.
+
+Inter-task contracts must never use `allow_unbounded_fields=True` — use typed fields, `Annotated[list[T], MaxItems(N)]`, or `FileReference`. The checker WARNs on any occurrence; reviewers will REJECT it.
 
 ### Toolkit version pin (for `/contract`)
 
@@ -1066,19 +1077,24 @@ class MyHandler(Handler):
 
 For the workflow side, see "Client caching in `app_state`" below — the typed `MyCredential` is what the cached client is built from, **once per worker**.
 
-### Payload safety and `allow_unbounded_fields`
+### Payload safety — avoid `dict[str, Any]`
 
-v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields will raise `PayloadSafetyError` at import time. For top-level input models that receive arbitrary config from AE/Heracles (connection dicts, metadata dicts), use:
+v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields will raise `PayloadSafetyError` at import time. The correct fix is to use proper types, not to add `allow_unbounded_fields=True`:
+
+- **`connection`** → use `ConnectionRef` from `application_sdk.contracts.types`
+- **`metadata`** → define typed fields for the attributes your connector actually uses
+- **`credentials`** → use a typed `Credential` subclass (see "Credential resolution" above)
 
 ```python
-class MyExtractionInput(Input, allow_unbounded_fields=True):
+from application_sdk.contracts.types import ConnectionRef
+
+class MyExtractionInput(Input):
     credential_guid: str = ""
-    credentials: dict[str, Any] = {}
-    connection: dict[str, Any] = {}
-    metadata: dict[str, Any] = {}
+    credentials: MyCredential = Field(default_factory=MyCredential)
+    connection: ConnectionRef = Field(default_factory=ConnectionRef)
 ```
 
-For inter-task contracts, prefer typed fields with `MaxItems` or `FileReference`.
+For inter-task contracts, use typed fields with `MaxItems` or `FileReference`.
 
 ### Dockerfile must use v3 base image and pattern
 
@@ -1231,9 +1247,11 @@ output_path = str(Path(tempfile.gettempdir()) / "my-app" / self.run_id)
 
 ### Stream rows to disk — never materialize the full result set
 
+> **SQL connectors only.** This section describes cursor-based streaming for SQL connectors. REST/API connectors use the same per-batch write loop but replace `cursor.fetchmany()` with paginated API calls.
+
 `ParquetFileWriter` and `JsonFileWriter` internally call `ObjectStore` → `DaprClient()` → Dapr health check (60s timeout). This fails locally and adds unnecessary coupling. Write directly to local disk — but **stream**, do not materialize.
 
-Reviewers on the MSSQL v3 PR (#89) flagged `pd.read_sql_query(...)` followed by `df.to_parquet(...)` as the second-most-cited anti-pattern: it pulls every row into memory before writing a byte. Memory grows linearly with metadata size for no functional reason. The correct shape is a single cursor + bounded chunks:
+Reviewers on the MSSQL v3 PR (#89) flagged `pd.read_sql_query(...)` followed by `df.to_parquet(...)` as the second-most-cited anti-pattern in SQL connectors: it pulls every row into memory before writing a byte. Memory grows linearly with metadata size for no functional reason. The correct shape for a SQL connector is a single cursor + bounded chunks:
 
 ```python
 import pandas as pd
@@ -1267,7 +1285,7 @@ with output_file.open("wb") as f:
         f.write(json.dumps(record).encode() + b"\n")
 ```
 
-**Rule of thumb:** if your fetch task calls `pd.read_sql_query` or `cursor.fetchall()`, it is wrong. Use `fetchmany(chunk_size)` in a loop, or the SDK's streaming helpers.
+**SQL connector rule of thumb:** if your fetch task calls `pd.read_sql_query` or `cursor.fetchall()`, it is wrong. Use `fetchmany(chunk_size)` in a loop, or the SDK's streaming helpers.
 
 All blocking DB calls inside the loop must be wrapped in `self.run_in_thread()` — see "Use `self.run_in_thread()` for blocking work" below.
 
