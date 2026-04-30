@@ -180,7 +180,7 @@ def _wrap_response(
 
 
 async def _get_workflow_result(
-    client: "Client",
+    client: Client,
     *,
     workflow_id: str,
     output_type: type | None,
@@ -264,6 +264,50 @@ CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 # Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
 # in get_manifest() before any filesystem path is constructed.
 _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+
+
+def _discover_compute_manifest(entrypoint: str):
+    """Look for a per-entrypoint ``compute_manifest`` hook.
+
+    Convention: ``app.<entrypoint_snake>.core.compute_manifest`` where
+    ``entrypoint_snake = entrypoint.replace("-", "_")``. Multi-entrypoint
+    apps that need *dynamic* per-submission manifest substitution
+    (placeholder fill-in, SQL generation, full DAG rewrite) drop a
+    ``core.py`` next to their package's hand-written code with::
+
+        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict: ...
+
+    The static manifest (already token-substituted) is passed in; the
+    callable's return value becomes the response body. Apps that don't
+    define this module get the static manifest unchanged.
+
+    Returns the callable or ``None`` if the module / attribute is absent.
+    Best-effort discovery — never raises on import failure.
+    """
+    import importlib  # noqa: PLC0415 — cold path: only loaded for /manifest
+
+    snake = entrypoint.replace("-", "_")
+    try:
+        module = importlib.import_module(f"app.{snake}.core")
+    except (ModuleNotFoundError, ImportError):
+        return None
+    fn = getattr(module, "compute_manifest", None)
+    return fn if callable(fn) else None
+
+
+def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
+    """Decode the ``fe_inputs`` query payload (JSON, sent URL-encoded by
+    Heracles for dynamic-manifest apps). Returns ``{}`` when absent;
+    raises ``HTTPException(400)`` when present but malformed."""
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"fe_inputs is not valid JSON: {exc}"
+        ) from exc
+
 
 # Allowed characters for config_id and config_type path components.
 # Prevents path traversal (no slashes, dots, or percent-encoding) when these
@@ -1142,7 +1186,7 @@ def create_app_handler_service(
 
     async def _config_load_from_objectstore(
         config_id: str, config_type: str = "workflows"
-    ) -> "dict[str, Any] | None":
+    ) -> dict[str, Any] | None:
         """Load workflow config from object store (S3) fallback."""
         if _storage is None:
             return None
@@ -1166,7 +1210,7 @@ def create_app_handler_service(
                 os.unlink(safe_tmp)
 
     async def _config_save_to_objectstore(
-        config_id: str, body: "dict[str, Any]", config_type: str = "workflows"
+        config_id: str, body: dict[str, Any], config_type: str = "workflows"
     ) -> bool:
         """Save workflow config to object store (S3) fallback."""
         if _storage is None:
@@ -1491,7 +1535,10 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/workflows/v1/manifest")
-    async def get_manifest(entrypoint: str | None = None) -> Response:
+    async def get_manifest(
+        entrypoint: str | None = None,
+        fe_inputs: str | None = None,
+    ) -> Response:
         deployment = (DEPLOYMENT_NAME or "default").encode()
 
         if entrypoint:
@@ -1515,6 +1562,19 @@ def create_app_handler_service(
             raw = ep_manifest.read_bytes()
             raw = raw.replace(b"{deployment_name}", deployment)
             raw = raw.replace(b"{app_name}", (app_name or "").encode())
+
+            # Dynamic-manifest hook: if the app defines
+            # `app.<entrypoint_snake>.core.compute_manifest`, hand the
+            # static manifest + decoded `fe_inputs` to it and use the
+            # returned dict as the response body. Apps that don't define
+            # the hook get the static manifest unchanged (current behavior).
+            compute = _discover_compute_manifest(entrypoint)
+            if compute is not None:
+                form = _decode_fe_inputs(fe_inputs)
+                manifest_dict = json.loads(raw)
+                manifest_dict = compute(manifest_dict, form)
+                raw = json.dumps(manifest_dict).encode()
+
             return Response(content=raw, media_type="application/json")
 
         # No entrypoint param: single-entrypoint path
@@ -1543,7 +1603,10 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/manifest", include_in_schema=False)
-    async def get_manifest_legacy(entrypoint: str | None = None) -> Response:
+    async def get_manifest_legacy(
+        entrypoint: str | None = None,
+        fe_inputs: str | None = None,
+    ) -> Response:
         """Unversioned alias for ``GET /workflows/v1/manifest``.
 
         .. deprecated::
@@ -1553,7 +1616,7 @@ def create_app_handler_service(
             orchestrators have been updated to use ``/workflows/v1/manifest``.
             Do **not** add new callers of this endpoint.
         """
-        return await get_manifest(entrypoint=entrypoint)
+        return await get_manifest(entrypoint=entrypoint, fe_inputs=fe_inputs)
 
     # ------------------------------------------------------------------
     # Dev-only: local credential provisioning
