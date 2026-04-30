@@ -109,7 +109,7 @@ class BaseSQLClient(ClientInterface):
             self.engine = create_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.DB_CONFIG.connect_args,
-                pool_pre_ping=True,
+                pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
 
             # Test connection briefly to validate credentials.
@@ -589,7 +589,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             self.engine = create_async_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.DB_CONFIG.connect_args,
-                pool_pre_ping=True,
+                pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
 
             # Test connection briefly to validate credentials

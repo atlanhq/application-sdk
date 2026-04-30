@@ -273,6 +273,13 @@
     "expires": "2026-05-27",
     "added_by": "vishalkatlan"
   },
+  "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2SERVICES3-16316411": {
+    "package": "github.com/aws/aws-sdk-go-v2/service/s3",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.97.3; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
+    "expires": "2026-05-29",
+    "added_by": "sachi-atlan"
+  },
   "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2AWSPROTOCOLEVENTSTREAM-16316402": {
     "package": "github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream",
     "severity": "HIGH",
