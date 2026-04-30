@@ -332,7 +332,7 @@ class IncrementalExtractor(App):
 Pass a `RetryPolicy` to `@task` via `retry_policy` to override the default (3 attempts, exponential backoff up to 5 minutes):
 
 ```python
-from application_sdk.execution import RetryPolicy
+from application_sdk.app import RetryPolicy
 
 NO_RETRY = RetryPolicy(max_attempts=1)
 AGGRESSIVE = RetryPolicy(
