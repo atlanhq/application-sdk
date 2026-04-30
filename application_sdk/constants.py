@@ -197,9 +197,7 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 #: it reaches complete_activity_task(), leaving the SDK with a phantom
 #: "in-use" task slot that blocks shutdown for the entire
 #: graceful_shutdown_timeout.
-SHUTDOWN_DRAIN_DELAY_SECONDS = int(
-    os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5)
-)
+SHUTDOWN_DRAIN_DELAY_SECONDS = int(os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5))
 
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
