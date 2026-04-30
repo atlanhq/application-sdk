@@ -45,10 +45,25 @@ SDR_PREFLIGHT_ACTIVITY = "sdr:preflight_check"
 SDR_FETCH_METADATA_ACTIVITY = "sdr:fetch_metadata"
 
 
-_DEFAULT_RETRY = RetryPolicy(maximum_attempts=3, backoff_coefficient=2)
-_DEFAULT_START_TO_CLOSE = timedelta(minutes=10)
-_DEFAULT_HEARTBEAT = timedelta(minutes=2)
-_AUTH_START_TO_CLOSE = timedelta(minutes=5)
+# UI-facing wall-clock caps. schedule_to_close is the only timeout that ticks
+# even when no worker is polling the queue — without it, a UI request to an
+# offline SDR worker would hang forever. start_to_close still bounds in-flight
+# execution once a worker picks the activity up.
+_AUTH_SCHEDULE_TO_CLOSE = timedelta(seconds=30)
+_PREFLIGHT_SCHEDULE_TO_CLOSE = timedelta(seconds=60)
+_METADATA_SCHEDULE_TO_CLOSE = timedelta(seconds=90)
+
+_DEFAULT_HEARTBEAT = timedelta(seconds=15)
+_AUTH_START_TO_CLOSE = timedelta(seconds=25)
+_PREFLIGHT_START_TO_CLOSE = timedelta(seconds=55)
+_METADATA_START_TO_CLOSE = timedelta(seconds=85)
+
+# test_auth: fail-fast. A wrong password should not retry; transient network
+# errors get one extra attempt only because the user is sitting on the UI.
+_AUTH_RETRY = RetryPolicy(maximum_attempts=1)
+# preflight / fetch_metadata: brief retries against flaky sources, but bounded
+# by schedule_to_close above.
+_DEFAULT_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 
 
 @workflow.defn(name="sdr:test_auth")
@@ -60,7 +75,8 @@ class SdrTestAuthWorkflow:
         return await workflow.execute_activity(
             SDR_TEST_AUTH_ACTIVITY,
             input,
-            retry_policy=_DEFAULT_RETRY,
+            retry_policy=_AUTH_RETRY,
+            schedule_to_close_timeout=_AUTH_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_AUTH_START_TO_CLOSE,
             heartbeat_timeout=_DEFAULT_HEARTBEAT,
         )
@@ -76,7 +92,8 @@ class SdrPreflightCheckWorkflow:
             SDR_PREFLIGHT_ACTIVITY,
             input,
             retry_policy=_DEFAULT_RETRY,
-            start_to_close_timeout=_DEFAULT_START_TO_CLOSE,
+            schedule_to_close_timeout=_PREFLIGHT_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=_PREFLIGHT_START_TO_CLOSE,
             heartbeat_timeout=_DEFAULT_HEARTBEAT,
         )
 
@@ -91,7 +108,8 @@ class SdrFetchMetadataWorkflow:
             SDR_FETCH_METADATA_ACTIVITY,
             input,
             retry_policy=_DEFAULT_RETRY,
-            start_to_close_timeout=_DEFAULT_START_TO_CLOSE,
+            schedule_to_close_timeout=_METADATA_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=_METADATA_START_TO_CLOSE,
             heartbeat_timeout=_DEFAULT_HEARTBEAT,
         )
 

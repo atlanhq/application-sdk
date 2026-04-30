@@ -74,6 +74,37 @@ class TestSdrWorkflows:
         assert SdrFetchMetadataWorkflow in SDR_WORKFLOWS
 
 
+class TestSdrTimeoutsAndRetries:
+    """Guard the UI-facing wall-clock caps and retry policy.
+
+    These are user-visible: a regression that bumps auth schedule_to_close to
+    minutes would silently turn a "worker offline" error into an indefinite
+    spinner. Explicit assertions catch that.
+    """
+
+    def test_schedule_to_close_caps(self) -> None:
+        from datetime import timedelta
+
+        from application_sdk.execution._temporal import sdr
+
+        assert sdr._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=30)
+        assert sdr._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=60)
+        assert sdr._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=90)
+
+    def test_auth_retry_is_fail_fast(self) -> None:
+        from application_sdk.execution._temporal import sdr
+
+        # test_auth must not retry on bad credentials -- one attempt, period.
+        assert sdr._AUTH_RETRY.maximum_attempts == 1
+
+    def test_default_retry_is_bounded(self) -> None:
+        from application_sdk.execution._temporal import sdr
+
+        # preflight + fetch_metadata: at most 2 attempts so retries never
+        # blow past the schedule_to_close cap.
+        assert sdr._DEFAULT_RETRY.maximum_attempts == 2
+
+
 class TestBuildSdrActivities:
     """Tests for build_sdr_activities()."""
 
