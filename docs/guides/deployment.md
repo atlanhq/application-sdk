@@ -56,7 +56,7 @@ All components default to `false` unless listed. Only enable what your app actua
 The SDK provides a base image with Python, uv, and Dapr pre-configured. Extend it:
 
 ```dockerfile
-FROM ghcr.io/atlanhq/application-sdk:latest
+FROM ghcr.io/atlanhq/application-sdk:3.4.0
 
 WORKDIR /app
 

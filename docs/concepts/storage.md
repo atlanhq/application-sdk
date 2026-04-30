@@ -104,6 +104,7 @@ class MyConnector(App):
                 tier=StorageTier.TRANSIENT,
             )
         )
+        # up.ref is a single FileReference (not a list)
 
         # Later, download back to a local path using a FileReference
         dl = await self.download(

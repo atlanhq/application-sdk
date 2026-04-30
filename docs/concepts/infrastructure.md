@@ -24,7 +24,7 @@ from application_sdk.infrastructure import (
 | `secret_store` | `SecretStore` | `DaprSecretStore` | `MockSecretStore` |
 | `state_store` | `StateStore` | `DaprStateStore` | `MockStateStore` |
 | `storage` | `ObjectStore` | obstore S3/GCS/Azure | local filesystem |
-| `event_binding` | `Binding` | `DaprBinding` | `MagicMock` |
+| `event_binding` | `Binding` | `DaprBinding` | `MockBinding` |
 
 All fields are optional (`None` by default). Accessing a `None` field raises a configuration error at runtime.
 
@@ -107,9 +107,10 @@ class Binding(Protocol):
 ```
 
 Wraps Dapr output bindings (queues, storage, SMTP, etc.). Accessed via `get_infrastructure().event_binding`.
-```
 
-Distributes concurrency slots across workers. `RedisCapacityPool` (production) uses Redis for cross-pod coordination; `LocalCapacityPool` uses an in-process semaphore.
+### CapacityPool
+
+Distributes concurrency slots across workers. `RedisCapacityPool` (production) uses Redis for cross-pod coordination; `LocalCapacityPool` uses an in-process semaphore. See [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool) for the full Protocol, configuration, and usage examples.
 
 ---
 

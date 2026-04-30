@@ -54,6 +54,12 @@ This lists the bundled `components/*.yaml` files — they are committed to the r
 uv run poe start-deps
 ```
 
+To provision credentials into the local vault without running the full app (useful for standalone handler tests):
+
+```bash
+uv run poe provision-credentials
+```
+
 ### Step 4: Run the app with `run_dev_combined`
 
 Create a `run_dev.py` script (or add to your existing one):

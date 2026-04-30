@@ -101,6 +101,7 @@ Use `FileReference` to pass large data between tasks through object storage rath
 
 ```python
 from application_sdk.contracts import Output, FileReference, StorageTier
+from application_sdk.contracts.storage import UploadInput, DownloadInput
 
 class FetchOutput(Output):
     data_file: FileReference
@@ -110,12 +111,12 @@ class MyConnector(App):
     async def fetch_data(self, input: FetchInput) -> FetchOutput:
         path = "/tmp/data.parquet"
         write_parquet(path, records)
-        refs = await self.upload(local_dir="/tmp/", prefix="artifacts/", tier=StorageTier.TRANSIENT)
-        return FetchOutput(data_file=refs[0])
+        up = await self.upload(UploadInput(local_path="/tmp/", tier=StorageTier.TRANSIENT))
+        return FetchOutput(data_file=up.ref)
 
     @task
     async def transform(self, input: TransformInput) -> TransformOutput:
-        await self.download([input.data_file], local_dir="/tmp/")
+        await self.download(DownloadInput(ref=input.data_file, local_path="/tmp/"))
         df = read_parquet("/tmp/data.parquet")
         ...
 ```

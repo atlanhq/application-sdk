@@ -54,13 +54,10 @@ The Dapr component name is `statestore` by default (read at module import time f
 **Testing without Dapr:**
 
 ```python
-from unittest.mock import AsyncMock, MagicMock
+from application_sdk.testing import MockStateStore
 
-mock_state = MagicMock()
-mock_state.load = AsyncMock(return_value=None)
-mock_state.save = AsyncMock()
-mock_state.delete = AsyncMock(return_value=True)
-mock_state.list_keys = AsyncMock(return_value=[])
+mock_state = MockStateStore()
+# Supports save/load/delete/list_keys and records all calls for assertions
 ```
 
 ---
@@ -171,11 +168,10 @@ The component name is read from `EVENT_STORE_NAME` at module import time (defaul
 **Testing without Dapr:**
 
 ```python
-from unittest.mock import AsyncMock, MagicMock
+from application_sdk.testing import MockPubSub
 
-mock_pubsub = MagicMock()
-mock_pubsub.publish = AsyncMock()
-mock_pubsub.subscribe = AsyncMock(return_value=MagicMock(is_active=True))
+mock_pubsub = MockPubSub()
+# Supports publish/subscribe and records calls; use mock_pubsub.get_published(topic) to assert
 ```
 
 ---
@@ -296,16 +292,7 @@ async def parallel_fetch(self, input: FetchInput) -> FetchOutput:
 
 **Configuring `RedisCapacityPool`:**
 
-```python
-import redis
-from application_sdk.infrastructure.capacity import configure_capacity_pool
-from application_sdk.infrastructure._redis.capacity import RedisCapacityPool
-
-redis_client = redis.Redis(host="localhost", port=6379)
-configure_capacity_pool(RedisCapacityPool(redis_client=redis_client, max_permits=10))
-```
-
-Or set `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` env vars and the pool is configured automatically (see [Configuration](../configuration.md)).
+Set `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` env vars and `RedisCapacityPool` is configured automatically at startup — no code changes needed. See [Configuration](../configuration.md) for all Redis env vars.
 
 ---
 
@@ -313,10 +300,10 @@ Or set `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` env vars and the pool is confi
 
 | Protocol | Dapr Component | Mock | Access | Purpose |
 |---|---|---|---|---|
-| `StateStore` | `statestore` (`STATE_STORE_NAME`) | `MagicMock` | `get_infrastructure().state_store` | Checkpoint / resume |
+| `StateStore` | `statestore` (`STATE_STORE_NAME`) | `MockStateStore` | `get_infrastructure().state_store` | Checkpoint / resume |
 | `SecretStore` | Dapr secret store | `MockSecretStore` | `get_infrastructure().secret_store` | Credential resolution |
-| `Binding` | Dapr binding | `MagicMock` | `get_infrastructure().event_binding` | External I/O |
-| `PubSub` | `eventstore` (`EVENT_STORE_NAME`) | `MagicMock` | Dapr client directly | Event emission/subscription |
+| `Binding` | Dapr binding | `MockBinding` | `get_infrastructure().event_binding` | External I/O |
+| `PubSub` | `eventstore` (`EVENT_STORE_NAME`) | `MockPubSub` | Dapr client directly | Event emission/subscription |
 | `CapacityPool` | Redis (optional) | `LocalCapacityPool` | `get_capacity_pool()` | Concurrency limits |
 
 `StateStore`, `SecretStore`, and `Binding` are held in `InfrastructureContext` and accessed via `get_infrastructure()`. `PubSub` is accessed via the Dapr client directly. `CapacityPool` is a separate module-level singleton accessed via `get_capacity_pool()`. See [Infrastructure](infrastructure.md) for the test fixture pattern and `set_infrastructure()` / `clear_infrastructure()` usage.

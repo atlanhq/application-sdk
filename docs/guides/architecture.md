@@ -228,93 +228,125 @@ Key chart features: KEDA `ScaledObject` (worker scales to zero on empty queue), 
 application_sdk/
 ├── app/                    # Core: App ABC, @task, AppRegistry, TaskRegistry
 │   ├── base.py             # App class, run() wrapper, determinism helpers
-│   ├── task.py             # @task decorator, signature validation
+│   ├── client.py           # App client bootstrap helpers
+│   ├── context.py          # AppContext, logging, infra/credential access
+│   ├── entrypoint.py       # @entrypoint and @on_event decorators
 │   ├── registry.py         # AppRegistry, TaskRegistry singletons
-│   └── context.py          # AppContext, logging, infra/credential access
+│   └── task.py             # @task decorator, signature validation
 │
 ├── contracts/              # Typed cross-boundary contracts
 │   ├── base.py             # Input, Output, HeartbeatDetails base classes
-│   ├── types.py            # MaxItems, FileReference, GitReference, SerializableEnum
-│   └── events.py           # Lifecycle event models
+│   ├── cleanup.py          # CleanupInput, CleanupOutput
+│   ├── events.py           # Lifecycle event models
+│   ├── storage.py          # UploadInput, UploadOutput, DownloadInput, DownloadOutput
+│   └── types.py            # MaxItems, FileReference, GitReference, SerializableEnum, StorageTier
 │
 ├── handler/                # HTTP handler framework
-│   ├── base.py             # Handler ABC
+│   ├── base.py             # Handler ABC, HandlerError
+│   ├── context.py          # HandlerContext
 │   ├── contracts.py        # AuthInput/Output, PreflightInput/Output, etc.
+│   ├── manifest.py         # Manifest generation helpers
 │   └── service.py          # create_app_handler_service() FastAPI factory
 │
 ├── execution/              # Temporal abstraction layer (not for direct use)
-│   ├── retry.py            # RetryPolicy (framework wrapper)
+│   ├── decorators.py       # Execution-layer decorators
+│   ├── errors.py           # Execution error types
 │   ├── heartbeat.py        # HeartbeatController, run_in_thread
+│   ├── retry.py            # RetryPolicy (framework wrapper)
 │   ├── sandbox.py          # SandboxConfig with framework defaults
+│   ├── settings.py         # Worker and activity settings
 │   └── _temporal/          # Internal Temporal integration (never import directly)
 │
 ├── infrastructure/         # Infrastructure protocols and implementations
-│   ├── state.py            # StateStore Protocol + implementations
-│   ├── secrets.py          # SecretStore Protocol + implementations
-│   ├── pubsub.py           # PubSub Protocol + implementations
 │   ├── bindings.py         # Binding Protocol + implementations
-│   ├── capacity.py         # CapacityPool Protocol + implementations
+│   ├── capacity.py         # CapacityPool Protocol + get_capacity_pool()
 │   ├── context.py          # InfrastructureContext, get_infrastructure()
+│   ├── credential_vault.py # Credential vault helpers
+│   ├── pubsub.py           # PubSub Protocol + implementations
+│   ├── secrets.py          # SecretStore Protocol + implementations
+│   ├── state.py            # StateStore Protocol + implementations
 │   ├── _dapr/              # Internal Dapr implementations
 │   └── _redis/             # Internal Redis implementations
 │
 ├── credentials/            # Typed credential system
+│   ├── agent.py            # Agent credential helpers
+│   ├── atlan.py            # AtlanApiToken, AtlanOAuthClient
+│   ├── atlan_client.py     # AtlanClientMixin
+│   ├── errors.py           # Credential error types
+│   ├── git.py              # GitSshCredential, GitTokenCredential
+│   ├── oauth.py            # OAuth token exchange helpers
 │   ├── ref.py              # CredentialRef and helper constructors
-│   ├── types.py            # Credential types (BasicCredential, etc.)
 │   ├── registry.py         # CredentialTypeRegistry for custom credential types
-│   ├── utils.py            # parse_credentials_extra and credential helpers
 │   ├── resolver.py         # CredentialResolver
-│   └── atlan_client.py     # AtlanClientMixin
+│   ├── spec.py             # Credential spec types
+│   ├── types.py            # Credential types (BasicCredential, etc.)
+│   └── utils.py            # parse_credentials_extra and credential helpers
 │
 ├── clients/                # External-system client base classes and utilities
+│   ├── azure/              # Azure-specific auth and client helpers
 │   ├── base.py             # BaseClient ABC
-│   ├── sql.py              # BaseSQLClient (load, run_query, run_count_query)
 │   ├── models.py           # DatabaseConfig and shared client models
 │   ├── redis.py            # RedisClient
-│   ├── azure/              # Azure-specific auth and client helpers
+│   ├── sql.py              # BaseSQLClient (load, run_query, run_count_query)
 │   └── ssl_utils.py        # Custom CA certificate loading for httpx/aiohttp
 │
 ├── common/                 # Shared utilities (not SDK-specific)
-│   ├── sql_filters.py      # SQL escaping, identifier quoting, read_sql_files
+│   ├── aws_utils.py        # AWS credential and session helpers
 │   ├── concurrency.py      # get_safe_num_threads()
-│   ├── path.py             # Path normalisation helpers
-│   ├── file_ops.py         # File-system utilities
+│   ├── error_codes.py      # Component-specific error code constants
+│   ├── exc_utils.py        # Exception handling utilities
 │   ├── file_converter.py   # Format conversion helpers
+│   ├── file_ops.py         # File-system utilities
+│   ├── models.py           # Shared Pydantic models
+│   ├── path.py             # Path normalisation helpers
+│   ├── sql_filters.py      # SQL escaping, identifier quoting, read_sql_files
 │   ├── transforms.py       # Data transformation utilities
 │   ├── types.py            # Shared type aliases
-│   ├── models.py           # Shared Pydantic models
 │   ├── utils.py            # Miscellaneous utilities
-│   ├── aws_utils.py        # AWS credential and session helpers
 │   └── incremental/        # Incremental-extraction helpers (DuckDB, markers)
 │
 ├── storage/                # obstore-backed object storage
-│   ├── ops.py              # upload_file, download_file, delete, exists
+│   ├── batch.py            # Batch transfer helpers
+│   ├── binding.py          # Dapr YAML → obstore config parsing
+│   ├── cloud.py            # Cloud provider storage helpers
+│   ├── errors.py           # Storage error types
 │   ├── factory.py          # create_local_store, create_memory_store, etc.
-│   └── binding.py          # Dapr YAML → obstore config parsing
+│   ├── file_ref_sync.py    # FileReference synchronisation helpers
+│   ├── ops.py              # upload_file, download_file, delete, exists
+│   ├── reference.py        # FileReference tracker
+│   └── transfer.py         # High-level transfer orchestration
 │
 ├── observability/          # Logging, tracing, and metrics adaptors
-│   ├── logger_adaptor.py   # AtlanLoggerAdapter (loguru-backed)
-│   ├── traces_adaptor.py   # OTel TracerProvider setup
-│   ├── metrics_adaptor.py  # OTel MeterProvider setup
 │   ├── app_vitals.py       # App Vitals lifecycle interceptor
+│   ├── context.py          # Observability context carrier
+│   ├── correlation.py      # Correlation ID propagation
+│   ├── error_classifier.py # Error type classification for observability
+│   ├── logger_adaptor.py   # AtlanLoggerAdapter (loguru-backed)
+│   ├── metrics_adaptor.py  # OTel MeterProvider setup
+│   ├── models.py           # Observability data models
+│   ├── observability.py    # Observability store sink
+│   ├── resource_sampler.py # Resource-based sampling helpers
 │   ├── segment_client.py   # Segment analytics client
 │   ├── trace_context.py    # Correlation ID propagation
-│   └── context.py          # Observability context carrier
+│   ├── traces_adaptor.py   # OTel TracerProvider setup
+│   └── utils.py            # Shared observability utilities
 │
 ├── server/                 # Internal FastAPI / health-check servers
-│   ├── health.py           # /health and /ready endpoints
 │   ├── fastapi/            # FastAPI app factory helpers
-│   └── middleware/         # Logging, auth, and CORS middleware
+│   ├── health.py           # /health and /ready endpoints
+│   ├── mcp/                # MCP server integration
+│   └── middleware/         # Logging and metrics middleware
 │
 ├── templates/              # High-level connector templates
+│   ├── base_metadata_extractor.py
+│   ├── incremental_sql_metadata_extractor.py
 │   ├── sql_metadata_extractor.py
-│   ├── sql_query_extractor.py
-│   └── incremental_sql_metadata_extractor.py
+│   └── sql_query_extractor.py
 │
 ├── transformers/           # Asset transformation pipelines (internal)
 │   ├── atlas/              # Atlas entity transformers
-│   ├── query/              # Query log transformers
-│   └── common/             # Shared transformer utilities
+│   ├── common/             # Shared transformer utilities
+│   └── query/              # Query log transformers
 │
 ├── outputs/                # Output writer utilities
 │   ├── collector.py        # Batch collector for output records
@@ -323,13 +355,14 @@ application_sdk/
 ├── tools/                  # CLI and utility tools
 │   └── provision_credentials.py  # Credential provisioning helper
 │
-├── decorators/             # Miscellaneous class and function decorators
-│
 ├── docgen/                 # Contract documentation generation
+│   ├── exporters/          # Doc export formats
+│   ├── models/             # Doc data models
+│   └── parsers/            # Contract schema parsers
 │
 ├── testing/                # In-memory mocks and pytest fixtures
-│   ├── mocks.py            # MockStateStore, MockSecretStore, MockPubSub, etc.
-│   └── fixtures.py         # pytest fixtures (clean_app_registry, etc.)
+│   ├── fixtures.py         # pytest fixtures (clean_app_registry, etc.)
+│   └── mocks.py            # MockStateStore, MockSecretStore, MockPubSub, MockBinding, etc.
 │
 ├── test_utils/             # Integration test helpers
 │   └── integration/        # Integration test runner and fixtures

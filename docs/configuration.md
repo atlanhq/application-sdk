@@ -11,7 +11,7 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_APP_MODULE` | _(required)_ | App class to load: `module.path:ClassName` (e.g. `app.app:MyExtractor`). Startup fails without it. Set in your `Dockerfile` as `ENV ATLAN_APP_MODULE=…` or pass via `--app` CLI flag. |
-| `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. |
+| `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. **v2-compat fallback:** `APPLICATION_MODE` (deprecated; mapped at startup to the equivalent v3 mode). |
 | `ATLAN_APPLICATION_NAME` | `default` | Application name. Used in object-store paths, logging, and workflow identification. |
 | `ATLAN_DEPLOYMENT_NAME` | `local` | Deployment name. Distinguishes dev / staging / prod deployments of the same app. |
 | `ATLAN_TENANT_ID` | `default` | Tenant identifier for multi-tenant deployments. |
@@ -110,7 +110,6 @@ Dapr component names are read at module-import time (not at runtime) because the
 | `EVENT_STORE_NAME` | `eventstore` | Dapr pub/sub component name. |
 | `DEPLOYMENT_SECRET_STORE_NAME` | `deployment-secret-store` | Dapr secret store holding deployment-scoped secrets (auth credentials, etc.). |
 | `DAPR_MAX_GRPC_MESSAGE_LENGTH` | `104857600` (100 MB) | Maximum gRPC message size in bytes for Dapr client calls. Increase for apps that move large payloads through Dapr state or bindings. |
-| `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
 
 ---
 
@@ -151,6 +150,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
+| `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by `httpx` and `aiohttp` clients when set. |
 
 ---
@@ -197,7 +197,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OTEL_SERVICE_NAME` | _(derived from app module)_ | Service name in telemetry data. Override with `ATLAN_SERVICE_NAME` (takes priority). |
+| `OTEL_SERVICE_NAME` | _(derived from app module)_ | Service name in telemetry data. At runtime, `ATLAN_SERVICE_NAME` takes priority (resolved in `AppConfig`). Import-time telemetry (traces/metrics adaptors) reads only `OTEL_SERVICE_NAME` directly. |
 | `OTEL_SERVICE_VERSION` | _(SDK version)_ | Service version in telemetry data. |
 | `OTEL_RESOURCE_ATTRIBUTES` | _(empty)_ | Additional OTel resource attributes (key=value pairs). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint. Set to the node IP collector in Kubernetes: `$(K8S_NODE_IP):4317`. |

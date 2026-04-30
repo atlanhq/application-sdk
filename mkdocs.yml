@@ -132,6 +132,8 @@ nav:
       - Setup: standards/setup.md
       - DeepWiki MCP: standards/deepwiki.md
       - Review Checklist: standards/review-checklist.md
+      - Release Flow: standards/release-flow.md
+      - v3 Readiness: standards/v3-readiness.md
   - Architecture Decisions:
       - adr/index.md
       - adr/0001-per-app-handlers.md
@@ -149,4 +151,6 @@ nav:
       - CLI: reference/cli.md
       - HTTP API: reference/http-api.md
       - Configuration: configuration.md
+  - Postmortems:
+      - Shutdown Drain Delay (2026-03-27): rca-shutdown-drain-delay-2026-03-27.md
   - API Reference: https://k.atlan.dev/application-sdk/main/api

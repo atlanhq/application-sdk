@@ -24,14 +24,14 @@ ref = api_key_ref("my-service")
 |----------|----------------|-----------------|
 | `basic_ref(name)` | `BasicCredential` | `username`, `password` |
 | `api_key_ref(name)` | `ApiKeyCredential` | `api_key`, `header_name`, `prefix` |
-| `bearer_token_ref(name)` | `BearerTokenCredential` | `token`, `token_type` |
-| `oauth_client_ref(name)` | `OAuthClientCredential` | `client_id`, `client_secret`, `token_url`, `scopes` |
-| `certificate_ref(name)` | `CertificateCredential` | `cert_pem`, `key_pem`, `ca_pem` |
-| `git_ssh_ref(name)` | `GitSshCredential` | `private_key`, `passphrase` |
-| `git_token_ref(name)` | `GitTokenCredential` | `token` |
-| `atlan_api_token_ref(name)` | `AtlanApiToken` | `api_token`, `base_url` |
-| `atlan_oauth_client_ref(name)` | `AtlanOAuthClient` | `client_id`, `client_secret`, `base_url` |
-| `legacy_credential_ref(guid, credential_type="unknown")` | `RawCredential` | `extra` (raw dict, legacy fallback) — **deprecated**, emits `DeprecationWarning` |
+| `bearer_token_ref(name)` | `BearerTokenCredential` | `token`, `expires_at` |
+| `oauth_client_ref(name)` | `OAuthClientCredential` | `client_id`, `client_secret`, `token_url`, `scopes`, `access_token`, `refresh_token`, `expires_at` |
+| `certificate_ref(name)` | `CertificateCredential` | `cert_data`, `key_data`, `ca_data`, `passphrase` |
+| `git_ssh_ref(name)` | `GitSshCredential` | `key_data`, `passphrase` |
+| `git_token_ref(name)` | `GitTokenCredential` | `token`, `expires_at` |
+| `atlan_api_token_ref(name)` | `AtlanApiToken` | `token`, `base_url`, `expires_at` |
+| `atlan_oauth_client_ref(name)` | `AtlanOAuthClient` | `client_id`, `client_secret`, `token_url`, `scopes`, `access_token`, `refresh_token`, `expires_at`, `base_url` |
+| `legacy_credential_ref(guid, credential_type="unknown")` | `RawCredential` | `data` (raw dict, legacy fallback) — **deprecated**, emits `DeprecationWarning` |
 
 All factory functions accept an optional `store_name` keyword argument (default: `"default"`) to route to a specific `SecretStore`.
 
@@ -80,7 +80,8 @@ cred: OAuthClientCredential = await ctx.resolve_credential(oauth_client_ref("my-
 
 ```python
 cred: RawCredential = await ctx.resolve_credential(legacy_credential_ref(guid))
-value = cred.extra.get("some_field")  # dict access — use only when migrating v2 code
+value = cred.data.get("some_field")  # dict access — use only when migrating v2 code
+# or equivalently: cred.get("some_field")
 ```
 
 ---
@@ -157,6 +158,7 @@ class SecretStore(Protocol):
     async def get(self, name: str) -> str: ...
     async def get_optional(self, name: str) -> str | None: ...
     async def get_bulk(self, names: list[str]) -> dict[str, str]: ...
+    async def list_names(self) -> list[str]: ...
 ```
 
 Methods return raw string values (often JSON-encoded). `CredentialResolver` parses the string into the requested typed model.

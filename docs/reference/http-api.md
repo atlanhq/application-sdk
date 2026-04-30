@@ -230,7 +230,7 @@ Receive a Dapr cloud event. Routes to the appropriate `@on_event` handler.
 
 ### `POST /events/v1/drop`
 
-Acknowledge and discard a cloud event without processing it.
+Returns a Dapr `DROP` status, instructing the sidecar to drop the event without retry or dead-lettering.
 
 ---
 
