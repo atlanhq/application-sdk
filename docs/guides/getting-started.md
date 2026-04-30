@@ -167,6 +167,7 @@ DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 uv run python run_dev.py
 
 ## Next steps
 
+- **Build a real connector** → [Build Your First Connector](./build-your-first-app.md)
 - **Build a SQL connector** → [SQL Application Guide](./sql-application-guide.md)
 - **Understand the architecture** → [Architecture](./architecture.md)
 - **Deep-dive on Apps and tasks** → [Apps](../concepts/apps.md) · [Tasks](../concepts/tasks.md)
