@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -146,8 +148,12 @@ class TemporalAuthManager:
     def _get_token_service(self) -> OAuthTokenService:
         """Lazily construct the OAuthTokenService from TemporalAuthConfig."""
         if self._token_service is None:
-            from application_sdk.credentials.oauth import OAuthTokenService
-            from application_sdk.credentials.types import OAuthClientCredential
+            from application_sdk.credentials.oauth import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                OAuthTokenService,
+            )
+            from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                OAuthClientCredential,
+            )
 
             cred = OAuthClientCredential(
                 client_id=self.config.client_id,
@@ -225,17 +231,16 @@ class TemporalAuthManager:
         await self._emit_token_refresh_event(expires_at)
 
     async def _emit_token_refresh_event(self, expires_at: datetime | None) -> None:
-        """Emit a token_refresh lifecycle event via the EventBus (best-effort)."""
-        import os
-        import time
+        """Emit a token_refresh lifecycle event via the event binding (best-effort)."""
 
         try:
-            from application_sdk.execution._temporal.interceptors.event_bus import (
-                get_event_bus,
+            from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
+                ApplicationEventNames,
+                Event,
+                EventTypes,
             )
-            from application_sdk.execution._temporal.interceptors.events import (
-                TOKEN_REFRESH,
-                LifecycleEvent,
+            from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                _publish_event_via_binding,
             )
 
             app_name = os.environ.get("ATLAN_APP_NAME", "")
@@ -244,11 +249,10 @@ class TemporalAuthManager:
             expires_at_ts = expires_at.timestamp() if expires_at else 0.0
             remaining = max(0.0, expires_at_ts - now)
 
-            event = LifecycleEvent(
-                event_name=TOKEN_REFRESH,
-                app_name=app_name,
-                timestamp_ms=int(now * 1000),
-                extra={
+            event = Event(
+                event_type=EventTypes.APPLICATION_EVENT.value,
+                event_name=ApplicationEventNames.TOKEN_REFRESH.value,
+                data={
                     "force_refresh": "true",
                     "token_expiry_time": str(expires_at_ts),
                     "time_until_expiry": str(remaining),
@@ -257,7 +261,7 @@ class TemporalAuthManager:
                     "deployment_name": deployment_name,
                 },
             )
-            await get_event_bus().emit(event)
+            await _publish_event_via_binding(event)
         except Exception:
             logger.warning("Failed to emit token_refresh event", exc_info=True)
 

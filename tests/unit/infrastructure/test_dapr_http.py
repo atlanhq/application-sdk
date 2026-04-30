@@ -16,6 +16,7 @@ from application_sdk.infrastructure._dapr.http import (
     STATE_PATH,
     AsyncDaprClient,
     BindingResult,
+    wait_for_dapr_sidecar,
 )
 
 
@@ -171,6 +172,94 @@ class TestAsyncDaprClientBinding:
 
         assert result.data is None
 
+    async def test_invoke_binding_json_data_not_double_encoded(self, mock_client):
+        """JSON bytes must be embedded as a parsed object, not a string.
+
+        Regression test: prior to the fix, ``data.decode()`` produced a
+        string which ``json=body`` then double-encoded, causing Dapr HTTP
+        bindings to forward a JSON string instead of an object (422).
+        """
+        client, mock_http = mock_client
+        mock_http.post.return_value = MagicMock(
+            status_code=200,
+            content=b"",
+            headers={},
+            raise_for_status=MagicMock(),
+        )
+
+        json_payload = b'{"event_name": "worker_start", "nested": {"key": 1}}'
+        await client.invoke_binding("eventstore", "create", data=json_payload)
+
+        body = mock_http.post.call_args[1]["json"]
+        # data must be a dict, NOT a string
+        assert isinstance(body["data"], dict)
+        assert body["data"]["event_name"] == "worker_start"
+        assert body["data"]["nested"] == {"key": 1}
+
+    async def test_invoke_binding_json_array_parsed_as_list(self, mock_client):
+        """JSON arrays must be embedded as a parsed list, not a string."""
+        client, mock_http = mock_client
+        mock_http.post.return_value = MagicMock(
+            status_code=200, content=b"", headers={}, raise_for_status=MagicMock()
+        )
+
+        await client.invoke_binding("my-binding", "create", data=b"[1, 2, 3]")
+
+        body = mock_http.post.call_args[1]["json"]
+        assert isinstance(body["data"], list)
+        assert body["data"] == [1, 2, 3]
+
+    async def test_invoke_binding_json_primitive_sent_as_string(self, mock_client):
+        """JSON primitives (numbers, booleans, null) stay as decoded strings."""
+        client, mock_http = mock_client
+        mock_http.post.return_value = MagicMock(
+            status_code=200, content=b"", headers={}, raise_for_status=MagicMock()
+        )
+
+        await client.invoke_binding("my-binding", "create", data=b"42")
+
+        body = mock_http.post.call_args[1]["json"]
+        assert body["data"] == "42"
+
+    async def test_invoke_binding_non_json_data_falls_back_to_string(self, mock_client):
+        """Non-JSON bytes should still be sent as a decoded string."""
+        client, mock_http = mock_client
+        mock_http.post.return_value = MagicMock(
+            status_code=200, content=b"", headers={}, raise_for_status=MagicMock()
+        )
+
+        await client.invoke_binding("my-binding", "create", data=b"plain text")
+
+        body = mock_http.post.call_args[1]["json"]
+        assert body["data"] == "plain text"
+
+    async def test_invoke_binding_empty_bytes_omits_data_key(self, mock_client):
+        """Empty bytes (falsy) should not add a data key to the body."""
+        client, mock_http = mock_client
+        mock_http.post.return_value = MagicMock(
+            status_code=200, content=b"", headers={}, raise_for_status=MagicMock()
+        )
+
+        await client.invoke_binding("my-binding", "create", data=b"")
+
+        body = mock_http.post.call_args[1]["json"]
+        assert "data" not in body
+
+    async def test_invoke_binding_invalid_utf8_falls_back_to_replacement(
+        self, mock_client
+    ):
+        """Invalid UTF-8 bytes should decode with replacement characters."""
+        client, mock_http = mock_client
+        mock_http.post.return_value = MagicMock(
+            status_code=200, content=b"", headers={}, raise_for_status=MagicMock()
+        )
+
+        await client.invoke_binding("my-binding", "create", data=b"\xff\xfe")
+
+        body = mock_http.post.call_args[1]["json"]
+        assert isinstance(body["data"], str)
+        assert "\ufffd" in body["data"]  # replacement character
+
 
 class TestAsyncDaprClientMetadata:
     async def test_get_metadata(self, mock_client):
@@ -267,3 +356,73 @@ class TestRetryConfiguration:
 
         client = AsyncDaprClient(base_url="http://localhost:3500", retries=0)
         assert isinstance(client._client._transport, RetryTransport)
+
+
+class TestWaitForDaprSidecar:
+    async def test_ready_immediately(self):
+        """Returns as soon as sidecar responds 204 on first poll."""
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_get = AsyncMock(return_value=mock_response)
+        with patch(
+            "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+        ) as mock_cls:
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+        mock_get.assert_called_once()
+
+    async def test_ready_after_retries(self):
+        """Returns once sidecar eventually responds 204 after non-204 responses."""
+        not_ready = MagicMock()
+        not_ready.status_code = 503
+        ready = MagicMock()
+        ready.status_code = 204
+        mock_get = AsyncMock(side_effect=[not_ready, not_ready, ready])
+        with patch(
+            "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+        ) as mock_cls:
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+        assert mock_get.call_count == 3
+
+    async def test_timeout_logs_warning(self):
+        """Logs a warning and returns when sidecar never becomes ready."""
+        not_ready = MagicMock()
+        not_ready.status_code = 503
+        mock_get = AsyncMock(return_value=not_ready)
+        with (
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger") as mock_logger,
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
+        mock_logger.warning.assert_called_once()
+        assert "not ready" in mock_logger.warning.call_args[0][0]
+
+    async def test_connection_error_does_not_crash(self):
+        """Poll loop survives connection errors and eventually times out cleanly."""
+        import httpx as _httpx
+
+        mock_get = AsyncMock(side_effect=_httpx.ConnectError("refused"))
+        with (
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger"),
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)

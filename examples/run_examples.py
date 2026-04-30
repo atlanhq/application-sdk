@@ -10,11 +10,13 @@ Usage (from examples/):
     python run_examples.py
 """
 
+import collections
 import json
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -37,6 +39,10 @@ class ExampleConfig:
     name: str
     module: str
     workflow_input: dict[str, Any]
+    # Credentials to provision before starting the workflow (mimics Heracles).
+    # If set, POSTed to /workflows/v1/dev/local-vault and the returned
+    # credential_guid is injected into the workflow start call.
+    credentials: dict[str, Any] | None = None
     skip_if_missing_env: list[str] = field(default_factory=list)
     # Set to True for skeleton/stub examples that should never be run in CI.
     is_stub: bool = False
@@ -63,18 +69,18 @@ def _build_examples() -> list[ExampleConfig]:
         ExampleConfig(
             name="application_sql",
             module="application_sql",
+            credentials={
+                "host": postgres_host,
+                "username": "postgres",
+                "password": postgres_password,
+                "port": "5432",
+                "database": "postgres",
+            },
             workflow_input={
                 "connection": {
                     "connection_name": "test-connection",
                     "connection_qualified_name": "default/postgres/1728518400",
                 },
-                "credentials": [
-                    {"key": "host", "value": postgres_host},
-                    {"key": "username", "value": "postgres"},
-                    {"key": "password", "value": postgres_password},
-                    {"key": "port", "value": "5432"},
-                    {"key": "database", "value": "postgres"},
-                ],
             },
             skip_if_missing_env=["POSTGRES_HOST", "POSTGRES_PASSWORD"],
         ),
@@ -153,6 +159,15 @@ def _wait_for_health(timeout: int) -> bool:
     return False
 
 
+def _provision_credentials(credentials: dict[str, Any]) -> str | None:
+    response = _http_post(f"{BASE_URL}/workflows/v1/dev/local-vault", credentials)
+    data = response.get("data", {})
+    guid = data.get("credential_guid") or response.get("credential_guid")
+    if not guid:
+        print(f"    provision response: {response}", flush=True)
+    return guid or None
+
+
 def _start_workflow(workflow_input: dict[str, Any]) -> tuple[str, str] | None:
     response = _http_post(f"{BASE_URL}/workflows/v1/start", workflow_input)
     data = response.get("data", {})
@@ -184,7 +199,7 @@ def _kill(proc: subprocess.Popen) -> None:
             time.sleep(2)
         proc.kill()
         proc.wait(timeout=15)
-    except Exception:
+    except Exception:  # noqa: S110  # best-effort kill; process may already have exited
         pass
 
 
@@ -200,20 +215,39 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
 
     env = os.environ.copy()
     env["ATLAN_LOCAL_DEVELOPMENT"] = "true"
-    # Components live in the repo root, not in examples/
-    env.setdefault("DAPR_COMPONENTS_PATH", str(_REPO_ROOT / "components"))
+    # Force-set (not setdefault) so a stale system-level DAPR_COMPONENTS_PATH
+    # never leaks in and points daprd at the wrong component directory.
+    env["DAPR_COMPONENTS_PATH"] = str(_REPO_ROOT / "components")
+    # Ensure UTF-8 output on Windows (avoid cp1252 garbling in logs).
+    env["PYTHONUTF8"] = "1"
 
     extra_kwargs: dict[str, Any] = {}
     if sys.platform == "win32":
         extra_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
+    # Run the subprocess from the repo root so that all relative paths
+    # (./components, ./local/dapr/objectstore, ./local/dapr/secrets, etc.)
+    # resolve to the same locations used by the daprd sidecar, which is
+    # also started from the repo root.
+    _examples_dir = str(_REPO_ROOT / "examples")
+    _module_path = str(_REPO_ROOT / "examples" / (example.module + ".py"))
+
     # Import the module under its real name (not __main__) so Temporal's
     # sandbox can resolve workflow classes via the module path rather than
     # falling back to the unresolvable __temporal_main__.
+    #
+    # On Windows, asyncio defaults to ProactorEventLoop (IOCP-based) which
+    # can deadlock when uvicorn.Server.serve() is awaited inside asyncio.gather()
+    # alongside a running Temporal worker.  WindowsSelectorEventLoopPolicy
+    # switches to the select()-based SelectorEventLoop, matching the
+    # epoll/kqueue behaviour on Linux/macOS and letting uvicorn start cleanly.
     launcher = (
         "import sys, importlib.util, asyncio\n"
+        "if sys.platform == 'win32':\n"
+        "    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n"
         "sys.path.insert(0, '.')\n"
-        f"spec = importlib.util.spec_from_file_location({example.module!r}, {example.module!r} + '.py')\n"
+        f"sys.path.insert(0, {_examples_dir!r})\n"
+        f"spec = importlib.util.spec_from_file_location({example.module!r}, {_module_path!r})\n"
         f"mod = importlib.util.module_from_spec(spec)\n"
         f"sys.modules[{example.module!r}] = mod\n"
         "spec.loader.exec_module(mod)\n"
@@ -230,21 +264,46 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
         "asyncio.run(run_dev_combined(_app_cls))\n"
     )
     proc = subprocess.Popen(
-        [sys.executable, "-c", launcher],
+        [sys.executable, "-u", "-c", launcher],
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        cwd=str(_REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
         **extra_kwargs,
     )
 
+    # Drain stdout in a background thread so the child never blocks on a full
+    # pipe buffer (Windows default: 4 KB; Linux: 64 KB).  Keep the last 200
+    # lines so we can print them on failure.
+    output_buf: collections.deque[str] = collections.deque(maxlen=200)
+
+    def _reader() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            output_buf.append(line.rstrip("\n"))
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
+    status = "UNKNOWN"
     start = time.monotonic()
     try:
         print("  waiting for server...", flush=True)
         if not _wait_for_health(HEALTH_TIMEOUT):
             return "SERVER_TIMEOUT", time.monotonic() - start
 
+        # Provision credentials before starting (mirrors Heracles → local-vault → start).
+        workflow_input = dict(example.workflow_input)
+        if example.credentials:
+            cred_guid = _provision_credentials(example.credentials)
+            if cred_guid is None:
+                return "PROVISION_FAILED", time.monotonic() - start
+            workflow_input["credential_guid"] = cred_guid
+
         print("  server ready, starting workflow...", flush=True)
-        ids = _start_workflow(example.workflow_input)
+        ids = _start_workflow(workflow_input)
         if ids is None:
             return "START_FAILED", time.monotonic() - start
 
@@ -256,6 +315,14 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
         return status, elapsed
     finally:
         _kill(proc)
+        reader_thread.join(timeout=5)
+        if status not in ("COMPLETED", "SKIPPED"):
+            lines = list(output_buf)
+            if lines:
+                print("  --- child output (last 200 lines) ---", flush=True)
+                for line in lines:
+                    print(f"  | {line}", flush=True)
+                print("  ---", flush=True)
 
 
 def main() -> None:

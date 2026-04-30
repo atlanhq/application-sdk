@@ -61,6 +61,7 @@ jobs:
           token: ${{ secrets.ORG_PAT_GITHUB || secrets.GITHUB_TOKEN }}
 
       - name: Download latest scan artifacts
+        id: download
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SCAN_WORKFLOW: ${{ inputs.scan_workflow }}
@@ -75,8 +76,9 @@ jobs:
             --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
 
           if [ -z "$RUN_ID" ]; then
-            echo "::error::No completed runs found for workflow ${SCAN_WORKFLOW}"
-            exit 1
+            echo "::warning::No completed runs found for workflow ${SCAN_WORKFLOW}"
+            echo "has_artifacts=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           echo "Downloading artifacts from run $RUN_ID"
@@ -86,10 +88,13 @@ jobs:
           # If no scan results at all, skip dashboard update to avoid overwriting with zeros
           if [ ! -f /tmp/scan-artifacts/trivy_results.json ] && [ ! -f /tmp/scan-artifacts/snyk_results.json ]; then
             echo "::warning::No scan artifacts found (expired?). Skipping dashboard update to preserve existing data."
-            exit 0
+            echo "has_artifacts=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_artifacts=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Generate per-repo dashboard data
+        if: steps.download.outputs.has_artifacts == 'true'
         run: |
           python3 - <<'PYEOF'
           import json, os
@@ -288,7 +293,9 @@ jobs:
           print(f"  Allowlisted: {repo_data['allowlisted']}")
           print(f"  New: {repo_data['new']}")
 
-          # Append to history for trend tracking
+          # Append to history for trend tracking. Includes CVE ID lists so the dashboard can
+          # compute true cross-repo unique counts (instead of inflated per-repo sums) and
+          # honest set-difference deltas per source / severity / status over time.
           history_entry = {
               "date": datetime.now().strftime("%Y-%m-%d"),
               "repo": repo_name,
@@ -300,6 +307,13 @@ jobs:
               "app": app_count,
               "allowlisted": repo_data["allowlisted"],
               "new": repo_data["new"],
+              "ids": [v["id"] for v in unique],
+              "ids_app": [v["id"] for v in unique if v.get("source_type") == "app"],
+              "ids_base": [v["id"] for v in unique if v.get("source_type") == "base_image"],
+              "ids_critical": [v["id"] for v in unique if (v.get("severity") or "").upper() == "CRITICAL"],
+              "ids_high": [v["id"] for v in unique if (v.get("severity") or "").upper() == "HIGH"],
+              "ids_new": [v["id"] for v in unique if (v.get("status") or "new") == "new"],
+              "ids_allowlisted": [v["id"] for v in unique if v.get("status") == "allowlisted"],
           }
           os.makedirs("/tmp/dashboard-deploy", exist_ok=True)
           with open(f"/tmp/dashboard-deploy/history_{repo_slug}.jsonl", "a") as f:
@@ -307,12 +321,14 @@ jobs:
           PYEOF
 
       - name: Setup AWS Credentials
+        if: steps.download.outputs.has_artifacts == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
       - name: One-time history reset
+        if: steps.download.outputs.has_artifacts == 'true'
         run: |
           # Only reset if marker file doesn't exist yet
           if ! aws s3 ls "s3://kryptonite-store/${{ inputs.dashboard_path }}/history/.reset_done" 2>/dev/null; then
@@ -324,6 +340,7 @@ jobs:
           fi
 
       - name: Deploy to Kryptonite
+        if: steps.download.outputs.has_artifacts == 'true'
         env:
           REPO_SLUG: ${{ github.repository }}
         run: |

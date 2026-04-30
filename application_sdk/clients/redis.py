@@ -74,9 +74,6 @@ class BaseRedisClient:
         if not REDIS_PASSWORD or (
             not REDIS_SENTINEL_HOSTS and not (REDIS_HOST and REDIS_PORT)
         ):
-            logger.error(
-                "Redis configuration invalid: REDIS_PASSWORD is required and either REDIS_SENTINEL_HOSTS or REDIS_HOST/REDIS_PORT must be configured"
-            )
             raise ClientError(
                 f"{ClientError.REQUEST_VALIDATION_ERROR}: Redis configuration invalid - REDIS_PASSWORD is required and either REDIS_SENTINEL_HOSTS or REDIS_HOST/REDIS_PORT must be configured"
             )
@@ -103,7 +100,6 @@ class BaseRedisClient:
             ) from e
 
         if not sentinel_hosts:
-            logger.error("No Sentinel hosts configured")
             raise ClientError(
                 f"{ClientError.REQUEST_VALIDATION_ERROR}: No Sentinel hosts configured"
             )
@@ -185,6 +181,8 @@ class RedisClient(BaseRedisClient):
             self.redis_client.ping()
             logger.info("Sync Redis connection established for strict locking")
 
+        except ClientError:
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
 
@@ -261,7 +259,6 @@ class RedisClient(BaseRedisClient):
             ClientError: If Redis connection or operation fails
         """
         if not self.redis_client:
-            logger.error("Sync Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -293,7 +290,6 @@ class RedisClient(BaseRedisClient):
             ClientError: If Redis connection or operation fails.
         """
         if not self.redis_client:
-            logger.error("Sync Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -303,6 +299,11 @@ class RedisClient(BaseRedisClient):
                 _LOCK_RELEASE_LUA_SCRIPT, 1, resource_id, owner_id
             )
             return self._process_lock_release_result(result, resource_id)
+        except ClientError:
+            # `_process_lock_release_result` raises ClientError on unexpected
+            # results (carries a structured error code). Re-raise unchanged
+            # instead of letting `_handle_redis_error` re-wrap it.
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
 
@@ -336,6 +337,13 @@ class RedisClientAsync(BaseRedisClient):
             await self.redis_client.ping()
             logger.info("Async Redis connection established for strict locking")
 
+        except ClientError:
+            # Internal ClientError raised above (e.g. REDIS_CONNECTION_ERROR
+            # for missing redis_client) carries a structured error code that
+            # callers depend on. Re-raise unchanged instead of letting
+            # `_handle_redis_error` re-wrap it. Mirrors the sync `_connect`
+            # fix from BLDX-1165.
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
 
@@ -412,7 +420,6 @@ class RedisClientAsync(BaseRedisClient):
             ClientError: If Redis connection or operation fails
         """
         if not self.redis_client:
-            logger.error("Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -444,7 +451,6 @@ class RedisClientAsync(BaseRedisClient):
             ClientError: If Redis connection or operation fails.
         """
         if not self.redis_client:
-            logger.error("Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -454,5 +460,10 @@ class RedisClientAsync(BaseRedisClient):
                 _LOCK_RELEASE_LUA_SCRIPT, 1, resource_id, owner_id
             )
             return self._process_lock_release_result(result, resource_id)
+        except ClientError:
+            # `_process_lock_release_result` raises ClientError on unexpected
+            # results (carries a structured error code). Re-raise unchanged
+            # instead of letting `_handle_redis_error` re-wrap it.
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)

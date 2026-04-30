@@ -83,6 +83,34 @@ async def test_load(
     assert async_sql_client.connection is None
 
 
+@patch("sqlalchemy.ext.asyncio.create_async_engine")
+@pytest.mark.asyncio
+async def test_load_respects_pool_pre_ping_override(
+    create_async_engine: Any,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
+):
+    assert async_sql_client.DB_CONFIG is not None
+    async_sql_client.DB_CONFIG = DatabaseConfig(
+        template="test://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        connect_args={},
+        pool_pre_ping=False,
+    )
+    mock_engine, _, _ = mock_async_engine_with_connection
+    create_async_engine.return_value = mock_engine
+
+    await async_sql_client.load({"username": "test_user", "password": "test_password"})
+
+    create_async_engine.assert_called_once_with(
+        async_sql_client.get_sqlalchemy_connection_string(),
+        connect_args=async_sql_client.DB_CONFIG.connect_args,
+        pool_pre_ping=False,
+    )
+    assert async_sql_client.engine == mock_engine
+    assert async_sql_client.connection is None
+
+
 @pytest.mark.asyncio
 @patch(
     "sqlalchemy.text",

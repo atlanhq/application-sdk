@@ -71,7 +71,7 @@ async def convert_data_files(
 def convert_json_to_parquet(file_path: str) -> Optional[str]:
     """Convert the downloaded files from json to parquet"""
     try:
-        import pandas as pd  # lazy import: heavy dependency
+        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
         logger.info("Converting file to parquet: %s", file_path)
         df = pd.read_json(file_path, orient="records", lines=True)
@@ -88,7 +88,7 @@ def convert_json_to_parquet(file_path: str) -> Optional[str]:
 def convert_parquet_to_json(file_path: str) -> Optional[str]:
     """Convert the downloaded files from parquet to json"""
     try:
-        import pandas as pd  # lazy import: heavy dependency
+        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
         logger.info("Converting file to json: %s", file_path)
         df = pd.read_parquet(file_path)
@@ -96,7 +96,5 @@ def convert_parquet_to_json(file_path: str) -> Optional[str]:
         df.to_json(json_file_path, orient="records", lines=True)
         return json_file_path
     except Exception:
-        logger.error(
-            "Error converting file to json", file_path=file_path, exc_info=True
-        )
+        logger.error("Error converting file to json: %s", file_path, exc_info=True)
         return None

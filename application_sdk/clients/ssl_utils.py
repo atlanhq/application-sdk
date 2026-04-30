@@ -67,8 +67,10 @@ def create_ssl_context_with_custom_certs(cert_dir: str) -> ssl.SSLContext:
         try:
             ssl_context.load_verify_locations(cafile=cert_file)
             logger.debug("Loaded certificate from: %s", cert_file)
-        except ssl.SSLError as e:
-            logger.warning("Failed to load certificate from %s: %s", cert_file, e)
+        except ssl.SSLError:
+            logger.warning(
+                "Failed to load certificate from %s", cert_file, exc_info=True
+            )
 
     if cert_files:
         logger.debug(
@@ -128,7 +130,7 @@ def _get_default_ca_bundle_path() -> str | None:
         Path to the default CA bundle file, or None if not found.
     """
     try:
-        import certifi
+        import certifi  # noqa: PLC0415 — optional dep: certifi
 
         certifi_path = certifi.where()
         if certifi_path and os.path.isfile(certifi_path):
@@ -172,9 +174,9 @@ def _read_default_ca_certs() -> bytes | None:
                     ca_bundle_path,
                 )
                 return ca_bytes
-    except OSError as e:
+    except OSError:
         logger.warning(
-            "Failed to read default CA bundle from %s: %s", ca_bundle_path, e
+            "Failed to read default CA bundle from %s", ca_bundle_path, exc_info=True
         )
 
     return None
@@ -227,8 +229,10 @@ def get_custom_ca_cert_bytes() -> bytes | None:
                     cert_bytes_list.append(cert_data)
                     custom_cert_count += 1
                     logger.debug("Read custom certificate from: %s", cert_file)
-        except OSError as e:
-            logger.warning("Failed to read certificate from %s: %s", cert_file, e)
+        except OSError:
+            logger.warning(
+                "Failed to read certificate from %s", cert_file, exc_info=True
+            )
 
     if not cert_bytes_list:
         return None

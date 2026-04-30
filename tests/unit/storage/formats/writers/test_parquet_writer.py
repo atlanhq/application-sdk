@@ -1,8 +1,8 @@
 import contextlib
 import os
 import shutil
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -10,8 +10,16 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from application_sdk import constants
 from application_sdk.common.types import DataframeType
-from application_sdk.storage.formats.parquet import ParquetFileWriter
+from application_sdk.infrastructure.context import (
+    InfrastructureContext,
+    clear_infrastructure,
+    set_infrastructure,
+)
+from application_sdk.storage.batch import list_keys
+from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.formats.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.storage.formats.utils import path_gen
 
 
@@ -67,7 +75,7 @@ def mock_consolidation_files():
     """Create a reusable context manager for mocking consolidation files with proper cleanup."""
 
     @contextlib.contextmanager
-    def _create_mock_files(base_path: str, file_names: List[str]):
+    def _create_mock_files(base_path: str, file_names: list[str]):
         """Create temporary files and return proper mock setup."""
         temp_dir = os.path.join(base_path, f"temp_mock_{id(file_names)}")
         os.makedirs(temp_dir, exist_ok=True)
@@ -82,7 +90,7 @@ def mock_consolidation_files():
                 created_files.append(file_path)
 
             # Return a function that creates properly mocked results
-            def create_mock_result(paths: List[str]):
+            def create_mock_result(paths: list[str]):
                 mock_result = MagicMock()
                 mock_result.to_pydict.return_value = {"path": paths}
                 return mock_result
@@ -263,6 +271,110 @@ class TestParquetFileWriterWriteDataframe:
 
             with pytest.raises(Exception, match="Test error"):
                 await parquet_output.write(sample_dataframe)
+
+
+class TestParquetFileWriterReplacePrefix:
+    """Regression coverage for replacing object-store parquet prefixes."""
+
+    @pytest.mark.asyncio
+    async def test_replace_prefix_removes_stale_object_store_chunks_at_scale(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A rewrite must not leak chunk-1+ files from an earlier task."""
+        expected_rows = 10020
+        qualified_names = [
+            f"connection/db/schema/table_{i}" for i in range(expected_rows)
+        ]
+
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        monkeypatch.setattr(constants, "TEMPORARY_PATH", str(staging))
+
+        import application_sdk.storage.formats.utils as formats_utils
+
+        monkeypatch.setattr(formats_utils, "TEMPORARY_PATH", str(staging))
+
+        store = create_memory_store()
+        set_infrastructure(InfrastructureContext(storage=store))
+        raw_path = (
+            staging / "artifacts" / "apps" / "default" / "workflows" / "wf" / "raw"
+        )
+        table_path = raw_path / "table"
+
+        try:
+            first_writer = ParquetFileWriter(
+                path=str(raw_path),
+                typename="table",
+                buffer_size=5000,
+                retain_local_copy=False,
+            )
+            await first_writer.write(
+                pd.DataFrame(
+                    {
+                        "qualifiedName": qualified_names[:3],
+                        "raw_shape_only": ["raw"] * 3,
+                    }
+                )
+            )
+            await first_writer.write(
+                pd.DataFrame(
+                    {
+                        "qualifiedName": qualified_names[3:4],
+                        "raw_shape_only": ["raw"],
+                    }
+                )
+            )
+            await first_writer.write(
+                pd.DataFrame(
+                    {
+                        "qualifiedName": qualified_names[4:],
+                        "raw_shape_only": ["raw"] * len(qualified_names[4:]),
+                    }
+                )
+            )
+            await first_writer.close()
+
+            first_keys = await list_keys(str(table_path), store, suffix=".parquet")
+            assert any("/chunk-1-part0.parquet" in key for key in first_keys)
+            assert any("/chunk-2-part0.parquet" in key for key in first_keys)
+
+            shutil.rmtree(table_path, ignore_errors=True)
+
+            second_writer = ParquetFileWriter(
+                path=str(raw_path),
+                typename="table",
+                buffer_size=5000,
+                retain_local_copy=False,
+                replace_prefix=True,
+            )
+            await second_writer.write(
+                pd.DataFrame(
+                    {
+                        "qualifiedName": qualified_names,
+                        "is_partitioned": [False] * expected_rows,
+                    }
+                )
+            )
+            await second_writer.close()
+
+            second_keys = await list_keys(str(table_path), store, suffix=".parquet")
+            assert len(second_keys) == 3
+            assert all("/chunk-0-" in key for key in second_keys)
+
+            shutil.rmtree(table_path, ignore_errors=True)
+
+            reader = ParquetFileReader(path=str(table_path))
+            try:
+                result = await reader.read()
+            finally:
+                await reader.close()
+
+            assert len(result) == expected_rows
+            assert result["qualifiedName"].nunique() == expected_rows
+            assert "is_partitioned" in result.columns
+            assert "raw_shape_only" not in result.columns
+        finally:
+            clear_infrastructure()
 
 
 class TestParquetFileWriterWriteDaftDataframe:

@@ -35,6 +35,12 @@ Public API::
     )
 """
 
+from application_sdk.common.transforms import (
+    camel_to_kebab,
+    expand_dotted_keys,
+    kebab_to_camel,
+    transform_agent_credentials,
+)
 from application_sdk.credentials.atlan import AtlanApiToken, AtlanOAuthClient
 from application_sdk.credentials.atlan_client import (
     AtlanClientMixin,
@@ -50,6 +56,7 @@ from application_sdk.credentials.git import GitSshCredential, GitTokenCredential
 from application_sdk.credentials.oauth import OAuthTokenError, OAuthTokenService
 from application_sdk.credentials.ref import (
     CredentialRef,
+    CredentialResolvable,
     api_key_ref,
     atlan_api_token_ref,
     atlan_oauth_client_ref,
@@ -79,8 +86,9 @@ from application_sdk.credentials.types import (
 )
 
 __all__ = [
-    # Core ref + spec
+    # Core ref + spec + protocol
     "CredentialRef",
+    "CredentialResolvable",
     "AgentCredentialSpec",
     # Factory functions
     "api_key_ref",
@@ -124,4 +132,9 @@ __all__ = [
     "CredentialNotFoundError",
     "CredentialParseError",
     "CredentialValidationError",
+    # Transforms (deprecated — will be removed once apps are fully native)
+    "kebab_to_camel",
+    "camel_to_kebab",
+    "expand_dotted_keys",
+    "transform_agent_credentials",
 ]

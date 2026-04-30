@@ -117,7 +117,7 @@ class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
 
         # correlation_id from v3 CorrelationContext
         try:
-            from application_sdk.observability.correlation import (
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                 get_correlation_context,
             )
 
