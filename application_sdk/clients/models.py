@@ -37,6 +37,10 @@ class DatabaseConfig(BaseModel):
         default_factory=dict,
         description="Additional connection arguments to be passed to SQLAlchemy. ex: {'sslmode': 'require'}",
     )
+    pool_pre_ping: bool = Field(
+        default=True,
+        description="Whether SQLAlchemy should test pooled connections for liveness before checkout. Disable for dialects or endpoints where the driver's ping/close path is unsafe.",
+    )
 
     model_config = {
         "extra": "forbid",

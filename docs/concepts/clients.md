@@ -36,6 +36,7 @@ Both SQL client classes are typically **subclassed** for specific database types
     *   **`parameters` (list[str], optional):** Optional keys appended as URL query parameters when present in `credentials`/`extra`.
     *   **`defaults` (dict[str, Any], optional):** Default URL parameters always appended unless already in the template.
     *   **`connect_args` (dict[str, Any], optional):** Additional connection arguments to be passed directly to SQLAlchemy's `create_engine` or `create_async_engine`. Useful for driver-specific connection parameters that are not part of the connection URL. Defaults to `{}`.
+    *   **`pool_pre_ping` (bool, optional):** Whether SQLAlchemy should test pooled connections for liveness before checkout. Defaults to `True` for backward compatibility; connector subclasses can set this to `False` when a dialect or endpoint has an unsafe ping/close path and the connector performs its own explicit validation query.
     *   **Credentials Note:** The `credentials` dictionary can include an `extra` field (JSON or dict). Lookups for `required` and `parameters` first check `credentials`, then `extra`.
 
 2.  **Loading (`load` method):**
@@ -62,6 +63,7 @@ class SnowflakeClient(BaseSQLClient):
         parameters=["warehouse", "role"],
         defaults={"client_session_keep_alive": "true"},
         connect_args={"sslmode": "require"},  # Optional: driver-specific connection arguments
+        pool_pre_ping=True,  # Optional: disable only if the dialect's pre-ping path is unsafe
     )
 ```
 
