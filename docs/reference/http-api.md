@@ -143,12 +143,12 @@ Poll workflow execution status.
     "status": "RUNNING",
     "workflow_id": "my-connector-abc123",
     "run_id": "run-xyz",
-    "start_time": "2025-01-01T10:00:00Z"
+    "execution_duration_seconds": 42
   }
 }
 ```
 
-`status` values in the response body: `running`, `completed`, `failed`, `result_decode_failed`. Temporal's `CANCELED`, `TERMINATED`, `TIMED_OUT` states all map to `failed` in the response.
+`status` values are raw Temporal status names (uppercase): `RUNNING`, `COMPLETED`, `FAILED`, `CANCELED`, `TERMINATED`, `TIMED_OUT`, `UNKNOWN`.
 
 ---
 
@@ -160,11 +160,14 @@ Fetch the most recent run result for a workflow.
 ```json
 {
   "data": {
-    "status": "COMPLETED",
-    "output": { "record_count": 1234 }
+    "status": "completed",
+    "workflow_id": "my-connector-abc123",
+    "result": { "record_count": 1234 }
   }
 }
 ```
+
+`status` values in the response body: `running`, `completed`, `failed`, `result_decode_failed`. Temporal's `CANCELED`, `TERMINATED`, `TIMED_OUT` states all map to `failed` in the response.
 
 ---
 
