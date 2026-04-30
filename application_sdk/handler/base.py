@@ -107,7 +107,9 @@ class Handler(ABC):
             RuntimeError: If accessed outside of a handler method invocation.
         """
         if self._context is None:
-            from application_sdk.app.base import AppContextError
+            from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports handler.context transitively
+                AppContextError,
+            )
 
             raise AppContextError(
                 "Handler context is not set. "

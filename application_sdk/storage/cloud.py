@@ -54,6 +54,7 @@ from application_sdk.storage.errors import (
     StorageError,
     StorageNotFoundError,
 )
+from application_sdk.storage.ops import _list_items
 
 # Lazy import: direct get_logger() at module load would create a circular
 # dependency (observability -> storage -> cloud -> observability).
@@ -64,7 +65,9 @@ _logger = None
 def _log():
     global _logger
     if _logger is None:
-        from application_sdk.observability.logger_adaptor import get_logger
+        from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — deferred to break circular import (observability ↔ storage)
+            get_logger,
+        )
 
         _logger = get_logger(__name__)
     return _logger
@@ -193,8 +196,11 @@ class CloudStore:
             key: Specific object key to download (single file mode).
             output_dir: Local directory to write files into.
             prefix: Object key prefix for listing (multi-file mode).
-            suffix_filter: Only download files with these extensions
-                (e.g. ``{".json", ".yaml"}``). Ignored in single-file mode.
+            suffix_filter: Only download files whose key ends with one of
+                these strings (e.g. ``{".json", ".yaml"}``).  Matches are
+                case-insensitive and use ``endswith`` — handles multi-part
+                extensions (e.g. ``".tar.gz"``) correctly.  Ignored in
+                single-file mode.
             max_concurrency: Maximum parallel downloads (default 4).
 
         Returns:
@@ -269,45 +275,39 @@ class CloudStore:
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
-    def _list_keys_sync(
+    async def _list_keys(
         self, list_prefix: str, suffix_filter: set[str] | None = None
     ) -> list[str]:
-        """Synchronous key listing helper (run via asyncio.to_thread)."""
-        # Normalize suffix filter to lowercase for case-insensitive matching
-        normalized_filter = (
-            {s.lower() for s in suffix_filter} if suffix_filter else None
-        )
+        # Lowercase once so endswith checks are case-insensitive (e.g. ".JSON" matches ".json").
+        lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
         try:
-            keys: list[str] = []
-            for batch in obs.list(self._store, prefix=list_prefix or None):
-                for item in batch:
-                    obj_path = str(item["path"])
-                    if normalized_filter:
-                        ext = Path(obj_path).suffix.lower()
-                        if ext not in normalized_filter:
-                            continue
-                    keys.append(obj_path)
-            return sorted(keys)
+            items = await _list_items(self._store, list_prefix or None)
+            return sorted(
+                path
+                for path, _ in items
+                if not lfilter or any(path.lower().endswith(s) for s in lfilter)
+            )
         except Exception as exc:
             raise StorageError(
                 f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
             ) from exc
-
-    async def _list_keys(
-        self, list_prefix: str, suffix_filter: set[str] | None = None
-    ) -> list[str]:
-        """Async wrapper for key listing."""
-        return await asyncio.to_thread(self._list_keys_sync, list_prefix, suffix_filter)
 
     async def list(self, prefix: str = "", *, suffix: str = "") -> list[str]:
         """List object keys under a prefix.
 
         Args:
             prefix: Key prefix to filter by.
-            suffix: Optional extension filter (e.g. ``".json"``).
+            suffix: Optional extension or tail filter (e.g. ``".json"``).
+                Matched case-insensitively against the full key using
+                ``endswith`` — handles multi-part extensions
+                (e.g. ``".tar.gz"``) correctly.
 
         Returns:
-            Sorted list of matching object keys.
+            Sorted list of matching object keys.  Zero-byte objects that act as
+            GCS-style directory markers (i.e. they have at least one child key
+            under them) are excluded; zero-byte files with no children are
+            returned normally.  For raw access including markers, use the
+            underlying :attr:`store` property directly.
         """
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
         suffix_filter = {suffix} if suffix else None

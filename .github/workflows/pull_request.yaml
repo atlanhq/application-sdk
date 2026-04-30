@@ -107,7 +107,7 @@ jobs:
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          fail-under: "50"
+          fail-under: "85"
           python-version: ${{ matrix.python-version }}
 
   integration:

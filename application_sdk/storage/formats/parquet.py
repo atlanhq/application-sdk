@@ -101,14 +101,16 @@ class ParquetFileReader(Reader):
                 f"Either provide a directory path with file_names, or specify the exact file path without file_names."
             )
 
+        # Initialise the Reader base class so `_is_closed` and
+        # `_downloaded_files` are per-instance state (not shared via the old
+        # class-level mutable defaults). Required after BLDX-1167.
+        super().__init__()
         self.path = path
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
         self.file_names = file_names
         self.dataframe_type = dataframe_type
         self.cleanup_on_close = cleanup_on_close
-        self._is_closed = False
-        self._downloaded_files: List[str] = []
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """Read the data from the parquet files and return as a single DataFrame.
@@ -186,7 +188,7 @@ class ParquetFileReader(Reader):
         - Only reads files in the specified directory
         """
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -246,7 +248,7 @@ class ParquetFileReader(Reader):
         - Only reads files in the specified directory
         """
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -296,7 +298,7 @@ class ParquetFileReader(Reader):
         - Column schemas must be compatible across files
         """
         try:
-            import daft  # type: ignore
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -353,7 +355,7 @@ class ParquetFileReader(Reader):
         - Files processed individually for memory efficiency
         """
         try:
-            import daft  # type: ignore
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -370,8 +372,8 @@ class ParquetFileReader(Reader):
             # daft so it reads all files with consistent types. See BLDX-837.
             daft_schema = None
             try:
-                import pyarrow as pa
-                import pyarrow.parquet as pq_meta
+                import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+                import pyarrow.parquet as pq_meta  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
                 pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
                 unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
@@ -631,7 +633,7 @@ class ParquetFileWriter(Writer):
         try:
             await self._ensure_prefix_replaced()
 
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Convert string to enum if needed for backward compatibility
             if isinstance(write_mode, str):
@@ -792,7 +794,7 @@ class ParquetFileWriter(Writer):
             return
 
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Read all parquet files in temp folder
             pattern = os.path.join(self.current_temp_folder_path, f"*{self.extension}")
@@ -918,8 +920,8 @@ class ParquetFileWriter(Writer):
         conflict by using ``null`` for ALL rows, dropping actual data from files
         that had the column typed as ``string``. See BLDX-837.
         """
-        import pyarrow as pa
-        import pyarrow.parquet as pq
+        import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+        import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
         table = pa.Table.from_pandas(chunk, preserve_index=False)
 

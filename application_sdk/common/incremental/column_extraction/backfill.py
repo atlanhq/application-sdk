@@ -101,8 +101,12 @@ def get_backfill_tables(
 
             return backfill_qns
 
-    except Exception:
-        logger.error("DuckDB analysis failed, returning None", exc_info=True)
+    except ValueError:
+        logger.warning(
+            "Backfill analysis: legitimate skip (no transformed tables); "
+            "returning None",
+            exc_info=True,
+        )
         return None
 
 
@@ -159,7 +163,7 @@ def _load_tables_to_duckdb(
     union_query = " UNION ALL ".join(union_parts)
 
     # lazy import: heavy optional dependency (installed via [sql] extra)
-    import duckdb
+    import duckdb  # noqa: PLC0415 — optional dep: duckdb
 
     try:
         conn.execute(f"""

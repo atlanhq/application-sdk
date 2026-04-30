@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.2.0"
+version = "3.4.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -153,13 +153,14 @@ start-deps.shell = "export DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 && poe start
 stop-deps.shell = "lsof -ti:3000,3500,7233,8233,50001 | xargs kill -9 2>/dev/null || true"
 test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-integ.db &>/tmp/temporal-integ.log & sleep 3 && uv run pytest tests/integration/ -m integration -v --timeout=120; EXIT=$?; kill %1 2>/dev/null; exit $EXIT"
 
+# API docs — must be before any sub-table header ([tool.poe.tasks.*])
+# or TOML nests it inside the sub-table rather than the parent tasks namespace
+generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
+
 # Local credential provisioning
 [tool.poe.tasks.provision-credentials]
 help = "Provision credentials for local development"
 cmd = "python -m application_sdk.tools.provision_credentials"
-
-# API docs
-generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
 
 [build-system]
 requires = ["hatchling"]
@@ -197,10 +198,20 @@ markers = [
 ]
 
 [tool.coverage.run]
+# `application_sdk/testing/**` ships test infrastructure for downstream apps
+# (mocks, fixtures) and internal test runners (integration, e2e, hypothesis,
+# parity, scale generation) that are exercised under different markers, not
+# under unit tests. Including them in unit coverage drags the percentage down
+# without representing product-code quality. Keep `mocks.py` and `fixtures.py`
+# in scope since downstream apps consume them as a public testing API.
 omit = [
     "tests/**",
     "application_sdk/test_utils/**",
     "application_sdk/testing/scale_data_generator/**",
+    "application_sdk/testing/integration/**",
+    "application_sdk/testing/e2e/**",
+    "application_sdk/testing/hypothesis/**",
+    "application_sdk/testing/parity/**",
 ]
 source = ["application_sdk"]
 
@@ -214,27 +225,38 @@ exclude_lines = [
     "pass",
     "raise ImportError",
 ]
-fail_under = 50
+fail_under = 85
 show_missing = true
 precision = 2
 
 [tool.ruff.lint]
+# explicit-preview-rules: only the preview rules listed in extend-select are
+# enabled — other preview rules remain off. This lets us opt into PLC0415
+# without inheriting every other preview rule's churn.
+preview = true
+explicit-preview-rules = true
 extend-select = [
-    "G001",   # % operator inline in log call (not lazy)
-    "G003",   # string concatenation in log call
-    "G004",   # f-string in log call
-    "T201",   # print() in production code
-    "S110",   # try-except-pass detected
-    "S112",   # try-except-continue detected
+    "G001",    # % operator inline in log call (not lazy)
+    "G003",    # string concatenation in log call
+    "G004",    # f-string in log call
+    "T201",    # print() in production code
+    "PLC0415", # imports must be at top of module — prevents broken-import-at-runtime bugs (e.g. PR #1543)
+    "S110",    # try-except-pass detected
+    "S112",    # try-except-continue detected
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "application_sdk/main.py" = ["T201"]
 ".github/**" = ["G004", "T201"]
-"tests/**" = ["G004"]
-"tools/**" = ["T201"]
-"application_sdk/tools/**" = ["T201"]
-"examples/**" = ["T201"]
+# tests, tools, examples exempted from PLC0415: production runtime risk does
+# not apply, and tests sometimes use inline imports for fixture isolation.
+# F841 is also exempted in tests because enabling `preview = true` (required
+# for PLC0415) made F841 stricter on tuple unpacking and codemod tests
+# routinely capture-and-discard return values for assertion staging.
+"tests/**" = ["G004", "PLC0415", "F841"]
+"tools/**" = ["T201", "PLC0415"]
+"application_sdk/tools/**" = ["T201", "PLC0415"]
+"examples/**" = ["T201", "PLC0415"]
 
 [tool.uv]
 default-groups = ["dev", "test"]

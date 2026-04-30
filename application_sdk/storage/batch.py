@@ -25,8 +25,10 @@ from typing import TYPE_CHECKING
 import obstore
 
 from application_sdk.storage.ops import (
+    _is_not_found,
+    _list_items,
+    _normalize_listing_prefix,
     _resolve_store,
-    delete,
     download_file,
     normalize_key,
     upload_file,
@@ -38,10 +40,11 @@ if TYPE_CHECKING:
 
 async def list_keys(
     prefix: str = "",
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     *,
     suffix: str = "",
     normalize: bool = True,
+    include_markers: bool = False,
 ) -> list[str]:
     """List all object keys under *prefix*.
 
@@ -57,38 +60,44 @@ async def list_keys(
         store: An obstore-compatible store instance, or ``None`` to use the
             store from the current infrastructure context.
         suffix: Optional file extension or suffix filter.  When set, only
-            keys ending with this string are returned (e.g. ``".parquet"``).
+            keys whose path ends with this string are returned
+            (e.g. ``".parquet"``).  The match is case-insensitive.
         normalize: When ``True`` (default), normalise *prefix* before use.
             Pass ``False`` to use *prefix* exactly as supplied.
+        include_markers: When ``False`` (default), zero-byte objects that act
+            as GCS-style directory markers (i.e. they have at least one child
+            key under them) are excluded from results.  Pass ``True`` to
+            bypass this filter and receive every object including markers —
+            useful when the caller needs to operate on all objects regardless
+            of size (e.g. ``delete_prefix``).
 
     Returns:
-        Sorted list of matching object keys.
+        Sorted list of matching object keys.  By default, zero-byte objects
+        that act as GCS-style directory markers are excluded; zero-byte files
+        with no children are returned normally.  Marker detection is
+        single-pass: a zero-byte object is only identified as a marker if its
+        children appear in the same listing call (i.e. they share the
+        requested *prefix*).
 
     Raises:
         StorageError: If the listing fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
-    import asyncio
-
     resolved = _resolve_store(store)
-    if normalize and prefix:
-        prefix = normalize_key(prefix)
-        if prefix and not prefix.endswith("/"):
-            prefix = prefix + "/"
-
-    def _collect() -> list[str]:
-        keys: list[str] = []
-        for batch in obstore.list(resolved, prefix=prefix or None):
-            for item in batch:
-                key = str(item["path"])
-                if not suffix or key.endswith(suffix):
-                    keys.append(key)
-        return sorted(keys)
+    prefix = _normalize_listing_prefix(prefix, normalize)
 
     try:
-        return await asyncio.to_thread(_collect)
+        items = await _list_items(
+            resolved, prefix or None, include_markers=include_markers
+        )
+        lsuffix = suffix.lower() if suffix else ""
+        return sorted(
+            path for path, _ in items if not lsuffix or path.lower().endswith(lsuffix)
+        )
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"Failed to list keys with prefix '{prefix}'", cause=exc
@@ -97,13 +106,19 @@ async def list_keys(
 
 async def delete_prefix(
     prefix: str,
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> int:
     """Delete all objects whose key starts with *prefix*.
 
-    Lists all matching keys then deletes each one individually.
+    Uses the store's native bulk-delete API where available (S3 batches up to
+    1 000 keys per request; Azure up to 256; GCS issues 10 parallel individual
+    DELETE requests).  A not-found error on GCS or Azure after a fresh listing
+    indicates concurrent modification of the same prefix and is surfaced as a
+    ``StorageError`` rather than silently retried — such a failure almost
+    certainly signals an unexpected interaction between two apps sharing the
+    same prefix, which is a bug worth making explicit.
 
     Args:
         prefix: Key prefix — all objects under this prefix are deleted.
@@ -120,18 +135,71 @@ async def delete_prefix(
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
-    keys = await list_keys(prefix, resolved, normalize=normalize)
-    count = 0
-    for key in keys:
-        if await delete(key, resolved, normalize=False):
-            count += 1
-    return count
+    prefix = _normalize_listing_prefix(prefix, normalize)
+
+    # include_markers=True so intermediate zero-byte "folder" objects within
+    # the requested prefix (e.g. "artifacts/run/sub" when deleting "artifacts/")
+    # are deleted alongside real files.  Note: the marker *at* the prefix root
+    # (e.g. "artifacts/run" when prefix = "artifacts/run/") sits outside the
+    # prefix-filtered listing due to trailing-slash normalisation and is handled
+    # separately below via a best-effort delete of the bare root key.
+    try:
+        items = await _list_items(resolved, prefix or None, include_markers=True)
+    except Exception as exc:
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
+
+        raise StorageError(
+            f"Failed to list keys with prefix '{prefix}'", cause=exc
+        ) from exc
+
+    paths = [path for path, _ in items]
+
+    # Also delete the directory marker at the prefix root itself (e.g. the GCS
+    # object "artifacts/run" when prefix = "artifacts/run/").  obstore strips
+    # trailing slashes from all keys, so the marker for the requested directory
+    # never starts with the slash-terminated prefix and is not returned by the
+    # listing above.  Probe with HEAD first (rather than DELETE-and-swallow)
+    # because some backends (MemoryStore, S3) silently succeed on deleting a
+    # non-existent key, which would inflate the count.
+    root_marker = prefix.rstrip("/")
+    if root_marker and root_marker not in paths:
+        try:
+            await obstore.head_async(resolved, root_marker)
+            paths.append(root_marker)
+        except Exception as exc:
+            if not _is_not_found(exc):
+                from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                    StorageError,
+                )
+
+                raise StorageError(
+                    f"Failed to check root marker '{root_marker}'", cause=exc
+                ) from exc
+            # not-found → no marker exists, nothing to add
+
+    if not paths:
+        return 0
+
+    try:
+        await obstore.delete_async(resolved, paths)
+    except Exception as exc:
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
+
+        raise StorageError(
+            f"Failed to delete {len(paths)} objects with prefix '{prefix}'", cause=exc
+        ) from exc
+
+    return len(paths)
 
 
 async def download_prefix(
     prefix: str,
-    local_dir: "str | Path",
-    store: "ObjectStore | None" = None,
+    local_dir: str | Path,
+    store: ObjectStore | None = None,
     *,
     suffix: str = "",
     normalize: bool = True,
@@ -158,7 +226,7 @@ async def download_prefix(
         StorageError: If listing or downloading fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
-    import asyncio
+    import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
     keys = await list_keys(prefix, store, suffix=suffix, normalize=normalize)
     local = Path(local_dir)
@@ -176,9 +244,9 @@ async def download_prefix(
 
 
 async def upload_prefix(
-    local_dir: "str | Path",
+    local_dir: str | Path,
     prefix: str,
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     *,
     normalize: bool = True,
     retain_local_copy: bool = True,
@@ -205,7 +273,7 @@ async def upload_prefix(
     Returns:
         List of uploaded object keys.
     """
-    import asyncio
+    import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
     local = Path(local_dir)
     if normalize and prefix:
@@ -240,7 +308,7 @@ async def upload_prefix(
 async def upload_file_from_bytes(
     key: str,
     content: bytes,
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> str:
@@ -257,7 +325,7 @@ async def upload_file_from_bytes(
     Returns:
         Hex-encoded SHA-256 digest of the uploaded content.
     """
-    import tempfile
+    import tempfile  # noqa: PLC0415 — stdlib tempfile; lazy use only
 
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(content)

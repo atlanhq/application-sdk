@@ -213,8 +213,8 @@ class QueryBasedTransformer(TransformerInterface):
         if prefix is None:
             raise ValueError("prefix cannot be None in _build_struct")
 
-        import daft
-        from daft.functions import to_struct, when
+        import daft  # noqa: PLC0415 — optional dep: daft
+        from daft.functions import to_struct, when  # noqa: PLC0415 — optional dep: daft
 
         struct_fields = []
         non_null_fields = []
@@ -297,7 +297,7 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             daft.DataFrame: DataFrame with columns grouped into structs
         """
-        import daft
+        import daft  # noqa: PLC0415 — optional dep: daft
 
         # Get all column names
         columns = dataframe.column_names
@@ -371,7 +371,7 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             Tuple[daft.DataFrame, str]: DataFrame with default attributes added and the entity SQL template
         """
-        import daft
+        import daft  # noqa: PLC0415 — optional dep: daft
 
         # prepare default attributes
         default_attributes = {
@@ -443,7 +443,7 @@ class QueryBasedTransformer(TransformerInterface):
         )
 
         # run the SQL on the dataframe
-        import daft
+        import daft  # noqa: PLC0415 — optional dep: daft
 
         logger.debug(
             "Running transformer for asset typename=%s sql=%s",

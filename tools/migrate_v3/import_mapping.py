@@ -374,11 +374,6 @@ MODULE_MAP: dict[str, tuple[str, bool, str]] = {
         True,
         "auto_heartbeater removed — heartbeating built into @task. See migration guide Step 11.",
     ),
-    "application_sdk.activities.common.sql_utils": (
-        "application_sdk.common.sql_utils",
-        False,
-        "",
-    ),
     "application_sdk.activities.lock_management": (
         "application_sdk.execution._temporal.lock_activities",
         False,

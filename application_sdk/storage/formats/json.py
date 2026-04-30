@@ -91,13 +91,15 @@ class JsonFileReader(Reader):
                 f"Either provide a directory path with file_names, or specify the exact file path without file_names."
             )
 
+        # Initialise the Reader base class so `_is_closed` and
+        # `_downloaded_files` are per-instance state (not shared via the old
+        # class-level mutable defaults). Required after BLDX-1167.
+        super().__init__()
         self.path = path
         self.chunk_size = chunk_size
         self.file_names = file_names
         self.dataframe_type = dataframe_type
         self.cleanup_on_close = cleanup_on_close
-        self._is_closed = False
-        self._downloaded_files: List[str] = []
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """Read the data from the JSON files and return as a single DataFrame.
@@ -148,7 +150,7 @@ class JsonFileReader(Reader):
     ) -> AsyncIterator["pd.DataFrame"]:
         """Read the data from the JSON files and return as a batched pandas dataframe."""
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -172,7 +174,7 @@ class JsonFileReader(Reader):
     async def _get_dataframe(self) -> "pd.DataFrame":
         """Read the data from the JSON files and return as a single pandas dataframe."""
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -195,7 +197,7 @@ class JsonFileReader(Reader):
     ) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
         """Read the data from the JSON files and return as a batched daft dataframe."""
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
@@ -214,7 +216,7 @@ class JsonFileReader(Reader):
     async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Read the data from the JSON files and return as a single daft dataframe."""
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(

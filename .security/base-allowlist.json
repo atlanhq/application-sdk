@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-04-24",
+  "_updated": "2026-04-29",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -217,6 +217,13 @@
     "expires": "2026-05-23",
     "added_by": "mananjain99"
   },
+  "SNYK-GOLANG-GITHUBCOMMOBYSPDYSTREAMSPDY-16304822": {
+    "package": "github.com/moby/spdystream/spdy",
+    "severity": "HIGH",
+    "reason": "Base image — Go dependency. Same underlying issue as CVE-2026-35469 reported under Snyk's ID. Fix available in 0.5.1, awaiting SDK base rebuild.",
+    "expires": "2026-05-23",
+    "added_by": "mananjain99"
+  },
   "CVE-2023-45853": {
     "package": "zlib1g (Debian bookworm-slim)",
     "severity": "CRITICAL",
@@ -265,5 +272,33 @@
     "reason": "Base image — Jackson Java transitive in application-sdk-main:2.7.3 (likely via Dapr tooling). No fix released upstream. Connector apps are Python at runtime and do not invoke Jackson code paths; review at expiry to track upstream patch availability.",
     "expires": "2026-05-27",
     "added_by": "vishalkatlan"
+  },
+  "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2SERVICES3-16316411": {
+    "package": "github.com/aws/aws-sdk-go-v2/service/s3",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.97.3; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
+    "expires": "2026-05-29",
+    "added_by": "sachi-atlan"
+  },
+  "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2AWSPROTOCOLEVENTSTREAM-16316402": {
+    "package": "github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.7.8; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
+    "expires": "2026-05-29",
+    "added_by": "sachi-atlan"
+  },
+  "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2SERVICEBEDROCKRUNTIME-16316405": {
+    "package": "github.com/aws/aws-sdk-go-v2/service/bedrockruntime",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.50.4; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
+    "expires": "2026-05-29",
+    "added_by": "sachi-atlan"
+  },
+  "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2SERVICEKINESIS-16316408": {
+    "package": "github.com/aws/aws-sdk-go-v2/service/kinesis",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.43.5; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
+    "expires": "2026-05-29",
+    "added_by": "sachi-atlan"
   }
 }

@@ -4,16 +4,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+from unittest import mock
 
-from application_sdk.app.base import App
+import pytest
+
+from application_sdk.app.base import App, NonRetryableError
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference
+
+# These tests intentionally import private Temporal helpers because they verify
+# the task-to-activity adapter used internally by the SDK.
+from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
+    TaskContext,
+    _track_file_refs,
     create_activity_from_task,
     get_activity_options,
     get_all_task_activities,
 )
+from application_sdk.execution.retry import RetryPolicy as SdkRetryPolicy
 
 
 # Module-level types so get_type_hints can resolve them
@@ -408,3 +419,274 @@ class TestGetActivityOptions:
         simple_task = next(t for t in tasks if t.name == "simple")
         options = get_activity_options(simple_task)
         assert options["retry_policy"] is not None
+
+    def test_explicit_retry_policy_passed_through(self) -> None:
+        """When task_metadata.retry_policy is set, get_activity_options uses it.
+
+        This exercises the inline import of temporalio.common.RetryPolicy and
+        the rp-is-not-None branch (line ~287-295).
+        """
+
+        class _ExplicitRetryApp(App):
+            @task(
+                timeout_seconds=60,
+                retry_policy=SdkRetryPolicy(
+                    max_attempts=7,
+                    initial_interval=timedelta(seconds=2),
+                    max_interval=timedelta(seconds=42),
+                    backoff_coefficient=3.0,
+                    non_retryable_errors=("ValueError",),
+                ),
+            )
+            async def explicit(self, input: _ActInput) -> _ActOutput:
+                return _ActOutput()
+
+            async def run(self, input: _ActInput) -> _ActOutput:
+                return _ActOutput()
+
+        task_registry = TaskRegistry.get_instance()
+        tasks = task_registry.get_tasks_for_app("_explicit-retry-app")
+        explicit_task = next(t for t in tasks if t.name == "explicit")
+        options = get_activity_options(explicit_task)
+        rp = options["retry_policy"]
+        assert rp.maximum_attempts == 7
+        assert rp.initial_interval == timedelta(seconds=2)
+        assert rp.maximum_interval == timedelta(seconds=42)
+        assert rp.backoff_coefficient == 3.0
+        assert "ValueError" in rp.non_retryable_error_types
+
+
+# ---------------------------------------------------------------------------
+# Additional activity wrapper coverage.
+# These exercise the activity_fn body, which holds 11 inline imports.
+# ---------------------------------------------------------------------------
+
+
+class _AfnIn(Input, allow_unbounded_fields=True):
+    name: str = "x"
+
+
+class _AfnOut(Output, allow_unbounded_fields=True):
+    greeting: str = ""
+
+
+class TestTrackFileRefs:
+    """Tests for _track_file_refs (exercises inline import of _app_state*)."""
+
+    def test_noop_when_no_refs(self) -> None:
+        # No refs → does not import _app_state, does not raise.
+        _track_file_refs("wf-1")
+
+    def test_adds_refs_to_app_state(self) -> None:
+        from application_sdk.app.base import _app_state
+
+        ref = FileReference(local_path="/tmp/foo")
+        _track_file_refs("wf-test-track", ref)
+        from application_sdk.constants import TRACKED_FILE_REFS_KEY
+
+        assert ref in _app_state["wf-test-track"][TRACKED_FILE_REFS_KEY]
+
+
+class TestActivityFnExecution:
+    """Tests for the activity_fn returned by create_activity_from_task.
+
+    These exercise the full happy path through the activity body, hitting
+    11 inline imports — a regression in any of them fails these tests.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _make_app_and_get_activity(self) -> tuple[type[App], object]:
+        class _AfnApp(App):
+            @task(timeout_seconds=60)
+            async def greet(self, input: _AfnIn) -> _AfnOut:
+                return _AfnOut(greeting=f"hi {input.name}")
+
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return await self.greet(input)
+
+        task_registry = TaskRegistry.get_instance()
+        tasks = task_registry.get_tasks_for_app("_afn-app")
+        greet_task = next(t for t in tasks if t.name == "greet")
+        activity_fn = create_activity_from_task(greet_task)
+        return _AfnApp, activity_fn
+
+    @pytest.mark.asyncio
+    async def test_happy_path_executes_task_method(self) -> None:
+        _, activity_fn = self._make_app_and_get_activity()
+        ctx = TaskContext(
+            app_name="_afn-app",
+            task_name="greet",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,  # disable heartbeat path
+            auto_heartbeat_seconds=None,
+        )
+        info_mock = mock.MagicMock(workflow_id="wf-1")
+        with (
+            mock.patch.object(
+                activities_module.activity, "info", return_value=info_mock
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+        ):
+            result = await activity_fn(ctx, _AfnIn(name="vee"))
+        assert isinstance(result, _AfnOut)
+        assert result.greeting == "hi vee"
+
+    @pytest.mark.asyncio
+    async def test_non_retryable_error_wrapped_as_application_error(self) -> None:
+        """A NonRetryableError raised inside a task is converted to ApplicationError."""
+
+        class _FailApp(App):
+            @task(timeout_seconds=60)
+            async def boom(self, input: _AfnIn) -> _AfnOut:
+                raise NonRetryableError("bad input", app_name="_fail-app")
+
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return await self.boom(input)
+
+        from application_sdk.execution.errors import ApplicationError
+
+        task_registry = TaskRegistry.get_instance()
+        tasks = task_registry.get_tasks_for_app("_fail-app")
+        boom_task = next(t for t in tasks if t.name == "boom")
+        activity_fn = create_activity_from_task(boom_task)
+
+        ctx = TaskContext(
+            app_name="_fail-app",
+            task_name="boom",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-2"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+        ):
+            with pytest.raises(ApplicationError) as exc_info:
+                await activity_fn(ctx, _AfnIn(name="x"))
+        # ApplicationError should be flagged non-retryable.
+        assert exc_info.value.non_retryable is True
+
+    @pytest.mark.asyncio
+    async def test_retryable_exception_propagates_unchanged(self) -> None:
+        class _PlainErrApp(App):
+            @task(timeout_seconds=60)
+            async def fail(self, input: _AfnIn) -> _AfnOut:
+                raise ValueError("ordinary failure")
+
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return await self.fail(input)
+
+        task_registry = TaskRegistry.get_instance()
+        tasks = task_registry.get_tasks_for_app("_plain-err-app")
+        fail_task = next(t for t in tasks if t.name == "fail")
+        activity_fn = create_activity_from_task(fail_task)
+
+        ctx = TaskContext(
+            app_name="_plain-err-app",
+            task_name="fail",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-3"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+        ):
+            with pytest.raises(ValueError, match="ordinary failure"):
+                await activity_fn(ctx, _AfnIn(name="x"))
+
+    @pytest.mark.asyncio
+    async def test_starts_and_stops_auto_heartbeat_loop(self) -> None:
+        """Heartbeat path runs when heartbeat_timeout_seconds and auto_heartbeat_seconds are set."""
+        _, activity_fn = self._make_app_and_get_activity()
+        ctx = TaskContext(
+            app_name="_afn-app",
+            task_name="greet",
+            run_id="run-1",
+            heartbeat_timeout_seconds=60,
+            auto_heartbeat_seconds=10,
+        )
+
+        # Patch auto_heartbeat_loop so it returns immediately when stop_event set.
+        async def fake_loop(*, interval_seconds, heartbeat_fn, stop_event, task_name):
+            await stop_event.wait()
+
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-hb"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            mock.patch(
+                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
+                new=fake_loop,
+            ),
+        ):
+            result = await activity_fn(ctx, _AfnIn(name="hb"))
+        assert result.greeting == "hi hb"
+
+    @pytest.mark.asyncio
+    async def test_uses_infrastructure_when_available(self) -> None:
+        """Validates the get_infrastructure() inline import path.
+
+        When infrastructure is configured, app_context fields should be wired
+        from it. We don't assert internals — only that the activity completes
+        without error when infra is non-None.
+        """
+        _, activity_fn = self._make_app_and_get_activity()
+        ctx = TaskContext(
+            app_name="_afn-app",
+            task_name="greet",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+
+        infra = mock.MagicMock()
+        infra.state_store = mock.MagicMock()
+        infra.secret_store = mock.MagicMock()
+        infra.storage = None  # Avoid file_ref_sync paths
+
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-infra"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=infra,
+            ),
+        ):
+            result = await activity_fn(ctx, _AfnIn(name="i"))
+        assert result.greeting == "hi i"

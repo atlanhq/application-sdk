@@ -27,7 +27,7 @@ class ParquetFormatHandler(OutputFormatHandler):
 
     def _write_batch(self, table_name: str) -> None:
         if self.file_handlers[table_name]["records"]:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             df = pd.DataFrame(self.file_handlers[table_name]["records"])
             table = pa.Table.from_pandas(df)

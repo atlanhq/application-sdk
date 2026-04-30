@@ -33,19 +33,24 @@ pip install atlan-application-sdk
 
 The `app-runtime-base` image provides the runtime environment (Python, Dapr, OS packages) for Atlan apps. It does **not** include the SDK itself — install `atlan-application-sdk` via pip/uv in your app's Dockerfile.
 
+Images are published to Harbor on every [release](https://github.com/atlanhq/application-sdk/releases):
+
 ```bash
-# Latest main image
-docker pull registry.atlan.com/public/app-runtime-base:main-latest
+# Major-version alias — tracks the latest v3.x release (recommended for app Dockerfiles)
+docker pull registry.atlan.com/public/app-runtime-base:3
 
-# Versioned image
-docker pull registry.atlan.com/public/app-runtime-base:main-2.3.1
+# Minor-version alias (always points to the latest patch release)
+docker pull registry.atlan.com/public/app-runtime-base:3.3
 
-# Commit-specific image
+# Specific version (pinned, fully reproducible)
+docker pull registry.atlan.com/public/app-runtime-base:3.3.0
+
+# Immutable commit-pinned tag
 docker pull registry.atlan.com/public/app-runtime-base:sha-49c027f
 ```
 
 > [!NOTE]
-> The old image name `registry.atlan.com/public/application-sdk` is deprecated but still published for backward compatibility. New apps should use `app-runtime-base`.
+> Push-to-`main` CI builds are published to GHCR (`ghcr.io/atlanhq/app-runtime-base-main:sha-<sha7>`) and are intended for internal development use only. Use a versioned Harbor tag for app Dockerfiles.
 
 ## Contributing
 
