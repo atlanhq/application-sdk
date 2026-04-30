@@ -1,0 +1,137 @@
+---
+name: add-entrypoint
+description: >
+  Add a new @entrypoint method to an existing App subclass. Creates the
+  typed Input/Output contracts, wires up tasks, and generates the per-entry-point
+  manifest subfolder in app/generated/ if contracts are PKL-driven.
+mandatory_triggers:
+  - "/add-entrypoint"
+  - "add entrypoint"
+  - "add a new entrypoint"
+optional_triggers:
+  - "add new workflow"
+  - "add mine queries"
+  - "add query history"
+owner: connector-platform-team
+last_updated: "2026-04-30"
+staleness_days: 90
+inputs:
+  - entrypoint_name: string (snake_case, e.g. "mine_queries")
+  - description: string (human description of what this entrypoint does)
+outputs:
+  - Modified app/contracts.py (new Input/Output models)
+  - Modified app/connector.py (@entrypoint method + tasks)
+  - Optional: app/generated/manifest.json update
+gates: []
+---
+
+# add-entrypoint
+
+Add a new `@entrypoint` method to an existing `App` subclass, giving it a
+second independently-triggerable workflow.
+
+## When to Use
+
+Use `@entrypoint` when the same connector needs multiple independently-triggerable
+operations that share credentials, handler, and infrastructure but have different
+input/output contracts. Common patterns:
+
+- `extract_metadata` + `mine_queries` (metadata + query history)
+- `full_sync` + `incremental_sync`
+- `extract` + `validate` + `publish` (if keeping them as one app vs AE DAG)
+
+## Steps
+
+### 1. Gather inputs
+
+Ask for:
+- `entrypoint_name` (snake_case): e.g. `mine_queries`
+- A brief description of what it does
+
+Read the existing `app/connector.py` and `app/contracts.py` to understand the current structure.
+
+### 2. Add Input/Output contracts to `app/contracts.py`
+
+```python
+class {EntrypointName}Input(Input):
+    connection_id: str
+    credential_guid: str
+    # Add entrypoint-specific fields with defaults for backwards compat
+    days_back: int = 7
+
+class {EntrypointName}Output(Output):
+    record_count: int
+```
+
+**Evolution rule:** all new fields must have defaults. Never remove fields from existing contracts.
+
+### 3. Add `@entrypoint` and tasks to `app/connector.py`
+
+```python
+from application_sdk.app import App, entrypoint, task
+
+class MyConnector(App):
+    # ... existing methods ...
+
+    @entrypoint
+    async def {entrypoint_name}(self, input: {EntrypointName}Input) -> {EntrypointName}Output:
+        out = await self.{fetch_task_name}(
+            {FetchTask}Input(connection_id=input.connection_id, ...)
+        )
+        return {EntrypointName}Output(record_count=out.count)
+
+    @task(timeout_seconds=3600, auto_heartbeat_seconds=30)
+    async def {fetch_task_name}(self, input: {FetchTask}Input) -> {FetchTask}Output:
+        # Actual work goes here
+        ...
+```
+
+**Important:**
+- Import `entrypoint` from `application_sdk.app`.
+- `@entrypoint` is mutually exclusive with `run()` — if the class has `run()`, convert it to `@entrypoint` first (or keep `run()` as the default entry point alongside the new `@entrypoint`).
+- Each `@entrypoint` becomes a separate Temporal workflow named `{app-name}:{entrypoint_name}`.
+
+### 4. Trigger the new entrypoint
+
+Via curl:
+```bash
+curl -X POST http://localhost:8000/workflows/v1/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credential_guid": "...",
+    "connection": { "connection_qualified_name": "default/app/123" },
+    "entrypoint": "{entrypoint_name}"
+  }'
+```
+
+### 5. Update manifest.json (if PKL-driven)
+
+If the app uses PKL contracts, add a new DAG node to `contract/app.pkl` for the new entrypoint and re-run the contract skill:
+```
+/contract update
+```
+
+Or manually add to `app/generated/manifest.json`:
+```json
+{
+  "{entrypoint_name}": {
+    "activity_name": "{entrypoint_name}",
+    "activity_display_name": "{Description}",
+    "app_name": "{app-name}",
+    "inputs": {
+      "workflow_type": "{entrypoint_name}",
+      "task_queue": "{app-name}-queue",
+      "args": {
+        "credential_guid": "{{credential}}",
+        "connection_qualified_name": "{{connection}}"
+      }
+    }
+  }
+}
+```
+
+## Verification
+
+1. `uv run python run_dev.py` — smoke test the new entrypoint.
+2. In Temporal UI, verify `{app-name}:{entrypoint_name}` appears as the workflow type.
+3. Check the response from `GET /workflows/v1/manifest` includes the new node.
