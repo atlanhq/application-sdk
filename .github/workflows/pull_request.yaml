@@ -3,7 +3,7 @@ name: PR Checks
 on:
   pull_request:
     types: [opened, synchronize, labeled, reopened]
-    branches: [main]
+    branches: [release/v2]
 
 permissions:
   id-token: write
