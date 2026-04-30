@@ -104,7 +104,7 @@ Start a workflow run.
 
 Example with entrypoint:
 ```
-POST /workflows/v1/start?entrypoint=extract_metadata
+POST /workflows/v1/start?entrypoint=extract-metadata
 ```
 
 > **Note:** `workflow_type` body field is supported as a deprecated fallback (planned removal in v3.1.0). Always use `?entrypoint=` for new code.
@@ -198,6 +198,8 @@ List all available configmap IDs.
 ### `GET /workflows/v1/manifest`
 
 Return the Automation Engine DAG manifest (from `app/generated/manifest.json`).
+
+**Query param:** `?entrypoint=<name>` (optional). When provided, returns the per-entry-point manifest from `app/generated/<name>/manifest.json`. When omitted, falls back to the root `app/generated/manifest.json`.
 
 **Response:** `AppManifest` JSON — see [Multi-App Coordination](../guides/multi-app-coordination.md).
 
