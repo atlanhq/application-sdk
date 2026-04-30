@@ -53,7 +53,7 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-async def _get_remote_sha256(store: "ObjectStore", key: str) -> str | None:
+async def _get_remote_sha256(store: ObjectStore, key: str) -> str | None:
     """Fetch the stored SHA-256 sidecar for *key*, or ``None`` if absent."""
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _get_bytes,
@@ -63,7 +63,7 @@ async def _get_remote_sha256(store: "ObjectStore", key: str) -> str | None:
     return data.decode() if data else None
 
 
-async def _put_remote_sha256(store: "ObjectStore", key: str, digest: str) -> None:
+async def _put_remote_sha256(store: ObjectStore, key: str, digest: str) -> None:
     """Write the SHA-256 sidecar for *key*."""
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _put,
@@ -73,7 +73,7 @@ async def _put_remote_sha256(store: "ObjectStore", key: str, digest: str) -> Non
 
 
 async def _upload_one(
-    store: "ObjectStore",
+    store: ObjectStore,
     local_file: Path,
     store_key: str,
     *,
@@ -98,7 +98,7 @@ async def _upload_one(
 
 
 async def _download_one(
-    store: "ObjectStore",
+    store: ObjectStore,
     store_key: str,
     local_file: Path,
     *,
@@ -175,11 +175,11 @@ async def upload(
     *,
     storage_subdir: str | None = None,
     skip_if_exists: bool = False,
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
     max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
-) -> "UploadOutput":
+) -> UploadOutput:
     """Upload a local file or directory to the object store.
 
     When *storage_path* is ``None`` and *_app_prefix* is provided the key /
@@ -320,8 +320,8 @@ async def download(
     local_path: str | None = None,
     *,
     skip_if_exists: bool = False,
-    store: "ObjectStore | None" = None,
-) -> "DownloadOutput":
+    store: ObjectStore | None = None,
+) -> DownloadOutput:
     """Download a key or prefix from the object store to a local path.
 
     When *storage_path* ends with ``/`` (or matches multiple keys) the
@@ -401,7 +401,7 @@ async def download(
 
         transferred_count = 0
         for key in data_keys:
-            rel = key[len(strip) :] if key.startswith(strip) else key
+            rel = key.removeprefix(strip)
             # S3 keys use forward slashes; convert to OS-native path for local filesystem
             local_file = dest_dir / Path(*PurePosixPath(rel.lstrip("/")).parts)
             ok, _ = await _download_one(
