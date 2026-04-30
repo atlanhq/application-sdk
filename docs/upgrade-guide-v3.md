@@ -390,7 +390,7 @@ RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
 COPY --chown=appuser:appuser . .
 
 # App-specific environment variables
-ENV ATLAN_APP_HTTP_PORT=8000
+ENV ATLAN_HANDLER_PORT=8000
 ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor
 ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
 

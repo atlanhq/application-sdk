@@ -111,8 +111,8 @@ await worker.run()
 |----------|----------|-------------|
 | `ATLAN_APP_MODULE` | Yes (production) | Python module path, e.g. `app.app:MyExtractor` |
 | `ATLAN_CONTRACT_GENERATED_DIR` | Recommended | Path to generated contract JSON files |
-| `ATLAN_TEMPORAL_HOST` | Yes | Temporal server host (v2 fallback: `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT`) |
-| `ATLAN_TEMPORAL_NAMESPACE` | Yes | Temporal namespace (v2 fallback: `ATLAN_WORKFLOW_NAMESPACE`) |
+| `ATLAN_TEMPORAL_HOST` | Recommended | Temporal server host (defaults to `localhost:7233`; v2 fallback: `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT`) |
+| `ATLAN_TEMPORAL_NAMESPACE` | Recommended | Temporal namespace (defaults to `default`; v2 fallback: `ATLAN_WORKFLOW_NAMESPACE`) |
 
 ---
 

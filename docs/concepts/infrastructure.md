@@ -98,6 +98,9 @@ Returns raw string values (often JSON-encoded). Used by `CredentialResolver` to 
 
 ```python
 class Binding(Protocol):
+    @property
+    def name(self) -> str: ...
+
     async def invoke(
         self,
         operation: str,

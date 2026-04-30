@@ -415,7 +415,7 @@ Each `@task` method becomes a Temporal activity. The `run()` method orchestrates
 | `fetch_tables` | `FetchTablesInput` | `FetchTablesOutput` | Required --- raises `NotImplementedError` |
 | `fetch_columns` | `FetchColumnsInput` | `FetchColumnsOutput` | Required --- raises `NotImplementedError` |
 | `fetch_views` | `FetchViewsInput` | `FetchViewsOutput` | Optional --- add for databases with views |
-| `transform` | `TransformInput` | `TransformOutput` | Override to map raw results via asset mapper |
+| `transform_data` | `TransformInput` | `TransformOutput` | Override to map raw results via asset mapper |
 
 ### Adding custom tasks
 

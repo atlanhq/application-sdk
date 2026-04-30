@@ -130,10 +130,12 @@ Tracked `FileReference` objects are automatically registered for cleanup by `cle
 You can also call them mid-run to reclaim space after large intermediate steps:
 
 ```python
+from application_sdk.contracts.cleanup import StorageCleanupInput
+
 async def run(self, input):
     out = await self.fetch_large_batch(...)
     # Reclaim storage before the next big step
-    await self.cleanup_storage()
+    await self.cleanup_storage(StorageCleanupInput())
     return await self.transform(...)
 ```
 

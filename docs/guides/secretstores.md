@@ -30,14 +30,14 @@ All credential types are frozen Pydantic models available from `application_sdk.
 |------|--------|-------------|
 | `BasicCredential` | `username`, `password` | `basic_ref(name)` |
 | `ApiKeyCredential` | `api_key`, `header_name`, `prefix` | `api_key_ref(name)` |
-| `BearerTokenCredential` | `token`, `token_type` | `bearer_token_ref(name)` |
+| `BearerTokenCredential` | `token`, `expires_at` | `bearer_token_ref(name)` |
 | `OAuthClientCredential` | `client_id`, `client_secret`, `token_url`, `scopes`, `access_token` | `oauth_client_ref(name)` |
-| `CertificateCredential` | `cert_pem`, `key_pem`, `ca_pem` | `certificate_ref(name)` |
-| `AtlanApiToken` | `api_token`, `base_url` | `atlan_api_token_ref(name)` |
+| `CertificateCredential` | `cert_data`, `key_data`, `ca_data`, `passphrase` | `certificate_ref(name)` |
+| `AtlanApiToken` | `token`, `base_url` | `atlan_api_token_ref(name)` |
 | `AtlanOAuthClient` | `client_id`, `client_secret`, `base_url` | `atlan_oauth_client_ref(name)` |
-| `GitSshCredential` | `private_key`, `passphrase` | `git_ssh_ref(name)` |
+| `GitSshCredential` | `key_data`, `passphrase` | `git_ssh_ref(name)` |
 | `GitTokenCredential` | `token` | `git_token_ref(name)` |
-| `RawCredential` | `extra` (raw dict) | `legacy_credential_ref(guid)` — migration only |
+| `RawCredential` | `data` (raw dict) | `legacy_credential_ref(guid)` — migration only |
 
 ### Using credentials in a task
 

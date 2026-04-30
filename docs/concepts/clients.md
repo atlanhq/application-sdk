@@ -206,7 +206,8 @@ Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/
 - `AzureAuthProvider` (`azure/auth.py`) — handles Azure credential strategies including managed identity, service principal, and connection-string authentication.
 
 ```python
-from application_sdk.clients.azure import AzureClient
+from application_sdk.clients.azure.client import AzureClient
+from application_sdk.clients.azure.auth import AzureAuthProvider
 ```
 
 ## SSL Utilities (`ssl_utils.py`)

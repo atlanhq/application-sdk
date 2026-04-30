@@ -123,6 +123,10 @@ class MyConnectorHandler(Handler):
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         return PreflightOutput(status=PreflightStatus.READY, message="OK")
+
+    async def fetch_metadata(self, input, **kwargs):
+        # Metadata extraction is driven by the App, not the handler.
+        pass
 ```
 
 ## App (Connector)

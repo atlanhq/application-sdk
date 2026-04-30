@@ -108,7 +108,7 @@ dapr:
 ### 4. Generate `Dockerfile`
 
 ```dockerfile
-FROM ghcr.io/atlanhq/application-sdk:3.4.0
+FROM registry.atlan.com/public/app-runtime-base:3
 
 WORKDIR /app
 

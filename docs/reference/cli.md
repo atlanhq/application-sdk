@@ -53,7 +53,7 @@ application-sdk --mode {worker,handler,combined} --app MODULE:CLASS [options]
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
 | `--log-level` | `ATLAN_LOG_LEVEL` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `--service-name` | `ATLAN_SERVICE_NAME` | _(derived from app)_ | Service name for observability |
+| `--service-name` | `ATLAN_SERVICE_NAME`, `OTEL_SERVICE_NAME` | _(derived from app)_ | Service name for observability |
 
 ---
 

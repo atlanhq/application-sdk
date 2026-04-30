@@ -108,7 +108,7 @@ and use curl:
 
 ```bash
 # Start the app
-uv run python main.py
+uv run application-sdk --mode combined --app app.connector:MyApp
 
 # Provision credentials (app must be running)
 curl -s -X POST http://localhost:8000/workflows/v1/dev/local-vault \

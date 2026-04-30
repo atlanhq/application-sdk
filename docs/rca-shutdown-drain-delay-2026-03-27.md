@@ -79,10 +79,10 @@ Once `complete_activity_task()` is called, the Rust core knows about the complet
 **`application_sdk/constants.py`**
 - Added `SHUTDOWN_DRAIN_DELAY_SECONDS` (default: 5, configurable via `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS`)
 
-**`application_sdk/worker.py`**
-- `_shutdown_worker()`: added `await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)` before `worker.shutdown()`
+**`application_sdk/execution/_temporal/worker.py`**
+- `AppWorker.__aexit__()`: added `await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)` before `worker.shutdown()`
 
-**`tests/unit/test_worker.py`**
+**`tests/unit/execution/test_worker.py`**
 - `TestShutdownDrainDelay`: 4 new tests that reproduce the race condition and prove the fix:
   - `test_without_fix_activity_completion_is_preempted` — with delay=0 (old code), the activity completion never runs. **Reproduces the bug.**
   - `test_with_fix_activity_completion_runs_before_shutdown` — with delay>0 (new code), the activity completion runs first. **Proves the fix.**

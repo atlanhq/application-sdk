@@ -43,7 +43,7 @@ Injected by the Local Marketplace into the Helm release at deploy time. Leave em
 |----------|---------|-------------|
 | `ATLAN_TEMPORAL_HOST` | `localhost:7233` | Temporal server address (`host:port`). **v2-compat fallback:** if unset, the SDK constructs the address from `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` (deprecated; remove when all deployments set `ATLAN_TEMPORAL_HOST`). |
 | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace. **v2-compat fallback:** `ATLAN_WORKFLOW_NAMESPACE`. |
-| `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when unset. |
+| `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the app name when only `ATLAN_APPLICATION_NAME` is set. |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `0.0.0.0:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). See [Monitoring](concepts/monitoring.md). |
 
 ### Worker Versioning
@@ -176,7 +176,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
 | `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between parquet sink flushes. |
 | `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain parquet metric files. |
-| `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Same truthy caveat as `ATLAN_LOG_CLEANUP_ENABLED`. |
+| `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Uses `.lower() == "true"` — safe to set to `"false"` to disable. |
 | `ATLAN_ENABLE_PROMETHEUS_METRICS` | `true` | Expose a Prometheus `/metrics` endpoint on the handler at port `ATLAN_HANDLER_PORT`. See [Monitoring](concepts/monitoring.md). |
 
 ---

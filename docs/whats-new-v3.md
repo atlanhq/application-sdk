@@ -121,7 +121,8 @@ class MyConnectorActivities(ActivitiesInterface):
 #### v3 — one class, @task, heartbeating built-in
 
 ```python
-from application_sdk.app import App, task, Input, Output
+from application_sdk.app import App, task
+from application_sdk.contracts import Input, Output
 
 class FetchInput(Input):
     connection_id: str

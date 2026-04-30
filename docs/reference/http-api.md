@@ -89,7 +89,7 @@ Delegates to `Handler.fetch_metadata(MetadataInput)`.
 
 Start a workflow run.
 
-**Query param:** `?entrypoint=<name>` (optional). When omitted, the default `run()` entry point is used. When set, it selects a specific `@entrypoint`-decorated method.
+**Query param:** `?entrypoint=<name>` (optional). When omitted, the default `run()` entry point is used for single-entrypoint apps; apps with multiple `@entrypoint` methods return HTTP 400 if this parameter is absent. When set, it selects a specific `@entrypoint`-decorated method.
 
 **Request body:**
 ```json
@@ -148,7 +148,7 @@ Poll workflow execution status.
 }
 ```
 
-`status` values: `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`, `TERMINATED`, `TIMED_OUT`.
+`status` values in the response body: `running`, `completed`, `failed`, `result_decode_failed`. Temporal's `CANCELED`, `TERMINATED`, `TIMED_OUT` states all map to `failed` in the response.
 
 ---
 
@@ -208,11 +208,22 @@ Upload a file to be used as workflow input (e.g. CSV for file-based connectors).
 
 **Request body:** `multipart/form-data` with a `file` field.
 
-**Response:**
+**Response:** `FileUploadResponse` serialized with camelCase aliases:
 ```json
 {
-  "data": { "file_reference": "file_refs/uuid/upload.csv" },
-  "success": true
+  "id": "",
+  "version": "1",
+  "isActive": true,
+  "fileName": "upload.csv",
+  "rawName": "upload.csv",
+  "key": "workflow_file_upload/uuid/upload.csv",
+  "extension": "csv",
+  "contentType": "text/csv",
+  "fileSize": 1234,
+  "isUploaded": true,
+  "uploadedAt": "2025-01-01T10:00:00Z",
+  "createdAt": 0,
+  "updatedAt": 0
 }
 ```
 
