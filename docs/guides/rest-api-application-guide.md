@@ -284,11 +284,6 @@ curl -X POST http://localhost:8000/workflows/v1/start \
   -H "Content-Type: application/json" \
   -d '{
     "credential_guid": "test-local-cred",
-    "credential": {
-      "authType": "api_key",
-      "api_token": "my-test-api-token",
-      "base_url": "https://api.example.com"
-    },
     "connection": {
       "qualifiedName": "default/my-connector/1234567890",
       "name": "my-test-connection"

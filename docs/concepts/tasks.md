@@ -101,9 +101,9 @@ Inside a `@task` method, access infrastructure through `self.context`:
 class MyConnector(App):
     @task
     async def fetch(self, input: FetchInput) -> FetchOutput:
-        # State store
-        prev_state = await self.context.load_state("last_run")
-        await self.context.save_state("last_run", {"timestamp": "2025-01-01"})
+        # State store — use self.persistent_state (the public accessor documented in apps.md)
+        prev_state = await self.persistent_state.load("last_run")
+        await self.persistent_state.save("last_run", {"timestamp": "2025-01-01"})
 
         # Secret store
         api_key = await self.context.get_secret("my-api-key")

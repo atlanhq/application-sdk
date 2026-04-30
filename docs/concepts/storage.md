@@ -93,7 +93,7 @@ FileReference(storage_path="…", tier=StorageTier.PERSISTENT)
 `App` provides two built-in methods for directory-level transfers with automatic `FileReference` tracking. Both accept `UploadInput` / `DownloadInput` objects:
 
 ```python
-from application_sdk.contracts.storage import UploadInput, DownloadInput, StorageTier
+from application_sdk.contracts import UploadInput, DownloadInput, StorageTier
 
 class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:

@@ -120,7 +120,7 @@ application-sdk --mode handler --handler myapp.handlers:MyHandler
 To define a custom handler using the convention-based approach:
 
 ```python
-from application_sdk.handler.base import Handler, AuthInput, AuthOutput
+from application_sdk.handler import Handler, AuthInput, AuthOutput
 
 class MyAppHandler(Handler):   # name must be {AppClassName}Handler
     async def test_auth(self, input: AuthInput) -> AuthOutput:

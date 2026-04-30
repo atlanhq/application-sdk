@@ -119,7 +119,7 @@ Wire it into `SqlMetadataExtractor` by overriding `transform_data()`:
 
 ```python
 from application_sdk.app import task
-from application_sdk.templates.contracts.sql_metadata_extraction import TransformInput, TransformOutput
+from application_sdk.templates.contracts.sql_metadata import TransformInput, TransformOutput
 
 class MyConnectorApp(SqlMetadataExtractor):
     @task(timeout_seconds=1800)

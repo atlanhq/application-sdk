@@ -29,9 +29,9 @@ Use exactly four levels — **DEBUG**, **INFO**, **WARNING**, **ERROR** — with
 - Retry attempt details (attempt number, backoff duration)
 
 ```python
-self.logger.debug("credential cache hit", credential_name=ref.name)
-self.logger.debug("Atlan async client created", credential_type=type(cred).__name__)
-self.logger.debug("Type discovered", type_name=typename, asset_count=count)
+self.logger.debug("credential cache hit name=%s", ref.name)
+self.logger.debug("Atlan async client created credential_type=%s", type(cred).__name__)
+self.logger.debug("Type discovered type_name=%s asset_count=%s", typename, count)
 ```
 
 **Performance note**: Avoid computing expensive values just to pass to `logger.debug()`. The project logger is loguru-backed and does not expose stdlib's `isEnabledFor()`. Use lazy evaluation via `opt(lazy=True)` instead:
@@ -61,14 +61,14 @@ self.logger.opt(lazy=True).debug("record {data}", data=lambda: json.dumps(record
 - Child app calls starting and completing
 
 ```python
-self.logger.info("Connecting to Temporal", host=temporal_host)
-self.logger.info("Extraction complete", records=count, elapsed_s=round(elapsed, 2))
+self.logger.info("Connecting to Temporal host=%s", temporal_host)
+self.logger.info("Extraction complete records=%s elapsed_s=%.2f", count, round(elapsed, 2))
 self.logger.info("Shutdown signal received")
 ```
 
 **Anti-patterns:**
 - Do NOT log at INFO inside a loop that runs per-record (use DEBUG or batch summaries)
-- Do NOT duplicate context in prose: `logger.info(f"Processing {n} records")` → `logger.info("Processing records", count=n)`
+- Do NOT interpolate values via f-string: `logger.info(f"Processing {n} records")` → `logger.info("Processing records count=%s", n)`
 
 ---
 
@@ -135,19 +135,19 @@ except SomeError as e:
 
 ---
 
-## Structured Fields over String Interpolation
+## %-style over f-strings
 
-Always pass context as keyword arguments, never interpolate into the message string:
+Always use `%`-style placeholders in log message strings. Never use f-strings or `str.format()`:
 
 ```python
-# BAD — context is buried in the string, unsearchable
+# BAD — f-string; values are not indexable and may include sensitive data
 self.logger.info(f"Loaded {count} records in {elapsed:.2f}s for app {app_name}")
 
-# GOOD — context is structured, queryable by field name
-self.logger.info("Records loaded", count=count, elapsed_s=round(elapsed, 2), app=app_name)
+# GOOD — %-style; values are rendered lazily and the pattern is grep-able
+self.logger.info("Loaded %s records in %.2fs for app %s", count, elapsed, app_name)
 ```
 
-This is critical because the OTEL/Loki pipeline indexes structured fields for fast querying. String-embedded values are not indexed.
+Do **not** pass extra per-field kwargs (e.g. `logger.info("msg", count=n)`). Only Temporal context kwargs (`workflow_id`, `run_id`, etc.) are promoted to indexed fields in the OTEL/Loki pipeline — all other kwargs land in an opaque JSON blob. Embed differentiating context in the message body using `%-style` so it is always visible in log output regardless of pipeline configuration.
 
 ## Never Swallow Exceptions Silently
 
@@ -193,6 +193,6 @@ No framework changes required — these are conventions enforced in code review:
 
 1. Does any new `logger.warning()` or `logger.error()` that catches an exception include `exc_info=True`?
 2. Are INFO calls inside tight loops? (Use DEBUG or batch summaries instead.)
-3. Are structured fields used instead of f-string interpolation?
+3. Are `%-style` placeholders used in the message body instead of f-strings or kwargs?
 
 Log level is controlled by the `ATLAN_LOG_LEVEL` env var and defaults to `INFO`. Debug logs are never visible in production unless explicitly enabled.

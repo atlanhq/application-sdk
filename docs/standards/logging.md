@@ -14,13 +14,19 @@
         - INFO: General operational information
         - WARNING: Warning messages for potential issues
         - ERROR: Error messages for recoverable errors
-        - CRITICAL: Critical errors that may cause system failure
-        - ACTIVITY: Activity-specific logging
+        - CRITICAL: Use ERROR instead; process termination is communicated via exit codes, not log level
 
 - **Log Format**
-    ```python
-    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
+
+    Colorized (terminal):
     ```
+    <green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue><magenta> trace_id=...</magenta><yellow> correlation_id=...</yellow> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>
+    ```
+    Plain (JSON sink / OTEL):
+    ```
+    {time:YYYY-MM-DD HH:mm:ss} [{level}] trace_id=... correlation_id=... {extra[logger_name]} - {message}
+    ```
+    `trace_id` and `correlation_id` are injected by `CorrelationContextInterceptor` / `AtlanLoggerAdapter` — see `application_sdk/observability/logger_adaptor.py`.
 
 - **Logging Best Practices**
     - Include relevant context in log messages
@@ -40,8 +46,8 @@
     # Basic logging
     logger.info("Operation completed successfully")
 
-    # Logging with context
-    logger.info("Processing request", extra={"request_id": "123", "user": "john"})
+    # Logging with context — embed values in the message body using %-style
+    logger.info("Processing request request_id=%s user=%s", request_id, user)
 
     # Error logging
     try:

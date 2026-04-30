@@ -22,7 +22,6 @@ application-sdk --mode {worker,handler,combined} --app MODULE:CLASS [options]
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--mode` | `-m` | Execution mode: `worker`, `handler`, or `combined` |
 | `--app` | `-a` | App class path in `module:ClassName` form (e.g. `app.connector:PostgresApp`). Apps expose multiple workflows via `@entrypoint` methods. Also accepts `ATLAN_APP_MODULE` env var. |
 
 ---
@@ -52,6 +51,7 @@ application-sdk --mode {worker,handler,combined} --app MODULE:CLASS [options]
 
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
+| `--mode` | `ATLAN_APP_MODE` | `combined` | Execution mode: `worker`, `handler`, or `combined`. Falls back to `APPLICATION_MODE` (v2 legacy). |
 | `--log-level` | `ATLAN_LOG_LEVEL` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `--service-name` | `ATLAN_SERVICE_NAME`, `OTEL_SERVICE_NAME` | _(derived from app)_ | Service name for observability |
 

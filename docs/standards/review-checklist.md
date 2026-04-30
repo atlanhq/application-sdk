@@ -262,31 +262,31 @@ def create_distributed_lock(
 **Critical exception handling rules:**
 
 - **Always re-raise exceptions** after logging unless in non-critical operations
-- **Use SDK-specific exceptions**: Use `ClientError` and internal error codes from `application_sdk/common/error_codes.py`, not generic exceptions
+- **Use SDK-specific exceptions**: Use structured error codes from `application_sdk/errors.py` (format: `AAF-{COMP}-{ID:03d}`) for new code; `application_sdk/common/error_codes.py` is retained for backward compatibility only
 - **Add comprehensive try-catch**: Operations that can fail must be wrapped in try-catch with specific exception types
 - **Error context**: Error messages must include debugging context (operation, parameters, state)
 - **Resource cleanup**: Failed operations must be logged with appropriate detail
 - **Non-critical operations**: May swallow exceptions to prevent cascading failures
 
 ```python
-# DO: Proper error handling with SDK exceptions
-from application_sdk.common.error_codes import ClientError
+# DO: Proper error handling — %-style messages, exc_info=True when catching
+from application_sdk.common.error_codes import ClientError  # legacy; prefer application_sdk.errors for new codes
 
 try:
     result = database_connection.execute_query(query)
     return result
 except ConnectionError as e:
-    logger.error(f"Database connection failed for query {query[:50]}...: {e}")
-    raise ClientError(f"Database connection failed: {e}")
+    logger.error("Database connection failed for query %s: %s", query[:50], e, exc_info=True)
+    raise ClientError("Database connection failed: %s" % e)
 except ValueError as e:
-    logger.error(f"Invalid query parameters: {e}")
-    raise ClientError(f"Query validation failed: {e}")
+    logger.error("Invalid query parameters: %s", e, exc_info=True)
+    raise ClientError("Query validation failed: %s" % e)
 
-# DON'T: Generic exceptions without context
+# DON'T: f-strings, missing exc_info, generic exception
 try:
     result = some_operation()
 except Exception as e:
-    logger.error(f"Error: {e}")  # No context, generic exception
+    logger.error(f"Error: {e}")  # WRONG: f-string, no exc_info=True, no context
 ```
 
 ---
