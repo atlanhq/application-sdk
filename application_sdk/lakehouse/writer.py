@@ -4,6 +4,9 @@ Each app owns one namespace. The writer is constructed against that namespace
 and any append targeting a different namespace logs a warning but still
 proceeds — catalog RBAC is the authoritative enforcement; the warning surfaces
 the violation in app logs so it's caught in code review.
+
+Apps interact with plain ``dict`` records and SDK :class:`Schema` declarations;
+no pyiceberg or pyarrow types appear on the public surface.
 """
 
 from __future__ import annotations
@@ -11,12 +14,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import pyarrow as pa
-from pyiceberg.partitioning import PartitionSpec
-from pyiceberg.schema import Schema
-from pyiceberg.table import Table
-
-from application_sdk.lakehouse.catalog_client import CatalogClient
+from application_sdk.lakehouse._iceberg import catalog as _catalog
+from application_sdk.lakehouse._iceberg import ops as _ops
+from application_sdk.lakehouse.schema import Schema
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +24,18 @@ logger = logging.getLogger(__name__)
 class LakehouseWriter:
     """Append-only writer bound to a single ``app_namespace``."""
 
-    def __init__(self, catalog_client: CatalogClient, app_namespace: str) -> None:
-        self._client = catalog_client
+    def __init__(self, _catalog_obj: Any, app_namespace: str) -> None:
+        self._catalog = _catalog_obj
         self._app_namespace = app_namespace
 
     @classmethod
     def from_env(cls, app_namespace: str) -> LakehouseWriter:
-        """Build a writer using the catalog credentials from the environment.
+        """Build a writer from environment credentials, bound to ``app_namespace``.
 
-        See :func:`application_sdk.lakehouse.catalog_client.load_catalog_from_env`
+        See :func:`application_sdk.lakehouse._iceberg.catalog.load_catalog_from_env`
         for the env vars consumed.
         """
-        return cls(CatalogClient.from_env(), app_namespace)
+        return cls(_catalog.load_catalog_from_env(), app_namespace)
 
     @property
     def app_namespace(self) -> str:
@@ -53,63 +53,45 @@ class LakehouseWriter:
     def append(
         self,
         table_name: str,
-        arrow_table: pa.Table,
+        records: list[dict[str, Any]],
+        *,
+        schema: Schema | None = None,
         namespace: str | None = None,
     ) -> int:
-        """Append an arrow table to an existing Iceberg table. Returns row count.
+        """Append records to a table. Returns the number of rows appended.
+
+        If ``schema`` is provided and the table does not exist, it is
+        auto-created (and its namespace too) using that schema. If ``schema``
+        is omitted the table must already exist; the writer infers the Arrow
+        schema from the table's own metadata.
 
         ``namespace`` defaults to the writer's bound ``app_namespace``. Passing
         a different namespace is allowed but logged as a warning.
         """
-        target_namespace = namespace or self._app_namespace
-        self._check_namespace(target_namespace)
-        if arrow_table.num_rows == 0:
-            return 0
-        table = self._client.load_table(target_namespace, table_name)
-        table.append(arrow_table)
-        return arrow_table.num_rows
-
-    def create_or_get_table(
-        self,
-        table_name: str,
-        schema: Schema,
-        partition_spec: PartitionSpec | None = None,
-        namespace: str | None = None,
-    ) -> Table:
-        """Load the table, creating it (and its namespace) if missing."""
-        target_namespace = namespace or self._app_namespace
-        self._check_namespace(target_namespace)
-        try:
-            return self._client.load_table(target_namespace, table_name)
-        except Exception:
-            self._client.ensure_namespace(target_namespace)
-            identifier = CatalogClient.identifier(target_namespace, table_name)
-            kwargs: dict[str, Any] = {"identifier": identifier, "schema": schema}
-            if partition_spec is not None:
-                kwargs["partition_spec"] = partition_spec
-            return self._client.catalog.create_table(**kwargs)
-
-    def write_records(
-        self,
-        table_name: str,
-        records: list[dict[str, Any]],
-        schema: Schema,
-        partition_spec: PartitionSpec | None = None,
-        arrow_schema: pa.Schema | None = None,
-        namespace: str | None = None,
-    ) -> int:
-        """Create-or-get the table, then append records. Returns row count.
-
-        Builds the arrow table using ``arrow_schema`` if provided, otherwise
-        falls back to ``schema.as_arrow()`` from the iceberg schema.
-        """
         if not records:
             return 0
         target_namespace = namespace or self._app_namespace
-        table = self.create_or_get_table(
-            table_name, schema, partition_spec, namespace=target_namespace
+        self._check_namespace(target_namespace)
+        return _ops.append_records(
+            self._catalog,
+            target_namespace,
+            table_name,
+            records,
+            schema=schema,
         )
-        effective_arrow_schema = arrow_schema or schema.as_arrow()
-        arrow_table = pa.Table.from_pylist(records, schema=effective_arrow_schema)
-        table.append(arrow_table)
-        return arrow_table.num_rows
+
+    def ensure_table(
+        self,
+        table_name: str,
+        schema: Schema,
+        *,
+        namespace: str | None = None,
+    ) -> None:
+        """Create the table from the SDK schema if it doesn't exist; no-op otherwise.
+
+        Useful for migration steps that want to provision the table up-front
+        without writing any rows.
+        """
+        target_namespace = namespace or self._app_namespace
+        self._check_namespace(target_namespace)
+        _ops.ensure_table(self._catalog, target_namespace, table_name, schema)

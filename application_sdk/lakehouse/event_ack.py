@@ -63,39 +63,39 @@ class EventAckWriter:
         self._workflow_name = workflow_name
         self._filename = filename
 
-    @staticmethod
-    def build_arrow(
-        events: list[dict[str, Any]],
-        results: list[ProcessingResult],
-    ) -> pa.Table:
-        """Build the ack arrow table from parallel events / results lists."""
-        if len(events) != len(results):
-            raise ValueError(
-                f"events ({len(events)}) and results ({len(results)}) must align"
-            )
-        return pa.table(
-            {
-                "event_id": [e["event_id"] for e in events],
-                "status": [r.status for r in results],
-                "error_message": [r.error_message for r in results],
-            },
-            schema=_ACK_SCHEMA,
-        )
-
     async def write(
         self,
         events: list[dict[str, Any]],
         results: list[ProcessingResult],
         workflow_run_id: str,
     ) -> str:
-        """Serialize the ack table to Parquet and upload it. Returns the path."""
+        """Serialize the ack rows to Parquet and upload them. Returns the path."""
         ack_path = _ack_path(
             self._app_name, self._workflow_name, workflow_run_id, self._filename
         )
-        arrow = self.build_arrow(events, results)
+        arrow = _build_ack_arrow(events, results)
 
         buf = io.BytesIO()
         pq.write_table(arrow, buf)
         await upload_file_from_bytes(key=ack_path, content=buf.getvalue())
         logger.info("Wrote event ack: %d rows → %s", arrow.num_rows, ack_path)
         return ack_path
+
+
+def _build_ack_arrow(
+    events: list[dict[str, Any]],
+    results: list[ProcessingResult],
+) -> pa.Table:
+    """Internal: build the ack arrow table from parallel events / results lists."""
+    if len(events) != len(results):
+        raise ValueError(
+            f"events ({len(events)}) and results ({len(results)}) must align"
+        )
+    return pa.table(
+        {
+            "event_id": [e["event_id"] for e in events],
+            "status": [r.status for r in results],
+            "error_message": [r.error_message for r in results],
+        },
+        schema=_ACK_SCHEMA,
+    )

@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, patch
 
 import pyarrow.parquet as pq
 
-from application_sdk.lakehouse.event_ack import EventAckWriter, _ack_path
+from application_sdk.lakehouse.event_ack import (
+    EventAckWriter,
+    _ack_path,
+    _build_ack_arrow,
+)
 from application_sdk.lakehouse.models import ProcessingResult
 
 
@@ -27,13 +31,15 @@ class TestAckPath(unittest.TestCase):
 
 
 class TestEventAckBuildArrow(unittest.TestCase):
+    """Internal: ack-arrow construction. ``_build_ack_arrow`` is private."""
+
     def test_aligns_events_and_results(self):
         events = [{"event_id": "e1"}, {"event_id": "e2"}]
         results = [
             ProcessingResult(status="SUCCESS"),
             ProcessingResult(status="FAILED", error_message="boom"),
         ]
-        arrow = EventAckWriter.build_arrow(events, results)
+        arrow = _build_ack_arrow(events, results)
         self.assertEqual(arrow.num_rows, 2)
         self.assertEqual(arrow["event_id"].to_pylist(), ["e1", "e2"])
         self.assertEqual(arrow["status"].to_pylist(), ["SUCCESS", "FAILED"])
@@ -41,7 +47,7 @@ class TestEventAckBuildArrow(unittest.TestCase):
 
     def test_raises_on_length_mismatch(self):
         with self.assertRaises(ValueError):
-            EventAckWriter.build_arrow(
+            _build_ack_arrow(
                 [{"event_id": "e1"}], [ProcessingResult(status="SUCCESS")] * 2
             )
 

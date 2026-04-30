@@ -1,82 +1,67 @@
 """Generic lakehouse reader.
 
-Reads from any namespace the catalog grants the app access to. Has no
-polling, no snapshot tracking, no max-duration loop — callers (typically
-Temporal activities) drive each read explicitly.
+Reads from any namespace the catalog grants the app access to. Apps interact
+with plain ``dict`` records — no Iceberg or Arrow types appear on the public
+surface; the internal :mod:`_iceberg` package handles that.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-import pyarrow as pa
-from pyiceberg.table import Table
-
-from application_sdk.lakehouse.catalog_client import CatalogClient
-
-logger = logging.getLogger(__name__)
+from application_sdk.lakehouse._iceberg import catalog as _catalog
+from application_sdk.lakehouse._iceberg import ops as _ops
 
 
 class LakehouseReader:
-    """Read Iceberg tables via a CatalogClient."""
+    """Read records from any namespace the app has access to."""
 
-    def __init__(self, catalog_client: CatalogClient) -> None:
-        self._client = catalog_client
+    def __init__(self, _catalog_obj: Any) -> None:
+        # The catalog object is intentionally untyped on the boundary —
+        # apps construct readers via ``from_env`` and never pass it directly.
+        self._catalog = _catalog_obj
 
     @classmethod
     def from_env(cls) -> LakehouseReader:
-        """Build a reader using the catalog credentials from the environment.
+        """Build a reader from environment credentials.
 
-        See :func:`application_sdk.lakehouse.catalog_client.load_catalog_from_env`
-        for the env vars consumed.
+        Reads ``ICEBERG_CATALOG_URI`` (or derives from ``ATLAN_DOMAIN_NAME``),
+        ``ICEBERG_CLIENT_ID``, ``ICEBERG_CLIENT_SECRET``, and the optional
+        ``ICEBERG_WAREHOUSE``. Raises ``RuntimeError`` if a required var is
+        missing.
         """
-        return cls(CatalogClient.from_env())
-
-    def load_table(self, namespace: str, table_name: str) -> Table:
-        return self._client.load_table(namespace, table_name)
-
-    def read_arrow(
-        self,
-        namespace: str,
-        table_name: str,
-        row_filter: str | None = None,
-        limit: int | None = None,
-        selected_fields: tuple[str, ...] | None = None,
-    ) -> pa.Table:
-        """Scan an Iceberg table and return the result as a PyArrow Table.
-
-        Returns an empty arrow table (preserving the iceberg schema) when the
-        table is missing rows for the filter.
-        """
-        table = self.load_table(namespace, table_name)
-        scan = table.scan(
-            row_filter=row_filter or "true",
-            selected_fields=selected_fields or ("*",),
-            limit=limit,
-        )
-        return scan.to_arrow()
+        return cls(_catalog.load_catalog_from_env())
 
     def fetch_records(
         self,
         namespace: str,
         table_name: str,
-        row_filter: str | None = None,
+        *,
+        where: str | None = None,
         limit: int | None = None,
         sort_by: str | None = None,
+        select: tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
         """Read a table and return rows as plain dicts.
 
-        Convenience over ``read_arrow`` for callers that want to iterate over
-        Python dicts instead of an arrow table. ``sort_by`` is applied in-process
-        because Iceberg scans don't guarantee row order.
+        Args:
+            namespace: Source namespace (dotted form OK, e.g. ``"apps.databricks"``).
+            table_name: Table within the namespace.
+            where: Optional Iceberg row-filter expression
+                (e.g. ``"status = 'unprocessed'"``). ``None`` reads the full table.
+            limit: Optional maximum number of rows to return.
+            sort_by: Optional column to sort by ascending. Sort happens
+                in-process because Iceberg scans don't guarantee order.
+            select: Optional tuple of column names to project.
         """
-        arrow = self.read_arrow(
-            namespace, table_name, row_filter=row_filter, limit=limit
+        records = _ops.scan_records(
+            self._catalog,
+            namespace,
+            table_name,
+            where=where,
+            limit=limit,
+            select=select,
         )
-        if arrow.num_rows == 0:
-            return []
-        records = arrow.to_pylist()
         if sort_by:
             records.sort(key=lambda r: r.get(sort_by))
         if limit is not None:
@@ -84,11 +69,5 @@ class LakehouseReader:
         return records
 
     def current_snapshot_id(self, namespace: str, table_name: str) -> int | None:
-        """Return the table's current snapshot id, or None if the table is empty.
-
-        Useful when an app wants to record what version of the data it processed,
-        but the reader does not track snapshots itself.
-        """
-        table = self.load_table(namespace, table_name)
-        snapshot = table.current_snapshot()
-        return snapshot.snapshot_id if snapshot else None
+        """Return the table's current snapshot id, or None if the table is empty."""
+        return _ops.current_snapshot_id(self._catalog, namespace, table_name)
