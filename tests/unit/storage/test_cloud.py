@@ -294,3 +294,48 @@ class TestCloudStoreOps:
         assert "data/run/file.json" in keys
         assert "data/run" not in keys
         assert len(keys) == 1
+
+    async def test_large_file_download_streaming(self, tmp_path):
+        """download(key=) streams a multi-chunk payload without buffering the whole object."""
+        store = self._make_store(tmp_path)
+        content = b"x" * (12 * 1024 * 1024)  # 12 MiB — exceeds default 10 MiB chunk
+        await store.upload_bytes("large.bin", content)
+
+        out = tmp_path / "out"
+        files = await store.download(key="large.bin", output_dir=out)
+
+        assert len(files) == 1
+        assert files[0].read_bytes() == content
+
+    async def test_large_file_upload_streaming(self, tmp_path):
+        """upload() streams a multi-chunk local file without reading it all into memory."""
+        store = self._make_store(tmp_path)
+        content = b"y" * (12 * 1024 * 1024)  # 12 MiB
+        src = tmp_path / "large.bin"
+        src.write_bytes(content)
+
+        size = await store.upload(src, "large.bin")
+
+        assert size == len(content)
+        stored = await store.get_bytes("large.bin")
+        assert stored == content
+
+    async def test_streaming_prefix_download_multi_file(self, tmp_path):
+        """download(prefix=) streams all matching files and preserves path-traversal guard."""
+        store = self._make_store(tmp_path)
+        files_in = {
+            "batch/a.json": b'{"a":1}',
+            "batch/sub/b.json": b'{"b":2}',
+            "batch/c.txt": b"c",
+        }
+        for key, data in files_in.items():
+            await store.upload_bytes(key, data)
+
+        out = tmp_path / "out"
+        downloaded = await store.download(prefix="batch", output_dir=out)
+
+        assert len(downloaded) == 3
+        for path in downloaded:
+            assert path.resolve().is_relative_to(out.resolve())
+        contents = {p.read_bytes() for p in downloaded}
+        assert contents == set(files_in.values())

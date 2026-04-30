@@ -40,13 +40,13 @@ import hashlib
 import math
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, overload
 
 import obstore
 import orjson
 
 if TYPE_CHECKING:
-    from typing import Any
+    from typing import Any, Literal
 
     from obstore.store import ObjectStore
 
@@ -235,6 +235,32 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
     return max(chunk_size, math.ceil(file_size / 9900))
 
 
+@overload
+async def upload_file(
+    key: str,
+    local_path: str | Path,
+    store: ObjectStore | None = ...,
+    *,
+    chunk_size: int = ...,
+    normalize: bool = ...,
+    retain_local_copy: bool = ...,
+    compute_hash: Literal[True] = ...,
+) -> str: ...
+
+
+@overload
+async def upload_file(
+    key: str,
+    local_path: str | Path,
+    store: ObjectStore | None = ...,
+    *,
+    chunk_size: int = ...,
+    normalize: bool = ...,
+    retain_local_copy: bool = ...,
+    compute_hash: Literal[False],
+) -> None: ...
+
+
 async def upload_file(
     key: str,
     local_path: str | Path,
@@ -243,7 +269,8 @@ async def upload_file(
     chunk_size: int = 8 * 1024 * 1024,
     normalize: bool = True,
     retain_local_copy: bool = True,
-) -> str:
+    compute_hash: bool = True,
+) -> str | None:
     """Stream-upload a local file to *key* in the store.
 
     Uses obstore's multipart writer so arbitrarily large files are uploaded
@@ -264,9 +291,24 @@ async def upload_file(
         retain_local_copy: When ``True`` (default), keep the local file after
             upload.  When ``False``, delete the local file after a successful
             upload.
+        compute_hash: When ``True`` (default), compute a SHA-256 digest of the
+            file while streaming and return it as a hex string.  Higher-level
+            SDK transfer helpers (e.g. ``transfer._upload_one``) use this digest
+            to write a ``{key}.sha256`` integrity record alongside the uploaded
+            object, enabling deduplication and corruption detection on subsequent
+            downloads.
+
+            **Do not set this to ``False`` unless you are uploading to an
+            externally-managed object store — for example via** ``CloudStore``
+            **— that does not participate in the SDK's integrity protocol.**
+            Disabling it saves the cost of streaming the data through the
+            SHA-256 hasher but leaves no integrity record in the store.  Any
+            transfer helper that later tries to verify or deduplicate against
+            a sidecar will behave as if the object was never uploaded.
 
     Returns:
-        Hex-encoded SHA-256 digest of the uploaded file.
+        Hex-encoded SHA-256 digest of the uploaded file if *compute_hash* is
+        ``True``, else ``None``.
 
     Raises:
         StorageError: If the upload fails.
@@ -280,7 +322,7 @@ async def upload_file(
     file_size = path.stat().st_size
     effective_chunk = _compute_part_size(file_size, chunk_size)
 
-    h = hashlib.sha256()
+    h = hashlib.sha256() if compute_hash else None
     try:
         async with obstore.open_writer_async(
             resolved, key, buffer_size=effective_chunk
@@ -290,7 +332,8 @@ async def upload_file(
                     chunk = fh.read(effective_chunk)
                     if not chunk:
                         break
-                    h.update(chunk)
+                    if h is not None:
+                        h.update(chunk)
                     await writer.write(chunk)
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
@@ -300,8 +343,6 @@ async def upload_file(
         raise StorageError(
             f"Failed to upload file to key '{key}'", key=key, cause=exc
         ) from exc
-
-    digest = h.hexdigest()
 
     if not retain_local_copy:
         from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
@@ -317,7 +358,7 @@ async def upload_file(
             except OSError:
                 _log().debug("Failed to delete local file (cleanup)", exc_info=True)
 
-    return digest
+    return h.hexdigest() if h is not None else None
 
 
 async def download_file(
