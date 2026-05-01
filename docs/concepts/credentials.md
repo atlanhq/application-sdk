@@ -1,6 +1,6 @@
 # Credentials
 
-The Application SDK provides a typed credential system that eliminates `dict["password"]`-style access patterns. Credentials are stored in a `SecretStore` and resolved at runtime into strongly-typed objects via `resolve_credentials()`.
+The Application SDK provides a typed credential system that eliminates `dict["password"]`-style access patterns. Credentials are stored in a `SecretStore` and resolved at runtime into strongly-typed objects via `resolve_credential()`.
 
 ---
 

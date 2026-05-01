@@ -939,12 +939,12 @@ class MyProgress(HeartbeatDetails):
 @task(heartbeat_timeout_seconds=60)
 async def process_batches(self, input: MyInput) -> MyOutput:
     # Resume after a retry
-    prev = await self.task_context.get_heartbeat_details(MyProgress)
+    prev = self.task_context.get_heartbeat_details(MyProgress)
     start_id = prev.last_processed_id if prev else None
 
     for batch in get_batches(start_from=start_id):
         process(batch)
-        await self.task_context.heartbeat(MyProgress(
+        self.task_context.heartbeat(MyProgress(
             last_processed_id=batch.id,
             records_done=batch.count,
         ))

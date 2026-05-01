@@ -596,12 +596,12 @@ class MyProgress(HeartbeatDetails):
 
 @task(heartbeat_timeout_seconds=60)
 async def process_batches(self, input: MyInput) -> MyOutput:
-    prev = await self.task_context.get_heartbeat_details(MyProgress)
+    prev = self.task_context.get_heartbeat_details(MyProgress)
     start_id = prev.last_id if prev else None
 
     for batch in get_batches(start_from=start_id):
         process(batch)
-        await self.task_context.heartbeat(MyProgress(last_id=batch.id, records_done=batch.count))
+        self.task_context.heartbeat(MyProgress(last_id=batch.id, records_done=batch.count))
 ```
 
 **Blocking sync code** — if your task calls a blocking (non-async) library (e.g., a sync DB

@@ -114,7 +114,7 @@ self.logger.error("Batch failed, continuing; batch_num=%s", n, exc_info=True)
 self.logger.error("Request failed; path=%s status=%s", request.path, 500, exc_info=True)
 ```
 
-**Never use `logger.exception()`** — always use `logger.error(..., exc_info=True)` instead. This keeps the level mental model clean: `{debug, info, warning, error, critical}` with no aliases.
+**Never use `logger.exception()` in app code** — always use `logger.error(..., exc_info=True)` instead. This keeps the level mental model clean: `{debug, info, warning, error, critical}` with no aliases. (The SDK adapter still exposes `exception()` internally so third-party callers like `temporalio.activity.logger` work correctly; this prohibition applies to connector and app code only.)
 
 ```python
 # GOOD
