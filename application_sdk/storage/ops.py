@@ -197,7 +197,7 @@ def _throughput_mbps(size_bytes: int, elapsed_ms: float) -> float | None:
 def _log_storage_event(
     level: int,
     op: str,
-    key: str,
+    store_path: str,
     *,
     outcome: str,
     elapsed_ms: float | None = None,
@@ -212,7 +212,7 @@ def _log_storage_event(
     """
     extra: dict[str, object] = {
         "storage_op": op,
-        "key": key,
+        "store_path": store_path,
         "outcome": outcome,
     }
     if elapsed_ms is not None:
@@ -225,7 +225,7 @@ def _log_storage_event(
                 extra["throughput_mibps"] = tput
     if error_class is not None:
         extra["error_class"] = error_class
-    msg = f"storage.{op} {outcome} key={key}"
+    msg = f"storage.{op} {outcome} path={store_path}"
     logger.log(level, msg, extra=extra)
 
 

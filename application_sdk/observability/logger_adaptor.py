@@ -122,6 +122,12 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "circuit_breaker_tripped",
         "bottleneck_activity_type",
         "bottleneck_duration_ms",
+        # ── ObjectStore operations ───────────────────────────────────────
+        "storage_op",
+        "store_path",
+        "elapsed_ms",
+        "size_bytes",
+        "throughput_mibps",
         # ── FileReference transfers ──────────────────────────────────────
         "storage_path",
         "local_path",

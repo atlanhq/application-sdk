@@ -70,7 +70,9 @@ def _default_user_agent() -> str:
     module into circular-import paths during package init.
     """
     try:
-        from application_sdk.version import __version__  # type: ignore[import]
+        from application_sdk.version import (  # noqa: PLC0415; type: ignore[import]
+            __version__,
+        )
 
         return f"atlan-application-sdk/{__version__}"
     except Exception:  # pragma: no cover — defensive
@@ -113,7 +115,7 @@ def obstore_retry_config() -> dict[str, Any] | None:
         GCSStore / AzureStore constructors, or ``None`` when no overrides
         have been set (so we don't fight the upstream defaults).
     """
-    from datetime import timedelta
+    from datetime import timedelta  # noqa: PLC0415
 
     cfg: dict[str, Any] = {}
     raw_max = os.getenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES")

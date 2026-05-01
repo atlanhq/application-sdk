@@ -80,7 +80,7 @@ def create_store_from_binding(
     name: str,
     *,
     components_dir: Path | str = Path("./components"),
-) -> "ObjectStore":
+) -> ObjectStore:
     """Create an obstore store from a Dapr component binding YAML file.
 
     Scans all ``*.yaml`` files in *components_dir* for a ``Component``
@@ -146,7 +146,7 @@ def create_store_from_binding(
     # so timeouts and pool sizes are sized for GB-class transfers, not for
     # small objects.  Without this, S3Store falls back to obstore's small-
     # object defaults (30 s timeout) and 100 MB+ downloads time out mid-stream.
-    from application_sdk.storage._obstore_config import (
+    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
         log_obstore_config,
         obstore_client_options,
         obstore_retry_config,
