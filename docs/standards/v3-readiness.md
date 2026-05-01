@@ -31,7 +31,7 @@ Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migrati
 - [ ] **Handler signatures** — if a `Handler` subclass exists, `test_auth`, `preflight_check`, and `fetch_metadata` use typed `Input` contracts — not `*args`/`**kwargs`.
 - [ ] **Async clients** — no sync `get_client()`. Use `create_async_atlan_client()` with an `AtlanApiToken` credential.
 - [ ] **Entry point** — dev uses `run_dev_combined(...)`; containers invoke the `application-sdk --mode combined` CLI (usually via `ATLAN_APP_MODULE`). No `BaseApplication(...)`.
-- [ ] **No direct infrastructure** — no `DaprClient()`, `self._state`, or raw `loguru`/`logging.getLogger()` in app code. Go through `self.context.*` and `application_sdk.observability.logger_adaptor.get_logger()`.
+- [ ] **No direct infrastructure** — no direct `DaprClient(...)` or `AsyncDaprClient(...)` construction, no `self._state`, and no raw `loguru`/`logging.getLogger()` in app code. Go through `self.context.*`, the `application_sdk.infrastructure` exports, and `application_sdk.observability.logger_adaptor.get_logger()`.
 
 ## 2 — Contract & config
 
@@ -78,7 +78,7 @@ The SDK ships test doubles in `application_sdk.testing.mocks` (`MockSecretStore`
 ### Unit tests (must exist; must all pass)
 
 - [ ] **App instantiation** — construct the `App` subclass with `MockSecretStore({...})` + `MockStateStore()` and assert `context.app_name` / `context.run_id` are populated.
-- [ ] **Each `@task` method** — at least one happy-path test per `@task`, invoked with a typed `Input` and asserting the typed `Output`. Use `app.run_in_thread` only where the real implementation does.
+- [ ] **Each `@task` method** — at least one happy-path test per `@task`, invoked with a typed `Input` and asserting the typed `Output`. Use `self.task_context.run_in_thread()` only where the real implementation does.
 - [ ] **Contract serialization** — round-trip every `Input`/`Output` through `model_dump()` + `model_validate()` to catch unbounded fields and ensure Temporal-safe payloads (<2 MB).
 - [ ] **Handler methods** — if the app exposes a `Handler`, cover `test_auth`, `preflight_check`, and `fetch_metadata` with typed inputs and mocked credentials.
 - [ ] **Credential registration** — import the app's credentials module and assert `CredentialTypeRegistry().get_class("<type>")` is not None.
@@ -134,7 +134,7 @@ Non-zero exit = generated artifacts are stale relative to `contract/app.pkl`. Re
 
 ```bash
 # From the app repo root, in a scratch environment:
-uv run python -m app.run_dev &
+uv run python run_dev.py &
 APP_PID=$!
 trap "kill $APP_PID" EXIT
 

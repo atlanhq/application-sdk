@@ -292,6 +292,7 @@ def infra():
                 "test-cred": json.dumps({
                     "type": "bearer_token",
                     "token": "fake-token",
+                    "expires_at": "",
                 })
             })
         )

@@ -2,7 +2,7 @@
 
 ## Exceptions
 
-- **Observability Module**: The `application_sdk/observability/` module uses the standard `logging` module directly since it implements the `get_logger` wrapper. All other modules must use `get_logger`.
+- **Observability Module**: The `application_sdk/observability/` module uses **loguru** directly to implement the `AtlanLoggerAdapter` / `get_logger` wrapper; stdlib `logging` is used only to silence noisy third-party loggers. All other modules must use `get_logger`.
 
 - **Logger Configuration**
     - Use `AtlanLoggerAdapter` for all logging

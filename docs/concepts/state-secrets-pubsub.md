@@ -128,19 +128,18 @@ class PubSub(Protocol):
 
 **Publishing a message:**
 
-`PubSub` is not part of `InfrastructureContext`. Access it through the Dapr client directly or via the SDK's Dapr pub/sub wrapper. Example using the Dapr SDK:
+`PubSub` is not part of `InfrastructureContext`. Use `DaprPubSub` from `application_sdk.infrastructure` — it implements the `PubSub` Protocol and handles serialisation and error wrapping:
 
 ```python
-import json
-from application_sdk.infrastructure import AsyncDaprClient
+from application_sdk.infrastructure import AsyncDaprClient, DaprPubSub
 
 @task(timeout_seconds=60)
 async def notify_complete(self, input: NotifyInput) -> NotifyOutput:
     async with AsyncDaprClient() as dapr:
-        await dapr.publish_event(
-            pubsub_name="eventstore",  # matches EVENT_STORE_NAME env var (default: "eventstore")
+        pubsub = DaprPubSub(dapr, pubsub_name="eventstore")  # matches EVENT_STORE_NAME env var (default: "eventstore")
+        await pubsub.publish(
             topic="extraction-complete",
-            data=json.dumps({"run_id": input.run_id, "record_count": input.record_count}),
+            data={"run_id": input.run_id, "record_count": input.record_count},
         )
     return NotifyOutput()
 ```
@@ -264,7 +263,7 @@ class CapacityPool(Protocol):
 
 ```python
 import uuid
-from application_sdk.infrastructure.capacity import get_capacity_pool
+from application_sdk.infrastructure import get_capacity_pool
 
 @task(timeout_seconds=3600)
 async def parallel_fetch(self, input: FetchInput) -> FetchOutput:

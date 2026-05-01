@@ -14,7 +14,7 @@
 ### **Specific Exception Types**
 - **Use specific exception types** instead of generic `Exception`
 - **Examples**: `ValueError`, `ConnectionError`, `TimeoutError`, `FileNotFoundError`
-- **Create custom exceptions** in `application_sdk/errors.py` for domain-specific errors (the legacy `application_sdk/common/error_codes.py` is retained for backward compatibility only)
+- **Create custom exceptions** in `application_sdk/errors.py` (top-level structured error codes, format `AAF-{COMP}-{ID:03d}`) for domain-specific errors (the legacy `application_sdk/common/error_codes.py` is retained for backward compatibility only)
 - **Anti-pattern**: `except Exception:` - Too broad, masks real issues
 
 ## Exception Handling Patterns

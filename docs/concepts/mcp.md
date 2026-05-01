@@ -198,16 +198,22 @@ ENABLE_MCP=true
 ### Error Handling
 
 ```python
+@dataclass
+class ProcessInput(Input):
+    data_id: str
+
+@dataclass
+class ProcessOutput(Output):
+    message: str
+
 @mcp_tool(description="Safe data processing with error handling")
 @task
-async def process_data(self, data_id: str) -> str:
+async def process_data(self, input: ProcessInput) -> ProcessOutput:
     try:
-        # Process data
-        result = await process_data_safely(data_id)
-        return f"Processed successfully: {result}"
+        result = await process_data_safely(input.data_id)
+        return ProcessOutput(message=f"Processed successfully: {result}")
     except Exception as e:
-        # Return user-friendly error messages
-        return f"Processing failed: {str(e)}"
+        return ProcessOutput(message=f"Processing failed: {e}")
 ```
 
 ### Performance Considerations

@@ -20,7 +20,7 @@ Use the right type system for each zone:
 | Zone | Type System | When to Use | Example |
 |------|-------------|-------------|---------|
 | **Temporal contracts** | `pydantic.BaseModel` | Anything serialized through Temporal wire (workflow/activity I/O) | `Input`, `Output`, `FileReference`, `CredentialRef` |
-| **High-volume / low-level** | `msgspec.Struct` or plain dicts | Performance-critical paths: pyatlan asset types, logging internals | pyatlan_v9 types, log record construction |
+| **High-volume / low-level** | `msgspec.Struct` or plain dicts | Performance-critical paths: pyatlan_v9 asset types, logging internals | pyatlan_v9 types, log record construction |
 
 **Rules:**
 - All contracts (`Input`, `Output`, `HeartbeatDetails`, `Record`, `FileReference`, `CredentialRef`, credential types) **MUST** extend the appropriate base class from `contracts/base.py` or `contracts/types.py`. They are `pydantic.BaseModel` subclasses serialized through Temporal via `pydantic_data_converter`.

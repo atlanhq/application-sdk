@@ -63,7 +63,7 @@ A two-phase manifest looks like:
 }
 ```
 
-> **Deprecation note:** The `workflow_type` field in `inputs` is the current AE-compatible form. The SDK logs a deprecation warning when it encounters this field and will remove support in v3.1.0. Once AE supports query parameters on start requests, use `?entrypoint=<name>` instead. Until then, keep `workflow_type` for AE-triggered flows.
+> **Deprecation note:** The `workflow_type` field in `inputs` is the current AE-compatible form. The SDK logs a deprecation warning when it encounters this field. Once AE supports query parameters on start requests, use `?entrypoint=<name>` instead. Until then, keep `workflow_type` for AE-triggered flows.
 
 The `$.extract.outputs.output_path` JSONPath reference is resolved by AE at runtime against App A's `run()` return value.
 

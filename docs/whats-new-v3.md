@@ -717,7 +717,7 @@ from application_sdk.testing import MockHeartbeatController
 
 controller = MockHeartbeatController()
 # inject into task context during test setup
-# controller.recorded_heartbeats contains all heartbeat calls
+# controller.get_heartbeat_calls() returns the list of heartbeat calls
 ```
 
 ---

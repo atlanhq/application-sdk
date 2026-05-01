@@ -1081,7 +1081,7 @@ from application_sdk.testing import MockHeartbeatController
 
 controller = MockHeartbeatController()
 # inject into task context or pass to the function under test
-# controller.recorded_heartbeats contains all calls made
+# controller.get_heartbeat_calls() returns the list of heartbeat calls
 ```
 
 ### Running locally with credentials

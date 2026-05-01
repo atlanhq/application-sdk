@@ -57,7 +57,7 @@ from application_sdk.credentials import (
 ### BasicCredential
 
 ```python
-cred: BasicCredential = await ctx.resolve_credential(basic_ref("my-db"))
+cred: BasicCredential = await self.context.resolve_credential(basic_ref("my-db"))
 print(cred.username)   # str
 print(cred.password)   # str
 ```
@@ -65,21 +65,21 @@ print(cred.password)   # str
 ### ApiKeyCredential
 
 ```python
-cred: ApiKeyCredential = await ctx.resolve_credential(api_key_ref("my-svc"))
+cred: ApiKeyCredential = await self.context.resolve_credential(api_key_ref("my-svc"))
 header = f"{cred.header_name}: {cred.prefix}{cred.api_key}"
 ```
 
 ### OAuthClientCredential
 
 ```python
-cred: OAuthClientCredential = await ctx.resolve_credential(oauth_client_ref("my-oauth"))
+cred: OAuthClientCredential = await self.context.resolve_credential(oauth_client_ref("my-oauth"))
 # cred.needs_refresh() → bool (True if access_token is absent or expired)
 ```
 
 ### RawCredential (legacy fallback)
 
 ```python
-cred: RawCredential = await ctx.resolve_credential(legacy_credential_ref(guid))
+cred: RawCredential = await self.context.resolve_credential(legacy_credential_ref(guid))
 value = cred.data.get("some_field")  # dict access — use only when migrating v2 code
 # or equivalently: cred.get("some_field")
 ```

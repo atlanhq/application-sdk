@@ -75,7 +75,7 @@ For application-level error codes, use the top-level `application_sdk.errors` mo
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, HANDLER_ERROR
 
 # Log structured error codes for monitoring/alerting
-logger.error("Task failed [%s]: %s", APP_ERROR, exc)
+logger.error("Task failed [%s]", APP_ERROR, exc_info=exc)
 
 # Reference error codes in ApplicationError for Temporal retry control
 from application_sdk.execution import ApplicationError

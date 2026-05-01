@@ -218,7 +218,7 @@ Pass the resulting `ssl.SSLContext` via `DB_CONFIG.connect_args={"ssl": ssl_ctx}
 
 ## Prometheus Metrics
 
-Every application that uses `create_temporal_client()` exposes ~40 built-in Temporal SDK metrics at `0.0.0.0:9464/metrics` by default (disable with `enable_prometheus=False`). See [`docs/concepts/monitoring.md`](monitoring.md) for details.
+Every deployed application exposes ~40 built-in Temporal SDK metrics at `0.0.0.0:9464/metrics` by default. The bind address is controlled by the `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` env var; the handler-service side is controlled by `ATLAN_ENABLE_PROMETHEUS_METRICS`. See [`docs/concepts/monitoring.md`](monitoring.md) for details.
 
 ## Summary
 

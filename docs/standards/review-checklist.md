@@ -277,10 +277,10 @@ try:
     return result
 except ConnectionError as e:
     logger.error("Database connection failed for query %s: %s", query[:50], e, exc_info=True)
-    raise AppError("Database connection failed: %s" % e)
+    raise AppError("Database connection failed: %s" % e) from e
 except ValueError as e:
     logger.error("Invalid query parameters: %s", e, exc_info=True)
-    raise AppError("Query validation failed: %s" % e)
+    raise AppError("Query validation failed: %s" % e) from e
 
 # DON'T: f-strings, missing exc_info, generic exception
 try:
@@ -523,7 +523,7 @@ def good_validation(max_value: int) -> int:
 
 - **Scattered functionality**: Related code spread across multiple inappropriate locations
 - **Import organization violations**: Imports not at the top, wrong order, or unused imports
-- **File misplacement**: Decorators not co-located with the domain they extend (v3 decorators live in `app/`, `server/mcp/`, `execution/`, `observability/decorators/`), constants not in `constants.py`
+- **File misplacement**: Decorators not co-located with the domain they extend (v3 decorators live in `app/task.py`, `app/entrypoint.py`, `server/mcp/decorators.py`, `execution/decorators.py`, `observability/decorators/observability_decorator.py`), constants not in `constants.py`
 - **Dead code**: Any code marked as "no need" or unused
 - **DRY violations**: Repeated logic that should be extracted into shared functions
 - **Naming inconsistencies**: Using different naming patterns for similar concepts
