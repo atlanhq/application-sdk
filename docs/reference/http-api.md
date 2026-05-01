@@ -260,7 +260,7 @@ Returns the Dapr pub/sub subscription configuration. Called by the Dapr sidecar 
 
 ### `POST /events/v1/event/{event_id}`
 
-Receive a Dapr cloud event. Routes to the appropriate `@on_event` handler.
+Receive a Dapr cloud event. Dispatches the event by starting a Temporal workflow via the app's workflow client (`client.start_workflow`), using the event payload as input.
 
 ### `POST /events/v1/drop`
 
@@ -309,7 +309,7 @@ Prometheus metrics endpoint (application-level metrics). Available when `ATLAN_E
 
 ### `GET /`
 
-Serves the custom frontend `index.html` when present at `ATLAN_FRONTEND_ASSETS_PATH`. Returns a JSON placeholder when no frontend bundle is found.
+Serves the custom frontend `index.html` when present at `ATLAN_FRONTEND_ASSETS_PATH`. Returns a minimal `text/html` 404 page (`<html><body><h1>UI not available</h1></body></html>`) when no frontend bundle is found.
 
 ---
 

@@ -76,6 +76,7 @@ The framework rejects unsafe field types at class-definition time:
 |------|--------|-----------------|
 | `Any` | Rejected | Use a concrete type |
 | `bytes` | Rejected | Use `FileReference` |
+| `bytearray` | Rejected | Use `FileReference` |
 | `list[T]` (unbounded) | Rejected | Use `Annotated[list[T], MaxItems(N)]` |
 | `dict[str, Any]` (unbounded) | Rejected | Use a typed Pydantic model |
 

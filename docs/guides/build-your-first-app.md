@@ -74,6 +74,7 @@ import httpx
 
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
+    ApiMetadataOutput,
     AuthInput,
     AuthOutput,
     AuthStatus,
@@ -82,7 +83,6 @@ from application_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
-    SqlMetadataOutput,
 )
 
 
@@ -106,7 +106,7 @@ class GitHubHandler(Handler):
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         # Metadata extraction is driven by the App, not the handler.
-        return SqlMetadataOutput(objects=[])
+        return ApiMetadataOutput()
 ```
 
 The handler receives credentials as `input.credentials: list[HandlerCredential]` — a list of opaque key/value pairs sent by Atlan. Extract the fields you need by key name.
@@ -220,20 +220,23 @@ asyncio.run(
             "org": "your-github-org",
         },
         example_input={
-            "connection": {
-                "connection_name": "my-github",
-                "connection_qualified_name": "default/github/1234567890",
-            },
+            "credential_guid": "test-credential",
+            "org": "your-github-org",
             "max_pages": 2,
         },
     )
 )
 ```
 
-Copy Dapr components into your project:
+Copy the Dapr component definitions into your project. The components ship with the SDK repo, not the wheel:
 
 ```bash
+# If you have the SDK repo cloned locally:
 cp -r /path/to/application-sdk/components ./components
+
+# Otherwise, download them directly:
+curl -sL https://github.com/atlanhq/application-sdk/archive/refs/heads/main.tar.gz \
+  | tar -xz --strip-components=2 application-sdk-main/components
 ```
 
 Start infrastructure and run:

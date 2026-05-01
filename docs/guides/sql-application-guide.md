@@ -257,7 +257,7 @@ def serialize_entity(entity) -> dict:
     """Convert a pyatlan entity to Atlas nested-entity dict format for publishing."""
     return {
         "typeName": entity.type_name,
-        "attributes": entity.attributes.dict(exclude_none=True),
+        "attributes": entity.attributes.model_dump(exclude_none=True),
     }
 ```
 

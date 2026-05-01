@@ -175,7 +175,7 @@ Access the current correlation ID programmatically:
 from application_sdk.observability.correlation import get_correlation_context
 
 ctx = get_correlation_context()
-cid = ctx.correlation_id if ctx else None  # returns str | None
+cid = ctx.correlation_id if ctx else None  # str (empty when unset) or None when ctx is None
 ```
 
 ---

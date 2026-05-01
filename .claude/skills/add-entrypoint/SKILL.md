@@ -16,7 +16,7 @@ owner: connector-platform-team
 last_updated: "2026-04-30"
 staleness_days: 90
 inputs:
-  - entrypoint_name: string (snake_case, e.g. "mine_queries")
+  - entrypoint_name: string (snake_case Python method name, e.g. "mine_queries"; the SDK converts it to kebab-case for dispatch, e.g. "mine-queries")
   - description: string (human description of what this entrypoint does)
 outputs:
   - Modified app/contracts.py (new Input/Output models)
@@ -45,7 +45,7 @@ input/output contracts. Common patterns:
 ### 1. Gather inputs
 
 Ask for:
-- `entrypoint_name` (snake_case): e.g. `mine_queries`
+- `entrypoint_name` (snake_case Python method name): e.g. `mine_queries` — the SDK converts this to kebab-case (`mine-queries`) for the dispatch identity and workflow type
 - A brief description of what it does
 
 Read the existing `app/connector.py` and `app/contracts.py` to understand the current structure.
@@ -89,7 +89,7 @@ class MyConnector(App):
 **Important:**
 - Import `entrypoint` from `application_sdk.app`.
 - `@entrypoint` is mutually exclusive with `run()` — if the class has `run()`, convert it to `@entrypoint` first (or keep `run()` as the default entry point alongside the new `@entrypoint`).
-- Each `@entrypoint` becomes a separate Temporal workflow named `{app-name}:{entrypoint_name}`.
+- Each `@entrypoint` becomes a separate Temporal workflow named `{app-name}:{entrypoint-kebab-name}` where the kebab name is the method name with underscores replaced by hyphens (e.g. `mine_queries` → `mine-queries`).
 
 ### 4. Trigger the new entrypoint
 
@@ -100,7 +100,7 @@ curl -X POST http://localhost:8000/workflows/v1/start \
   -d '{
     "credential_guid": "...",
     "connection": { "connection_qualified_name": "default/app/123" },
-    "entrypoint": "{entrypoint_name}"
+    "entrypoint": "{entrypoint-kebab-name}"
   }'
 ```
 
@@ -114,12 +114,12 @@ If the app uses PKL contracts, add a new DAG node to `contract/app.pkl` for the 
 Or manually add to `app/generated/manifest.json`:
 ```json
 {
-  "{entrypoint_name}": {
-    "activity_name": "{entrypoint_name}",
+  "{entrypoint-kebab-name}": {
+    "activity_name": "{entrypoint-kebab-name}",
     "activity_display_name": "{Description}",
     "app_name": "{app-name}",
     "inputs": {
-      "workflow_type": "{entrypoint_name}",
+      "workflow_type": "{entrypoint-kebab-name}",
       "task_queue": "atlan-{app-name}-{deployment-name}",
       "args": {
         "credential_guid": "{{credential}}",
@@ -130,8 +130,10 @@ Or manually add to `app/generated/manifest.json`:
 }
 ```
 
+**Note on `task_queue`:** The value `atlan-{app-name}-{deployment-name}` is only used when both `ATLAN_APPLICATION_NAME` and `ATLAN_DEPLOYMENT_NAME` env vars are set. In local dev (where neither is set), the SDK falls back to `{ClassName}-queue`. Update `task_queue` to match how your local Temporal worker is configured (check the output of `uv run python run_dev.py` for the actual queue name).
+
 ## Verification
 
 1. `uv run python run_dev.py` — smoke test the new entrypoint.
-2. In Temporal UI, verify `{app-name}:{entrypoint_name}` appears as the workflow type.
+2. In Temporal UI, verify `{app-name}:{entrypoint-kebab-name}` appears as the workflow type (e.g. `my-app:mine-queries` if the method is `mine_queries`).
 3. Check the response from `GET /workflows/v1/manifest` includes the new node.

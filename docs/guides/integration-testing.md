@@ -111,7 +111,7 @@ Scenario(
 | `metadata` | `/workflows/v1/metadata` | Fetch metadata |
 | `preflight` | `/workflows/v1/check` | Validate configuration |
 | `workflow` | `/workflows/v1/start` (default) | Start workflow |
-| `config` | `/workflows/v1/config/{id}` | Get or update credential config (object store backed) |
+| `config` | `/workflows/v1/config/{id}` | Get or update credential config (Dapr state-store backed) |
 
 **v3 Response Shapes:**
 
@@ -120,7 +120,7 @@ Auth responses include a `data` envelope:
 {"success": true, "message": "Authentication success", "data": {"status": "success", "message": "", "identities": [], "scopes": []}}
 ```
 
-Preflight responses use named sub-check keys under `data` (each check name is lowercamelCased), with a `success` field inside each sub-check:
+Preflight responses use named sub-check keys under `data` (the first character of each check name is lower-cased; spaces and inner capitals are preserved), with a `success` field inside each sub-check:
 ```json
 {"success": true, "data": {"status": "ready", "connectivityCheck": {"success": true, "message": "OK"}}}
 ```

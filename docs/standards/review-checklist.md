@@ -523,7 +523,7 @@ def good_validation(max_value: int) -> int:
 
 - **Scattered functionality**: Related code spread across multiple inappropriate locations
 - **Import organization violations**: Imports not at the top, wrong order, or unused imports
-- **File misplacement**: Decorators outside `decorators/`, constants not in `constants.py`
+- **File misplacement**: Decorators not co-located with the domain they extend (v3 decorators live in `app/` and `server/mcp/`), constants not in `constants.py`
 - **Dead code**: Any code marked as "no need" or unused
 - **DRY violations**: Repeated logic that should be extracted into shared functions
 - **Naming inconsistencies**: Using different naming patterns for similar concepts
@@ -541,7 +541,7 @@ def good_validation(max_value: int) -> int:
 - Use generators for memory-efficient iteration
 - Follow asyncio best practices for concurrent code
 - Use Pydantic `BaseModel` for structured data crossing workflow/task boundaries; `@dataclass` only for internal value types
-- Implement proper exception hierarchies in `error_codes.py`
+- Implement proper exception hierarchies in `errors.py` (new code) — `error_codes.py` is back-compat only
 
 **Temporal workflow patterns:**
 

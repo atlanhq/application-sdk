@@ -188,13 +188,13 @@ class MyConnector(App):
 
 Two cleanup tasks are available on every `App`:
 
-- `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **and** convention-based temp directories (from `input.extra_paths` or `ATLAN_CLEANUP_BASE_PATHS`).
+- `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **then** convention-based temp directories (using `input.extra_paths` if provided, otherwise `ATLAN_CLEANUP_BASE_PATHS`, otherwise the default temp path).
 - `cleanup_storage()` — removes object store artifacts by tier:
   - `StorageTier.TRANSIENT` refs are always removed.
   - `StorageTier.PERSISTENT` refs are always left untouched.
   - `StorageTier.RETAINED` refs under the run-scoped prefix are removed **only** when `input.include_prefix_cleanup=True` is set (opt-in); otherwise they are left untouched.
 
-Both can also be called mid-run to reclaim space after large intermediate steps.
+Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — the cleanup contract is tied to workflow completion, not mid-run state.
 
 ## Passthrough Modules
 

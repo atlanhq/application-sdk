@@ -10,7 +10,7 @@ The handler checks `ATLAN_FRONTEND_ASSETS_PATH` (default: `app/generated/fronten
 
 - If `index.html` exists there, it is served at `GET /`.
 - The rest of the directory is mounted as static files (JS, CSS, assets).
-- If the path does not exist or is empty, `GET /` returns a minimal placeholder JSON response.
+- If the path does not exist or is empty, `GET /` returns a minimal `text/html` 404 page.
 
 Your frontend communicates with the handler via the standard SDK HTTP API (authentication, preflight, metadata, workflow start) at the same origin.
 

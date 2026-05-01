@@ -40,13 +40,13 @@ uv run pre-commit install
 uv sync
 ```
 
-### Step 2: List available Dapr components
+### Step 2: Verify Dapr components are present
+
+The `components/*.yaml` files are committed to the repo and do not need downloading. Confirm they exist:
 
 ```bash
-uv run poe download-components
+ls components/
 ```
-
-This lists the bundled `components/*.yaml` files — they are committed to the repo and do not need downloading.
 
 ### Step 3: Start Dapr + Temporal
 

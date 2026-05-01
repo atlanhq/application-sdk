@@ -127,17 +127,7 @@ Tracked `FileReference` objects are automatically registered for cleanup by `cle
 - **`cleanup_files()`** — removes local temp paths from tracked `FileReference` objects and convention-based directories listed in `ATLAN_CLEANUP_BASE_PATHS`.
 - **`cleanup_storage()`** — deletes remote files according to their `StorageTier`.
 
-You can also call them mid-run to reclaim space after large intermediate steps:
-
-```python
-from application_sdk.contracts.cleanup import StorageCleanupInput
-
-async def run(self, input):
-    out = await self.fetch_large_batch(...)
-    # Reclaim storage before the next big step
-    await self.cleanup_storage(StorageCleanupInput())
-    return await self.transform(...)
-```
+Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — cleanup is tied to workflow completion, not mid-run state.
 
 ---
 

@@ -198,5 +198,5 @@ To stop all local processes cleanly:
 # Stop Dapr
 dapr stop --app-id app
 # Stop Temporal (if started by this skill)
-temporal server stop    # or pkill -f "temporal server"
+pkill -f "temporal server"   # temporal has no "server stop" subcommand; use pkill or Ctrl-C
 ```

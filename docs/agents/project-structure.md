@@ -1,6 +1,6 @@
 # Project Structure
 
-- `application_sdk/` is the core SDK package (`app`, `clients`, `common`, `contracts`, `credentials`, `decorators`, `docgen`, `execution`, `handler`, `infrastructure`, `observability`, `outputs`, `server`, `storage`, `templates`, `test_utils`, `testing`, `tools`, `transformers`, plus top-level `constants.py`, `discovery.py`, `errors.py`, `main.py`, `version.py`).
+- `application_sdk/` is the core SDK package (`app`, `clients`, `common`, `contracts`, `credentials`, `docgen`, `execution`, `handler`, `infrastructure`, `observability`, `outputs`, `server`, `storage`, `templates`, `testing`, `tools`, `transformers`, plus top-level `constants.py`, `discovery.py`, `errors.py`, `main.py`, `version.py`). Note: `decorators/` and `test_utils/` are empty legacy directories — ignore them; v3 decorators live in `app/` and `server/mcp/`, and test utilities live in `testing/`.
 - `tests/` contains the test suite, organized under `tests/unit/`, `tests/integration/`, `tests/e2e/`, and `tests/scratch/`.
 - `docs/` holds documentation sources (guides, concepts, setup).
 - `components/` stores Dapr/Temporal configs used by local dev tasks.
