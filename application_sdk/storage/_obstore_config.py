@@ -19,8 +19,9 @@ Environment variables
 
 Client options (passed via ``S3Store(client_options=…)``):
 
-* ``ATLAN_OBSTORE_TIMEOUT`` — per-request timeout (default ``"30m"``,
-  matching the empirical fivetran-app value for 50–100 MB SQLite files).
+* ``ATLAN_OBSTORE_TIMEOUT`` — per-request timeout (default ``"90s"``,
+  sized for one 16 MiB chunked download at modest throughput; raise it to
+  ``5m`` or higher on slow cross-region paths via this env var).
 * ``ATLAN_OBSTORE_CONNECT_TIMEOUT`` — connect-phase timeout (default ``"30s"``).
 * ``ATLAN_OBSTORE_POOL_IDLE_TIMEOUT`` — pool idle timeout (default ``"90s"``).
 * ``ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST`` — pool size per host (unset by
@@ -45,7 +46,15 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # ClientConfig and RetryConfig are TypedDict aliases shipped by obstore
+    # for static type-checking only — they are not importable at runtime
+    # (see obstore/store/_client.pyi, _retry.pyi).  We use them as the public
+    # contract on our helper return types so callers see the exact set of
+    # fields obstore-rs accepts, instead of an opaque ``dict[str, Any]``.
+    from obstore.store import ClientConfig, RetryConfig
 
 # Stdlib logger to avoid the storage → observability → storage circular
 # import that bites the rest of this package.
@@ -54,9 +63,17 @@ logger = logging.getLogger(__name__)
 # Defaults.  Values larger than upstream defaults are deliberate:
 #   - upstream timeout is 30 s, which kills mid-stream on 100 MB+ files via
 #     NAT/public-egress paths for large file downloads.
-#   - 30 minutes matches what fivetran-app already sets directly today; we
-#     promote that value to the SDK default so every app inherits it.
-_DEFAULT_TIMEOUT = "30m"
+# ATLAN_OBSTORE_TIMEOUT is a *per-HTTP-request* timeout — it applies to each
+# individual GET or PUT, not to the total transfer.  For the chunked-download
+# path (chunk_size = 16 MiB by default), each request covers at most one chunk,
+# so the timeout bounds one 16 MiB transfer, not the whole file.  90s lets us
+# detect stuck transfers fast while comfortably covering 16 MiB at modest
+# throughput (~180 KB/s and up).  Operators on slow cross-region or NAT-heavy
+# paths can raise it via ``ATLAN_OBSTORE_TIMEOUT`` (e.g. ``5m``); operators with
+# reliable connectivity can drop it further.  connect_timeout (30s) and
+# http2_keep_alive_timeout (30s) already catch dead connections before the
+# per-request timeout fires.
+_DEFAULT_TIMEOUT = "90s"
 _DEFAULT_CONNECT_TIMEOUT = "30s"
 _DEFAULT_POOL_IDLE_TIMEOUT = "90s"
 _DEFAULT_HTTP2_KEEP_ALIVE_TIMEOUT = "30s"
@@ -78,15 +95,15 @@ def _default_user_agent() -> str:
         return "atlan-application-sdk"
 
 
-def obstore_client_options() -> dict[str, Any]:
-    """Build an obstore ``ClientConfig`` dict from environment variables.
+def obstore_client_options() -> ClientConfig:
+    """Build an obstore ``ClientConfig`` from environment variables.
 
     Returns:
-        A dict suitable for passing as ``client_options=`` to S3Store /
-        GCSStore / AzureStore constructors.  Always contains at least the
-        SDK defaults — the dict is never empty.
+        A ``ClientConfig`` (obstore TypedDict) suitable for passing as
+        ``client_options=`` to S3Store / GCSStore / AzureStore constructors.
+        Always contains at least the SDK defaults — the dict is never empty.
     """
-    opts: dict[str, Any] = {
+    opts: ClientConfig = {
         "timeout": os.getenv("ATLAN_OBSTORE_TIMEOUT", _DEFAULT_TIMEOUT),
         "connect_timeout": os.getenv(
             "ATLAN_OBSTORE_CONNECT_TIMEOUT", _DEFAULT_CONNECT_TIMEOUT
@@ -106,17 +123,18 @@ def obstore_client_options() -> dict[str, Any]:
     return opts
 
 
-def obstore_retry_config() -> dict[str, Any] | None:
-    """Build an obstore ``RetryConfig`` dict, or ``None`` for upstream defaults.
+def obstore_retry_config() -> RetryConfig | None:
+    """Build an obstore ``RetryConfig``, or ``None`` for upstream defaults.
 
     Returns:
-        A dict suitable for passing as ``retry_config=`` to S3Store /
-        GCSStore / AzureStore constructors, or ``None`` when no overrides
-        have been set (so we don't fight the upstream defaults).
+        A ``RetryConfig`` (obstore TypedDict) suitable for passing as
+        ``retry_config=`` to S3Store / GCSStore / AzureStore constructors,
+        or ``None`` when no overrides have been set (so we don't fight the
+        upstream defaults).
     """
     from datetime import timedelta  # noqa: PLC0415
 
-    cfg: dict[str, Any] = {}
+    cfg: RetryConfig = {}
     raw_max = os.getenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES")
     if raw_max:
         try:
@@ -143,8 +161,8 @@ def obstore_retry_config() -> dict[str, Any] | None:
 def log_obstore_config(
     provider: str,
     *,
-    client_options: dict[str, Any] | None,
-    retry_config: dict[str, Any] | None,
+    client_options: ClientConfig | None,
+    retry_config: RetryConfig | None,
 ) -> None:
     """Log the configured client/retry options once at store creation time.
 

@@ -322,7 +322,7 @@ class TestS3EndpointAndPathStyle:
         # callers additionally override the user_agent string.
         client_options = mock_s3_cls.call_args.kwargs["client_options"]
         assert client_options is not None
-        assert client_options.get("timeout") == "30m"
+        assert client_options.get("timeout") == "90s"
         assert client_options.get("user_agent") == "aws-sdk-go-v2 atlan-application-sdk"
 
     @patch("obstore.store.S3Store")
@@ -346,7 +346,7 @@ class TestS3EndpointAndPathStyle:
         # is the SDK-versioned identifier (no custom endpoint override).
         client_options = mock_s3_cls.call_args.kwargs["client_options"]
         assert client_options is not None
-        assert client_options.get("timeout") == "30m"
+        assert client_options.get("timeout") == "90s"
         assert client_options.get("user_agent", "").startswith("atlan-application-sdk")
         # No retry override by default — obstore's defaults are kept.
         assert mock_s3_cls.call_args.kwargs.get("retry_config") is None

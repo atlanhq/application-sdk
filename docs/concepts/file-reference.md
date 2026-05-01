@@ -2,7 +2,7 @@
 
 This document is the single source of truth for large-payload data transfer in
 application-sdk v3. Read it before writing any code that passes files between
-activities, writes run artifacts, or pushes data upstream.
+tasks, writes run artifacts, or pushes data upstream.
 
 ---
 
@@ -16,11 +16,11 @@ error.
 
 `FileReference` solves this by storing the actual bytes in object storage (S3,
 GCS, Azure Blob) and putting only a tiny pointer in the Temporal payload. The SDK
-uploads and downloads automatically — activity authors never call storage APIs
+uploads and downloads automatically — task authors never call storage APIs
 directly.
 
 `App.upload()` solves a different problem: pushing a file to a **stable, addressable
-path** that survives beyond the current workflow run and is visible to external
+path** that survives beyond the current run and is visible to external
 systems (the Atlan platform, downstream pipelines, SDR).
 
 These are two distinct APIs with distinct purposes. Using the wrong one causes subtle
@@ -32,15 +32,15 @@ failures.
 
 | Scenario | API | Why |
 |---|---|---|
-| Pass a SQLite / Parquet / JSON file from task A to task B in the same workflow | `FileReference` field on Input/Output | Auto persisted on output, auto materialised on input. Zero storage code needed. |
+| Pass a SQLite / Parquet / JSON file from task A to task B in the same run | `FileReference` field on Input/Output | Auto persisted on output, auto materialised on input. Zero storage code needed. |
 | Task B always needs what task A produced, and the file is always present | `FileReference` field (eager, default) | SDK downloads it before task B runs. |
 | Task B only sometimes needs the file (e.g. only when `mode == "full"`) | `Annotated[FileReference \| None, Lazy()]` | SDK skips the download; task B fetches on demand with `fetch()`. |
-| Multiple tasks all share the same large manifest file | Single `FileReference` passed through the chain | SDK downloads it exactly once per activity via dedup. |
-| Push a completed artifact so it appears in the Atlan UI after the workflow | `await self.upload(UploadInput(..., tier=StorageTier.RETAINED))` | Writes to a stable run-scoped prefix that the platform indexes. |
-| Write a file that must persist across multiple workflow runs (e.g. incremental bookmark) | `await self.upload(UploadInput(..., tier=StorageTier.PERSISTENT))` | Writes to a fixed path not cleaned up between runs. |
+| Multiple tasks all share the same large manifest file | Single `FileReference` passed through the chain | SDK downloads it exactly once per task via dedup. |
+| Push a completed artifact so it appears in the Atlan UI after the run | `await self.upload(UploadInput(..., tier=StorageTier.RETAINED))` | Writes to a stable run-scoped prefix that the platform indexes. |
+| Write a file that must persist across multiple runs (e.g. incremental bookmark) | `await self.upload(UploadInput(..., tier=StorageTier.PERSISTENT))` | Writes to a fixed path not cleaned up between runs. |
 | Directory of output files (e.g. partitioned Parquet) from task A to task B | `FileReference(local_path=str(dir_path))` — same API, directory-aware | SDK uploads all files in the directory and re-creates the structure on download. |
 
-**Key rule:** `FileReference` is for *within-workflow* transfer. `App.upload()` is
+**Key rule:** `FileReference` is for *within-run* transfer. `App.upload()` is
 for *durable outbound* delivery.
 
 ---
@@ -67,7 +67,9 @@ fills them in during persist and materialize.
 
 ### Constructing a FileReference
 
-**Always inside a `@task`-decorated function** (Temporal sandbox restriction):
+Constructing a `FileReference` is just a Pydantic model instantiation — it works
+anywhere (a `@task`, `run()`, a helper function). What requires a `@task`-decorated
+method is **persisting** the ref so the SDK can auto-upload it on activity return:
 
 ```python
 # Single file
@@ -86,8 +88,12 @@ ref = FileReference(local_path="/tmp/output/")
 ref = FileReference(local_path="/tmp/special.bin", auto_materialize=False)
 ```
 
-Do **not** construct `FileReference` in `__init__`, in a `@workflow`, or at
-module level — only inside `@task` functions.
+The SDK only auto-persists a `FileReference` when it is **returned from a `@task`
+method** as part of an `Output` model. A ref constructed in `run()` and never
+returned from a task will not be uploaded — `run()` is a Temporal workflow
+function with sandbox restrictions, and the upload happens activity-side. As a
+rule of thumb: build refs inside `@task` methods and return them; treat refs
+received in `run()` as already-durable handles to pass between tasks.
 
 ### Tiers
 
@@ -99,7 +105,7 @@ The tier controls **where** the file is stored and **when it is cleaned up**.
 Prefix:  file_refs/{uuid}
 Cleanup: deleted by App.cleanup_storage() at the end of every run
 Use for: intermediate files between tasks that are no longer needed after
-         the workflow completes
+         the run completes
 ```
 
 Example — extraction output that the transform task needs but nothing else:
@@ -121,7 +127,7 @@ return ExtractOutput(
 Prefix:  artifacts/apps/{app_name}/workflows/{workflow_id}/{run_id}/file_refs/
 Cleanup: NOT deleted by standard cleanup — must be removed manually or via
          a retention policy
-Use for: run artifacts you want available after the workflow completes
+Use for: run artifacts you want available after the run completes
          (downloadable from the Atlan UI, inspectable for debugging)
 ```
 
@@ -174,7 +180,7 @@ After your `@task` returns an Output containing an ephemeral `FileReference`
 3. Writes a `{storage_path}.sha256` sidecar to the store — used for integrity
    verification on download.
 4. Writes a `{local_path}.sha256` sidecar locally — allows the same worker to
-   skip re-download if the activity is retried locally.
+   skip re-download if the task is retried locally.
 5. Returns a **durable** ref (`is_durable=True`, `storage_path` set) in the
    serialised Output that Temporal stores.
 
@@ -192,7 +198,7 @@ or sidecar hash mismatch), the SDK:
 3. Writes a fresh local sidecar.
 4. Sets `local_path` on the ref so your task sees a ready-to-use local file.
 
-**Retry safety:** if the activity retries on a different worker pod, `local_path`
+**Retry safety:** if the task retries on a different worker pod, `local_path`
 will be a stale path from another machine. The sidecar check catches this: the
 local sidecar is absent (different pod, different disk), so the SDK re-downloads.
 
@@ -227,7 +233,7 @@ files are re-downloaded.
 
 ### Lazy Materialization
 
-By default every `FileReference` field is downloaded before the activity runs.
+By default every `FileReference` field is downloaded before the task runs.
 Mark a field `Lazy` to skip the automatic download:
 
 ```python
@@ -249,22 +255,22 @@ from application_sdk.storage.reference import fetch
 
 async def my_task(self, input: MyInput) -> MyOutput:
     if input.full_export and self.needs_full_export():
-        ref = await fetch(input.full_export)  # downloads now, cached for this activity
+        ref = await fetch(input.full_export)  # downloads now, cached for this task
         with open(ref.local_path, "rb") as f:
             data = f.read()
 ```
 
 **When to use `Lazy`:**
 
-- Your activity only sometimes needs the file (conditional logic, mode flags).
-- Lightweight activities (send-metrics, notify, query-metastore) that happen to
+- Your task only sometimes needs the file (conditional logic, mode flags).
+- Lightweight tasks (send-metrics, notify, query-metastore) that happen to
   receive an Input model with large refs they don't use — forcing a 500 MB
-  download on a 50 ms activity will cause timeouts.
-- Fan-out activities that receive a shared manifest but only need their slice.
+  download on a 50 ms task will cause timeouts.
+- Fan-out tasks that receive a shared manifest but only need their slice.
 
 **When NOT to use `Lazy`:**
 
-- The activity always reads the file — eager download is simpler and you get the
+- The task always reads the file — eager download is simpler and you get the
   download logged and retried before your code runs.
 
 ### Dedup — Same File, Multiple Fields
@@ -291,7 +297,7 @@ do not need to deduplicate manually.
 `App.upload()` uploads a local file to a **stable, run-scoped path** in the
 deployment object store and returns a `FileReference` pointing at it. Use it when:
 
-- You want the artifact to outlive the current Temporal activity context.
+- You want the artifact to outlive the current run.
 - You need to push a file to Atlan's artifact layer (visible in the UI,
   downloadable by support, indexed by the platform).
 - You need a `FileReference` with a known prefix (not a random `file_refs/{uuid}`).
@@ -306,10 +312,11 @@ await self.upload(input: UploadInput) -> UploadOutput
 
 ```python
 class UploadInput(BaseModel):
-    local_path: str                        # required: path to the file on disk
-    tier: StorageTier = StorageTier.RETAINED  # where to store it
-    storage_path: str | None = None        # override the full destination key
-    storage_subdir: str | None = None      # append a subdir under the run prefix
+    local_path: str                            # required: path to the file on disk
+    tier: StorageTier = StorageTier.RETAINED   # where to store it
+    storage_path: str | None = None            # override the full destination key
+    storage_subdir: str | None = None          # append a subdir under the run prefix
+    skip_if_exists: bool = False               # skip upload when remote SHA-256 matches
 ```
 
 | Field | Required | Description |
@@ -318,6 +325,7 @@ class UploadInput(BaseModel):
 | `tier` | No (default `RETAINED`) | Tier that controls the destination prefix and cleanup policy. |
 | `storage_path` | No | Fully-qualified destination key. Overrides the auto-generated path. Use this when you need an exact fixed path (e.g. `argo-artifacts/spec.json`). |
 | `storage_subdir` | No | Subdirectory appended under the run prefix. Useful for grouping related uploads without spelling out the full path. |
+| `skip_if_exists` | No (default `False`) | When `True`, skip uploading files whose SHA-256 already matches the stored `{key}.sha256` sidecar. Useful for retried tasks and idempotent re-uploads. |
 
 ### Path Computation
 
@@ -354,7 +362,7 @@ class UploadOutput(BaseModel):
 ```
 
 The returned `ref` is already durable (`is_durable=True`, `storage_path` set).
-You can pass it as a `FileReference` field on a subsequent activity's Input.
+You can pass it as a `FileReference` field on a subsequent task's Input.
 
 ### Usage Patterns
 
@@ -364,7 +372,7 @@ You can pass it as a `FileReference` field on a subsequent activity's Input.
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
 
-# Inside a @workflow or @task method:
+# Inside run() or a @task method:
 upload_result = await self.upload(
     UploadInput(
         local_path="/tmp/output/tables.parquet",
@@ -400,17 +408,17 @@ upload_result = await self.upload(
 # storage_path: argo-artifacts/my-connector/latest-spec.json (exactly)
 ```
 
-#### Pattern 4 — Upload then pass the ref to another activity
+#### Pattern 4 — Upload then pass the ref to another task
 
 ```python
-# In the extract workflow step:
+# In the extract task:
 upload_result = await self.upload(
     UploadInput(local_path=extract_output.db_path, tier=StorageTier.RETAINED)
 )
 
-# Pass the durable ref to the transform activity:
+# Pass the durable ref to the transform task:
 transform_input = TransformInput(source_db=upload_result.ref)
-transform_output = await workflow.execute_activity(transform, transform_input, ...)
+transform_output = await self.transform(transform_input)
 ```
 
 #### Pattern 5 — PERSISTENT for cross-run state
@@ -447,7 +455,7 @@ async def transform(self, input: TransformInput) -> TransformOutput:
 
 # ── App.upload() (outbound, stable path) ──────────────────────────────────
 
-# In the workflow run() method — push result for the platform to index:
+# In the run() method — push result for the platform to index:
 result = await self.upload(
     UploadInput(local_path=transform_output.result_parquet.local_path,
                 tier=StorageTier.RETAINED)
@@ -473,8 +481,8 @@ class TransformOutput(Output):
     result_parquet: FileReference | None = None  # RETAINED: kept after run
 
 
-# activities.py
-class ExtractActivity:
+# connector.py
+class MyConnector(App):
     @task
     async def extract(self, input: ExtractInput) -> ExtractOutput:
         db_path = Path(TEMPORARY_PATH) / "raw.db"
@@ -482,11 +490,9 @@ class ExtractActivity:
         return ExtractOutput(raw_db=FileReference(local_path=str(db_path)))
         # SDK uploads raw.db to file_refs/{uuid} automatically on return
 
-
-class TransformActivity:
     @task
     async def transform(self, input: TransformInput) -> TransformOutput:
-        # SDK downloaded raw.db before this function was called
+        # SDK downloaded raw.db before this method was called
         df = read_sqlite(input.raw_db.local_path)
         out = Path(TEMPORARY_PATH) / "result.parquet"
         df.to_parquet(out)
@@ -495,24 +501,20 @@ class TransformActivity:
         )
         # SDK uploads result.parquet to artifacts/.../run-.../file_refs/result.parquet
 
-
-# workflow run() method
-async def run(self, input: WorkflowInput) -> WorkflowOutput:
-    extract_out = await workflow.execute_activity(ExtractActivity.extract, ...)
-    transform_out = await workflow.execute_activity(
-        TransformActivity.transform,
-        TransformInput(raw_db=extract_out.raw_db),
-        ...
-    )
-    # Push artifact so the platform can index it:
-    upload = await self.upload(
-        UploadInput(
-            local_path=transform_out.result_parquet.local_path,
-            tier=StorageTier.RETAINED,
-            storage_subdir="argo-artifacts",
+    async def run(self, input: RunInput) -> RunOutput:
+        extract_out = await self.extract(ExtractInput(...))
+        transform_out = await self.transform(
+            TransformInput(raw_db=extract_out.raw_db)
         )
-    )
-    return WorkflowOutput(artifact_ref=upload.ref)
+        # Push artifact so the platform can index it:
+        upload = await self.upload(
+            UploadInput(
+                local_path=transform_out.result_parquet.local_path,
+                tier=StorageTier.RETAINED,
+                storage_subdir="argo-artifacts",
+            )
+        )
+        return RunOutput(artifact_ref=upload.ref)
 ```
 
 ### Example B — Fan-out with shared manifest and lazy heavy ref
@@ -522,7 +524,7 @@ class ParseInput(Input):
     manifest: FileReference | None = None                             # eager
     full_snapshot: Annotated[FileReference | None, Lazy()] = None    # lazy
 
-class ParseActivity:
+class MyConnector(App):
     @task
     async def parse(self, input: ParseInput) -> ParseOutput:
         # manifest is already downloaded — use it directly
@@ -601,7 +603,7 @@ data = {"file": ref}
 ### Do not read local_path before the task runs
 
 ```python
-# WRONG — in a @workflow, local_path is a stale hint, not guaranteed to exist:
+# WRONG — in run(), local_path is a stale hint, not guaranteed to exist:
 path = input.ref.local_path
 data = open(path).read()           # may not exist on this machine
 
@@ -614,7 +616,7 @@ async def my_task(self, input: MyInput) -> MyOutput:
 ### Do not use FileReference for outbound delivery
 
 ```python
-# WRONG — FileReference is internal to the workflow:
+# WRONG — FileReference is internal to the run:
 return Output(ref=FileReference(local_path=str(result), tier=StorageTier.RETAINED))
 # The Atlan platform cannot index this on its own
 

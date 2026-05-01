@@ -40,6 +40,21 @@ from application_sdk.observability.utils import (
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
+# SDK-side allowlist that gates which kwargs reach OTLP.  When a logger is called
+# with structured kwargs (e.g. ``_log().info("Downloaded", storage_path=key)``),
+# loguru places the kwargs on ``record["extra"]`` rather than in the message
+# string.  ``_build_extra_dict`` filters that dict through this set before it is
+# copied into the emitted OTLP LogRecord's ``attributes`` map — keys not listed
+# here are dropped and never reach the exporter.
+#
+# End-to-end pipeline (verified against atlanhq/otel-collector +
+# atlanhq/workflow-logs-reader): the collector is a pass-through (only a
+# ``batch`` processor, no attribute filter), and ClickHouse stores attributes in
+# a ``LogAttributes Map(String, String)`` column on ``otel_logs.logs_v1``.  Any
+# key listed here is therefore queryable in Grafana / direct SQL as
+# ``LogAttributes['<key>']`` with no collector or ClickHouse schema change.
+# Numeric values are stored as strings — cast at query time, e.g.
+# ``toUInt64OrZero(LogAttributes['bytes_uploaded'])``.
 _KNOWN_EXTRA_KEYS = frozenset(
     {
         "client_host",

@@ -301,7 +301,8 @@ async def upload_file(
     chunk_size: int = 8 * 1024 * 1024,
     normalize: bool = True,
     retain_local_copy: bool = True,
-) -> str:
+    compute_hash: bool = True,
+) -> str | None:
     """Stream-upload a local file to *key* in the store.
 
     Uses obstore's multipart writer so arbitrarily large files are uploaded
@@ -322,9 +323,17 @@ async def upload_file(
         retain_local_copy: When ``True`` (default), keep the local file after
             upload.  When ``False``, delete the local file after a successful
             upload.
+        compute_hash: When ``True`` (default), compute a SHA-256 digest of the
+            file while streaming and return it as a hex string.  Higher-level
+            SDK transfer helpers use this digest to write a ``{key}.sha256``
+            integrity record alongside the uploaded object, enabling
+            deduplication and corruption detection on subsequent downloads.
+            Pass ``False`` for external stores (e.g. ``CloudStore``) that do
+            not participate in the SDK integrity protocol.
 
     Returns:
-        Hex-encoded SHA-256 digest of the uploaded file.
+        Hex-encoded SHA-256 digest of the uploaded file if *compute_hash* is
+        ``True``, else ``None``.
 
     Raises:
         StorageError: If the upload fails.
@@ -338,7 +347,7 @@ async def upload_file(
     file_size = path.stat().st_size
     effective_chunk = _compute_part_size(file_size, chunk_size)
 
-    h = hashlib.sha256()
+    h = hashlib.sha256() if compute_hash else None
     started = time.monotonic()
     try:
         async with obstore.open_writer_async(
@@ -349,7 +358,8 @@ async def upload_file(
                     chunk = fh.read(effective_chunk)
                     if not chunk:
                         break
-                    h.update(chunk)
+                    if h is not None:
+                        h.update(chunk)
                     await writer.write(chunk)
     except Exception as exc:
         elapsed_ms = (time.monotonic() - started) * 1000.0
@@ -377,7 +387,7 @@ async def upload_file(
         elapsed_ms=elapsed_ms,
         size_bytes=file_size,
     )
-    digest = h.hexdigest()
+    digest = h.hexdigest() if h is not None else None
 
     if not retain_local_copy:
         from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415
@@ -413,10 +423,11 @@ async def download_file(
     Transient failures (network errors, mid-body stream drops, HTTP 5xx) are
     retried automatically by the Rust layer (obstore / object_store crate) using
     the ``ClientConfig`` timeout and ``RetryConfig`` values configured in
-    ``_obstore_config.py`` — notably ``ATLAN_OBSTORE_TIMEOUT=30m`` (default)
-    which prevents the 30-second body-read cut-off that caused the
-    production incidents.  There is no additional Python-level retry loop
-    here to avoid multiplying wait time without changing the outcome.
+    ``_obstore_config.py`` — notably ``ATLAN_OBSTORE_TIMEOUT=90s`` (default,
+    bounding each chunked GET) which raises obstore's 30-second body-read
+    cut-off without masking genuinely stuck transfers.  There is no
+    additional Python-level retry loop here to avoid multiplying wait time
+    without changing the outcome.
 
     Args:
         key: Source object key.  Normalised by default.

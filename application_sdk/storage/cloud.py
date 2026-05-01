@@ -227,7 +227,7 @@ class CloudStore:
         """Download a single file by streaming to disk without buffering."""
         local_path = output / Path(key).name
         await download_file(key, local_path, store=self._store, normalize=False)
-        _log().info("Downloaded", storage_path=key, local_path=str(local_path))
+        _log().info("Downloaded key=%s local_path=%s", key, str(local_path))
         return [local_path]
 
     async def _download_prefix(
@@ -239,7 +239,7 @@ class CloudStore:
     ) -> list[Path]:
         """Download all files under a prefix."""
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
-        _log().info("Listing objects under prefix", storage_path=list_prefix)
+        _log().info("Listing objects under prefix=%s", list_prefix)
 
         keys = await self._list_keys(list_prefix, suffix_filter)
 
@@ -270,11 +270,7 @@ class CloudStore:
 
         results = await asyncio.gather(*[_dl(k) for k in keys])
         downloaded = list(results)
-        _log().info(
-            "Downloaded files from prefix",
-            storage_path=list_prefix,
-            file_count=len(downloaded),
-        )
+        _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
     async def _list_keys(
@@ -342,12 +338,13 @@ class CloudStore:
                 store=self._store,
                 normalize=False,
                 retain_local_copy=True,
+                compute_hash=False,
             )
         except StorageError:
             raise
         except Exception as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
-        _log().info("Uploaded", storage_path=key, bytes_uploaded=size)
+        _log().info("Uploaded key=%s bytes=%d", key, size)
         return size
 
     async def upload_bytes(self, key: str, data: bytes) -> int:

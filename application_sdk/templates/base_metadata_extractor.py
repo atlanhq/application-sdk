@@ -33,103 +33,32 @@ task that initialises them — use self.app_state.get/set("client", ...) in your
 
 from __future__ import annotations
 
-import os
-import tempfile
-
-from typing_extensions import deprecated
-
 from application_sdk.app.base import App
 from application_sdk.app.task import task
-from application_sdk.constants import (
-    DEPLOYMENT_OBJECT_STORE_NAME,
-    UPSTREAM_OBJECT_STORE_NAME,
-)
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage import (
-    create_store_from_binding,
-    download_file,
-    list_keys,
-    upload_file,
-)
+from application_sdk.contracts.storage import UploadInput as _UploadInput
+from application_sdk.contracts.types import StorageTier
 from application_sdk.templates.contracts.base_metadata_extraction import (
     UploadInput,
     UploadOutput,
 )
 
-logger = get_logger(__name__)
-
 
 class BaseMetadataExtractor(App):
     """Base App for all metadata extraction connectors.
 
-    Provides a concrete ``upload_to_atlan`` task that migrates output
-    files from the deployment object store to the upstream (Atlan)
-    object store.
+    Provides ``upload_to_atlan`` as a thin redirect to ``App.upload`` so the
+    deprecated entry point and the supported one share a single transfer
+    implementation.
 
     Subclasses must implement ``run()`` with their own Input/Output contracts.
     See module docstring for a usage example.
     """
 
-    @deprecated(
-        "upload_to_atlan is deprecated and will be removed in the next major SDK release. "
-        "In v3, upload files via App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)). "
-        "See docs/concepts/file-reference.md for migration guidance."
-    )
     @task(timeout_seconds=1800)
     async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
-        """Migrate output files from the deployment store to the upstream store.
-
-        .. deprecated::
-            Use ``App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED))`` instead.
-            This method will be removed in the next major SDK release.
-            See ``docs/concepts/file-reference.md`` for migration guidance.
-
-        Lists all objects under input.output_path in the deployment store and
-        copies each one to the same key in the upstream store. Raises on any
-        migration failures.
-
-        Args:
-            input: UploadInput specifying the output_path prefix to migrate.
-
-        Returns:
-            UploadOutput with migrated_files and total_files counts.
-        """
-        deployment_store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
-        upstream_store = create_store_from_binding(UPSTREAM_OBJECT_STORE_NAME)
-
-        files_to_migrate = await list_keys(input.output_path, store=deployment_store)
-        total_files = len(files_to_migrate)
-        migrated_files = 0
-        failures = []
-
-        for file_path in files_to_migrate:
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp_path = tmp.name
-            try:
-                await download_file(file_path, tmp_path, store=deployment_store)
-                await upload_file(file_path, tmp_path, store=upstream_store)
-                migrated_files += 1
-            except Exception as e:
-                logger.warning(
-                    "Failed to migrate file %s during atlan-storage upload",
-                    file_path,
-                    exc_info=True,
-                )
-                failures.append({"file": file_path, "error": str(e)})
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-
-        if failures:
-            from application_sdk.common.error_codes import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-                ActivityError,
-            )
-
-            failed = len(failures)
-            raise ActivityError(
-                f"{ActivityError.ATLAN_UPLOAD_ERROR}: Atlan upload failed with "
-                f"{failed} errors. Failed migrations: {failed}, "
-                f"Total files: {total_files}"
-            )
-
-        return UploadOutput(migrated_files=migrated_files, total_files=total_files)
+        """Upload output files to the platform via :meth:`App.upload`."""
+        result = await self.upload(
+            _UploadInput(local_path=input.output_path, tier=StorageTier.RETAINED)
+        )
+        count = result.ref.file_count or 0
+        return UploadOutput(migrated_files=count, total_files=count)

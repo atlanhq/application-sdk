@@ -26,7 +26,7 @@ from application_sdk.storage._obstore_config import (
 class TestClientOptionsDefaults:
     """SDK defaults are never empty — every store must inherit sane values."""
 
-    def test_defaults_set_timeout_to_30_minutes(self, monkeypatch) -> None:
+    def test_defaults_set_per_request_timeout_to_90_seconds(self, monkeypatch) -> None:
         for k in [
             "ATLAN_OBSTORE_TIMEOUT",
             "ATLAN_OBSTORE_CONNECT_TIMEOUT",
@@ -38,7 +38,7 @@ class TestClientOptionsDefaults:
             monkeypatch.delenv(k, raising=False)
 
         opts = obstore_client_options()
-        assert opts["timeout"] == "30m"
+        assert opts["timeout"] == "90s"
         assert opts["connect_timeout"] == "30s"
         assert opts["pool_idle_timeout"] == "90s"
         assert opts["http2_keep_alive_timeout"] == "30s"

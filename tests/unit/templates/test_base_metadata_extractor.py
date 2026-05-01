@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from unittest.mock import patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from application_sdk.app.base import App
 from application_sdk.app.task import is_task
-from application_sdk.common.error_codes import ActivityError
 from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.storage import UploadInput as StorageUploadInput
+from application_sdk.contracts.storage import UploadOutput as StorageUploadOutput
+from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.base_metadata_extraction import (
     UploadInput,
@@ -63,10 +65,8 @@ class TestBaseMetadataExtractorStructure:
 
 
 # ---------------------------------------------------------------------------
-# Functional tests for upload_to_atlan
+# Functional tests for upload_to_atlan — verifies the redirect to App.upload
 # ---------------------------------------------------------------------------
-
-MODULE = "application_sdk.templates.base_metadata_extractor"
 
 
 class TestUploadToAtlan:
@@ -74,77 +74,31 @@ class TestUploadToAtlan:
     def extractor(self):
         return _ConcreteExtractor()
 
-    @patch(f"{MODULE}.create_store_from_binding")
-    @patch(f"{MODULE}.list_keys")
-    @patch(f"{MODULE}.download_file")
-    @patch(f"{MODULE}.upload_file")
-    async def test_success(
-        self, mock_upload, mock_download, mock_list_keys, mock_create_store, extractor
-    ):
-        """All files migrate successfully → UploadOutput with correct counts."""
-        mock_create_store.return_value = object()
-        mock_list_keys.return_value = [f"file{i}.json" for i in range(10)]
-        mock_download.return_value = None
-        mock_upload.return_value = "sha256sum"
+    async def test_redirects_to_app_upload(self, extractor):
+        """upload_to_atlan delegates to self.upload with the correct StorageUploadInput."""
+        extractor.upload = AsyncMock(
+            return_value=StorageUploadOutput(
+                ref=FileReference(file_count=10), synced=True, reason="uploaded"
+            )
+        )
 
         result = await extractor.upload_to_atlan(
             UploadInput(output_path="/tmp/test/output")
         )
+
+        extractor.upload.assert_awaited_once()
+        forwarded = extractor.upload.await_args.args[0]
+        assert isinstance(forwarded, StorageUploadInput)
+        assert forwarded.local_path == "/tmp/test/output"
+        assert forwarded.tier is StorageTier.RETAINED
 
         assert isinstance(result, UploadOutput)
         assert result.migrated_files == 10
         assert result.total_files == 10
-        assert mock_upload.call_count == 10
 
-    @patch(f"{MODULE}.create_store_from_binding")
-    @patch(f"{MODULE}.list_keys")
-    @patch(f"{MODULE}.download_file")
-    @patch(f"{MODULE}.upload_file")
-    async def test_partial_failures_raise(
-        self, mock_upload, mock_download, mock_list_keys, mock_create_store, extractor
-    ):
-        """Any upload failure raises ActivityError with failure counts."""
-        mock_create_store.return_value = object()
-        mock_list_keys.return_value = ["file1.json", "file2.json", "file3.json"]
-        mock_download.return_value = None
-        mock_upload.side_effect = [
-            "sha256sum",
-            Exception("Connection timeout"),
-            Exception("Permission denied"),
-        ]
+    async def test_propagates_upload_exception(self, extractor):
+        """If self.upload raises, upload_to_atlan propagates the exception."""
+        extractor.upload = AsyncMock(side_effect=RuntimeError("boom"))
 
-        with pytest.raises(ActivityError) as exc_info:
-            await extractor.upload_to_atlan(UploadInput(output_path="/tmp/test/output"))
-
-        assert "Atlan upload failed with 2 errors" in str(exc_info.value)
-        assert "Failed migrations: 2" in str(exc_info.value)
-
-    @patch(f"{MODULE}.create_store_from_binding")
-    @patch(f"{MODULE}.list_keys")
-    async def test_no_files(self, mock_list_keys, mock_create_store, extractor):
-        """Empty prefix returns zero counts without error."""
-        mock_create_store.return_value = object()
-        mock_list_keys.return_value = []
-
-        result = await extractor.upload_to_atlan(
-            UploadInput(output_path="/tmp/test/output")
-        )
-
-        assert isinstance(result, UploadOutput)
-        assert result.migrated_files == 0
-        assert result.total_files == 0
-
-    @patch(f"{MODULE}.create_store_from_binding")
-    @patch(f"{MODULE}.list_keys")
-    async def test_uses_output_path_as_prefix(
-        self, mock_list_keys, mock_create_store, extractor
-    ):
-        """list_keys is called with the exact output_path from UploadInput."""
-        mock_create_store.return_value = object()
-        mock_list_keys.return_value = []
-
-        await extractor.upload_to_atlan(UploadInput(output_path="artifacts/run-42"))
-
-        mock_list_keys.assert_called_once()
-        call_args = mock_list_keys.call_args
-        assert call_args.args[0] == "artifacts/run-42"
+        with pytest.raises(RuntimeError, match="boom"):
+            await extractor.upload_to_atlan(UploadInput(output_path="/tmp/x"))
