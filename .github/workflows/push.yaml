@@ -15,7 +15,6 @@ permissions:
 
 env:
   TEMPORAL_CLI_VERSION: "1.5.1"  # bundles Server 1.29.1 — matches tenant Server 1.29.4
-  DAPR_CLI_VERSION: "1.16.2"
 
 jobs:
   # Testing
@@ -83,6 +82,7 @@ jobs:
 
       - name: Install and start Dapr runtime (daprd)
         run: |
+          DAPR_CLI_VERSION="1.16.2"
           curl -sSLf "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" \
             -o /tmp/dapr-cli.tar.gz
           tar -xzf /tmp/dapr-cli.tar.gz -C /tmp dapr
