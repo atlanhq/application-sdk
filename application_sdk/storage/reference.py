@@ -208,6 +208,8 @@ async def persist_file_reference(
                 relative = str(file_path.relative_to(local)).replace(os.sep, "/")
                 file_key = f"{prefix}{relative}"
                 sha256 = await upload_file(file_key, file_path, store, normalize=False)
+                # compute_hash defaults to True, so the digest is always returned here.
+                assert sha256 is not None
                 try:
                     await _put(
                         file_key + ".sha256", sha256.encode(), store, normalize=False
@@ -257,6 +259,8 @@ async def persist_file_reference(
 
         try:
             sha256 = await upload_file(storage_path, local, store, normalize=False)
+            # compute_hash defaults to True, so the digest is always returned here.
+            assert sha256 is not None
             try:
                 await _put(
                     storage_path + ".sha256", sha256.encode(), store, normalize=False

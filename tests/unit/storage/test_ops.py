@@ -190,6 +190,35 @@ class TestUploadFile:
         sha256 = await upload_file("check.bin", f, store)
         assert sha256 == expected
 
+    async def test_upload_file_compute_hash_false_returns_none(
+        self, store, tmp_path
+    ) -> None:
+        """``compute_hash=False`` skips the digest and returns None.
+
+        Regression guard: PR #1624 introduced ``compute_hash`` so external
+        stores (CloudStore) can avoid the integrity sidecar.  Removing the
+        parameter would silently start computing hashes for every external
+        upload — this test pins the contract.
+        """
+        f = tmp_path / "no_hash.bin"
+        f.write_bytes(b"do not hash me")
+
+        result = await upload_file("no_hash.bin", f, store, compute_hash=False)
+        assert result is None
+
+    async def test_upload_file_compute_hash_default_returns_digest(
+        self, store, tmp_path
+    ) -> None:
+        """The default ``compute_hash=True`` continues to return a hex digest."""
+        import hashlib
+
+        content = b"default behaviour"
+        f = tmp_path / "default.bin"
+        f.write_bytes(content)
+
+        result = await upload_file("default.bin", f, store)
+        assert result == hashlib.sha256(content).hexdigest()
+
     async def test_upload_file_normalize_false(self, store, tmp_path) -> None:
         f = tmp_path / "x.bin"
         f.write_bytes(b"exact")
