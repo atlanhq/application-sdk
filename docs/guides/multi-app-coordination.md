@@ -122,7 +122,7 @@ class MyExtractor(App):
         return ExtractionOutput(parquet_file=up.ref)
 ```
 
-The downstream app receives the `FileReference.key` (object-store path) via the AE args substitution and downloads it before processing.
+The downstream app receives the `FileReference.storage_path` (object-store path) via the AE args substitution and downloads it before processing.
 
 ---
 

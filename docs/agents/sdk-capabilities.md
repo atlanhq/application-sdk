@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.4.0
-source-sha:    01c011d8d14f3742e18fc6c8d25ed45e69ac7ff7
-source-date:   2026-04-30T19:48:02+01:00
+source-sha:    1b34234fc66c13537040c7449942ae685c95f5b5
+source-date:   2026-05-01T15:40:44+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -38,6 +38,11 @@ do-not-edit:   re-run the skill instead of hand-editing
 > These appear in concept docs but are intentionally excluded from the table above because
 > they expose no package-level `__all__`. Import from their submodules directly
 > (e.g. `from application_sdk.clients.sql import BaseSQLClient`).
+>
+> **Partial deep-import within indexed subpackages** — `application_sdk.observability`
+> has a shallow `__all__` (context/correlation helpers only); the canonical logging API
+> lives in the submodule and must be imported directly:
+> `from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger`
 
 ## Subpackage Details
 
@@ -1180,6 +1185,31 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `request_context: ContextVar[Dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
+
+### Deep-import-only members (`application_sdk.observability.logger_adaptor`)
+
+> These symbols are NOT in `application_sdk.observability.__all__`. Import them directly
+> from the submodule: `from application_sdk.observability.logger_adaptor import ...`
+
+#### `AtlanLoggerAdapter`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter`
+- **Signature:** `class AtlanLoggerAdapter(AtlanObservability[Any])`
+- **Summary:** Custom logger adapter with structured context, OTel integration, Temporal context binding, and Parquet file logging. Obtain instances via `get_logger()`.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+##### `AtlanLoggerAdapter.opt`
+
+- **Signature:** `opt(self, *, lazy: bool = False, **loguru_opt_kwargs: Any) -> _LazyLoggerProxy`
+- **Summary:** Return a proxy with loguru `opt()` flags applied and context pre-bound. Primary use: `lazy=True` for expensive debug arguments — the lambda is only evaluated when DEBUG is enabled. Use `{key}` format (not `%`-style) for lazy kwargs.
+- **Example:** `self.logger.opt(lazy=True).debug("record {data}", data=lambda: json.dumps(record))`
+
+#### `get_logger`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import get_logger`
+- **Signature:** `get_logger(name: str | None = None) -> AtlanLoggerAdapter`
+- **Summary:** Get or create an `AtlanLoggerAdapter` instance. If `name` is `None`, uses the caller's module name. This is the canonical way to obtain a logger throughout the SDK.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 ## `application_sdk.outputs`
 
