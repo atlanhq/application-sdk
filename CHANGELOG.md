@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.5.0 (May 01, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.4.0...v3.5.0
+
+### Features
+
+- sql - make pool pre-ping configurable (#1591) (by @fyzanshaik-atlan in [fee1a05](https://github.com/atlanhq/application-sdk/commit/fee1a05))
+- tighten upgrade-v3 idioms from atlan-mssql-app#89 review (#1630) (by @AtMrun in [f0561a3](https://github.com/atlanhq/application-sdk/commit/f0561a3))
+- add capability-manifest skill and initial SDK capability manifest (#1637) (by @cmgrote in [85d1c73](https://github.com/atlanhq/application-sdk/commit/85d1c73))
+
+### Bug Fixes
+
+- stream CloudStore file transfers to eliminate OOM risk [BLDX-1198] (#1624) (by @cmgrote in [22dfb08](https://github.com/atlanhq/application-sdk/commit/22dfb08))
+- drain delay before worker shutdown to prevent phantom task slot deadlock (#1174) (by @tczhao in [189b9ac](https://github.com/atlanhq/application-sdk/commit/189b9ac))
+- address CVEs via temporalio bump and uv lock upgrade [BLDX-1212] (#1640) (by @vaibhavatlan in [6de53dc](https://github.com/atlanhq/application-sdk/commit/6de53dc))
+
+
 ## v3.4.0 (April 29, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.3.0...v3.4.0
