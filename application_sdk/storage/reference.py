@@ -511,12 +511,37 @@ async def materialize_file_reference(
 
         try:
             prefix = ref.storage_path.rstrip("/") + "/"
+            skipped = 0
             for key in data_keys:
                 rel = key.removeprefix(prefix)
                 dest = os.path.join(local_directory, rel)
-                await download_file(
-                    key, dest, store, compute_hash=False, normalize=False
+                dest_path = Path(dest)
+                dest_sidecar = Path(dest + ".sha256")
+
+                # Per-file sidecar fast-path: skip re-download when the local
+                # file and its sidecar both exist and their hashes agree.
+                # This makes same-pod retries (Temporal heartbeat timeouts,
+                # OOM recoveries on the same node) free after the first pass.
+                if dest_path.exists() and dest_sidecar.exists():
+                    try:
+                        local_hash = _sha256_hex_file(dest_path)
+                        if local_hash == dest_sidecar.read_text().strip():
+                            skipped += 1
+                            logger.debug(
+                                "file_ref.materialize.skipped",
+                                storage_path=key,
+                                local_path=dest,
+                                is_cache_hit=True,
+                            )
+                            continue
+                    except Exception:  # noqa: S110,BLE001
+                        pass  # sidecar check failed — fall through to re-download
+
+                sha256 = await download_file(
+                    key, dest, store, compute_hash=True, normalize=False
                 )
+                if sha256 is not None:
+                    _write_local_sidecar(dest, sha256)
         except Exception as exc:
             logger.error(
                 "file_ref.materialize.failed",
@@ -530,6 +555,8 @@ async def materialize_file_reference(
             "file_ref.materialize.complete",
             storage_path=ref.storage_path,
             file_count=len(data_keys),
+            files_skipped=skipped,
+            files_downloaded=len(data_keys) - skipped,
             duration_ms=int((time.monotonic() - _t0) * 1000),
             tier=str(ref.tier),
         )

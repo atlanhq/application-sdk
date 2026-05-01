@@ -36,6 +36,7 @@ to target a specific store instead.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import math
@@ -409,6 +410,14 @@ async def download_file(
     Uses obstore's streaming GET so arbitrarily large files are written to
     disk without materialising the whole content in memory.
 
+    Transient failures (network errors, mid-body stream drops, HTTP 5xx) are
+    retried automatically by the Rust layer (obstore / object_store crate) using
+    the ``ClientConfig`` timeout and ``RetryConfig`` values configured in
+    ``_obstore_config.py`` — notably ``ATLAN_OBSTORE_TIMEOUT=30m`` (default)
+    which prevents the 30-second body-read cut-off that caused the
+    Autodesk/Mindbody incidents.  There is no additional Python-level retry loop
+    here to avoid multiplying wait time without changing the outcome.
+
     Args:
         key: Source object key.  Normalised by default.
         local_path: Destination path (file will be created or overwritten).
@@ -591,7 +600,6 @@ async def download_file_chunked(
         StorageError: If a chunk download or the disk write fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
-    import asyncio  # noqa: PLC0415 — import here so top-level scan stays clean for formatters
 
     resolved = _resolve_store(store)
     if normalize:
