@@ -288,12 +288,12 @@ async def parallel_fetch(self, input: FetchInput) -> FetchOutput:
 
 | Class | Backend | Use case |
 |---|---|---|
-| `LocalCapacityPool` | `asyncio.Semaphore` | Single-process concurrency |
-| `RedisCapacityPool` | Redis | Cross-pod, distributed concurrency |
+| `LocalCapacityPool` | `asyncio.Semaphore` | Single-process concurrency, tests |
+| Redis-backed pool (internal) | Redis | Cross-pod, distributed concurrency |
 
-**Configuring `RedisCapacityPool`:**
+**Enabling the Redis-backed pool:**
 
-Set `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` env vars and `RedisCapacityPool` is configured automatically at startup — no code changes needed. See [Configuration](../configuration.md) for all Redis env vars.
+Set `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` env vars and the framework configures a Redis-backed capacity pool automatically at startup — no code changes needed. See [Configuration](../configuration.md) for all Redis env vars.
 
 ---
 

@@ -113,7 +113,7 @@ Wraps Dapr output bindings (queues, storage, SMTP, etc.). Accessed via `get_infr
 
 ### CapacityPool
 
-Distributes concurrency slots across workers. `RedisCapacityPool` (production) uses Redis for cross-pod coordination; `LocalCapacityPool` uses an in-process semaphore. See [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool) for the full Protocol, configuration, and usage examples.
+Distributes concurrency slots across workers. In production the framework auto-configures a Redis-backed pool (controlled by the `REDIS_*` env vars); `LocalCapacityPool` is the public implementation for tests and single-process dev. See [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool) for the full Protocol, configuration, and usage examples.
 
 ---
 

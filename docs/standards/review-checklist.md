@@ -523,7 +523,7 @@ def good_validation(max_value: int) -> int:
 
 - **Scattered functionality**: Related code spread across multiple inappropriate locations
 - **Import organization violations**: Imports not at the top, wrong order, or unused imports
-- **File misplacement**: Decorators not co-located with the domain they extend (v3 decorators live in `app/` and `server/mcp/`), constants not in `constants.py`
+- **File misplacement**: Decorators not co-located with the domain they extend (v3 decorators live in `app/`, `server/mcp/`, `execution/`, `observability/decorators/`), constants not in `constants.py`
 - **Dead code**: Any code marked as "no need" or unused
 - **DRY violations**: Repeated logic that should be extracted into shared functions
 - **Naming inconsistencies**: Using different naming patterns for similar concepts

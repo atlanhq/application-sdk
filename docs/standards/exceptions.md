@@ -148,7 +148,7 @@ The following patterns are acceptable and used in the codebase:
 
 ### **VALID: Signal Handlers and Cleanup Operations**
 ```python
-# From observability.py - signal handler cleanup
+# Illustrative — cleanup/flush errors that must not crash the process
 except Exception as e:
     logger.warning("Error during signal handler flush: %s", e, exc_info=True)
     # Don't re-raise - cleanup failures shouldn't crash the application
@@ -171,7 +171,7 @@ except Exception as publish_error:
 
 ### **VALID: Cleanup in Finally Blocks**
 ```python
-# From interceptors/cleanup.py - workflow cleanup
+# Illustrative — cleanup inside finally so workflow end is non-fatal
 finally:
     try:
         await workflow.execute_activity(cleanup, ...)

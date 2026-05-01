@@ -284,13 +284,18 @@ class MyConnector(App):
     @task
     async def extract_topics(self, input: MyInput) -> FileReference:
         records = [TopicRecord(**row) async for row in self.client.list_topics()]
-        return await self.task_context.write_jsonl("topics.jsonl", records)
+        local_path = "/tmp/topics.jsonl"
+        write_jsonl(local_path, records)  # your serialisation helper
+        return FileReference.from_local(local_path)  # framework auto-uploads
 
     @task
     async def transform_topics(self, input: FileReference) -> FileReference:
-        records = await self.task_context.read_jsonl(input, TopicRecord)
+        # framework auto-downloads before this task runs; input.local_path is set
+        records = read_jsonl(input.local_path, TopicRecord)  # your parse helper
         assets = [map_topic(r, self.connection_qn, self.connection_name) for r in records]
-        return await self.task_context.write_assets("topics_assets.jsonl", assets)
+        local_path = "/tmp/topics_assets.jsonl"
+        write_jsonl(local_path, assets)  # your serialisation helper
+        return FileReference.from_local(local_path)  # framework auto-uploads
 ```
 
 ### Rules for mapper functions

@@ -222,7 +222,7 @@ async def process_data(self, data_id: str) -> str:
 **MCP server not starting**:
 
 - Ensure `atlan-application-sdk[mcp]` is installed
-- Check that `enable_mcp=True` is set
+- Check that the `ENABLE_MCP` environment variable is set to `true`
 - Verify no port conflicts on 8000
 
 **Tools not appearing in AI client**:
