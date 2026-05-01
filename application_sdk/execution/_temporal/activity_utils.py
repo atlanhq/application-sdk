@@ -75,7 +75,10 @@ def get_workflow_id() -> str:
             workflow ID cannot be retrieved.
     """
     try:
-        return activity.info().workflow_id
+        wf_id = activity.info().workflow_id
+        if wf_id is None:
+            raise ValueError("workflow_id unavailable outside a workflow-backed activity")
+        return wf_id
     except Exception as e:
         raise rewrap(e, "Failed to get workflow id") from e
 
@@ -96,7 +99,10 @@ def get_workflow_run_id() -> str:
     attempt's prefix).
     """
     try:
-        return activity.info().workflow_run_id
+        wf_run_id = activity.info().workflow_run_id
+        if wf_run_id is None:
+            raise ValueError("workflow_run_id unavailable outside a workflow-backed activity")
+        return wf_run_id
     except Exception as e:
         raise rewrap(e, "Failed to get workflow run id") from e
 
