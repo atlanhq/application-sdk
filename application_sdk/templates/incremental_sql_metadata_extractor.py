@@ -52,7 +52,7 @@ from __future__ import annotations
 import asyncio
 import os
 from abc import abstractmethod
-from typing import ClassVar
+from typing import ClassVar, List, Optional
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
@@ -127,8 +127,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             ``None`` means fall back to full SQL.
     """
 
-    incremental_table_sql: ClassVar[str | None] = None
-    incremental_column_sql: ClassVar[str | None] = None
+    incremental_table_sql: ClassVar[Optional[str]] = None
+    incremental_column_sql: ClassVar[Optional[str]] = None
 
     # ------------------------------------------------------------------
     # Abstract tasks — must be implemented by connector subclasses
@@ -243,7 +243,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     @abstractmethod
     def build_incremental_column_sql(
         self,
-        table_ids: list[str],
+        table_ids: List[str],
         ctx: IncrementalRunContext,
     ) -> str:
         """Build the SQL query string for extracting columns for a batch of tables.
@@ -276,7 +276,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     def resolve_database_placeholders(
         self,
         sql: str,
-        input: FetchTablesIncrementalInput,
+        input: FetchTablesIncrementalInput,  # noqa: A002
     ) -> str:
         """Replace database-specific placeholders in SQL templates.
 
@@ -654,7 +654,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     async def execute_column_sql(
         self,
         sql: str,
-        input: ExecuteColumnBatchInput,
+        input: ExecuteColumnBatchInput,  # noqa: A002
         ctx: IncrementalRunContext,
     ) -> int:
         """Execute a column SQL query and return the record count.

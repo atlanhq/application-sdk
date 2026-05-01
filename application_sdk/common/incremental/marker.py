@@ -25,8 +25,8 @@ Example:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Tuple
 
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.helpers import (
@@ -52,7 +52,7 @@ def create_next_marker() -> str:
     Returns:
         Formatted timestamp string in ``YYYY-MM-DDTHH:MM:SSZ`` format.
     """
-    return datetime.now(UTC).strftime(MARKER_TIMESTAMP_FORMAT)
+    return datetime.now(timezone.utc).strftime(MARKER_TIMESTAMP_FORMAT)
 
 
 def process_marker_timestamp(
@@ -100,10 +100,10 @@ def process_marker_timestamp(
 async def fetch_marker_from_storage(
     connection_qualified_name: str,
     application_name: str = "",
-    existing_marker: str | None = None,
+    existing_marker: Optional[str] = None,
     prepone_enabled: bool = False,
     prepone_hours: float = 0,
-) -> tuple[str | None, str]:
+) -> Tuple[Optional[str], str]:
     """Fetch and process the incremental marker from storage.
 
     Attempts to retrieve an existing marker from:
@@ -165,7 +165,7 @@ async def persist_marker_to_storage(
     connection_qualified_name: str,
     marker_value: str,
     application_name: str = "",
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """Persist marker timestamp to S3 storage.
 
     Writes the marker to both local storage and S3 for persistence

@@ -554,7 +554,7 @@ from application_sdk.credentials import AtlanClientMixin, atlan_api_token_ref
 
 class MyConnector(AtlanClientMixin, App):
     @task
-    async def push_to_atlan(self, input: UploadInput) -> UploadOutput:
+    async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
         ref = atlan_api_token_ref("atlan-token")
         client = await self.get_or_create_async_atlan_client(ref)
         # client is an AsyncAtlanClient, cached per run

@@ -307,25 +307,26 @@ class TestDownloadS3PrefixWithStructure:
             nonlocal max_concurrent, current_concurrent
             async with lock:
                 current_concurrent += 1
-                max_concurrent = max(max_concurrent, current_concurrent)
+                if current_concurrent > max_concurrent:
+                    max_concurrent = current_concurrent
             await asyncio.sleep(0.01)
             async with lock:
                 current_concurrent -= 1
 
         file_list = [f"prefix/file{i}.json" for i in range(50)]
 
-        with (
-            tempfile.TemporaryDirectory() as temp_dir,
-            patch(
-                "application_sdk.common.incremental.helpers.list_keys",
-                AsyncMock(return_value=file_list),
-            ),
-            patch(
-                "application_sdk.common.incremental.helpers.download_file",
-                side_effect=_tracking_download,
-            ),
-        ):
-            await download_s3_prefix_with_structure("prefix/", Path(temp_dir))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch(
+                    "application_sdk.common.incremental.helpers.list_keys",
+                    AsyncMock(return_value=file_list),
+                ),
+                patch(
+                    "application_sdk.common.incremental.helpers.download_file",
+                    side_effect=_tracking_download,
+                ),
+            ):
+                await download_s3_prefix_with_structure("prefix/", Path(temp_dir))
 
         assert max_concurrent <= 4
 
