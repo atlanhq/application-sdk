@@ -22,6 +22,35 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.context import correlation_context
 
+#: Resource attribute keys we inline as labels onto every metric series so
+#: PromQL can filter by app/version/type without joining ``target_info``.
+#: All entries must be bounded *per-process* constants — adding a label that
+#: varies within a process multiplies series count.
+METRIC_ENRICHMENT_KEYS: tuple[str, ...] = (
+    "app.name",
+    "app.version",
+    "app.type",
+    "app.release_channel",
+    "app.release_id",
+    "app.sdk_version",
+)
+
+
+def get_metric_enrichment_labels() -> dict[str, str]:
+    """Return ``METRIC_ENRICHMENT_KEYS`` resolved against the process resource,
+    with dots transliterated to underscores for Prometheus label compatibility.
+
+    Used by both the OTel Prometheus reader (server scrape, worker push) and
+    the Temporal Rust core's ``TelemetryConfig.global_tags`` to keep the
+    enrichment surface consistent across the two metric pipelines.
+    """
+    resource = build_otel_resource()
+    return {
+        k.replace(".", "_"): str(v)
+        for k, v in resource.attributes.items()
+        if k in METRIC_ENRICHMENT_KEYS
+    }
+
 
 def get_observability_dir() -> str:
     """Build the observability path using deployment name.

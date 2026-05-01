@@ -14,6 +14,7 @@ from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.utils import get_metric_enrichment_labels
 
 logger = get_logger(__name__)
 
@@ -41,9 +42,14 @@ def _get_or_create_runtime(
         with _prometheus_lock:
             if _prometheus_runtime is None:
                 bind_addr = prometheus_bind_address or TEMPORAL_PROMETHEUS_BIND_ADDRESS
+                # Mirror the OTel Prometheus reader's resource enrichment onto
+                # Temporal Rust core's emitted metrics so app_name/app_version/…
+                # appear as labels on every temporal_* series, matching the
+                # SDK-side metrics.
                 _prometheus_runtime = Runtime(
                     telemetry=TelemetryConfig(
-                        metrics=PrometheusConfig(bind_address=bind_addr)
+                        metrics=PrometheusConfig(bind_address=bind_addr),
+                        global_tags=get_metric_enrichment_labels(),
                     )
                 )
                 logger.info("Temporal Prometheus metrics enabled on %s", bind_addr)

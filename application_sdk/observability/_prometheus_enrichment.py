@@ -34,8 +34,7 @@ from prometheus_client.core import REGISTRY as _PROM_REGISTRY
 from prometheus_client.core import Metric as _PrometheusMetric
 from prometheus_client.core import Sample
 
-#: Resource attribute keys we inline onto every metric. Keep bounded.
-ENRICHMENT_KEYS: tuple[str, ...] = ("app.name", "app.version")
+from application_sdk.observability.utils import METRIC_ENRICHMENT_KEYS
 
 #: target_info family name to skip during enrichment (it carries the full
 #: resource already; touching its samples would shadow that information).
@@ -87,7 +86,7 @@ class EnrichedPrometheusMetricReader(PrometheusMetricReader):
         enrichment = {
             k.replace(".", "_"): str(v)
             for k, v in resource.attributes.items()
-            if k in ENRICHMENT_KEYS
+            if k in METRIC_ENRICHMENT_KEYS
         }
         # Run the parent __init__ (it constructs and registers a default
         # collector). Then swap that collector out for our enriching one.
