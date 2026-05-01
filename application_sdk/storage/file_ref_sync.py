@@ -292,6 +292,10 @@ async def _replace_refs(
             new_tuple = tuple(_scatter(item) for item in node)
             return new_tuple if new_tuple != node else node
 
+        if isinstance(node, dict):
+            new_dict = {k: _scatter(v) for k, v in node.items()}
+            return new_dict if any(new_dict[k] is not node[k] for k in node) else node
+
         return node
 
     return _scatter(data)
