@@ -14,8 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from application_sdk.lakehouse._iceberg import catalog as _catalog
 from application_sdk.lakehouse._iceberg import ops as _ops
+from application_sdk.lakehouse._polaris import catalog as _catalog
 from application_sdk.lakehouse.schema import Schema
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class LakehouseWriter:
     def from_env(cls, app_namespace: str) -> LakehouseWriter:
         """Build a writer from environment credentials, bound to ``app_namespace``.
 
-        See :func:`application_sdk.lakehouse._iceberg.catalog.load_catalog_from_env`
+        See :func:`application_sdk.lakehouse._polaris.catalog.load_catalog_from_env`
         for the env vars consumed.
         """
         return cls(_catalog.load_catalog_from_env(), app_namespace)

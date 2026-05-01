@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from application_sdk.lakehouse._iceberg import catalog as _catalog
 from application_sdk.lakehouse._iceberg import ops as _ops
+from application_sdk.lakehouse._polaris import catalog as _catalog
 
 
 class LakehouseReader:

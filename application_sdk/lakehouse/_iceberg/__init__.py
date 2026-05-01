@@ -1,7 +1,11 @@
-"""Internal pyiceberg + pyarrow + Polaris-specific implementation.
+"""Internal: Iceberg-format-specific operations.
 
-Apps must not import from this package. The public surface
-(``application_sdk.lakehouse.LakehouseReader`` / ``LakehouseWriter`` /
-``EventsConsumer`` / ``EventAckWriter``) routes through here, and the
-underlying implementation can change without breaking app code.
+Generic across IRC (Iceberg REST Catalog) implementations — this is where
+``pyiceberg`` and ``pyarrow`` live. Polaris-specific connection details are
+isolated in the sibling :mod:`application_sdk.lakehouse._polaris` package.
+
+Apps must not import from this package; the public surface
+(``LakehouseReader`` / ``LakehouseWriter`` / ``EventsConsumer`` /
+``EventAckWriter`` / ``Schema`` / ``Field`` / ``PartitionBy``) is the only
+supported entry point.
 """
