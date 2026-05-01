@@ -1227,6 +1227,16 @@ async def run_dev_combined(
 
 def run_main(config: AppConfig) -> None:
     """Route to worker, handler, or combined mode based on config."""
+    # Bootstrap the global MeterProvider once per process so any meter
+    # consumer (instrumentors, interceptors, decorators, …) resolves to the
+    # configured provider. Without this, handler-mode /metrics serves only
+    # the prometheus_client defaults.
+    from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — cold path: meter provider bootstrap at process start
+        get_metrics,
+    )
+
+    get_metrics()
+
     if config.mode == "worker":
         asyncio.run(run_worker_mode(config))
     elif config.mode == "handler":
