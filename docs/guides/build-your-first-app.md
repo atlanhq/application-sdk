@@ -33,7 +33,7 @@ Create `app/contracts.py`:
 ```python
 from __future__ import annotations
 
-from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts import Input, Output
 
 
 # --- Workflow contracts ---
@@ -277,8 +277,7 @@ Create `tests/test_connector.py`:
 ```python
 import json
 import pytest
-from application_sdk.infrastructure import set_infrastructure, clear_infrastructure
-from application_sdk.infrastructure.context import InfrastructureContext
+from application_sdk.infrastructure import set_infrastructure, clear_infrastructure, InfrastructureContext
 from application_sdk.testing import MockSecretStore
 from app.connector import GitHubConnector
 from app.contracts import RepoFetchInput

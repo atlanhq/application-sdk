@@ -464,7 +464,7 @@ class LineageActivities(ActivitiesInterface):
 ```python
 # app/connector.py
 from application_sdk.app import App, entrypoint, task
-from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts import Input, Output
 from typing import Any
 
 class ExtractionInput(Input, allow_unbounded_fields=True):
@@ -589,8 +589,7 @@ class MyConnector(App):
 v3 uses `Input`/`Output` Pydantic models for all task boundaries. The SDK validates these at import time.
 
 ```python
-from application_sdk.contracts import Input, Output
-from application_sdk.contracts.types import MaxItems
+from application_sdk.contracts import Input, Output, MaxItems
 from typing import Annotated
 
 class MyTaskInput(Input):
@@ -642,8 +641,7 @@ You only need to declare `FileReference` fields in your contracts and use
 `FileReference.from_local()` when writing — no manual upload/download calls required:
 
 ```python
-from application_sdk.contracts import Input, Output
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts import Input, Output, FileReference
 
 class FetchOutput(Output):
     results: FileReference  # auto-uploaded by the framework after fetch() returns
@@ -769,7 +767,7 @@ await client.load(credentials)  # dict[str, Any]
 ### After (CredentialRef pattern)
 
 ```python
-from application_sdk.contracts.base import Input
+from application_sdk.contracts import Input
 from application_sdk.credentials import CredentialRef, api_key_ref, ApiKeyCredential
 
 class ExtractionInput(Input, allow_unbounded_fields=True):
@@ -1028,8 +1026,7 @@ In v3 you can test `@task` methods without any Dapr sidecar running:
 ```python
 import pytest
 from application_sdk.testing import MockSecretStore, MockStateStore
-from application_sdk.infrastructure.context import set_infrastructure
-from application_sdk.infrastructure import InfrastructureContext
+from application_sdk.infrastructure import set_infrastructure, InfrastructureContext
 
 @pytest.fixture
 def infra():

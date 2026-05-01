@@ -296,8 +296,7 @@ curl -X POST http://localhost:8000/workflows/v1/start \
 If any of your task inputs or outputs could be large, use `FileReference` instead of embedding data directly:
 
 ```python
-from application_sdk.contracts.base import Input
-from application_sdk.contracts import FileReference, StorageTier
+from application_sdk.contracts import Input, FileReference, StorageTier
 
 class FetchEntitiesInput(Input):
     credential_guid: str = ""
@@ -355,8 +354,7 @@ Use `MockSecretStore` and `MockCredentialStore` to test without real credentials
 ```python
 import json
 import pytest
-from application_sdk.infrastructure import set_infrastructure, clear_infrastructure
-from application_sdk.infrastructure.context import InfrastructureContext
+from application_sdk.infrastructure import set_infrastructure, clear_infrastructure, InfrastructureContext
 from application_sdk.testing import MockSecretStore
 
 @pytest.fixture(autouse=True)

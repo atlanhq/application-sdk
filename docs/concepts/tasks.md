@@ -42,7 +42,7 @@ Every task boundary is a typed contract. The SDK validates contract fields at cl
 ```python
 from typing import Annotated
 from application_sdk.contracts import Input, Output
-from application_sdk.contracts.types import MaxItems, FileReference
+from application_sdk.contracts import MaxItems, FileReference
 
 class ProcessInput(Input):
     items: Annotated[list[str], MaxItems(5000)]
@@ -132,7 +132,7 @@ class MyConnector(App):
 Temporal has a ~2 MB payload limit. Use `FileReference` for large data:
 
 ```python
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts import FileReference
 
 class FetchOutput(Output):
     results: FileReference  # automatically uploaded when output leaves the task

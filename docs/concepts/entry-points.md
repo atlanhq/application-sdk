@@ -122,7 +122,7 @@ A single `App` can expose multiple independently-triggerable workflows by decora
 
 ```python
 from application_sdk.app import App, entrypoint, task
-from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts import Input, Output
 
 class ExtractionInput(Input):
     connection_qualified_name: str = ""

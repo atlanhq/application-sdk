@@ -237,7 +237,7 @@ in the contract. The framework handles the rest automatically:
   skipped entirely (verified via sha256 sidecar comparison).
 
 ```python
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts import FileReference
 
 class FetchOutput(Output):
     results: FileReference  # automatically uploaded when this output leaves the task

@@ -486,7 +486,7 @@ Unbounded `list` and `dict` are forbidden in contracts. Use `MaxItems` to declar
 ```python
 from typing import Annotated
 from pydantic import Field
-from application_sdk.contracts.types import MaxItems
+from application_sdk.contracts import MaxItems
 
 class FetchDatabasesOutput(Output):
     databases: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
@@ -499,7 +499,7 @@ class FetchDatabasesOutput(Output):
 When a task produces data too large for a Temporal payload, use `FileReference`. The SDK uploads it to object storage automatically:
 
 ```python
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts import FileReference
 
 class FetchOutput(Output):
     results: FileReference  # automatically uploaded on task output
