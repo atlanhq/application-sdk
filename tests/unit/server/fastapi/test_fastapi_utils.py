@@ -531,8 +531,8 @@ class TestDownloadFileFromUploadResponse:
 
         mock_objectstore.assert_called_once()
         call_args = mock_objectstore.call_args
-        assert call_args[1]["object_path"] == "workflow_file_upload/abc123.csv"
-        assert call_args[1]["object_path"].endswith("workflow_file_upload/abc123.csv")
+        assert call_args[1]["key"] == "workflow_file_upload/abc123.csv"
+        assert call_args[1]["key"].endswith("workflow_file_upload/abc123.csv")
 
         assert result.endswith("workflow_file_upload/abc123.csv")
 
@@ -546,7 +546,7 @@ class TestDownloadFileFromUploadResponse:
 
         mock_objectstore.assert_called_once()
         call_args = mock_objectstore.call_args
-        assert call_args[1]["object_path"] == "workflow_file_upload/abc123.csv"
+        assert call_args[1]["key"] == "workflow_file_upload/abc123.csv"
         assert result.endswith("workflow_file_upload/abc123.csv")
 
     @patch("application_sdk.common.utils.download_file")
@@ -575,7 +575,7 @@ class TestDownloadFileFromUploadResponse:
 
         mock_objectstore.assert_called_once()
         call_args = mock_objectstore.call_args
-        assert call_args[1]["object_path"] == "workflow_file_upload/abc123.csv"
+        assert call_args[1]["key"] == "workflow_file_upload/abc123.csv"
         assert result.endswith("workflow_file_upload/abc123.csv")
 
     async def test_download_missing_key_error(self):

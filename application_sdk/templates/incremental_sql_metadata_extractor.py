@@ -614,7 +614,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             batches_s3_prefix = get_object_store_prefix(str(batches_dir))
 
         await download_file(
-            object_path=f"{batches_s3_prefix}/{batch_filename}",
+            key=f"{batches_s3_prefix}/{batch_filename}",
             local_path=str(batch_file),
         )
 

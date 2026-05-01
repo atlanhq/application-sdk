@@ -199,7 +199,7 @@ async def download_marker_from_s3(
     logger.info("Downloading marker from S3: %s", marker_s3_key)
     try:
         await download_file(
-            object_path=marker_s3_key,
+            key=marker_s3_key,
             local_path=str(local_marker_path),
         )
         if local_marker_path.exists() and local_marker_path.stat().st_size > 0:
@@ -254,7 +254,7 @@ async def download_s3_prefix_with_structure(
 
         async with sem:
             await download_file(
-                object_path=file_path,
+                key=file_path,
                 local_path=str(local_file_path),
             )
 

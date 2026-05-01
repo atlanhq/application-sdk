@@ -212,7 +212,7 @@ async def persist_marker_to_storage(
     try:
         await upload_file(
             local_path=str(local_marker_path),
-            object_path=marker_s3_key,
+            key=marker_s3_key,
             retain_local_copy=True,
         )
         logger.info(

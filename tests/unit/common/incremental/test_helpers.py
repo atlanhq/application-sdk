@@ -288,11 +288,11 @@ class TestDownloadS3PrefixWithStructure:
             mock_list_keys.assert_awaited_once_with(prefix=s3_prefix)
             assert mock_download.await_count == 2
             mock_download.assert_any_await(
-                object_path="bucket/tenant/data/subdir/file1.json",
+                key="bucket/tenant/data/subdir/file1.json",
                 local_path=str(local_dest / "subdir" / "file1.json"),
             )
             mock_download.assert_any_await(
-                object_path="bucket/tenant/data/file2.json",
+                key="bucket/tenant/data/file2.json",
                 local_path=str(local_dest / "file2.json"),
             )
 
@@ -365,6 +365,6 @@ class TestDownloadS3PrefixWithStructure:
                 await download_s3_prefix_with_structure("prefix/", local_dest)
 
             mock_download.assert_awaited_once_with(
-                object_path="other/path/file.json",
+                key="other/path/file.json",
                 local_path=str(local_dest / "other" / "path" / "file.json"),
             )

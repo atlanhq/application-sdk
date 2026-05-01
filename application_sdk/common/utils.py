@@ -56,7 +56,7 @@ async def download_file_from_upload_response(
     local_path = os.path.join(TEMPORARY_PATH, key)
 
     await download_file(
-        object_path=key,
+        key=key,
         local_path=local_path,
     )
 
