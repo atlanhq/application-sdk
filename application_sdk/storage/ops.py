@@ -226,7 +226,7 @@ def _log_storage_event(
     if error_class is not None:
         extra["error_class"] = error_class
     msg = f"storage.{op} {outcome} path={store_path}"
-    logger.log(level, msg, extra=extra)
+    logger.log(level, msg, extra=extra)  # lgtm[py/clear-text-logging-sensitive-data]
 
 
 async def _list_items(

@@ -9,7 +9,6 @@ Most functions previously in this module have been moved to more logical homes:
 
 import json
 import os
-from typing import Union
 
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
@@ -20,7 +19,7 @@ logger = get_logger(__name__)
 
 
 async def download_file_from_upload_response(
-    response: Union[dict, str, FileUploadResponse],
+    response: dict | str | FileUploadResponse,
 ) -> str:
     """Download a file that was uploaded via the /file endpoint.
 
@@ -57,7 +56,7 @@ async def download_file_from_upload_response(
     local_path = os.path.join(TEMPORARY_PATH, key)
 
     await download_file(
-        key=key,
+        object_path=key,
         local_path=local_path,
     )
 

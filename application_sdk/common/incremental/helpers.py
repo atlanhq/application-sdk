@@ -13,9 +13,8 @@ import os
 import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -165,7 +164,7 @@ def prepone_marker_timestamp(marker: str, hours: float) -> str:
         '2025-01-15T07:30:00Z'
     """
     # Parse the timestamp
-    dt = datetime.strptime(marker, MARKER_TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+    dt = datetime.strptime(marker, MARKER_TIMESTAMP_FORMAT).replace(tzinfo=UTC)
 
     # Move back by specified hours
     adjusted = dt - timedelta(hours=hours)
@@ -180,7 +179,7 @@ def prepone_marker_timestamp(marker: str, hours: float) -> str:
 async def download_marker_from_s3(
     connection_qualified_name: str,
     application_name: str = "",
-) -> Optional[str]:
+) -> str | None:
     """Download marker.txt from S3 and return its content, or None if not found.
 
     Args:
@@ -200,7 +199,7 @@ async def download_marker_from_s3(
     logger.info("Downloading marker from S3: %s", marker_s3_key)
     try:
         await download_file(
-            key=marker_s3_key,
+            object_path=marker_s3_key,
             local_path=str(local_marker_path),
         )
         if local_marker_path.exists() and local_marker_path.stat().st_size > 0:
@@ -255,7 +254,7 @@ async def download_s3_prefix_with_structure(
 
         async with sem:
             await download_file(
-                key=file_path,
+                object_path=file_path,
                 local_path=str(local_file_path),
             )
 

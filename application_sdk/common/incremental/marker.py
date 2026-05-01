@@ -25,8 +25,8 @@ Example:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.helpers import (
@@ -52,7 +52,7 @@ def create_next_marker() -> str:
     Returns:
         Formatted timestamp string in ``YYYY-MM-DDTHH:MM:SSZ`` format.
     """
-    return datetime.now(timezone.utc).strftime(MARKER_TIMESTAMP_FORMAT)
+    return datetime.now(UTC).strftime(MARKER_TIMESTAMP_FORMAT)
 
 
 def process_marker_timestamp(
@@ -100,10 +100,10 @@ def process_marker_timestamp(
 async def fetch_marker_from_storage(
     connection_qualified_name: str,
     application_name: str = "",
-    existing_marker: Optional[str] = None,
+    existing_marker: str | None = None,
     prepone_enabled: bool = False,
     prepone_hours: float = 0,
-) -> Tuple[Optional[str], str]:
+) -> tuple[str | None, str]:
     """Fetch and process the incremental marker from storage.
 
     Attempts to retrieve an existing marker from:
@@ -165,7 +165,7 @@ async def persist_marker_to_storage(
     connection_qualified_name: str,
     marker_value: str,
     application_name: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Persist marker timestamp to S3 storage.
 
     Writes the marker to both local storage and S3 for persistence
@@ -212,7 +212,7 @@ async def persist_marker_to_storage(
     try:
         await upload_file(
             local_path=str(local_marker_path),
-            key=marker_s3_key,
+            object_path=marker_s3_key,
             retain_local_copy=True,
         )
         logger.info(
