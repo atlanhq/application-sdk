@@ -13,6 +13,10 @@ permissions:
   security-events: write
   actions: write
 
+env:
+  TEMPORAL_CLI_VERSION: "1.5.1"  # bundles Server 1.29.1 — matches tenant Server 1.29.4
+  DAPR_CLI_VERSION: "1.16.2"
+
 jobs:
   # Testing
   unit:
@@ -50,9 +54,8 @@ jobs:
 
       - name: Install Temporal CLI
         run: |
-          TEMPORAL_VERSION="1.3.0"
           mkdir -p "$HOME/.temporalio/bin"
-          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_VERSION}/temporal_cli_${TEMPORAL_VERSION}_linux_amd64.tar.gz" \
+          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_CLI_VERSION}/temporal_cli_${TEMPORAL_CLI_VERSION}_linux_amd64.tar.gz" \
             -o /tmp/temporal.tar.gz
           tar -xzf /tmp/temporal.tar.gz -C /tmp
           mv /tmp/temporal "$HOME/.temporalio/bin/temporal"
@@ -80,7 +83,6 @@ jobs:
 
       - name: Install and start Dapr runtime (daprd)
         run: |
-          DAPR_CLI_VERSION="1.16.2"
           curl -sSLf "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" \
             -o /tmp/dapr-cli.tar.gz
           tar -xzf /tmp/dapr-cli.tar.gz -C /tmp dapr
