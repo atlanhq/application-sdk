@@ -159,7 +159,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_LOG_LEVEL` | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). **Fallback:** `LOG_LEVEL`. |
+| `ATLAN_LOG_LEVEL` | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). **Fallback:** `LOG_LEVEL`. `CRITICAL` is accepted by loguru but prohibited in app code per [ADR-0011](adr/0011-logging-level-guidelines.md). |
 | `ATLAN_LOG_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
 | `ATLAN_LOG_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between parquet sink flushes. |
 | `ATLAN_LOG_RETENTION_DAYS` | `30` | Days to retain parquet log files before cleanup. |

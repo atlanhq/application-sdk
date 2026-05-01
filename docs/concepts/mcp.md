@@ -199,6 +199,7 @@ ENABLE_MCP=true
 
 ```python
 @mcp_tool(description="Safe data processing with error handling")
+@task
 async def process_data(self, data_id: str) -> str:
     try:
         # Process data

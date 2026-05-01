@@ -130,11 +130,7 @@ Retrieve the registered class with `get_registry().get_class("slack")` (import `
 
 ## AtlanClientMixin
 
-Mix in `AtlanClientMixin` when your App needs to call the Atlan API. The mixin provides `get_or_create_async_atlan_client()`, which:
-
-1. Checks the per-execution cache.
-2. Re-uses any `AsyncAtlanClient` already created during `validate()`.
-3. Creates and caches a new client if neither is available.
+Mix in `AtlanClientMixin` when your App needs to call the Atlan API. The mixin provides `get_or_create_async_atlan_client()`, which returns the cached `AsyncAtlanClient` for the current execution if one exists, or creates and caches a new one.
 
 ```python
 from application_sdk.credentials import AtlanClientMixin

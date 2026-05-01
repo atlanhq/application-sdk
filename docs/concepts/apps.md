@@ -361,7 +361,7 @@ policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
 
 ## Atlan Client Mixin
 
-Mix in `AtlanClientMixin` when your App needs to call the Atlan API. It provides `get_or_create_async_atlan_client()`, which caches the `AsyncAtlanClient` per execution and reuses any client already created during `validate()`.
+Mix in `AtlanClientMixin` when your App needs to call the Atlan API. It provides `get_or_create_async_atlan_client()`, which caches the `AsyncAtlanClient` per execution.
 
 ```python
 from application_sdk.credentials import AtlanClientMixin

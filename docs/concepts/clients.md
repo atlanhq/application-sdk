@@ -71,7 +71,7 @@ class SnowflakeClient(BaseSQLClient):
 
 `BaseSQLClient` establishes the connection and holds the SQLAlchemy engine, which is used by `@task` methods to execute queries.
 
-*   **Role of `SQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` method to other components.
+*   **Role of `BaseSQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` method to other components.
 *   **Role of `@task` methods:**
     *   Tasks (e.g., `fetch_tables`, `fetch_columns` in your `SqlMetadataExtractor` subclass) orchestrate the extraction process.
     *   They create a client instance and call `load()` with a credentials dict.
@@ -79,7 +79,7 @@ class SnowflakeClient(BaseSQLClient):
     *   They process the resulting data (e.g., pass to asset mappers for transformation).
 
 **Simplified Flow:**
-`@task method` → creates `SQLClient` → `client.load(credentials=cred_dict)` → `client.run_query(query=...)` → yields row batches → asset mapper.
+`@task method` → creates `BaseSQLClient` → `client.load(credentials=cred_dict)` → `client.run_query(query=...)` → yields row batches → asset mapper.
 
 ## Base Client (`base.py`)
 
@@ -224,7 +224,7 @@ Every application that uses `create_temporal_client()` exposes ~40 built-in Temp
 
 The `clients` module abstracts interactions with external services.
 
-`SQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine and query execution methods used by `@task` methods to fetch data. See [`docs/concepts/apps.md`](apps.md) for how `App` + `@task` orchestrate extraction and [`docs/concepts/tasks.md`](tasks.md) for the task contract pattern.
+`BaseSQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine and query execution methods used by `@task` methods to fetch data. See [`docs/concepts/apps.md`](apps.md) for how `App` + `@task` orchestrate extraction and [`docs/concepts/tasks.md`](tasks.md) for the task contract pattern.
 
 Temporal worker lifecycle (startup, shutdown, workflow dispatch) is managed by `application_sdk.execution` — see the execution layer documentation in `docs/concepts/apps.md`.
 

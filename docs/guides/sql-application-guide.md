@@ -177,7 +177,8 @@ class PostgresHandler(Handler):
             "AND schema_name != 'information_schema'"
         ):
             rows.extend(batch)
-        # BaseSQLClient.run_query lowercases all column names; use lowercase keys here.
+        # BaseSQLClient.run_query lowercases column names, so dict keys are lowercase.
+        # SqlMetadataObject keeps the uppercase field names from the wire schema.
         objects = [
             SqlMetadataObject(TABLE_CATALOG=r["table_catalog"], TABLE_SCHEMA=r["table_schema"])
             for r in rows
