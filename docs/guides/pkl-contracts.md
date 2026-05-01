@@ -297,8 +297,8 @@ for k, v in publish.get('inputs', {}).get('args', {}).items():
 "
 
 # 3. Check toolkit version vs latest
-CURRENT=\$(grep -oE '@[0-9.]+' contract/PklProject | tr -d '@')
-echo "Contract toolkit: \$CURRENT"
+CURRENT=$(grep -oE '@[0-9.]+' contract/PklProject | tr -d '@')
+echo "Contract toolkit: $CURRENT"
 
 # 4. Verify _input.py exclusions
 grep "_input.py" .pre-commit-config.yaml pyproject.toml | head -5

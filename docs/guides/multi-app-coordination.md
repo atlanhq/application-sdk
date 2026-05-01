@@ -108,7 +108,7 @@ When apps coordinate via AE, the downstream app receives inputs via the `args` b
 For large intermediate files, use `FileReference` with `StorageTier.RETAINED`:
 
 ```python
-from application_sdk.contracts import UploadInput, StorageTier
+from application_sdk.contracts import FileReference, Output, StorageTier, UploadInput
 
 class ExtractionOutput(Output):
     parquet_file: FileReference   # StorageTier.RETAINED — kept for downstream

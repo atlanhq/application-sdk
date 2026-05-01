@@ -54,11 +54,12 @@ class MyConnector(App):
     async def paginate(self, input: PaginateInput) -> PaginateOutput:
         prev = self.task_context.get_heartbeat_details(PageProgress)
         start_page = prev.last_page if prev else 0
+        records_done = prev.records_done if prev else 0
 
         async for page in fetch_pages(start=start_page):
-            # Process page...
+            records_done += page.count
             self.task_context.heartbeat(
-                PageProgress(last_page=page.number, records_done=page.count)
+                PageProgress(last_page=page.number, records_done=records_done)
             )
 
         return PaginateOutput(total=records_done)

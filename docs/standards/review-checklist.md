@@ -269,18 +269,18 @@ def create_distributed_lock(
 - **Non-critical operations**: May swallow exceptions to prevent cascading failures
 
 ```python
-# DO: Proper error handling — %-style messages, exc_info=True when catching
-from application_sdk.common.error_codes import ClientError  # legacy; prefer application_sdk.errors for new codes
+# DO (v3 preferred): use AppError from application_sdk.app
+from application_sdk.app import AppError
 
 try:
     result = database_connection.execute_query(query)
     return result
 except ConnectionError as e:
     logger.error("Database connection failed for query %s: %s", query[:50], e, exc_info=True)
-    raise ClientError("Database connection failed: %s" % e)
+    raise AppError("Database connection failed: %s" % e)
 except ValueError as e:
     logger.error("Invalid query parameters: %s", e, exc_info=True)
-    raise ClientError("Query validation failed: %s" % e)
+    raise AppError("Query validation failed: %s" % e)
 
 # DON'T: f-strings, missing exc_info, generic exception
 try:

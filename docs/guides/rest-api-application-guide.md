@@ -29,7 +29,7 @@ Define input, output, and credential types in `app/contracts.py`:
 ```python
 from __future__ import annotations
 
-from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts import Input, Output
 
 
 # --- Workflow contracts ---

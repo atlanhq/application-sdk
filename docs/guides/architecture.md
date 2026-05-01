@@ -108,14 +108,14 @@ All infrastructure is accessed through Protocol-based interfaces, not concrete i
 |----------|---------|-----------------|-----------|
 | `StateStore` | `save`, `load`, `delete`, `list_keys` | `DaprStateStore` | `MockStateStore` |
 | `SecretStore` | `get`, `get_optional`, `get_bulk` | `DaprSecretStore` | `MockSecretStore`, `EnvironmentSecretStore` |
-| `ObjectStore`¹ | `put`, `get`, `delete`, `list` | `obstore`-backed | local filesystem (no mock needed — `obstore` works without a sidecar) |
+| `ObjectStore`¹ | `upload_file`, `download_file`, `put_json`, `delete`, `list_keys` | `obstore`-backed | `create_local_store(tmp_path)` (no mock class needed) |
 | `Binding` | `invoke` | `DaprBinding` | `MockBinding` |
 | `PubSub` | `publish`, `subscribe` | `DaprPubSub` | `MockPubSub` |
 | `CapacityPool` | `acquire`, `release`, `renew` | Redis-backed | `LocalCapacityPool` |
 
 `InfrastructureContext` (a frozen dataclass) holds the four services that every handler and worker needs: `state_store`, `secret_store`, `storage` (ObjectStore), and `event_binding` (Binding). It is stored in a module-level singleton, set once at startup via `application_sdk.main`, and accessed anywhere via `get_infrastructure()`. A module-level variable is used rather than a `ContextVar` because uvicorn HTTP request handlers run in isolated `contextvars.Context` instances and would silently receive `None` if the value were stored in a `ContextVar`.
 
-¹ `ObjectStore` is defined in `application_sdk.storage` (not `application_sdk.infrastructure`), but is held by `InfrastructureContext.storage` and accessed the same way. It uses the `obstore` library directly — no Dapr sidecar required — so tests can point it at a local temp directory without a mock class.
+¹ `ObjectStore` is the `obstore` library type (not an SDK-defined Protocol). It is held by `InfrastructureContext.storage` and the SDK exposes it through module-level functions in `application_sdk.storage` — `upload_file`, `download_file`, `put_json`, `delete`, `exists`, `list_keys`, `delete_prefix` — rather than direct method calls on the store object. For tests, `create_local_store(tmp_path)` or `create_memory_store()` — no Dapr sidecar required.
 
 `PubSub` and `CapacityPool` are accessed directly from `application_sdk.infrastructure` — they are not fields on `InfrastructureContext`.
 
