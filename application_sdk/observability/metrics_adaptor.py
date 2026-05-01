@@ -113,13 +113,18 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         writes to.
         """
         try:
-            from opentelemetry.exporter.prometheus import (  # noqa: PLC0415 — cold path: prometheus exporter only loaded during MeterProvider setup
-                PrometheusMetricReader,
+            from application_sdk.observability._prometheus_enrichment import (  # noqa: PLC0415 — cold path: prometheus exporter only loaded during MeterProvider setup
+                EnrichedPrometheusMetricReader,
             )
 
-            self._prometheus_reader = PrometheusMetricReader()
+            resource = build_otel_resource()
+            # EnrichedPrometheusMetricReader inlines app.name / app.version
+            # onto every series so PromQL doesn't need a target_info join to
+            # filter by app. The bounded enrichment subset keeps cardinality
+            # flat — see _prometheus_enrichment.py for the rationale.
+            self._prometheus_reader = EnrichedPrometheusMetricReader(resource=resource)
             self.meter_provider = MeterProvider(
-                resource=build_otel_resource(),
+                resource=resource,
                 metric_readers=[self._prometheus_reader],
             )
             metrics.set_meter_provider(self.meter_provider)
