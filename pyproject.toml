@@ -59,7 +59,7 @@ sql = [
     "pandas>=2.2.3,<2.4.0",
     "pyarrow>=20.0.0,<23.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
-    "duckdb>=1.1.3,<1.5.0",
+    "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
 ]
 # Daft transformer engine
@@ -71,7 +71,7 @@ incremental = [
     "pandas>=2.2.3,<2.4.0",
     "pyarrow>=20.0.0,<23.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
-    "duckdb>=1.1.3,<1.5.0",
+    "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
     "daft>=0.7.1,<0.8.0",
     "rocksdict>=0.3.0",
