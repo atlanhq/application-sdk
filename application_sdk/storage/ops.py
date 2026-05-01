@@ -420,15 +420,6 @@ async def download_file(
     Uses obstore's streaming GET so arbitrarily large files are written to
     disk without materialising the whole content in memory.
 
-    Transient failures (network errors, mid-body stream drops, HTTP 5xx) are
-    retried automatically by the Rust layer (obstore / object_store crate) using
-    the ``ClientConfig`` timeout and ``RetryConfig`` values configured in
-    ``_obstore_config.py`` — notably ``ATLAN_OBSTORE_TIMEOUT=90s`` (default,
-    bounding each chunked GET) which raises obstore's 30-second body-read
-    cut-off without masking genuinely stuck transfers.  There is no
-    additional Python-level retry loop here to avoid multiplying wait time
-    without changing the outcome.
-
     Args:
         key: Source object key.  Normalised by default.
         local_path: Destination path (file will be created or overwritten).

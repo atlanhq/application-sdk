@@ -19,9 +19,7 @@ Environment variables
 
 Client options (passed via ``S3Store(client_options=…)``):
 
-* ``ATLAN_OBSTORE_TIMEOUT`` — per-request timeout (default ``"90s"``,
-  sized for one 16 MiB chunked download at modest throughput; raise it to
-  ``5m`` or higher on slow cross-region paths via this env var).
+* ``ATLAN_OBSTORE_TIMEOUT`` — per-request timeout (default ``"90s"``).
 * ``ATLAN_OBSTORE_CONNECT_TIMEOUT`` — connect-phase timeout (default ``"30s"``).
 * ``ATLAN_OBSTORE_POOL_IDLE_TIMEOUT`` — pool idle timeout (default ``"90s"``).
 * ``ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST`` — pool size per host (unset by
@@ -49,30 +47,13 @@ import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    # ClientConfig and RetryConfig are TypedDict aliases shipped by obstore
-    # for static type-checking only — they are not importable at runtime
-    # (see obstore/store/_client.pyi, _retry.pyi).  We use them as the public
-    # contract on our helper return types so callers see the exact set of
-    # fields obstore-rs accepts, instead of an opaque ``dict[str, Any]``.
+    # obstore TypedDicts — not importable at runtime.
     from obstore.store import ClientConfig, RetryConfig
 
 # Stdlib logger to avoid the storage → observability → storage circular
 # import that bites the rest of this package.
 logger = logging.getLogger(__name__)
 
-# Defaults.  Values larger than upstream defaults are deliberate:
-#   - upstream timeout is 30 s, which kills mid-stream on 100 MB+ files via
-#     NAT/public-egress paths for large file downloads.
-# ATLAN_OBSTORE_TIMEOUT is a *per-HTTP-request* timeout — it applies to each
-# individual GET or PUT, not to the total transfer.  For the chunked-download
-# path (chunk_size = 16 MiB by default), each request covers at most one chunk,
-# so the timeout bounds one 16 MiB transfer, not the whole file.  90s lets us
-# detect stuck transfers fast while comfortably covering 16 MiB at modest
-# throughput (~180 KB/s and up).  Operators on slow cross-region or NAT-heavy
-# paths can raise it via ``ATLAN_OBSTORE_TIMEOUT`` (e.g. ``5m``); operators with
-# reliable connectivity can drop it further.  connect_timeout (30s) and
-# http2_keep_alive_timeout (30s) already catch dead connections before the
-# per-request timeout fires.
 _DEFAULT_TIMEOUT = "90s"
 _DEFAULT_CONNECT_TIMEOUT = "30s"
 _DEFAULT_POOL_IDLE_TIMEOUT = "90s"
