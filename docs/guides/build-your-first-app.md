@@ -129,8 +129,7 @@ import tempfile
 import httpx
 
 from application_sdk.app import App, task
-from application_sdk.credentials import CredentialResolver
-from application_sdk.credentials.ref import bearer_token_ref
+from application_sdk.credentials import CredentialResolver, bearer_token_ref
 from application_sdk.infrastructure import get_infrastructure
 from application_sdk.storage import upload_file
 

@@ -146,7 +146,7 @@ Handlers are always-on because users expect immediate HTTP responses. Workers sc
 Implement `Handler` to provide typed pre-execution operations:
 
 ```python
-from application_sdk.handler.base import Handler
+from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     AuthInput, AuthOutput, AuthStatus,
     PreflightInput, PreflightOutput,
@@ -169,8 +169,7 @@ class MyHandler(Handler):
 Credentials are resolved through a typed system — no more `dict["password"]` bugs:
 
 ```python
-from application_sdk.credentials.ref import basic_ref
-from application_sdk.credentials.types import BasicCredential
+from application_sdk.credentials import basic_ref, BasicCredential
 
 ref = basic_ref("my-db-creds")
 cred: BasicCredential = await self.context.resolve_credential(ref)

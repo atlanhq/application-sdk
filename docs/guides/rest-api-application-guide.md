@@ -140,8 +140,7 @@ import os
 import tempfile
 
 from application_sdk.app import App, task
-from application_sdk.credentials import CredentialResolver
-from application_sdk.credentials.ref import api_key_ref
+from application_sdk.credentials import CredentialResolver, api_key_ref
 from application_sdk.infrastructure import get_infrastructure
 from application_sdk.storage import upload_file
 
