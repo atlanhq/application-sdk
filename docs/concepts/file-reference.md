@@ -665,18 +665,8 @@ Events for files ≥ 10 MiB are logged at `INFO`; smaller files at `DEBUG`.
 
 ## Part 6 — Migration from upload_to_atlan
 
-`BaseMetadataExtractor.upload_to_atlan` is deprecated. It performs a
-cross-store copy (deployment store → upstream Atlan store) in a single sequential
-call. Replace it with `self.upload()` which is concurrent, SHA-256 verified, and
-works identically in hosted and SDR deployments.
-
-**v2 (deprecated):**
-
-```python
-await self.upload_to_atlan(UploadInput(output_path=input.output_path))
-```
-
-**v3 replacement:**
+`BaseMetadataExtractor.upload_to_atlan` has been removed.  Push files to the
+platform via `App.upload()` directly:
 
 ```python
 up = await self.upload(
@@ -685,8 +675,8 @@ up = await self.upload(
         tier=StorageTier.RETAINED,
     )
 )
+records_uploaded = up.ref.file_count or 0
 ```
 
-Do not remove existing `upload_to_atlan` call sites in production apps until
-confirmed with the platform team — the cross-store routing behaviour differs
-from `self.upload()` in SDR deployments.
+`App.upload()` is concurrent, SHA-256 verified, and works identically in hosted
+and SDR deployments.
