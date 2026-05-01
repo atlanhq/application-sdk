@@ -1,9 +1,20 @@
 """Internal: build a PyIceberg REST catalog pointed at Polaris.
 
 This is the only place we encode Polaris-specific connection details
-(URL pattern, OAuth scope, sigv4-disabled). Public SDK surfaces funnel
-through here so the credential acquisition story can evolve without
-touching app code.
+(URL pattern, OAuth scope, sigv4-disabled, per-cloud config). Public SDK
+surfaces funnel through here so the credential acquisition story can
+evolve without touching app code.
+
+Cloud handling:
+
+* On **Azure**, two extra config keys are required for Polaris to vend
+  SAS tokens and for PyIceberg to use ``adlfs`` for storage I/O:
+  ``header.X-Iceberg-Access-Delegation: vended-credentials`` and
+  ``py-io-impl: pyiceberg.io.fsspec.FsspecFileIO``. The Daft ADLS
+  scoped-key normalisation patch is also applied so Daft picks up the
+  account-scoped keys Polaris vends.
+* On **AWS** and **GCP**, default PyIceberg config is enough — vended
+  S3/GCS credentials flow through PyIceberg's native FileIO.
 """
 
 from __future__ import annotations
@@ -11,6 +22,9 @@ from __future__ import annotations
 import os
 
 from pyiceberg.catalog import Catalog, load_catalog
+
+from application_sdk.lakehouse._polaris import cloud as _cloud
+from application_sdk.lakehouse._polaris.azure_adls_patch import patch_daft_adls_io
 
 
 def load_catalog_from_env() -> Catalog:
@@ -28,6 +42,7 @@ def load_catalog_from_env() -> Catalog:
 
     Optional:
       - ``ICEBERG_WAREHOUSE`` (default: ``context_store``)
+      - ``CLOUD`` (default: ``aws``; one of ``aws|gcp|azure``)
     """
     uri = os.environ.get("ICEBERG_CATALOG_URI") or _uri_from_domain()
     if not uri:
@@ -44,17 +59,24 @@ def load_catalog_from_env() -> Catalog:
             f"Lakehouse credentials not configured: {missing.args[0]} is required."
         ) from missing
     warehouse = os.environ.get("ICEBERG_WAREHOUSE", "context_store")
-    return load_catalog(
-        warehouse,
-        **{
-            "type": "rest",
-            "uri": uri,
-            "warehouse": warehouse,
-            "credential": f"{client_id}:{client_secret}",
-            "scope": "PRINCIPAL_ROLE:ALL",
-            "rest.sigv4-enabled": "false",
-        },
-    )
+    cloud = _cloud.detect_cloud()
+
+    config: dict[str, str] = {
+        "type": "rest",
+        "uri": uri,
+        "warehouse": warehouse,
+        "credential": f"{client_id}:{client_secret}",
+        "scope": "PRINCIPAL_ROLE:ALL",
+        "rest.sigv4-enabled": "false",
+    }
+    if cloud == "azure":
+        # Tell Polaris to vend SAS tokens, and use adlfs in PyIceberg.
+        config["header.X-Iceberg-Access-Delegation"] = "vended-credentials"
+        config["py-io-impl"] = "pyiceberg.io.fsspec.FsspecFileIO"
+        # Normalise ADLS account-scoped keys for Daft's IO converter.
+        patch_daft_adls_io()
+
+    return load_catalog(warehouse, **config)
 
 
 def _uri_from_domain() -> str | None:
