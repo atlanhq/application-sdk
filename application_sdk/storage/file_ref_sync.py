@@ -33,13 +33,15 @@ This ensures that:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import FileReference, Lazy
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -116,13 +118,9 @@ def _needs_materialize(ref: FileReference) -> bool:
 
 
 def has_refs_to_persist(data: Any) -> bool:
-    """Return True if *data* contains ephemeral FileReferences (local but not durable).
-
-    Refs with ``auto_materialize=False`` are excluded — those are managed by
-    the application directly, not the activity interceptor.
-    """
+    """Return True if *data* contains ephemeral FileReferences (local but not durable)."""
     return any(
-        ref.local_path is not None and not ref.is_durable and ref.auto_materialize
+        ref.local_path is not None and not ref.is_durable
         for ref in _find_file_refs(data)
     )
 
@@ -133,20 +131,27 @@ def has_refs_to_materialize(data: Any) -> bool:
     Checks for: missing local file, stale local_path (different worker),
     missing local sha256 sidecar (conservative), and sidecar hash mismatch
     (corrupt/partial file).
-
-    Refs with ``auto_materialize=False`` are excluded — those are managed by
-    the application directly, not the activity interceptor.
     """
-    return any(
-        ref.auto_materialize and _needs_materialize(ref)
-        for ref in _find_file_refs(data)
-    )
+    return any(_needs_materialize(ref) for ref in _find_file_refs(data))
 
 
 async def _replace_refs(
-    data: Any, store: "ObjectStore", mode: str, output_path: str | None = None
+    data: Any, store: ObjectStore, mode: str, output_path: str | None = None
 ) -> Any:
-    """Recursively replace FileReference instances in a dataclass tree.
+    """Replace FileReference instances in a data tree using concurrent execution.
+
+    Uses a three-pass approach:
+
+    - **Pass 1 (collect)**: walk the tree, bucket unique operations by
+      ``storage_path`` (materialize) or ``id(ref)`` (persist).  Refs sharing
+      the same ``storage_path`` are coalesced — only the first-encountered ref
+      triggers an actual download.
+    - **Pass 2 (execute)**: run all unique coroutines concurrently under a
+      bounded ``asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)``.
+    - **Pass 3 (scatter)**: rebuild the tree synchronously via ``model_copy``
+      for frozen ``BaseModel`` parents, writing results from the dict.
+      Subsequent refs sharing a ``storage_path`` adopt the winner's
+      ``local_path`` and emit a ``file_ref.materialize.dedup_hit`` debug event.
 
     Args:
         data: Input dataclass, list, tuple, dict, or scalar.
@@ -159,49 +164,141 @@ async def _replace_refs(
         A new object tree with replaced FileReference instances (original
         objects are never mutated).
     """
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imported transitively across the SDK
+        MAX_CONCURRENT_STORAGE_TRANSFERS,
+    )
     from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         materialize_file_reference,
         persist_file_reference,
     )
 
-    if isinstance(data, FileReference):
-        # Honor opt-out: app owns the lifecycle for this ref.
-        if not data.auto_materialize:
-            return data
-        if mode == "persist" and data.local_path is not None and not data.is_durable:
-            return await persist_file_reference(store, data, output_path=output_path)
-        if mode == "materialize" and _needs_materialize(data):
-            return await materialize_file_reference(store, data)
-        return data
+    # ── Pass 1: collect unique operations ─────────────────────────────────────
+    # materialize: dedup by storage_path — same remote file → one download.
+    # persist:     dedup by id(ref)      — same Python object → one upload.
+    _factories: dict[str, Callable[[], Coroutine[Any, Any, FileReference]]] = {}
+    _winners: dict[str, FileReference] = {}
 
-    if isinstance(data, BaseModel):
-        changes: dict[str, Any] = {}
-        for name in type(data).model_fields:
-            old_val = getattr(data, name)
-            new_val = await _replace_refs(old_val, store, mode, output_path=output_path)
-            if new_val is not old_val:
-                changes[name] = new_val
-        return data.model_copy(update=changes) if changes else data
+    def _is_lazy(node: BaseModel, name: str) -> bool:
+        """Return True if field *name* on *node* carries the ``Lazy`` marker."""
+        return any(isinstance(m, Lazy) for m in type(node).model_fields[name].metadata)
 
-    if isinstance(data, list):
-        new_list = [
-            await _replace_refs(item, store, mode, output_path=output_path)
-            for item in data
-        ]
-        return new_list if any(n is not o for n, o in zip(new_list, data)) else data
+    def _collect(node: Any) -> None:
+        if isinstance(node, FileReference):
+            if not node.auto_materialize:
+                return  # app owns the lifecycle for this ref — skip
+            if (
+                mode == "persist"
+                and node.local_path is not None
+                and not node.is_durable
+            ):
+                key = str(id(node))
+                if key not in _factories:
+                    _ref = node
+                    _factories[key] = lambda r=_ref: persist_file_reference(
+                        store, r, output_path=output_path
+                    )
+                    _winners[key] = node
+            elif mode == "materialize" and _needs_materialize(node):
+                key = node.storage_path or str(id(node))
+                if key not in _factories:
+                    _ref = node
+                    _factories[key] = lambda r=_ref: materialize_file_reference(
+                        store, r
+                    )
+                    _winners[key] = node
+            return
+        if isinstance(node, BaseModel):
+            for name in type(node).model_fields:
+                value = getattr(node, name)
+                if (
+                    mode == "materialize"
+                    and isinstance(value, FileReference)
+                    and _is_lazy(node, name)
+                ):
+                    logger.debug(
+                        "file_ref.materialize.lazy_skipped",
+                        storage_path=value.storage_path,
+                    )
+                    continue
+                _collect(value)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                _collect(item)
+        elif isinstance(node, dict):
+            for v in node.values():
+                _collect(v)
 
-    if isinstance(data, tuple):
-        new_tuple = tuple(
-            await _replace_refs(item, store, mode, output_path=output_path)
-            for item in data
-        )
-        return new_tuple if new_tuple != data else data
+    _collect(data)
 
-    return data
+    if not _factories:
+        return data  # nothing to do — skip gather entirely
+
+    # ── Pass 2: execute concurrently under bounded semaphore ──────────────────
+    sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
+
+    async def _run(
+        key: str, factory: Callable[[], Coroutine[Any, Any, FileReference]]
+    ) -> tuple[str, FileReference]:
+        async with sem:
+            result = await factory()
+        return key, result
+
+    pairs = await asyncio.gather(*[_run(k, f) for k, f in _factories.items()])
+    _results: dict[str, FileReference] = dict(pairs)
+
+    # ── Pass 3: scatter results back through the tree ─────────────────────────
+    def _scatter(node: Any) -> Any:
+        if isinstance(node, FileReference):
+            if (
+                mode == "persist"
+                and node.local_path is not None
+                and not node.is_durable
+            ):
+                return _results.get(str(id(node)), node)
+            if mode == "materialize" and _needs_materialize(node):
+                key = node.storage_path or str(id(node))
+                result = _results.get(key, node)
+                if node is not _winners.get(key):
+                    logger.debug(
+                        "file_ref.materialize.dedup_hit",
+                        storage_path=node.storage_path,
+                        dedup_key=key,
+                        reused_local_path=result.local_path,
+                        local_path=node.local_path,
+                    )
+                return result
+            return node
+
+        if isinstance(node, BaseModel):
+            changes: dict[str, Any] = {}
+            for name in type(node).model_fields:
+                old_val = getattr(node, name)
+                if (
+                    mode == "materialize"
+                    and isinstance(old_val, FileReference)
+                    and _is_lazy(node, name)
+                ):
+                    continue  # leave lazy field as the original durable ref
+                new_val = _scatter(old_val)
+                if new_val is not old_val:
+                    changes[name] = new_val
+            return node.model_copy(update=changes) if changes else node
+
+        if isinstance(node, list):
+            new_list = [_scatter(item) for item in node]
+            return new_list if any(n is not o for n, o in zip(new_list, node)) else node
+
+        if isinstance(node, tuple):
+            new_tuple = tuple(_scatter(item) for item in node)
+            return new_tuple if new_tuple != node else node
+
+        return node
+
+    return _scatter(data)
 
 
 async def persist_file_refs(
-    store: "ObjectStore", data: Any, output_path: str | None = None
+    store: ObjectStore, data: Any, output_path: str | None = None
 ) -> Any:
     """Upload all ephemeral FileReferences in *data* to the store.
 
@@ -220,7 +317,7 @@ async def persist_file_refs(
     return await _replace_refs(data, store, "persist", output_path=output_path)
 
 
-async def materialize_file_refs(store: "ObjectStore", data: Any) -> Any:
+async def materialize_file_refs(store: ObjectStore, data: Any) -> Any:
     """Download all durable FileReferences in *data* to local temp files.
 
     Handles:

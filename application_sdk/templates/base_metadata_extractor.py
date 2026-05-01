@@ -36,6 +36,8 @@ from __future__ import annotations
 import os
 import tempfile
 
+from typing_extensions import deprecated
+
 from application_sdk.app.base import App
 from application_sdk.app.task import task
 from application_sdk.constants import (
@@ -68,9 +70,19 @@ class BaseMetadataExtractor(App):
     See module docstring for a usage example.
     """
 
+    @deprecated(
+        "upload_to_atlan is deprecated and will be removed in the next major SDK release. "
+        "In v3, upload files via App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)). "
+        "See docs/concepts/file-reference.md for migration guidance."
+    )
     @task(timeout_seconds=1800)
     async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
         """Migrate output files from the deployment store to the upstream store.
+
+        .. deprecated::
+            Use ``App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED))`` instead.
+            This method will be removed in the next major SDK release.
+            See ``docs/concepts/file-reference.md`` for migration guidance.
 
         Lists all objects under input.output_path in the deployment store and
         copies each one to the same key in the upstream store. Raises on any

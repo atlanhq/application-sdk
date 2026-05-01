@@ -122,6 +122,24 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "circuit_breaker_tripped",
         "bottleneck_activity_type",
         "bottleneck_duration_ms",
+        # ── FileReference transfers ──────────────────────────────────────
+        "storage_path",
+        "local_path",
+        "file_size_bytes",
+        "bytes_uploaded",
+        "bytes_downloaded",
+        "bytes_transferred_before_failure",
+        "sha256",
+        "tier",
+        "file_count",
+        "chunk_size_bytes",
+        "chunks_total",
+        "chunks_completed",
+        "is_cache_hit",
+        "reused_local_path",
+        "dedup_key",
+        "chunk_offset",
+        "chunk_length",
     }
 )
 

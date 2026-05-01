@@ -30,6 +30,12 @@ Use the right type system for each zone:
 - Avoid Pydantic on high-volume paths (e.g., every log line). Use plain dicts instead — Pydantic validation overhead accumulates significantly.
 - Always use Pydantic v2 `model_config = ConfigDict(...)` style. Do not use the v1 inner `class Config:` pattern.
 
+## Large Payloads and FileReference
+
+Use `FileReference` for any data that cannot fit in Temporal's 2 MB payload limit.
+See `docs/concepts/file-reference.md` for the full guide: decision matrix, lifecycle,
+the `Lazy()` marker for selective materialization, dedup behaviour, and observability events.
+
 ## Before Every Commit
 
 ```bash

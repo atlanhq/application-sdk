@@ -149,6 +149,34 @@ MAX_CONCURRENT_STORAGE_TRANSFERS = int(
     os.getenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "4")
 )
 
+# FileReference chunked-download configuration
+#: File size threshold above which downloads use parallel range GETs (default 32 MiB)
+FILE_REF_CHUNKED_THRESHOLD_BYTES = int(
+    os.getenv("ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES", str(32 * 1024 * 1024))
+)
+#: Size of each range-GET chunk in a chunked download (default 16 MiB)
+FILE_REF_CHUNK_SIZE_BYTES = int(
+    os.getenv("ATLAN_FILE_REF_CHUNK_SIZE_BYTES", str(16 * 1024 * 1024))
+)
+#: Maximum concurrent range-GET chunks per file (default 4)
+FILE_REF_CHUNK_CONCURRENCY = int(os.getenv("ATLAN_FILE_REF_CHUNK_CONCURRENCY", "4"))
+
+# obstore retry / timeout configuration (applied at store construction in binding.py)
+#: Maximum number of retries for safe (idempotent) requests before giving up
+OBSTORE_RETRY_MAX = int(os.getenv("ATLAN_OBSTORE_RETRY_MAX", "5"))
+#: Total time budget for all retry attempts of a single request, in seconds (default 60 s)
+OBSTORE_RETRY_TIMEOUT_SECONDS = int(
+    os.getenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", "60")
+)
+#: Per-request body-read timeout, in seconds (default 120 s; set > chunk_size / bandwidth)
+OBSTORE_REQUEST_TIMEOUT_SECONDS = int(
+    os.getenv("ATLAN_OBSTORE_REQUEST_TIMEOUT_SECONDS", "120")
+)
+#: TCP connect timeout, in seconds (default 10 s)
+OBSTORE_CONNECT_TIMEOUT_SECONDS = int(
+    os.getenv("ATLAN_OBSTORE_CONNECT_TIMEOUT_SECONDS", "10")
+)
+
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.

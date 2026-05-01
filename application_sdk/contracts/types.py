@@ -157,6 +157,26 @@ class MaxItems:
     """Maximum number of items allowed in the collection."""
 
 
+class Lazy:
+    """Marker: this FileReference field is NOT auto-materialized before the activity runs.
+
+    Use with ``Annotated`` on any ``FileReference | None`` field whose data is
+    too large to download unconditionally, or that the activity may not always
+    need:
+
+        class MyInput(Input):
+            heavy_artifact: Annotated[FileReference | None, Lazy()] = None
+            light_manifest: FileReference | None = None  # eager (default)
+
+    Lazy fields are left as durable ``FileReference`` objects in the activity
+    input.  Call ``await fetch(ref, store)`` from ``storage.reference`` inside
+    the activity to download on demand — the sidecar fast-path means repeated
+    calls are cheap if the file is already on disk.
+    """
+
+    __slots__ = ()
+
+
 BoundedList = Annotated[list[T], MaxItems]
 """Bounded list type. Use: Annotated[list[T], MaxItems(N)]"""
 
@@ -208,7 +228,7 @@ class FileReference(BaseModel, frozen=True):
     @staticmethod
     def from_local(
         path: str | Path,
-    ) -> "FileReference":
+    ) -> FileReference:
         """Create an ephemeral FileReference from a local filesystem path.
 
         For a directory, ``file_count`` is computed as the number of regular
@@ -251,7 +271,7 @@ class GitReference(BaseModel, frozen=True):
     path: str = ""
     tag: str = ""
     commit: str = ""
-    credential: "CredentialRef | None" = None
+    credential: CredentialRef | None = None
 
 
 class ConnectionAttributes(BaseModel, frozen=True):
@@ -328,7 +348,7 @@ class ConnectionRef(BaseModel, frozen=True):
     )
 
     @staticmethod
-    def from_connection(conn: Any) -> "ConnectionRef":
+    def from_connection(conn: Any) -> ConnectionRef:
         """Convert a pyatlan_v9 Connection (msgspec.Struct) to ConnectionRef.
 
         The pyatlan_v9 struct is flat (all attributes at top level with camelCase
