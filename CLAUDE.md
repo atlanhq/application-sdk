@@ -21,6 +21,13 @@ Non-standard commands used across the repo:
 - Never add Co-Authored-By lines to commits
 - Follow Conventional Commits format from `docs/standards/commits.md`
 
+**Confidentiality**:
+- Never include customer names, tenant names, run IDs, or any other
+  customer-identifiable information in code, comments, docstrings, commit
+  messages, or PR descriptions. Reference incidents generically
+  ("a production RCA", "a prior incident") — not by the customer or
+  run involved.
+
 **Path Semantics (ObjectStore)**:
 - Key and prefix params for ObjectStore APIs accept either `./local/tmp/...` workflow paths or object-store keys like `artifacts/...`; the SDK normalizes these internally.
 - Local file params remain local paths: `upload_file(key, local_path)` and `download_file(key, local_path)` — `key` is an object-store key (normalised internally); `local_path` is a local filesystem path and is never treated as an object-store key.

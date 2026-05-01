@@ -12,6 +12,7 @@
 4. **Import sorting** - Imports must be sorted (isort with black profile)
 5. **Type hints** - Pyright enforces type checking
 6. **Conventional commits** - Commit messages must follow conventional format (e.g., `fix:`, `feat:`, `chore:`)
+7. **No customer names** - Never reference customer names, tenant names, run IDs, or any customer-identifiable information in code, comments, docstrings, commit messages, or PR descriptions. Use generic language: "a production incident", "a prior RCA".
 
 ## Serialization & Type Systems
 
