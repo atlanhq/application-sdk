@@ -24,8 +24,6 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
-from application_sdk.observability.error_classifier import classify_error
-
 _METER_NAME = "application_sdk.temporal"
 
 
@@ -88,14 +86,6 @@ def _activity_errors():
     return _INSTRUMENTS["act_err"]
 
 
-def _outcome_from_error_type(error_type: str) -> str:
-    if error_type == "cancelled":
-        return "CANCELED"
-    if error_type == "timeout":
-        return "TIMED_OUT"
-    return "ERROR"
-
-
 class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         if workflow.unsafe.is_replaying():
@@ -109,8 +99,8 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         status = "OK"
         try:
             return await self.next.execute_workflow(input)
-        except BaseException as exc:
-            status = _outcome_from_error_type(classify_error(exc))
+        except BaseException:
+            status = "ERROR"
             raise
         finally:
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
@@ -131,12 +121,12 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
         }
         start_ns = time.monotonic_ns()
         status = "OK"
-        error_type = ""
+        exception_class = ""
         try:
             return await self.next.execute_activity(input)
         except BaseException as exc:
-            error_type = classify_error(exc)
-            status = _outcome_from_error_type(error_type)
+            status = "ERROR"
+            exception_class = type(exc).__name__
             raise
         finally:
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
@@ -149,7 +139,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                         1,
                         {
                             "temporal.activity.type": attrs["temporal.activity.type"],
-                            "exception.type": error_type or "Unknown",
+                            "exception.type": exception_class or "Unknown",
                         },
                     )
             except Exception:  # noqa: S110 — best-effort observability; never block the activity on metric emission

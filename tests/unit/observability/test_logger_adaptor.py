@@ -1301,19 +1301,16 @@ class TestBuildExtraDict:
         assert out["attempt"] == "7"
 
     def test_atlan_dot_prefix_kept(self):
-        # The interceptors emit dot-prefixed keys (atlan.correlation_id,
-        # atlan.exception.fingerprint, atlan.exception.cause_chain) — these
-        # must pass through alongside the legacy dash form.
+        # The LogInterceptor emits atlan.correlation_id; any future
+        # atlan.* attribute must also pass through the gate.
         out = _build_extra_dict(
             {
                 "atlan.correlation_id": "corr-1",
-                "atlan.exception.fingerprint": "sha-abc",
-                "atlan.exception.cause_chain": "A -> B -> C",
+                "atlan.foo": "bar",
             }
         )
         assert out["atlan.correlation_id"] == "corr-1"
-        assert out["atlan.exception.fingerprint"] == "sha-abc"
-        assert out["atlan.exception.cause_chain"] == "A -> B -> C"
+        assert out["atlan.foo"] == "bar"
 
     def test_otel_prefix_kept(self):
         # otel.status_code is the OTel semconv way to mark a record as failed;

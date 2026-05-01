@@ -20,7 +20,6 @@ Folds the work of four legacy interceptors into one:
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import time
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -48,10 +47,6 @@ from application_sdk.observability.correlation import (
     get_correlation_context,
     set_correlation_context,
 )
-from application_sdk.observability.error_classifier import (
-    classify_error,
-    extract_cause_chain,
-)
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -65,27 +60,6 @@ _HEADER_CORRELATION_ID = "x-correlation-id"
 # Legacy header used by the AE's older interceptor — kept for compatibility
 # so AE-dispatched workflows inherit correlation_id without AE-side changes.
 _HEADER_CORRELATION_ID_LEGACY = "correlation_id"
-
-
-def _exception_fingerprint(scope: str, error_type: str, error_class: str) -> str:
-    """Deterministic 16-char fingerprint for error deduplication."""
-    raw = f"{scope}:{error_type}:{error_class}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
-def _failure_attrs(scope: str, exc: BaseException) -> dict[str, Any]:
-    """Common failure attributes for an ``ended`` log line."""
-    error_type = classify_error(exc)
-    error_class = type(exc).__name__
-    cause_chain = extract_cause_chain(exc)
-    attrs: dict[str, Any] = {
-        "atlan.exception.fingerprint": _exception_fingerprint(
-            scope, error_type, error_class
-        ),
-    }
-    if cause_chain:
-        attrs["atlan.exception.cause_chain"] = " -> ".join(cause_chain)
-    return attrs
 
 
 def _correlation_id_or_empty() -> str:
@@ -214,12 +188,10 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         start_ns = time.monotonic_ns()
         status = "OK"
-        failure_extras: dict[str, Any] = {}
         try:
             return await self.next.execute_workflow(input)
-        except Exception as exc:
+        except Exception:
             status = "ERROR"
-            failure_extras = _failure_attrs(info.workflow_type or "", exc)
             raise
         finally:
             duration_ms = round((time.monotonic_ns() - start_ns) / 1_000_000, 1)
@@ -227,7 +199,6 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 **identity,
                 "otel.status_code": status,
                 "temporal.workflow.duration_ms": duration_ms,
-                **failure_extras,
             }
             try:
                 if status == "ERROR":
@@ -301,12 +272,10 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
 
         start_ns = time.monotonic_ns()
         status = "OK"
-        failure_extras: dict[str, Any] = {}
         try:
             return await self.next.execute_activity(input)
-        except BaseException as exc:
+        except BaseException:
             status = "ERROR"
-            failure_extras = _failure_attrs(info.activity_type or "", exc)
             raise
         finally:
             duration_ms = round((time.monotonic_ns() - start_ns) / 1_000_000, 1)
@@ -314,7 +283,6 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 **identity,
                 "otel.status_code": status,
                 "temporal.activity.duration_ms": duration_ms,
-                **failure_extras,
             }
             try:
                 if status == "ERROR":

@@ -125,7 +125,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
 
 
 _PREFIXES_PASSTHROUGH = (
-    "atlan.",  # SDK convention: atlan.correlation_id, atlan.exception.fingerprint
+    "atlan.",  # SDK convention: atlan.correlation_id and similar dotted keys
     "exception.",  # OTel semconv: exception.type/message/stacktrace
     "otel.",  # OTel semconv: otel.status_code
     "temporal.",  # SDK convention: temporal.workflow.id, etc.

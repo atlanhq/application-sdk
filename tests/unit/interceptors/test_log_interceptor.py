@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import string
 from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,8 +11,6 @@ from temporalio.converter import default as default_converter
 from application_sdk.execution._temporal.interceptors.log import (
     LogInterceptor,
     _correlation_id_or_empty,
-    _exception_fingerprint,
-    _failure_attrs,
     _LogActivityInboundInterceptor,
     _LogWorkflowInboundInterceptor,
     _LogWorkflowOutboundInterceptor,
@@ -87,60 +84,6 @@ def reset_context():
 def _encode_header(value: str):
     """Encode a string as a Temporal payload for use in headers."""
     return default_converter().payload_converter.to_payload(value)
-
-
-# ---------------------------------------------------------------------------
-# TestExceptionFingerprint
-# ---------------------------------------------------------------------------
-
-
-class TestExceptionFingerprint:
-    def test_same_inputs_produce_same_hash(self):
-        h1 = _exception_fingerprint("workflow", "timeout", "TimeoutError")
-        h2 = _exception_fingerprint("workflow", "timeout", "TimeoutError")
-        assert h1 == h2
-
-    def test_different_inputs_produce_different_hashes(self):
-        h1 = _exception_fingerprint("workflow", "timeout", "TimeoutError")
-        h2 = _exception_fingerprint("activity", "internal", "ValueError")
-        assert h1 != h2
-
-    def test_returns_16_char_hex_string(self):
-        h = _exception_fingerprint("scope", "type", "Class")
-        assert len(h) == 16
-        assert all(c in string.hexdigits for c in h)
-
-
-# ---------------------------------------------------------------------------
-# TestFailureAttrs
-# ---------------------------------------------------------------------------
-
-
-class TestFailureAttrs:
-    def test_includes_fingerprint_key(self):
-        attrs = _failure_attrs("TestWorkflow", ValueError("oops"))
-        assert "atlan.exception.fingerprint" in attrs
-        assert len(attrs["atlan.exception.fingerprint"]) == 16
-
-    def test_includes_cause_chain_when_chained(self):
-        # Need a 3-deep chain so extract_cause_chain returns 2+ entries joined by " -> "
-        try:
-            try:
-                try:
-                    raise KeyError("root")
-                except KeyError as root:
-                    raise RuntimeError("middle") from root
-            except RuntimeError as middle:
-                raise ValueError("top") from middle
-        except ValueError as exc:
-            attrs = _failure_attrs("TestActivity", exc)
-
-        assert "atlan.exception.cause_chain" in attrs
-        assert "->" in attrs["atlan.exception.cause_chain"]
-
-    def test_omits_cause_chain_when_none(self):
-        attrs = _failure_attrs("TestWorkflow", ValueError("standalone"))
-        assert "atlan.exception.cause_chain" not in attrs
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +195,6 @@ class TestLogWorkflowInboundInterceptor:
         assert len(ended_calls) == 1
         kwargs = ended_calls[0][1]
         assert kwargs["otel.status_code"] == "ERROR"
-        assert "atlan.exception.fingerprint" in kwargs
         assert kwargs["exc_info"] is True
 
     async def test_generates_new_correlation_id_when_no_headers_no_memo(
@@ -409,7 +351,6 @@ class TestLogActivityInboundInterceptor:
         assert len(ended_calls) == 1
         kwargs = ended_calls[0][1]
         assert kwargs["otel.status_code"] == "ERROR"
-        assert "atlan.exception.fingerprint" in kwargs
         assert kwargs["exc_info"] is True
 
     async def test_reads_correlation_id_from_header(self, interceptor):
