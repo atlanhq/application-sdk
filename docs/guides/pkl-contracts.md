@@ -9,9 +9,9 @@ One file, `app.pkl`, generates everything. This guide explains how to write and 
 ```
 contract/app.pkl
     │
-    ├── pkl eval → contract/generated/{name}.json          (setup form)
-    ├── pkl eval → contract/generated/atlan-connectors-{name}.json  (credential form)
-    ├── pkl eval → contract/generated/manifest.json        (AE DAG)
+    ├── pkl eval → app/generated/{name}.json               (setup form)
+    ├── pkl eval → app/generated/atlan-connectors-{name}.json  (credential form)
+    ├── pkl eval → app/generated/manifest.json             (AE DAG)
     └── pkl eval → app/contracts/_input.py                 (typed Input class)
 ```
 
@@ -159,15 +159,15 @@ workflow {
 
 ## Step 3 — Add the Generate Task
 
-Add to `pyproject.toml` under `[tool.poe.tasks]`:
+The SDK does not ship a built-in `generate` poe task — you add it to your connector's `pyproject.toml`. Add the following block under `[tool.poe.tasks]`:
 
 ```toml
 [tool.poe.tasks.generate]
 shell = """
 set -euo pipefail
 cd contract
-pkl eval app.pkl --multiple-file-output generated/
-mv generated/_input.py ../app/contracts/_input.py
+pkl eval app.pkl --multiple-file-output ../app/generated/
+mv ../app/generated/_input.py ../app/contracts/_input.py
 """
 ```
 
@@ -267,7 +267,7 @@ When a new toolkit version ships:
 
 1. Update the version in `contract/PklProject`
 2. Re-resolve: `cd contract && pkl project resolve`
-3. Regenerate: `uv run poe generate`
+3. Regenerate: `uv run poe generate` (the user-supplied task from Step 3)
 4. Diff the generated files — review changes before committing
 
 Check the current latest version:
@@ -283,12 +283,12 @@ Before deploying, verify the contract is correct:
 
 ```bash
 # 1. Regenerate from scratch
-uv run poe generate
+uv run poe generate  # the user-supplied task from Step 3
 
 # 2. Confirm all DAG refs are satisfied
 python3 -c "
 import json
-m = json.load(open('contract/generated/manifest.json'))
+m = json.load(open('app/generated/manifest.json'))
 publish = m.get('dag', {}).get('publish', {})
 for k, v in publish.get('inputs', {}).get('args', {}).items():
     if isinstance(v, str) and '$.extract.outputs.' in v:

@@ -1047,12 +1047,17 @@ async def test_my_task(infra):
 ### Pytest fixtures provided by the framework
 
 ```python
-# conftest.py — import the autouse fixture to ensure registry isolation between tests
-from application_sdk.testing.fixtures import clean_app_registry  # noqa: F401
+# conftest.py — import to make the fixture available project-wide
+from application_sdk.testing.fixtures import clean_app_registry
+
+# test_my_app.py — list it as a parameter on each test that needs isolation
+async def test_something(clean_app_registry):
+    ...
 ```
 
 The `clean_app_registry` fixture resets `AppRegistry` and `TaskRegistry` between tests,
-preventing subclass registrations in one test from leaking into the next.
+preventing subclass registrations in one test from leaking into the next. It is not
+autouse — you must list it in the test's parameter list to activate it.
 
 ### MockCredentialStore
 
@@ -1132,7 +1137,7 @@ All of the following were removed in v3.0.0. They no longer exist — importing 
 | `application_sdk.activities.ActivitiesInterface` | `application_sdk.app.App` with `@task` |
 | `application_sdk.activities.common.models.ActivityStatistics` | `application_sdk.common.models.TaskStatistics` |
 | `application_sdk.activities.common.models.ActivityResult` | `application_sdk.common.models.TaskResult` |
-| `application_sdk.activities.common.utils` | `application_sdk.execution._temporal.activity_utils` |
+| `application_sdk.activities.common.utils` | `application_sdk.execution` (`build_output_path`, `get_object_store_prefix` are re-exported; direct activity internals should be accessed via `Input.workflow_id` instead) |
 | `application_sdk.activities.metadata_extraction.base` | `application_sdk.templates.BaseMetadataExtractor` |
 | `application_sdk.activities.metadata_extraction.sql` | `application_sdk.templates.SqlMetadataExtractor` |
 | `application_sdk.activities.metadata_extraction.incremental` | `application_sdk.templates.IncrementalSqlMetadataExtractor` |

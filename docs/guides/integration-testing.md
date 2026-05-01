@@ -122,7 +122,7 @@ Auth responses include a `data` envelope:
 
 Preflight responses use named sub-check keys under `data` (the first character of each check name is lower-cased; spaces and inner capitals are preserved), with a `success` field inside each sub-check:
 ```json
-{"success": true, "data": {"status": "ready", "connectivityCheck": {"success": true, "message": "OK"}}}
+{"success": true, "data": {"connectivityCheck": {"success": true, "message": "OK"}}}
 ```
 
 ### Lazy Evaluation
@@ -300,7 +300,6 @@ preflight_scenarios = [
         }),
         assert_that={
             "success": equals(True),
-            "data.status": equals("ready"),
             "data.connectivityCheck.success": equals(True),
         }
     ),

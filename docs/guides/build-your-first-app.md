@@ -294,7 +294,6 @@ def infra():
                 "test-cred": json.dumps({
                     "type": "bearer_token",
                     "token": "fake-token",
-                    "org": "test-org",
                 })
             })
         )

@@ -697,12 +697,16 @@ async def test_fetch_data():
 #### clean_app_registry fixture
 
 `App.__init_subclass__` registers every subclass in `AppRegistry` at import time. If test
-modules define `App` subclasses, they can bleed into each other. Import the autouse fixture
-to reset the registries between tests:
+modules define `App` subclasses, they can bleed into each other. Import the fixture and
+add it to each test that needs registry isolation:
 
 ```python
-# conftest.py
-from application_sdk.testing.fixtures import clean_app_registry  # noqa: F401
+# conftest.py — makes the fixture available project-wide
+from application_sdk.testing.fixtures import clean_app_registry
+
+# test_my_app.py
+async def test_something(clean_app_registry):
+    ...
 ```
 
 #### MockHeartbeatController

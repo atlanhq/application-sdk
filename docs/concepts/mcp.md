@@ -122,16 +122,25 @@ For any MCP-compatible client, use the streamable HTTP transport:
 
 ### Custom Tool Names and Descriptions
 
-Customize how your tools appear to AI assistants:
+Customize how your tools appear to AI assistants. `@mcp_tool` must be stacked above `@task`
+— only `@task`-registered functions are discovered by the MCP server:
 
 ```python
-@mcp_tool(
-    name="data_fetcher",
-    description="Retrieve and process data from external APIs with advanced filtering"
-)
-async def fetch_data(self, query: str, filters: dict = None) -> dict:
-    # Implementation
-    pass
+class FetchInput(Input):
+    query: str
+    filters: dict[str, str] = {}
+
+class FetchOutput(Output):
+    result: str
+
+class MyApp(App):
+    @task
+    @mcp_tool(
+        name="data_fetcher",
+        description="Retrieve and process data from external APIs with advanced filtering"
+    )
+    async def fetch_data(self, input: FetchInput) -> FetchOutput:
+        return FetchOutput(result=f"Data for {input.query}")
 ```
 
 ### Conditional Tool Exposure
@@ -139,13 +148,21 @@ async def fetch_data(self, query: str, filters: dict = None) -> dict:
 Control when tools are available:
 
 ```python
-@mcp_tool(
-    description="Admin-only data export function",
-    visible=False  # Disable this tool
-)
-async def export_sensitive_data(self, format: str) -> dict:
-    # This tool won't be exposed to AI assistants
-    pass
+class ExportInput(Input):
+    format: str
+
+class ExportOutput(Output):
+    path: str
+
+class MyApp(App):
+    @task
+    @mcp_tool(
+        description="Admin-only data export function",
+        visible=False  # Disable this tool
+    )
+    async def export_sensitive_data(self, input: ExportInput) -> ExportOutput:
+        # This tool won't be exposed to AI assistants
+        return ExportOutput(path="/exports/data")
 ```
 
 ## Development and Debugging

@@ -132,7 +132,7 @@ curl -s -X POST http://localhost:8000/workflows/v1/start \
 uv run pytest
 
 # Run specific test file with verbose output
-uv run pytest tests/unit/io/test_file.py -v -s
+uv run pytest tests/unit/storage/test_file_ref_sync.py -v -s
 
 # Run tests matching a pattern
 uv run pytest -k "test_name_pattern" -v

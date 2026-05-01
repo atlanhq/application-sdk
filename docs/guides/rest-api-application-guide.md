@@ -94,6 +94,7 @@ from __future__ import annotations
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     AuthInput, AuthOutput, AuthStatus,
+    MetadataInput, ApiMetadataOutput,
     PreflightInput, PreflightOutput, PreflightStatus,
 )
 
@@ -121,14 +122,14 @@ class MyConnectorHandler(Handler):
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         return PreflightOutput(status=PreflightStatus.READY, message="OK")
 
-    async def fetch_metadata(self, input, **kwargs):
+    async def fetch_metadata(self, input: MetadataInput) -> ApiMetadataOutput:
         # Metadata extraction is driven by the App, not the handler.
-        pass
+        return ApiMetadataOutput()
 ```
 
 ## App (Connector)
 
-The App subclasses `BaseMetadataExtractor`, which provides the `upload_to_atlan` task:
+The App subclasses `App` directly (REST connectors typically manage their own output pipeline):
 
 ```python
 # app/connector.py
