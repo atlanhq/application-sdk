@@ -4,8 +4,6 @@ import glob
 import json
 import os
 import re
-
-import orjson
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
     Any,
@@ -20,8 +18,14 @@ from typing import (
     Union,
 )
 
+import orjson
+
 from application_sdk.common.error_codes import CommonError
-from application_sdk.constants import TEMPORARY_PATH, UPSTREAM_OBJECT_STORE_NAME
+from application_sdk.constants import (
+    DEPLOYMENT_OBJECT_STORE_NAME,
+    TEMPORARY_PATH,
+    UPSTREAM_OBJECT_STORE_NAME,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
 from application_sdk.services.objectstore import ObjectStore
@@ -612,6 +616,11 @@ async def download_file_from_upload_response(
     return local_path
 
 
+#: Prefix on credential field values that indicates the file lives in the
+#: customer's DEPLOYMENT Dapr object store binding (configured during SDR setup).
+OBJECT_STORE_PREFIX = "objectstore://"
+
+
 async def resolve_credential_file(
     value: Optional[str],
     filename: str,
@@ -619,14 +628,23 @@ async def resolve_credential_file(
 ) -> Optional[str]:
     """Resolve a credential file field value to a local file path.
 
-    Handles two input formats transparently, allowing customers to choose
-    how they provide sensitive files based on their organisation's security policy:
+    Handles three input formats transparently, allowing customers to choose
+    how they provide sensitive files based on their organisation's security policy
+    and the size of the file:
 
-    1. **Object-store reference** (file uploaded via UI):
+    1. **Atlan object-store reference** (file uploaded via UI):
        ``{"key": "some/path", "rawName": "hiveadmin.keytab", "extension": ".keytab"}``
-       Downloads the binary from the Dapr-backed object store.
+       Downloads the binary from Atlan's Dapr-backed upload object store.
 
-    2. **Base64-encoded file content** (stored in customer's own secret store):
+    2. **Customer object-store path** (large files, SDR mode):
+       ``"objectstore://kerberos/hiveadmin.keytab"``
+       The file lives in the customer's own bucket — the same one wired up as
+       their ``DEPLOYMENT_OBJECT_STORE_NAME`` Dapr binding during SDR setup. The SDK
+       fetches it via the existing binding (no new credentials, cloud-agnostic, no
+       file-size ceiling beyond the Dapr gRPC max-body-size).
+       Recommended for files larger than secret-manager limits (typically 64KB).
+
+    3. **Base64-encoded file content** (small files, SDR mode):
        ``"BQIAAAABAAoASElWRS5MT0NBTA..."``
        Decodes the binary and writes it directly to disk.
        Used when the customer base64-encodes the file, stores it in their secret
@@ -634,11 +652,12 @@ async def resolve_credential_file(
        ``SecretStore.get_credentials()`` + Dapr at activity runtime.
 
     Args:
-        value:    Raw credential field value — either a JSON object-store reference
-                  or a raw base64-encoded string. Returns ``None`` if empty.
-        filename: Destination filename used for the base64 path
+        value:    Raw credential field value — JSON object-store reference, an
+                  ``objectstore://`` prefixed key, or a raw base64-encoded string.
+                  Returns ``None`` if empty.
+        filename: Destination filename used for the base64 and object-store paths
                   (e.g. ``"keytab.keytab"``, ``"krb5.conf"``, ``"ca_cert.pem"``).
-                  Ignored for the object-store path (filename is derived from the key).
+                  Ignored for the Atlan upload path (filename is derived from the key).
         dest_dir: Directory to write or download the file into.
 
     Returns:
@@ -648,20 +667,52 @@ async def resolve_credential_file(
     if not value:
         return None
 
-    # Detect format: JSON object-store reference vs raw base64 string
+    stripped = value.strip()
+
+    # 1. Atlan upload object store — JSON reference from the UI file picker
     try:
         parsed = orjson.loads(value)
         if isinstance(parsed, dict) and ("key" in parsed or "fileKey" in parsed):
-            # Object-store reference — delegate to existing download utility
             return await download_file_from_upload_response(value)
     except (orjson.JSONDecodeError, TypeError):
         pass
 
-    # Base64-encoded file content — decode and write to disk
+    # 2. Customer's DEPLOYMENT object store binding — explicit objectstore:// prefix
+    if stripped.startswith(OBJECT_STORE_PREFIX):
+        key = stripped[len(OBJECT_STORE_PREFIX) :]
+        # Reject empty keys, absolute paths, and path-traversal segments
+        if not key or key.startswith("/") or ".." in key.split("/"):
+            logger.error(
+                "Invalid object store key (empty / absolute / contains '..')",
+                extra={"filename": filename},
+            )
+            return None
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+            file_path = os.path.join(dest_dir, filename)
+            await ObjectStore.download_file(
+                source=key,
+                destination=file_path,
+                store_name=DEPLOYMENT_OBJECT_STORE_NAME,
+            )
+            logger.info(
+                "Resolved credential file from customer object store",
+                extra={"key": key, "path": file_path},
+            )
+            return file_path
+        except Exception:
+            logger.error(
+                "Failed to download credential file from customer object store",
+                extra={"key": key, "filename": filename},
+                exc_info=True,
+            )
+            return None
+
+    # 3. Base64-encoded file content — decode and write to disk
     try:
         os.makedirs(dest_dir, exist_ok=True)
         file_path = os.path.join(dest_dir, filename)
-        decoded_bytes = base64.b64decode(value.strip())
+        decoded_bytes = base64.b64decode(stripped)
         with open(file_path, "wb") as f:
             f.write(decoded_bytes)
         logger.info(
