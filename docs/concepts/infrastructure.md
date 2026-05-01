@@ -80,8 +80,6 @@ class StateStore(Protocol):
     async def list_keys(self, prefix: str = "") -> list[str]: ...
 ```
 
-Used by `App.persistent_state` to store durable workflow data across runs.
-
 ### SecretStore
 
 ```python
@@ -129,8 +127,6 @@ class MyConnector(App):
         value = await infra.state_store.load(f"checkpoint:{input.connection_id}")
         ...
 ```
-
-Or use the higher-level `App.persistent_state` accessor which wraps the state store with structured paths.
 
 ---
 
