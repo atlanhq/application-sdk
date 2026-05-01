@@ -1,0 +1,418 @@
+"""Unit tests for storage.reference using MemoryStore (no real I/O)."""
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.storage.errors import StorageError, StorageNotFoundError
+from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.ops import _get_bytes, _put
+from application_sdk.storage.reference import (
+    _sha256_hex_file,
+    _write_local_sidecar,
+    materialize_file_reference,
+    persist_file_reference,
+)
+
+
+@pytest.fixture
+def store():
+    return create_memory_store()
+
+
+def _hash_bytes(data: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(data)
+    return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+class TestSha256Helper:
+    def test_streaming_sha256_matches_one_shot(self, tmp_path) -> None:
+        f = tmp_path / "data.bin"
+        content = b"some bytes here"
+        f.write_bytes(content)
+        assert _sha256_hex_file(f) == _hash_bytes(content)
+
+    def test_empty_file(self, tmp_path) -> None:
+        f = tmp_path / "empty.bin"
+        f.write_bytes(b"")
+        assert _sha256_hex_file(f) == hashlib.sha256(b"").hexdigest()
+
+
+class TestWriteLocalSidecar:
+    def test_writes_sidecar(self, tmp_path) -> None:
+        local = tmp_path / "f.txt"
+        local.write_bytes(b"x")
+        _write_local_sidecar(str(local), "deadbeef")
+        assert (tmp_path / "f.txt.sha256").read_text() == "deadbeef"
+
+    def test_failure_swallowed(self, tmp_path) -> None:
+        # Pointing at a directory that doesn't exist → write fails → swallowed
+        bogus = str(tmp_path / "no_such_dir" / "x.txt")
+        # Should NOT raise
+        _write_local_sidecar(bogus, "abc")
+
+
+# ---------------------------------------------------------------------------
+# persist_file_reference
+# ---------------------------------------------------------------------------
+
+
+class TestPersistFileReference:
+    async def test_already_durable_short_circuits(self, store) -> None:
+        ref = FileReference(local_path="/tmp/x", is_durable=True, storage_path="k/x")
+        result = await persist_file_reference(store, ref)
+        assert result is ref
+
+    async def test_local_path_none_raises_storage_error(self, store) -> None:
+        """BLDX-1129 anchor: exercises function-local
+        `from application_sdk.storage.errors import StorageError`."""
+        ref = FileReference(local_path=None, is_durable=False)
+        with pytest.raises(StorageError):
+            await persist_file_reference(store, ref)
+
+    async def test_single_file_upload_with_explicit_key(self, store, tmp_path) -> None:
+        f = tmp_path / "data.bin"
+        f.write_bytes(b"payload")
+        ref = FileReference(local_path=str(f))
+        result = await persist_file_reference(store, ref, key="explicit/path.bin")
+        assert result.is_durable is True
+        assert result.storage_path == "explicit/path.bin"
+        # Stored content roundtrips
+        assert (
+            await _get_bytes("explicit/path.bin", store, normalize=False) == b"payload"
+        )
+        # Stored sidecar present
+        sidecar = await _get_bytes("explicit/path.bin.sha256", store, normalize=False)
+        assert sidecar is not None
+        assert sidecar.decode().strip() == _hash_bytes(b"payload")
+        # Local sidecar created
+        assert (tmp_path / "data.bin.sha256").read_text() == _hash_bytes(b"payload")
+
+    async def test_single_file_generates_storage_path_when_no_key(
+        self, store, tmp_path
+    ) -> None:
+        f = tmp_path / "data.txt"
+        f.write_bytes(b"abc")
+        ref = FileReference(local_path=str(f), tier=StorageTier.TRANSIENT)
+        result = await persist_file_reference(store, ref)
+        assert result.is_durable is True
+        assert result.storage_path is not None
+        # TRANSIENT tier → starts with file_refs/
+        assert result.storage_path.startswith("file_refs/")
+        assert result.storage_path.endswith(".txt")
+
+    async def test_directory_upload(self, store, tmp_path) -> None:
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+        ref = FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
+
+        result = await persist_file_reference(store, ref)
+        assert result.is_durable is True
+        assert result.file_count == 2
+        # Verify each uploaded file plus its sidecar
+        prefix = result.storage_path
+        assert prefix is not None
+        a_key = f"{prefix}sub/a.txt"
+        b_key = f"{prefix}b.txt"
+        assert await _get_bytes(a_key, store, normalize=False) == b"a"
+        assert await _get_bytes(b_key, store, normalize=False) == b"b"
+        # Sidecars
+        a_side = await _get_bytes(a_key + ".sha256", store, normalize=False)
+        assert a_side is not None
+        assert a_side.decode().strip() == _hash_bytes(b"a")
+
+    async def test_retained_tier_requires_run_prefix(self, store, tmp_path) -> None:
+        f = tmp_path / "data.bin"
+        f.write_bytes(b"x")
+        ref = FileReference(local_path=str(f), tier=StorageTier.RETAINED)
+        with pytest.raises(ValueError):
+            await persist_file_reference(store, ref)
+
+    async def test_retained_tier_with_output_path(self, store, tmp_path) -> None:
+        f = tmp_path / "data.bin"
+        f.write_bytes(b"x")
+        ref = FileReference(local_path=str(f), tier=StorageTier.RETAINED)
+        result = await persist_file_reference(store, ref, output_path="run/abc/123")
+        assert result.is_durable is True
+        assert result.storage_path is not None
+        assert result.storage_path.startswith("run/abc/123/file_refs/")
+
+    async def test_sidecar_write_failure_swallowed(self, store, tmp_path) -> None:
+        """If _put for sidecar fails, persist still returns durable ref."""
+        f = tmp_path / "data.bin"
+        f.write_bytes(b"x")
+        ref = FileReference(local_path=str(f))
+
+        # Patch the inline-imported _put used inside persist_file_reference
+        # to raise on sidecar puts (key endswith .sha256), pass-through otherwise.
+        from application_sdk.storage import ops as ops_mod
+
+        real_put = ops_mod._put
+
+        async def flaky_put(key, data, st, **kwargs):
+            if key.endswith(".sha256"):
+                raise RuntimeError("sidecar fail")
+            return await real_put(key, data, st, **kwargs)
+
+        with patch.object(ops_mod, "_put", side_effect=flaky_put):
+            result = await persist_file_reference(store, ref, key="some/key.bin")
+        assert result.is_durable is True
+
+    async def test_directory_sidecar_write_failure_swallowed(
+        self, store, tmp_path
+    ) -> None:
+        (tmp_path / "a.txt").write_bytes(b"a")
+        ref = FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
+
+        from application_sdk.storage import ops as ops_mod
+
+        real_put = ops_mod._put
+
+        async def flaky_put(key, data, st, **kwargs):
+            if key.endswith(".sha256"):
+                raise RuntimeError("sidecar fail")
+            return await real_put(key, data, st, **kwargs)
+
+        with patch.object(ops_mod, "_put", side_effect=flaky_put):
+            result = await persist_file_reference(store, ref)
+        assert result.is_durable is True
+        assert result.file_count == 1
+
+
+# ---------------------------------------------------------------------------
+# materialize_file_reference
+# ---------------------------------------------------------------------------
+
+
+class TestMaterializeFileReference:
+    async def test_non_durable_short_circuits(self, store) -> None:
+        ref = FileReference(local_path="/tmp/x", is_durable=False)
+        result = await materialize_file_reference(store, ref)
+        assert result is ref
+
+    async def test_no_storage_path_short_circuits(self, store) -> None:
+        ref = FileReference(local_path="/tmp/x", is_durable=True, storage_path=None)
+        result = await materialize_file_reference(store, ref)
+        assert result is ref
+
+    async def test_single_file_fast_path_with_matching_sidecar(
+        self, store, tmp_path
+    ) -> None:
+        """File present locally + remote sidecar matches → no re-download."""
+        # Upload a file via persist to set up store + sidecar.
+        f = tmp_path / "data.bin"
+        f.write_bytes(b"payload")
+        # Stage file in store + remote sidecar
+        await _put("k/data.bin", b"payload", store, normalize=False)
+        await _put(
+            "k/data.bin.sha256",
+            _hash_bytes(b"payload").encode(),
+            store,
+            normalize=False,
+        )
+        ref = FileReference(
+            local_path=str(f), is_durable=True, storage_path="k/data.bin"
+        )
+        result = await materialize_file_reference(store, ref)
+        # Returned the same ref; local sidecar written.
+        assert result is ref
+        assert (tmp_path / "data.bin.sha256").read_text() == _hash_bytes(b"payload")
+
+    async def test_single_file_hash_mismatch_redownloads(self, store, tmp_path) -> None:
+        """Local file present, remote sidecar exists but mismatches → re-download."""
+        await _put("k/data.bin", b"correct", store, normalize=False)
+        await _put(
+            "k/data.bin.sha256",
+            _hash_bytes(b"correct").encode(),
+            store,
+            normalize=False,
+        )
+        # Local file has wrong content
+        f = tmp_path / "data.bin"
+        f.write_bytes(b"WRONG")
+        ref = FileReference(
+            local_path=str(f), is_durable=True, storage_path="k/data.bin"
+        )
+        result = await materialize_file_reference(store, ref)
+        # local_path was rewritten with correct content
+        assert Path(result.local_path).read_bytes() == b"correct"
+
+    async def test_single_file_no_sidecar_redownloads(self, store, tmp_path) -> None:
+        """Local file exists; no stored sidecar → conservative re-download path."""
+        await _put("k/data.bin", b"server", store, normalize=False)
+        f = tmp_path / "data.bin"
+        f.write_bytes(b"local")
+        ref = FileReference(
+            local_path=str(f), is_durable=True, storage_path="k/data.bin"
+        )
+        result = await materialize_file_reference(store, ref)
+        assert Path(result.local_path).read_bytes() == b"server"
+
+    async def test_single_file_no_local_path_uses_tempfile(
+        self, store, tmp_path
+    ) -> None:
+        await _put("k/file.bin", b"hello", store, normalize=False)
+        await _put(
+            "k/file.bin.sha256",
+            _hash_bytes(b"hello").encode(),
+            store,
+            normalize=False,
+        )
+        ref = FileReference(local_path=None, is_durable=True, storage_path="k/file.bin")
+        result = await materialize_file_reference(store, ref, local_dir=str(tmp_path))
+        assert result.local_path is not None
+        assert Path(result.local_path).read_bytes() == b"hello"
+        assert result.local_path.endswith(".bin")
+
+    async def test_single_file_no_local_path_no_local_dir(self, store) -> None:
+        """Without local_path or local_dir, uses system tmp."""
+        await _put("k/x.txt", b"sys-temp", store, normalize=False)
+        await _put(
+            "k/x.txt.sha256",
+            _hash_bytes(b"sys-temp").encode(),
+            store,
+            normalize=False,
+        )
+        ref = FileReference(is_durable=True, storage_path="k/x.txt")
+        result = await materialize_file_reference(store, ref)
+        assert result.local_path is not None
+        assert Path(result.local_path).read_bytes() == b"sys-temp"
+        # Cleanup
+        Path(result.local_path).unlink(missing_ok=True)
+        Path(result.local_path + ".sha256").unlink(missing_ok=True)
+
+    async def test_single_file_not_found_raises(self, store, tmp_path) -> None:
+        """Storage path absent → StorageNotFoundError.
+
+        BLDX-1129 anchor: exercises function-local imports of
+        `download_file`, `StorageNotFoundError`, and `list_keys`.
+        """
+        ref = FileReference(
+            local_path=str(tmp_path / "absent.bin"),
+            is_durable=True,
+            storage_path="missing/key.bin",
+        )
+        with pytest.raises(StorageNotFoundError):
+            await materialize_file_reference(store, ref)
+
+    async def test_single_file_sha256_mismatch_after_download_raises(
+        self, store, tmp_path
+    ) -> None:
+        """If downloaded hash != stored sidecar hash → StorageError."""
+        await _put("k/x.bin", b"server", store, normalize=False)
+        # Stored sidecar lies about the hash
+        await _put(
+            "k/x.bin.sha256", b"deadbeef" * 8, store, normalize=False
+        )  # wrong hash
+        ref = FileReference(
+            local_path=str(tmp_path / "out.bin"),
+            is_durable=True,
+            storage_path="k/x.bin",
+        )
+        with pytest.raises(StorageError):
+            await materialize_file_reference(store, ref)
+
+    async def test_directory_materialize(self, store, tmp_path) -> None:
+        """Directory prefix → all files re-downloaded."""
+        await _put("dirkey/a.txt", b"alpha", store, normalize=False)
+        await _put("dirkey/sub/b.txt", b"beta", store, normalize=False)
+        # Sidecars under the prefix should be ignored on listing
+        await _put("dirkey/a.txt.sha256", b"x" * 64, store, normalize=False)
+
+        local_dir = tmp_path / "out"
+        ref = FileReference(
+            local_path=str(local_dir),
+            is_durable=True,
+            storage_path="dirkey",
+        )
+        result = await materialize_file_reference(store, ref)
+        assert result.file_count == 2
+        assert (local_dir / "a.txt").read_bytes() == b"alpha"
+        assert (local_dir / "sub" / "b.txt").read_bytes() == b"beta"
+
+    async def test_directory_materialize_no_local_path_uses_local_dir(
+        self, store, tmp_path
+    ) -> None:
+        await _put("dk/a.txt", b"alpha", store, normalize=False)
+        ref = FileReference(local_path=None, is_durable=True, storage_path="dk")
+        result = await materialize_file_reference(
+            store, ref, local_dir=str(tmp_path / "ldir")
+        )
+        assert result.local_path == str(tmp_path / "ldir")
+        assert (tmp_path / "ldir" / "a.txt").read_bytes() == b"alpha"
+
+    async def test_directory_materialize_no_local_path_no_local_dir(
+        self, store
+    ) -> None:
+        await _put("dk2/x.txt", b"data", store, normalize=False)
+        ref = FileReference(local_path=None, is_durable=True, storage_path="dk2")
+        result = await materialize_file_reference(store, ref)
+        assert result.local_path is not None
+        # Cleanup
+        Path(result.local_path).joinpath("x.txt").unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Sidecar fetch error handling (best-effort)
+# ---------------------------------------------------------------------------
+
+
+class TestStoredSidecarFailureSwallowed:
+    async def test_download_returns_none_raises_not_found(
+        self, store, tmp_path
+    ) -> None:
+        """If download_file returns None (no data), raise StorageNotFoundError.
+
+        download_file is patched to simulate the rare 'returned None' branch —
+        with MemoryStore it normally raises, never returns None.
+        """
+        # Stage list_keys such that the storage_path is treated as single-file
+        # (i.e. no sub-keys). We have no objects under "phantom/key.bin/".
+        from application_sdk.storage import ops as ops_mod
+
+        async def fake_download(*args, **kwargs):
+            return None
+
+        ref = FileReference(
+            local_path=str(tmp_path / "out.bin"),
+            is_durable=True,
+            storage_path="phantom/key.bin",
+        )
+        with patch.object(ops_mod, "download_file", side_effect=fake_download):
+            with pytest.raises(StorageNotFoundError):
+                await materialize_file_reference(store, ref)
+
+    async def test_get_stored_sidecar_failure_falls_back_to_redownload(
+        self, store, tmp_path
+    ) -> None:
+        """If sidecar fetch raises, materialize falls through (no crash)."""
+        await _put("k/x.bin", b"actual", store, normalize=False)
+        # Patch the function-local import inside reference.py
+        f = tmp_path / "x.bin"
+        f.write_bytes(b"actual")
+        from application_sdk.storage import ops as ops_mod
+
+        real_get_bytes = ops_mod._get_bytes
+
+        async def flaky_get_bytes(key, st, **kwargs):
+            if key.endswith(".sha256"):
+                raise RuntimeError("transient sidecar failure")
+            return await real_get_bytes(key, st, **kwargs)
+
+        ref = FileReference(local_path=str(f), is_durable=True, storage_path="k/x.bin")
+        with patch.object(ops_mod, "_get_bytes", side_effect=flaky_get_bytes):
+            # Sidecar fetch fails → returns None → conservative re-download path.
+            result = await materialize_file_reference(store, ref)
+        assert Path(result.local_path).read_bytes() == b"actual"

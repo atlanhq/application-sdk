@@ -34,7 +34,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from application_sdk.constants import MCP_METADATA_KEY
-from application_sdk.decorators.mcp_tool import mcp_tool
+from application_sdk.server.mcp.decorators import mcp_tool
 
 
 class TestMCPToolDecorator:
@@ -417,7 +417,6 @@ class TestMCPToolDecorator:
             # Test that it doesn't change when environment variables change
             os.environ["ENABLE_MCP"] = "true"
             os.environ["APPLICATION_NAME"] = "test_app"
-            os.environ["WORKFLOW_HOST"] = "test_host"
 
             # Re-import to ensure the constant is still the same
             from application_sdk.constants import MCP_METADATA_KEY as MCP_METADATA_KEY_2

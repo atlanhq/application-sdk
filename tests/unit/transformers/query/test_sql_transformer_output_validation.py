@@ -50,11 +50,11 @@ def test_transform_metadata_output_validation(sql_transformer):
     """
     test_files = get_raw_json_files()
     assert len(test_files) > 0, "No test files found in resources directory"
-    logger.info(f"Found {len(test_files)} test files to process")
+    logger.info("Found %d test files to process", len(test_files))
 
     for json_file in test_files:
         file_name = os.path.basename(json_file).removesuffix(".json").upper()
-        logger.info(f"Testing for Asset: {file_name}")
+        logger.info("Testing for Asset: %s", file_name)
 
         # Read the json file into a Daft DataFrame
         input_df = daft.read_json(json_file)
@@ -86,17 +86,17 @@ def test_transform_metadata_output_validation(sql_transformer):
         # assert that the number of records in the transformed output is the same as the expected output
         assert len(transformed_result_ouput) == len(expected_transformed_output)
         logger.info(
-            f"Validating {len(transformed_result_ouput)} records for {file_name}"
+            "Validating %d records for %s", len(transformed_result_ouput), file_name
         )
 
         # validate each record in the transformed output with the expected output
         for idx, (expected, actual) in enumerate(
             zip(expected_transformed_output, transformed_result_ouput)
         ):
-            logger.info(f"Validating record {idx + 1} of {file_name}")
+            logger.info("Validating record %d of %s", idx + 1, file_name)
             remove_run_time_sensitive_fields(expected)
             remove_run_time_sensitive_fields(actual)
             assert expected == actual
-            logger.info(f"Record {idx + 1} validation successful")
+            logger.info("Record %d validation successful", idx + 1)
 
-        logger.info(f"All records validated successfully for {file_name}")
+        logger.info("All records validated successfully for %s", file_name)

@@ -2,31 +2,20 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, Optional
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.trace import SpanKind
-from pydantic import BaseModel
 
 from application_sdk.constants import (
-    APP_SDK_VERSION,
-    APP_TYPE,
-    APPLICATION_VERSION,
     ENABLE_OTLP_TRACES,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
-    OTEL_RESOURCE_ATTRIBUTES,
-    OTEL_WF_NODE_NAME,
-    PUBLISHED_AT,
-    RELEASE_CHANNEL,
-    RELEASE_ID,
     SERVICE_NAME,
-    SERVICE_VERSION,
     TRACES_BATCH_SIZE,
     TRACES_CLEANUP_ENABLED,
     TRACES_FILE_NAME,
@@ -34,41 +23,19 @@ from application_sdk.constants import (
     TRACES_RETENTION_DAYS,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.models import TraceRecord
 from application_sdk.observability.observability import AtlanObservability
-from application_sdk.observability.utils import get_observability_dir
+from application_sdk.observability.utils import (
+    build_otel_resource,
+    get_observability_dir,
+)
 
+__all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces"]
 
-class TraceRecord(BaseModel):
-    """A Pydantic model representing a trace record in the system.
-
-    This model defines the structure for distributed tracing data with fields for
-    trace identification, timing, status, and additional context.
-
-    Attributes:
-        timestamp (float): Unix timestamp when the trace was recorded
-        trace_id (str): Unique identifier for the trace
-        span_id (str): Unique identifier for this span
-        parent_span_id (Optional[str]): ID of the parent span, if any
-        name (str): Name of the trace/span
-        kind (str): Type of span (SERVER, CLIENT, INTERNAL, etc.)
-        status_code (str): Status of the trace (OK, ERROR, etc.)
-        status_message (Optional[str]): Additional status information
-        attributes (Dict[str, Any]): Key-value pairs for trace context
-        events (Optional[list[Dict[str, Any]]]): List of events in the trace
-        duration_ms (float): Duration of the trace in milliseconds
-    """
-
-    timestamp: float
-    trace_id: str
-    span_id: str
-    parent_span_id: Optional[str] = None
-    name: str
-    kind: str  # SERVER, CLIENT, INTERNAL, etc.
-    status_code: str  # OK, ERROR, etc.
-    status_message: Optional[str] = None
-    attributes: Dict[str, Any]
-    events: Optional[list[Dict[str, Any]]] = None
-    duration_ms: float
+# SDK logger for module-level diagnostics (init failures, etc.). Uses the SDK
+# logger rather than the root `logging` module so messages are routed through
+# the configured handlers.
+_module_logger = get_logger(__name__)
 
 
 class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
@@ -85,7 +52,12 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
     - Parquet file storage
     """
 
-    _flush_task_started = False
+    _flush_task_started: ClassVar[bool] = False
+
+    @classmethod
+    def _reset_for_testing(cls) -> None:
+        """Reset initialization state for test isolation."""
+        cls._flush_task_started = False
 
     def __init__(self):
         """Initialize the traces adapter with configuration and setup.
@@ -111,16 +83,19 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         # Start periodic flush task if not already started
         if not AtlanTracesAdapter._flush_task_started:
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
+                try:
+                    loop = asyncio.get_running_loop()
                     loop.create_task(self._periodic_flush())
-                else:
+                except RuntimeError:
                     threading.Thread(
                         target=self._start_asyncio_flush, daemon=True
                     ).start()
                 AtlanTracesAdapter._flush_task_started = True
-            except Exception as e:
-                logging.error(f"Failed to start traces flush task: {e}")
+            except Exception:
+                # BLDX-1189: switched from root `logging.error` to the SDK
+                # logger here. Six other `logging.*` call sites in this file
+                # still use the root logger; tracked for a follow-up sweep.
+                _module_logger.error("Failed to start traces flush task", exc_info=True)
 
     def _setup_otel_traces(self):
         """Set up OpenTelemetry traces exporter and configuration.
@@ -134,41 +109,13 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
 
         Falls back to console-only tracing if setup fails.
         """
+        # Pre-assign so attributes always exist if setup fails before they are
+        # bound. Downstream callers must check for None.
+        self.tracer_provider = None
+        self.tracer = None
         try:
-            # Get workflow node name for Argo environment
-            workflow_node_name = OTEL_WF_NODE_NAME
-
-            # Parse resource attributes
-            resource_attributes = self._parse_otel_resource_attributes(
-                OTEL_RESOURCE_ATTRIBUTES
-            )
-
-            # Add default service attributes if not present
-            if "service.name" not in resource_attributes:
-                resource_attributes["service.name"] = SERVICE_NAME
-            if "service.version" not in resource_attributes:
-                resource_attributes["service.version"] = SERVICE_VERSION
-
-            # App vitals metadata from Local Marketplace
-            if APPLICATION_VERSION:
-                resource_attributes["app.version"] = APPLICATION_VERSION
-            if RELEASE_ID:
-                resource_attributes["app.release_id"] = RELEASE_ID
-            if RELEASE_CHANNEL:
-                resource_attributes["app.release_channel"] = RELEASE_CHANNEL
-            if APP_SDK_VERSION:
-                resource_attributes["app.sdk_version"] = APP_SDK_VERSION
-            if APP_TYPE:
-                resource_attributes["app.type"] = APP_TYPE
-            if PUBLISHED_AT:
-                resource_attributes["app.published_at"] = PUBLISHED_AT
-
-            # Add workflow node name if running in Argo
-            if workflow_node_name:
-                resource_attributes["k8s.workflow.node.name"] = workflow_node_name
-
             # Create resource
-            resource = Resource.create(resource_attributes)
+            resource = build_otel_resource()
 
             # Create exporters
             exporters = []
@@ -185,9 +132,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                         timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
                     )
                     exporters.append(otlp_exporter)
-                except Exception as e:
+                except Exception:
                     logging.warning(
-                        f"Failed to setup OTLP exporter: {e}. Falling back to console only."
+                        "Failed to setup OTLP exporter, falling back to console only",
+                        exc_info=True,
                     )
 
             # Create span processors for each exporter
@@ -214,8 +162,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             # Create tracer
             self.tracer = self.tracer_provider.get_tracer(SERVICE_NAME)
 
-        except Exception as e:
-            logging.error(f"Failed to setup OpenTelemetry traces: {e}")
+        except Exception:
+            logging.error("Failed to setup OpenTelemetry traces", exc_info=True)
             # Fall back to console-only tracing
             self._setup_console_only_traces()
 
@@ -229,14 +177,13 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         - Initializes tracer provider
         - Creates tracer for the service
         """
+        # Pre-assign so attributes always exist if setup fails before they are
+        # bound. Downstream callers must check for None.
+        self.tracer_provider = None
+        self.tracer = None
         try:
             # Create resource with basic attributes
-            resource = Resource.create(
-                {
-                    "service.name": SERVICE_NAME,
-                    "service.version": SERVICE_VERSION,
-                }
-            )
+            resource = build_otel_resource()
 
             # Create console exporter
             console_exporter = ConsoleSpanExporter()
@@ -259,33 +206,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             # Create tracer
             self.tracer = self.tracer_provider.get_tracer(SERVICE_NAME)
 
-        except Exception as e:
-            logging.error(f"Failed to setup console-only tracing: {e}")
-
-    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
-        """Parse OpenTelemetry resource attributes from environment variable.
-
-        Args:
-            env_var (str): Comma-separated string of key-value pairs
-
-        Returns:
-            dict[str, str]: Dictionary of parsed resource attributes
-
-        Example:
-            Input: "service.name=myapp,service.version=1.0"
-            Output: {"service.name": "myapp", "service.version": "1.0"}
-        """
-        try:
-            if env_var:
-                attributes = env_var.split(",")
-                return {
-                    item.split("=")[0].strip(): item.split("=")[1].strip()
-                    for item in attributes
-                    if "=" in item
-                }
-        except Exception as e:
-            logging.error(f"Failed to parse OTLP resource attributes: {e}")
-        return {}
+        except Exception:
+            logging.error("Failed to setup console-only tracing", exc_info=True)
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic trace flushing.
@@ -392,6 +314,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         Raises:
             Exception: If sending fails, logs error and continues
         """
+        if self.tracer is None:
+            # Setup failed and left the adapter without a tracer; skip silently
+            # rather than AttributeError on every emit.
+            return
         try:
             # Convert string kind to SpanKind enum
             span_kind = self._str_to_span_kind(trace_record.kind)
@@ -425,8 +351,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                             timestamp=timestamp_nanos,
                         )
 
-        except Exception as e:
-            logging.error(f"Error sending trace to OpenTelemetry: {e}")
+        except Exception:
+            logging.error("Error sending trace to OpenTelemetry", exc_info=True)
 
     def _log_to_console(self, trace_record: TraceRecord):
         """Log trace to console using the logger.
@@ -457,8 +383,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
 
             logger = get_logger()
             logger.tracing(log_message)
-        except Exception as e:
-            logging.error(f"Error logging trace to console: {e}")
+        except Exception:
+            logging.error("Error logging trace to console", exc_info=True)
 
     def record_trace(
         self,
@@ -509,8 +435,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             # Add record using base class method
             self.add_record(trace_record)
 
-        except Exception as e:
-            logging.error(f"Error recording trace: {e}")
+        except Exception:
+            logging.error("Error recording trace", exc_info=True)
             raise
 
 

@@ -7,8 +7,9 @@ This directory contains the core utilities for incremental SQL metadata extracti
 The incremental extraction framework enables efficient metadata extraction by:
 1. Tracking changes via marker timestamps
 2. Extracting only modified assets instead of full extractions
-3. Preserving ancestral state for unchanged entities
-4. Generating incremental diffs for efficient publishing
+3. Lightweight column copy from transformed data (no ancestral merge)
+4. Detecting deleted tables and columns via DuckDB set-difference operations
+5. Generating incremental diffs for efficient publishing
 
 ## Architecture
 
@@ -56,8 +57,7 @@ application_sdk/common/incremental/
 │   ├── state_reader.py        # Download current state from S3
 │   ├── state_writer.py        # Create and upload current state snapshot
 │   ├── table_scope.py         # Table scope detection and state management
-│   ├── ancestral_merge.py     # Column merging for unchanged tables
-│   └── incremental_diff.py    # Diff generation for changed entities
+│   └── incremental_diff.py    # Diff generation with deletion detection
 └── storage/                   # Storage backends
     ├── duckdb_utils.py        # DuckDB connection management
     └── rocksdb_utils.py       # RocksDB disk-backed state storage
@@ -86,10 +86,9 @@ application_sdk/common/incremental/
 | File | Purpose |
 |------|---------|
 | `state_reader.py` | Download previous run's current-state snapshot from S3 |
-| `state_writer.py` | Create new current-state snapshot with ancestral merge and upload to S3 |
+| `state_writer.py` | Create new current-state snapshot with lightweight column copy and upload to S3 |
 | `table_scope.py` | Detect table incremental states (CREATED/UPDATED/NO CHANGE) via DuckDB queries |
-| `ancestral_merge.py` | Merge current columns with ancestral data for NO CHANGE tables |
-| `incremental_diff.py` | Generate folder with only changed assets for efficient publishing |
+| `incremental_diff.py` | Generate diff with deletion detection for changed/removed assets |
 
 #### Key Functions
 
@@ -108,11 +107,8 @@ application_sdk/common/incremental/
 - `get_current_table_scope()` - Extract table qualified names and incremental states
 - `get_table_qns_from_columns()` - Extract table qualified names from column files
 
-**ancestral_merge.py:**
-- `merge_ancestral_columns()` - Merge current + ancestral columns for new state
-
 **incremental_diff.py:**
-- `create_incremental_diff()` - Create diff folder with only changed entities
+- `create_incremental_diff()` - Create diff folder with deletion detection for changed/removed entities
 
 ### Storage Backends (storage/)
 
@@ -155,18 +151,15 @@ Tables are classified based on comparison with previous state:
 |-------|-------------|-----------------|
 | `CREATED` | New table (not in previous state) | Extract fresh columns |
 | `UPDATED` | Modified table (DDL changed) | Extract fresh columns |
-| `NO CHANGE` | Unchanged table | Use ancestral columns |
+| `NO CHANGE` | Unchanged table | No column extraction needed |
 | `BACKFILL` | Needs backfill (custom logic) | Extract fresh columns |
 
-### Ancestral Column Merge
+### Lightweight Column Copy + Deletion Detection
 
-For unchanged tables, we preserve the previous run's column data instead of re-extracting:
-
-```
-Current Columns (CREATED/UPDATED tables)  +  Ancestral Columns (NO CHANGE tables)
-                      ↓                                        ↓
-                                 New Current State
-```
+Columns are copied directly from the transformed output (no ancestral merge). Deletion
+detection uses DuckDB set-difference operations to identify:
+- **Deleted tables**: tables present in previous state but absent from current extraction
+- **Deleted columns**: columns removed from UPDATED tables (compared via DuckDB queries)
 
 ### Incremental Diff
 

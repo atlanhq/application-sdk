@@ -8,6 +8,7 @@ import redis.asyncio as async_redis
 from redis.exceptions import ConnectionError, RedisError, TimeoutError
 
 from application_sdk.common.error_codes import ClientError
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     IS_LOCKING_DISABLED,
     REDIS_HOST,
@@ -31,13 +32,13 @@ def _handle_redis_error(e: Exception) -> NoReturn:
         ClientError: Appropriate ClientError based on exception type
     """
     if isinstance(e, ConnectionError):
-        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}")
+        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}") from e
     elif isinstance(e, TimeoutError):
-        raise ClientError(f"{ClientError.REDIS_TIMEOUT_ERROR}: {e}")
+        raise ClientError(f"{ClientError.REDIS_TIMEOUT_ERROR}: {e}") from e
     elif isinstance(e, RedisError):
-        raise ClientError(f"{ClientError.REDIS_PROTOCOL_ERROR}: {e}")
+        raise ClientError(f"{ClientError.REDIS_PROTOCOL_ERROR}: {e}") from e
     else:
-        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}")
+        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}") from e
 
 
 class LockReleaseResult(Enum):
@@ -73,9 +74,6 @@ class BaseRedisClient:
         if not REDIS_PASSWORD or (
             not REDIS_SENTINEL_HOSTS and not (REDIS_HOST and REDIS_PORT)
         ):
-            logger.error(
-                "Redis configuration invalid: REDIS_PASSWORD is required and either REDIS_SENTINEL_HOSTS or REDIS_HOST/REDIS_PORT must be configured"
-            )
             raise ClientError(
                 f"{ClientError.REQUEST_VALIDATION_ERROR}: Redis configuration invalid - REDIS_PASSWORD is required and either REDIS_SENTINEL_HOSTS or REDIS_HOST/REDIS_PORT must be configured"
             )
@@ -97,13 +95,11 @@ class BaseRedisClient:
                 for host, port in [host_port.strip().rsplit(":", 1)]
             ]
         except ValueError as e:
-            logger.error(
-                f"Invalid Sentinel host format in REDIS_SENTINEL_HOSTS '{REDIS_SENTINEL_HOSTS}': {e}"
-            )
-            raise
+            raise rewrap(
+                e, "Invalid Sentinel host format in REDIS_SENTINEL_HOSTS"
+            ) from e
 
         if not sentinel_hosts:
-            logger.error("No Sentinel hosts configured")
             raise ClientError(
                 f"{ClientError.REQUEST_VALIDATION_ERROR}: No Sentinel hosts configured"
             )
@@ -127,7 +123,10 @@ class BaseRedisClient:
         """
         if not isinstance(result, int):
             logger.error(
-                f"Unexpected eval result type for {resource_id}: {type(result)}, value: {result}"
+                "Unexpected eval result type: resource_id=%s type=%s value=%s",
+                resource_id,
+                type(result),
+                result,
             )
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
@@ -143,7 +142,11 @@ class BaseRedisClient:
         elif result == -2:
             return False, LockReleaseResult.WRONG_OWNER
         else:
-            logger.error(f"Unknown Redis eval result for {resource_id}: {result}")
+            logger.error(
+                "Unknown Redis eval result: resource_id=%s result=%s",
+                resource_id,
+                result,
+            )
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -178,14 +181,16 @@ class RedisClient(BaseRedisClient):
             self.redis_client.ping()
             logger.info("Sync Redis connection established for strict locking")
 
+        except ClientError:
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
 
     def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel using sync client."""
         sentinel_hosts = self._parse_sentinel_hosts()
-        logger.info(f"Connecting to Redis via sync Sentinel: {sentinel_hosts}")
-        logger.info(f"Service name: {REDIS_SENTINEL_SERVICE_NAME}")
+        logger.info("Connecting to Redis via sync Sentinel: %s", sentinel_hosts)
+        logger.info("Sentinel service name: %s", REDIS_SENTINEL_SERVICE_NAME)
 
         try:
             # Create Sentinel with password
@@ -203,7 +208,11 @@ class RedisClient(BaseRedisClient):
 
     def _connect_standalone(self) -> None:
         """Connect to standalone Redis instance using sync client."""
-        logger.debug(f"Connecting to standalone sync Redis: {REDIS_HOST}:{REDIS_PORT}")
+        logger.debug(
+            "Connecting to standalone sync Redis: host=%s port=%s",
+            REDIS_HOST,
+            REDIS_PORT,
+        )
 
         try:
             self.redis_client = redis.Redis(
@@ -219,8 +228,8 @@ class RedisClient(BaseRedisClient):
             try:
                 self.redis_client.close()
                 logger.info("Sync Redis connection closed")
-            except Exception as e:
-                logger.error(f"Error closing sync Redis connection: {e}")
+            except Exception:
+                logger.error("Error closing sync Redis connection", exc_info=True)
             finally:
                 self.redis_client = None
 
@@ -250,7 +259,6 @@ class RedisClient(BaseRedisClient):
             ClientError: If Redis connection or operation fails
         """
         if not self.redis_client:
-            logger.error("Sync Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -282,7 +290,6 @@ class RedisClient(BaseRedisClient):
             ClientError: If Redis connection or operation fails.
         """
         if not self.redis_client:
-            logger.error("Sync Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -292,6 +299,11 @@ class RedisClient(BaseRedisClient):
                 _LOCK_RELEASE_LUA_SCRIPT, 1, resource_id, owner_id
             )
             return self._process_lock_release_result(result, resource_id)
+        except ClientError:
+            # `_process_lock_release_result` raises ClientError on unexpected
+            # results (carries a structured error code). Re-raise unchanged
+            # instead of letting `_handle_redis_error` re-wrap it.
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
 
@@ -325,14 +337,21 @@ class RedisClientAsync(BaseRedisClient):
             await self.redis_client.ping()
             logger.info("Async Redis connection established for strict locking")
 
+        except ClientError:
+            # Internal ClientError raised above (e.g. REDIS_CONNECTION_ERROR
+            # for missing redis_client) carries a structured error code that
+            # callers depend on. Re-raise unchanged instead of letting
+            # `_handle_redis_error` re-wrap it. Mirrors the sync `_connect`
+            # fix from BLDX-1165.
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
 
     async def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel using async client."""
         sentinel_hosts = self._parse_sentinel_hosts()
-        logger.info(f"Connecting to Redis via async Sentinel: {sentinel_hosts}")
-        logger.info(f"Service name: {REDIS_SENTINEL_SERVICE_NAME}")
+        logger.info("Connecting to Redis via async Sentinel: %s", sentinel_hosts)
+        logger.info("Sentinel service name: %s", REDIS_SENTINEL_SERVICE_NAME)
 
         try:
             # Create Sentinel with password
@@ -350,7 +369,11 @@ class RedisClientAsync(BaseRedisClient):
 
     async def _connect_standalone(self) -> None:
         """Connect to standalone Redis instance using async client."""
-        logger.debug(f"Connecting to standalone async Redis: {REDIS_HOST}:{REDIS_PORT}")
+        logger.debug(
+            "Connecting to standalone async Redis: host=%s port=%s",
+            REDIS_HOST,
+            REDIS_PORT,
+        )
 
         try:
             self.redis_client = async_redis.Redis(
@@ -366,8 +389,8 @@ class RedisClientAsync(BaseRedisClient):
             try:
                 await self.redis_client.aclose()
                 logger.info("Async Redis connection closed")
-            except Exception as e:
-                logger.error(f"Error closing async Redis connection: {e}")
+            except Exception:
+                logger.error("Error closing async Redis connection", exc_info=True)
             finally:
                 self.redis_client = None
 
@@ -397,7 +420,6 @@ class RedisClientAsync(BaseRedisClient):
             ClientError: If Redis connection or operation fails
         """
         if not self.redis_client:
-            logger.error("Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -429,7 +451,6 @@ class RedisClientAsync(BaseRedisClient):
             ClientError: If Redis connection or operation fails.
         """
         if not self.redis_client:
-            logger.error("Redis client not initialized")
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -439,5 +460,10 @@ class RedisClientAsync(BaseRedisClient):
                 _LOCK_RELEASE_LUA_SCRIPT, 1, resource_id, owner_id
             )
             return self._process_lock_release_result(result, resource_id)
+        except ClientError:
+            # `_process_lock_release_result` raises ClientError on unexpected
+            # results (carries a structured error code). Re-raise unchanged
+            # instead of letting `_handle_redis_error` re-wrap it.
+            raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)

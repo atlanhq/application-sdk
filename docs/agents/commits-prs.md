@@ -1,6 +1,6 @@
 # Commits and PRs
 
-- Commit message format is defined in `.cursor/rules/commits.mdc` (Conventional Commits).
+- Commit message format is defined in `docs/standards/commits.md` (Conventional Commits).
 - PR size and review expectations live in `CONTRIBUTING.md`.
 
 ## Before Committing

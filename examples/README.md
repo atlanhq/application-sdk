@@ -12,8 +12,6 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 | [application_hello_world.py](./application_hello_world.py) | Minimal "Hello World" workflow using the Atlan SDK and Temporal. |
 | [application_fastapi.py](./application_fastapi.py) | Example of exposing workflow operations via a FastAPI server. |
 | [application_custom_fastapi.py](./application_custom_fastapi.py) | FastAPI server with custom routes and workflow integration. |
-| [application_subscriber.py](./application_subscriber.py) | Demonstrates event-driven workflow execution using event triggers and subscriptions. |
-| [run_examples.py](./run_examples.py) | Utility to run and monitor all example workflows, outputting results to a markdown file. |
 
 ---
 

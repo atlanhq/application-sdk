@@ -51,14 +51,14 @@ def close_states_db(db: Any) -> None:
     db_path = None
     try:
         db_path = db.path()
-    except Exception as e:
-        logger.warning("Failed to get RocksDB path: %s", e)
+    except Exception:
+        logger.warning("Failed to get RocksDB path", exc_info=True)
 
     # Close db (may fail, but we still want to cleanup)
     try:
         db.close()
-    except Exception as e:
-        logger.warning("Failed to close RocksDB: %s", e)
+    except Exception:
+        logger.warning("Failed to close RocksDB", exc_info=True)
 
     # Always cleanup temp directory
     if db_path:

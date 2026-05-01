@@ -4,6 +4,8 @@ This module provides classes for transforming SQL metadata into Atlas entities,
 including databases, schemas, tables, columns, functions, and tag attachments.
 """
 
+from __future__ import annotations
+
 import json
 from typing import Any, Dict, Optional, Set, TypeVar, overload
 
@@ -122,7 +124,7 @@ class Procedure(assets.Procedure):
                 "entity_class": Procedure,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Procedure Entity: {str(e)}")
+            raise ValueError(f"Error creating Procedure Entity: {str(e)}") from e
 
 
 class Database(assets.Database):
@@ -174,7 +176,7 @@ class Database(assets.Database):
                 "entity_class": Database,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Database Entity: {str(e)}")
+            raise ValueError(f"Error creating Database Entity: {str(e)}") from e
 
 
 class Schema(assets.Schema):
@@ -243,7 +245,7 @@ class Schema(assets.Schema):
                 "entity_class": Schema,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Schema Entity: {str(e)}")
+            raise ValueError(f"Error creating Schema Entity: {str(e)}") from e
 
 
 class Table(assets.Table):
@@ -274,10 +276,14 @@ class Table(assets.Table):
 
             assert obj.get("table_catalog") is not None, "Table catalog cannot be None"
 
-            # Determine the type of table based on metadata
-            is_partition = bool(obj.get("is_partition", False))
+            # Determine the type of table based on metadata.
+            # Source metadata layers use either bool (True/False) or the
+            # canonical string ("YES"/"NO") for these flags; treat both
+            # truthy forms as positive and reject every other string. This
+            # avoids the prior bug where bool("NO") was True. [BLDX-1168]
+            is_partition = obj.get("is_partition") in (True, "YES")
             table_type_value = obj.get("table_type", "TABLE")
-            is_dynamic = obj.get("is_dynamic") == "YES"
+            is_dynamic = obj.get("is_dynamic") in (True, "YES")
 
             if is_partition:
                 table_type = assets.TablePartition
@@ -475,7 +481,7 @@ class Table(assets.Table):
                 "entity_class": table_type,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Table Entity: {str(e)}")
+            raise ValueError(f"Error creating Table Entity: {str(e)}") from e
 
 
 class Column(assets.Column):
@@ -621,7 +627,7 @@ class Column(assets.Column):
                 "character_octet_length",
                 "is_auto_increment",
                 "is_generated",
-                "num_prec_radix" "extra_info",
+                "num_prec_radixextra_info",
                 "buffer_length",
                 "column_size",
             ]
@@ -642,7 +648,7 @@ class Column(assets.Column):
                 "entity_class": Column,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Column Entity: {str(e)}")
+            raise ValueError(f"Error creating Column Entity: {str(e)}") from e
 
 
 class Function(assets.Function):
@@ -901,9 +907,15 @@ class Function(assets.Function):
             function_attributes["function_definition"] = obj.get(
                 "function_definition", None
             )
-            function_attributes["function_arguments"] = list(
-                obj.get("argument_signature", "()")[1:-1].split(",")
-            )
+            argument_signature = obj.get("argument_signature", "()")
+            if not (
+                argument_signature.startswith("(") and argument_signature.endswith(")")
+            ):
+                raise ValueError(
+                    f"Malformed argument_signature: {argument_signature!r}"
+                )
+            inner = argument_signature[1:-1]
+            function_attributes["function_arguments"] = list(inner.split(","))
             function_attributes["function_is_secure"] = (
                 obj.get("is_secure", None) == "YES"
             )
@@ -923,7 +935,7 @@ class Function(assets.Function):
                 "entity_class": Function,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Function Entity: {str(e)}")
+            raise ValueError(f"Error creating Function Entity: {str(e)}") from e
 
 
 class TagAttachment(assets.TagAttachment):
@@ -1205,5 +1217,5 @@ class TagAttachment(assets.TagAttachment):
                 "custom_attributes": tag_attachment_custom_attributes,
                 "entity_class": TagAttachment,
             }
-        except Exception as e:
-            raise ValueError(f"Error creating TagAttachment Entity: {str(e)}")
+        except AssertionError as e:
+            raise ValueError(f"Error creating TagAttachment Entity: {str(e)}") from e

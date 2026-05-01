@@ -32,12 +32,12 @@ Flag as **Important** if:
 
 ## Test Infrastructure (v3 Patterns)
 
-### In-Memory Infrastructure (Critical)
+### Mock Infrastructure for Unit Tests (Critical)
 
-Tests must NOT require Dapr or Temporal sidecars for unit tests. Use v3 in-memory implementations:
+Unit tests must NOT require Dapr or Temporal sidecars. Use mock implementations from `application_sdk.testing.mocks`:
 
 ```python
-# GOOD — in-memory, no sidecar
+# GOOD — mock implementations, no sidecar needed
 from application_sdk.testing import MockStateStore, MockSecretStore, MockPubSub
 
 @pytest.fixture
@@ -49,11 +49,14 @@ def infra():
     )
 ```
 
+> **Important:** These mocks are for tests only. Production and local-dev runtime requires the Dapr sidecar — `DaprStateStore`/`DaprSecretStore` are the only runtime implementations. There are no InMemory fallback implementations.
+
 Flag:
 - Tests that import from `dapr.clients` directly
 - Tests that require `DAPR_HTTP_PORT` or `DAPR_GRPC_PORT` environment variables
 - Tests that connect to real Temporal server (unless marked `@pytest.mark.integration`)
 - Tests using `unittest.mock.patch` on infrastructure when `MockStateStore`/`MockSecretStore` exists
+- Production/app code that conditionally falls back to any non-Dapr implementation at runtime
 
 ### clean_app_registry Fixture (Critical)
 

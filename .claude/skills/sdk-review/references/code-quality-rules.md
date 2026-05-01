@@ -237,13 +237,13 @@ When v2 APIs are modified or removed:
 - Scheduled removal version must be documented (v3.1.0)
 
 ```python
-# Required pattern for deprecated modules
+# Real example: application_sdk/test_utils/integration/__init__.py
 import warnings
 warnings.warn(
-    "application_sdk.services.objectstore is deprecated. "
-    "Use application_sdk.storage instead. "
-    "Will be removed in v3.1.0.",
+    "application_sdk.test_utils.integration is deprecated and will be removed "
+    "in v3.1.0. Use application_sdk.testing.integration instead.",
     DeprecationWarning,
     stacklevel=2,
 )
+from application_sdk.testing.integration import *  # noqa: E402,F401,F403
 ```

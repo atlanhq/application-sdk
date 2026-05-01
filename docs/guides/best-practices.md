@@ -32,25 +32,25 @@ This architecture enables concurrency at both workflow and activity levels based
 
 ## Reliability
 
-### Activity Heartbeats
+### Task Heartbeats
 
-- Temporal monitors activity health through heartbeats
-- Activities that fail to heartbeat are retried on different workers
-- Use heartbeats to report activity progress and aid debugging
-- The `execute_activity` call includes a `heartbeat_timeout` parameter
-- The `auto_heartbeater` decorator automatically sends heartbeats (3x per timeout interval by default)
+- Temporal monitors task health through heartbeats
+- Tasks that fail to heartbeat are retried on different workers
+- Use heartbeats to report task progress and aid debugging
+- The `@task(auto_heartbeat_seconds=10)` parameter automatically sends heartbeats at the specified interval
+- `@task` methods are called directly from `run()` --- no separate `execute_activity` call is needed
 
 > Read more about activity timeouts [here](https://temporal.io/blog/activity-timeouts)
 
 ## Temporal
 
-### Activities and Timeouts
+### Tasks and Timeouts
 
 Great [read](https://temporal.io/blog/activity-timeouts) on activity timeouts and heartbeats.
 
 **TLDR;**
 
-- Set `StartToCloseTimeout` - Maximum activity runtime
-- Configure `HeartbeatTimeout` - Maximum time between heartbeats
-    - Essential for long-running activities
-    - Activities are retried if they fail to heartbeat within the timeout period
+- Set `@task(timeout_seconds=...)` - Maximum task runtime
+- Configure `@task(auto_heartbeat_seconds=...)` - Automatic heartbeat interval
+    - Essential for long-running tasks
+    - Tasks are retried if they fail to heartbeat within the timeout period

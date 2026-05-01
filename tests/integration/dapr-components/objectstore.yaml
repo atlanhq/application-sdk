@@ -1,0 +1,11 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: objectstore
+spec:
+  version: v1
+  type: bindings.localstorage
+  ignoreErrors: true
+  metadata:
+    - name: rootPath
+      value: "./tests/integration/dapr-data/objectstore"

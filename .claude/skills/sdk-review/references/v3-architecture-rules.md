@@ -32,10 +32,10 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 **Rule:** Each app exports telemetry under its own `OTEL_SERVICE_NAME`. Distributed traces linked via `correlation_id`.
 
 **Violations to flag:**
-- Missing `correlation_id` propagation in inter-app calls (`call_by_name`)
+- Missing `correlation_id` propagation across app boundaries
 - Log statements without structured context (app_name, run_id, correlation_id should come from `self.logger`)
 - Custom logger instantiation instead of using `self.logger` (which auto-includes correlation context)
-- Hardcoded service names instead of using framework-provided `ATLAN_SERVICE_NAME`
+- Hardcoded service names instead of reading from the `OTEL_SERVICE_NAME` environment variable (see `application_sdk/constants.py`)
 
 ---
 
@@ -83,12 +83,13 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 
 ## ADR-0007: Apps as Unit of Inter-App Coordination
 
-**Rule:** Apps invoke other Apps as Temporal child workflows via `call_by_name()`. Tasks are strictly internal — never callable from outside the App.
+> **⚠️ Under Review — BLDX-878**: `call()` / `call_by_name()` are **deactivated** in the SDK. Do not recommend or flag missing usage of these methods. Multi-app coordination goes through Automation Engine DAG orchestration.
+
+**Rule (still enforced):** Tasks are strictly internal — never callable from outside the App.
 
 **Violations to flag:**
 - Direct task method invocation across App boundaries
 - Importing another App's implementation class (should only import its contracts)
-- Missing `task_queue` parameter in `call_by_name()` calls
 - Tight coupling: one App class importing internals of another
 
 ---
@@ -120,10 +121,11 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 
 ## ADR-0010: Async-First Design
 
-**Rule:** Async-first. Blocking operations must use `self.task_context.run_in_thread()`. Blocking code must have internal timeouts (framework cannot kill threads).
+**Rule:** Async-first. Blocking operations must use `self.task_context.run_in_thread()`. Blocking code must have internal timeouts (framework cannot kill threads). Never use `run_in_thread()` to wrap `AtlanClient` calls — the Atlan client is async-only; use its native async API.
 
 **Violations to flag:**
 - Blocking calls (`requests.get`, `open()` for large files, sync DB drivers) without `run_in_thread()`
+- `run_in_thread()` wrapping `AtlanClient` or any other async-native Atlan SDK call
 - `run_in_thread()` calls where the blocking function has no internal timeout parameter
 - `time.sleep()` in async code (use `asyncio.sleep()`)
 - Sync HTTP libraries (`requests`, `urllib3`) when `httpx` async is available
@@ -148,7 +150,7 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 
 ## General Architecture Checks
 
-- **App base.py size**: If changes increase `app/base.py` beyond ~1600 lines, flag for decomposition
+- **App base.py size**: `app/base.py` is currently ~1739 lines (decomposition tracked). Flag any PR that increases it further — do not allow unbounded growth
 - **Registry singleton safety**: `AppRegistry` and `TaskRegistry` mutations must be thread-safe
-- **Deprecation shims**: Any removed v2 import path must have a deprecation shim with `warnings.warn()` pointing to the v3 replacement
+- **Deprecation shims**: Only for v2 paths where connectors may already import the old symbol (i.e. `application_sdk.test_utils.integration` → `application_sdk.testing.integration`). Do NOT add shims for symbols that were removed before v3 shipped — those never existed from a public-API perspective
 - **`__init_subclass__` hooks**: New metaclass or `__init_subclass__` must not break existing subclass registration

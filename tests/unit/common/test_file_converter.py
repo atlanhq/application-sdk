@@ -131,14 +131,14 @@ class TestConvertDataFiles:
     @pytest.mark.asyncio
     @patch("application_sdk.common.file_converter.file_converter_registry")
     async def test_converter_not_found_error(self, mock_registry):
-        """Test that when converter function is None, AttributeError is raised."""
+        """Test that when converter function is None, ValueError is raised."""
         # Arrange - registry returns None for unknown converter
         mock_registry.registry.get.return_value = None
 
         input_files = ["/path/input.json"]
 
-        # Act & Assert - This should raise AttributeError when trying to call None
-        with pytest.raises(TypeError):  # calling None() raises TypeError
+        # Act & Assert - Should raise ValueError with descriptive message
+        with pytest.raises(ValueError, match="No converter found"):
             await convert_data_files(input_files, FileType.PARQUET)
 
     @pytest.mark.asyncio
@@ -163,7 +163,7 @@ class TestConvertDataFiles:
 class TestConvertJsonToParquet:
     """Test suite for the convert_json_to_parquet function."""
 
-    @patch("application_sdk.common.file_converter.pd.read_json")
+    @patch("pandas.read_json")
     def test_successful_json_to_parquet_conversion(self, mock_read_json):
         """Test successful conversion from JSON to Parquet."""
         # Arrange
@@ -190,7 +190,7 @@ class TestConvertJsonToParquet:
         mock_read_json.assert_called_once_with(file_path, orient="records", lines=True)
         mock_filtered_df.to_parquet.assert_called_once_with(expected_output)
 
-    @patch("application_sdk.common.file_converter.pd.read_json")
+    @patch("pandas.read_json")
     def test_json_to_parquet_read_error_returns_none(self, mock_read_json):
         """Test that read errors return None and are logged."""
         # Arrange
@@ -206,7 +206,7 @@ class TestConvertJsonToParquet:
         assert result is None
         mock_logger.assert_called_once()
 
-    @patch("application_sdk.common.file_converter.pd.read_json")
+    @patch("pandas.read_json")
     def test_json_to_parquet_write_error_returns_none(self, mock_read_json):
         """Test that write errors return None and are logged."""
         # Arrange
@@ -235,7 +235,7 @@ class TestConvertJsonToParquet:
         assert result is None
         mock_logger.assert_called_once()
 
-    @patch("application_sdk.common.file_converter.pd.read_json")
+    @patch("pandas.read_json")
     def test_json_to_parquet_column_filtering(self, mock_read_json):
         """Test that empty columns are filtered out during conversion."""
         # Arrange
@@ -268,7 +268,7 @@ class TestConvertJsonToParquet:
 class TestConvertParquetToJson:
     """Test suite for the convert_parquet_to_json function."""
 
-    @patch("application_sdk.common.file_converter.pd.read_parquet")
+    @patch("pandas.read_parquet")
     def test_successful_parquet_to_json_conversion(self, mock_read_parquet):
         """Test successful conversion from Parquet to JSON."""
         # Arrange
@@ -288,7 +288,7 @@ class TestConvertParquetToJson:
             expected_output, orient="records", lines=True
         )
 
-    @patch("application_sdk.common.file_converter.pd.read_parquet")
+    @patch("pandas.read_parquet")
     def test_parquet_to_json_read_error_returns_none(self, mock_read_parquet):
         """Test that read errors return None and are logged."""
         # Arrange
@@ -304,7 +304,7 @@ class TestConvertParquetToJson:
         assert result is None
         mock_logger.assert_called_once()
 
-    @patch("application_sdk.common.file_converter.pd.read_parquet")
+    @patch("pandas.read_parquet")
     def test_parquet_to_json_write_error_returns_none(self, mock_read_parquet):
         """Test that write errors return None and are logged."""
         # Arrange
@@ -322,7 +322,7 @@ class TestConvertParquetToJson:
         assert result is None
         mock_logger.assert_called_once()
 
-    @patch("application_sdk.common.file_converter.pd.read_parquet")
+    @patch("pandas.read_parquet")
     def test_parquet_to_json_proper_parameters(self, mock_read_parquet):
         """Test that JSON is written with correct parameters for line-delimited format."""
         # Arrange

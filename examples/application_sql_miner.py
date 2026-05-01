@@ -1,39 +1,46 @@
-"""
-This example demonstrates how to create a SQL Miner workflow for extracting query metadata from a Snowflake database.
-It uses the Temporal workflow engine to manage the extraction process.
+"""SQL query extraction (mining) example using v3 SqlQueryExtractor template.
 
-Workflow steps:
-1. Perform preflight checks
-2. Create an output directory
-3. Fetch query information
-4. Push results to object store
+Demonstrates how to build a Snowflake query miner by subclassing
+SqlQueryExtractor. In v3, the workflow + activities split collapses into
+a single App class with typed contracts.
+
+Extraction steps (orchestrated by SqlQueryExtractor.run()):
+1. Determine query batches (get_query_batches)
+2. Fetch queries for each batch (fetch_queries)
+3. Aggregate and upload results
 
 Usage:
-1. Set the Snowflake connection credentials as environment variables
-2. Run the script to start the Temporal worker and execute the workflow
-
-Note: This example is specific to Snowflake but can be adapted for other SQL databases.
+    python examples/application_sql_miner.py
 """
 
 import asyncio
-import os
-import time
-from datetime import datetime, timedelta
-from typing import Any, Dict
 
-from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
-from application_sdk.application.metadata_extraction.sql import (
-    BaseSQLMetadataExtractionApplication,
-)
+from application_sdk.app import task
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.handlers.sql import BaseSQLHandler
+from application_sdk.handler import (
+    AuthInput,
+    AuthOutput,
+    AuthStatus,
+    Handler,
+    MetadataInput,
+    MetadataOutput,
+    PreflightCheck,
+    PreflightInput,
+    PreflightOutput,
+    PreflightStatus,
+)
+from application_sdk.main import run_dev_combined
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
+from application_sdk.templates import SqlQueryExtractor
+from application_sdk.templates.contracts.sql_query import (
+    QueryBatchInput,
+    QueryBatchOutput,
+    QueryFetchInput,
+    QueryFetchOutput,
+)
 
 logger = get_logger(__name__)
-
-APPLICATION_NAME = "snowflake"
 
 
 FETCH_QUERIES_SQL = """
@@ -101,11 +108,9 @@ WITH qs AS (
 """
 
 
-class SampleSQLMinerActivities(SQLQueryExtractionActivities):
-    fetch_queries_sql = FETCH_QUERIES_SQL
-
-
 class SQLClient(BaseSQLClient):
+    """Snowflake connection configuration."""
+
     DB_CONFIG = DatabaseConfig(
         template="snowflake://{username}:{password}@{account_id}",
         required=["username", "password", "account_id"],
@@ -113,82 +118,77 @@ class SQLClient(BaseSQLClient):
     )
 
 
-class SampleSnowflakeHandler(BaseSQLHandler):
-    tables_check_sql = """
-    SELECT count(*) as "count"
-    FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
-    WHERE NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
-        AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}'
-        {temp_table_regex_sql};
+class SnowflakeQueryExtractor(SqlQueryExtractor):
+    """Snowflake query miner — example skeleton, not a production implementation.
+
+    In a real connector:
+    - ``get_query_batches`` queries QUERY_HISTORY to count rows and returns
+      the total batch count + batch size.
+    - ``fetch_queries`` pages through QUERY_HISTORY using ``fetch_queries_sql``
+      and writes results to the object store.
     """
 
-    extract_temp_table_regex_table_sql = (
-        "AND NOT TABLE_NAME RLIKE '{exclude_table_regex}'"
-    )
+    fetch_queries_sql = FETCH_QUERIES_SQL
 
-    metadata_sql = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
+    @task(timeout_seconds=600)
+    async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
+        """Determine batch count from Snowflake query history.
+
+        TODO: replace with real implementation — connect via sql_client_class,
+        COUNT rows in QUERY_HISTORY, and return total_batches / batch_size.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}.get_query_batches() is a skeleton — "
+            "replace with a real implementation before running."
+        )
+
+    @task(timeout_seconds=3600, heartbeat_timeout_seconds=60, auto_heartbeat_seconds=10)
+    async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
+        """Fetch one batch of queries from Snowflake.
+
+        TODO: replace with real implementation — page through QUERY_HISTORY
+        using fetch_queries_sql and write results to the object store.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}.fetch_queries() is a skeleton — "
+            "replace with a real implementation before running."
+        )
 
 
-async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
-    logger.info("Starting application_sql_miner")
+class SampleSnowflakeHandler(Handler):
+    """Handler for the Snowflake query miner."""
 
-    app = BaseSQLMetadataExtractionApplication(
-        name=APPLICATION_NAME,
-        client_class=SQLClient,
-        handler_class=SampleSnowflakeHandler,
-    )
-    await app.setup_workflow(
-        workflow_and_activities_classes=[
-            (SQLQueryExtractionWorkflow, SampleSQLMinerActivities)
-        ]
-    )
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS)
 
-    time.sleep(3)
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[
+                PreflightCheck(
+                    name="queryHistoryCheck",
+                    passed=True,
+                    message="Query history access verified",
+                ),
+            ],
+        )
 
-    start_time_epoch = int((datetime.now() - timedelta(hours=5)).timestamp())
-
-    workflow_args = {
-        "miner_args": {
-            "database_name_cleaned": "SNOWFLAKE",
-            "schema_name_cleaned": "ACCOUNT_USAGE",
-            "miner_start_time_epoch": start_time_epoch,
-            "chunk_size": 5000,
-            "current_marker": start_time_epoch,
-            "timestamp_column": "START_TIME",
-            "sql_replace_from": "ss.SESSION_CREATED_ON > TO_TIMESTAMP_TZ([START_MARKER], 3)",
-            "sql_replace_to": "ss.SESSION_CREATED_ON >= TO_TIMESTAMP_TZ([START_MARKER], 3) AND ss.SESSION_CREATED_ON <= TO_TIMESTAMP_TZ([END_MARKER], 3)",
-            "ranged_sql_start_key": "[START_MARKER]",
-            "ranged_sql_end_key": "[END_MARKER]",
-        },
-        "credentials": {
-            "authType": "basic",
-            "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
-            "username": os.getenv("SNOWFLAKE_USER", "snowflake"),
-            "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
-            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
-            "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
-        },
-        "connection": {
-            "connection_name": "test-connection",
-            "connection_qualified_name": "default/postgres/1728518400",
-        },
-        "metadata": {
-            "exclude-filter": "{}",
-            "include-filter": '{"^E2E_TEST_DB$":["^HIERARCHY_OFFER75$"]}',
-            "temp-table-regex": "",
-            "extraction-method": "direct",
-        },
-    }
-
-    workflow_response = await app.start_workflow(
-        workflow_args=workflow_args,
-        workflow_class=SQLQueryExtractionWorkflow,
-    )
-
-    await app.start_worker(daemon=daemon)
-
-    return workflow_response
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return MetadataOutput(objects=[])
 
 
 if __name__ == "__main__":
-    asyncio.run(application_sql_miner(daemon=False))
+    asyncio.run(
+        run_dev_combined(
+            SnowflakeQueryExtractor,
+            example_input={
+                "connection": {
+                    "connection_name": "test-connection",
+                    "connection_qualified_name": "default/snowflake/1728518400",
+                },
+                "credential_guid": "your-credential-guid",
+                "lookback_days": 30,
+                "batch_size": 5000,
+            },
+        )
+    )
