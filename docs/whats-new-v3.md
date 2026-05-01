@@ -318,8 +318,8 @@ class MyConnector(App):
 
 - **No Dapr sidecar in tests.** Inject `MockStateStore` / `MockSecretStore` from `application_sdk.testing.mocks` and run your task methods in pure Python — no sidecar, no gRPC, no environment variables.
 - **No gRPC size limits.** Object storage is now backed by `obstore`, which talks directly to
-  S3/GCS/Azure or the local filesystem. The Dapr gRPC binding had a ~4 MB message limit that
-  bit connectors with large files; that limit is gone.
+  S3/GCS/Azure or the local filesystem. The historic 4 MB Dapr gRPC message limit that
+  bit connectors with large files is gone.
 - **Portable.** Because infrastructure is injected via Protocols, the framework could swap
   Temporal or Dapr for another engine without touching your app code.
 

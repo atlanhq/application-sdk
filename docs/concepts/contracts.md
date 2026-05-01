@@ -102,10 +102,13 @@ The `MaxItems` annotation enforces a maximum list length both at class-definitio
 Use `FileReference` to pass large data between tasks through object storage rather than the Temporal payload:
 
 ```python
-from application_sdk.contracts import Output, FileReference, StorageTier
+from application_sdk.contracts import Input, Output, FileReference
 from application_sdk.contracts.storage import UploadInput, DownloadInput
 
 class FetchOutput(Output):
+    local_path: str  # task returns the local path; App.upload runs in run()
+
+class TransformInput(Input):
     data_file: FileReference
 
 class MyConnector(App):
@@ -113,14 +116,19 @@ class MyConnector(App):
     async def fetch_data(self, input: FetchInput) -> FetchOutput:
         path = "/tmp/data.parquet"
         write_parquet(path, records)
-        up = await self.upload(UploadInput(local_path="/tmp/", tier=StorageTier.TRANSIENT))
-        return FetchOutput(data_file=up.ref)
+        return FetchOutput(local_path=path)
 
     @task
     async def transform(self, input: TransformInput) -> TransformOutput:
         await self.download(DownloadInput(ref=input.data_file, local_path="/tmp/"))
         df = read_parquet("/tmp/data.parquet")
         ...
+
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+        fetch = await self.fetch_data(FetchInput(...))
+        # App.upload is a @task itself — call it from run(), not from inside another @task.
+        up = await self.upload(UploadInput(local_path=fetch.local_path))
+        return await self.transform(TransformInput(data_file=up.ref))
 ```
 
 See [Storage](storage.md) for full `FileReference` and `StorageTier` documentation.

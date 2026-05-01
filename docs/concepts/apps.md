@@ -144,12 +144,13 @@ class MyQueryExtractor(SqlQueryExtractor):
 
 ### IncrementalSqlMetadataExtractor
 
-Runs a 4-phase incremental extraction:
+Runs a 5-phase incremental extraction:
 
-1. Write an incremental marker (current timestamp)
-2. Fetch the current full state into a local DuckDB file
-3. Diff against the previous state and emit only changed rows
-4. Finalize by persisting the new state to object storage
+1. **Prerequisites** — fetch the prior run marker and the previous state snapshot.
+2. **Base extraction** — extract databases, schemas (in parallel), then tables.
+3. **Incremental columns** — batch preparation followed by parallel column discovery.
+4. **Write state** — create and upload the new current-state snapshot.
+5. **Update marker** — persist the new run marker after the state write succeeds.
 
 ```python
 from application_sdk.templates import IncrementalSqlMetadataExtractor

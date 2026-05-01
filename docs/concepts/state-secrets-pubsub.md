@@ -288,7 +288,7 @@ async def parallel_fetch(self, input: FetchInput) -> FetchOutput:
 
 | Class | Backend | Use case |
 |---|---|---|
-| `LocalCapacityPool` | `asyncio.Semaphore` | Single-process concurrency, tests |
+| `LocalCapacityPool` | None (no-op) | Local dev / no-Redis fallback; always grants the full requested amount |
 | Redis-backed pool (internal) | Redis | Cross-pod, distributed concurrency |
 
 **Enabling the Redis-backed pool:**
