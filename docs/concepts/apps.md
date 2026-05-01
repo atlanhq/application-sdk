@@ -306,7 +306,7 @@ class MyConnector(App):
         ...
 ```
 
-`persistent_state` provides durable access to state stored externally (object store). It survives workflow restarts and is shared across runs.
+`persistent_state` provides durable access to state stored in an external state store (Dapr StateStore by default). It survives worker restarts and is shared across runs.
 
 ---
 

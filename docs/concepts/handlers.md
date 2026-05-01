@@ -5,8 +5,8 @@ Handlers implement the API contract for your application's HTTP endpoints: authe
 ## Defining a Handler
 
 ```python
-from application_sdk.handler import Handler
-from application_sdk.handler.contracts import (
+from application_sdk.handler import (
+    Handler,
     AuthInput, AuthOutput, AuthStatus,
     PreflightInput, PreflightOutput, PreflightStatus, PreflightCheck,
     MetadataInput, SqlMetadataOutput, SqlMetadataObject,

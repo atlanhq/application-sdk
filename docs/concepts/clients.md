@@ -179,22 +179,7 @@ class MyApiClient(BaseClient):
 
 ## Redis Client (`redis.py`)
 
-`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement a low-level acquire/release lock protocol via Redis. Use them as context managers to connect to Redis, then call `_acquire_lock` to claim a named lock:
-
-```python
-from application_sdk.clients.redis import RedisClientAsync
-
-async with RedisClientAsync() as client:
-    acquired = await client._acquire_lock("my-lock", owner_id="pod-1", ttl_seconds=30)
-    if acquired:
-        try:
-            # exclusive section — only one pod holds this lock at a time
-            ...
-        finally:
-            await client._release_lock("my-lock", owner_id="pod-1")
-```
-
-For the higher-level `CapacityPool` abstraction (which manages concurrency slots across pods), see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool).
+`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement a low-level acquire/release lock protocol via Redis. The internal lock primitives (`_acquire_lock`, `_release_lock`) are exposed by the higher-level `CapacityPool` abstraction, which is the recommended interface for managing concurrency slots across pods. See [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool).
 
 Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/configuration.md` for the full list including sentinel and lock settings.
 

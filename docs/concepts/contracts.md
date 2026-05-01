@@ -102,8 +102,7 @@ The `MaxItems` annotation enforces a maximum list length both at class-definitio
 Use `FileReference` to pass large data between tasks through object storage rather than the Temporal payload:
 
 ```python
-from application_sdk.contracts import Input, Output, FileReference
-from application_sdk.contracts.storage import UploadInput, DownloadInput
+from application_sdk.contracts import Input, Output, FileReference, UploadInput, DownloadInput
 
 class FetchOutput(Output):
     local_path: str  # task returns the local path; App.upload runs in run()

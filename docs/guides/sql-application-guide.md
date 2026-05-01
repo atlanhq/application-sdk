@@ -258,7 +258,7 @@ def serialize_entity(entity) -> dict:
     }
 ```
 
-Each mapper function is a pure function: easy to unit test, no framework dependencies, no YAML files to maintain. The extractor calls these in its `transform` task (see below).
+Each mapper function is a pure function: easy to unit test, no framework dependencies, no YAML files to maintain. The extractor calls these in its `transform_data` task (see below).
 
 ## App (Extractor)
 
@@ -469,7 +469,7 @@ ExtractionTaskInput      -- shared fields for all per-task inputs
   FetchColumnsInput      -- passed to fetch_columns()
   FetchProceduresInput   -- passed to fetch_procedures()
   FetchViewsInput        -- passed to fetch_views()
-  TransformInput         -- passed to transform(); carries typename, file_names, chunk_start
+  TransformInput         -- passed to transform_data(); carries typename, file_names, chunk_start
 FetchDatabasesOutput     -- databases: list[str], chunk_count, total_record_count
 FetchSchemasOutput       -- schemas: list[str], chunk_count, total_record_count
 FetchTablesOutput        -- tables: list[str], chunk_count, total_record_count

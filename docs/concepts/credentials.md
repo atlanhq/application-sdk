@@ -124,7 +124,7 @@ def _parse_slack(data: dict) -> SlackCredential:
 register_credential_type("slack", SlackCredential, _parse_slack)
 ```
 
-Retrieve the registered class with `CredentialTypeRegistry.get_class("slack")`.
+Retrieve the registered class with `get_registry().get_class("slack")` (import `get_registry` from `application_sdk.credentials`).
 
 ---
 
