@@ -425,7 +425,7 @@ class TestTransferLogging:
         assert evt.__dict__.get("storage_op") == "upload"
         assert evt.__dict__.get("size_bytes") == 256 * 1024
         assert evt.__dict__.get("elapsed_ms") is not None
-        assert evt.__dict__.get("key") == "metrics/up.bin"
+        assert evt.__dict__.get("store_path") == "metrics/up.bin"
 
     async def test_download_emits_failure_log_with_error_class(
         self, store, tmp_path, caplog

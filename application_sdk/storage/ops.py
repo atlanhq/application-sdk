@@ -294,7 +294,7 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
 
 
 async def upload_file(
-    key: str,
+    object_path: str,
     local_path: str | Path,
     store: ObjectStore | None = None,
     *,
@@ -302,7 +302,7 @@ async def upload_file(
     normalize: bool = True,
     retain_local_copy: bool = True,
 ) -> str:
-    """Stream-upload a local file to *key* in the store.
+    """Stream-upload a local file to *object_path* in the store.
 
     Uses obstore's multipart writer so arbitrarily large files are uploaded
     without materialising the whole content in memory.  The part size is
@@ -312,13 +312,13 @@ async def upload_file(
     SHA-256 hasher and the store writer.
 
     Args:
-        key: Destination object key.  Normalised by default.
+        object_path: Destination object path.  Normalised by default.
         local_path: Path to the local file to upload.
         store: Target store, or ``None`` to use the infrastructure store.
         chunk_size: Desired chunk / part size in bytes (default 8 MiB).
             Increased automatically if the file is large enough to exceed
             the 9,900-part safety limit.
-        normalize: When ``True`` (default), normalise *key* before use.
+        normalize: When ``True`` (default), normalise *object_path* before use.
         retain_local_copy: When ``True`` (default), keep the local file after
             upload.  When ``False``, delete the local file after a successful
             upload.
@@ -332,7 +332,7 @@ async def upload_file(
     """
     resolved = _resolve_store(store)
     if normalize:
-        key = normalize_key(key)
+        object_path = normalize_key(object_path)
 
     path = Path(local_path)
     file_size = path.stat().st_size
@@ -342,7 +342,7 @@ async def upload_file(
     started = time.monotonic()
     try:
         async with obstore.open_writer_async(
-            resolved, key, buffer_size=effective_chunk
+            resolved, object_path, buffer_size=effective_chunk
         ) as writer:
             with path.open("rb") as fh:
                 while True:
@@ -356,7 +356,7 @@ async def upload_file(
         _log_storage_event(
             logging.WARNING,
             "upload",
-            key,
+            object_path,
             outcome="failure",
             elapsed_ms=elapsed_ms,
             size_bytes=file_size,
@@ -365,14 +365,14 @@ async def upload_file(
         from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(
-            f"Failed to upload file to key '{key}'", key=key, cause=exc
+            f"Failed to upload file to '{object_path}'", key=object_path, cause=exc
         ) from exc
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
         logging.INFO,
         "upload",
-        key,
+        object_path,
         outcome="success",
         elapsed_ms=elapsed_ms,
         size_bytes=file_size,
@@ -397,7 +397,7 @@ async def upload_file(
 
 
 async def download_file(
-    key: str,
+    object_path: str,
     local_path: str | Path,
     store: ObjectStore | None = None,
     *,
@@ -405,7 +405,7 @@ async def download_file(
     min_chunk_size: int = 10 * 1024 * 1024,
     normalize: bool = True,
 ) -> str | None:
-    """Stream-download *key* from the store to a local file.
+    """Stream-download *object_path* from the store to a local file.
 
     Uses obstore's streaming GET so arbitrarily large files are written to
     disk without materialising the whole content in memory.
@@ -419,7 +419,7 @@ async def download_file(
     here to avoid multiplying wait time without changing the outcome.
 
     Args:
-        key: Source object key.  Normalised by default.
+        object_path: Source object path.  Normalised by default.
         local_path: Destination path (file will be created or overwritten).
             Parent directories are created automatically.
         store: Source store, or ``None`` to use the infrastructure store.
@@ -427,19 +427,19 @@ async def download_file(
             while streaming.  When ``False`` (default), returns ``None``.
         min_chunk_size: Minimum chunk size hint passed to the stream iterator
             (default 10 MiB).
-        normalize: When ``True`` (default), normalise *key* before use.
+        normalize: When ``True`` (default), normalise *object_path* before use.
 
     Returns:
         Hex-encoded SHA-256 digest if *compute_hash* is ``True``, else ``None``.
 
     Raises:
-        StorageNotFoundError: If *key* does not exist in the store.
+        StorageNotFoundError: If *object_path* does not exist in the store.
         StorageError: If the download or write fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     if normalize:
-        key = normalize_key(key)
+        object_path = normalize_key(object_path)
 
     path = Path(local_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -448,14 +448,14 @@ async def download_file(
     started = time.monotonic()
 
     try:
-        result = await obstore.get_async(resolved, key)
+        result = await obstore.get_async(resolved, object_path)
     except Exception as exc:
         elapsed_ms = (time.monotonic() - started) * 1000.0
         if _is_not_found(exc):
             _log_storage_event(
                 logging.WARNING,
                 "download",
-                key,
+                object_path,
                 outcome="failure",
                 elapsed_ms=elapsed_ms,
                 error_class="StorageNotFoundError",
@@ -465,12 +465,12 @@ async def download_file(
             )
 
             raise StorageNotFoundError(
-                f"Key not found in store: {key}", key=key
+                f"Object not found in store: {object_path}", key=object_path
             ) from exc
         _log_storage_event(
             logging.WARNING,
             "download",
-            key,
+            object_path,
             outcome="failure",
             elapsed_ms=elapsed_ms,
             error_class=_exc_class_name(exc),
@@ -478,7 +478,7 @@ async def download_file(
         from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(
-            f"Failed to download key '{key}'", key=key, cause=exc
+            f"Failed to download '{object_path}'", key=object_path, cause=exc
         ) from exc
 
     bytes_written = 0
@@ -495,7 +495,7 @@ async def download_file(
         _log_storage_event(
             logging.WARNING,
             "download",
-            key,
+            object_path,
             outcome="failure",
             elapsed_ms=elapsed_ms,
             size_bytes=bytes_written,
@@ -504,14 +504,16 @@ async def download_file(
         from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(
-            f"Failed to write downloaded file to '{local_path}'", key=key, cause=exc
+            f"Failed to write downloaded file to '{local_path}'",
+            key=object_path,
+            cause=exc,
         ) from exc
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
         logging.INFO,
         "download",
-        key,
+        object_path,
         outcome="success",
         elapsed_ms=elapsed_ms,
         size_bytes=bytes_written,
