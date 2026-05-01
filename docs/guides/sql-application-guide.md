@@ -98,9 +98,6 @@ class MyCredential(BaseModel):
 
 class MetadataConfig(BaseModel):
     """Connector-specific configuration parsed from the workflow input."""
-    include_filter: str = ".*"
-    exclude_filter: str = ""
-    temp_table_regex: str = ""
     exclude_views: bool = False
 
 

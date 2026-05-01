@@ -544,7 +544,7 @@ await legacy_client.load(raw)  # dict[str, Any]
 from application_sdk.credentials.atlan_client import AtlanClientMixin
 from application_sdk.credentials import atlan_api_token_ref
 
-class MyConnector(App, AtlanClientMixin):
+class MyConnector(AtlanClientMixin, App):
     @task
     async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
         ref = atlan_api_token_ref("atlan-token")

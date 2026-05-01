@@ -54,5 +54,5 @@
         # Some operation
         pass
     except Exception as e:
-        logger.error("Operation failed", exc_info=True)
+        logger.error("Operation failed; operation=%s error=%s", operation_name, e, exc_info=True)
     ```

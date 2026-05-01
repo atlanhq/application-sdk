@@ -866,7 +866,7 @@ Inside an `App`, use the `AtlanClientMixin` to get a cached, per-run client:
 from application_sdk.credentials.atlan_client import AtlanClientMixin
 from application_sdk.credentials import atlan_api_token_ref
 
-class MyConnector(App, AtlanClientMixin):
+class MyConnector(AtlanClientMixin, App):
     @task
     async def my_task(self, input: MyInput) -> MyOutput:
         ref = atlan_api_token_ref("atlan-token")  # name of your secret store entry

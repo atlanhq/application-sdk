@@ -43,6 +43,8 @@ self.logger.debug("record", data=json.dumps(record))
 self.logger.opt(lazy=True).debug("record {data}", data=lambda: json.dumps(record))
 ```
 
+**Known-benign probes**: Use DEBUG (not WARNING) for expected, transient failures used as a probe pattern — e.g., trying a cache lookup before falling back to a live fetch. A WARNING implies human attention is warranted; a cache miss does not.
+
 **Anti-patterns:**
 - Do NOT log every iteration of a hot inner loop at DEBUG — use sampling or batch-level summaries
 - Do NOT include sensitive credential values, even at DEBUG

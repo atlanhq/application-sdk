@@ -119,6 +119,7 @@ nav:
       - Documentation Updates: agents/docs-updates.md
       - Code Review: agents/review.md
       - DeepWiki MCP: agents/deepwiki.md
+      - SDK Capability Manifest: agents/sdk-capabilities.md
 
   - Standards:
       - Coding: standards/coding.md

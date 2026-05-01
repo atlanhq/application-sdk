@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.4.0
-source-sha:    89518263a0af59d32605473d0fb31524aae284b2
-source-date:   2026-04-30T12:14:11Z
+source-sha:    01c011d8d14f3742e18fc6c8d25ed45e69ac7ff7
+source-date:   2026-04-30T19:48:02+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -29,6 +29,15 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 4 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
+
+> **Deep-import-only subpackages** (no top-level `__all__`; import directly from submodules):
+> `application_sdk.clients` — SQL/Redis/Azure clients, `ClientInterface` ABC;
+> `application_sdk.common` — shared utilities (paths, file ops, SQL filters, concurrency);
+> `application_sdk.transformers` — `TransformerInterface` ABC, Atlas/query transformers;
+> `application_sdk.server` — FastAPI server, MCP integration, health endpoint.
+> These appear in concept docs but are intentionally excluded from the table above because
+> they expose no package-level `__all__`. Import from their submodules directly
+> (e.g. `from application_sdk.clients.sql import BaseSQLClient`).
 
 ## Subpackage Details
 

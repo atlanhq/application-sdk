@@ -118,7 +118,10 @@ class SlackCredential(BaseModel, frozen=True):
     bot_token: str
     signing_secret: str
 
-register_credential_type("slack", SlackCredential)
+def _parse_slack(data: dict) -> SlackCredential:
+    return SlackCredential(**data)
+
+register_credential_type("slack", SlackCredential, _parse_slack)
 ```
 
 Retrieve with `CredentialTypeRegistry.get("slack")`.
