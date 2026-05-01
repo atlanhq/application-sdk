@@ -541,8 +541,7 @@ await legacy_client.load(raw)  # dict[str, Any]
 **AtlanClientMixin** — for apps that call the Atlan SDK directly:
 
 ```python
-from application_sdk.credentials.atlan_client import AtlanClientMixin
-from application_sdk.credentials import atlan_api_token_ref
+from application_sdk.credentials import AtlanClientMixin, atlan_api_token_ref
 
 class MyConnector(AtlanClientMixin, App):
     @task

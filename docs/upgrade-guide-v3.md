@@ -27,7 +27,7 @@ v3.0 is a clean break from v2. All v2 Python module paths raise `ImportError` â€
 | `from application_sdk.services.objectstore import ObjectStore` | `from application_sdk.storage import upload_file, download_file` |
 | `from application_sdk.services.secretstore import SecretStore` | `from application_sdk.infrastructure import SecretStore` |
 | `from application_sdk.services.statestore import StateStore` | `from application_sdk.infrastructure import StateStore` |
-| `from application_sdk.clients.atlan import get_async_client` | `from application_sdk.credentials.atlan_client import create_async_atlan_client` |
+| `from application_sdk.clients.atlan import get_async_client` | `from application_sdk.credentials import create_async_atlan_client` |
 | `from application_sdk.activities.common.models import ActivityStatistics` | `from application_sdk.common.models import TaskStatistics` |
 | `from application_sdk.test_utils.credentials import MockCredentialStore` | `from application_sdk.testing import MockCredentialStore` |
 
@@ -858,8 +858,7 @@ client = await get_async_client(token="...", url="...")
 Only async clients are exposed. Use the credential system to supply the token:
 
 ```python
-from application_sdk.credentials.atlan_client import create_async_atlan_client
-from application_sdk.credentials import AtlanApiToken
+from application_sdk.credentials import create_async_atlan_client, AtlanApiToken
 
 cred = AtlanApiToken(api_token="my-token", base_url="https://my-tenant.atlan.com")
 client = create_async_atlan_client(cred)
@@ -868,8 +867,7 @@ client = create_async_atlan_client(cred)
 Inside an `App`, use the `AtlanClientMixin` to get a cached, per-run client:
 
 ```python
-from application_sdk.credentials.atlan_client import AtlanClientMixin
-from application_sdk.credentials import atlan_api_token_ref
+from application_sdk.credentials import AtlanClientMixin, atlan_api_token_ref
 
 class MyConnector(AtlanClientMixin, App):
     @task
@@ -888,8 +886,7 @@ auth = AtlanAuthClient()
 headers = await auth.get_authenticated_headers()
 
 # v3
-from application_sdk.credentials import OAuthClientCredential
-from application_sdk.credentials.oauth import OAuthTokenService
+from application_sdk.credentials import OAuthClientCredential, OAuthTokenService
 cred = OAuthClientCredential(client_id="...", client_secret="...", token_url="...")
 service = OAuthTokenService(cred)
 headers = await service.get_authenticated_headers()
@@ -1068,7 +1065,7 @@ autouse â€” you must list it in the test's parameter list to activate it.
 
 ```python
 from application_sdk.testing import MockCredentialStore
-from application_sdk.credentials.resolver import CredentialResolver
+from application_sdk.credentials import CredentialResolver
 
 mock = MockCredentialStore()
 ref = mock.add_api_key("test-key", api_key="test-secret")
