@@ -75,11 +75,12 @@ class AppWorker:
         )
 
         if not PROMETHEUS_PUSHGATEWAY_URL:
-            raise RuntimeError(
-                "Worker mode requires ATLAN_PROMETHEUS_PUSHGATEWAY_URL since "
-                "the worker process has no /metrics endpoint. Set the env var "
-                "or run in combined mode (server + worker in one process)."
+            logger.warning(
+                "ATLAN_PROMETHEUS_PUSHGATEWAY_URL is not set; worker will run "
+                "without pushing metrics. Set the env var (or run in combined "
+                "mode) to enable Prometheus visibility."
             )
+            return
 
         from prometheus_client import REGISTRY  # noqa: PLC0415 — pushgateway cold path
 
