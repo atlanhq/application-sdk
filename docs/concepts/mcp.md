@@ -121,8 +121,9 @@ For any MCP-compatible client, use the streamable HTTP transport:
 
 ### Custom Tool Names and Descriptions
 
-Customize how your tools appear to AI assistants. `@mcp_tool` must be stacked above `@task`
-— only `@task`-registered functions are discovered by the MCP server:
+Customize how your tools appear to AI assistants. `@mcp_tool` can appear in either position relative to `@task`
+— both decorators only attach metadata to the function without wrapping it, so order does not affect behaviour.
+Only `@task`-decorated methods are discovered by the MCP server:
 
 ```python
 class FetchInput(Input):
@@ -203,8 +204,8 @@ class ProcessInput(Input):
 class ProcessOutput(Output):
     message: str
 
-@mcp_tool(description="Safe data processing with error handling")
 @task
+@mcp_tool(description="Safe data processing with error handling")
 async def process_data(self, input: ProcessInput) -> ProcessOutput:
     try:
         result = await process_data_safely(input.data_id)

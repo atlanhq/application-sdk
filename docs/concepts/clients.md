@@ -187,7 +187,7 @@ Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/
 `application_sdk.clients.azure` provides an Azure-specific client layer:
 
 - `AzureClient` (`azure/client.py`) — base client for Azure service interactions.
-- `AzureAuthProvider` (`azure/auth.py`) — handles Azure credential strategies including managed identity, service principal, and connection-string authentication.
+- `AzureAuthProvider` (`azure/auth.py`) — handles Azure Service Principal authentication.
 
 ```python
 from application_sdk.clients import AzureClient, AzureAuthProvider

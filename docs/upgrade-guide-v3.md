@@ -887,7 +887,7 @@ headers = await auth.get_authenticated_headers()
 from application_sdk.credentials import OAuthClientCredential, OAuthTokenService
 cred = OAuthClientCredential(client_id="...", client_secret="...", token_url="...")
 service = OAuthTokenService(cred)
-headers = await service.get_authenticated_headers()
+headers = await service.get_headers()
 ```
 
 ---

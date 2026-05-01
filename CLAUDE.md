@@ -23,7 +23,7 @@ Non-standard commands used across the repo:
 
 **Path Semantics (ObjectStore)**:
 - Key and prefix params for ObjectStore APIs accept either `./local/tmp/...` workflow paths or object-store keys like `artifacts/...`; the SDK normalizes these internally.
-- Local file params remain local paths: upload `source` and download `destination` are not treated as object-store keys.
+- Local file params remain local paths: `upload_file(key, local_path)` and `download_file(key, local_path)` — `key` is an object-store key (normalised internally); `local_path` is a local filesystem path and is never treated as an object-store key.
 
 Where to look next (progressive disclosure):
 - `docs/agents/project-structure.md` — quick map of key directories.

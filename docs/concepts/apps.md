@@ -295,10 +295,15 @@ calls = controller.get_heartbeat_calls()
 ```python
 class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
-        out = await self.fetch_databases(FetchDbInput(connection_id=input.connection_id))
-        # Store for later tasks to read:
-        self.app_state.set("db_list", out.databases)
+        await self.fetch_databases(FetchDbInput(connection_id=input.connection_id))
         return await self.transform_data(TransformInput(...))
+
+    @task
+    async def fetch_databases(self, input: FetchDbInput) -> FetchDbOutput:
+        out = await self._do_fetch(input)
+        # Store inside a @task — app_state requires an active activity context:
+        self.app_state.set("db_list", out.databases)
+        return out
 
     @task
     async def transform_data(self, input: TransformInput) -> TransformOutput:
