@@ -227,7 +227,7 @@ class CloudStore:
         """Download a single file by streaming to disk without buffering."""
         local_path = output / Path(key).name
         await download_file(key, local_path, store=self._store, normalize=False)
-        _log().info("Downloaded key=%s local=%s", key, local_path)
+        _log().info("Downloaded", storage_path=key, local_path=str(local_path))
         return [local_path]
 
     async def _download_prefix(
@@ -239,7 +239,7 @@ class CloudStore:
     ) -> list[Path]:
         """Download all files under a prefix."""
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
-        _log().info("Listing objects under prefix=%s", list_prefix)
+        _log().info("Listing objects under prefix", storage_path=list_prefix)
 
         keys = await self._list_keys(list_prefix, suffix_filter)
 
@@ -270,7 +270,11 @@ class CloudStore:
 
         results = await asyncio.gather(*[_dl(k) for k in keys])
         downloaded = list(results)
-        _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
+        _log().info(
+            "Downloaded files from prefix",
+            storage_path=list_prefix,
+            file_count=len(downloaded),
+        )
         return downloaded
 
     async def _list_keys(
@@ -338,13 +342,12 @@ class CloudStore:
                 store=self._store,
                 normalize=False,
                 retain_local_copy=True,
-                compute_hash=False,
             )
         except StorageError:
             raise
         except Exception as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
-        _log().info("Uploaded key=%s size=%d", key, size)
+        _log().info("Uploaded", storage_path=key, bytes_uploaded=size)
         return size
 
     async def upload_bytes(self, key: str, data: bytes) -> int:
@@ -430,7 +433,7 @@ def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStor
     defaults for ``client_options`` + ``retry_config`` so every CloudStore
     inherits the same 30-minute request budget as the in-tenant Dapr store.
     """
-    from application_sdk.storage._obstore_config import (
+    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
         log_obstore_config,
         obstore_client_options,
         obstore_retry_config,
@@ -475,7 +478,7 @@ def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectSto
 
     BLDX-1155: see :func:`_create_s3_store`; same plumbing applies.
     """
-    from application_sdk.storage._obstore_config import (
+    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
         log_obstore_config,
         obstore_client_options,
         obstore_retry_config,
@@ -508,7 +511,7 @@ def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectS
 
     BLDX-1155: see :func:`_create_s3_store`; same plumbing applies.
     """
-    from application_sdk.storage._obstore_config import (
+    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
         log_obstore_config,
         obstore_client_options,
         obstore_retry_config,

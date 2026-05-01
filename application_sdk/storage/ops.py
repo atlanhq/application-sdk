@@ -95,7 +95,7 @@ def normalize_key(key: str) -> str:
     if not key:
         return ""
 
-    from application_sdk.constants import TEMPORARY_PATH
+    from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415
 
     abs_path = os.path.abspath(key)
     abs_temp_path = os.path.abspath(TEMPORARY_PATH)
@@ -115,6 +115,20 @@ def normalize_key(key: str) -> str:
     return "" if normalized == "." else normalized
 
 
+def _normalize_listing_prefix(prefix: str, normalize: bool) -> str:
+    """Return *prefix* normalised for a listing call.
+
+    Applies :func:`normalize_key` when *normalize* is ``True``, then ensures
+    the result ends with ``"/"`` so prefix matching never bleeds into sibling
+    directories.
+    """
+    if normalize and prefix:
+        prefix = normalize_key(prefix)
+        if prefix and not prefix.endswith("/"):
+            prefix = prefix + "/"
+    return prefix
+
+
 def _resolve_store(store: ObjectStore | None) -> ObjectStore:
     """Return *store* if provided, otherwise resolve from the infrastructure context.
 
@@ -123,7 +137,9 @@ def _resolve_store(store: ObjectStore | None) -> ObjectStore:
     """
     if store is not None:
         return store
-    from application_sdk.infrastructure.context import get_infrastructure
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415
+        get_infrastructure,
+    )
 
     infra = get_infrastructure()
     if infra is None or infra.storage is None:
@@ -345,7 +361,7 @@ async def upload_file(
             size_bytes=file_size,
             error_class=_exc_class_name(exc),
         )
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(
             f"Failed to upload file to key '{key}'", key=key, cause=exc
@@ -363,7 +379,7 @@ async def upload_file(
     digest = h.hexdigest()
 
     if not retain_local_copy:
-        from application_sdk.constants import TEMPORARY_PATH
+        from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415
 
         resolved_path = path.resolve()
         staging_root = Path(TEMPORARY_PATH).resolve()
@@ -435,7 +451,9 @@ async def download_file(
                 elapsed_ms=elapsed_ms,
                 error_class="StorageNotFoundError",
             )
-            from application_sdk.storage.errors import StorageNotFoundError
+            from application_sdk.storage.errors import (  # noqa: PLC0415
+                StorageNotFoundError,
+            )
 
             raise StorageNotFoundError(
                 f"Key not found in store: {key}", key=key
@@ -448,7 +466,7 @@ async def download_file(
             elapsed_ms=elapsed_ms,
             error_class=_exc_class_name(exc),
         )
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(
             f"Failed to download key '{key}'", key=key, cause=exc
@@ -474,7 +492,7 @@ async def download_file(
             size_bytes=bytes_written,
             error_class=_exc_class_name(exc),
         )
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(
             f"Failed to write downloaded file to '{local_path}'", key=key, cause=exc
@@ -490,6 +508,180 @@ async def download_file(
         size_bytes=bytes_written,
     )
     return h.hexdigest() if h is not None else None
+
+
+async def get_file_size(
+    key: str,
+    store: ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+) -> int | None:
+    """Return the byte size of *key* via a HEAD request, or ``None`` if not found.
+
+    Uses a lightweight metadata-only request; the object body is never
+    transferred.  Raises :class:`~application_sdk.storage.errors.StorageError`
+    for non-404 errors (permission denied, I/O error, etc.).
+
+    Args:
+        key: Object key / path.  Normalised by default.
+        store: An obstore-compatible store instance, or ``None`` to use the
+            store from the current infrastructure context.
+        normalize: When ``True`` (default), normalise *key* before use.
+
+    Returns:
+        File size in bytes, or ``None`` if the key does not exist.
+
+    Raises:
+        StorageError: For non-404 errors.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    resolved = _resolve_store(store)
+    if normalize:
+        key = normalize_key(key)
+    try:
+        meta = await obstore.head_async(resolved, key)
+        return int(meta["size"])
+    except Exception as exc:
+        if _is_not_found(exc):
+            return None
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
+
+        raise StorageError(f"Failed to head key '{key}'", key=key, cause=exc) from exc
+
+
+async def download_file_chunked(
+    key: str,
+    local_path: str | Path,
+    store: ObjectStore | None = None,
+    *,
+    chunk_size_bytes: int = 16 * 1024 * 1024,
+    max_concurrent_chunks: int = 4,
+    compute_hash: bool = True,
+    normalize: bool = True,
+) -> str | None:
+    """Download *key* using parallel range GETs, writing chunks at fixed offsets.
+
+    For files larger than *chunk_size_bytes*, issues multiple independent
+    ``get_range_async`` requests (up to *max_concurrent_chunks* in flight at
+    once) and writes each chunk to the correct file offset via ``os.pwrite``.
+    Each chunk gets its own obstore retry budget, so a mid-stream stall only
+    retries the affected chunk — not the entire file.
+
+    Falls through to :func:`download_file` (single streaming GET) when the
+    remote object is smaller than *chunk_size_bytes*.
+
+    Args:
+        key: Source object key.  Normalised by default.
+        local_path: Destination path (created / overwritten).
+        store: Source store, or ``None`` to use the infrastructure store.
+        chunk_size_bytes: Size of each range-GET chunk (default 16 MiB).
+        max_concurrent_chunks: Maximum number of in-flight chunk requests
+            (default 4).
+        compute_hash: When ``True`` (default), compute and return a SHA-256
+            digest over the completed file.
+        normalize: When ``True`` (default), normalise *key* before use.
+
+    Returns:
+        Hex-encoded SHA-256 digest if *compute_hash* is ``True``, else ``None``.
+
+    Raises:
+        StorageNotFoundError: If *key* does not exist.
+        StorageError: If a chunk download or the disk write fails.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    import asyncio  # noqa: PLC0415 — import here so top-level scan stays clean for formatters
+
+    resolved = _resolve_store(store)
+    if normalize:
+        key = normalize_key(key)
+
+    path = Path(local_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # HEAD to get exact size before allocating; also serves as the existence check.
+    try:
+        meta = await obstore.head_async(resolved, key)
+        file_size = int(meta["size"])
+    except Exception as exc:
+        if _is_not_found(exc):
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                StorageNotFoundError,
+            )
+
+            raise StorageNotFoundError(
+                f"Key not found in store: {key}", key=key
+            ) from exc
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
+
+        raise StorageError(f"Failed to head key '{key}'", key=key, cause=exc) from exc
+
+    # Small files: delegate to the single-stream path so they still use the
+    # streaming GET (avoids allocating the whole body in memory via get_range_async).
+    if file_size <= chunk_size_bytes:
+        return await download_file(
+            key, local_path, resolved, compute_hash=compute_hash, normalize=False
+        )
+
+    # Pre-allocate the file at the target size so pwrite can address any offset.
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+    try:
+        os.ftruncate(fd, file_size)
+    except Exception:
+        os.close(fd)
+        raise
+
+    sem = asyncio.Semaphore(max_concurrent_chunks)
+
+    async def _fetch_chunk(offset: int) -> None:
+        length = min(chunk_size_bytes, file_size - offset)
+        async with sem:
+            try:
+                raw = bytes(
+                    await obstore.get_range_async(
+                        resolved, key, start=offset, length=length
+                    )
+                )
+                os.pwrite(fd, raw, offset)
+            except Exception as chunk_exc:
+                raise chunk_exc
+
+    try:
+        await asyncio.gather(
+            *(_fetch_chunk(off) for off in range(0, file_size, chunk_size_bytes))
+        )
+    except Exception as exc:
+        os.close(fd)
+        path.unlink(missing_ok=True)
+        if _is_not_found(exc):
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                StorageNotFoundError,
+            )
+
+            raise StorageNotFoundError(
+                f"Key not found during chunked download: {key}", key=key
+            ) from exc
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
+
+        raise StorageError(
+            f"Chunked download failed for '{key}'", key=key, cause=exc
+        ) from exc
+
+    os.close(fd)
+
+    if not compute_hash:
+        return None
+
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 async def _get_bytes(
@@ -532,7 +724,7 @@ async def _get_bytes(
     except Exception as exc:
         if _is_not_found(exc):
             return None
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(f"Failed to get key '{key}'", key=key, cause=exc) from exc
 
@@ -570,7 +762,7 @@ async def _put(
     try:
         await obstore.put_async(resolved, key, data)
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
 
@@ -636,7 +828,7 @@ async def delete(
     except Exception as exc:
         if _is_not_found(exc):
             return False
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(f"Failed to delete key '{key}'", key=key, cause=exc) from exc
 
@@ -677,7 +869,7 @@ async def exists(
     except Exception as exc:
         if _is_not_found(exc):
             return False
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
         raise StorageError(
             f"Failed to check existence of key '{key}'", key=key, cause=exc
