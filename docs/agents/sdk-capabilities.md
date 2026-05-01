@@ -24,25 +24,11 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 20 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 8 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 10 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 4 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
-
-> **Deep-import-only subpackages** (no top-level `__all__`; import directly from submodules):
-> `application_sdk.clients` — SQL/Redis/Azure clients, `ClientInterface` ABC;
-> `application_sdk.common` — shared utilities (paths, file ops, SQL filters, concurrency);
-> `application_sdk.transformers` — `TransformerInterface` ABC, Atlas/query transformers;
-> `application_sdk.server` — FastAPI server, MCP integration, health endpoint.
-> These appear in concept docs but are intentionally excluded from the table above because
-> they expose no package-level `__all__`. Import from their submodules directly
-> (e.g. `from application_sdk.clients.sql import BaseSQLClient`).
->
-> **Partial deep-import within indexed subpackages** — `application_sdk.observability`
-> has a shallow `__all__` (context/correlation helpers only); the canonical logging API
-> lives in the submodule and must be imported directly:
-> `from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger`
 
 ## Subpackage Details
 
@@ -1126,6 +1112,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 ### Classes
 
+#### `AtlanLoggerAdapter`
+
+- **Import:** `from application_sdk.observability import AtlanLoggerAdapter`
+- **Signature:** `class AtlanLoggerAdapter(logger_name: str)`
+- **Summary:** A custom logger adapter for Atlan that extends AtlanObservability.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
 #### `CorrelationContext`
 
 - **Import:** `from application_sdk.observability import CorrelationContext`
@@ -1156,6 +1149,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Return the current execution context (never raises).
 - **Defined in:** `application_sdk/observability/context.py`
 
+#### `get_logger`
+
+- **Import:** `from application_sdk.observability import get_logger`
+- **Signature:** `get_logger(name: str | None = None)`
+- **Summary:** Get or create an instance of AtlanLoggerAdapter.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
 #### `set_correlation_context`
 
 - **Import:** `from application_sdk.observability import set_correlation_context`
@@ -1185,31 +1185,6 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `request_context: ContextVar[Dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
-
-### Deep-import-only members (`application_sdk.observability.logger_adaptor`)
-
-> These symbols are NOT in `application_sdk.observability.__all__`. Import them directly
-> from the submodule: `from application_sdk.observability.logger_adaptor import ...`
-
-#### `AtlanLoggerAdapter`
-
-- **Import:** `from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter`
-- **Signature:** `class AtlanLoggerAdapter(AtlanObservability[Any])`
-- **Summary:** Custom logger adapter with structured context, OTel integration, Temporal context binding, and Parquet file logging. Obtain instances via `get_logger()`.
-- **Defined in:** `application_sdk/observability/logger_adaptor.py`
-
-##### `AtlanLoggerAdapter.opt`
-
-- **Signature:** `opt(self, *, lazy: bool = False, **loguru_opt_kwargs: Any) -> _LazyLoggerProxy`
-- **Summary:** Return a proxy with loguru `opt()` flags applied and context pre-bound. Primary use: `lazy=True` for expensive debug arguments — the lambda is only evaluated when DEBUG is enabled. Use `{key}` format (not `%`-style) for lazy kwargs.
-- **Example:** `self.logger.opt(lazy=True).debug("record {data}", data=lambda: json.dumps(record))`
-
-#### `get_logger`
-
-- **Import:** `from application_sdk.observability.logger_adaptor import get_logger`
-- **Signature:** `get_logger(name: str | None = None) -> AtlanLoggerAdapter`
-- **Summary:** Get or create an `AtlanLoggerAdapter` instance. If `name` is `None`, uses the caller's module name. This is the canonical way to obtain a logger throughout the SDK.
-- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 ## `application_sdk.outputs`
 
