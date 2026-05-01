@@ -16,7 +16,13 @@ from application_sdk.observability.context import (
 )
 from application_sdk.observability.logger_adaptor import (
     AtlanLoggerAdapter,
+    _build_extra_dict,
+    _extract_exception_attributes,
+    _format_exception_stacktrace,
+    _format_printf_args,
+    _has_remote_otlp_endpoint,
     _make_log_record_dict,
+    _normalize_log_extra_value,
     get_logger,
 )
 from application_sdk.testing.hypothesis.strategies.common.logger import (
@@ -1109,16 +1115,6 @@ class TestPython314EventLoopCompat:
 # ───────────────────────────────────────────────────────────────────────────
 
 
-from application_sdk.observability.logger_adaptor import (  # noqa: E402
-    _build_extra_dict,
-    _extract_exception_attributes,
-    _format_exception_stacktrace,
-    _format_printf_args,
-    _has_remote_otlp_endpoint,
-    _normalize_log_extra_value,
-)
-
-
 class TestHasRemoteOtlpEndpoint:
     """`_has_remote_otlp_endpoint` decides between local-noop and remote-export.
 
@@ -1275,8 +1271,8 @@ class TestBuildExtraDict:
         assert "logger_name" not in out
 
     def test_atlan_prefix_kept(self):
-        out = _build_extra_dict({"atlan-tenant": "acme"})
-        assert out["atlan-tenant"] == "acme"
+        out = _build_extra_dict({"atlan.tenant": "acme"})
+        assert out["atlan.tenant"] == "acme"
 
     def test_temporal_prefix_kept(self):
         out = _build_extra_dict({"temporal.activity.type": "fetch"})
@@ -1287,16 +1283,43 @@ class TestBuildExtraDict:
         assert out["tenant.id"] == "acme-1"
 
     def test_atlan_prefix_with_none_value_dropped(self):
-        out = _build_extra_dict({"atlan-tenant": None})
-        assert "atlan-tenant" not in out
+        out = _build_extra_dict({"atlan.tenant": None})
+        assert "atlan.tenant" not in out
 
     def test_non_primitive_prefixed_value_coerced_to_string(self):
-        out = _build_extra_dict({"atlan-payload": {"k": "v"}})
-        assert isinstance(out["atlan-payload"], str)
+        out = _build_extra_dict({"atlan.payload": {"k": "v"}})
+        assert isinstance(out["atlan.payload"], str)
+
+    def test_atlan_dash_prefix_dropped(self):
+        # The legacy "atlan-" dash form is no longer recognized — nothing
+        # in the codebase emits it as a logger extra key.
+        out = _build_extra_dict({"atlan-tenant": "acme"})
+        assert "atlan-tenant" not in out
 
     def test_attempt_normalized_via_known_key_path(self):
         out = _build_extra_dict({"attempt": 7})
         assert out["attempt"] == "7"
+
+    def test_atlan_dot_prefix_kept(self):
+        # The interceptors emit dot-prefixed keys (atlan.correlation_id,
+        # atlan.exception.fingerprint, atlan.exception.cause_chain) — these
+        # must pass through alongside the legacy dash form.
+        out = _build_extra_dict(
+            {
+                "atlan.correlation_id": "corr-1",
+                "atlan.exception.fingerprint": "sha-abc",
+                "atlan.exception.cause_chain": "A -> B -> C",
+            }
+        )
+        assert out["atlan.correlation_id"] == "corr-1"
+        assert out["atlan.exception.fingerprint"] == "sha-abc"
+        assert out["atlan.exception.cause_chain"] == "A -> B -> C"
+
+    def test_otel_prefix_kept(self):
+        # otel.status_code is the OTel semconv way to mark a record as failed;
+        # without it, the loguru-bridged log doesn't carry the status into CH.
+        out = _build_extra_dict({"otel.status_code": "ERROR"})
+        assert out["otel.status_code"] == "ERROR"
 
 
 class TestCreateLogRecord:
@@ -1424,13 +1447,15 @@ class TestLoggingMethodsForwardToLoguru:
         self, logger_adapter: AtlanLoggerAdapter
     ):
         # Make `process` blow up; debug() must not propagate.
-        with mock.patch.object(
-            logger_adapter, "process", side_effect=RuntimeError("explode")
+        with (
+            mock.patch.object(
+                logger_adapter, "process", side_effect=RuntimeError("explode")
+            ),
+            mock.patch.object(logger_adapter, "_sync_flush") as fl,
         ):
-            with mock.patch.object(logger_adapter, "_sync_flush") as fl:
-                # Should not raise
-                logger_adapter.debug("x")
-                fl.assert_called_once()
+            # Should not raise
+            logger_adapter.debug("x")
+            fl.assert_called_once()
 
 
 class TestProcessV3CorrelationBridge:

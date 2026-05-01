@@ -124,20 +124,26 @@ _KNOWN_EXTRA_KEYS = frozenset(
 )
 
 
+_PREFIXES_PASSTHROUGH = (
+    "atlan.",  # SDK convention: atlan.correlation_id, atlan.exception.fingerprint
+    "exception.",  # OTel semconv: exception.type/message/stacktrace
+    "otel.",  # OTel semconv: otel.status_code
+    "temporal.",  # SDK convention: temporal.workflow.id, etc.
+    "tenant.",
+)
+
+
 def _build_extra_dict(
     record_extra: dict[str, Any], exception: Any = None
 ) -> dict[str, Any]:
     """Build a dict of structured log extra fields from a loguru record's extra dict."""
     extra: dict[str, Any] = {}
     for k, v in record_extra.items():
-        if k != "logger_name" and k in _KNOWN_EXTRA_KEYS:
+        if k == "logger_name":
+            continue
+        if k in _KNOWN_EXTRA_KEYS:
             extra[k] = _normalize_log_extra_value(k, v)
-        elif (
-            k.startswith("atlan-")
-            or k.startswith("exception.")
-            or k.startswith("temporal.")
-            or k.startswith("tenant.")
-        ) and v is not None:
+        elif k.startswith(_PREFIXES_PASSTHROUGH) and v is not None:
             extra[k] = v if isinstance(v, (bool, int, float, str, bytes)) else str(v)
     for key, value in _extract_exception_attributes(exception).items():
         extra[key] = value
