@@ -665,8 +665,17 @@ Events for files ≥ 10 MiB are logged at `INFO`; smaller files at `DEBUG`.
 
 ## Part 6 — Migration from upload_to_atlan
 
-`BaseMetadataExtractor.upload_to_atlan` has been removed.  Push files to the
-platform via `App.upload()` directly:
+`BaseMetadataExtractor.upload_to_atlan` is **deprecated**.  It still works (it
+now just forwards to `App.upload` internally), but emits a `DeprecationWarning`
+and will be removed in the next major SDK release.
+
+**Deprecated:**
+
+```python
+await self.upload_to_atlan(UploadInput(output_path=input.output_path))
+```
+
+**Replacement:**
 
 ```python
 up = await self.upload(

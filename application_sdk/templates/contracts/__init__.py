@@ -1,5 +1,9 @@
 """Typed contracts for built-in App implementations."""
 
+from application_sdk.templates.contracts.base_metadata_extraction import (
+    UploadInput,
+    UploadOutput,
+)
 from application_sdk.templates.contracts.incremental_sql import (
     ExecuteColumnBatchInput,
     ExecuteColumnBatchOutput,
@@ -49,6 +53,9 @@ from application_sdk.templates.contracts.sql_query import (
 )
 
 __all__ = [
+    # Base metadata extraction (deprecated upload_to_atlan task)
+    "UploadInput",
+    "UploadOutput",
     # SQL metadata — base
     "ExtractionInput",
     "ExtractionOutput",
