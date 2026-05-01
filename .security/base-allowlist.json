@@ -300,5 +300,12 @@
     "reason": "Base image — Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.43.5; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
     "expires": "2026-05-29",
     "added_by": "sachi-atlan"
+  },
+  "CVE-2026-41066": {
+    "package": "lxml",
+    "severity": "HIGH",
+    "reason": "Connector transitive — lxml pulled in by redshift-connector (aws/amazon-redshift-python-driver). Fix is in lxml>=6.1.0, but redshift-connector 2.1.10 pins lxml<6.0.0 in its package metadata. Bumping lxml in connector apps forces a downgrade of redshift-connector to 2.1.7. Allowlisting until upstream relaxes the cap; tracking via aws/amazon-redshift-python-driver. Connector code uses lxml only for SOAP/XML parsing of trusted Redshift IAM responses, not untrusted input.",
+    "expires": "2026-05-28",
+    "added_by": "anuj-atlan"
   }
 }
