@@ -197,11 +197,9 @@ ENABLE_MCP=true
 ### Error Handling
 
 ```python
-@dataclass
 class ProcessInput(Input):
     data_id: str
 
-@dataclass
 class ProcessOutput(Output):
     message: str
 

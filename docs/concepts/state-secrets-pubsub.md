@@ -131,12 +131,14 @@ class PubSub(Protocol):
 `PubSub` is not part of `InfrastructureContext`. Use `DaprPubSub` from `application_sdk.infrastructure` — it implements the `PubSub` Protocol and handles serialisation and error wrapping:
 
 ```python
+import os
 from application_sdk.infrastructure import AsyncDaprClient, DaprPubSub
 
 @task(timeout_seconds=60)
 async def notify_complete(self, input: NotifyInput) -> NotifyOutput:
     async with AsyncDaprClient() as dapr:
-        pubsub = DaprPubSub(dapr, pubsub_name="eventstore")  # matches EVENT_STORE_NAME env var (default: "eventstore")
+        # DaprPubSub constructor default is "pubsub"; pass EVENT_STORE_NAME to match the Dapr component name ("eventstore" by default)
+        pubsub = DaprPubSub(dapr, pubsub_name=os.getenv("EVENT_STORE_NAME", "eventstore"))
         await pubsub.publish(
             topic="extraction-complete",
             data={"run_id": input.run_id, "record_count": input.record_count},

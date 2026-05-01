@@ -82,7 +82,7 @@ from application_sdk.execution import ApplicationError
 raise ApplicationError(str(APP_NON_RETRYABLE), non_retryable=True)
 ```
 
-Available error constants: `APP_ERROR`, `APP_NON_RETRYABLE`, `APP_CONTEXT_ERROR`, `APP_NOT_FOUND`, `TASK_NOT_FOUND`, `STORAGE_NOT_FOUND`, `CONTRACT_VALIDATION`, `PAYLOAD_SAFETY`, `HANDLER_ERROR`, `EXECUTION_ERROR`.
+Available error constants: `APP_ERROR`, `APP_NON_RETRYABLE`, `HANDLER_ERROR`, `CONTRACT_VALIDATION`, `PAYLOAD_SAFETY`, `CREDENTIAL_ERROR`, `CREDENTIAL_NOT_FOUND`, `STORAGE_NOT_FOUND`, `SECRET_NOT_FOUND`.
 
 ## SQL Utilities
 

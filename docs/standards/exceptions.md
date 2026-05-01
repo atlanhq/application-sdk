@@ -203,10 +203,10 @@ finally:
 - **Include workflow context** in error messages
 - **Handle Temporal-specific exceptions** appropriately
 
-### **Server (`application_sdk/server/`)**
-- **Critical**: Re-raise exceptions to return proper HTTP error responses
+### **Server middleware (`application_sdk/server/`)**
+- **Non-critical for middleware**: Middleware, MCP plumbing, and FastAPI utilities — swallow or log non-fatal errors; let the framework handle unhandled ones
 - **Include request context** in error messages
-- **Handle HTTP-specific exceptions** appropriately
+- **Note**: HTTP request-handler error handling belongs in `application_sdk/handler/` (see "Handlers" section above)
 
 ## Review Checklist
 

@@ -43,6 +43,7 @@ from application_sdk.transformers.atlas import AtlasTransformer  # deep import â
 Used inside `SqlMetadataExtractor.transform_data()`. To override the transformer, instantiate it inside your `transform_data()` override and wire it via the `TransformInput`/`TransformOutput` contracts:
 
 ```python
+import os
 from application_sdk.app import task
 from application_sdk.templates.contracts import TransformInput, TransformOutput
 
@@ -51,7 +52,7 @@ class MyConnectorApp(SqlMetadataExtractor):
     async def transform_data(self, input: TransformInput) -> TransformOutput:
         transformer = AtlasTransformer(
             connector_name="my-connector",
-            tenant_id=input.tenant_id,
+            tenant_id=os.getenv("ATLAN_TENANT_ID", "default"),  # TransformInput has no tenant_id; read from env
         )
         # ... call transformer.transform_metadata() per typename as needed
         return TransformOutput(...)

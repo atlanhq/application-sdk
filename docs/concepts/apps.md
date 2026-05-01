@@ -168,7 +168,7 @@ class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
 
 ### BaseMetadataExtractor
 
-For non-SQL sources (REST APIs, file systems). Provides the same task structure but without SQL-specific defaults.
+Base class for all metadata-extraction Apps. Provides upload, cleanup, and lifecycle plumbing without committing to a SQL-specific task layout. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
 
 ## Lifecycle Hooks
 

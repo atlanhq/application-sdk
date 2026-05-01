@@ -196,7 +196,7 @@ See [Testing Apps](apps.md#testing-apps) and [Integration Testing](../guides/int
 For connectors that receive credentials as a flat dict (e.g. from Heracles), use `parse_credentials_extra` to extract nested fields:
 
 ```python
-from application_sdk.credentials.utils import parse_credentials_extra
+from application_sdk.credentials import parse_credentials_extra
 
 raw = {"host": "db.example.com", "extra": '{"schema": "public"}'}
 extra = parse_credentials_extra(raw)

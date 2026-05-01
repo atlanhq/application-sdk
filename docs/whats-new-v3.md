@@ -316,7 +316,7 @@ class MyConnector(App):
 
 **The key improvements:**
 
-- **No Dapr sidecar in tests.** Inject `MockStateStore` / `MockSecretStore` from `application_sdk.testing.mocks` and run your task methods in pure Python — no sidecar, no gRPC, no environment variables.
+- **No Dapr sidecar in tests.** Inject `MockStateStore` / `MockSecretStore` from `application_sdk.testing` and run your task methods in pure Python — no sidecar, no gRPC, no environment variables.
 - **No gRPC size limits.** Object storage is now backed by `obstore`, which talks directly to
   S3/GCS/Azure or the local filesystem. The historic 4 MB Dapr gRPC message limit that
   bit connectors with large files is gone.

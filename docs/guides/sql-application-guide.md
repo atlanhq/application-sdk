@@ -704,7 +704,7 @@ dapr:
 3. **Keep tasks focused.** Each `@task` method should do one thing --- fetch databases, fetch schemas, transform, etc. The `run()` method handles orchestration.
 4. **Use `FileReference` for large data.** If a task produces output larger than ~1 MB, store it in object storage via `FileReference` rather than passing it through Temporal.
 5. **Load credentials via `credential_ref`.** Use `input.credential_ref` (the typed `CredentialRef`) in `@task` methods. In handlers, use typed credential models to normalize `input.credentials`.
-6. **Log with the SDK logger.** Use `application_sdk.observability.logger_adaptor.get_logger` for structured logging that integrates with Temporal.
+6. **Log with the SDK logger.** Use `get_logger` from `application_sdk.observability` for structured logging that integrates with Temporal.
 7. **Test without sidecars.** Use `MockStateStore` and `MockSecretStore` from `application_sdk.testing` to test your connector and handler without Dapr or Temporal running.
 8. **Set `ATLAN_APP_MODULE` in the Dockerfile.** This locks the app module to the image and avoids runtime misconfiguration.
 9. **Use `on_complete` for cleanup.** Override `on_complete()` for post-run cleanup (see [Upgrade Guide Step 12](../upgrade-guide-v3.md#step-12-app-lifecycle-hooks)).
