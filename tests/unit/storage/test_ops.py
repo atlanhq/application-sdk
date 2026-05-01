@@ -400,9 +400,9 @@ class TestIsNotFound:
 class TestTransferLogging:
     """upload_file / download_file must emit structured per-attempt log events.
 
-    The autodesk/mindbody RCA was wrong-footed by the absence of these fields:
-    we said "single attempt" when ~5–6 attempts had actually happened in the
-    Rust layer. Even though we cannot count Rust retries directly, we *can*
+    A prior RCA was wrong-footed by the absence of these fields: we said
+    "single attempt" when ~5–6 attempts had actually happened in the Rust
+    layer. Even though we cannot count Rust retries directly, we *can*
     expose what the SDK observed: bytes, elapsed, throughput, outcome, error
     class. That alone closes the worst gap.
     """

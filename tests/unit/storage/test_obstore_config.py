@@ -1,10 +1,10 @@
 """Tests for obstore client_options and retry_config plumbing (BLDX-1155 #3).
 
-The autodesk/mindbody RCA showed that ``S3Store`` was being created with
-nothing but region+credentials — which means object_store-rs falls back to
-defaults sized for small objects (request timeout 30 s).  These tests pin
-the env-var → ClientConfig contract so the next 200 MB SQLite file does not
-silently inherit a small-object timeout.
+A production RCA showed that ``S3Store`` was being created with nothing but
+region+credentials — which means object_store-rs falls back to defaults sized
+for small objects (request timeout 30 s).  These tests pin the env-var →
+ClientConfig contract so large files do not silently inherit a small-object
+timeout.
 """
 
 from __future__ import annotations
@@ -145,8 +145,8 @@ class TestLogObstoreConfig:
 
 class TestBindingPlumbsClientOptions:
     """``create_store_from_binding`` for ``s3`` must pass client_options +
-    retry_config into ``S3Store``.  Without this the autodesk fix is
-    purely cosmetic — the dict is built but never reaches obstore-rs.
+    retry_config into ``S3Store``.  Without this the fix is purely cosmetic —
+    the dict is built but never reaches obstore-rs.
     """
 
     def test_s3_binding_passes_client_options_and_retry_config(

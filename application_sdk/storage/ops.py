@@ -415,7 +415,7 @@ async def download_file(
     the ``ClientConfig`` timeout and ``RetryConfig`` values configured in
     ``_obstore_config.py`` — notably ``ATLAN_OBSTORE_TIMEOUT=30m`` (default)
     which prevents the 30-second body-read cut-off that caused the
-    Autodesk/Mindbody incidents.  There is no additional Python-level retry loop
+    production incidents.  There is no additional Python-level retry loop
     here to avoid multiplying wait time without changing the outcome.
 
     Args:

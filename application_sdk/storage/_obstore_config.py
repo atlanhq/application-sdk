@@ -6,8 +6,7 @@ we *cannot* tune from the SDK without these helpers is its **client-level
 timeouts and connection pool**, which are sized for small objects by default
 and cause GB-class downloads to fail with timeout-stalled streams.
 
-The autodesk/mindbody RCA (mindbody run ``019dcc69-db14-7b18-b40a-19db48e6fa68``,
-2026-04-27) and the in-tree fivetran-app workaround
+A production RCA and the in-tree fivetran-app workaround
 (``binding_cfg.config["client_options"] = {"timeout": "30m"}``) both point to
 the same gap: ``client_options`` and ``retry_config`` are never plumbed
 through ``application_sdk/storage/binding.py`` or
@@ -54,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 # Defaults.  Values larger than upstream defaults are deliberate:
 #   - upstream timeout is 30 s, which kills mid-stream on 100 MB+ files via
-#     NAT/public-egress paths (the autodesk/mindbody scenario).
+#     NAT/public-egress paths for large file downloads.
 #   - 30 minutes matches what fivetran-app already sets directly today; we
 #     promote that value to the SDK default so every app inherits it.
 _DEFAULT_TIMEOUT = "30m"
@@ -149,10 +148,10 @@ def log_obstore_config(
 ) -> None:
     """Log the configured client/retry options once at store creation time.
 
-    The autodesk/mindbody RCA was wrong-footed by these values being
-    invisible — we said "single attempt" when ~5–6 attempts had actually
-    happened in the Rust layer at obstore's default 10×3 min retry budget.
-    Surfacing what's configured up front prevents that confusion next time.
+    A prior RCA was wrong-footed by these values being invisible — we said
+    "single attempt" when ~5–6 attempts had actually happened in the Rust
+    layer at obstore's default 10×3 min retry budget. Surfacing what's
+    configured up front prevents that confusion next time.
     """
     extra: dict[str, Any] = {
         "obstore_provider": provider,
