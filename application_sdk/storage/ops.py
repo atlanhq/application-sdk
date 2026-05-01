@@ -647,15 +647,12 @@ async def download_file_chunked(
     async def _fetch_chunk(offset: int) -> None:
         length = min(chunk_size_bytes, file_size - offset)
         async with sem:
-            try:
-                raw = bytes(
-                    await obstore.get_range_async(
-                        resolved, key, start=offset, length=length
-                    )
+            raw = bytes(
+                await obstore.get_range_async(
+                    resolved, key, start=offset, length=length
                 )
-                os.pwrite(fd, raw, offset)
-            except Exception as chunk_exc:
-                raise chunk_exc
+            )
+            os.pwrite(fd, raw, offset)
 
     try:
         await asyncio.gather(
