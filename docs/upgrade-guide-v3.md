@@ -207,6 +207,12 @@ Override `run()` if you need to customise this sequence. The incremental state f
 
 If your connector talks to a REST/API backend (rather than a SQL engine), v3 replaces the v2 `TransformerInterface` + Daft + YAML-query pipeline with a simpler pattern: **typed records → pure mapper functions → `pyatlan` Asset instances**. Reference implementations: `atlan-openapi-app`, `atlan-azure-event-hub-app`.
 
+> **Note:** The examples below import from the legacy `pyatlan` package (consistent with the
+> built-in `AtlasTransformer` transformers, which still depend on `pyatlan`). If you are
+> building a new connector that uses the `pyatlan_v9` client elsewhere, prefer
+> `from pyatlan_v9.model.assets import ...` and use the v9 serialisation API instead of
+> `.dict()`.
+
 ### When to use this pattern
 
 Use the asset-mapper pattern when:

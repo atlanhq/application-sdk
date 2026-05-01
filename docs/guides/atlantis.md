@@ -107,10 +107,22 @@ DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 \
 
 # Terminal 2: frontend dev server (example: Vite)
 cd app/frontend
-npm run dev -- --port 5173 --proxy /workflows=http://localhost:8000
+npm run dev -- --port 5173
 ```
 
-Use your framework's dev-server proxy to forward `/workflows/*` to the SDK handler at port 8000. This avoids rebuilding the frontend on every change during development.
+Configure your framework's dev-server proxy to forward `/workflows/*` to the SDK handler at
+port 8000. This avoids rebuilding the frontend on every change during development. For Vite,
+add this to `vite.config.js`:
+
+```js
+export default {
+  server: {
+    proxy: {
+      '/workflows': 'http://localhost:8000',
+    },
+  },
+}
+```
 
 ---
 

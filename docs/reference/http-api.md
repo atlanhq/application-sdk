@@ -132,7 +132,7 @@ Request graceful termination of a running workflow.
 
 **Path params:** `workflow_id`, `run_id` (supports slashes — use URL encoding).
 
-**Response:** `{ "success": true }`
+**Response:** `{ "success": true, "message": "Workflow terminated successfully" }`
 
 ---
 
