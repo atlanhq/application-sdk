@@ -9,7 +9,7 @@ v3 uses `loguru` (via an `AtlanLoggerAdapter` wrapper) for structured logging. T
 ### Getting a Logger
 
 ```python
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability import get_logger
 
 logger = get_logger(__name__)
 
@@ -126,40 +126,13 @@ include_pattern, exclude_pattern = prepare_filters(
 )
 ```
 
-## AWS Utilities
-
-Helper functions for AWS RDS IAM authentication:
-
-```python
-from application_sdk.common.aws_utils import (
-    generate_aws_rds_token_with_iam_role,
-    generate_aws_rds_token_with_iam_user,
-    get_region_name_from_hostname,
-)
-
-# IAM role authentication
-token = generate_aws_rds_token_with_iam_role(
-    role_arn="arn:aws:iam::123456789:role/my-role",
-    host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-    user="admin",
-)
-
-# IAM user authentication
-token = generate_aws_rds_token_with_iam_user(
-    aws_access_key_id="AKIA...",
-    aws_secret_access_key="...",
-    host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-    user="admin",
-)
-```
-
 ## General Utilities
 
 | Function | Import | Description |
 |----------|--------|-------------|
-| `get_actual_cpu_count()` | `application_sdk.common.concurrency` | CPU count respecting container limits |
-| `get_safe_num_threads()` | `application_sdk.common.concurrency` | Reasonable thread count for parallel work (`cpu_count * 2`, min 2) |
-| `parse_credentials_extra(credentials)` | `application_sdk.credentials.utils` | Parse the `extra` JSON field in a credentials dict |
+| `get_actual_cpu_count()` | `application_sdk.common` | CPU count respecting container limits |
+| `get_safe_num_threads()` | `application_sdk.common` | Reasonable thread count for parallel work (`cpu_count * 2`, min 2) |
+| `parse_credentials_extra(credentials)` | `application_sdk.credentials` | Parse the `extra` JSON field in a credentials dict |
 
 ## Temporal Configuration
 

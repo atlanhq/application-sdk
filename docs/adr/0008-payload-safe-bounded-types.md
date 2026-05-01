@@ -33,7 +33,7 @@ Forbid unbounded types at class definition time and provide safe alternatives:
 ```python
 from typing import Annotated
 from application_sdk.contracts import Input, Output
-from application_sdk.contracts.types import MaxItems, FileReference
+from application_sdk.contracts import MaxItems, FileReference
 
 class ProcessInput(Input):
     # SAFE: bounded list

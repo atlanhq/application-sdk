@@ -100,7 +100,7 @@ class MyMetadataActivities(BaseSQLMetadataExtractionActivities):
 
 ```python
 from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts.sql_metadata import (
+from application_sdk.templates.contracts import (
     FetchDatabasesInput, FetchDatabasesOutput,
     ExtractionInput, ExtractionOutput,
 )
@@ -138,7 +138,7 @@ class MyQueryWorkflow(SQLQueryExtractionWorkflow):
 
 ```python
 from application_sdk.templates import SqlQueryExtractor
-from application_sdk.templates.contracts.sql_query import (
+from application_sdk.templates.contracts import (
     QueryBatchInput, QueryBatchOutput,
     QueryFetchInput, QueryFetchOutput,
 )
@@ -181,7 +181,7 @@ class MyIncrementalActivities(BaseSQLIncrementalMetadataExtractionActivities):
 
 ```python
 from application_sdk.templates import IncrementalSqlMetadataExtractor
-from application_sdk.templates.contracts.incremental_sql import (
+from application_sdk.templates.contracts import (
     IncrementalExtractionInput, IncrementalExtractionOutput,
     FetchColumnsIncrementalInput, FetchColumnsOutput,
 )
@@ -1047,7 +1047,7 @@ async def test_my_task(infra):
 
 ```python
 # conftest.py — import to make the fixture available project-wide
-from application_sdk.testing.fixtures import clean_app_registry
+from application_sdk.testing import clean_app_registry
 
 # test_my_app.py — list it as a parameter on each test that needs isolation
 async def test_something(clean_app_registry):

@@ -701,7 +701,7 @@ add it to each test that needs registry isolation:
 
 ```python
 # conftest.py — makes the fixture available project-wide
-from application_sdk.testing.fixtures import clean_app_registry
+from application_sdk.testing import clean_app_registry
 
 # test_my_app.py
 async def test_something(clean_app_registry):

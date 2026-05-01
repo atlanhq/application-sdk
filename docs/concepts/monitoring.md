@@ -172,7 +172,7 @@ In Grafana/Loki, filter by `correlation_id` to see the full trace of a multi-pha
 Access the current correlation ID programmatically:
 
 ```python
-from application_sdk.observability.correlation import get_correlation_context
+from application_sdk.observability import get_correlation_context
 
 ctx = get_correlation_context()
 cid = ctx.correlation_id if ctx else None  # str (empty when unset) or None when ctx is None

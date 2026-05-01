@@ -30,16 +30,19 @@ REPO_ROOT = (
 )  # .claude/skills/capability-manifest/references/extractor.py
 PKG_ROOT = REPO_ROOT / "application_sdk"
 
-# Subpackages to index (those that can have __all__)
+# Subpackages to index (those that can have __all__).
+# Packages (directories with __init__.py) and top-level modules (single .py files) are both supported.
 SUBPACKAGES = [
     "app",
     "clients",
     "common",
     "contracts",
     "credentials",
+    "errors",  # top-level module: application_sdk/errors.py
     "execution",
     "handler",
     "infrastructure",
+    "main",  # top-level module: application_sdk/main.py
     "observability",
     "outputs",
     "server",
@@ -101,11 +104,32 @@ def get_sdk_version() -> str:
 
 
 def extract_all_from_init(pkg_path: Path) -> list[str]:
-    """Parse __all__ from a package __init__.py via AST (reliable for literal lists)."""
-    init_file = pkg_path / "__init__.py"
-    if not init_file.exists():
+    """Parse __all__ from a package __init__.py or a top-level .py module.
+
+    Accepts either:
+    - a directory (package): reads ``pkg_path/__init__.py``
+    - a file path (top-level module): reads ``pkg_path`` directly
+    Also accepts ``pkg_path`` as a name without extension — tries
+    ``pkg_path/__init__.py`` first, then ``pkg_path.py`` as a fallback.
+    """
+    if pkg_path.is_dir():
+        source_file = pkg_path / "__init__.py"
+    elif pkg_path.suffix == ".py" and pkg_path.is_file():
+        source_file = pkg_path
+    else:
+        # Try package first, then top-level module
+        init = pkg_path / "__init__.py"
+        module = pkg_path.parent / (pkg_path.name + ".py")
+        if init.exists():
+            source_file = init
+        elif module.exists():
+            source_file = module
+        else:
+            return []
+
+    if not source_file.exists():
         return []
-    tree = ast.parse(init_file.read_text())
+    tree = ast.parse(source_file.read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -208,9 +232,13 @@ def _render_class_signature(cls_obj: Any) -> str:
 
 def _docstring_summary(obj: Any) -> str:
     """Extract the first sentence from a griffe object's docstring."""
-    if obj.docstring is None:
+    try:
+        docstring = obj.docstring
+    except Exception:
         return "_(no docstring)_"
-    text = obj.docstring.value.strip()
+    if docstring is None:
+        return "_(no docstring)_"
+    text = docstring.value.strip()
     if not text:
         return "_(no docstring)_"
     # First non-empty line, then trim at first period if it terminates a sentence
@@ -223,8 +251,8 @@ def _relative_filepath(obj: Any) -> str:
     try:
         fp = Path(obj.filepath)
         return str(fp.relative_to(REPO_ROOT))
-    except (TypeError, ValueError):
-        return str(getattr(obj, "filepath", ""))
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -309,10 +337,11 @@ def cmd_dump() -> None:
             eprint(f"  WARNING: {subpkg_name} not found in griffe output")
             continue
 
+        # Support both packages (directory) and top-level modules (single .py file)
         pkg_path = PKG_ROOT / subpkg_name
         all_names = extract_all_from_init(pkg_path)
         if not all_names:
-            eprint(f"  INFO: {subpkg_name}/__init__.py has no __all__; skipping")
+            eprint(f"  INFO: {subpkg_name} has no __all__; skipping")
             continue
 
         eprint(f"  {subpkg_name}: {len(all_names)} exports")
@@ -659,8 +688,9 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
     lines.append("## Contracts")
     lines.append("")
     lines.append(
-        "Strongly-typed Inputs/Outputs for SDK methods."
-        " All inherit from `application_sdk.contracts.base.{Input, Output}` (Pydantic)."
+        "Strongly-typed Pydantic models for SDK methods. "
+        "Contracts in `application_sdk.contracts` inherit from `Input`/`Output`; "
+        "contracts in `application_sdk.handler.contracts` are direct `pydantic.BaseModel` subclasses."
     )
     lines.append("")
 

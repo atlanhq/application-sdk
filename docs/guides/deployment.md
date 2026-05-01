@@ -27,7 +27,7 @@ dapr:
 | Field | Type | Description |
 |-------|------|-------------|
 | `app_id` | string | Unique identifier for this app. Must be kebab-case and match the Temporal task queue prefix. |
-| `execution_mode` | enum | `native` — standard SDK handler + worker. `argo` — legacy Argo Workflow mode (deprecated). |
+| `execution_mode` | enum | `native` — standard SDK handler + worker. `argo` — transitional value retained for legacy manifests; do not use for new apps. Will be removed in a future release. |
 | `splitDeploymentEnabled` | bool | `true` → deploy handler and worker as separate Kubernetes Deployments (recommended). `false` → single combined deployment (use only for very small apps). |
 | `self_deployed_runtime` | bool | `true` → publish the image to Docker Hub for self-hosted customers (SDR). Default: `false`. |
 

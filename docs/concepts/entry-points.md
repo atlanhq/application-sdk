@@ -183,7 +183,7 @@ curl -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=mine-queries' 
 
 For single-entry-point apps, `?entrypoint=` is optional — the sole entry point is selected automatically. For multi-entry-point apps it is **required** (returns 400 otherwise).
 
-> **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with existing Argo templates and Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
+> **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with legacy Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
 
 ### Shared infrastructure
 

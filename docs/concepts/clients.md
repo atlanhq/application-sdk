@@ -4,7 +4,7 @@ This module provides the necessary abstractions (clients) for interacting with v
 
 ## Core Concepts
 
-1.  **`ClientInterface` (`application_sdk.clients.__init__.py`)**:
+1.  **`ClientInterface` (`application_sdk.clients`)**:
     *   **Purpose:** An abstract base class defining the minimal contract for all clients. It requires implementing an `async def load()` method for connection/setup and provides an optional `async def close()` for cleanup.
     *   **Extensibility:** Any class interacting with an external service should ideally inherit from this interface.
 
@@ -30,7 +30,7 @@ Provides classes for interacting with SQL databases using SQLAlchemy.
 Both SQL client classes are typically **subclassed** for specific database types (e.g., PostgreSQL, Snowflake) rather than used directly.
 
 1.  **Connection Configuration (`DB_CONFIG` - Class Attribute):**
-    *   Define `DB_CONFIG` using the Pydantic model `DatabaseConfig` (`application_sdk.clients.models.DatabaseConfig`).
+    *   Define `DB_CONFIG` using the Pydantic model `DatabaseConfig` (`application_sdk.clients.DatabaseConfig`).
     *   **`template` (str):** SQLAlchemy connection string template using placeholders (e.g., `{username}`, `{host}`).
     *   **`required` (list[str]):** Keys that must be present in `credentials`/`credentials.extra`. `{password}` is resolved via `get_auth_token()` depending on `authType`.
     *   **`parameters` (list[str], optional):** Optional keys appended as URL query parameters when present in `credentials`/`extra`.
@@ -53,8 +53,7 @@ Both SQL client classes are typically **subclassed** for specific database types
 
 ```python
 # In your subclass definition (e.g., my_connector/clients.py)
-from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.clients.models import DatabaseConfig
+from application_sdk.clients import BaseSQLClient, DatabaseConfig
 
 class SnowflakeClient(BaseSQLClient):
     DB_CONFIG = DatabaseConfig(
@@ -114,7 +113,7 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 ```python
 # In your subclass definition (e.g., my_connector/clients.py)
 from typing import Dict, Any
-from application_sdk.clients.base import BaseClient
+from application_sdk.clients import BaseClient
 
 class MyApiClient(BaseClient):
     async def load(self, **kwargs: Any) -> None:
@@ -191,8 +190,7 @@ Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/
 - `AzureAuthProvider` (`azure/auth.py`) — handles Azure credential strategies including managed identity, service principal, and connection-string authentication.
 
 ```python
-from application_sdk.clients.azure.client import AzureClient
-from application_sdk.clients.azure.auth import AzureAuthProvider
+from application_sdk.clients import AzureClient, AzureAuthProvider
 ```
 
 ## SSL Utilities (`ssl_utils.py`)
@@ -200,7 +198,7 @@ from application_sdk.clients.azure.auth import AzureAuthProvider
 `application_sdk.clients.ssl_utils` provides helpers for constructing SSL contexts from PEM certificates stored in a directory:
 
 ```python
-from application_sdk.clients.ssl_utils import create_ssl_context_with_custom_certs
+from application_sdk.clients import create_ssl_context_with_custom_certs
 
 # cert_dir must contain ca.crt, client.crt, client.key files
 ssl_ctx = create_ssl_context_with_custom_certs(cert_dir="/etc/ssl/my-app")
@@ -209,7 +207,7 @@ ssl_ctx = create_ssl_context_with_custom_certs(cert_dir="/etc/ssl/my-app")
 Use `get_ssl_context()` to let the SDK discover the certificate directory automatically from the `SSL_CERT_DIR` environment variable:
 
 ```python
-from application_sdk.clients.ssl_utils import get_ssl_context
+from application_sdk.clients import get_ssl_context
 
 ssl_ctx = get_ssl_context()   # returns True (default cert verification) if SSL_CERT_DIR is not set
 ```

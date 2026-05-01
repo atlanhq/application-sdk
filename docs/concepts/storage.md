@@ -22,7 +22,7 @@ await download_file(
 )
 ```
 
-`key` is the object-store path (no leading slash). `local_path` is the local filesystem path.
+`key` is the object-store path. Leading slashes and `./local/tmp/...` workflow prefixes are stripped automatically by `normalize_key`. `local_path` is the local filesystem path.
 
 ### Additional operations
 

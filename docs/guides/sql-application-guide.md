@@ -69,7 +69,7 @@ Define typed Pydantic models for your connector's credentials and configuration.
 ```python
 # app/contracts.py
 from pydantic import BaseModel
-from application_sdk.templates.contracts.sql_metadata import ExtractionTaskInput
+from application_sdk.templates.contracts import ExtractionTaskInput
 
 
 class MyCredential(BaseModel):
@@ -269,7 +269,7 @@ The core of your connector is a `SqlMetadataExtractor` subclass. Override `@task
 # app/connector.py
 import asyncio
 from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts.sql_metadata import (
+from application_sdk.templates.contracts import (
     ExtractionInput,
     ExtractionOutput,
     ExtractionTaskInput,
@@ -283,7 +283,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchColumnsOutput,
 )
 from application_sdk.app import task
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability import get_logger
 
 from app.clients import PostgresClient
 from app.contracts import MyCredential, MetadataConfig, MyFetchInput
@@ -427,7 +427,7 @@ Each `@task` method becomes a Temporal activity. The `run()` method orchestrates
 Use `@task` to define additional extraction steps and override `run()` to include them:
 
 ```python
-from application_sdk.templates.contracts.sql_metadata import (
+from application_sdk.templates.contracts import (
     FetchViewsInput,
     FetchViewsOutput,
 )
@@ -596,7 +596,7 @@ v3 provides in-memory mock implementations of infrastructure services so you can
 # tests/test_extractor.py
 import pytest
 from application_sdk.testing import MockStateStore, MockSecretStore
-from application_sdk.templates.contracts.sql_metadata import (
+from application_sdk.templates.contracts import (
     FetchDatabasesInput,
     FetchDatabasesOutput,
 )

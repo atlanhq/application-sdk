@@ -103,7 +103,7 @@ Extracts metadata (databases, schemas, tables, columns, procedures) from SQL sou
 
 ```python
 from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts.sql_metadata import (
+from application_sdk.templates.contracts import (
     FetchDatabasesInput, FetchDatabasesOutput,
     ExtractionInput, ExtractionOutput,
 )
@@ -124,7 +124,7 @@ Extracts query history/logs from SQL sources:
 
 ```python
 from application_sdk.templates import SqlQueryExtractor
-from application_sdk.templates.contracts.sql_query import (
+from application_sdk.templates.contracts import (
     QueryBatchInput, QueryBatchOutput,
     QueryFetchInput, QueryFetchOutput,
 )
@@ -154,7 +154,7 @@ Runs a 5-phase incremental extraction:
 
 ```python
 from application_sdk.templates import IncrementalSqlMetadataExtractor
-from application_sdk.templates.contracts.incremental_sql import (
+from application_sdk.templates.contracts import (
     FetchColumnsIncrementalInput, FetchColumnsOutput,
 )
 from application_sdk.app import task
@@ -235,7 +235,7 @@ from application_sdk.infrastructure import (
     clear_infrastructure,
     set_infrastructure,
 )
-from application_sdk.testing.fixtures import clean_app_registry  # noqa: F401
+from application_sdk.testing import clean_app_registry  # noqa: F401
 
 @pytest.fixture
 def infra():
@@ -259,7 +259,7 @@ Use the `clean_app_registry` fixture to prevent `App` subclass registrations fro
 
 ```python
 # conftest.py
-from application_sdk.testing.fixtures import clean_app_registry  # noqa: F401
+from application_sdk.testing import clean_app_registry  # noqa: F401
 ```
 
 For testing credential resolution, use `MockCredentialStore`:
@@ -331,23 +331,13 @@ class IncrementalExtractor(App):
 Pass a `RetryPolicy` to `@task` via `retry_policy` to override the default (3 attempts, exponential backoff up to 5 minutes):
 
 ```python
-from datetime import timedelta
-
-from application_sdk.app import RetryPolicy
-
-NO_RETRY = RetryPolicy(max_attempts=1)
-AGGRESSIVE = RetryPolicy(
-    max_attempts=10,
-    initial_interval=timedelta(seconds=5),
-    max_interval=timedelta(minutes=2),
-    backoff_coefficient=1.5,
-)
+from application_sdk.execution.retry import NO_RETRY, AGGRESSIVE_RETRY, DEFAULT_RETRY
 
 class MyConnector(App):
     @task(retry_policy=NO_RETRY)
     async def send_webhook(self, input: WebhookInput) -> WebhookOutput: ...
 
-    @task(retry_policy=AGGRESSIVE)
+    @task(retry_policy=AGGRESSIVE_RETRY)
     async def fetch_flaky_api(self, input: FetchInput) -> FetchOutput: ...
 ```
 

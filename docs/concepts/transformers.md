@@ -1,14 +1,16 @@
-# Transformers
+# Transformers (Legacy)
 
-Transformers convert raw extraction data into the format Atlan's ingestion API expects. They are used internally by the `SqlMetadataExtractor` template — most connector developers do not call them directly.
+> **Deprecation notice:** The `application_sdk.transformers` stack — `TransformerInterface`, `AtlasTransformer`, and `QueryBasedTransformer` — is a **legacy, back-compat-only** subsystem. New connectors should use the typed-record + pyatlan mapper pattern described in the [v3 migration guide](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction). No public `__all__` is exposed; import from the submodules directly and treat them as internal.
 
-## Overview
+## Background
+
+The legacy transformer pipeline converts raw Daft DataFrames into Atlas entity JSONL via one of two strategies:
 
 ```
-Raw SQL query results
+Raw SQL query results (daft.DataFrame)
         │
         ▼
-  TransformerInterface.transform_metadata()
+  TransformerInterface.transform_metadata()  ← AtlasTransformer or QueryBasedTransformer
         │
         ▼
   Atlas entity JSONL
@@ -17,131 +19,64 @@ Raw SQL query results
   upload_to_atlan() → Atlan ingestion API
 ```
 
-The `TransformerInterface` base class defines the contract:
+This pipeline is used internally by `SqlMetadataExtractor.transform_data()`. If you subclass `SqlMetadataExtractor` today without overriding `transform_data()`, you are running through this legacy path.
 
-```python
-from application_sdk.transformers import TransformerInterface
+## Migrating Away
 
-class TransformerInterface(ABC):
-    def transform_metadata(
-        self,
-        typename: str,
-        dataframe: "daft.DataFrame",
-        workflow_id: str,
-        workflow_run_id: str,
-        entity_class_definitions: dict[str, type] | None = None,
-        **kwargs,
-    ) -> "daft.DataFrame": ...
-```
+For new connectors, and when upgrading existing ones, use the simpler pattern documented in the upgrade guide:
 
-All transformers operate on [Daft](https://www.getdaft.io/) DataFrames — a columnar data engine optimized for large-scale metadata transformation.
+- [Step 2: Upgrade SQL Metadata Extraction](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction) — replace `AtlasTransformer` + Daft with typed records → pure mapper functions → `pyatlan_v9` Asset instances
+- Reference implementations: `atlan-openapi-app`, `atlan-azure-event-hub-app`
 
-## Built-In Transformers
+The import rewriter (`tools/migrate_v3/rewrite_imports.py`) will leave `# TODO(upgrade-v3)` markers on transformer code because it cannot auto-convert this pattern; apply the migration manually.
+
+## Legacy Reference (back-compat only)
 
 ### `AtlasTransformer`
 
-Converts metadata into Atlas entities (the native Atlan format) using `pyatlan` model classes. Note: the built-in transformers still depend on `pyatlan` (legacy); new connector code should use `pyatlan_v9` import paths instead.
+Converts metadata into Atlas entities using `pyatlan` model classes. Supports `typename` values: `DATABASE`, `SCHEMA`, `TABLE`, `VIEW`, `COLUMN`, `MATERIALIZED VIEW`, `PROCEDURE`, `FUNCTION`, `TAG_REF`.
 
 ```python
-from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.atlas import AtlasTransformer  # deep import — legacy
 ```
 
-Supports these `typename` values out of the box: `DATABASE`, `SCHEMA`, `TABLE`, `VIEW`, `COLUMN`, `MATERIALIZED VIEW`, `PROCEDURE`, `FUNCTION`, and `TAG_REF` (tag attachments).
-
-This transformer is used inside `SqlMetadataExtractor.transform_data()`, which subclasses must implement. There is no `transformer_class` class attribute — to use a different transformer, instantiate it inside your `transform_data()` override.
-
-### `QueryBasedTransformer`
-
-A YAML-template-driven transformer. SQL queries defined in YAML files are executed against raw Daft DataFrames to produce transformed output. Supports the same typenames as `AtlasTransformer`.
-
-```python
-from application_sdk.transformers.query import QueryBasedTransformer
-```
-
-The YAML templates map each typename to a set of column expressions:
-
-```yaml
-# Example: TABLE.yaml
-columns:
-  - name: attributes.name
-    source_query: table_name
-  - name: attributes.qualifiedName
-    source_query: "concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)"
-    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
-  - name: typeName
-    source_query: "'Table'"
-```
-
-The transformer generates a SQL `SELECT` statement from the YAML, executes it via Daft, and restructures flat dot-notation column names into nested structs.
-
-### `common/utils.py`
-
-Shared utility functions used by both transformers:
-
-- `process_text(text, max_length)` — truncates and strips HTML
-- `build_atlas_qualified_name(...)` — constructs Atlas-style qualified names
-- `build_phoenix_uri(...)` — URI builder for Phoenix entity references
-
-## When to Use Transformers Directly
-
-**You typically don't.** If you subclass `SqlMetadataExtractor`, the transformer is invoked automatically for each batch of extracted data.
-
-Write your own transformer only if:
-- You have a non-SQL source with a custom entity schema that does not map to `DATABASE/SCHEMA/TABLE/COLUMN`
-- You need transformation logic not expressible in YAML column mappings
-
-**Custom transformer example:**
-
-```python
-from application_sdk.transformers import TransformerInterface
-import daft
-
-class MyTransformer(TransformerInterface):
-    def transform_metadata(
-        self,
-        typename: str,
-        dataframe: daft.DataFrame,
-        workflow_id: str,
-        workflow_run_id: str,
-        entity_class_definitions=None,
-        **kwargs,
-    ) -> daft.DataFrame:
-        if typename.upper() == "DASHBOARD":
-            return dataframe.select(
-                daft.col("id").alias("attributes.qualifiedName"),
-                daft.col("name").alias("attributes.name"),
-                daft.lit("Dashboard").alias("typeName"),
-            )
-        raise ValueError(f"Unsupported typename: {typename}")
-```
-
-Wire it into `SqlMetadataExtractor` by overriding `transform_data()`:
+Used inside `SqlMetadataExtractor.transform_data()`. To override the transformer, instantiate it inside your `transform_data()` override and wire it via the `TransformInput`/`TransformOutput` contracts:
 
 ```python
 from application_sdk.app import task
-from application_sdk.templates.contracts.sql_metadata import TransformInput, TransformOutput
+from application_sdk.templates.contracts import TransformInput, TransformOutput
 
 class MyConnectorApp(SqlMetadataExtractor):
     @task(timeout_seconds=1800)
     async def transform_data(self, input: TransformInput) -> TransformOutput:
-        transformer = MyTransformer()
-        # call transformer.transform_metadata() per typename as needed
-        ...
+        transformer = AtlasTransformer(
+            connector_name="my-connector",
+            tenant_id=input.tenant_id,
+        )
+        # ... call transformer.transform_metadata() per typename as needed
         return TransformOutput(...)
 ```
 
-## Daft Dependency
+### `QueryBasedTransformer`
 
-Daft is an optional dependency. It is pulled in by the `sql` extra:
+A YAML-template-driven transformer. SQL queries defined in YAML files are executed against raw Daft DataFrames to produce transformed output. See the upgrade guide for why this approach is being retired.
+
+```python
+from application_sdk.transformers.query import QueryBasedTransformer  # deep import — legacy
+```
+
+### Daft Dependency
+
+Daft is an optional dependency pulled in by the `sql` extra:
 
 ```bash
 uv add "atlan-application-sdk[sql]"
 ```
 
-Transformers import Daft lazily at call time (`import daft` inside methods) so the package loads without Daft installed — you'll only get an `ImportError` if you actually invoke a transformer without the extra.
+Transformers import Daft lazily so the package loads without Daft installed — you'll only get an `ImportError` if you actually invoke a transformer without the extra.
 
 ## See Also
 
-- [Apps](apps.md) — `SqlMetadataExtractor` and the `transform_data` task
-- [Creating an SQL Application](../guides/sql-application-guide.md) — end-to-end SQL connector guide
-- [Building a REST API Connector](../guides/rest-api-application-guide.md) — non-SQL connector without transformers
+- [v3 Migration Guide — Step 2](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction) — the recommended migration path
+- [Apps](apps.md) — `SqlMetadataExtractor` and the `transform_data` task contract
+- [REST API Application Guide](../guides/rest-api-application-guide.md) — non-SQL connector without transformers

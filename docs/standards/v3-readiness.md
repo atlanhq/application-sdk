@@ -31,7 +31,7 @@ Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migrati
 - [ ] **Handler signatures** — if a `Handler` subclass exists, `test_auth`, `preflight_check`, and `fetch_metadata` use typed `Input` contracts — not `*args`/`**kwargs`.
 - [ ] **Async clients** — no sync `get_client()`. Use `create_async_atlan_client()` with an `AtlanApiToken` credential.
 - [ ] **Entry point** — dev uses `run_dev_combined(...)`; containers invoke the `application-sdk --mode combined` CLI (usually via `ATLAN_APP_MODULE`). No `BaseApplication(...)`.
-- [ ] **No direct infrastructure** — no direct `DaprClient(...)` or `AsyncDaprClient(...)` construction, no `self._state`, and no raw `loguru`/`logging.getLogger()` in app code. Go through `self.context.*`, the `application_sdk.infrastructure` exports, and `application_sdk.observability.logger_adaptor.get_logger()`.
+- [ ] **No direct infrastructure** — no direct `DaprClient(...)` or `AsyncDaprClient(...)` construction, no `self._state`, and no raw `loguru`/`logging.getLogger()` in app code. Go through `self.context.*`, the `application_sdk.infrastructure` exports, and `application_sdk.observability.get_logger()`.
 
 ## 2 — Contract & config
 

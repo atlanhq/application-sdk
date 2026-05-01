@@ -96,7 +96,7 @@ The uber-handler's efficiency gains don't justify the coupling and risk it intro
 Each app implements the `Handler` ABC:
 
 ```python
-from application_sdk.handler.base import Handler
+from application_sdk.handler import Handler
 
 class MyHandler(Handler):
     async def test_auth(self, input: AuthInput) -> AuthOutput: ...
