@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.3.0-BLDX-968 (May 2, 2026)
+
+### Bug Fixes
+
+- omit `message` field from metadata endpoint response when empty — fixes frontend filter dropdowns rendering blank on native apps (by @Aryamanz29 in [9e5178e](https://github.com/atlanhq/application-sdk/commit/9e5178e))
+
 ## v3.3.0 (April 27, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.2.0...v3.3.0
