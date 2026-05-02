@@ -6,6 +6,7 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 
 from pydantic import Field, field_validator, model_validator
@@ -95,6 +96,18 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
         """
         if not isinstance(data, dict):
             return data
+
+        # AE passes connection as a JSON string when {{connection}} is substituted.
+        # Parse it to a dict so Pydantic can build ConnectionRef correctly.
+        # Without this, connection.attributes.qualified_name stays empty and the
+        # publish step receives an empty connection_qualified_name.
+        raw_conn = data.get("connection")
+        if isinstance(raw_conn, str) and raw_conn.strip().startswith("{"):
+            try:
+                data = {**data, "connection": json.loads(raw_conn)}
+            except (json.JSONDecodeError, ValueError):
+                pass
+
         field_names = set(cls.model_fields)
         updates: dict[str, Any] = {}
 
