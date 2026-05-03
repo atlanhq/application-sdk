@@ -80,6 +80,7 @@ nav:
 
       # Development guides
       - Creating an SQL Application: guides/sql-application-guide.md
+      - Contract Toolkit: guides/contract-toolkit.md
       - Custom Frontends with Atlantis: guides/atlantis.md
       - Secret Stores: guides/secretstores.md
 

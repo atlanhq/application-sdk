@@ -35,7 +35,7 @@ Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migrati
 
 ## 2 — Contract & config
 
-The SDK generates workflow/credential/manifest/input artifacts from a single `contract/app.pkl`. See [`.claude/skills/contract/SKILL.md`](../../.claude/skills/contract/SKILL.md).
+The SDK generates workflow/credential/manifest/input artifacts from a single `contract/app.pkl`. See [`.claude/skills/make-contract/SKILL.md`](../../.claude/skills/make-contract/SKILL.md).
 
 > **Output directory is `app/generated/`**, importable as `app.generated`. The SDK reads it via `ATLAN_CONTRACT_GENERATED_DIR` (default defined in [`application_sdk/constants.py`](../../application_sdk/constants.py) as `app/generated`). If an app writes generated artifacts elsewhere, either set `ATLAN_CONTRACT_GENERATED_DIR` to match or (preferred) point `poe generate` at `app/generated/` so the runtime finds them without extra config.
 

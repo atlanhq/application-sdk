@@ -1,0 +1,2682 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2024 Atlan Pte. Ltd. */
+
+/// Base module for defining native Atlan apps (Temporal-native, Automation Engine orchestrated).
+///
+/// A developer amends this module to declare their app's:
+/// - Metadata (name, connector, icon)
+/// - Credential config (auth types, fields via FieldSpec) — optional
+/// - Workflow config (UI form params, steps)
+/// - Workflow class name
+///
+/// The toolkit auto-generates up to three artifacts from this single file:
+/// 1. Workflow config JSON — UI form schema served at GET /workflows/v1/configmap/{name}
+/// 2. Credential config JSON — auth form schema served at GET /workflows/v1/configmap/{connectorConfigName}
+/// 3. Manifest JSON — AE DAG template served at GET /manifest
+@ModuleInfo { minPklVersion = "0.25.1" }
+open module com.atlan.app.contract.NativeApp
+
+import "Config.pkl"
+import "Connectors.pkl"
+
+// ---------------------------------------------------------------------------
+// App metadata
+// ---------------------------------------------------------------------------
+
+/// Unique identifier for this app (e.g., "redshift", "trino", "postgres").
+/// Used to derive configmap names, task queues, and file names.
+name: String
+
+/// Human-readable display name for the app. Defaults to capitalized name.
+displayName: String = name.capitalize()
+
+/// Connector type from the Connectors registry.
+connector: Connectors.Type
+
+/// Icon URL for the app.
+icon: String
+
+/// Link to documentation.
+docsUrl: String = ""
+
+/// Logo URL (defaults to icon).
+logo: String = icon
+
+/// Helpdesk link for credential configuration.
+helpdeskLink: String = ""
+
+// ---------------------------------------------------------------------------
+// Workflow class (for manifest generation)
+// ---------------------------------------------------------------------------
+
+/// The Python App class name (PascalCase). Used to derive the Temporal
+/// workflow type name using the same convention as the SDK's _pascal_to_kebab():
+///   TeradataCrawlerApp → teradata-crawler-app
+///
+/// Set this when using SDK v3 convention (class name auto-derives workflow type).
+/// Either workflowType or workflowTypeOverride must be provided.
+workflowType: String = ""
+
+/// Explicit workflow type for the manifest, used as-is (no conversion).
+/// Use this when the Python App class sets a custom `name` ClassVar
+/// that doesn't follow the PascalCase→kebab auto-derivation convention.
+/// When set, workflowType is ignored.
+///
+/// Example — app with explicit name override in Python:
+///   # Python: name: ClassVar[str] = "RedshiftMetadataExtractionWorkflow"
+///   workflowTypeOverride = "RedshiftMetadataExtractionWorkflow"
+workflowTypeOverride: String?
+
+/// Validation: at least one of workflowType or workflowTypeOverride must be non-empty.
+local _validateWorkflowType =
+  if (workflowType == "" && (workflowTypeOverride == null || workflowTypeOverride!! == ""))
+    throw("Either workflowType or workflowTypeOverride must be provided.")
+  else true
+
+/// (Derived) Workflow type used in the manifest.
+/// Priority: workflowTypeOverride (as-is) > workflowType (PascalCase→kebab)
+/// If both are set, workflowTypeOverride wins.
+local workflowTypeResolved: String =
+  let (_ = _validateWorkflowType)
+  if (workflowTypeOverride != null && workflowTypeOverride!! != "") workflowTypeOverride!!
+  else workflowType
+    .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
+    .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+    .toLowerCase()
+
+/// Task queue prefix for the extract node in the AE manifest.
+/// The full task queue is "{taskQueuePrefix}-{deployment_name}".
+/// Defaults to "atlan-{name}" which matches the SDK's derivation:
+///   atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}
+///
+/// Override this when multiple manifests (e.g. crawler + miner) share
+/// the same app deployment and task queue. Example:
+///   name = "teradata-miner"
+///   taskQueuePrefix = "atlan-teradata"  // share queue with crawler
+taskQueuePrefix: String = "atlan-\(name)"
+
+/// Whether this app includes a publish step in the DAG pipeline.
+/// When true, a default publish node is added to the manifest.
+hasPublishStep: Boolean = true
+
+/// Whether to append publish-related scaffolding fields
+/// (output_dir, checkpoint_dir, load_to_atlan, publish_dry_run)
+/// to the generated Input class. Set to false when the app has a
+/// publish step but does not implement incremental extraction or dry-run
+/// control through these generated fields.
+hasPublishInputFields: Boolean = true
+
+/// Value for the default publish node's executor_enabled argument.
+/// Use a Boolean literal or an exact template placeholder string such as
+/// "{{load-to-atlan}}". Defaults to true for the existing always-publish path.
+publishExecutorEnabled: Boolean|String = true
+
+/// Value for the publish node's `tag_pipeline_enabled` argument.
+///
+/// Defaults to `"{{enable-tags}}"` when the workflow form contains an
+/// `enable-tags` field, otherwise falls back to `"{{enable-tag-sync}}"` when
+/// that legacy tag-sync field exists. This keeps existing manifests unchanged
+/// unless an app already exposes a tag-sync control. The placeholder lets
+/// Heracles substitute the submitted form value so publish-app only enables its
+/// managed classification/tag-attachment pipeline when tag sync is enabled.
+/// Without this flag, publish-app can receive TagAttachment entities while
+/// still stripping classifications from the Atlas payloads.
+///
+/// Set this explicitly for apps that use a different tag-sync field name or need
+/// a fixed value. Set to `null` to omit the publish arg.
+publishTagPipelineEnabled: Boolean|String? =
+  if (uiConfig.properties.containsKey("enable-tags")) "{{enable-tags}}"
+  else if (uiConfig.properties.containsKey("enable-tag-sync")) "{{enable-tag-sync}}"
+  else null
+
+/// Value for the publish node's `tag_attachments_prefix` argument.
+///
+/// Defaults to `$.extract.outputs.tag_attachments_prefix` when
+/// `publishTagPipelineEnabled` is not null, otherwise omitted. This matches the
+/// native Databricks contract: the extract workflow returns the object-store
+/// prefix for the connector-emitted `transformed/tag_attachments` payloads, and
+/// publish-app uses it for typedef resolution and classification enrichment.
+///
+/// Set this explicitly if the extract workflow emits the tag attachment prefix
+/// under a different output key. Set to `null` to omit the publish arg.
+publishTagAttachmentsPrefix: String? =
+  if (publishTagPipelineEnabled != null) "$.extract.outputs.tag_attachments_prefix" else null
+
+/// Override the `activity_display_name` rendered for the toolkit-managed
+/// extract node in `manifest.json`.
+///
+/// Defaults to `"Extract \(displayName) Metadata"` for backward compatibility.
+/// Set this when the marketplace/app `displayName` is intentionally long but
+/// the Automation Engine step list should stay compact, for example:
+/// `extractActivityDisplayName = "Extract"`.
+///
+/// This only changes the human-readable AE step label. It does not change the
+/// node id (`extract`), workflow type, task queue, app name, or manifest args.
+extractActivityDisplayName: String?
+
+/// Override the `activity_display_name` rendered for the toolkit-managed
+/// default publish node in `manifest.json`.
+///
+/// Defaults to `"Publish to Atlas"` for backward compatibility. Set this when
+/// the app wants compact AE step labels, for example:
+/// `publishActivityDisplayName = "Publish"`.
+///
+/// This applies only when the toolkit creates the default publish node. If the
+/// app replaces publish with `extraNodes["publish"] = new PublishNode { ... }`,
+/// set `displayName` on that `PublishNode` directly.
+publishActivityDisplayName: String?
+
+/// Error handling / retry / timeout configuration for the toolkit-managed
+/// extract node in `manifest.json`.
+///
+/// The extract node renders `activity_name = "execute_workflow"`, so Automation
+/// Engine treats it as a workflow node. Use this for workflow-safe settings such
+/// as `startToCloseTimeoutSeconds` and retry policy fields. Do not set
+/// `heartbeatTimeoutSeconds`; AE only accepts heartbeat timeouts on activity
+/// nodes, and the toolkit rejects that at eval time.
+extractNodeErrorHandling: ErrorHandlingConfig?
+
+/// Error handling / retry / timeout configuration for the toolkit-managed
+/// default publish node in `manifest.json`.
+///
+/// This applies only when the toolkit creates the default publish node. If the
+/// app replaces publish with `extraNodes["publish"] = new PublishNode { ... }`,
+/// set `errorHandling` on that `PublishNode` directly. The default publish node
+/// is also a workflow node, so `heartbeatTimeoutSeconds` is invalid.
+publishNodeErrorHandling: ErrorHandlingConfig?
+
+/// Field name for the app's credential reference in the generated Input class.
+/// Set to null to omit. Defaults to "{name}_credential" when hasCredentialConfig.
+credentialFieldName: String? = if (hasCredentialConfig) "\(name.replaceAll("-", "_"))_credential" else null
+
+// ---------------------------------------------------------------------------
+// FieldSpec — credential field definition (aligned with SDK FieldSpec)
+// ---------------------------------------------------------------------------
+
+/// Supported field types for credential UI generation.
+/// Aligned with application_sdk.credentials.types.FieldType.
+typealias FieldType = "text"|"password"|"textarea"|"select"|"number"|"checkbox"|"url"|"email"|"inputRepeater"
+
+/// A single credential field definition.
+/// Aligned with application_sdk.credentials.types.FieldSpec — same properties,
+/// same semantics. The generated JSON produces the configmap format the
+/// frontend understands, but the authoring model matches the SDK's credential system.
+///
+/// Example:
+/// ```
+/// new FieldSpec { name = "host"; displayName = "Host Name"; placeholder = "db.example.com" }
+/// new FieldSpec { name = "password"; sensitive = true }
+/// new FieldSpec { name = "port"; fieldType = "number"; defaultValue = "5439" }
+/// new FieldSpec { name = "region"; fieldType = "select"; options { "us-east-1"; "eu-west-1" } }
+/// ```
+class FieldSpec {
+  /// Internal field name (used in code/SDK). Also the JSON property key.
+  name: String
+
+  /// User-facing label in the UI. Auto-generated from name if not set.
+  displayName: String = name.replaceAll("_", " ").replaceAll("-", " ").capitalize()
+
+  /// Placeholder text in the input field.
+  placeholder: String?
+
+  /// Help text shown as tooltip.
+  helpText: String?
+
+  /// Whether this field is required.
+  required: Boolean = true
+
+  /// Whether to emit `required: false` when `required` is false.
+  includeRequiredWhenFalse: Boolean = false
+
+  /// Whether this field should be masked (password input).
+  /// When true, overrides fieldType to render as password widget.
+  sensitive: Boolean = false
+
+  /// Field type for UI rendering.
+  fieldType: FieldType = "text"
+
+  /// For select fields — list of allowed values.
+  options: Listing<String>?
+
+  /// For select fields — display labels for each option.
+  /// If not provided, option values are used as labels.
+  optionLabels: Mapping<String, String>?
+
+  /// Pre-filled default value.
+  defaultValue: String?
+
+  /// Regex pattern for validation.
+  validationRegex: String?
+
+  /// Grid width (8 = full width, 4 = half, 2 = quarter).
+  width: Int = 8
+
+  /// UI rows for textarea/TextInput widgets.
+  /// Set to 1 for compact single-row display while preserving newline paste behavior.
+  rows: Int?
+
+  /// Whether this field should be hidden in the UI.
+  /// Use for fields with fixed values that users should not see or edit.
+  isHidden: Boolean = false
+
+  /// Whether to emit the inferred `ui.widget` key.
+  includeUiWidget: Boolean = true
+
+  /// Whether to emit `ui.label`.
+  includeUiLabel: Boolean = true
+
+  /// Whether to emit `ui.hidden`.
+  includeUiHidden: Boolean = true
+
+  /// Whether to emit `ui.placeholder`.
+  includeUiPlaceholder: Boolean = true
+
+  /// Whether to emit `ui.grid`.
+  includeUiGrid: Boolean = true
+
+  /// Optional CSS class for the rendered form item.
+  uiClass: String?
+
+  /// Optional UI-level required marker for legacy configmaps.
+  uiRequired: Boolean?
+
+  /// Whether to show validation feedback indicator on this field.
+  feedback: Boolean?
+
+  /// Inline validation message shown below the field.
+  message: String?
+
+  /// Validation rules for the field (array of rule objects).
+  /// Example: new Listing { new Dynamic { required = true; message = "Please enter a valid value" } }
+  validationRules: Listing<Dynamic>?
+
+  /// Whether this field is disabled in BYOC contexts.
+  /// Emitted as `BYOCdisabled` to match frontend credential-config expectations.
+  byocDisabled: Boolean?
+}
+
+/// A credential field whose visibility/label/placeholder is driven by a compound
+/// boolean filter over sibling form fields. Generates a `type: "conditional"`
+/// property with a `conditions` array — the same shape used by sap-s4 / sap-ecc
+/// credential configmaps for fields like `basic.extra.sap-port` that switch
+/// based on `connection-type` × `extraction-method`.
+///
+/// Example:
+/// ```
+/// new ConditionalFieldSpec {
+///   name = "sap-port"
+///   conditions {
+///     new Config.Condition {
+///       filter = new Dynamic {
+///         `$or` {
+///           new Dynamic { `$and` { new Dynamic { ["extraction-method"] = "agent" } ; ... } }
+///         }
+///       }
+///       overrideUi = new Config.Widget { widget = ""; label = "Port"; `hidden` = false }
+///     }
+///   }
+/// }
+/// ```
+class ConditionalFieldSpec {
+  /// Internal field name (used as the JSON property key).
+  name: String
+
+  /// Whether this field is required (emitted when true).
+  required: Boolean = false
+
+  /// Per-condition overrides. Each Condition may carry a compound `filter`
+  /// (`$and`/`$or` tree) or a simple `property`/`value` match, plus `overrideUi`.
+  conditions: Listing<Config.Condition>
+
+  /// Optional sub-schema for array-valued conditional fields.
+  additionalProperties: Dynamic?
+
+  /// Optional default value (emitted verbatim when set).
+  defaultValue: Any?
+}
+
+/// Wrapper that pairs a `Config.UIElement` with an explicit JSON property name
+/// for use inside credential field listings.
+///
+/// `FieldSpec` carries its own `name`; `UIElement` subclasses don't — their key
+/// normally comes from the parent `Mapping<String, UIElement>` in
+/// `uiConfig.properties`. `NamedWidget` supplies the key when you want to nest
+/// a `ConnectionSelector`, `SqlTree`, `CustomWidget`, etc. inside a credential
+/// configmap (e.g. Fivetran's platform-connector auth, where the schema picker
+/// lives at `platform_connector.properties.extra.properties.include-filter`).
+///
+/// The widget serializes structurally — its `type` and `ui` fields are emitted
+/// verbatim, same as `uiConfig.properties` does for workflow widgets. No extra
+/// render logic is needed per UIElement subclass.
+///
+/// Example:
+/// ```
+/// extraFields {
+///   new FieldSpec { name = "selected_connector"; required = false; isHidden = true }
+///   new NamedWidget {
+///     name = "connection-qualified-name"
+///     widget = new Config.ConnectionSelector {
+///       title = "Atlan Connection"
+///       connectorFilters { "snowflake"; "redshift"; "bigquery"; "postgres"; "databricks" }
+///       required = true
+///     }
+///   }
+/// }
+/// ```
+class NamedWidget {
+  /// JSON property key for the emitted widget (e.g. `"connection-qualified-name"`).
+  name: String
+
+  /// The `Config.UIElement` to emit at this key. Its `type`, `ui`, and any
+  /// subclass-declared fields (`additionalProperties`, `default`, `conditions`, …)
+  /// are serialized as-is by PKL's JsonRenderer.
+  widget: Config.UIElement
+}
+
+/// Wrapper for a fully-rendered credential configmap property.
+///
+/// Use sparingly for legacy parity where a hand-authored credential JSON omits
+/// toolkit defaults such as `type`, `required`, or common `ui` keys.
+class NamedProperty {
+  /// JSON property key for the emitted property.
+  name: String
+
+  /// Fully-rendered configmap property emitted verbatim.
+  property: Mapping<String, Any>
+}
+
+/// Entry type accepted inside credential auth-option field listings.
+/// `NamedWidget` is the bridge for workflow-style UI widgets that need an
+/// explicit key when rendered inside credential configmaps.
+typealias CredentialFieldEntry = FieldSpec|ConditionalFieldSpec|NamedWidget|NamedProperty
+
+/// An auth type option for the credential form.
+/// Each option becomes a radio button choice. When selected, its fields are shown.
+///
+/// Example:
+/// ```
+/// ["basic"] = new AuthOption {
+///   label = "Basic Authentication"
+///   fields {
+///     new FieldSpec { name = "username" }
+///     new FieldSpec { name = "password"; sensitive = true }
+///   }
+///   extraFields {
+///     new FieldSpec { name = "database"; displayName = "Database" }
+///   }
+/// }
+/// ```
+open class AuthOption {
+  /// Label shown in the auth-type radio button.
+  label: String
+
+  /// Primary credential fields for this auth type. May mix plain `FieldSpec`,
+  /// `ConditionalFieldSpec`, `NamedWidget`, and `NamedProperty`.
+  fields: Listing<CredentialFieldEntry>
+
+  /// Additional fields nested under "extra" in the credential payload.
+  /// Used for connection metadata (database, deployment_type, cluster_id, etc.)
+  /// that Heracles stores in the object store alongside Vault secrets.
+  ///
+  /// May mix plain `FieldSpec`, `ConditionalFieldSpec`, and `NamedWidget`
+  /// (wrapping a `Config.UIElement` like `ConnectionSelector` / `SqlTree` /
+  /// `CustomWidget`). Order is preserved — declare hidden route-through
+  /// `FieldSpec`s before visible `NamedWidget`s when the frontend depends on
+  /// their ordering (e.g. Fivetran's `selected_connector` + `selected_connection_credential_guid`
+  /// emitted before the ConnectionSelector that writes into them).
+  extraFields: Listing<CredentialFieldEntry> = new Listing {}
+
+  /// Additional properties emitted after the `extra` group but still as
+  /// siblings inside this auth-option object. Use for presentational widgets
+  /// whose position depends on the preceding `extra` section.
+  postExtraFields: Listing<CredentialFieldEntry> = new Listing {}
+
+  /// Extra field names to include in the generated auth-type anyOf `required`
+  /// list for this option. Defaults to none.
+  anyOfRequiredFields: Listing<String> = new Listing {}
+
+  /// Custom label for the nested auth-type section wrapper in the credential form.
+  /// If not set, defaults to empty string (hidden nested pane).
+  nestedLabel: String = ""
+
+  /// Custom placeholder text for the nested auth-type section wrapper.
+  nestedPlaceholder: String?
+
+  /// Whether the nested auth-type pane should be hidden by default.
+  /// Defaults to `true` to preserve existing generated config behavior.
+  nestedHidden: Boolean = true
+
+  /// Label for the per-auth-option `extra` nested section.
+  nestedExtraLabel: String = ""
+
+  /// Header text for the per-auth-option `extra` nested section.
+  /// Defaults to "Advanced" to preserve existing generated config behavior.
+  /// JDBC-URL connectors typically override this (e.g. "Configuration" for
+  /// Azure AD, "Domain Configuration" for NTLM).
+  nestedExtraHeader: String? = "Advanced"
+}
+
+// ---------------------------------------------------------------------------
+// AdvancedJDBCUrlGroup — Host↔URL toggle for SQL-family credential forms
+//
+// Renders the `connectBy` radio + nested `jdbcUrl` conditional object used by
+// mssql, cloud-sql-postgres, alloydb-postgres. Opt in by setting
+// `credentialUrlGroup` at the module level; every entry in
+// `credentialAuthOptions` must then be a `JDBCUrlAuthOption`.
+// ---------------------------------------------------------------------------
+
+/// Value inside `UrlPartMapping.searchParams`. Discriminates a literal
+/// string (e.g. `"yes"`, `"PUBLIC"`) from a form-field reference that the
+/// renderer resolves to the active namespace (`credential-guid.` for direct,
+/// `agent-json.` for agent).
+///
+/// The two subtypes produce semantically different output:
+/// - `UrlLiteral { value = "yes" }` → JSON: `"Encrypt": "yes"` (constant)
+/// - `UrlRef { field = "extra.__enable_ssl" }` → JSON: `"Encrypt": "credential-guid.extra.__enable_ssl"`
+///   (evaluated at form-submit time against the selected form value)
+abstract class UrlValue {}
+
+/// Literal search-param value — emitted verbatim to the JSON output.
+/// Use for constants that don't depend on user input.
+///
+/// Example: `new UrlLiteral { value = "yes" }` for an always-on SSL flag.
+class UrlLiteral extends UrlValue {
+  /// Literal string emitted directly into the generated URL's query string.
+  value: String
+}
+
+/// Form-field reference — `field` is resolved to `<namespace>.<field>` at
+/// render time for each extraction-method branch. Use this when the URL
+/// search-param value is derived from a user-facing form input.
+///
+/// Example: `new UrlRef { field = "extra.__enable_ssl" }` binds the SSL
+/// toggle's value to the URL's `Encrypt` query param.
+class UrlRef extends UrlValue {
+  /// Path relative to the credential form root, e.g. `"extra.__enable_ssl"`.
+  /// Renderer prefixes with `credential-guid.` for direct branches and
+  /// `agent-json.` for agent branches.
+  field: String
+}
+
+/// Per-auth-type mapping passed to the `AdvancedJDBCUrlGroup` widget.
+/// Field names (hostname/port/pathname) are relative to the credential form
+/// root; the renderer prefixes them with the active namespace.
+class UrlPartMapping {
+  /// Credential-form path for the host component (e.g. `"host"`).
+  hostname: String?
+  /// Credential-form path for the port component (e.g. `"port"`).
+  port: String?
+  /// Credential-form path for the pathname/database (e.g. `"extra.database"`).
+  pathname: String?
+  /// Search-param key → value map. Values are either literal strings
+  /// (`UrlLiteral`) or form-field refs (`UrlRef`).
+  searchParams: Mapping<String, UrlValue> = new Mapping {}
+}
+
+/// Auth option for JDBC-URL credential forms. Extends `AuthOption` with the
+/// `AdvancedJDBCUrlGroup` mapping and an `extractionModes` listing
+/// controlling which (direct/agent) branches this auth-type appears under.
+///
+/// `nestedLabel` is **required** in JDBC mode (no default) — argo connectors
+/// use distinct pane labels ("Basic Authentication", "Azure AD (Microsoft
+/// Entra)") that differ from the radio-enum label (`label`).
+class JDBCUrlAuthOption extends AuthOption {
+  /// Per-auth-type mapping emitted in `jdbcUrl.conditions[].ui.urlPartPropertyIdMapping`.
+  urlPartMapping: UrlPartMapping
+
+  /// Which extraction methods expose this auth-type. Use `{ "agent" }` for
+  /// agent-only options (e.g. `workload_identity_federation` on cloudsql).
+  extractionModes: Listing<String(this == "direct" || this == "agent")> = new Listing {
+    "direct"
+    "agent"
+  }
+
+  /// Required for JDBC mode — pane label distinct from the radio-enum label.
+  /// Example: `"Basic Authentication"` (pane) vs `"Basic"` (radio option).
+  nestedLabel: String
+
+  /// Override default: JDBC auth panes are always hidden on initial render;
+  /// visibility is driven by the `anyOf` block's `auth-type == <k>` const.
+  nestedHidden = true
+}
+
+/// Top-level spec for the Host↔URL credential form used by SQL-family
+/// connectors (mssql, cloud-sql-postgres, alloydb-postgres). Paired with
+/// `credentialAuthOptions: Mapping<String, JDBCUrlAuthOption>`.
+///
+/// The renderer emits:
+///   1. A `connectBy` radio (Host / URL) at the root of the credential form.
+///   2. A `jdbcUrl` conditional object containing:
+///      - N×M conditional branches (auth-type × extraction-method) with
+///        `AdvancedJDBCUrlGroup` widget config (urlPartPropertyIdMapping
+///        resolved per-auth-type, per-namespace).
+///      - `properties.{host, port, extra.compiled_url}` conditional rows
+///        (enabled on `connectBy=host`, disabled on `connectBy=url` — or
+///        the inverse for `extra.compiled_url`).
+///      - `properties.auth-type` conditional radio (enum may differ between
+///        `direct` and `agent` when auth-options have different extractionModes).
+///      - One nested pane per `JDBCUrlAuthOption` (via `renderJdbcAuthOption`).
+///      - Shared `properties.extra` nested section (`extraFields` field).
+///      - A default `jdbcUrl.ui` `AdvancedJDBCUrlGroup` block.
+///      - An `anyOf` block enforcing required auth-option panes.
+///
+/// Example:
+/// ```
+/// credentialUrlGroup = new AdvancedJDBCUrlGroup {
+///   protocol = ""
+///   urlAddonBefore = "mssql+pyodbc://"
+///   urlHelp = "Format: host:port..."
+///   urlPlaceholder = "myhost:1433 or myhost.database.windows.net"
+///   hostField = new FieldSpec { name = "host"; displayName = "Host"; ... }
+///   portField = new FieldSpec { name = "port"; fieldType = "number"; defaultValue = "1433"; ... }
+///   extraFields { new FieldSpec { name = "database"; ... } }
+/// }
+/// ```
+class AdvancedJDBCUrlGroup {
+  /// URL-part protocol string. Empty string for mssql; `"postgresql+asyncpg"`
+  /// for postgres-family. Emitted verbatim in every `jdbcUrl.conditions[].ui`
+  /// block and in the top-level `jdbcUrl.ui` default.
+  protocol: String = ""
+
+  /// Prefix shown (immutable) before the URL text input, e.g.
+  /// `"mssql+pyodbc://"` or `"postgresql+asyncpg"`.
+  urlAddonBefore: String
+
+  /// Default `connectBy` value on form load. Either `"host"` or `"url"`.
+  connectByDefault: String(this == "host" || this == "url") = "host"
+
+  /// Label on the URL text input row.
+  urlLabel: String = "SQLAlchemy Connection URL"
+
+  /// Help text on the URL text input row.
+  urlHelp: String?
+
+  /// Placeholder text on the URL text input row.
+  urlPlaceholder: String?
+
+  /// Field spec for the host row (shared across auth-types).
+  hostField: FieldSpec
+
+  /// Field spec for the port row (shared across auth-types).
+  portField: FieldSpec
+
+  /// Fields nested under `jdbcUrl.properties.extra` — shared across auth-types
+  /// (for example `database`, `__enable_ssl`, `sqlalchemy_url`).
+  extraFields: Listing<FieldSpec|ConditionalFieldSpec> = new Listing {}
+
+  /// Header text on the shared `extra` nested section. Defaults to "Advanced".
+  extraHeader: String = "Advanced"
+
+  /// Label on the `connectBy` radio.
+  connectByLabel: String = "Connect by"
+
+  /// Validation rules on the `connectBy` radio.
+  connectByRules: Listing<Dynamic> = new Listing {
+    new Dynamic {
+      required = true
+      message = "Please select a valid connection method"
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Credential configuration (optional)
+// ---------------------------------------------------------------------------
+
+/// Whether this app has a credential config.
+hasCredentialConfig: Boolean = true
+
+/// Name for the credential configmap (e.g., "atlan-connectors-redshift").
+connectorConfigName: String = "atlan-connectors-\(name)"
+
+/// Default connector type for credentials (e.g., "jdbc", "rest").
+credentialConnectorType: String = "rest"
+
+/// Fields shared across all auth types (e.g., host, port).
+credentialCommonFields: Listing<CredentialFieldEntry> = new Listing {}
+
+/// Additional fields nested under a shared top-level `extra` object in the
+/// credential payload, outside any auth-type branch.
+/// Use this for metadata shared across auth types (for example
+/// `s3_output_location`, `workgroup`, `database`).
+credentialSharedExtraFields: Listing<CredentialFieldEntry> = new Listing {}
+
+/// Auth type options. Each key becomes a radio option.
+credentialAuthOptions: Mapping<String, AuthOption>?
+
+/// Opt-in JDBC Host↔URL credential form. When set, the credential config
+/// renderer emits the `connectBy` radio + `jdbcUrl` conditional wrapper with
+/// per-(auth-type × extraction-method) `AdvancedJDBCUrlGroup` branches
+/// instead of the plain `auth-type` radio + nested panes flow.
+///
+/// Invariants enforced at generation time (throws with clear message):
+/// - `credentialAuthOptions` must also be non-null and non-empty.
+/// - Every value in `credentialAuthOptions` must be a `JDBCUrlAuthOption`,
+///   not a plain `AuthOption` (mixing the two silently breaks the renderer).
+///
+/// Pair with `module.generatedAgentJsonEntries(...)` inside your
+/// `uiConfig.tasks.<step>.inputs["agent-json"]` to wire the agent extraction
+/// path automatically — see `generatedAgentJsonEntries` for the helper signature.
+credentialUrlGroup: AdvancedJDBCUrlGroup?
+
+/// Label for the auth-type radio button.
+credentialAuthTitle: String = "Authentication"
+
+/// Default auth type selected in the credential auth radio.
+/// Defaults to the first key in `credentialAuthOptions`.
+credentialAuthDefault: String?
+
+/// Validation rules for the auth-type radio button.
+credentialAuthRules: Listing<Dynamic>?
+
+/// Placeholder text for the auth-type radio button.
+credentialAuthPlaceholder: String?
+
+/// Help text under the auth-type radio button (tooltip / hover).
+credentialAuthHelp: String?
+
+/// Grid width for the auth-type radio button (when set).
+credentialAuthWidth: Int?
+
+/// Auth-type options hidden during credential creation.
+/// The frontend keeps previously-selected values visible during edit.
+credentialAuthHiddenEnumListForCreating: Listing<String>?
+
+/// Placeholder for the hidden credential `name` field.
+credentialNamePlaceholder: String = "Host Name"
+
+/// Optional default for the hidden credential `connector` field.
+credentialConnectorDefault: String?
+
+/// Whether to emit top-level metadata keys on the credential configmap.
+credentialConfigIncludeTopLevelMetadata: Boolean = true
+
+/// Whether to emit `ui.hidden=false` on the auth-type radio.
+credentialAuthIncludeHiddenFlag: Boolean = true
+
+// ---------------------------------------------------------------------------
+// Workflow configuration (UI form)
+// ---------------------------------------------------------------------------
+
+/// The workflow configmap name (e.g., "redshift").
+workflowConfigName: String = name
+
+/// UI configuration for the workflow setup form.
+/// Define tasks (steps), each with their inputs (form fields).
+uiConfig: Config.UIConfig
+
+/// Whether to emit top-level id/name/logo keys on the workflow configmap.
+workflowConfigIncludeTopLevelMetadata: Boolean = true
+
+/// Extra files to add to this module's generated output.
+///
+/// Use this for explicit opt-in artifacts such as a customized
+/// `AgentConfig.pkl` output:
+/// `["atlan-connectors-agent.json"] = agentConfig.configFile`.
+additionalOutputFiles: Mapping<String, FileOutput> = new Mapping {}
+
+// ---------------------------------------------------------------------------
+// Manifest configuration (mostly auto-derived)
+// ---------------------------------------------------------------------------
+
+/// Additional DAG nodes beyond the default extract → publish pipeline.
+/// If a key "publish" is defined here, it replaces the auto-generated publish node.
+/// Use `PublishNode` for the standard publish pattern (only specify upstream).
+/// Use `DAGNode` for fully custom nodes.
+extraNodes: Mapping<String, DAGNode> = new Mapping {}
+
+/// Mapping of manifest arg name → form field name for top-level extract args.
+manifestTopLevelArgs: Mapping<String, String> = new Mapping {
+  ["credential_guid"] = "credential-guid"
+  ["connection"] = "connection"
+}
+
+/// When true, all workflow params are emitted as top-level keys inside `args`
+/// instead of being nested under `metadata`. This matches generated SDK v3
+/// `_input.py` fields, which read workflow inputs directly from args. Set to
+/// `false` only for legacy apps that intentionally consume `args.metadata`.
+flatManifestArgs: Boolean = true
+
+/// Optional mapping of metadata arg key → form field name for legacy manifests.
+/// When set and `flatManifestArgs=false`, only these fields are emitted under
+/// `args.metadata`, preserving the mapping keys verbatim.
+manifestMetadataArgs: Mapping<String, String>?
+
+// ---------------------------------------------------------------------------
+// DAG node definitions
+// ---------------------------------------------------------------------------
+
+/// Explicit Automation Engine dependency condition.
+///
+/// Use this when a DAG needs tags, OR conditions, or nested conditions. Keep
+/// `DAGNode.dependsOn` for the common shorthand cases.
+class DependencyCondition {
+  /// Node id (the key in the DAG mapping) for a direct dependency condition.
+  nodeId: String?
+
+  /// Optional tag required on the direct dependency. AE reserves `success` and
+  /// `failure`; any other value is treated as a custom tag emitted by the node.
+  tag: String?
+
+  /// All nested conditions must evaluate true.
+  andConditions: Listing<DependencyCondition>?
+
+  /// At least one nested condition must evaluate true. AE still waits for all
+  /// referenced predecessor nodes to complete or skip before evaluating this.
+  orConditions: Listing<DependencyCondition>?
+
+  hidden _conditionShapeCheck: Any =
+    if (nodeId != null && (andConditions != null || orConditions != null))
+      throw("DependencyCondition cannot combine nodeId with andConditions/orConditions.")
+    else if (andConditions != null && orConditions != null)
+      throw("DependencyCondition cannot set both andConditions and orConditions.")
+    else if (tag != null && nodeId == null)
+      throw("DependencyCondition.tag requires nodeId.")
+    else if (nodeId == null && andConditions == null && orConditions == null)
+      throw("DependencyCondition requires nodeId, andConditions, or orConditions.")
+    else if (andConditions != null && andConditions.length == 0)
+      throw("DependencyCondition.andConditions must contain at least one condition.")
+    else if (orConditions != null && orConditions.length == 0)
+      throw("DependencyCondition.orConditions must contain at least one condition.")
+    else null
+}
+
+/// A generic node in the Automation Engine DAG.
+open class DAGNode {
+  /// DAG node type — `"activity"` or `"workflow"` (child workflow invocation).
+  /// Defaults to `"workflow"` because `renderNode` always emits `activity_name = "execute_workflow"`,
+  /// which AE auto-infers as a workflow node. The discriminator is PKL-side only
+  /// (not emitted to JSON) and gates which `errorHandling` fields are valid:
+  /// `heartbeatTimeoutSeconds` is activity-only and AE rejects it on workflow nodes.
+  nodeType: "activity"|"workflow" = "workflow"
+
+  displayName: String
+  workflowType: String
+  appName: String = "automation-engine"
+  taskQueue: String?
+  args: Mapping<String, Any>
+
+  /// Upstream dependencies for this node. Emission shape is chosen
+  /// automatically based on list length:
+  ///
+  ///   `dependsOn { "a" }`  → `"depends_on": {"node_id": "a"}`
+  ///
+  ///   `dependsOn { "a"; "b" }` → ```
+  ///     "depends_on": {
+  ///       "and_conditions": [
+  ///         {"node_id": "a", "tag": "success"},
+  ///         {"node_id": "b", "tag": "success"}
+  ///       ]
+  ///     }
+  ///   ```
+  ///
+  /// The 2+ entry form maps to AE's `and_conditions` fan-in: the node is
+  /// scheduled only after ALL listed parents succeed.
+  dependsOn: Listing<String>?
+
+  /// Explicit AE dependency condition for tags, OR, or nested logic. Mutually
+  /// exclusive with `dependsOn`.
+  dependsOnCondition: DependencyCondition?
+
+  /// Error handling / retry / timeout configuration for this node.
+  errorHandling: ErrorHandlingConfig?
+
+  // Invariant: heartbeatTimeoutSeconds is activity-only. Mirrors AE's
+  // _validate_error_handling_for_node_type (registry/workflows/models.py).
+  hidden _errorHandlingCheck: Any =
+    if (nodeType == "workflow" && errorHandling != null && errorHandling.heartbeatTimeoutSeconds != null)
+      throw("errorHandling.heartbeatTimeoutSeconds is not valid for workflow nodes (DAGNode.nodeType == \"workflow\"). "
+            + "Set nodeType = \"activity\" or remove heartbeatTimeoutSeconds.")
+    else null
+
+  hidden _dependencyConfigCheck: Any =
+    if (dependsOn != null && dependsOnCondition != null)
+      throw("DAGNode cannot set both dependsOn and dependsOnCondition. Use dependsOn for shorthand or dependsOnCondition for explicit AE conditions.")
+    else null
+}
+
+/// Error handling / retry / timeout configuration for a DAG node.
+/// Maps to the automation engine's `ErrorHandlingConfig` (registry/workflows/models.py).
+///
+/// Every field is serialized as-is under `error_handling` in the manifest.
+/// Note: AE remaps `start_to_close_timeout_seconds` to `execution_timeout` for
+/// workflow nodes and `start_to_close_timeout` for activity nodes at runtime.
+class ErrorHandlingConfig {
+  /// Initial retry interval in seconds (≥1).
+  initialInterval: Int(this >= 1)?
+
+  /// Retry backoff coefficient (multiplier applied per retry).
+  backoffCoefficient: Int?
+
+  /// Maximum retry interval in seconds (≥1).
+  maximumInterval: Int(this >= 1)?
+
+  /// Maximum retry attempts before the node is considered failed.
+  maximumAttempts: Int?
+
+  /// Error types that should not be retried (exact type/class names).
+  nonRetryableErrorTypes: Listing<String>?
+
+  /// Maximum time from start to completion in seconds (1-259200).
+  /// AE remaps to `execution_timeout` for workflow nodes (default 2 hours)
+  /// or `start_to_close_timeout` for activity nodes (default 30 minutes).
+  startToCloseTimeoutSeconds: Int(isBetween(1, 259200))?
+
+  /// Maximum time between heartbeats in seconds (1-3600). Activity nodes only —
+  /// AE rejects this on workflow nodes (see DAGNode.nodeType).
+  heartbeatTimeoutSeconds: Int(isBetween(1, 3600))?
+
+  // Cross-field invariant — mirrors AE's validate_timeouts (registry/workflows/models.py).
+  hidden _timeoutOrderingCheck: Any =
+    if (startToCloseTimeoutSeconds != null && heartbeatTimeoutSeconds != null
+        && heartbeatTimeoutSeconds >= startToCloseTimeoutSeconds)
+      throw("heartbeatTimeoutSeconds (\(heartbeatTimeoutSeconds)) must be less than "
+            + "startToCloseTimeoutSeconds (\(startToCloseTimeoutSeconds)).")
+    else null
+}
+
+/// Pre-built publish node. Usually specify only `upstream`, plus
+/// `executorEnabled` when dry-run or extract-only control is needed.
+class PublishNode extends DAGNode {
+  hidden upstream: String = "extract"
+  /// Value emitted as args["executor_enabled"].
+  /// Use a Boolean literal or an exact template placeholder string such as
+  /// "{{load-to-atlan}}".
+  executorEnabled: Boolean|String = true
+  /// Value emitted as args["tag_pipeline_enabled"] when non-null.
+  ///
+  /// When null, `renderNode()` falls back to the app-level
+  /// `publishTagPipelineEnabled`, which auto-enables the publish-app tag
+  /// pipeline from the workflow's tag-sync field (`enable-tags` preferred,
+  /// legacy `enable-tag-sync` fallback). Override per node only when this
+  /// publish node intentionally needs different tag-pipeline behavior.
+  tagPipelineEnabled: Boolean|String? = null
+  /// Value emitted as args["tag_attachments_prefix"] when non-null.
+  ///
+  /// When null, `renderNode()` falls back to the app-level
+  /// `publishTagAttachmentsPrefix`, normally
+  /// `$.extract.outputs.tag_attachments_prefix`. Publish-app reads this prefix
+  /// to load TagAttachment payloads for classification enrichment.
+  tagAttachmentsPrefix: String? = null
+  displayName = "Publish to Atlas"
+  workflowType = "PublishWorkflow"
+  appName = "publish"
+  args {
+    ["connection_qualified_name"] = "$.\(upstream).outputs.connection_qualified_name"
+    ["transformed_data_prefix"] = "$.\(upstream).outputs.transformed_data_prefix"
+    ["publish_state_prefix"] = "$.\(upstream).outputs.publish_state_prefix"
+    ["current_state_prefix"] = "$.\(upstream).outputs.current_state_prefix"
+    ["connection_creation_enabled"] = true
+    ["executor_enabled"] = executorEnabled
+    ["connection_entity"] = "{{connection}}"
+  }
+  dependsOn { upstream }
+}
+
+/// Pre-built Query Intelligence node.
+/// Provide SQL field mapping and, optionally, cloud storage settings.
+///
+/// Defaults are biased toward AE-native orchestration:
+/// - `appName = "automation-engine"` (matches working Athena usage)
+/// - `taskQueue = "atlan-query-intelligence-{deployment_name}"`
+/// - `dependsOn { upstream }`
+///
+/// The default input/output prefixes assume the extract node emits
+/// `qi_input_prefix` and `qi_output_prefix`. Override them when your app uses
+/// different output names (for example `transformed_data_prefix` or
+/// `view_lineage_output_prefix`).
+class QueryIntelligenceNode extends DAGNode {
+  hidden upstream: String = "extract"
+
+  /// Runtime source for the connection qualified name.
+  connectionQualifiedName: String = "$.\(upstream).outputs.connection_qualified_name"
+
+  /// Path / object-store prefix where QI should read input files from.
+  inputPrefix: String = "$.\(upstream).outputs.qi_input_prefix"
+
+  /// Path / object-store prefix where QI should write output files to.
+  outputPrefix: String = "$.\(upstream).outputs.qi_output_prefix"
+
+  /// Fixed dialect for all records.
+  vendorName: String?
+
+  /// Per-record dialect field (JSON mode only).
+  vendorKey: String?
+
+  /// Column / field containing the SQL text.
+  sqlKey: String
+
+  /// Column / field containing catalog / database name.
+  catalogKey: String = "DATABASE_NAME"
+
+  /// Column / field containing schema name.
+  schemaKey: String = "SCHEMA_NAME"
+
+  /// Column / field containing record timestamp. Use `""` to disable.
+  timestampKey: String = "START_TIME"
+
+  /// Input format — `parquet` for miner-style inputs, `json` for crawler-style inputs.
+  mineOutputType: "parquet"|"json" = "parquet"
+
+  /// Parsing strategy used by QI.
+  parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
+
+  /// Cloud backend name (for example `aws`). Set together with `storageBucket`.
+  lakeProvider: String?
+
+  /// Cloud storage bucket used for input/output prefixes.
+  storageBucket: String?
+
+  /// Deprecated compatibility file-exclude glob passed to QI artifact discovery.
+  excludeFilePattern: String?
+
+  /// Deprecated compatibility file-include glob passed to QI artifact discovery.
+  includeFilePattern: String?
+
+  /// Optional parquet time-window lower bound (exclusive), epoch millis.
+  startTime: Int?
+
+  /// Optional parquet time-window upper bound (inclusive), epoch millis.
+  endTime: Int?
+
+  /// Optional vendor-specific filter flag.
+  extraFilter: String?
+
+  /// Optional indirect lineage flag.
+  indirectLineage: Boolean?
+
+  /// Optional orphan-column handling flag.
+  ignoreOrphans: Boolean?
+
+  /// Optional passthrough columns list.
+  columnsToPreserve: String?
+
+  /// Optional parser timeout config, in `"<ms1>,<ms2>"` format.
+  processingTimeLimitMs: String?
+
+  /// Optional related-assets output prefix.
+  relatedAssetsOutputPrefix: String?
+
+  /// Optional parser artifacts tarball key.
+  parserArtifactsKey: String?
+
+  /// Optional connection cache object-store key.
+  connectionCacheKey: String?
+
+  /// Optional current-state prefix for schema-aware parsing.
+  currentStatePrefix: String?
+
+  /// Optional instance name for parser-specific routing.
+  instanceName: String?
+
+  hidden _qiArgsCheck: Any =
+    if (vendorName == null && vendorKey == null)
+      throw("QueryIntelligenceNode requires either vendorName or vendorKey.")
+    else if ((lakeProvider == null) != (storageBucket == null))
+      throw("QueryIntelligenceNode expects lakeProvider and storageBucket to be set together.")
+    else null
+
+  displayName = "Parse SQL Queries"
+  workflowType = "QueryIntelligenceWorkflow"
+  appName = "automation-engine"
+  taskQueue = "atlan-query-intelligence-{deployment_name}"
+  args {
+    ["connection_qualified_name"] = connectionQualifiedName
+    ["input_prefix"] = inputPrefix
+    ["output_prefix"] = outputPrefix
+    ["sql_key"] = sqlKey
+    ["catalog_key"] = catalogKey
+    ["schema_key"] = schemaKey
+    ["timestamp_key"] = timestampKey
+    ["mine_output_type"] = mineOutputType
+    ["parsing_mode"] = parsingMode
+    when (vendorName != null) { ["vendor_name"] = vendorName }
+    when (vendorKey != null) { ["vendor_key"] = vendorKey }
+    when (lakeProvider != null) { ["lake_provider"] = lakeProvider }
+    when (storageBucket != null) { ["storage_bucket"] = storageBucket }
+    when (excludeFilePattern != null) { ["exclude_file_pattern"] = excludeFilePattern }
+    when (includeFilePattern != null) { ["include_file_pattern"] = includeFilePattern }
+    when (startTime != null) { ["start_time"] = startTime }
+    when (endTime != null) { ["end_time"] = endTime }
+    when (extraFilter != null) { ["extra_filter"] = extraFilter }
+    when (indirectLineage != null) { ["indirect_lineage"] = indirectLineage }
+    when (ignoreOrphans != null) { ["ignore_orphans"] = ignoreOrphans }
+    when (columnsToPreserve != null) { ["columns_to_preserve"] = columnsToPreserve }
+    when (processingTimeLimitMs != null) { ["processing_time_limit_ms"] = processingTimeLimitMs }
+    when (relatedAssetsOutputPrefix != null) { ["related_assets_output_prefix"] = relatedAssetsOutputPrefix }
+    when (parserArtifactsKey != null) { ["parser_artifacts_key"] = parserArtifactsKey }
+    when (connectionCacheKey != null) { ["connection_cache_key"] = connectionCacheKey }
+    when (currentStatePrefix != null) { ["current_state_prefix"] = currentStatePrefix }
+    when (instanceName != null) { ["instance_name"] = instanceName }
+  }
+  dependsOn { upstream }
+}
+
+/// Source-specific column mapping for `PopularityNode`.
+///
+/// Defaults match the popularity app's built-in Snowflake-compatible mapping.
+/// Override only the columns that differ for the miner feeding the app.
+class PopularityMineColumnMapping {
+  queryId: String = "QUERY_ID"
+  userName: String = "USER_NAME"
+  warehouseName: String = "WAREHOUSE_NAME"
+  roleName: String = "ROLE_NAME"
+  totalElapsedTime: String = "TOTAL_ELAPSED_TIME"
+  creditsCloudServices: String = "CREDITS_USED_CLOUD_SERVICES"
+  creditsCompute: String = "CREDITS_USED_COMPUTE"
+  queryType: String = "QUERY_TYPE"
+  startTime: String = "START_TIME"
+  queryTag: String = "NULL"
+  queryTagsSql: String = "NULL"
+  hasNativeInputs: String?
+  nativeInputsPayload: String?
+}
+
+const local function renderPopularityMineColumnMapping(
+  mapping: PopularityMineColumnMapping
+): Mapping<String, Any> = new Mapping {
+  ["query_id"] = mapping.queryId
+  ["user_name"] = mapping.userName
+  ["warehouse_name"] = mapping.warehouseName
+  ["role_name"] = mapping.roleName
+  ["total_elapsed_time"] = mapping.totalElapsedTime
+  ["credits_cloud_services"] = mapping.creditsCloudServices
+  ["credits_compute"] = mapping.creditsCompute
+  ["query_type"] = mapping.queryType
+  ["start_time"] = mapping.startTime
+  ["query_tag"] = mapping.queryTag
+  ["query_tags_sql"] = mapping.queryTagsSql
+  when (mapping.hasNativeInputs != null) {
+    ["has_native_inputs"] = mapping.hasNativeInputs
+  }
+  when (mapping.nativeInputsPayload != null) {
+    ["native_inputs_payload"] = mapping.nativeInputsPayload
+  }
+}
+
+/// Pre-built Popularity app node.
+///
+/// Runs the `popularity` system app after query parsing and asset publishing.
+/// Popularity currently expects inline workflow arguments and does not return
+/// output paths, so the read/write prefixes are explicit properties:
+/// - `parsedDataPrefix`: Query Intelligence output prefix
+/// - `minedDataPrefix`: source query-history miner output prefix
+/// - `connectionCachePath`: exact SQLite cache object key/local file path
+/// - `outputPrefix`: dedicated popularity output prefix
+///
+/// By default the node waits for `qi` and `publish` to succeed. Disable either
+/// wait flag when feeding precomputed parsed data or an existing connection
+/// cache path.
+class PopularityNode extends DAGNode {
+  /// Query Intelligence node id to wait for when `waitForQueryIntelligence` is true.
+  queryIntelligenceNode: String? = "qi"
+
+  /// Asset publish node id to wait for when `waitForAssetPublish` is true.
+  /// Configure that publish node to build connection cache when this node uses
+  /// the cache it produces.
+  assetPublishNode: String? = "publish"
+
+  /// Wait for Query Intelligence to finish before computing popularity.
+  waitForQueryIntelligence: Boolean = true
+
+  /// Wait for asset publish / connection-cache generation before computing popularity.
+  waitForAssetPublish: Boolean = true
+
+  /// Runtime source for the connection qualified name.
+  connectionQualifiedName: String = "$.extract.outputs.connection_qualified_name"
+
+  /// Tenant identifier passed to the popularity app.
+  tenantId: String
+
+  /// Prefix where Query Intelligence wrote parsed SQL artifacts.
+  parsedDataPrefix: String
+
+  /// Prefix where the source miner wrote query-history artifacts.
+  minedDataPrefix: String
+
+  /// Exact connection-cache SQLite path. For cloud runs this is an object key,
+  /// not a directory prefix.
+  connectionCachePath: String
+
+  /// Prefix where popularity writes facts, windowed metrics, and JSON insights.
+  outputPrefix: String
+
+  /// Optional Snowflake ACCESS_HISTORY data prefix used for native lineage inputs.
+  accessHistoryDataPrefix: String?
+
+  /// Window size, in days, for the rolling popularity metrics.
+  windowDays: Int(this >= 1) = 30
+
+  /// Maximum representative queries retained per asset.
+  topNQueries: Int(this >= 1) = 5
+
+  /// Maximum users retained per asset.
+  topNUsers: Int(this >= 1) = 10
+
+  /// Storage backend for parsed/mined/access-history/cache/output paths.
+  lakeProvider: "local"|"aws"|"gcp"|"azure" = "aws"
+
+  /// Source-specific query-history column mapping. Omit to use the app's
+  /// Snowflake-compatible defaults.
+  mineColumnMapping: PopularityMineColumnMapping?
+
+  /// Include filter passed to the popularity app.
+  includeFilter: Mapping<String, Listing<String>>?
+
+  /// Exclude filter passed to the popularity app.
+  excludeFilter: Mapping<String, Listing<String>>?
+
+  /// Drop parsed-data rows marked as errors before metric computation.
+  parsedDataFilterHasError: Boolean?
+
+  /// Emit relationship output attribution details.
+  relationshipsOutputAttribution: Boolean?
+
+  /// Query types ignored by the popularity app. Omit to use app defaults; set
+  /// an empty listing to disable the default ignore list.
+  queryTypesToIgnore: Listing<String>?
+
+  /// Compare with legacy output and skip export/publish stages.
+  dryRun: Boolean = false
+
+  /// Escape hatch for new Popularity app config fields before this toolkit grows
+  /// first-class properties for them.
+  extraArgs: Mapping<String, Any> = new Mapping {}
+
+  hidden _popularityDependencyCheck: Any =
+    if (waitForQueryIntelligence && queryIntelligenceNode == null)
+      throw("PopularityNode.waitForQueryIntelligence requires queryIntelligenceNode.")
+    else if (waitForAssetPublish && assetPublishNode == null)
+      throw("PopularityNode.waitForAssetPublish requires assetPublishNode.")
+    else null
+
+  displayName = "Compute Popularity"
+  workflowType = "PopularityWorkflow"
+  appName = "popularity"
+  taskQueue = "atlan-popularity-{deployment_name}"
+  args {
+    ["connection_qualified_name"] = connectionQualifiedName
+    ["tenant_id"] = tenantId
+    ["parsed_data_prefix"] = parsedDataPrefix
+    ["mined_data_prefix"] = minedDataPrefix
+    ["connection_cache_path"] = connectionCachePath
+    ["output_prefix"] = outputPrefix
+    when (accessHistoryDataPrefix != null) {
+      ["access_history_data_prefix"] = accessHistoryDataPrefix
+    }
+    ["window_days"] = windowDays
+    ["top_n_queries"] = topNQueries
+    ["top_n_users"] = topNUsers
+    ["lake_provider"] = lakeProvider
+    when (mineColumnMapping != null) {
+      ["mine_column_mapping"] = renderPopularityMineColumnMapping(mineColumnMapping!!)
+    }
+    when (includeFilter != null) { ["include_filter"] = includeFilter }
+    when (excludeFilter != null) { ["exclude_filter"] = excludeFilter }
+    when (parsedDataFilterHasError != null) {
+      ["parsed_data_filter_has_error"] = parsedDataFilterHasError
+    }
+    when (relationshipsOutputAttribution != null) {
+      ["relationships_output_attribution"] = relationshipsOutputAttribution
+    }
+    when (queryTypesToIgnore != null) {
+      ["query_types_to_ignore"] = queryTypesToIgnore
+    }
+    ["dry_run"] = dryRun
+    ...extraArgs
+  }
+
+  dependsOn = if (waitForQueryIntelligence && !waitForAssetPublish)
+    new Listing { queryIntelligenceNode!! }
+  else if (!waitForQueryIntelligence && waitForAssetPublish)
+    new Listing { assetPublishNode!! }
+  else null
+
+  dependsOnCondition = if (waitForQueryIntelligence && waitForAssetPublish)
+    new DependencyCondition {
+      andConditions {
+        new DependencyCondition {
+          nodeId = queryIntelligenceNode!!
+          tag = "success"
+        }
+        new DependencyCondition {
+          nodeId = assetPublishNode!!
+          tag = "success"
+        }
+      }
+    }
+  else null
+}
+
+/// Pre-built Lineage app node.
+///
+/// Defaults target the native JSON/view-lineage flow used by Athena:
+/// - `workflowType = "LineageWorkflow"`
+/// - `appName = "automation-engine"`
+/// - `taskQueue = "atlan-lineage-{deployment_name}"`
+/// - `fileType = "json"` and `inputPath = ""`
+/// - `parsedViewsPath = "$.extract.outputs.view_lineage_output_prefix"`
+/// - `lineageOutputPath = "$.extract.outputs.lineage_stage_prefix"`
+///
+/// The Lineage app requires connector identity, case handling, input/output
+/// paths, and catalog cache path. This node defaults everything that is
+/// stable across native crawler-style usage, but keeps `connectorName`,
+/// `sqlUnquotedCase`, and `ignoreAllCase` explicit because those are
+/// connector-specific.
+class LineageNode extends DAGNode {
+  hidden upstream: String = "extract"
+
+  /// Runtime source for the connection qualified name.
+  connectionQualifiedName: String = "$.\(upstream).outputs.connection_qualified_name"
+
+  /// Short connector identifier consumed by the Lineage app.
+  connectorName: String
+
+  /// Unique key for the lineage processing session. Used to derive staging
+  /// paths when `stagePath` is omitted.
+  sessionKey: String = "view-lineage"
+
+  /// How unquoted SQL identifiers should be normalized: upper, lower, preserve.
+  sqlUnquotedCase: "upper"|"lower"|"preserve"
+
+  /// Whether all identifiers should be lowercased regardless of quoting.
+  ignoreAllCase: Boolean
+
+  /// Raw parsed query input path. Empty string is correct for JSON/view flow.
+  inputPath: String = ""
+
+  /// Final Lineage app output prefix. The follow-on lineage publish node reads this.
+  lineageOutputPath: String = "$.\(upstream).outputs.lineage_stage_prefix"
+
+  /// Atlan entity-cache SQLite path. Native publish writes `connection-cache`
+  /// when `connection_cache_via_app_enabled` is enabled.
+  cachePath: String = "connection-cache"
+
+  /// Optional explicit inter-activity staging path. Omit to let Lineage app
+  /// derive a run-id-scoped path.
+  stagePath: String?
+
+  /// Optional storage backend override for input, cache, staging, and output
+  /// paths. Omit to let the Lineage app resolve its tenant object-store
+  /// backend from deployment environment.
+  lakeProvider: ("local"|"aws"|"gcp"|"azure")? = null
+
+  /// Optional cloud bucket/container override. Omit to let the Lineage app
+  /// resolve its tenant object-store bucket from deployment environment.
+  cloudStorageBucket: String?
+
+  /// Local scratch/download directory.
+  localOutputPrefix: String?
+
+  /// Lineage input format. `json` is the crawler/view-lineage flow; `parquet`
+  /// is the miner/query-history flow.
+  fileType: "parquet"|"json" = "json"
+
+  /// Use native Azure Blob storage instead of S3-compatible Azure gateway.
+  azureBlob: Boolean?
+
+  /// Use localstack/test storage endpoints.
+  isTestEnv: Boolean?
+
+  /// Glob pattern to exclude discovered artifacts.
+  excludeFilePattern: String?
+
+  /// Glob pattern to include discovered artifacts.
+  includeFilePattern: String?
+
+  /// Collapse BigQuery shard tables.
+  enableSharded: Boolean?
+
+  /// Scope temp-table identity by parent job id.
+  enableParentJobScoping: Boolean?
+
+  /// Allow schema-only fallback when exact resolution fails.
+  enableFallbackMatch: Boolean?
+
+  /// Include indirect relationship types in column-level lineage.
+  includeIndirectColumnRelations: Boolean?
+
+  /// Freshly parsed view definitions. Used by JSON/view flow.
+  parsedViewsPath: String? = "$.\(upstream).outputs.view_lineage_output_prefix"
+
+  /// Previous crawler view definitions. Used by parquet/miner flow.
+  parsedViewsCurrentState: String?
+
+  /// Attach procedure/function metadata to process entities.
+  processRoutines: Boolean?
+
+  /// Routine mapping artifact path for miner flow.
+  routineMappingsPath: String?
+
+  /// Connector-specific parquet column mapping.
+  columnMapping: Mapping<String, String>?
+
+  /// JSON field mapping for NDJSON input.
+  jsonKeyMapping: Mapping<String, String>?
+
+  /// Comma-separated sort columns for parquet inputs.
+  sortColumns: String?
+
+  /// Previous output used for diff preservation.
+  lineageCurrentState: String?
+
+  /// Sync workflow name written to output entities.
+  workflowName: String?
+
+  /// Sync run name written to output entities. Also a session key fallback.
+  runName: String?
+
+  /// Tenant identifier written to output entities.
+  tenantId: String?
+
+  /// Package name used by accuracy metrics.
+  packageName: String?
+
+  /// Parser version written to output entity custom attributes.
+  gudusoftVersion: String?
+
+  /// Discovery lower bound, epoch millis. Seconds are accepted by Lineage app
+  /// and normalized there.
+  startTimeEpoch: Int?
+
+  /// Discovery upper bound, epoch millis. Null means current time.
+  endTimeEpoch: Int?
+
+  /// Activity-level worker parallelism.
+  maxParallelChunks: Int?
+
+  /// Streaming batch size.
+  maxRowsPerChunk: Int?
+
+  /// Files per Temporal ingest activity.
+  ingestGroupSize: Int?
+
+  /// Maximum concurrent ingest activities.
+  maxParallelIngestGroups: Int?
+
+  /// Run Lineage app accuracy comparison when workflowName is set.
+  enableAccuracyTest: Boolean?
+
+  /// Optional trace output directory for debugging.
+  traceDir: String?
+
+  /// Optional checkpoint output directory for debugging.
+  checkpointDir: String?
+
+  /// Checkpoint resume stage.
+  resumeFromStage: Int?
+
+  /// Escape hatch for new Lineage app config fields before this toolkit grows
+  /// first-class properties for them.
+  extraArgs: Mapping<String, Any> = new Mapping {}
+
+  displayName = "Build Lineage Entities"
+  workflowType = "LineageWorkflow"
+  appName = "automation-engine"
+  taskQueue = "atlan-lineage-{deployment_name}"
+  args {
+    ["connection_qualified_name"] = connectionQualifiedName
+    ["connector_name"] = connectorName
+    ["session_key"] = sessionKey
+    ["sql_unquoted_case"] = sqlUnquotedCase
+    ["ignore_all_case"] = ignoreAllCase
+    ["input_path"] = inputPath
+    when (parsedViewsPath != null) { ["parsed_views_path"] = parsedViewsPath }
+    ["lineage_output_path"] = lineageOutputPath
+    ["cache_path"] = cachePath
+    ["file_type"] = fileType
+    when (lakeProvider != null) { ["lake_provider"] = lakeProvider }
+    when (cloudStorageBucket != null) { ["cloud_storage_bucket"] = cloudStorageBucket }
+    when (stagePath != null) { ["stage_path"] = stagePath }
+    when (localOutputPrefix != null) { ["local_output_prefix"] = localOutputPrefix }
+    when (azureBlob != null) { ["azure_blob"] = azureBlob }
+    when (isTestEnv != null) { ["is_test_env"] = isTestEnv }
+    when (excludeFilePattern != null) { ["exclude_file_pattern"] = excludeFilePattern }
+    when (includeFilePattern != null) { ["include_file_pattern"] = includeFilePattern }
+    when (enableSharded != null) { ["enable_sharded"] = enableSharded }
+    when (enableParentJobScoping != null) { ["enable_parent_job_scoping"] = enableParentJobScoping }
+    when (enableFallbackMatch != null) { ["enable_fallback_match"] = enableFallbackMatch }
+    when (includeIndirectColumnRelations != null) { ["include_indirect_column_relations"] = includeIndirectColumnRelations }
+    when (parsedViewsCurrentState != null) { ["parsed_views_current_state"] = parsedViewsCurrentState }
+    when (processRoutines != null) { ["process_routines"] = processRoutines }
+    when (routineMappingsPath != null) { ["routine_mappings_path"] = routineMappingsPath }
+    when (columnMapping != null) { ["column_mapping"] = columnMapping }
+    when (jsonKeyMapping != null) { ["json_key_mapping"] = jsonKeyMapping }
+    when (sortColumns != null) { ["sort_columns"] = sortColumns }
+    when (lineageCurrentState != null) { ["lineage_current_state"] = lineageCurrentState }
+    when (workflowName != null) { ["workflow_name"] = workflowName }
+    when (runName != null) { ["run_name"] = runName }
+    when (tenantId != null) { ["tenant_id"] = tenantId }
+    when (packageName != null) { ["package_name"] = packageName }
+    when (gudusoftVersion != null) { ["gudusoft_version"] = gudusoftVersion }
+    when (startTimeEpoch != null) { ["start_time_epoch"] = startTimeEpoch }
+    when (endTimeEpoch != null) { ["end_time_epoch"] = endTimeEpoch }
+    when (maxParallelChunks != null) { ["max_parallel_chunks"] = maxParallelChunks }
+    when (maxRowsPerChunk != null) { ["max_rows_per_chunk"] = maxRowsPerChunk }
+    when (ingestGroupSize != null) { ["ingest_group_size"] = ingestGroupSize }
+    when (maxParallelIngestGroups != null) { ["max_parallel_ingest_groups"] = maxParallelIngestGroups }
+    when (enableAccuracyTest != null) { ["enable_accuracy_test"] = enableAccuracyTest }
+    when (traceDir != null) { ["trace_dir"] = traceDir }
+    when (checkpointDir != null) { ["checkpoint_dir"] = checkpointDir }
+    when (resumeFromStage != null) { ["resume_from_stage"] = resumeFromStage }
+    ...extraArgs
+  }
+  /// Use `dependsOn = null` plus `dependsOnCondition = new DependencyCondition { ... }`
+  /// when replacing this default with an explicit AE condition.
+  dependsOn { upstream }
+}
+
+/// Pre-built lineage publish node.
+///
+/// Publishes lineage entities produced by `LineageNode` through the standard
+/// publish app, using lineage-specific state/cache settings.
+///
+/// Defaults target the native lineage DAG shape:
+/// - waits for `lineage-app` and the main asset `publish` node to succeed
+/// - reads lineage output from `$.extract.outputs.lineage_stage_prefix`
+/// - writes lineage publish/current-state prefixes from extract outputs
+/// - disables connection creation and uses the `lineage` cache namespace
+class LineagePublishNode extends DAGNode {
+  /// Node id of the Lineage app node this publish must follow.
+  hidden upstream: String = "lineage-app"
+
+  /// Node id of the main asset publish node this publish must follow.
+  assetPublishNode: String = "publish"
+
+  /// Whether this lineage publish node should also wait for the main asset
+  /// publish node. Set false when the upstream LineageNode already depends on
+  /// asset publish and a direct `dependsOn { "lineage-app" }` edge is enough.
+  waitForAssetPublish: Boolean = true
+
+  /// Extract node that produced the lineage publish paths.
+  hidden extractNode: String = "extract"
+
+  /// Runtime source for the connection qualified name.
+  connectionQualifiedName: String = "$.\(extractNode).outputs.connection_qualified_name"
+
+  /// Prefix where the Lineage app writes publishable lineage entities.
+  transformedDataPrefix: String = "$.\(extractNode).outputs.lineage_stage_prefix"
+
+  /// Lineage publish state prefix.
+  publishStatePrefix: String = "$.\(extractNode).outputs.lineage_publish_state_prefix"
+
+  /// Lineage current-state prefix.
+  currentStatePrefix: String = "$.\(extractNode).outputs.lineage_current_state_prefix"
+
+  /// Connection entity placeholder passed through Heracles.
+  connectionEntity: String = "{{connection}}"
+
+  /// Whether publish should read/write connection cache entries.
+  connectionCacheEnabled: Boolean = true
+
+  /// Whether publish should resolve connection cache through app storage.
+  connectionCacheViaAppEnabled: Boolean = true
+
+  /// Whether publish should resolve current state through app storage.
+  currentStateViaAppEnabled: Boolean = true
+
+  /// Publish-app cache namespace used to isolate lineage state/cache paths.
+  /// Set this for multi-entrypoint apps that need independent lineage caches
+  /// for crawler, miner, or other lineage-producing workflows.
+  cacheNamespace: String = "lineage"
+
+  /// Escape hatch for new lineage publish args before this toolkit grows
+  /// first-class properties for them.
+  extraArgs: Mapping<String, Any> = new Mapping {}
+
+  displayName = "Publish Lineage to Atlas"
+  workflowType = "PublishWorkflow"
+  appName = "publish"
+  taskQueue = "atlan-publish-{deployment_name}"
+  args {
+    ["connection_qualified_name"] = connectionQualifiedName
+    ["transformed_data_prefix"] = transformedDataPrefix
+    ["publish_state_prefix"] = publishStatePrefix
+    ["current_state_prefix"] = currentStatePrefix
+    ["connection_creation_enabled"] = false
+    ["executor_enabled"] = true
+    ["cache_namespace"] = cacheNamespace
+    ["connection_entity"] = connectionEntity
+    ["connection_cache_enabled"] = connectionCacheEnabled
+    ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
+    ["current_state_via_app_enabled"] = currentStateViaAppEnabled
+    ...extraArgs
+  }
+  dependsOn = if (waitForAssetPublish)
+    null
+  else
+    new Listing { upstream }
+
+  dependsOnCondition = if (waitForAssetPublish)
+    new DependencyCondition {
+      andConditions {
+        new DependencyCondition {
+          nodeId = upstream
+          tag = "success"
+        }
+        new DependencyCondition {
+          nodeId = assetPublishNode
+          tag = "success"
+        }
+      }
+    }
+  else null
+}
+
+// ---------------------------------------------------------------------------
+// Internal: FieldSpec → configmap JSON rendering
+// ---------------------------------------------------------------------------
+
+/// Convert a FieldSpec to the configmap JSON property format.
+local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
+  // Determine the JSON schema type
+  ["type"] = if (f.fieldType == "number") "number"
+    else if (f.fieldType == "checkbox") "boolean"
+    else if (f.fieldType == "inputRepeater") "object"
+    else "string"
+
+  when (f.required || f.includeRequiredWhenFalse) { ["required"] = f.required }
+
+  // Enum values for select fields
+  when (f.fieldType == "select" && f.options != null) {
+    ["enum"] = f.options
+    when (f.optionLabels != null) {
+      ["enumNames"] = new Listing {
+        for (opt in f.options!!) {
+          f.optionLabels!!.toMap().getOrNull(opt) ?? opt
+        }
+      }
+    }
+  }
+
+  when (f.defaultValue != null) {
+    ["default"] = if (f.fieldType == "number") f.defaultValue!!.toInt()
+      else if (f.fieldType == "checkbox") f.defaultValue == "true"
+      else f.defaultValue
+  }
+
+  // UI rendering config
+  ["ui"] = new Mapping {
+    // Widget selection: sensitive → password, select with ≤4 options → radio, etc.
+    when (f.includeUiWidget) {
+      ["widget"] = if (f.sensitive || f.fieldType == "password") "password"
+        else if (f.fieldType == "textarea") "TextInput"
+        else if (f.fieldType == "number") "inputNumber"
+        else if (f.fieldType == "checkbox") "boolean"
+        else if (f.fieldType == "select" && f.options != null && f.options!!.length <= 4) "radio"
+        else if (f.fieldType == "select") "select"
+        else if (f.fieldType == "inputRepeater") "inputRepeater"
+        else "input"
+    }
+    when (f.includeUiLabel) { ["label"] = f.displayName }
+    when (f.includeUiHidden) { ["hidden"] = f.isHidden }
+    when (f.helpText != null) { ["help"] = f.helpText }
+    when (f.includeUiPlaceholder && f.placeholder != null) { ["placeholder"] = f.placeholder }
+    when (f.includeUiGrid) { ["grid"] = f.width }
+    when (f.rows != null) { ["rows"] = f.rows }
+    when (f.uiClass != null) { ["class"] = f.uiClass }
+    when (f.uiRequired != null) { ["required"] = f.uiRequired }
+    when (f.feedback != null) { ["feedback"] = f.feedback }
+    when (f.message != null) { ["message"] = f.message }
+    when (f.byocDisabled != null) { ["BYOCdisabled"] = f.byocDisabled }
+    when (f.validationRules != null) {
+      ["rules"] = f.validationRules
+    }
+    when (f.validationRules == null && f.validationRegex != null) {
+      ["rules"] = new Listing {
+        new Dynamic {
+          pattern = f.validationRegex
+          message = "Invalid format"
+          trigger = "blur"
+        }
+      }
+    }
+  }
+}
+
+/// Convert a ConditionalFieldSpec to the configmap JSON property format.
+/// Produces `{ type: "conditional", conditions: [...] }` — the per-condition
+/// rendering (property/value/filter + ui) is handled by Config.Condition itself.
+local function renderConditionalField(cf: ConditionalFieldSpec): Mapping<String, Any> = new Mapping {
+  ["type"] = "conditional"
+  when (cf.required) { ["required"] = true }
+  when (cf.additionalProperties != null) { ["additionalProperties"] = cf.additionalProperties }
+  when (cf.defaultValue != null) { ["default"] = cf.defaultValue }
+  ["conditions"] = cf.conditions
+}
+
+/// Dispatch by entry type:
+///   - `FieldSpec` → `renderField` (emits `{type, required?, ui}`)
+///   - `ConditionalFieldSpec` → `renderConditionalField` (emits `{type: "conditional", conditions}`)
+///   - `NamedWidget` → the wrapped `Config.UIElement` itself, which PKL's
+///     JsonRenderer serializes structurally (same path as `uiConfig.properties`)
+/// Return type is `Any` because the UIElement branch yields a class instance,
+/// not a `Mapping`. The caller in `renderAuthOption` assigns into a
+/// `Mapping<String, Any>` so either shape is accepted.
+local function renderAnyField(f: CredentialFieldEntry): Any =
+  if (f is ConditionalFieldSpec) renderConditionalField(f)
+  else if (f is NamedWidget) f.widget
+  else if (f is NamedProperty) (f as NamedProperty).property
+  else renderField(f as FieldSpec)
+
+/// Render an AuthOption's fields as a nested input property.
+local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Mapping {
+  ["type"] = "object"
+  ["ui"] = new Mapping {
+    ["widget"] = "nested"
+    ["label"] = opt.nestedLabel
+    when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
+    ["hidden"] = opt.nestedHidden
+    ["nestedValue"] = false
+  }
+  when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
+    ["properties"] = new Mapping {
+      for (f in opt.fields) {
+        [f.name] = renderAnyField(f)
+      }
+      when (!opt.extraFields.isEmpty) {
+        ["extra"] = new Mapping {
+          ["type"] = "object"
+          ["ui"] = new Mapping {
+            ["widget"] = "nested"
+            ["label"] = opt.nestedExtraLabel
+            when (opt.nestedExtraHeader != null) { ["header"] = opt.nestedExtraHeader }
+            ["hidden"] = false
+          }
+          ["properties"] = new Mapping {
+            for (f in opt.extraFields) {
+              [f.name] = renderAnyField(f)
+            }
+          }
+        }
+      }
+      for (f in opt.postExtraFields) {
+        [f.name] = renderAnyField(f)
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AdvancedJDBCUrlGroup renderer
+// ---------------------------------------------------------------------------
+
+/// Strip frontend-default keys that argo omits from visible `ui` blocks.
+/// Argo omits `widget: "input"` / `widget: "inputNumber"` (implicit from
+/// property-level `type`). It also omits `hidden: false` for every widget
+/// except selection widgets (`radio`, `select`), where it's kept as an
+/// explicit marker.
+local function stripUiDefaults(ui: Mapping<String, Any>): Mapping<String, Any> =
+  let (m = ui.toMap())
+  let (w = m.getOrNull("widget"))
+  let (isDefaultWidget = w == "input" || w == "inputNumber")
+  let (keepHiddenFalse = w == "radio" || w == "select")
+  let (step1 = if (isDefaultWidget) m.remove("widget") else m)
+  let (step2 = if (!keepHiddenFalse && step1.getOrNull("hidden") == false)
+    step1.remove("hidden") else step1)
+  step2.toMapping()
+
+/// Call `renderField` and strip default `hidden`/`widget` keys from its ui.
+local function renderFieldStripped(f: FieldSpec): Mapping<String, Any> =
+  let (full = renderField(f).toMap())
+  full.put("ui", stripUiDefaults(full["ui"] as Mapping<String, Any>)).toMapping()
+
+/// Dispatch for JDBC-scoped rendering: stripped variant of `renderAnyField`.
+local function renderAnyFieldStripped(f: CredentialFieldEntry): Any =
+  if (f is ConditionalFieldSpec) renderConditionalField(f)
+  else if (f is NamedWidget) (f as NamedWidget).widget
+  else if (f is NamedProperty) (f as NamedProperty).property
+  else renderFieldStripped(f as FieldSpec)
+
+/// Render an `AuthOption`'s pane with default-stripped child fields (JDBC mode).
+local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> = new Mapping {
+  ["type"] = "object"
+  ["ui"] = new Mapping {
+    ["widget"] = "nested"
+    ["label"] = opt.nestedLabel
+    when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
+    ["hidden"] = opt.nestedHidden
+    ["nestedValue"] = false
+  }
+  when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
+    ["properties"] = new Mapping {
+      for (f in opt.fields) {
+        [f.name] = renderAnyFieldStripped(f)
+      }
+      when (!opt.extraFields.isEmpty) {
+        ["extra"] = new Mapping {
+          ["type"] = "object"
+          ["ui"] = new Mapping {
+            ["widget"] = "nested"
+            ["label"] = opt.nestedExtraLabel
+            when (opt.nestedExtraHeader != null) { ["header"] = opt.nestedExtraHeader }
+            ["hidden"] = false
+          }
+          ["properties"] = new Mapping {
+            for (f in opt.extraFields) {
+              [f.name] = renderAnyFieldStripped(f)
+            }
+          }
+        }
+      }
+      for (f in opt.postExtraFields) {
+        [f.name] = renderAnyFieldStripped(f)
+      }
+    }
+  }
+}
+
+/// Namespace prefix per extraction-method. `credential-guid` is the form-field
+/// path for the direct credential input; `agent-json` is the path used when the
+/// agent extraction mode layers an override schema on the same form.
+local extractionNamespaces: Map<String, String> = Map(
+  "direct", "credential-guid",
+  "agent", "agent-json"
+)
+
+local function nsFor(mode: String): String = extractionNamespaces[mode]
+
+/// Resolve a search-param value for a given namespace. Literals pass through;
+/// refs are prefixed `<namespace>.<field>`.
+local function resolveUrlValue(v: UrlValue, ns: String): String =
+  if (v is UrlLiteral) (v as UrlLiteral).value
+  else "\(ns).\((v as UrlRef).field)"
+
+/// Emit a `urlPartPropertyIdMapping` block for one namespace. Omits
+/// hostname/port/pathname keys when the mapping doesn't set them (the IAM
+/// branches on cloudsql/alloydb only set pathname + searchParams).
+local function renderUrlPartMapping(m: UrlPartMapping, ns: String): Mapping<String, Any> = new Mapping {
+  when (m.hostname != null) { ["hostname"] = "\(ns).\(m.hostname!!)" }
+  when (m.port != null) { ["port"] = "\(ns).\(m.port!!)" }
+  when (m.pathname != null) { ["pathname"] = "\(ns).\(m.pathname!!)" }
+  ["searchParams"] = new Mapping {
+    for (k, v in m.searchParams) {
+      [k] = resolveUrlValue(v, ns)
+    }
+  }
+}
+
+/// Build an `$and` pair: extraction-method matches a mode AND a namespaced
+/// property equals a value. Used to scope `auth-type`, `connectBy` conditions.
+local function andPair(mode: String, pathSuffix: String, value: String): Dynamic = new {
+  `$and` {
+    new Dynamic { ["extraction-method"] = mode }
+    new Dynamic { ["\(nsFor(mode)).\(pathSuffix)"] = value }
+  }
+}
+
+/// The unique set of extraction modes referenced across every auth option,
+/// emitted in argo's canonical order: agent first, direct second.
+/// For mssql this is {agent, direct}; for cloudsql WIF-only auth still ends
+/// up here because `basic` claims both modes.
+local function activeModes(options: Mapping<String, AuthOption>): List<String> =
+  let (union = options.toMap().values.toList()
+    .flatMap((opt) -> (opt as JDBCUrlAuthOption).extractionModes.toList()))
+  let (seen = union.toSet())
+  List("agent", "direct").filter((m) -> seen.contains(m))
+
+/// Build a `$or` over `(mode)` for a given path suffix matching `value`.
+/// Used by host/port/extra.compiled_url/auth-type conditions — these only
+/// depend on connectBy or extraction-method, not on auth-type.
+local function connectByFilter(connectBy: String, options: Mapping<String, AuthOption>): Dynamic = new {
+  `$or` {
+    for (mode in activeModes(options)) {
+      andPair(mode, "connectBy", connectBy)
+    }
+  }
+}
+
+/// Top-level `jdbcUrl.conditions` branch for one (auth-type × mode) pair.
+/// The `ui` carries the `AdvancedJDBCUrlGroup` widget config with the
+/// per-auth-type mapping resolved against the mode's namespace.
+local function renderJdbcBranch(
+  group: AdvancedJDBCUrlGroup,
+  authKey: String,
+  jdbcOpt: JDBCUrlAuthOption,
+  mode: String
+): Mapping<String, Any> = new Mapping {
+  ["filter"] = new Dynamic {
+    `$and` {
+      new Dynamic { ["extraction-method"] = mode }
+      new Dynamic { ["\(nsFor(mode)).auth-type"] = authKey }
+    }
+  }
+  ["ui"] = new Mapping {
+    ["widget"] = "AdvancedJDBCUrlGroup"
+    ["urlPropertyId"] = "\(nsFor(mode)).extra.compiled_url"
+    ["protocol"] = group.protocol
+    ["connectByPropertyId"] = "\(nsFor(mode)).connectBy"
+    ["urlPartPropertyIdMapping"] = renderUrlPartMapping(jdbcOpt.urlPartMapping, nsFor(mode))
+  }
+}
+
+/// Render the `extra.compiled_url` conditional field — visible + required
+/// when connectBy=url, disabled when connectBy=host.
+local function renderCompiledUrlField(
+  group: AdvancedJDBCUrlGroup,
+  options: Mapping<String, AuthOption>
+): Mapping<String, Any> = new Mapping {
+  ["type"] = "conditional"
+  ["default"] = ""
+  ["conditions"] = new Listing {
+    new Mapping {
+      ["filter"] = connectByFilter("url", options)
+      ["required"] = true
+      ["type"] = "string"
+      ["ui"] = new Mapping {
+        ["label"] = group.urlLabel
+        when (group.urlHelp != null) { ["help"] = group.urlHelp }
+        when (group.urlPlaceholder != null) { ["placeholder"] = group.urlPlaceholder }
+        ["addonBefore"] = group.urlAddonBefore
+        ["rules"] = new Listing {
+          new Dynamic { required = true; message = "Please enter a valid URL" }
+        }
+      }
+    }
+    new Mapping {
+      ["filter"] = connectByFilter("host", options)
+      ["type"] = "string"
+      ["ui"] = new Mapping {
+        ["label"] = group.urlLabel
+        ["addonBefore"] = group.urlAddonBefore
+        ["disabled"] = true
+      }
+    }
+  }
+  ["ui"] = new Mapping {}
+}
+
+/// Shared renderer for host/port conditional fields. Reuses `renderField` to
+/// build the visible `ui` block, then wraps it in a two-branch conditional
+/// (enabled when connectBy=host, disabled when connectBy=url). `isPort`
+/// opts into argo's port-specific emissions (`required: false` on the
+/// host-branch, `disabled: false` on the host ui).
+local function renderHostOrPortField(
+  f: FieldSpec,
+  options: Mapping<String, AuthOption>,
+  isPort: Boolean
+): Mapping<String, Any> =
+  let (visible = renderFieldStripped(f))
+  let (hostUi = (visible["ui"] as Mapping<String, Any>).toMap())
+  new Mapping {
+    ["type"] = "conditional"
+    when (f.defaultValue != null) {
+      ["default"] = if (f.fieldType == "number") f.defaultValue!!.toInt() else f.defaultValue
+    }
+    ["conditions"] = new Listing {
+      new Mapping {
+        ["filter"] = connectByFilter("host", options)
+        // Host emits required only when true; port always emits required (even false).
+        when (f.required) { ["required"] = true }
+        when (isPort && !f.required) { ["required"] = false }
+        ["type"] = visible["type"]
+        ["ui"] = if (isPort) hostUi.put("disabled", false).toMapping() else visible["ui"]
+      }
+      new Mapping {
+        ["filter"] = connectByFilter("url", options)
+        ["type"] = visible["type"]
+        ["ui"] = hostUi.filter((k, _) -> k != "rules").put("disabled", true).toMapping()
+      }
+    }
+    ["ui"] = new Mapping {}
+  }
+
+/// Render the `auth-type` conditional inside the JDBC URL group. Base enum is
+/// the auth-options declared; per-mode overrides expose a different enum when
+/// an auth-type is restricted (e.g. workload_identity_federation agent-only).
+local function renderJdbcAuthTypeField(options: Mapping<String, AuthOption>): Mapping<String, Any> =
+  let (allKeys = options.keys.toList())
+  let (directKeys = allKeys.filter((k) -> (options[k] as JDBCUrlAuthOption).extractionModes.toList().contains("direct")))
+  let (agentKeys = allKeys.filter((k) -> (options[k] as JDBCUrlAuthOption).extractionModes.toList().contains("agent")))
+  // Base matches direct (the default extraction-method); emit an agent
+  // override only when the enums differ between direct and agent.
+  let (agentDiffers = agentKeys != directKeys)
+  new Mapping {
+    ["type"] = "conditional"
+    ["conditions"] = new Listing {
+      new Mapping {
+        ["property"] = "extraction-method"
+        ["value"] = "agent"
+        ["enum"] = new Listing { for (k in agentKeys) { k } }
+        ["enumNames"] = new Listing { for (k in agentKeys) { options[k].label } }
+      }
+    }
+    ["enum"] = new Listing { for (k in directKeys) { k } }
+    ["default"] = directKeys.first
+    ["required"] = true
+    ["enumNames"] = new Listing { for (k in directKeys) { options[k].label } }
+    ["ui"] = new Mapping {
+      ["widget"] = "radio"
+      ["hidden"] = false
+      ["label"] = credentialAuthTitle
+      when (credentialAuthHelp != null) { ["help"] = credentialAuthHelp }
+      when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
+      when (credentialAuthRules != null) { ["rules"] = credentialAuthRules }
+    }
+  }
+
+/// Render the shared `jdbcUrl.properties.extra` nested section (database,
+/// __enable_ssl, sqlalchemy_url — anything the connector scopes there).
+local function renderJdbcExtraSection(group: AdvancedJDBCUrlGroup): Mapping<String, Any> = new Mapping {
+  ["type"] = "object"
+  ["ui"] = new Mapping {
+    ["widget"] = "nested"
+    ["label"] = ""
+    ["header"] = group.extraHeader
+    ["hidden"] = false
+  }
+  ["properties"] = new Mapping {
+    for (f in group.extraFields) {
+      [f.name] = renderAnyFieldStripped(f)
+    }
+  }
+}
+
+/// Render the `jdbcUrl` conditional wrapper — the core of the JDBC URL form.
+/// Emits: top-level `conditions` with N×M branches of `AdvancedJDBCUrlGroup`
+/// widget config, nested `properties` (compiled_url + host + port + auth-type
+/// + one pane per auth-option + shared extra), the default `ui` group, and
+/// the `anyOf` block.
+local function renderJdbcUrlField(
+  group: AdvancedJDBCUrlGroup,
+  options: Mapping<String, AuthOption>
+): Mapping<String, Any> = new Mapping {
+  ["type"] = "conditional"
+  ["conditions"] = new Listing {
+    // Argo order: outer by mode (agent first, direct second), inner by auth-type.
+    for (mode in activeModes(options)) {
+      for (authKey, opt in options) {
+        when ((opt as JDBCUrlAuthOption).extractionModes.toList().contains(mode)) {
+          renderJdbcBranch(group, authKey, opt as JDBCUrlAuthOption, mode)
+        }
+      }
+    }
+  }
+  ["properties"] = new Mapping {
+    ["extra.compiled_url"] = renderCompiledUrlField(group, options)
+    ["host"] = renderHostOrPortField(group.hostField, options, false)
+    ["port"] = renderHostOrPortField(group.portField, options, true)
+    ["auth-type"] = renderJdbcAuthTypeField(options)
+    for (authKey, opt in options) {
+      [authKey] = renderJdbcAuthOption(opt)
+    }
+    when (!group.extraFields.isEmpty) {
+      ["extra"] = renderJdbcExtraSection(group)
+    }
+  }
+  ["ui"] = new Mapping {
+    ["widget"] = "AdvancedJDBCUrlGroup"
+    ["urlPropertyId"] = "credential-guid.extra.compiled_url"
+    ["connectByPropertyId"] = "credential-guid.connectBy"
+    ["protocol"] = group.protocol
+    ["urlPartPropertyIdMapping"] = new Mapping {}
+  }
+  ["anyOf"] = new Listing {
+    for (authKey, _ in options) {
+      new Mapping {
+        ["properties"] = new Mapping {
+          ["auth-type"] = new Mapping { ["const"] = authKey }
+        }
+        ["required"] = new Listing { authKey }
+      }
+    }
+  }
+}
+
+/// Render the sibling `connectBy` radio that sits alongside `jdbcUrl`.
+local function renderConnectByRadio(group: AdvancedJDBCUrlGroup): Mapping<String, Any> = new Mapping {
+  ["type"] = "string"
+  ["enum"] = new Listing { "host"; "url" }
+  ["default"] = group.connectByDefault
+  ["required"] = true
+  ["enumNames"] = new Listing { "Host"; "URL" }
+  ["ui"] = new Mapping {
+    ["widget"] = "radio"
+    ["hidden"] = false
+    ["label"] = group.connectByLabel
+    ["rules"] = group.connectByRules
+  }
+}
+
+/// Override rule applied to each field of an agent-json pane — flips the
+/// default + placeholder to tell the user the value comes from the agent's
+/// credential store. Password fields also get their widget un-masked.
+/// `const` so `generatedAgentJsonEntries` (which is `const` for external
+/// callers) can invoke it — pkl 0.27.x enforces const-callee-from-const-caller.
+const local function agentJsonFieldOverride(f: FieldSpec): Mapping<String, Any> = new Mapping {
+  ["default"] = ""
+  ["ui"] = new Mapping {
+    when (f.sensitive || f.fieldType == "password") { ["widget"] = "" }
+    ["placeholder"] = "Store Credential Path"
+    when (f.validationRules != null || f.validationRegex != null) {
+      ["rules"] = new Listing {}
+    }
+  }
+}
+
+/// Build the `{properties: {...}}` override mapping for one auth-option's
+/// pane inside the agent-json override schema. Matches the structure argo
+/// emits under `agentConfigs[0][1].properties.jdbcUrl.properties.<authKey>`.
+/// `const` so `generatedAgentJsonEntries` can invoke it — see note on
+/// `agentJsonFieldOverride` for why.
+const local function renderAgentAuthOptionOverride(opt: AuthOption): Mapping<String, Any> = new Mapping {
+  when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
+    ["properties"] = new Mapping {
+      for (f in opt.fields) {
+        when (f is FieldSpec) {
+          [(f as FieldSpec).name] = agentJsonFieldOverride(f as FieldSpec)
+        }
+      }
+      when (!opt.extraFields.isEmpty) {
+        ["extra"] = new Mapping {
+          ["properties"] = new Mapping {
+            for (f in opt.extraFields) {
+              when (f is FieldSpec) {
+                [(f as FieldSpec).name] = agentJsonFieldOverride(f as FieldSpec)
+              }
+            }
+          }
+        }
+      }
+      for (f in opt.postExtraFields) {
+        when (f is FieldSpec) {
+          [(f as FieldSpec).name] = agentJsonFieldOverride(f as FieldSpec)
+        }
+      }
+    }
+  }
+}
+
+/// Public helper — build `agentConfigEntries` for a JDBC-URL credential form.
+/// Consumer wires this into `Config.AgentSelector.agentConfigEntries` inside
+/// their `uiConfig.tasks.<step>.inputs["agent-json"]` block:
+///
+/// ```
+/// ["agent-json"] = new Config.AgentSelector {
+///   agentConfigEntries = generatedAgentJsonEntries(
+///     credentialUrlGroup,
+///     credentialAuthOptions,
+///     connectorConfigName
+///   )
+/// }
+/// ```
+///
+/// Emits `[[<connectorConfigName>, {overrides...}], ["atlan-connectors-agent"]]`
+/// matching the argo shape. The override schema only includes auth-options where
+/// `"agent"` is in `extractionModes`.
+const function generatedAgentJsonEntries(
+  group: AdvancedJDBCUrlGroup,
+  options: Mapping<String, AuthOption>,
+  connectorConfigName: String
+): Listing<Any> = new Listing {
+  new Listing {
+    connectorConfigName
+    new Mapping {
+      ["properties"] = new Mapping {
+        ["agent-type"] = new Mapping {
+          ["type"] = "string"
+          ["ui"] = new Mapping { ["hidden"] = true }
+        }
+        ["jdbcUrl"] = new Mapping {
+          ["properties"] = new Mapping {
+            for (authKey, opt in options) {
+              when ((opt as JDBCUrlAuthOption).extractionModes.toList().contains("agent")) {
+                [authKey] = renderAgentAuthOptionOverride(opt)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  new Listing { "atlan-connectors-agent" }
+}
+
+/// Validate JDBC-URL mode invariants. When `credentialUrlGroup` is set:
+///   1. `credentialAuthOptions` must be non-null (else the renderer silently
+///      emits nothing — a common mistake when copy-pasting a consumer skeleton).
+///   2. `credentialAuthOptions` must be non-empty.
+///   3. Every value in `credentialAuthOptions` must be a `JDBCUrlAuthOption`,
+///      not a plain `AuthOption` (mixed modes render incompletely).
+local jdbcInvariant: Any =
+  if (credentialUrlGroup != null)
+    if (credentialAuthOptions == null)
+      throw("credentialUrlGroup is set but credentialAuthOptions is null. "
+          + "JDBC URL mode requires at least one JDBCUrlAuthOption in credentialAuthOptions.")
+    else if (credentialAuthOptions!!.toMap().isEmpty)
+      throw("credentialUrlGroup is set but credentialAuthOptions is empty. "
+          + "JDBC URL mode requires at least one JDBCUrlAuthOption in credentialAuthOptions.")
+    else
+      let (nonJdbc = credentialAuthOptions!!.toMap().values.toList().filter((o) -> !(o is JDBCUrlAuthOption)))
+      if (!nonJdbc.isEmpty)
+        throw("credentialUrlGroup is set but credentialAuthOptions contains a plain AuthOption. "
+            + "Every option must be a JDBCUrlAuthOption when credentialUrlGroup is non-null.")
+      else null
+  else null
+
+/// Generate the full credential configmap JSON.
+local function generateCredentialConfig(): Mapping<String, Any> =
+  // Force invariant evaluation (local vals are lazy).
+  let (_check = jdbcInvariant)
+  new Mapping {
+  when (credentialConfigIncludeTopLevelMetadata) {
+    ["icon"] = icon
+    ["helpdeskLink"] = helpdeskLink
+    ["logo"] = logo
+    ["connector"] = connector.value
+    ["defaultConnectorType"] = credentialConnectorType
+  }
+  ["config"] = new Mapping {
+    ["properties"] = new Mapping {
+      // Hidden metadata fields
+      ["name"] = new Mapping {
+        ["type"] = "string"
+        ["required"] = false
+        ["ui"] = new Mapping { ["label"] = "Name"; ["hidden"] = true; ["placeholder"] = credentialNamePlaceholder }
+      }
+      ["connector"] = new Mapping {
+        ["type"] = "string"
+        when (credentialConnectorDefault != null) { ["default"] = credentialConnectorDefault }
+        ["required"] = false
+        ["ui"] = new Mapping { ["label"] = "Connector"; ["hidden"] = true; ["placeholder"] = "Connector" }
+      }
+      ["connectorType"] = new Mapping {
+        ["type"] = "string"
+        ["required"] = false
+        ["ui"] = new Mapping { ["key"] = "_host"; ["label"] = "connectorType"; ["placeholder"] = "connectorType"; ["hidden"] = true }
+      }
+      // Common fields (host, port, etc.) — skipped in JDBC-URL mode (the
+      // group's hostField/portField live inside jdbcUrl instead).
+      when (credentialUrlGroup == null) {
+        for (f in credentialCommonFields) {
+          [f.name] = renderAnyField(f)
+        }
+      }
+      // JDBC-URL flow: connectBy radio + jdbcUrl conditional wrapper
+      when (credentialUrlGroup != null && credentialAuthOptions != null) {
+        ["connectBy"] = renderConnectByRadio(credentialUrlGroup!!)
+        ["jdbcUrl"] = renderJdbcUrlField(credentialUrlGroup!!, credentialAuthOptions!!)
+      }
+      // Plain auth-type flow (non-JDBC): auth-type radio + nested panes
+      when (credentialUrlGroup == null && credentialAuthOptions != null) {
+        ["auth-type"] = new Mapping {
+          ["type"] = "string"
+          ["enum"] = new Listing { for (k, _ in credentialAuthOptions!!) { k } }
+          ["default"] = credentialAuthDefault ?? credentialAuthOptions!!.keys.first
+          ["required"] = true
+          ["enumNames"] = new Listing { for (_, v in credentialAuthOptions!!) { v.label } }
+          when (credentialAuthHiddenEnumListForCreating != null) {
+            ["hiddenEnumListForCreating"] = credentialAuthHiddenEnumListForCreating
+          }
+          ["ui"] = new Mapping {
+            ["widget"] = "radio"
+            when (credentialAuthIncludeHiddenFlag) { ["hidden"] = false }
+            ["label"] = credentialAuthTitle
+            when (credentialAuthRules != null) { ["rules"] = credentialAuthRules }
+            when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
+            when (credentialAuthWidth != null) { ["grid"] = credentialAuthWidth }
+          }
+        }
+        for (k, opt in credentialAuthOptions!!) {
+          [k] = renderAuthOption(opt)
+        }
+      }
+      when (!credentialSharedExtraFields.isEmpty && credentialUrlGroup == null) {
+        ["extra"] = new Mapping {
+          ["type"] = "object"
+          ["ui"] = new Mapping {
+            ["widget"] = "nested"
+            ["label"] = ""
+            ["header"] = "Advanced"
+            ["hidden"] = false
+          }
+          ["properties"] = new Mapping {
+            for (f in credentialSharedExtraFields) {
+              [f.name] = renderAnyField(f)
+            }
+          }
+        }
+      }
+    }
+    // anyOf rules for auth-type conditional visibility — only in plain flow;
+    // in JDBC-URL mode the anyOf lives inside the jdbcUrl object itself.
+    when (credentialUrlGroup == null && credentialAuthOptions != null) {
+      ["anyOf"] = new Listing {
+        for (k, opt in credentialAuthOptions!!) {
+          new Mapping {
+            ["properties"] = new Mapping {
+              ["auth-type"] = new Mapping { ["const"] = k }
+            }
+            ["required"] = new Listing {
+              k
+              for (field in opt.anyOfRequiredFields) {
+                field
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Generated outputs
+// ---------------------------------------------------------------------------
+
+/// (Generated) The manifest JSON for Automation Engine.
+local manifestData: Mapping<String, Any> = new Mapping {
+  ["execution_mode"] = "automation-engine"
+  ["dag"] = generateDAG()
+}
+
+local function generateDAG(): Mapping<String, Any> = new Mapping {
+  ["extract"] = generateExtractNode()
+  when (hasPublishStep && !extraNodes.toMap().containsKey("publish")) {
+    ["publish"] =
+      let (_publishEhCheck = validateWorkflowNodeErrorHandling(publishNodeErrorHandling, "publishNodeErrorHandling"))
+      renderNode(new PublishNode {
+        executorEnabled = publishExecutorEnabled
+        displayName = publishActivityDisplayName ?? "Publish to Atlas"
+        errorHandling = publishNodeErrorHandling
+      })
+  }
+  for (nodeId, node in extraNodes) {
+    [nodeId] = renderNode(node)
+  }
+}
+
+local function validateWorkflowNodeErrorHandling(errorHandling: ErrorHandlingConfig?, propertyName: String): Any =
+  if (errorHandling != null && errorHandling.heartbeatTimeoutSeconds != null)
+    throw("\(propertyName).heartbeatTimeoutSeconds is not valid for toolkit-managed workflow nodes. "
+          + "Built-in extract/publish nodes render activity_name = \"execute_workflow\", "
+          + "which Automation Engine treats as a workflow node. Use startToCloseTimeoutSeconds instead.")
+  else if (errorHandling != null) errorHandling._timeoutOrderingCheck
+  else null
+
+local function renderDependencyCondition(condition: DependencyCondition): Mapping<String, Any> =
+  let (_conditionCheck = condition._conditionShapeCheck)
+  new Mapping {
+  when (condition.nodeId != null) {
+    ["node_id"] = condition.nodeId
+  }
+  when (condition.tag != null) {
+    ["tag"] = condition.tag
+  }
+  when (condition.andConditions != null) {
+    ["and_conditions"] = condition.andConditions.toList()
+      .map((c) -> renderDependencyCondition(c))
+  }
+  when (condition.orConditions != null) {
+    ["or_conditions"] = condition.orConditions.toList()
+      .map((c) -> renderDependencyCondition(c))
+  }
+}
+
+local function renderNode(node: DAGNode): Mapping<String, Any> =
+  // Force evaluation of the validators — hidden properties are lazy, so reference
+  // them here to trigger their `throw` at eval time rather than silently skipping.
+  let (_nodeCheck = node._errorHandlingCheck)
+  let (_depCheck = node._dependencyConfigCheck)
+  let (_qiCheck = if (node is QueryIntelligenceNode) (node as QueryIntelligenceNode)._qiArgsCheck else null)
+  let (_popularityCheck = if (node is PopularityNode) (node as PopularityNode)._popularityDependencyCheck else null)
+  let (_ehCheck = if (node.errorHandling != null) node.errorHandling._timeoutOrderingCheck else null)
+  new Mapping {
+  ["activity_name"] = "execute_workflow"
+  ["activity_display_name"] = node.displayName
+  ["app_name"] = node.appName
+  ["inputs"] = new Mapping {
+    ["workflow_type"] = node.workflowType
+    ["app_name"] = node.appName
+    ["task_queue"] = node.taskQueue ?? "atlan-\(node.appName)-{deployment_name}"
+    ["args"] = renderNodeArgs(node)
+  }
+  // Single parent → depends_on: {node_id}. Multi-parent → depends_on: {and_conditions: [...]}.
+  when (node.dependsOn != null && node.dependsOn.length == 1) {
+    ["depends_on"] = new Mapping {
+      ["node_id"] = node.dependsOn.first
+    }
+  }
+  when (node.dependsOn != null && node.dependsOn.length > 1) {
+    ["depends_on"] = new Mapping {
+      ["and_conditions"] = node.dependsOn.toList()
+        .map((n) -> new Mapping {
+          ["node_id"] = n
+          ["tag"] = "success"
+        })
+    }
+  }
+  when (node.dependsOnCondition != null) {
+    ["depends_on"] = renderDependencyCondition(node.dependsOnCondition)
+  }
+  when (node.errorHandling != null) {
+    ["error_handling"] = renderErrorHandling(node.errorHandling)
+  }
+}
+
+local function renderErrorHandling(errorHandling: ErrorHandlingConfig): Mapping<String, Any> = new Mapping {
+  when (errorHandling.initialInterval != null) {
+    ["initial_interval"] = errorHandling.initialInterval
+  }
+  when (errorHandling.backoffCoefficient != null) {
+    ["backoff_coefficient"] = errorHandling.backoffCoefficient
+  }
+  when (errorHandling.maximumInterval != null) {
+    ["maximum_interval"] = errorHandling.maximumInterval
+  }
+  when (errorHandling.maximumAttempts != null) {
+    ["maximum_attempts"] = errorHandling.maximumAttempts
+  }
+  when (errorHandling.nonRetryableErrorTypes != null) {
+    ["non_retryable_error_types"] = errorHandling.nonRetryableErrorTypes
+  }
+  when (errorHandling.startToCloseTimeoutSeconds != null) {
+    ["start_to_close_timeout_seconds"] = errorHandling.startToCloseTimeoutSeconds
+  }
+  when (errorHandling.heartbeatTimeoutSeconds != null) {
+    ["heartbeat_timeout_seconds"] = errorHandling.heartbeatTimeoutSeconds
+  }
+}
+
+local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
+  if (node is PublishNode)
+    let (publishNode = node as PublishNode)
+    let (nodeArgs = node.args)
+    let (tagPipelineValue = publishNode.tagPipelineEnabled ?? publishTagPipelineEnabled)
+    let (tagAttachmentsValue = publishNode.tagAttachmentsPrefix ?? publishTagAttachmentsPrefix)
+    new Mapping {
+      ...nodeArgs
+      when (!nodeArgs.toMap().containsKey("tag_pipeline_enabled") && tagPipelineValue != null) {
+        ["tag_pipeline_enabled"] = tagPipelineValue
+      }
+      when (!nodeArgs.toMap().containsKey("tag_attachments_prefix") && tagAttachmentsValue != null) {
+        ["tag_attachments_prefix"] = tagAttachmentsValue
+      }
+    }
+  else node.args
+
+local function generateExtractNode(): Mapping<String, Any> =
+  let (_extractEhCheck = validateWorkflowNodeErrorHandling(extractNodeErrorHandling, "extractNodeErrorHandling"))
+  let (topLevelFormFields = manifestTopLevelArgs.toMap().values.toList())
+  new Mapping {
+    ["activity_name"] = "execute_workflow"
+    ["activity_display_name"] = extractActivityDisplayName ?? "Extract \(displayName) Metadata"
+    ["app_name"] = "{app_name}"
+    ["inputs"] = new Mapping {
+      ["workflow_type"] = workflowTypeResolved
+      ["app_name"] = "{app_name}"
+      ["app_id"] = ""
+      ["argo_workflow_slug"] = ""
+      ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
+      ["args"] = new Mapping {
+        ["credential"] = "{{credential}}"
+        for (argName, formField in manifestTopLevelArgs) {
+          when (uiConfig.properties.containsKey(formField) && uiConfig.properties[formField].includeInManifest) {
+            [argName] = "{{" + formField + "}}"
+          }
+        }
+        when (flatManifestArgs) {
+          for (paramKey, param in uiConfig.properties) {
+            when (param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
+              [toPyName(paramKey)] = "{{" + paramKey + "}}"
+            }
+          }
+        }
+        when (!flatManifestArgs) {
+          ["metadata"] = new Mapping {
+            when (manifestMetadataArgs != null) {
+              for (argName, formField in manifestMetadataArgs!!) {
+                when (uiConfig.properties.containsKey(formField) && uiConfig.properties[formField].includeInManifest) {
+                  [argName] = "{{" + formField + "}}"
+                }
+              }
+            }
+            when (manifestMetadataArgs == null) {
+              for (paramKey, param in uiConfig.properties) {
+                when (param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
+                  [toPyName(paramKey)] = "{{" + paramKey + "}}"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    when (extractNodeErrorHandling != null) {
+      ["error_handling"] = renderErrorHandling(extractNodeErrorHandling)
+    }
+  }
+
+/// Render workflow config directly as JSON.
+local workflowConfigOutput: FileOutput = new FileOutput {
+  value = new Mapping {
+    when (workflowConfigIncludeTopLevelMetadata) {
+      ["id"] = workflowConfigName
+      ["name"] = displayName
+      ["logo"] = logo
+    }
+    ["config"] = uiConfig
+  }
+  renderer = new JsonRenderer {}
+}
+
+/// Render the manifest as JSON.
+local manifestOutput: FileOutput = new FileOutput {
+  value = manifestData
+  renderer = new JsonRenderer {}
+}
+
+/// Render the credential config as JSON (FieldSpec-based).
+local credentialConfigOutput: FileOutput = new FileOutput {
+  value = generateCredentialConfig()
+  renderer = new JsonRenderer {}
+}
+
+// ---------------------------------------------------------------------------
+// Input.py generation
+// ---------------------------------------------------------------------------
+
+/// Normalize a property key to snake_case (hyphens → underscores).
+/// Used for both Python codegen and manifest JSON keys so that downstream
+/// consumers (Pydantic models, Go structs) receive valid identifiers.
+local function toPyName(k: String): String = k.replaceAll("-", "_")
+
+/// Map a single UI widget to its Python field declaration (name: type = default).
+/// Does not include the trailing docstring — see generateInputClassPy for that.
+local function getInputPyField(k: String, u: Config.UIElement): String =
+  let (k = toPyName(k))
+  if (u is Config.BooleanInput)
+    "\(k): bool = \(if ((u as Config.BooleanInput).defaultSelection) "True" else "False")"
+  else if (u is Config.Switcher)
+    "\(k): bool = \(if ((u as Config.Switcher).defaultSelection) "True" else "False")"
+  else if (u is Config.NumericInput)
+    "\(k): int = \(if ((u as Config.NumericInput).default != null) (u as Config.NumericInput).default!!.toInt() else 0)"
+  else if (u is Config.DateInput)
+    "\(k): int = 0"
+  else if (u is Config.FileUploader)
+    "\(k): FileReference | None = None"
+  else if (u is Config.ConnectionCreator)
+    "\(k): ConnectionRef | None = None"
+  else if (u is Config.ConnectionRefInput)
+    (if ((u as Config.ConnectionRefInput).multiSelect)
+      "\(k): Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_factory=list)"
+    else
+      "\(k): ConnectionRef | None = None")
+  else if (u is Config.ConnectionSelector)
+    "\(k): str = \"\""
+  else if (u is Config.CredentialInput)
+    "\(k): str = \"\""
+  else if (u is Config.PasswordInput)
+    "\(k): str = \"\""
+  else if (u is Config.TagsInput)
+    "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+  else if (u is Config.InputRepeater)
+    "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+  else if (u is Config.DropDown)
+    (if ((u as Config.DropDown).multiSelect)
+      "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+    else
+      "\(k): str = \"\(if ((u as Config.DropDown).default != null) (u as Config.DropDown).default!! else "")\"")
+  else if (u is Config.Radio)
+    "\(k): str = \"\(if ((u as Config.Radio).default != null) (u as Config.Radio).default!! else "")\""
+  else if (u is Config.CloudProvider)
+    "\(k): str = \"\""
+  else if (u is Config.Sage || u is Config.SageV2)
+    "\(k): str = \"\""
+  else if (u is Config.InfoBanner || u is Config.GlossarySelector)
+    "\(k): str = \"\""
+  else if (u is Config.CustomWidget)
+    "\(k): str = \"\""
+  else if (u is Config.TextInput)
+    "\(k): str = \"\(if ((u as Config.TextInput).defaultValue != null) (u as Config.TextInput).defaultValue!! else "")\""
+  else if (u is Config.TextBoxInput)
+    "\(k): str = \"\""
+  else if (u is Config.ConditionalInput)
+    (let (ci = u as Config.ConditionalInput)
+      if (ci.outputValueType == "object")
+        "\(k): Annotated[dict[str, Any], MaxItems(1000)] = Field(default_factory=dict)"
+      else
+        "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
+  else if (u is Config.NestedInput || u is Config.APITree || u is Config.ApiTreeSelect || u is Config.DsnTreeMap || u is Config.SqlTree || u is Config.AgentSelector)
+    "\(k): Annotated[dict[str, Any], MaxItems(1000)] = Field(default_factory=dict)"
+  else
+    "\(k): str = \"\""
+
+/// Object widgets can arrive from UI/Heracles/AE as JSON strings even though
+/// generated SDK inputs expose them as dictionaries.
+local function needsJsonObjectStringCoercion(u: Config.UIElement): Boolean =
+  u is Config.NestedInput
+  || u is Config.APITree
+  || u is Config.ApiTreeSelect
+  || u is Config.DsnTreeMap
+  || u is Config.SqlTree
+  || u is Config.AgentSelector
+  || (u is Config.ConditionalInput && (u as Config.ConditionalInput).outputValueType == "object")
+
+local function pyQuotedCsv(values: List<String>): String =
+  values.fold("", (acc: String, value: String) ->
+    if (acc == "") "\"\(value)\"" else "\(acc), \"\(value)\""
+  )
+
+/// Field names already declared by application_sdk.templates.contracts.ExtractionInput.
+/// Generated UI fields with these Python names are skipped so the SDK's typed
+/// declarations and validators stay in effect.
+local extractionInputProvidedFields: Listing<String> = new Listing {
+  "workflow_id"
+  "connection"
+  "credential_guid"
+  "credential_ref"
+  "extraction_method"
+  "agent_json"
+  "output_prefix"
+  "output_path"
+  "include_filter"
+  "exclude_filter"
+  "temp_table_regex"
+  "source_tag_prefix"
+}
+
+/// Generate a Python Pydantic Input class from the app's uiConfig properties.
+/// The class is always named `AppInputContract` — app code subclasses it.
+///
+/// The generated class extends application_sdk.templates.contracts.ExtractionInput,
+/// which carries allow_unbounded_fields=True, AE-payload normalization, and
+/// typed SDK fields such as agent_json, credential_guid, connection, filters,
+/// and output path fields. UI fields that collide with those parent fields are
+/// deliberately skipped so the parent declarations win.
+local function generateInputClassPy(): FileOutput = new FileOutput {
+  local skipFields: Set<String> = extractionInputProvidedFields.toList().toSet()
+  local uiFieldLines: String = (new Listing {
+    for (k, u in uiConfig.properties) {
+      if (u.includeInInput && !skipFields.contains(toPyName(k)))
+        "    " + getInputPyField(k.replaceAll("-", "_"), u) + "\n" +
+        (if (u.helpText != "") "    \"\"\"" + u.helpText + "\"\"\"\n" else "")
+      else
+        ""
+    }
+  }).toList().fold("", (acc: String, s: String) -> acc + s)
+  local objectStringCoercionFields: List<String> = (new Listing {
+    for (k, u in uiConfig.properties) {
+      when (u.includeInInput && !skipFields.contains(toPyName(k)) && needsJsonObjectStringCoercion(u)) {
+        toPyName(k)
+      }
+    }
+  }).toList()
+  local objectStringCoercionBlock: String = if (!objectStringCoercionFields.isEmpty)
+    "    @field_validator(\(pyQuotedCsv(objectStringCoercionFields)), mode=\"before\")\n" +
+    "    @classmethod\n" +
+    "    def _coerce_json_object_strings(cls, value: Any) -> Any:\n" +
+    "        if value is None or isinstance(value, dict):\n" +
+    "            return value\n" +
+    "        if isinstance(value, str):\n" +
+    "            stripped = value.strip()\n" +
+    "            if not stripped:\n" +
+    "                return {}\n" +
+    "            try:\n" +
+    "                parsed = json.loads(stripped)\n" +
+    "            except json.JSONDecodeError:\n" +
+    "                return value\n" +
+    "            if isinstance(parsed, dict):\n" +
+    "                return parsed\n" +
+    "        return value\n\n"
+  else ""
+  local credFieldLine: String = if (credentialFieldName != null && !skipFields.contains(credentialFieldName!!))
+    "    \(credentialFieldName!!): CredentialRef | None = None\n"
+  else ""
+  local publishExcludeContent: String = if (hasPublishStep && hasPublishInputFields)
+    "        \"output_dir\",\n" +
+    "        \"checkpoint_dir\",\n" +
+    "        \"load_to_atlan\",\n" +
+    "        \"publish_dry_run\","
+  else ""
+  local publishHashExcludeBlock: String = if (hasPublishStep && hasPublishInputFields)
+    "    _config_hash_exclude: ClassVar[set[str]] = {\n" + publishExcludeContent + "\n    }\n\n"
+  else ""
+  local publishFieldBlock: String = if (hasPublishStep && hasPublishInputFields)
+    "    output_dir: str = \"\"\n" +
+    "    \"\"\"Directory for output JSONL files.\"\"\"\n" +
+    "    checkpoint_dir: str = \"\"\n" +
+    "    \"\"\"Directory for checkpoint database. If provided, enables incremental extraction.\"\"\"\n" +
+    "    load_to_atlan: bool = True\n" +
+    "    \"\"\"If True, load extracted metadata to Atlan via publish-app.\"\"\"\n" +
+    "    publish_dry_run: bool = False\n" +
+    "    \"\"\"When True, skip the Atlas publish step (executor_enabled=False).\"\"\"\n"
+  else ""
+  text =
+    "# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.\n" +
+    "# To regenerate: make generate\n" +
+    "from __future__ import annotations\n" +
+    (if (!objectStringCoercionFields.isEmpty) "import json\n" else "") +
+    "from typing import Annotated, Any, ClassVar\n" +
+    "from pydantic import Field\(if (!objectStringCoercionFields.isEmpty) ", field_validator" else "")\n" +
+    "from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems\n" +
+    "from application_sdk.credentials.ref import CredentialRef\n" +
+    "from application_sdk.templates.contracts import ExtractionInput\n" +
+    "\n\n" +
+    "class AppInputContract(ExtractionInput):\n" +
+    publishHashExcludeBlock +
+    uiFieldLines +
+    objectStringCoercionBlock +
+    credFieldLine +
+    publishFieldBlock
+}
+
+/// Set the module output — generates all artifacts.
+/// Force-evaluate `jdbcInvariant` first so misconfigured JDBC-URL consumers
+/// fail with a clear message instead of silently skipping the credential file.
+output =
+  let (_jdbcCheck = jdbcInvariant)
+  new ModuleOutput {
+    files = new Mapping {
+      ["\(workflowConfigName).json"] = workflowConfigOutput
+      when (hasCredentialConfig && credentialAuthOptions != null) {
+        ["\(connectorConfigName).json"] = credentialConfigOutput
+      }
+      ["manifest.json"] = manifestOutput
+      ["_input.py"] = generateInputClassPy()
+      ["__init__.py"] = new FileOutput { text = "" }
+      for (fileName, fileOutput in additionalOutputFiles) {
+        [fileName] = fileOutput
+      }
+    }
+  }
