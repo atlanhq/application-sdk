@@ -376,7 +376,9 @@ class SqlApp(App):
     )
     async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
         """Upload transformed output to the upstream Atlan store."""
-        output_path = input.output_path or os.path.join(TEMPORARY_PATH, build_output_path())
+        output_path = input.output_path or os.path.join(
+            TEMPORARY_PATH, build_output_path()
+        )
         if not output_path:
             return UploadOutput(migrated_files=0, total_files=0)
 
@@ -478,11 +480,16 @@ class SqlApp(App):
         )
         await self.upload_to_atlan(upload_input)
 
+        connection_qn = ""
+        if input.connection and input.connection.attributes:
+            connection_qn = input.connection.attributes.qualified_name or ""
+
         return ExtractionOutput(
             databases_extracted=db_result.total_record_count,
             schemas_extracted=schema_result.total_record_count,
             tables_extracted=table_result.total_record_count,
             columns_extracted=column_result.total_record_count,
+            connection_qualified_name=connection_qn,
         )
 
     # =====================================================================
@@ -599,9 +606,7 @@ class SqlApp(App):
         import pandas as pd  # noqa: PLC0415
 
         output_path = self._resolve_output_path(input)
-        raw_dir = (
-            Path(output_path) / "raw" / entity_type if output_path else None
-        )
+        raw_dir = Path(output_path) / "raw" / entity_type if output_path else None
         if raw_dir is None or not raw_dir.exists():
             return TransformOutput(total_record_count=0)
 
