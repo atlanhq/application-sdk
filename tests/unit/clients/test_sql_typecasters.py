@@ -9,6 +9,7 @@ en-dash).
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 from typing import Any
@@ -20,6 +21,8 @@ from application_sdk.clients.sql_typecasters import (
     _decode_tolerant_utf8,
     attach_tolerant_text_decoder,
 )
+
+_HAS_PSYCOPG3 = importlib.util.find_spec("psycopg") is not None
 
 
 class TestDecodeTolerantUtf8:
@@ -136,6 +139,10 @@ class TestAttachPsycopg2:
         assert cb(None, MagicMock()) is None
 
 
+@pytest.mark.skipif(
+    not _HAS_PSYCOPG3,
+    reason="psycopg3 not installed in this interpreter (e.g. no Python 3.14 wheel yet)",
+)
 class TestAttachPsycopg3:
     """Verify the psycopg3 path registers a tolerant Loader on the connection."""
 
