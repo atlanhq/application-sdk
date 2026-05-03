@@ -368,6 +368,26 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 500
 
+    def test_preflight_metadata_forwarded_to_handler(self) -> None:
+        """metadata from the request body is forwarded to the handler via PreflightInput."""
+        received: list[dict] = []
+
+        class _MetadataCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(dict(input.metadata))
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_MetadataCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            json={
+                "credentials": [],
+                "metadata": {"extraction-type": "objectstore", "manifest-source": "atlan", "core-extract-output-prefix": "artifacts/dbt/prod"},
+            },
+        )
+        assert response.status_code == 200
+        assert received == [{"extraction-type": "objectstore", "manifest-source": "atlan", "core-extract-output-prefix": "artifacts/dbt/prod"}]
+
 
 class TestMetadataEndpoint:
     """Tests for POST /workflows/v1/metadata."""
