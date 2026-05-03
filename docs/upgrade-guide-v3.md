@@ -370,13 +370,13 @@ await app.start()
 startup if it is not set. Set it in your app's `Dockerfile` — it should never be left to Helm
 values or runtime defaults.
 
-The base image (`registry.atlan.com/public/app-runtime-base:main-latest`) includes
+The base image (`registry.atlan.com/public/app-runtime-base:3`) includes
 the `application-sdk` CLI, Dapr, and the entrypoint. You do **not** need a custom `ENTRYPOINT`
 or `entrypoint.sh`. The base image handles mode selection at runtime:
 
 ```dockerfile
 # Application-sdk v3 base image (Chainguard-based)
-FROM registry.atlan.com/public/app-runtime-base:main-latest
+FROM registry.atlan.com/public/app-runtime-base:3
 
 WORKDIR /app
 
@@ -406,7 +406,7 @@ For local dev, pass the class directly — `run_dev_combined` derives the module
 ```python
 from application_sdk.main import run_dev_combined
 
-asyncio.run(run_dev_combined(MyMetadataExtractor, handler_class=MyHandler))
+asyncio.run(run_dev_combined(MyMetadataExtractor))
 ```
 
 Three modes are available:
@@ -679,7 +679,7 @@ You do not need to create `DaprClient` instances in your code.
 | v2 | v3 (`self.context` in handler methods) |
 |----|----------------------------------------|
 | `services.secretstore.SecretStore.get_credentials(...)` | `await self.context.get_secret(name)` |
-| `/workflows/v1/config/{id}` (503 error) | Works automatically (state store wired) |
+| `/workflows/v1/config/{id}` (503 error) | Works automatically (object store wired) |
 | `/workflows/v1/file` (503 error) | Works automatically (storage binding wired) |
 
 ### Upgrading ObjectStore calls
@@ -1084,7 +1084,6 @@ from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
-    handler_class=MyHandler,
     secret_store=MockSecretStore({"my-api-key": "test-value"}),
     state_store=MockStateStore(),
 ))
@@ -1129,11 +1128,12 @@ All of the following were removed in v3.0.0. They no longer exist — importing 
 | `application_sdk.activities.common.models.ActivityStatistics` | `application_sdk.common.models.TaskStatistics` |
 | `application_sdk.activities.common.models.ActivityResult` | `application_sdk.common.models.TaskResult` |
 | `application_sdk.activities.common.utils` | `application_sdk.execution._temporal.activity_utils` |
-| `application_sdk.activities.common.sql_utils` | `application_sdk.common.sql_utils` |
 | `application_sdk.activities.metadata_extraction.base` | `application_sdk.templates.BaseMetadataExtractor` |
 | `application_sdk.activities.metadata_extraction.sql` | `application_sdk.templates.SqlMetadataExtractor` |
 | `application_sdk.activities.metadata_extraction.incremental` | `application_sdk.templates.IncrementalSqlMetadataExtractor` |
 | `application_sdk.activities.query_extraction.sql` | `application_sdk.templates.SqlQueryExtractor` |
+
+> **Note:** `application_sdk.common.sql_utils` (the v3-era replacement for `application_sdk.activities.common.sql_utils`) has also been removed. Apps that still depend on it should migrate to `BaseSQLClient` directly.
 
 ### Handlers
 

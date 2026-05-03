@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from application_sdk.app.base import App
+from application_sdk.app.entrypoint import entrypoint
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
@@ -37,23 +38,21 @@ from application_sdk.handler.contracts import (
 def _reset_service_globals():
     """Reset handler service module globals and infrastructure context before/after each test."""
     from application_sdk.handler import service as svc
-    from application_sdk.infrastructure.context import _infrastructure_ctx
+    from application_sdk.infrastructure import clear_infrastructure
 
     svc._temporal_client = None
     svc._workflow_config = svc.WorkflowClientConfig()
-    svc._state_store = None
     svc._secret_store = None
     svc._storage = None
-    _infrastructure_ctx.set(None)
+    clear_infrastructure()
 
     yield
 
     svc._temporal_client = None
     svc._workflow_config = svc.WorkflowClientConfig()
-    svc._state_store = None
     svc._secret_store = None
     svc._storage = None
-    _infrastructure_ctx.set(None)
+    clear_infrastructure()
 
 
 # ---------------------------------------------------------------------------
@@ -234,30 +233,30 @@ async def test_handler_error_custom_http_status():
 
 
 @pytest.fixture
-def state_app():
-    """Create a handler service backed by a MockStateStore."""
+def config_app(tmp_path):
+    """Create a handler service backed by a local object store for config."""
     from application_sdk.handler.service import create_app_handler_service
-    from application_sdk.testing.mocks import MockStateStore
+    from application_sdk.storage.factory import create_local_store
 
-    state = MockStateStore()
+    store = create_local_store(tmp_path / "config-store")
     handler = DefaultHandler()
-    app = create_app_handler_service(handler, app_name="state-app", state_store=state)
-    return app, state
+    app = create_app_handler_service(handler, app_name="config-app", storage=store)
+    return app, store
 
 
 @pytest.fixture
-async def state_client(state_app):
-    app, state = state_app
+async def config_client(config_app):
+    app, store = config_app
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:
-        yield c, state
+        yield c, store
 
 
 @pytest.mark.integration
-async def test_config_round_trip(state_client):
-    """G6.5: POST /config/{id} saves to state store; GET /config/{id} returns it."""
-    client, state = state_client
+async def test_config_round_trip(config_client):
+    """G6.5: POST /config/{id} saves to object store; GET /config/{id} returns it."""
+    client, store = config_client
 
     payload = {"host": "db.example.com", "port": 5432, "database": "mydb"}
 
@@ -270,15 +269,11 @@ async def test_config_round_trip(state_client):
     assert data["host"] == "db.example.com"
     assert data["port"] == 5432
 
-    save_calls = state.get_save_calls()
-    assert len(save_calls) == 1
-    assert save_calls[0][0] == "workflows/test-cfg"
-
 
 @pytest.mark.integration
-async def test_config_not_found(state_client):
-    """G6.6: GET /config/{id} returns 404 when key is not in state store."""
-    client, _ = state_client
+async def test_config_not_found(config_client):
+    """G6.6: GET /config/{id} returns 404 when key is not in object store."""
+    client, _ = config_client
 
     resp = await client.get("/workflows/v1/config/nonexistent")
     assert resp.status_code == 404
@@ -498,52 +493,14 @@ async def test_start_and_stop(run_worker, long_running_workflow_app):
         assert final_resp.json()["data"]["status"] == "TERMINATED"
 
 
-@pytest.mark.integration
-async def test_start_saves_config_to_state_store(run_worker, trivial_wf_client):
-    """G6.11: Starting a workflow persists config (minus credentials) to state store."""
-    from application_sdk.handler import service as svc
-    from application_sdk.testing.mocks import MockStateStore
-
-    client, _ = trivial_wf_client
-
-    state = MockStateStore()
-    svc._state_store = state
-
-    async with run_worker():
-        resp = await client.post(
-            "/workflows/v1/start",
-            json={"name": "state-test"},
-        )
-        assert resp.status_code == 200
-        wf_id = resp.json()["data"]["workflow_id"]
-
-    save_calls = state.get_save_calls()
-    assert len(save_calls) == 1
-    key, saved = save_calls[0]
-    assert key == f"workflows/{wf_id}"
-    assert saved["workflow_id"] == wf_id
-    assert saved["name"] == "state-test"
-    # Safety guard: credentials must never be persisted to the state store,
-    # even if a migrating connector accidentally passes them in the /start body
-    assert "credentials" not in saved
-
-
 @pytest.fixture
-async def credential_wf_client(
-    temporal_client, task_queue, reregister_app, monkeypatch
-):
-    """Handler service configured with CredentialAwareApp, state store, and ATLAN_LOCAL_DEVELOPMENT."""
+async def credential_wf_client(temporal_client, task_queue, reregister_app):
+    """Handler service configured with CredentialAwareApp for credential stripping tests."""
     from application_sdk.handler import service as svc
     from application_sdk.handler.service import create_app_handler_service
-    from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 
     reregister_app(CredentialAwareApp)
 
-    # Credential interception requires ATLAN_LOCAL_DEVELOPMENT=true
-    monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
-
-    secret_store = MockSecretStore()
-    state_store = MockStateStore()
     handler = DefaultHandler()
     app = create_app_handler_service(
         handler,
@@ -551,62 +508,45 @@ async def credential_wf_client(
         app_class=CredentialAwareApp,
         temporal_host="localhost:7233",
         task_queue=task_queue,
-        secret_store=secret_store,
-        state_store=state_store,
     )
     svc._temporal_client = temporal_client
 
-    return app, state_store
+    return app
 
 
 @pytest.mark.integration
-async def test_start_intercepts_inline_credentials(
+async def test_start_strips_inline_credentials(
     run_worker, credential_wf_client, temporal_client
 ):
-    """G6.12: POST /start with inline credentials intercepts them into the secret store,
-    replaces with a UUID credential_guid, and dispatches to Temporal without raw credentials.
+    """G6.12: POST /start with inline credentials strips them from the body
+    before dispatching to Temporal.
 
     Verifies:
-    - credentials are stored in the secret store under a freshly generated UUID
-    - stored format is a flat dict {key: value}, matching production Dapr/Vault format
-    - Temporal start event payload carries credential_guid (not raw credentials)
+    - credentials are NOT present in the Temporal start event payload
+    - the workflow starts successfully despite credentials being stripped
     """
 
-    app, state_store = credential_wf_client
+    app = credential_wf_client
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        async with run_worker():
-            resp = await client.post(
-                "/workflows/v1/start",
-                json={
-                    "name": "cred-test",
-                    "credentials": [{"key": "password", "value": "s3cr3t"}],
-                },
-            )
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client,
+        run_worker(),
+    ):
+        resp = await client.post(
+            "/workflows/v1/start",
+            json={
+                "name": "cred-test",
+                "credentials": [{"key": "password", "value": "s3cr3t"}],
+            },
+        )
 
     assert resp.status_code == 200
     wf_id = resp.json()["data"]["workflow_id"]
     assert wf_id
 
-    # State store must have exactly one cred: entry — the intercepted credential
-    save_calls = state_store.get_save_calls()
-    cred_saves = [(k, v) for k, v in save_calls if k.startswith("cred:")]
-    assert len(cred_saves) == 1
-    cred_key, _ = cred_saves[0]
-    credential_guid = cred_key.removeprefix("cred:")
-
-    # The key must be a valid UUID
-    UUID(credential_guid)
-
-    # Stored value must be flat dict {key: value}, not the v3 list [{key, value}]
-    stored = await state_store.load(cred_key)
-    assert stored == {"password": "s3cr3t"}
-
-    # Confirm the Temporal workflow start event carries credential_guid and no raw
-    # credentials. CredentialAwareInput declares credential_guid as a named field,
-    # so the UUID propagates through Pydantic into the serialised Temporal payload.
+    # Confirm the Temporal workflow start event does not carry raw credentials.
     handle = temporal_client.get_workflow_handle(wf_id)
     history = await handle.fetch_history()
     start_payload_data = b"".join(
@@ -615,7 +555,6 @@ async def test_start_intercepts_inline_credentials(
             0
         ].workflow_execution_started_event_attributes.input.payloads
     )
-    assert credential_guid.encode() in start_payload_data
     assert b'"credentials"' not in start_payload_data
 
 
@@ -672,8 +611,6 @@ async def test_prometheus_metrics_not_exposed_when_disabled():
 # App/Input/Output at module level so Temporal's sandboxed runner can import
 # them.  Routing validation (workflow_type checks) fires before the Temporal
 # call, so G6.16 and G6.17 don't require a running worker.
-
-from application_sdk.app.entrypoint import entrypoint  # noqa: E402
 
 
 class RouteAInput(Input):
@@ -764,3 +701,64 @@ async def test_multi_ep_invalid_workflow_type_returns_400(multi_route_wf_client)
     )
 
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Regression: get_infrastructure() visible inside uvicorn route handlers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_get_infrastructure_visible_in_http_handler():
+    """G6.18: get_infrastructure() returns the configured context inside a FastAPI route.
+
+    Regression for AUT-904: the ContextVar substrate silently returned None inside
+    uvicorn route handlers because uvicorn isolates each request in a fresh
+    contextvars.Context(). The module-level singleton substrate must be visible
+    from any code path, including app-author routes that call get_infrastructure()
+    directly rather than going through create_app_handler_service().
+    """
+    import contextvars
+
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    from application_sdk.infrastructure import InfrastructureContext, set_infrastructure
+    from application_sdk.infrastructure.context import get_infrastructure
+
+    # Simulate startup: set infrastructure before the server begins serving.
+    set_infrastructure(InfrastructureContext())
+
+    # --- Core regression guard ---
+    # httpx.ASGITransport runs in the same inherited context, so it would pass even
+    # with a ContextVar-backed implementation.  Run get_infrastructure() in a
+    # completely fresh Context (no inherited ContextVar values) — exactly what uvicorn
+    # creates per request — to ensure a ContextVar regression would be caught.
+    fresh_ctx = contextvars.Context()
+    result: dict[str, bool] = {}
+
+    def _check_in_fresh_ctx() -> None:
+        result["found"] = get_infrastructure() is not None
+
+    fresh_ctx.run(_check_in_fresh_ctx)
+
+    assert result.get("found"), (
+        "get_infrastructure() returned None in a fresh contextvars.Context() — "
+        "the uvicorn ContextVar isolation bug has regressed"
+    )
+
+    # --- End-to-end smoke test through the FastAPI stack ---
+    app = FastAPI()
+
+    @app.get("/infra-check")
+    async def infra_check():
+        infra = get_infrastructure()
+        return JSONResponse({"found": infra is not None})
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/infra-check")
+
+    assert resp.status_code == 200
+    assert resp.json()["found"] is True

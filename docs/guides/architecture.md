@@ -112,7 +112,7 @@ All infrastructure is accessed through Protocol-based interfaces, not concrete i
 | `Binding` | `invoke` | `DaprBinding` | `MockBinding` |
 | `CapacityPool` | `acquire`, `release`, `renew` | Redis-backed | `LocalCapacityPool` |
 
-An `InfrastructureContext` (frozen dataclass) holds all of these, stored in a `ContextVar`. Set once at startup via `application_sdk.main`; accessed anywhere via `get_infrastructure()`.
+An `InfrastructureContext` (frozen dataclass) holds all of these, stored in a module-level singleton. Set once at startup via `application_sdk.main`; accessed anywhere via `get_infrastructure()`. A module-level variable is used rather than a `ContextVar` because uvicorn HTTP request handlers run in isolated `contextvars.Context` instances and would silently receive `None` if the value were stored in a `ContextVar`.
 
 This means **unit tests never need a Dapr sidecar or Temporal server** — inject `MockStateStore`, `MockSecretStore`, etc. from `application_sdk.testing.mocks` and run pure Python. See [ADR-0005](../adr/0005-infrastructure-abstraction.md).
 
@@ -195,7 +195,7 @@ Higher-level: `App` provides `self.upload()` and `self.download()` framework tas
 
 ## Observability
 
-Structured logs and OTel traces flow from every worker and handler pod to the cluster's central OTLP collector. Workers configure `OTEL_EXPORTER_OTLP_ENDPOINT` to the node IP (`$(K8S_NODE_IP):4317`) at deploy time; the Helm chart wires this automatically.
+Structured logs and OTel traces flow from every worker and handler pod to the cluster's central OTLP collector. Workers configure `OTEL_EXPORTER_OTLP_ENDPOINT` to the node IP (`$(K8S_NODE_IP):4317`) at deploy time.
 
 `self.logger` is available in both `run()` and `@task` methods. It is automatically bound with `app_name`, `run_id`, and `correlation_id` on every entry. When apps call other apps, the correlation ID propagates automatically, linking distributed traces across services. See [ADR-0003](../adr/0003-per-app-observability.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
 
@@ -205,16 +205,7 @@ Errors carry structured codes in `AAF-{COMPONENT}-{ID}` format.
 
 ## Deployment
 
-Apps are deployed via the `helm/atlan-app/` Helm chart:
-
-```bash
-helm install my-connector oci://ghcr.io/atlanhq/charts/atlan-app \
-  --set appName=my-connector \
-  --set appModule=my_package.app:MyConnector \
-  --set image.tag=1.2.3
-```
-
-Both deployments use the same container image with a different `--mode` argument:
+Apps are deployed to Kubernetes via the platform's deployment tooling (GM). Both deployments use the same container image with a different `--mode` argument:
 
 ```bash
 # Handler pod

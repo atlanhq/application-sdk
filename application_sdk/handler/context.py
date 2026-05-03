@@ -17,7 +17,6 @@ from application_sdk.observability.logger_adaptor import get_logger
 if TYPE_CHECKING:
     from application_sdk.handler.contracts import HandlerCredential
     from application_sdk.infrastructure.secrets import SecretStore
-    from application_sdk.infrastructure.state import StateStore
 
 
 def _utc_now() -> datetime:
@@ -51,9 +50,6 @@ class HandlerContext:
 
     _secret_store: "SecretStore | None" = field(default=None, repr=False)
     """Secret store injected from InfrastructureContext."""
-
-    _state_store: "StateStore | None" = field(default=None, repr=False)
-    """State store injected from InfrastructureContext."""
 
     _logger: Any = field(default=None, repr=False)
     """Cached bound logger instance."""

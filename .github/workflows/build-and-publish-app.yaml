@@ -7,6 +7,11 @@
 # Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}
 # Mutable:    ghcr.io/atlanhq/{repo}:{branch}         (always points to latest on branch)
 #
+# Release:    when release_tag is provided (set to github.event.release.tag_name by caller),
+#             additionally pushes a version-tag ladder to GHCR:
+#             - Stable (no '-' in version): :latest, :VERSION, :MAJOR.MINOR, :MAJOR, :sha-{SHA7}
+#             - Pre-release (rc/alpha/beta): :VERSION, :sha-{SHA7} only (no :latest or aliases)
+#
 # Build: parallel matrix (amd64 + arm64), merged into a multi-arch manifest.
 # Publish: after build succeeds, registers the version in the Global Marketplace via API.
 #
@@ -55,6 +60,11 @@ on:
         required: false
         type: boolean
         default: false
+      release_tag:
+        description: "Git tag of the release (e.g. v1.2.3) — when set, pushes a version-tag ladder to GHCR in addition to the standard branch tags. Pass github.event.release.tag_name for release events."
+        required: false
+        type: string
+        default: ""
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -92,6 +102,7 @@ jobs:
       ghcr_image:       ${{ steps.tags.outputs.ghcr_image }}
       ghcr_branch_tag:  ${{ steps.tags.outputs.ghcr_branch_tag }}
       dockerhub_image:  ${{ steps.tags.outputs.dockerhub_image }}
+      release_tags:     ${{ steps.tags.outputs.release_tags }}
 
     steps:
       - name: Checkout
@@ -171,10 +182,41 @@ jobs:
           echo "ghcr_branch_tag=${GHCR_BRANCH_TAG}" >> "$GITHUB_OUTPUT"
           echo "dockerhub_image=${DOCKERHUB_IMAGE}" >> "$GITHUB_OUTPUT"
 
+          # Release-event tag ladder: version-pinned + :latest (stable) or version-only (pre-release)
+          RELEASE_TAG="${{ inputs.release_tag }}"
+          # Strip any accidental whitespace/newlines and validate semver format
+          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
+          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
+          RELEASE_TAGS=""
+          if [ -n "${RELEASE_TAG}" ]; then
+            if [[ ! "${RELEASE_TAG}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Invalid release_tag format: '${RELEASE_TAG}'"
+              exit 1
+            fi
+            VERSION="${RELEASE_TAG#v}"
+            MAJOR=$(echo "$VERSION" | cut -d. -f1)
+            MINOR=$(echo "$VERSION" | cut -d. -f1-2)
+            if echo "$VERSION" | grep -qvF '-'; then
+              RELEASE_TAGS=$(printf '%s\n' \
+                "${GHCR_BASE}:latest" \
+                "${GHCR_BASE}:${VERSION}" \
+                "${GHCR_BASE}:${MINOR}" \
+                "${GHCR_BASE}:${MAJOR}" \
+                "${GHCR_BASE}:sha-${IMAGE_TAG}")
+            else
+              RELEASE_TAGS=$(printf '%s\n' \
+                "${GHCR_BASE}:${VERSION}" \
+                "${GHCR_BASE}:sha-${IMAGE_TAG}")
+            fi
+          fi
+          DELIM=$(openssl rand -hex 8)
+          { echo "release_tags<<${DELIM}"; printf '%s\n' "${RELEASE_TAGS}"; echo "${DELIM}"; } >> "$GITHUB_OUTPUT"
+
           echo "Branch: ${BRANCH}"
           echo "Immutable image: ${GHCR_IMAGE}"
           echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
           echo "DockerHub image: ${DOCKERHUB_IMAGE}"
+          if [ -n "${RELEASE_TAGS}" ]; then printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"; fi
 
   # ── Job 2: Build — parallel per architecture ──────────────────────────────────
   build:
@@ -258,16 +300,29 @@ jobs:
           GHCR_BRANCH_TAG: ${{ needs.prepare.outputs.ghcr_branch_tag }}
           BRANCH:          ${{ needs.prepare.outputs.branch }}
           IMAGE_TAG:       ${{ needs.prepare.outputs.image_tag }}
+          RELEASE_TAGS:    ${{ needs.prepare.outputs.release_tags }}
         run: |
+          # Build --tag args: always include immutable + mutable branch tags,
+          # plus the version-tag ladder if this is a release build.
+          TAG_ARGS=(--tag "${GHCR_IMAGE}" --tag "${GHCR_BRANCH_TAG}")
+          if [ -n "${RELEASE_TAGS}" ]; then
+            while IFS= read -r tag; do
+              [ -n "$tag" ] && TAG_ARGS+=(--tag "$tag")
+            done <<< "${RELEASE_TAGS}"
+          fi
+
           docker buildx imagetools create \
-            --tag "${GHCR_IMAGE}" \
-            --tag "${GHCR_BRANCH_TAG}" \
+            "${TAG_ARGS[@]}" \
             "${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}-amd64" \
             "${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}-arm64"
 
           echo "Multi-arch manifest pushed:"
           echo "  Immutable: ${GHCR_IMAGE}"
           echo "  Branch:    ${GHCR_BRANCH_TAG}"
+          if [ -n "${RELEASE_TAGS}" ]; then
+            echo "  Release tags:"
+            while IFS= read -r tag; do [ -n "$tag" ] && echo "    ${tag}"; done <<< "${RELEASE_TAGS}"
+          fi
 
       - name: Push to Docker Hub (re-tag, no rebuild)
         if: needs.prepare.outputs.enable_sdr == 'true'
@@ -351,18 +406,29 @@ jobs:
           ENTRYPOINTS: ${{ needs.prepare.outputs.entrypoints }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          GITHUB_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
+
+          # Resolve triggering actor to email; fall back to GitHub username
+          GH_EMAIL=$(gh api "users/${GITHUB_ACTOR}" --jq '.email // empty' 2>/dev/null || true)
+          export CREATED_BY="${GH_EMAIL:-${GITHUB_ACTOR}}"
 
           # Build JSON payload matching the CLI's registerInMarketplace format
           BODY=$(python3 - <<'PYEOF'
           import json, os
 
+          # Prefer release_tag (e.g. 0.2.0) over commit SHA for the GM version.
+          # Backward compatible: apps that don't pass release_tag get SHA as before.
+          release_tag = os.environ.get("RELEASE_TAG", "").strip()
+          version = release_tag if release_tag else os.environ["IMAGE_TAG"]
+
           body = {
               "app_id": os.environ["APP_ID"],
               "image": os.environ["GHCR_IMAGE"],
-              "version": os.environ["IMAGE_TAG"],
+              "version": version,
               "branch": os.environ["BRANCH"],
               "repo": os.environ["REPO_URL"],
               "source": "ci_publish",
@@ -387,6 +453,10 @@ jobs:
               body["allowed_tenants"] = [t.strip() for t in tenants.split(",") if t.strip()]
           else:
               body["target_channel"] = os.environ.get("CHANNEL", "all") or "all"
+
+          created_by = os.environ.get("CREATED_BY", "").strip()
+          if created_by:
+              body["created_by"] = created_by
 
           print(json.dumps(body))
           PYEOF

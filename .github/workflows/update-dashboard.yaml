@@ -61,6 +61,7 @@ jobs:
           token: ${{ secrets.ORG_PAT_GITHUB || secrets.GITHUB_TOKEN }}
 
       - name: Download latest scan artifacts
+        id: download
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SCAN_WORKFLOW: ${{ inputs.scan_workflow }}
@@ -75,15 +76,25 @@ jobs:
             --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
 
           if [ -z "$RUN_ID" ]; then
-            echo "::error::No completed runs found for workflow ${SCAN_WORKFLOW}"
-            exit 1
+            echo "::warning::No completed runs found for workflow ${SCAN_WORKFLOW}"
+            echo "has_artifacts=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           echo "Downloading artifacts from run $RUN_ID"
           gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
           gh run download "$RUN_ID" --name snyk-results --dir /tmp/scan-artifacts || echo "No snyk results"
 
+          # If no scan results at all, skip dashboard update to avoid overwriting with zeros
+          if [ ! -f /tmp/scan-artifacts/trivy_results.json ] && [ ! -f /tmp/scan-artifacts/snyk_results.json ]; then
+            echo "::warning::No scan artifacts found (expired?). Skipping dashboard update to preserve existing data."
+            echo "has_artifacts=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_artifacts=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Generate per-repo dashboard data
+        if: steps.download.outputs.has_artifacts == 'true'
         run: |
           python3 - <<'PYEOF'
           import json, os
@@ -227,14 +238,34 @@ jobs:
                   unique.append(v)
 
           # Write per-repo data file (not shared data.json)
+          # Extract SDK version from Dockerfile
+          import re as _re
+          sdk_version = "unknown"
+          try:
+              with open("Dockerfile") as f:
+                  for line in f:
+                      if line.strip().startswith("FROM "):
+                          image = line.strip().split()[1]
+                          # Extract tag after ':'
+                          if ":" in image:
+                              sdk_version = image.split(":")[-1]
+                          break
+          except FileNotFoundError:
+              pass
+
           repo_slug = repo_name.replace("/", "_")
+          app_count = sum(1 for v in unique if v["source_type"] == "app")
+          base_count = sum(1 for v in unique if v["source_type"] == "base_image")
           repo_data = {
               "repo": repo_name,
+              "sdk_version": sdk_version,
               "vulnerabilities": unique,
               "scanned_at": datetime.now().isoformat() + "Z",
               "total": len(unique),
               "critical": sum(1 for v in unique if v["severity"] == "CRITICAL"),
               "high": sum(1 for v in unique if v["severity"] == "HIGH"),
+              "base_image_count": base_count,
+              "app_count": app_count,
               "allowlisted": sum(1 for v in unique if v["status"] == "allowlisted"),
               "new": sum(1 for v in unique if v["status"] == "new"),
           }
@@ -254,21 +285,62 @@ jobs:
           app_count = sum(1 for v in unique if v['source_type'] == 'app')
           base_count = sum(1 for v in unique if v['source_type'] == 'base_image')
           print(f"Dashboard data generated: {len(unique)} vulnerabilities for {repo_name}")
+          print(f"  SDK version: {sdk_version}")
           print(f"  CRITICAL: {repo_data['critical']}")
           print(f"  HIGH: {repo_data['high']}")
           print(f"  Base image: {base_count}")
           print(f"  App dep: {app_count}")
           print(f"  Allowlisted: {repo_data['allowlisted']}")
           print(f"  New: {repo_data['new']}")
+
+          # Append to history for trend tracking. Includes CVE ID lists so the dashboard can
+          # compute true cross-repo unique counts (instead of inflated per-repo sums) and
+          # honest set-difference deltas per source / severity / status over time.
+          history_entry = {
+              "date": datetime.now().strftime("%Y-%m-%d"),
+              "repo": repo_name,
+              "sdk_version": sdk_version,
+              "total": len(unique),
+              "critical": repo_data["critical"],
+              "high": repo_data["high"],
+              "base_image": base_count,
+              "app": app_count,
+              "allowlisted": repo_data["allowlisted"],
+              "new": repo_data["new"],
+              "ids": [v["id"] for v in unique],
+              "ids_app": [v["id"] for v in unique if v.get("source_type") == "app"],
+              "ids_base": [v["id"] for v in unique if v.get("source_type") == "base_image"],
+              "ids_critical": [v["id"] for v in unique if (v.get("severity") or "").upper() == "CRITICAL"],
+              "ids_high": [v["id"] for v in unique if (v.get("severity") or "").upper() == "HIGH"],
+              "ids_new": [v["id"] for v in unique if (v.get("status") or "new") == "new"],
+              "ids_allowlisted": [v["id"] for v in unique if v.get("status") == "allowlisted"],
+          }
+          os.makedirs("/tmp/dashboard-deploy", exist_ok=True)
+          with open(f"/tmp/dashboard-deploy/history_{repo_slug}.jsonl", "a") as f:
+              f.write(json.dumps(history_entry) + "\n")
           PYEOF
 
       - name: Setup AWS Credentials
+        if: steps.download.outputs.has_artifacts == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
+      - name: One-time history reset
+        if: steps.download.outputs.has_artifacts == 'true'
+        run: |
+          # Only reset if marker file doesn't exist yet
+          if ! aws s3 ls "s3://kryptonite-store/${{ inputs.dashboard_path }}/history/.reset_done" 2>/dev/null; then
+            aws s3 rm "s3://kryptonite-store/${{ inputs.dashboard_path }}/history/" --recursive 2>/dev/null || true
+            echo "reset" | aws s3 cp - "s3://kryptonite-store/${{ inputs.dashboard_path }}/history/.reset_done"
+            echo "History reset complete"
+          else
+            echo "History already reset — skipping"
+          fi
+
       - name: Deploy to Kryptonite
+        if: steps.download.outputs.has_artifacts == 'true'
         env:
           REPO_SLUG: ${{ github.repository }}
         run: |
@@ -294,5 +366,11 @@ jobs:
 
           # Remove stale legacy data.json
           aws s3 rm "s3://kryptonite-store/${{ inputs.dashboard_path }}/data.json" 2>/dev/null || true
+
+          # Append history (download existing, append, re-upload)
+          HISTORY_FILE="history/${SLUG}.jsonl"
+          aws s3 cp "s3://kryptonite-store/${{ inputs.dashboard_path }}/${HISTORY_FILE}" /tmp/existing_history.jsonl 2>/dev/null || true
+          cat /tmp/existing_history.jsonl /tmp/dashboard-deploy/history_${SLUG}.jsonl 2>/dev/null | sort -u > /tmp/merged_history.jsonl
+          aws s3 cp /tmp/merged_history.jsonl "s3://kryptonite-store/${{ inputs.dashboard_path }}/${HISTORY_FILE}"
 
           echo "Dashboard updated at https://k.atlan.dev/${{ inputs.dashboard_path }}/"

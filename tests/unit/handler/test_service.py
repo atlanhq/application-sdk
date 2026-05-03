@@ -6,6 +6,7 @@ import json
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,7 +33,6 @@ from application_sdk.handler.contracts import (
 from application_sdk.handler.service import (
     _flatten_to_pairs,
     _normalize_credentials,
-    _pairs_to_flat,
     _wrap_response,
     create_app_handler_service,
 )
@@ -71,6 +71,58 @@ class _ApiTreeHandler(Handler):
                 ApiMetadataObject(value="tag-2", title="Tag Two", node_type="tag"),
             ]
         )
+
+
+class _AuthFailedHandler(Handler):
+    """Handler that returns AuthStatus.FAILED (no exception)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.FAILED, message="bad credentials")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthExpiredHandler(Handler):
+    """Handler that returns AuthStatus.EXPIRED."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.EXPIRED, message="token expired")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthInvalidCredsHandler(Handler):
+    """Handler that returns AuthStatus.INVALID_CREDENTIALS."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.INVALID_CREDENTIALS, message="wrong key")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthUnhandledExceptionHandler(Handler):
+    """Handler whose test_auth raises an unexpected exception."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        raise RuntimeError("unexpected db connection error")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
 
 
 class _FailingHandler(Handler):
@@ -148,9 +200,16 @@ class TestHealthEndpoints:
 
 
 class TestAuthEndpoint:
-    """Tests for POST /workflows/v1/auth."""
+    """Tests for POST /workflows/v1/auth.
 
-    def test_auth_success(self) -> None:
+    Covers every AuthStatus, envelope format, credential passthrough,
+    HandlerError, and unhandled exceptions — ensures the contract between
+    the SDK and frontend never silently breaks again.
+    """
+
+    # -- Success ----------------------------------------------------------
+
+    def test_auth_success_returns_200(self) -> None:
         client = _make_client()
         response = client.post(
             "/workflows/v1/auth",
@@ -160,16 +219,9 @@ class TestAuthEndpoint:
         body = response.json()
         assert body["success"] is True
         assert body["data"]["status"] == "success"
+        assert body["message"] == "auth ok"
 
-    def test_auth_handler_error_returns_500(self) -> None:
-        client = _make_client(handler=_FailingHandler())
-        response = client.post(
-            "/workflows/v1/auth",
-            json={"credentials": []},
-        )
-        assert response.status_code == 500
-
-    def test_auth_response_has_envelope_format(self) -> None:
+    def test_auth_success_envelope_has_all_fields(self) -> None:
         client = _make_client()
         response = client.post(
             "/workflows/v1/auth",
@@ -179,6 +231,11 @@ class TestAuthEndpoint:
         assert "success" in body
         assert "message" in body
         assert "data" in body
+        # data must contain AuthOutput fields
+        data = body["data"]
+        assert "status" in data
+        assert "identities" in data
+        assert "scopes" in data
 
     def test_auth_with_credentials_succeeds(self) -> None:
         client = _make_client()
@@ -189,6 +246,101 @@ class TestAuthEndpoint:
             },
         )
         assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    # -- Failure (every non-SUCCESS AuthStatus) ---------------------------
+
+    def test_auth_failed_returns_401(self) -> None:
+        client = _make_client(handler=_AuthFailedHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["success"] is False
+        assert body["data"]["status"] == "failed"
+        assert body["message"] == "bad credentials"
+
+    def test_auth_expired_returns_401(self) -> None:
+        client = _make_client(handler=_AuthExpiredHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["success"] is False
+        assert body["data"]["status"] == "expired"
+        assert body["message"] == "token expired"
+
+    def test_auth_invalid_credentials_returns_401(self) -> None:
+        client = _make_client(handler=_AuthInvalidCredsHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["success"] is False
+        assert body["data"]["status"] == "invalid_credentials"
+        assert body["message"] == "wrong key"
+
+    # -- Failure envelope still has full structure ------------------------
+
+    def test_auth_failure_envelope_matches_success_shape(self) -> None:
+        """A failure response must have the same top-level keys as success
+        so that consumers can parse it uniformly."""
+        client = _make_client(handler=_AuthFailedHandler())
+        body = client.post("/workflows/v1/auth", json={"credentials": []}).json()
+        assert set(body.keys()) == {"success", "message", "data"}
+        assert set(body["data"].keys()) >= {"status", "message", "identities", "scopes"}
+
+    # -- Exception handling -----------------------------------------------
+
+    def test_auth_handler_error_returns_500(self) -> None:
+        client = _make_client(handler=_FailingHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 500
+        assert "detail" in response.json()
+
+    def test_auth_unhandled_exception_returns_500(self) -> None:
+        """Unexpected exceptions (not HandlerError) must return 500 with a
+        generic message — no stack traces leaked to the client."""
+        client = _make_client(handler=_AuthUnhandledExceptionHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 500
+        body = response.json()
+        assert body["detail"] == "Internal server error"
+        assert "RuntimeError" not in str(body)
+
+    # -- AuthStatus.http_status / is_success properties -------------------
+
+    def test_auth_status_http_codes(self) -> None:
+        assert AuthStatus.SUCCESS.http_status == 200
+        assert AuthStatus.FAILED.http_status == 401
+        assert AuthStatus.EXPIRED.http_status == 401
+        assert AuthStatus.INVALID_CREDENTIALS.http_status == 401
+
+    def test_auth_status_is_success(self) -> None:
+        assert AuthStatus.SUCCESS.is_success is True
+        assert AuthStatus.FAILED.is_success is False
+        assert AuthStatus.EXPIRED.is_success is False
+        assert AuthStatus.INVALID_CREDENTIALS.is_success is False
+
+    def test_every_auth_status_has_http_code(self) -> None:
+        """If someone adds a new AuthStatus without updating the map, this
+        test catches it."""
+        for status in AuthStatus:
+            assert isinstance(
+                status.http_status, int
+            ), f"{status} missing from _AUTH_STATUS_HTTP_CODES"
 
 
 class TestPreflightEndpoint:
@@ -671,17 +823,26 @@ class TestRunIdPathParam:
 class TestConfigMapEndpoints:
     """Tests for GET /workflows/v1/configmap/{id} and /configmaps."""
 
-    def test_configmap_not_found_returns_empty(self, tmp_path: Path) -> None:
+    def test_configmap_not_found_returns_404_and_logs_available_stems(
+        self, tmp_path: Path
+    ) -> None:
         from application_sdk.handler import service as svc_module
+
+        (tmp_path / "sap-hana.json").write_text("{}")
 
         original = svc_module.CONTRACT_GENERATED_DIR
         svc_module.CONTRACT_GENERATED_DIR = tmp_path
         try:
             client = _make_client()
-            response = client.get("/workflows/v1/configmap/nonexistent")
-            assert response.status_code == 200
-            body = response.json()
-            assert body["data"] == {}
+            with patch("application_sdk.handler.service.logger") as mock_logger:
+                response = client.get("/workflows/v1/configmap/saphana")
+            assert response.status_code == 404
+            assert response.json()["detail"] == "ConfigMap 'saphana' not found"
+            mock_logger.warning.assert_called_once_with(
+                "ConfigMap not found: requested=%s available=%s",
+                "saphana",
+                ["sap-hana"],
+            )
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
@@ -1429,97 +1590,15 @@ class TestFlattenToPairs:
         assert "extra" not in creds
 
 
-class TestPairsToFlat:
-    """Tests for _pairs_to_flat (v3 list → flat dict)."""
+class TestStartCredentialStripping:
+    """Tests for credential stripping in /start handler.
 
-    def test_simple_keys(self) -> None:
-        pairs = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "username", "value": "admin"},
-        ]
-        result = _pairs_to_flat(pairs)
-        assert result == {"host": "db.example.com", "username": "admin"}
-
-    def test_extra_keys_nested(self) -> None:
-        pairs = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "extra.role", "value": "ACCOUNTADMIN"},
-            {"key": "extra.warehouse", "value": "MINER_WH"},
-        ]
-        result = _pairs_to_flat(pairs)
-        assert result["host"] == "db.example.com"
-        assert result["extra"] == {"role": "ACCOUNTADMIN", "warehouse": "MINER_WH"}
-        assert "extra.role" not in result
-        assert "extra.warehouse" not in result
-
-    def test_no_extra_keys(self) -> None:
-        pairs = [{"key": "host", "value": "db.example.com"}]
-        result = _pairs_to_flat(pairs)
-        assert "extra" not in result
-        assert result == {"host": "db.example.com"}
-
-    def test_empty_list(self) -> None:
-        assert _pairs_to_flat([]) == {}
-
-    def test_single_extra_key(self) -> None:
-        """A single extra.* key still produces a nested extra dict."""
-        pairs = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "extra.role", "value": "ADMIN"},
-        ]
-        result = _pairs_to_flat(pairs)
-        assert result == {"host": "db.example.com", "extra": {"role": "ADMIN"}}
-
-    def test_malformed_pair_raises_key_error(self) -> None:
-        """Pairs missing 'key' or 'value' raise KeyError."""
-        import pytest
-
-        with pytest.raises(KeyError):
-            _pairs_to_flat([{"key": "host"}])  # missing "value"
-        with pytest.raises(KeyError):
-            _pairs_to_flat([{"value": "db.example.com"}])  # missing "key"
-
-    def test_round_trip_with_flatten_to_pairs(self) -> None:
-        """_pairs_to_flat reverses _flatten_to_pairs for string values."""
-        original = {
-            "host": "snow.example.com",
-            "authType": "basic",
-            "username": "admin",
-            "password": "secret",
-            "extra": {
-                "role": "ACCOUNTADMIN",
-                "warehouse": "COMPUTE_WH",
-                "database": "PROD",
-            },
-        }
-        pairs = _flatten_to_pairs(
-            dict(original)
-        )  # dict() because _flatten_to_pairs pops extra
-        restored = _pairs_to_flat(pairs)
-        assert restored == original
-
-    def test_round_trip_lossy_for_non_string_values(self) -> None:
-        """Non-string values are stringified by _flatten_to_pairs and stay strings."""
-        original = {"host": "db.example.com", "port": 5432, "ssl": True}
-        pairs = _flatten_to_pairs(dict(original))
-        restored = _pairs_to_flat(pairs)
-        # Values are stringified — not equal to original types
-        assert restored["port"] == "5432"  # int → str
-        assert restored["ssl"] == "true"  # bool → str (json.dumps)
-        assert restored["host"] == "db.example.com"  # str stays str
-
-
-class TestStartCredentialPersistence:
-    """Tests for inline credential save in /start handler.
-
-    The /start endpoint needs Temporal, so we test the normalization +
-    MockStateStore interaction directly to verify the contract.
+    The /start endpoint strips credentials from the body before dispatching
+    to Temporal. No state store save or credential_guid injection occurs.
     """
 
-    async def test_normalize_then_store_v2_dict_credentials(self) -> None:
-        """V2 dict credentials are normalized to v3 list before storage."""
-        from application_sdk.testing.mocks import MockStateStore
-
+    def test_normalize_v2_dict_credentials(self) -> None:
+        """V2 dict credentials are normalized to v3 list format."""
         body = {
             "credentials": {
                 "host": "db.example.com",
@@ -1536,24 +1615,11 @@ class TestStartCredentialPersistence:
         keys = {item["key"] for item in body["credentials"]}
         assert "host" in keys
         assert "port" in keys
-
-        store = MockStateStore()
-        guid = "test-guid-123"
-        flat_creds = _pairs_to_flat(body["credentials"])
-        await store.save(f"cred:{guid}", flat_creds)
-
-        result = await store.load(f"cred:{guid}")
-        assert result is not None
-        assert result["host"] == "db.example.com"
-
-        # Verify other fields preserved
+        # Other fields preserved
         assert body["other_field"] == "kept"
-        assert "credentials" in body
 
-    async def test_normalize_then_store_v3_list_credentials(self) -> None:
+    def test_normalize_v3_list_credentials(self) -> None:
         """V3 list credentials pass through normalization unchanged."""
-        from application_sdk.testing.mocks import MockStateStore
-
         body = {
             "credentials": [
                 {"key": "host", "value": "db.example.com"},
@@ -1566,42 +1632,11 @@ class TestStartCredentialPersistence:
         assert isinstance(body["credentials"], list)
         assert len(body["credentials"]) == 2
 
-        store = MockStateStore()
-        guid = "test-guid-456"
-        flat_creds = _pairs_to_flat(body["credentials"])
-        await store.save(f"cred:{guid}", flat_creds)
-
-        result = await store.load(f"cred:{guid}")
-        assert result is not None
-        assert result["host"] == "db.example.com"
-
-    def test_no_credentials_skips_store(self) -> None:
-        """Body without credentials is not stored."""
+    def test_no_credentials_passthrough(self) -> None:
+        """Body without credentials passes through unchanged."""
         body = {"name": "test-workflow"}
         body = _normalize_credentials(body)
         assert "credentials" not in body or not body.get("credentials")
-
-    async def test_credential_resolver_reads_from_secret_store(self) -> None:
-        """CredentialResolver reads credentials from secret store."""
-        from application_sdk.credentials.ref import CredentialRef
-        from application_sdk.credentials.resolver import CredentialResolver
-        from application_sdk.testing.mocks import MockSecretStore
-
-        store = MockSecretStore()
-        creds = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "port", "value": "5432"},
-        ]
-        store.set("my-guid", json.dumps(creds))
-
-        resolver = CredentialResolver(secret_store=store)
-        ref = CredentialRef(name="my-guid", credential_type="basic")
-
-        result = await resolver.resolve_raw(ref)
-
-        assert isinstance(result, list)
-        assert result[0]["key"] == "host"
-        assert result[0]["value"] == "db.example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -1864,3 +1899,1544 @@ class TestConfigMapsDeduplication:
             assert "real-config" in configmaps
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+# ---------------------------------------------------------------------------
+# Local vault credential provisioning tests
+# ---------------------------------------------------------------------------
+
+
+class TestProvisionLocalVault:
+    """Tests for POST /workflows/v1/dev/local-vault credential provisioning endpoint."""
+
+    def _make_local_vault_client(
+        self,
+        *,
+        deployment_name: str = "local",
+        local_environment: str = "local",
+        storage: object | None = None,
+    ) -> tuple[TestClient, dict[str, object]]:
+        """Create a TestClient with DEPLOYMENT_NAME and storage patched.
+
+        Returns (client, restore_dict) so the caller can restore module state.
+        """
+        from application_sdk.handler import service as svc_module
+
+        handler = _TestHandler()
+        app = create_app_handler_service(
+            handler, app_name="vault-test", storage=storage
+        )
+
+        original_dep = svc_module.DEPLOYMENT_NAME
+        original_local = svc_module.LOCAL_ENVIRONMENT
+        svc_module.DEPLOYMENT_NAME = deployment_name
+        svc_module.LOCAL_ENVIRONMENT = local_environment
+        client = TestClient(app, raise_server_exceptions=False)
+        restore = {
+            "dep": original_dep,
+            "local": original_local,
+            "module": svc_module,
+        }
+        return client, restore
+
+    def _restore(self, restore: dict[str, object]) -> None:
+        svc_module = restore["module"]
+        svc_module.DEPLOYMENT_NAME = restore["dep"]  # type: ignore[attr-defined]
+        svc_module.LOCAL_ENVIRONMENT = restore["local"]  # type: ignore[attr-defined]
+
+    def test_happy_path_returns_200_with_credential_guid(self, tmp_path: Path) -> None:
+        """POST full credential body returns 200 with credential_guid, writes secrets.json."""
+        import os
+
+        # storage=None means objectstore save is a no-op (returns False)
+        client, restore = self._make_local_vault_client(storage=None)
+
+        body = {
+            "username": "admin",
+            "password": "secret123",
+            "host": "db.example.com",
+            "port": 5432,
+            "extra": {"ssl": True},
+            "url": "jdbc:postgresql://db.example.com:5432",
+        }
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post("/workflows/v1/dev/local-vault", json=body)
+            finally:
+                os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            resp_body = response.json()
+            assert resp_body["success"] is True
+            guid = resp_body["data"]["credential_guid"]
+            # Verify it's a valid hex string (uuid4().hex)
+            assert len(guid) == 32
+            int(guid, 16)  # raises ValueError if not valid hex
+
+            # Verify secrets.json was written with sensitive fields
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            assert secrets_file.exists()
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            assert guid in all_secrets
+            stored_sensitive = all_secrets[guid]
+            assert stored_sensitive["username"] == "admin"
+            assert stored_sensitive["password"] == "secret123"
+            assert stored_sensitive["extra"] == {"ssl": True}
+            assert stored_sensitive["url"] == "jdbc:postgresql://db.example.com:5432"
+            # Non-sensitive fields should NOT be in secrets
+            assert "host" not in stored_sensitive
+            assert "port" not in stored_sensitive
+        finally:
+            self._restore(restore)
+
+    def test_dev_only_gate_rejects_non_local(self) -> None:
+        """When DEPLOYMENT_NAME != LOCAL_ENVIRONMENT, returns 403."""
+        client, restore = self._make_local_vault_client(
+            deployment_name="production", local_environment="local"
+        )
+        try:
+            response = client.post(
+                "/workflows/v1/dev/local-vault", json={"host": "db.example.com"}
+            )
+            assert response.status_code == 403
+            assert "Dev-only" in response.json()["detail"]
+        finally:
+            self._restore(restore)
+
+    def test_sensitive_nonsensitive_split(self, tmp_path: Path) -> None:
+        """Verify SENSITIVE_FIELDS go to secrets.json, everything else to object storage."""
+        import os
+        from unittest.mock import MagicMock, patch
+
+        mock_storage = MagicMock()  # non-None so objectstore save runs
+        client, restore = self._make_local_vault_client(storage=mock_storage)
+
+        body = {
+            "username": "user1",
+            "password": "pass1",
+            "extra": {"key": "val"},
+            "url": "jdbc://host",
+            "driverProperties": {"prop": "val"},
+            "sodaConnection": "soda://conn",
+            "host": "db.example.com",
+            "port": 5432,
+            "authType": "basic",
+        }
+
+        captured_config: dict = {}
+
+        async def capture_put_json(key, body_arg, store):
+            captured_config.update(body_arg)
+
+        try:
+            with patch(
+                "application_sdk.storage.ops.put_json",
+                side_effect=capture_put_json,
+            ):
+                original_cwd = os.getcwd()
+                os.chdir(tmp_path)
+                try:
+                    response = client.post("/workflows/v1/dev/local-vault", json=body)
+                finally:
+                    os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+
+            # Check secrets.json for sensitive fields
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            sensitive = all_secrets[guid]
+            assert set(sensitive.keys()) == {
+                "username",
+                "password",
+                "extra",
+                "url",
+                "driverProperties",
+                "sodaConnection",
+            }
+
+            # Non-sensitive fields should be in the captured config
+            assert "host" in captured_config
+            assert "port" in captured_config
+            assert "authType" in captured_config
+            assert captured_config["credentialSource"] == "direct"
+            # Sensitive fields should NOT be in config
+            assert "username" not in captured_config
+            assert "password" not in captured_config
+        finally:
+            self._restore(restore)
+
+    def test_auto_generates_uuid_hex(self, tmp_path: Path) -> None:
+        """Verify the returned guid is a valid 32-char hex string."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post(
+                    "/workflows/v1/dev/local-vault", json={"host": "example.com"}
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+            assert isinstance(guid, str)
+            assert len(guid) == 32
+            # Must be valid hex
+            int(guid, 16)
+        finally:
+            self._restore(restore)
+
+    def test_empty_body_succeeds(self, tmp_path: Path) -> None:
+        """Empty body should still work — empty secrets + empty config."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post("/workflows/v1/dev/local-vault", json={})
+            finally:
+                os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+
+            # secrets.json should exist with empty sensitive dict
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            assert all_secrets[guid] == {}
+        finally:
+            self._restore(restore)
+
+    def test_no_storage_still_writes_secrets(self, tmp_path: Path) -> None:
+        """When storage is None, secrets are written but objectstore save is a no-op."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post(
+                    "/workflows/v1/dev/local-vault",
+                    json={"username": "u", "host": "h"},
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            # The endpoint still succeeds because _config_save_to_objectstore
+            # returns False (no-op) when storage is None, but doesn't raise.
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            assert all_secrets[guid] == {"username": "u"}
+        finally:
+            self._restore(restore)
+
+
+# ---------------------------------------------------------------------------
+# BLDX-1129: tests targeting the bug class — runtime-only inline imports,
+# swallowed exceptions, contract drift between handler service and its
+# injected dependencies (Temporal, object store, etc.).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def reset_temporal_client_singleton():
+    """Reset the module-level _temporal_client cache before and after a test.
+
+    _get_temporal_client() caches a Temporal client globally; tests that
+    exercise its real body (rather than patching it out) must reset this
+    or they will leak state into other tests.
+    """
+    from application_sdk.handler import service as svc_module
+
+    svc_module._temporal_client = None
+    svc_module._handler_auth_manager = None
+    yield
+    svc_module._temporal_client = None
+    svc_module._handler_auth_manager = None
+
+
+class TestGetTemporalClientInlineImports:
+    """BLDX-1129 regression: exercise the real _get_temporal_client body so a
+    rename of create_temporal_client / TemporalAuthConfig / TemporalAuthManager
+    in application_sdk.execution surfaces here, not in production.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_auth_uses_create_temporal_client(
+        self, reset_temporal_client_singleton
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from application_sdk.handler import service as svc_module
+
+        svc_module._workflow_config = svc_module.WorkflowClientConfig(
+            host="temporal:7233",
+            namespace="default",
+            auth_enabled=False,
+        )
+
+        fake_client = object()
+        with patch(
+            "application_sdk.execution.create_temporal_client",
+            new=AsyncMock(return_value=fake_client),
+        ) as mock_create:
+            result = await svc_module._get_temporal_client()
+
+        assert result is fake_client
+        # Must call with the configured host, namespace, and api_key=None when no auth
+        kwargs = mock_create.call_args.kwargs
+        assert mock_create.call_args.args[0] == "temporal:7233"
+        assert mock_create.call_args.args[1] == "default"
+        assert kwargs["api_key"] is None
+        assert kwargs["tls_enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_returns_cached_client_on_second_call(
+        self, reset_temporal_client_singleton
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from application_sdk.handler import service as svc_module
+
+        svc_module._workflow_config = svc_module.WorkflowClientConfig(
+            host="temporal:7233", namespace="default"
+        )
+        sentinel = object()
+        with patch(
+            "application_sdk.execution.create_temporal_client",
+            new=AsyncMock(return_value=sentinel),
+        ) as mock_create:
+            first = await svc_module._get_temporal_client()
+            second = await svc_module._get_temporal_client()
+
+        assert first is second is sentinel
+        # Cached: only one underlying create
+        assert mock_create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_auth_enabled_uses_temporal_auth_manager(
+        self, reset_temporal_client_singleton
+    ) -> None:
+        """When auth_enabled=True, the inline-imported TemporalAuthConfig and
+        TemporalAuthManager must be wired up and the api_key threaded through.
+        Catches BLDX-1129-class breakage if either symbol is renamed in
+        application_sdk.execution.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler import service as svc_module
+
+        svc_module._workflow_config = svc_module.WorkflowClientConfig(
+            host="t:7233",
+            namespace="default",
+            auth_enabled=True,
+            auth_client_id="cid",
+            auth_client_secret="csec",
+            auth_token_url="https://idp/token",
+            auth_base_url="https://idp",
+            auth_scopes="a,b",
+        )
+
+        fake_auth_manager = MagicMock()
+        fake_auth_manager.acquire_initial_token = AsyncMock(return_value="api-key-xyz")
+        fake_auth_manager.start_background_refresh = MagicMock()
+
+        fake_client = object()
+        with (
+            patch(
+                "application_sdk.execution.TemporalAuthManager",
+                return_value=fake_auth_manager,
+            ) as mock_mgr_cls,
+            patch("application_sdk.execution.TemporalAuthConfig") as mock_cfg_cls,
+            patch(
+                "application_sdk.execution.create_temporal_client",
+                new=AsyncMock(return_value=fake_client),
+            ) as mock_create,
+        ):
+            result = await svc_module._get_temporal_client()
+
+        assert result is fake_client
+        mock_cfg_cls.assert_called_once()
+        mock_mgr_cls.assert_called_once()
+        # api_key from auth manager must be passed through to create_temporal_client
+        assert mock_create.call_args.kwargs["api_key"] == "api-key-xyz"
+        # Background token refresh must be started after client connect
+        fake_auth_manager.start_background_refresh.assert_called_once_with(fake_client)
+
+
+class TestGetWorkflowResultHelper:
+    """Tests for _get_workflow_result coverage (lines 198-215)."""
+
+    @pytest.mark.asyncio
+    async def test_typed_dict_result_returned_as_dict(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.handler.service import _get_workflow_result
+
+        mock_handle = MagicMock()
+        mock_handle.result = AsyncMock(return_value={"foo": "bar"})
+        mock_client = MagicMock()
+        mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+        result = await _get_workflow_result(
+            mock_client, workflow_id="wf-1", output_type=None
+        )
+        assert result == {"foo": "bar"}
+
+    @pytest.mark.asyncio
+    async def test_pydantic_result_is_model_dumped(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from pydantic import BaseModel
+
+        from application_sdk.handler.service import _get_workflow_result
+
+        class _Out(BaseModel):
+            x: int = 1
+            y: str = "ok"
+
+        mock_handle = MagicMock()
+        mock_handle.result = AsyncMock(return_value=_Out(x=42, y="hello"))
+        mock_client = MagicMock()
+        mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+        result = await _get_workflow_result(
+            mock_client, workflow_id="wf-2", output_type=_Out
+        )
+        assert result == {"x": 42, "y": "hello"}
+
+    @pytest.mark.asyncio
+    async def test_unknown_result_type_returns_empty_dict(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.handler.service import _get_workflow_result
+
+        mock_handle = MagicMock()
+        mock_handle.result = AsyncMock(return_value="not-a-dict-or-model")
+        mock_client = MagicMock()
+        mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+        result = await _get_workflow_result(
+            mock_client, workflow_id="wf-3", output_type=None
+        )
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_typed_failure_falls_back_to_untyped(self) -> None:
+        """If typed deserialization fails, fall back to untyped result.
+        Verifies the swallowed-but-logged exception path still returns data.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.handler.service import _get_workflow_result
+
+        # First call (typed) raises; second (untyped) succeeds
+        first_handle = MagicMock()
+        first_handle.result = AsyncMock(side_effect=RuntimeError("type mismatch"))
+        second_handle = MagicMock()
+        second_handle.result = AsyncMock(return_value={"recovered": True})
+
+        mock_client = MagicMock()
+        mock_client.get_workflow_handle = MagicMock(
+            side_effect=[first_handle, second_handle]
+        )
+
+        result = await _get_workflow_result(
+            mock_client, workflow_id="wf-4", output_type=int
+        )
+        assert result == {"recovered": True}
+        # Two handles fetched: one typed, one untyped fallback
+        assert mock_client.get_workflow_handle.call_count == 2
+
+
+class TestStopWorkflowEndpoint:
+    """Tests for POST /workflows/v1/stop/{workflow_id}/{run_id:path}."""
+
+    def _make_routed_client(self):
+        from application_sdk.app.base import App
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+        class _StopApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="stop-test",
+            app_class=_StopApp,
+            temporal_host="temporal:7233",
+        )
+        return svc
+
+    def test_stop_success_returns_200(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._make_routed_client()
+            mock_handle = MagicMock()
+            mock_handle.terminate = AsyncMock(return_value=None)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc)
+                response = client.post("/workflows/v1/stop/wf-1/run-1")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["success"] is True
+            mock_handle.terminate.assert_awaited_once()
+        finally:
+            from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+            AppRegistry.reset()
+            TaskRegistry.reset()
+
+    def test_stop_not_found_returns_404(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._make_routed_client()
+            mock_handle = MagicMock()
+            import temporalio.service
+
+            mock_handle.terminate = AsyncMock(
+                side_effect=temporalio.service.RPCError(
+                    "wording can change",
+                    status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                    raw_grpc_status=None,
+                )
+            )
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc, raise_server_exceptions=False)
+                response = client.post("/workflows/v1/stop/wf-x/run-x")
+            assert response.status_code == 404
+            assert "not found" in response.json()["detail"].lower()
+        finally:
+            from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+            AppRegistry.reset()
+            TaskRegistry.reset()
+
+    def test_stop_generic_error_returns_500_without_leaking_details(self) -> None:
+        """Generic Temporal errors → 500 with a generic message, no stack/internals."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._make_routed_client()
+            mock_handle = MagicMock()
+            mock_handle.terminate = AsyncMock(
+                side_effect=RuntimeError("connection refused: 10.0.0.42:7233")
+            )
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc, raise_server_exceptions=False)
+                response = client.post("/workflows/v1/stop/wf-1/run-1")
+            assert response.status_code == 500
+            body_str = str(response.json())
+            assert "10.0.0.42" not in body_str
+            assert "RuntimeError" not in body_str
+        finally:
+            from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+            AppRegistry.reset()
+            TaskRegistry.reset()
+
+
+class TestGetWorkflowStatusEndpoint:
+    """Tests for GET /workflows/v1/status/{workflow_id}/{run_id:path}."""
+
+    def _setup(self):
+        from application_sdk.app.base import App
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+        class _StatusApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        return create_app_handler_service(
+            _TestHandler(),
+            app_name="status-test",
+            app_class=_StatusApp,
+            temporal_host="temporal:7233",
+        )
+
+    def _teardown(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_status_running_returns_status_payload(self) -> None:
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            now = datetime.now(UTC)
+            desc = MagicMock()
+            desc.status.name = "RUNNING"
+            desc.execution_time = now - timedelta(seconds=10)
+            desc.close_time = None
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/status/wf-1/run-1")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["status"] == "RUNNING"
+            assert data["execution_duration_seconds"] >= 10
+        finally:
+            self._teardown()
+
+    def test_status_completed_uses_close_time_for_duration(self) -> None:
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            start = datetime(2024, 1, 1, tzinfo=UTC)
+            desc = MagicMock()
+            desc.status.name = "COMPLETED"
+            desc.execution_time = start
+            desc.close_time = start + timedelta(seconds=42)
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/status/wf-1/run-1")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["execution_duration_seconds"] == 42
+        finally:
+            self._teardown()
+
+    def test_status_unknown_when_status_falsy(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            desc = MagicMock()
+            desc.status = None
+            desc.execution_time = None
+            desc.close_time = None
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/status/wf-1/run-1")
+            assert response.status_code == 200
+            assert response.json()["data"]["status"] == "UNKNOWN"
+            assert response.json()["data"]["execution_duration_seconds"] == 0
+        finally:
+            self._teardown()
+
+    def test_status_not_found_returns_404(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import temporalio.service
+
+        try:
+            svc = self._setup()
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(
+                side_effect=temporalio.service.RPCError(
+                    "wording can change",
+                    status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                    raw_grpc_status=None,
+                )
+            )
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc, raise_server_exceptions=False)
+                response = client.get("/workflows/v1/status/wf-x/run-x")
+            assert response.status_code == 404
+        finally:
+            self._teardown()
+
+    def test_status_generic_error_returns_500(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(side_effect=RuntimeError("boom"))
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc, raise_server_exceptions=False)
+                response = client.get("/workflows/v1/status/wf-1/run-1")
+            assert response.status_code == 500
+            assert "boom" not in str(response.json())
+        finally:
+            self._teardown()
+
+
+class TestGetResultEndpoint:
+    """Tests for GET /workflows/v1/result/{workflow_id}."""
+
+    def _setup(self):
+        from application_sdk.app.base import App
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+        class _ResApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        return create_app_handler_service(
+            _TestHandler(),
+            app_name="res-test",
+            app_class=_ResApp,
+            temporal_host="temporal:7233",
+        )
+
+    def _teardown(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_result_running_returns_running_status(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            desc = MagicMock()
+            desc.status.name = "RUNNING"
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/result/wf-r")
+            assert response.status_code == 200
+            assert response.json()["data"]["status"] == "running"
+        finally:
+            self._teardown()
+
+    def test_result_completed_returns_result_data(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            desc = MagicMock()
+            desc.status.name = "COMPLETED"
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with (
+                patch(
+                    "application_sdk.handler.service._get_temporal_client",
+                    new=AsyncMock(return_value=mock_client),
+                ),
+                patch(
+                    "application_sdk.handler.service._get_workflow_result",
+                    new=AsyncMock(return_value={"a": 1}),
+                ),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/result/wf-c")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["status"] == "completed"
+            assert data["result"] == {"a": 1}
+        finally:
+            self._teardown()
+
+    @pytest.mark.parametrize(
+        "temporal_status", ["FAILED", "TERMINATED", "CANCELED", "TIMED_OUT"]
+    )
+    def test_result_failed_states_return_failed_status(
+        self, temporal_status: str
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            desc = MagicMock()
+            desc.status.name = temporal_status
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/result/wf-f")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["status"] == "failed"
+            assert temporal_status.lower() in data["error"].lower()
+        finally:
+            self._teardown()
+
+    def test_result_unknown_status_returns_lowercased(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            desc = MagicMock()
+            desc.status.name = "EXOTIC_STATE"
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/result/wf-other")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["status"] == "exotic_state"
+        finally:
+            self._teardown()
+
+    def test_result_wait_true_returns_completed(self) -> None:
+        """With ?wait=true, retrieve the workflow result directly."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            mock_handle = MagicMock()
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with (
+                patch(
+                    "application_sdk.handler.service._get_temporal_client",
+                    new=AsyncMock(return_value=mock_client),
+                ),
+                patch(
+                    "application_sdk.handler.service._get_workflow_result",
+                    new=AsyncMock(return_value={"final": "value"}),
+                ),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/result/wf-wait?wait=true")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["status"] == "completed"
+            assert data["result"] == {"final": "value"}
+        finally:
+            self._teardown()
+
+    def test_result_wait_failure_returns_failed_envelope(self) -> None:
+        """A non-WorkflowFailureError raised during result decoding produces
+        the new ``result_decode_failed`` status (PR #1603 / BLDX-1173) —
+        distinct from a real workflow failure. Both still set
+        ``success=false`` and must not leak the underlying exception text.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+            mock_handle = MagicMock()
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with (
+                patch(
+                    "application_sdk.handler.service._get_temporal_client",
+                    new=AsyncMock(return_value=mock_client),
+                ),
+                patch(
+                    "application_sdk.handler.service._get_workflow_result",
+                    new=AsyncMock(side_effect=RuntimeError("internal-error-xxx")),
+                ),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/result/wf-wait-fail?wait=true")
+            assert response.status_code == 200
+            body = response.json()
+            data = body["data"]
+            # Generic exception during decode → new distinct status.
+            assert data["status"] == "result_decode_failed"
+            assert body["success"] is False
+            # Generic message — must not leak the raw exception text.
+            assert "internal-error-xxx" not in str(body)
+        finally:
+            self._teardown()
+
+    def test_result_not_found_returns_404(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import temporalio.service
+
+        try:
+            svc = self._setup()
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(
+                side_effect=temporalio.service.RPCError(
+                    "wording can change",
+                    status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                    raw_grpc_status=None,
+                )
+            )
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(svc, raise_server_exceptions=False)
+                response = client.get("/workflows/v1/result/wf-nope")
+            assert response.status_code == 404
+        finally:
+            self._teardown()
+
+    def test_result_503_when_unconfigured(self) -> None:
+        client = _make_client()
+        response = client.get("/workflows/v1/result/wf-1")
+        assert response.status_code == 503
+
+    def test_status_503_when_unconfigured(self) -> None:
+        client = _make_client()
+        response = client.get("/workflows/v1/status/wf-1/run-1")
+        assert response.status_code == 503
+
+
+class TestStartWorkflowExtras:
+    """Tests for /start beyond simple routing — explicit workflow_id, caller
+    correlation_id, credential stripping, and error branches."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _wire(self, app_cls):
+        """Build service + patch _get_temporal_client. Caller must reset
+        registries beforehand and define app_cls AFTER reset."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="start-extras",
+            app_class=app_cls,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-id-actual"
+        mock_handle.result_run_id = "run-id-actual"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        return TestClient(svc, raise_server_exceptions=False), mock_client, patcher
+
+    def test_explicit_workflow_id_is_used(self) -> None:
+        from application_sdk.app.base import App
+
+        class _IdApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, mock_client, patcher = self._wire(_IdApp)
+        try:
+            response = client.post(
+                "/workflows/v1/start",
+                json={"name": "x", "workflow_id": "caller-given-id"},
+            )
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["id"] == "caller-given-id"
+        finally:
+            patcher.stop()
+
+    def test_caller_correlation_id_round_trips(self) -> None:
+        """If caller provides correlation_id, response echoes the same value."""
+        from application_sdk.app.base import App
+
+        class _CorrApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, mock_client, patcher = self._wire(_CorrApp)
+        try:
+            response = client.post(
+                "/workflows/v1/start",
+                json={"name": "x", "correlation_id": "trace-9999"},
+            )
+            assert response.status_code == 200
+            assert response.json()["correlation_id"] == "trace-9999"
+        finally:
+            patcher.stop()
+
+    def test_inline_credentials_are_stripped_before_dispatch(self) -> None:
+        """Credentials must NEVER reach Temporal history — start_workflow's
+        first arg (input_data) must not contain raw credential pairs."""
+        from application_sdk.app.base import App
+
+        class _StripApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, mock_client, patcher = self._wire(_StripApp)
+        try:
+            response = client.post(
+                "/workflows/v1/start",
+                json={
+                    "name": "x",
+                    "credentials": [{"key": "password", "value": "supersecret"}],
+                },
+            )
+            assert response.status_code == 200
+            call_args = mock_client.start_workflow.call_args
+            input_data = call_args.kwargs["args"][0]
+            dumped = (
+                input_data.model_dump()
+                if hasattr(input_data, "model_dump")
+                else vars(input_data)
+            )
+            assert "supersecret" not in str(dumped)
+        finally:
+            patcher.stop()
+
+    def test_start_response_envelope_shape(self) -> None:
+        from application_sdk.app.base import App
+
+        class _EnvApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, _, patcher = self._wire(_EnvApp)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            body = response.json()
+            assert set(body.keys()) >= {"success", "message", "data", "correlation_id"}
+            assert body["success"] is True
+            assert "workflow_id" in body["data"]
+            assert "run_id" in body["data"]
+        finally:
+            patcher.stop()
+
+
+class TestUploadFileEndpoint:
+    """Tests for POST /workflows/v1/file."""
+
+    def test_upload_no_storage_returns_503(self) -> None:
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/file",
+            files={"file": ("hello.txt", b"hello")},
+        )
+        assert response.status_code == 503
+
+    def test_upload_happy_path_returns_metadata(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_storage = MagicMock()
+        app = create_app_handler_service(
+            _TestHandler(), app_name="upload-test", storage=mock_storage
+        )
+        client = TestClient(app)
+        with patch(
+            "application_sdk.storage.ops.upload_file", new=AsyncMock(return_value=None)
+        ) as mock_upload:
+            response = client.post(
+                "/workflows/v1/file",
+                files={"file": ("report.pdf", b"data", "application/pdf")},
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        data = body["data"]
+        # alias_generator=to_camel — fields exposed as camelCase
+        assert data["rawName"] == "report.pdf"
+        assert data["extension"] == "pdf"
+        assert data["contentType"] == "application/pdf"
+        assert data["fileSize"] == 4
+        assert data["isUploaded"] is True
+        # Storage upload was actually invoked
+        mock_upload.assert_awaited_once()
+
+    def test_upload_with_explicit_filename_and_prefix_overrides(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_storage = MagicMock()
+        app = create_app_handler_service(
+            _TestHandler(), app_name="upload2", storage=mock_storage
+        )
+        client = TestClient(app)
+        with patch(
+            "application_sdk.storage.ops.upload_file", new=AsyncMock(return_value=None)
+        ) as mock_upload:
+            response = client.post(
+                "/workflows/v1/file",
+                files={"file": ("ignored.txt", b"hi")},
+                data={"filename": "real.csv", "prefix": "custom/path"},
+            )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["rawName"] == "real.csv"
+        assert data["extension"] == "csv"
+        # Key must use the supplied prefix, not the default
+        assert data["key"].startswith("custom/path/")
+        # And the storage layer was called with that same key
+        called_key = mock_upload.await_args.args[0]
+        assert called_key.startswith("custom/path/")
+
+    def test_upload_strips_unsafe_extension_chars(self) -> None:
+        """Extensions with non-alphanumerics must be sanitised — no path traversal."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_storage = MagicMock()
+        app = create_app_handler_service(
+            _TestHandler(), app_name="upload3", storage=mock_storage
+        )
+        client = TestClient(app)
+        with patch(
+            "application_sdk.storage.ops.upload_file", new=AsyncMock(return_value=None)
+        ):
+            response = client.post(
+                "/workflows/v1/file",
+                files={"file": ("evil.tar/../foo", b"x")},
+            )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        # Extension must not contain '/' or '.'
+        assert "/" not in data["extension"]
+        assert ".." not in data["extension"]
+
+    def test_upload_falls_back_to_octet_stream_when_no_content_type(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_storage = MagicMock()
+        app = create_app_handler_service(
+            _TestHandler(), app_name="upload4", storage=mock_storage
+        )
+        client = TestClient(app)
+        with patch(
+            "application_sdk.storage.ops.upload_file", new=AsyncMock(return_value=None)
+        ):
+            response = client.post(
+                "/workflows/v1/file",
+                files={"file": ("blob", b"raw")},
+            )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["contentType"] == "application/octet-stream"
+
+
+class TestEventTriggerEndpoint:
+    """Tests for POST /events/v1/event/{event_id}."""
+
+    def _make_event_app(self):
+        from application_sdk.app.base import App
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+        class _EvApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Tag the app class so the event handler can find _input_type
+        _EvApp._input_type = _RoutingInput
+        return _EvApp
+
+    def _teardown(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_event_503_when_temporal_unconfigured(self) -> None:
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        trigger = EventTriggerConfig(event_id="t1", event_type="topic", event_name="ev")
+        app = create_app_handler_service(
+            _TestHandler(), app_name="ev-test", event_triggers=[trigger]
+        )
+        client = TestClient(app)
+        response = client.post("/events/v1/event/t1", json={})
+        assert response.status_code == 503
+
+    def test_event_unknown_id_returns_404(self) -> None:
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="known", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            client = TestClient(app)
+            response = client.post("/events/v1/event/unknown", json={})
+            assert response.status_code == 404
+            assert "unknown" in response.json()["detail"]
+        finally:
+            self._teardown()
+
+    def test_event_invalid_json_returns_400(self) -> None:
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            client = TestClient(app)
+            response = client.post(
+                "/events/v1/event/t1",
+                content=b"not-valid-json",
+                headers={"content-type": "application/json"},
+            )
+            assert response.status_code == 400
+        finally:
+            self._teardown()
+
+    def test_event_happy_path_starts_workflow(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-1"
+            mock_handle.result_run_id = "run-1"
+            mock_client = MagicMock()
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/events/v1/event/t1",
+                    json={"data": {"name": "from-event"}},
+                )
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "SUCCESS"
+            assert body["workflow_id"] == "wf-1"
+        finally:
+            self._teardown()
+
+    def test_event_temporal_failure_returns_retry_status(self) -> None:
+        """When Temporal start fails, the endpoint returns 500 + RETRY so Dapr
+        will retry the message — per the bus contract."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            mock_client = MagicMock()
+            mock_client.start_workflow = AsyncMock(
+                side_effect=RuntimeError("temporal down")
+            )
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post("/events/v1/event/t1", json={"data": {}})
+            assert response.status_code == 500
+            assert response.json()["status"] == "RETRY"
+        finally:
+            self._teardown()
+
+
+class TestFrontendHomeEndpoint:
+    """Tests for GET / (frontend index.html)."""
+
+    def test_frontend_home_missing_returns_placeholder_html(
+        self, tmp_path: Path
+    ) -> None:
+        # frontend_assets_path doesn't contain index.html
+        app = create_app_handler_service(
+            _TestHandler(),
+            app_name="ui-test",
+            frontend_assets_path=str(tmp_path / "missing"),
+        )
+        client = TestClient(app)
+        response = client.get("/")
+        assert response.status_code == 404
+        assert "UI not available" in response.text
+
+    def test_frontend_home_serves_index_html_when_present(self, tmp_path: Path) -> None:
+        assets = tmp_path / "static"
+        assets.mkdir()
+        (assets / "index.html").write_text("<html><body>HELLO</body></html>")
+        app = create_app_handler_service(
+            _TestHandler(),
+            app_name="ui-test-2",
+            frontend_assets_path=str(assets),
+        )
+        client = TestClient(app)
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "HELLO" in response.text
+
+
+class TestRunAppHandlerService:
+    """Smoke test for run_app_handler_service — ensures uvicorn wiring is OK."""
+
+    def test_run_invokes_uvicorn_with_built_app(self) -> None:
+        from unittest.mock import patch
+
+        from application_sdk.handler.service import run_app_handler_service
+
+        with patch("uvicorn.run") as mock_run:
+            run_app_handler_service(
+                _TestHandler(), host="127.0.0.1", port=9000, log_level="warning"
+            )
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        # First positional arg is the FastAPI app instance
+        assert kwargs.get("host") == "127.0.0.1"
+        assert kwargs.get("port") == 9000
+        assert kwargs.get("log_level") == "warning"
+
+
+class TestWorkflowClientConfig:
+    """Tests for WorkflowClientConfig.is_configured()."""
+
+    def test_unconfigured_when_host_missing(self) -> None:
+        from application_sdk.handler.service import WorkflowClientConfig
+
+        cfg = WorkflowClientConfig(host="", task_queue="q")
+        assert cfg.is_configured() is False
+
+    def test_unconfigured_when_app_class_missing(self) -> None:
+        from application_sdk.handler.service import WorkflowClientConfig
+
+        cfg = WorkflowClientConfig(host="t:7233", app_class=None)
+        assert cfg.is_configured() is False
+
+    def test_configured_when_host_and_app_class_present(self) -> None:
+        from application_sdk.handler.service import WorkflowClientConfig
+
+        class _Cls:
+            pass
+
+        cfg = WorkflowClientConfig(host="t:7233", app_class=_Cls)  # type: ignore[arg-type]
+        assert cfg.is_configured() is True
+
+
+class TestStateStoreDeprecation:
+    """state_store= parameter is deprecated and ignored — verify warning."""
+
+    def test_state_store_emits_deprecation_warning(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            create_app_handler_service(
+                _TestHandler(),
+                app_name="dep-test",
+                state_store="some-state-store",
+            )
+        assert any(
+            issubclass(w.category, DeprecationWarning)
+            and "state_store" in str(w.message)
+            for w in caught
+        )
+
+    def test_no_state_store_no_deprecation_warning(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            create_app_handler_service(_TestHandler(), app_name="no-dep")
+        # No state_store warning should be emitted
+        assert not any(
+            issubclass(w.category, DeprecationWarning)
+            and "state_store" in str(w.message)
+            for w in caught
+        )
+
+
+class TestConfigEndpointPersistence:
+    """Tests for /workflows/v1/config/{id} round-trip with a real obstore mock."""
+
+    def test_get_config_503_when_no_storage(self) -> None:
+        client = _make_client()
+        response = client.get("/workflows/v1/config/some-id")
+        assert response.status_code == 503
+
+    def test_post_config_503_when_no_storage(self) -> None:
+        client = _make_client()
+        response = client.post("/workflows/v1/config/some-id", json={"k": "v"})
+        assert response.status_code == 503
+
+    def test_get_config_404_when_storage_present_but_key_missing(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_storage = MagicMock()
+        app = create_app_handler_service(
+            _TestHandler(), app_name="cfg-test", storage=mock_storage
+        )
+        client = TestClient(app)
+        # download_file raises → _config_load_from_objectstore returns None
+        with patch(
+            "application_sdk.storage.ops.download_file",
+            new=AsyncMock(side_effect=FileNotFoundError("missing")),
+        ):
+            response = client.get("/workflows/v1/config/abc-123")
+        assert response.status_code == 404
+        assert "abc-123" in response.json()["detail"]
+
+    def test_post_config_200_when_storage_present(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_storage = MagicMock()
+        app = create_app_handler_service(
+            _TestHandler(), app_name="cfg-post", storage=mock_storage
+        )
+        client = TestClient(app)
+        with patch(
+            "application_sdk.storage.ops.put_json", new=AsyncMock(return_value=None)
+        ) as mock_put:
+            response = client.post(
+                "/workflows/v1/config/abc-123",
+                params={"type": "credentials"},
+                json={"foo": "bar"},
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] == {"foo": "bar"}
+        mock_put.assert_awaited_once()
+        # Key must conform to the v2 path convention
+        called_key = mock_put.await_args.args[0]
+        assert called_key.endswith("/credentials/abc-123/config.json")
+
+    def test_get_config_200_round_trip(self) -> None:
+        """Full round-trip: object store returns bytes, endpoint deserializes them."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import orjson
+
+        mock_storage = MagicMock()
+        app = create_app_handler_service(
+            _TestHandler(), app_name="cfg-rt", storage=mock_storage
+        )
+        client = TestClient(app)
+
+        async def fake_download(key, dest, store):
+            Path(dest).write_bytes(orjson.dumps({"hello": "world"}))
+
+        with patch(
+            "application_sdk.storage.ops.download_file",
+            new=AsyncMock(side_effect=fake_download),
+        ):
+            response = client.get("/workflows/v1/config/round-trip")
+        assert response.status_code == 200
+        assert response.json()["data"] == {"hello": "world"}

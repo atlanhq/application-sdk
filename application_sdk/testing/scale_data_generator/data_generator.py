@@ -130,7 +130,7 @@ class DataGenerator:
 
     def generate_duckdb_tables(self, output_dir: str) -> None:
         """Generate DuckDB tables from the generated data."""
-        import duckdb  # lazy import: heavy dependency
+        import duckdb  # noqa: PLC0415 — optional dep: duckdb
 
         # the duckDB filename should be the database name:
         database_config = self.config_loader.get_database()

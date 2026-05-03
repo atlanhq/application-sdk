@@ -331,3 +331,99 @@ def test_table_partition_transformation(
             "qualifiedName"
         ]
     )
+
+
+# BLDX-1168 regression guard: `is_partition` / `is_dynamic` must accept both
+# bool `True` and the canonical string `"YES"` as positive, and reject every
+# other value — particularly the string `"NO"`, which the prior `bool(...)`
+# check evaluated as truthy.
+@pytest.mark.parametrize(
+    "is_partition_value,expected_partition",
+    [
+        (True, True),
+        ("YES", True),
+        (False, False),
+        ("NO", False),
+        (None, False),
+        ("", False),
+        ("yes", False),  # case-sensitive: only canonical "YES" is accepted
+    ],
+    ids=["bool-true", "yes", "bool-false", "no", "none", "empty-string", "lowercase"],
+)
+def test_table_is_partition_flag_parsing(
+    transformer: AtlasTransformer,
+    raw_data: Dict[str, Any],
+    is_partition_value: Any,
+    expected_partition: bool,
+):
+    """`is_partition` accepts bool True or string "YES"; everything else
+    (including the string "NO") must NOT be classified as a partition table.
+    Documents the BLDX-1168 fix.
+    """
+    # Use the partitioned-table fixture as base so the row carries the
+    # `parent_table_name` and other partition-only fields the SqlPartitioned
+    # mapping requires; only the is_partition flag itself is parametrized.
+    raw_table = dict(raw_data["partitioned_table"])
+    raw_table["is_partition"] = is_partition_value
+    transformed_data = transformer.transform_row(
+        "TABLE",
+        raw_table,
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="postgres",
+        connection_qualified_name="default/postgres/1728518400",
+    )
+
+    assert transformed_data is not None
+    if expected_partition:
+        assert transformed_data["typeName"] == "TablePartition"
+    else:
+        assert transformed_data["typeName"] != "TablePartition"
+
+
+@pytest.mark.parametrize(
+    "is_dynamic_value,expected_dynamic",
+    [
+        (True, True),
+        ("YES", True),
+        (False, False),
+        ("NO", False),
+        (None, False),
+        ("yes", False),
+    ],
+    ids=["bool-true", "yes", "bool-false", "no", "none", "lowercase"],
+)
+def test_table_is_dynamic_flag_parsing(
+    transformer: AtlasTransformer,
+    raw_data: Dict[str, Any],
+    is_dynamic_value: Any,
+    expected_dynamic: bool,
+):
+    """`is_dynamic` accepts bool True or string "YES"; everything else
+    (including the string "NO") must NOT be classified as a dynamic table.
+    Documents the BLDX-1168 fix.
+    """
+    # In `Table.get_attributes` the type-classification chain checks
+    # `table_type` BEFORE `is_dynamic`, so a fixture with table_type in
+    # {TABLE, BASE TABLE, FOREIGN TABLE, PARTITIONED TABLE} short-circuits
+    # to `Table` regardless of is_dynamic. To isolate the is_dynamic
+    # branch, override table_type to a value that doesn't hit any of those
+    # short-circuit cases — leaving `elif table_type == "DYNAMIC TABLE" or
+    # is_dynamic` as the deciding line.
+    raw_table = dict(raw_data["regular_table"])
+    raw_table["table_type"] = "OTHER"
+    raw_table["is_dynamic"] = is_dynamic_value
+    transformed_data = transformer.transform_row(
+        "TABLE",
+        raw_table,
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="snowflake",
+        connection_qualified_name="default/snowflake/1728518400",
+    )
+
+    assert transformed_data is not None
+    if expected_dynamic:
+        assert transformed_data["typeName"] == "SnowflakeDynamicTable"
+    else:
+        assert transformed_data["typeName"] != "SnowflakeDynamicTable"

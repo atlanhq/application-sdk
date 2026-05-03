@@ -17,12 +17,14 @@ identically for single files and directories.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
+from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
 
 if TYPE_CHECKING:
@@ -51,30 +53,36 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-async def _get_remote_sha256(store: "ObjectStore", key: str) -> str | None:
+async def _get_remote_sha256(store: ObjectStore, key: str) -> str | None:
     """Fetch the stored SHA-256 sidecar for *key*, or ``None`` if absent."""
-    from application_sdk.storage.ops import _get_bytes
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _get_bytes,
+    )
 
     data = await _get_bytes(_sidecar_key(key), store, normalize=False)
     return data.decode() if data else None
 
 
-async def _put_remote_sha256(store: "ObjectStore", key: str, digest: str) -> None:
+async def _put_remote_sha256(store: ObjectStore, key: str, digest: str) -> None:
     """Write the SHA-256 sidecar for *key*."""
-    from application_sdk.storage.ops import _put
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _put,
+    )
 
     await _put(_sidecar_key(key), digest.encode(), store, normalize=False)
 
 
 async def _upload_one(
-    store: "ObjectStore",
+    store: ObjectStore,
     local_file: Path,
     store_key: str,
     *,
     skip_if_exists: bool,
 ) -> tuple[bool, str]:
     """Upload a single file.  Returns ``(transferred, reason)``."""
-    from application_sdk.storage.ops import upload_file
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        upload_file,
+    )
 
     if skip_if_exists:
         local_digest = _sha256_file(local_file)
@@ -90,14 +98,16 @@ async def _upload_one(
 
 
 async def _download_one(
-    store: "ObjectStore",
+    store: ObjectStore,
     store_key: str,
     local_file: Path,
     *,
     skip_if_exists: bool,
 ) -> tuple[bool, str]:
     """Download a single file.  Returns ``(transferred, reason)``."""
-    from application_sdk.storage.ops import download_file
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        download_file,
+    )
 
     if skip_if_exists and local_file.exists():
         remote_digest = await _get_remote_sha256(store, store_key)
@@ -165,10 +175,11 @@ async def upload(
     *,
     storage_subdir: str | None = None,
     skip_if_exists: bool = False,
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
-) -> "UploadOutput":
+    max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
+) -> UploadOutput:
     """Upload a local file or directory to the object store.
 
     When *storage_path* is ``None`` and *_app_prefix* is provided the key /
@@ -188,12 +199,19 @@ async def upload(
         skip_if_exists: Skip files whose SHA-256 matches the stored sidecar.
         store: Object store to use, or ``None`` to resolve from infrastructure.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
+        max_concurrency: Maximum parallel uploads for directory mode
+            (default :data:`~application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS`).
 
     Returns:
         :class:`~application_sdk.contracts.storage.UploadOutput`
     """
-    from application_sdk.contracts.storage import UploadOutput
-    from application_sdk.storage.ops import _resolve_store, normalize_key
+    from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        UploadOutput,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _resolve_store,
+        normalize_key,
+    )
 
     resolved = _resolve_store(store)
     src = Path(local_path)
@@ -202,7 +220,9 @@ async def upload(
     _validate_upload_path(src)
 
     if storage_subdir:
-        from pathlib import PurePosixPath
+        from pathlib import (  # noqa: PLC0415 — stdlib pathlib; lazy use only
+            PurePosixPath,
+        )
 
         cleaned = storage_subdir.strip("/")
         if (
@@ -249,16 +269,30 @@ async def upload(
         else:
             prefix = src.name
 
+        sem = asyncio.Semaphore(max_concurrency)
+
         files = [p for p in src.rglob("*") if p.is_file()]
-        transferred_count = 0
+
+        async def _bounded_upload(file_path: Path, key: str) -> bool:
+            async with sem:
+                ok, _ = await _upload_one(
+                    resolved, file_path, key, skip_if_exists=skip_if_exists
+                )
+                return ok
+
+        keys = []
         for file_path in files:
             relative = str(file_path.relative_to(src)).replace(os.sep, "/")
-            key = f"{prefix}/{relative}" if prefix else relative
-            ok, _ = await _upload_one(
-                resolved, file_path, key, skip_if_exists=skip_if_exists
-            )
-            if ok:
-                transferred_count += 1
+            keys.append(f"{prefix}/{relative}" if prefix else relative)
+
+        results = await asyncio.gather(
+            *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
+            return_exceptions=True,
+        )
+        errors = [r for r in results if isinstance(r, BaseException)]
+        if errors:
+            raise errors[0]
+        transferred_count = sum(1 for ok in results if ok)
 
         store_prefix = (prefix.rstrip("/") + "/") if prefix else ""
         reason = "uploaded" if transferred_count > 0 else "skipped:hash_match"
@@ -272,7 +306,9 @@ async def upload(
         return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
 
     else:
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"local_path does not exist or is not a file/directory: {local_path}"
@@ -284,8 +320,8 @@ async def download(
     local_path: str | None = None,
     *,
     skip_if_exists: bool = False,
-    store: "ObjectStore | None" = None,
-) -> "DownloadOutput":
+    store: ObjectStore | None = None,
+) -> DownloadOutput:
     """Download a key or prefix from the object store to a local path.
 
     When *storage_path* ends with ``/`` (or matches multiple keys) the
@@ -301,9 +337,16 @@ async def download(
     Returns:
         :class:`~application_sdk.contracts.storage.DownloadOutput`
     """
-    from application_sdk.contracts.storage import DownloadOutput
-    from application_sdk.storage.batch import list_keys
-    from application_sdk.storage.ops import _resolve_store, normalize_key
+    from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        DownloadOutput,
+    )
+    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        list_keys,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _resolve_store,
+        normalize_key,
+    )
 
     resolved = _resolve_store(store)
     norm_path = normalize_key(storage_path)
@@ -358,8 +401,9 @@ async def download(
 
         transferred_count = 0
         for key in data_keys:
-            rel = key[len(strip) :] if key.startswith(strip) else key
-            local_file = dest_dir / rel
+            rel = key.removeprefix(strip)
+            # S3 keys use forward slashes; convert to OS-native path for local filesystem
+            local_file = dest_dir / Path(*PurePosixPath(rel.lstrip("/")).parts)
             ok, _ = await _download_one(
                 resolved, key, local_file, skip_if_exists=skip_if_exists
             )

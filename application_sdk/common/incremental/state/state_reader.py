@@ -21,6 +21,7 @@ from application_sdk.common.incremental.helpers import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
+from application_sdk.storage.errors import StorageError
 
 logger = get_logger(__name__)
 
@@ -87,10 +88,17 @@ async def download_current_state(
             logger.info("Current-state downloaded (%d JSON files)", json_count)
         else:
             logger.info("Current-state downloaded but empty (no JSON files)")
-    except Exception:
-        # First run - current-state doesn't exist in S3 yet
-        # This is expected behavior, not an error
-        logger.info("Current-state not found in S3 (first run)")
+    except FileNotFoundError:
+        logger.info(
+            "Current-state not found in S3 (prefix=%s) — first run",
+            current_state_s3_prefix,
+        )
+    except StorageError:
+        logger.warning(
+            "Failed to download current-state from S3 (prefix=%s)",
+            current_state_s3_prefix,
+            exc_info=True,
+        )
 
     if not exists:
         logger.info("Current-state not available (first run or empty)")

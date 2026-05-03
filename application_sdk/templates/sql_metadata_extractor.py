@@ -28,11 +28,11 @@ Alternatively, override the method entirely without calling super():
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
+from application_sdk.common.sql_filters import normalize_filters
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
@@ -135,31 +135,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     # ------------------------------------------------------------------
 
     async def _get_credentials(self, input: ExtractionTaskInput) -> dict[str, Any]:
-        """Resolve credentials from the task input.
-
-        Checks the Dapr state store first (local dev / combined mode), then
-        falls back to the full CredentialResolver for production.
-        """
+        """Resolve credentials from the task input via CredentialResolver."""
         cred_guid = input.credential_guid
-        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
-            "true",
-            "1",
-        )
 
         infra = get_infrastructure()
-
-        if cred_guid and is_local_dev and infra and infra.state_store:
-            data = await infra.state_store.load(f"cred:{cred_guid}")
-            if data is not None:
-                return data
-            logger.debug(
-                "credential state-store miss for guid=%s (local_dev=%s, state_store=%s); falling back to secret store",
-                cred_guid,
-                is_local_dev,
-                infra.state_store is not None,
-            )
-
-        # Production path: use CredentialResolver
 
         ref = input.credential_ref or (
             legacy_credential_ref(cred_guid) if cred_guid else None
@@ -202,12 +181,29 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Warning:
             SQL templates that use these placeholders MUST wrap each substitution
             in single quotes, e.g. ``WHERE name !~ '{normalized_exclude_regex}'``.
-            The ``_SAFE_FILTER_PATTERN`` guard blocks single quotes in filter
-            values but only prevents injection when this wrapping is present.
-            Templates that omit the surrounding quotes are not protected.
+            Single quotes in filter values are blocked by the SQL injection guard
+            in ``_validate_no_sql_injection``. Templates that omit the surrounding
+            quotes are not protected.
         """
-        exclude_regex = input.exclude_filter or "^$"
-        include_regex = input.include_filter or ".*"
+        # Filters can be dict (structured from AE) or str (raw regex / JSON string).
+        # Dict filters are normalized via sql_filters; strings are used directly.
+        if isinstance(input.include_filter, dict) or isinstance(
+            input.exclude_filter, dict
+        ):
+            if isinstance(input.include_filter, dict):
+                inc_list = normalize_filters(input.include_filter, is_include=True)
+                include_regex = "|".join(inc_list) if inc_list else ".*"
+            else:
+                include_regex = input.include_filter or ".*"
+
+            if isinstance(input.exclude_filter, dict):
+                exc_list = normalize_filters(input.exclude_filter, is_include=False)
+                exclude_regex = "|".join(exc_list) if exc_list else "^$"
+            else:
+                exclude_regex = input.exclude_filter or "^$"
+        else:
+            exclude_regex = input.exclude_filter or "^$"
+            include_regex = input.include_filter or ".*"
 
         temp_table_sql = ""
         if input.temp_table_regex:
@@ -423,6 +419,13 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 column_result.total_record_count,
             )
 
+            # Extract connection_qualified_name from the input connection.
+            # PublishInputMixin auto-derives publish_state_prefix and
+            # current_state_prefix from this value.
+            connection_qn = ""
+            if input.connection and input.connection.attributes:
+                connection_qn = input.connection.attributes.qualified_name or ""
+
             # Upload extracted data to Atlan
             if input.output_path:
                 upload_result = await self.upload_to_atlan(
@@ -440,6 +443,9 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 tables_extracted=table_result.total_record_count,
                 columns_extracted=column_result.total_record_count,
                 records_uploaded=records_uploaded,
+                connection_qualified_name=connection_qn,
+                output_path=input.output_path,
+                output_prefix=input.output_prefix,
             )
 
         except Exception as e:

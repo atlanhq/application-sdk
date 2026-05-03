@@ -11,6 +11,9 @@ permissions:
   issues: write
   security-events: write
 
+env:
+  TEMPORAL_CLI_VERSION: "1.5.1"  # bundles Server 1.29.1 — matches tenant Server 1.29.4
+
 jobs:
   # Detect which files changed
   changes:
@@ -19,7 +22,6 @@ jobs:
     outputs:
       container: ${{ steps.filter.outputs.container }}
       code: ${{ steps.filter.outputs.code }}
-      helm: ${{ steps.filter.outputs.helm }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
@@ -35,12 +37,13 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - 'examples/**'
-            helm:
-              - 'helm/**'
+              - '.github/**'
+              - '.security/**'
 
-  # Conventional Commits
+  # Conventional Commits (skipped on fork PRs — no org PAT available)
   commits:
     name: Conventional Commits
+    if: github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -77,7 +80,7 @@ jobs:
   trivy-container:
     name: Trivy Container Scan
     needs: changes
-    if: needs.changes.outputs.container == 'true'
+    if: needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -107,7 +110,7 @@ jobs:
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          fail-under: "50"
+          fail-under: "85"
           python-version: ${{ matrix.python-version }}
 
   integration:
@@ -122,9 +125,8 @@ jobs:
 
       - name: Install Temporal CLI
         run: |
-          TEMPORAL_VERSION="1.3.0"
           mkdir -p "$HOME/.temporalio/bin"
-          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_VERSION}/temporal_cli_${TEMPORAL_VERSION}_linux_amd64.tar.gz" \
+          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_CLI_VERSION}/temporal_cli_${TEMPORAL_CLI_VERSION}_linux_amd64.tar.gz" \
             -o /tmp/temporal.tar.gz
           tar -xzf /tmp/temporal.tar.gz -C /tmp
           mv /tmp/temporal "$HOME/.temporalio/bin/temporal"
@@ -206,7 +208,7 @@ jobs:
           # Get the target branch of PR
           TARGET_BRANCH="${{ github.base_ref }}"
           # Default matrix if no label provided
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-postgres-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Parse labels from GitHub Script output
@@ -255,7 +257,7 @@ jobs:
   run-examples:
     name: Run Examples
     needs: matrix-builder
-    if: ((github.event.action == 'labeled' && github.event.label.name == 'run-examples') || contains(github.event.pull_request.labels.*.name, 'run-examples'))
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'run-examples') || contains(github.event.pull_request.labels.*.name, 'run-examples')) && github.event.pull_request.head.repo.fork != true
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -277,7 +279,7 @@ jobs:
   e2e-apps:
     name: E2E (Apps)
     needs: [changes, matrix-builder]
-    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test'))
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test')) && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -290,75 +292,3 @@ jobs:
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
 
-  # Helm Chart Lint (label-gated)
-  helm-lint:
-    name: Helm Lint
-    needs: changes
-    if: |
-      needs.changes.outputs.helm == 'true' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'helm-test') ||
-      contains(github.event.pull_request.labels.*.name, 'helm-test')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Install Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
-
-      - name: Helm Lint
-        run: |
-          helm lint helm/atlan-app/ \
-            --values helm/atlan-app/values.yaml \
-            --set appName=test-app \
-            --set appModule=test:App
-
-      - name: Helm Template
-        run: |
-          helm template test helm/atlan-app/ \
-            --set appName=test-app \
-            --set appModule=test:App \
-            --debug
-
-  # K8s E2E Tests (label-gated on 'e2e-k8s')
-  e2e-k8s:
-    name: E2E K8s
-    needs: changes
-    if: |
-      (github.event.action == 'labeled' && github.event.label.name == 'e2e-k8s') ||
-      contains(github.event.pull_request.labels.*.name, 'e2e-k8s')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Create kind cluster
-        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
-
-      - uses: "./.github/actions/setup-deps"
-
-      - name: Build app image
-        run: |
-          docker build -t test-app:e2e .
-
-      - name: Load image into kind
-        run: |
-          kind load docker-image test-app:e2e
-
-      - name: Install Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
-
-      - name: Run e2e tests
-        env:
-          E2E_APP_NAME: test-app
-          E2E_APP_MODULE: ${{ vars.E2E_APP_MODULE }}
-          E2E_IMAGE: localhost/test-app:e2e
-          E2E_TIMEOUT: "300"
-        run: |
-          uv run pytest tests/e2e/ -m e2e -v
-
-      - name: Upload test logs
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: e2e-test-logs
-          path: test-logs/

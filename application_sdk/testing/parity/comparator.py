@@ -6,13 +6,13 @@ MODIFIED, or UNCHANGED.
 """
 
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.parity.models import AssetDiff, CategoryResult, FieldDiff
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Fields that change every run and must be ignored in comparison.
 VOLATILE_FIELDS: set[str] = {
@@ -39,7 +39,10 @@ def load_ndjson(directory: Path) -> list[dict[str, Any]]:
                     assets.append(json.loads(line))
                 except json.JSONDecodeError:
                     logger.warning(
-                        "Skipping malformed JSON at %s:%d", json_file.name, line_num
+                        "Skipping malformed JSON at %s:%d",
+                        json_file.name,
+                        line_num,
+                        exc_info=True,
                     )
     return assets
 

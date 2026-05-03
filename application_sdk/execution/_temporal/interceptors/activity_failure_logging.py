@@ -26,7 +26,6 @@ from application_sdk.observability.context import correlation_context
 from application_sdk.observability.error_classifier import (
     classify_error,
     extract_cause_chain,
-    is_retriable,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.trace_context import get_trace_context
@@ -88,7 +87,6 @@ class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
             "app_version": APP_BUILD_ID or "",
             "error_type": error_type,
             "error_class": type(exception).__name__,
-            "is_retriable": is_retriable(exception, error_type),
             "dimension": "reliability",
             "source": "temporal",
             "metric_name": "app_vitals.reliability.activity_completed",
@@ -119,7 +117,7 @@ class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
 
         # correlation_id from v3 CorrelationContext
         try:
-            from application_sdk.observability.correlation import (
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                 get_correlation_context,
             )
 

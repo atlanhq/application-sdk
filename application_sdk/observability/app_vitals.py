@@ -18,7 +18,7 @@ import json
 import sys
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from temporalio import activity, workflow
@@ -38,7 +38,6 @@ from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.error_classifier import (
     classify_error,
     extract_cause_chain,
-    is_retriable,
 )
 from application_sdk.observability.resource_sampler import compute_deltas, sample
 from application_sdk.observability.trace_context import get_trace_context
@@ -47,12 +46,14 @@ from application_sdk.observability.trace_context import get_trace_context
 def _get_correlation_id() -> str:
     """Get correlation_id from the v3 CorrelationContext ContextVar."""
     try:
-        from application_sdk.observability.correlation import get_correlation_context
+        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+            get_correlation_context,
+        )
 
         ctx = get_correlation_context()
         if ctx and ctx.correlation_id:
             return ctx.correlation_id
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     return ""
 
@@ -108,6 +109,17 @@ def _format_stack_trace(exc: BaseException) -> str:
         full = "".join(lines)
         return full[:2000]
     except Exception:
+        try:
+            from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — last-resort fallback inside except handler
+                get_logger,
+            )
+
+            get_logger("app_vitals").debug(
+                "AppVitals: _format_stack_trace failed — returning empty string",
+                exc_info=True,
+            )
+        except Exception:  # noqa: S110
+            pass
         return ""
 
 
@@ -193,19 +205,82 @@ def _emit_log_event(
         }
         sys.stdout.write(f"APP_VITALS | {event_name} | {json.dumps(summary)}\n")
         sys.stdout.flush()
-    except Exception:
+    except Exception:  # noqa: S110
         pass
 
     try:
         # Deferred import: logger_adaptor may not be initialized yet during early
         # workflow lifecycle events (interceptor runs before full app setup).
-        from application_sdk.observability.logger_adaptor import get_logger
+        from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+            get_logger,
+        )
 
         logger = get_logger("app_vitals")
         level = "error" if attrs.get("status") == "failed" else "info"
         getattr(logger, level)(event_name, **attrs)
-    except Exception:
+    except Exception:  # noqa: S110
         pass
+
+
+_PREFLIGHT_KEYWORDS = ("preflight", "setup", "connection_check")
+# Keywords to detect circuit breaker trips. The Publish App raises:
+#   ApplicationError(message, type="CircuitBreakerTriggered", non_retryable=True)
+# After Temporal wrapping, this appears in error_class, error_message, or
+# error_cause_chain. We match broadly to catch all variations.
+_CB_KEYWORDS = (
+    "circuit breaker",
+    "circuit_breaker",
+    "circuitbreaker",
+    "circuitbreakertriggered",
+)
+
+
+def _detect_preflight_passed(acts: list[dict[str, Any]]) -> bool | None:
+    """Determine whether preflight activities passed, failed, or didn't run.
+
+    Returns:
+        True  — all preflight activities succeeded.
+        False — at least one preflight activity failed.
+        None  — no preflight activities in this workflow, or status is incomplete.
+    """
+    preflight_acts = [
+        a
+        for a in acts
+        if any(kw in a.get("activity_type", "").lower() for kw in _PREFLIGHT_KEYWORDS)
+    ]
+    if not preflight_acts:
+        return None
+
+    statuses = [a.get("status") for a in preflight_acts]
+    if any(s == "failed" for s in statuses):
+        return False
+    if all(s == "succeeded" for s in statuses):
+        return True
+    # Incomplete (pending/cancelled mid-preflight) — don't misclassify
+    return None
+
+
+def _detect_circuit_breaker(failed_acts: list[dict[str, Any]]) -> bool:
+    """Check if any failed activity indicates a circuit breaker trip.
+
+    Scans error_class, error_message, AND error_cause_chain of failed activities.
+    The cause chain is important because Temporal wraps the original exception:
+    the outbound interceptor sees ActivityError("Activity task failed") as the
+    outer exception, while the real CircuitBreakerTriggered ApplicationError
+    is in the cause chain.
+    """
+    for a in failed_acts:
+        # Build a single searchable string from all error fields
+        searchable = " ".join(
+            [
+                str(a.get("error_class", "")).lower(),
+                str(a.get("error_message", "")).lower(),
+                " ".join(str(c).lower() for c in a.get("error_cause_chain", [])),
+            ]
+        )
+        if any(kw in searchable for kw in _CB_KEYWORDS):
+            return True
+    return False
 
 
 class _AppVitalsWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
@@ -272,6 +347,8 @@ async def _track_activity_completion(record: dict[str, Any], awaitable: Any) -> 
         record["status"] = "failed"
         record["error_type"] = classify_error(exc)
         record["error_class"] = type(exc).__name__
+        record["error_message"] = str(exc)
+        record["error_cause_chain"] = extract_cause_chain(exc)
         record["end_ns"] = time.monotonic_ns()
         record["duration_ms"] = round(
             (record["end_ns"] - record["start_ns"]) / 1_000_000, 1
@@ -320,6 +397,9 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             sum(a.get("duration_ms", 0) for a in acts_with_duration), 1
         )
 
+        preflight_passed = _detect_preflight_passed(acts)
+        circuit_breaker_tripped = _detect_circuit_breaker(failed)
+
         summary: dict[str, Any] = {
             **common,
             **_build_workflow_identity_attrs(info),
@@ -330,10 +410,15 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             "failed_activities": len(failed),
             "total_child_workflows": len(self._child_workflow_records),
             "sum_activity_duration_ms": sum_activity_duration_ms,
+            "circuit_breaker_tripped": circuit_breaker_tripped,
             "dimension": "reliability",
             "source": "temporal",
             "metric_name": "app_vitals.reliability.wf_summary",
         }
+        # Only emit preflight_passed when it has a definitive value (True/False).
+        # None = no preflight activities → omit to avoid "None" string in OTLP.
+        if preflight_passed is not None:
+            summary["preflight_passed"] = preflight_passed
         if first_failure is not None:
             summary["first_failure_activity_type"] = first_failure.get(
                 "activity_type", ""
@@ -366,7 +451,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "metric_name": "app_vitals.reliability.wf_started",
             }
             _emit_log_event("app_vitals.wf.started", started_attrs)
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # never block workflow on observability
 
         status = "succeeded"
@@ -374,7 +459,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         error_message = ""
         error_class = ""
         cause_chain: list[str] = []
-        retriable = False
         stack_trace = ""
 
         try:
@@ -383,10 +467,9 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         except Exception as exc:
             status = "failed"
             error_type = classify_error(exc)
-            error_message = str(exc)[:500]
+            error_message = str(exc)
             error_class = type(exc).__name__
             cause_chain = extract_cause_chain(exc)
-            retriable = is_retriable(exc, error_type)
             stack_trace = _format_stack_trace(exc)
             raise
         finally:
@@ -395,6 +478,17 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             try:
                 info = workflow.info()
             except Exception:
+                try:
+                    from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — last-resort fallback inside except handler
+                        get_logger as _gl,
+                    )
+
+                    _gl("app_vitals").debug(
+                        "AppVitals: workflow.info() unavailable in finally — skipping completion events",
+                        exc_info=True,
+                    )
+                except Exception:  # noqa: S110
+                    pass
                 info = None
 
             # Guard: skip event emission if workflow info unavailable.
@@ -408,7 +502,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     error_message,
                     error_class,
                     cause_chain,
-                    retriable,
                     stack_trace,
                 )
 
@@ -421,7 +514,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         error_message: str,
         error_class: str,
         cause_chain: list[str],
-        retriable: bool,
         stack_trace: str,
     ) -> None:
         """Emit workflow completed + summary events. Extracted to avoid return-in-finally."""
@@ -441,7 +533,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         history_length: int | None = None
         try:
             history_length = info.get_current_history_length()
-        except Exception:
+        except Exception:  # noqa: S110
             pass
 
         event_attrs: dict[str, Any] = {
@@ -465,7 +557,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         if error_message:
             event_attrs["error_message"] = error_message
             event_attrs["error_class"] = error_class
-            event_attrs["is_retriable"] = retriable
             event_attrs["error_fingerprint"] = _compute_error_fingerprint(
                 info.workflow_type or "", error_type, error_class
             )
@@ -484,7 +575,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         try:
             summary_attrs = self._build_summary_attrs(common, info, status, duration_ms)
             _emit_log_event("app_vitals.wf.summary", summary_attrs)
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # summary is best-effort; never block the workflow
 
 
@@ -502,12 +593,23 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         try:
             if input.args:
                 input_payload_bytes = sum(sys.getsizeof(a) for a in input.args)
-        except Exception:
-            pass
+        except Exception:  # noqa: S110
+            pass  # best-effort size measurement; never block activity on observability
 
         try:
             info = activity.info()
         except Exception:
+            try:
+                from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — last-resort fallback inside except handler
+                    get_logger as _gl,
+                )
+
+                _gl("app_vitals").debug(
+                    "AppVitals interceptor: activity.info() failed — skipping vitals emission",
+                    exc_info=True,
+                )
+            except Exception:  # noqa: S110
+                pass
             return await self.next.execute_activity(input)
 
         schedule_to_start_ms: float | None = None
@@ -544,7 +646,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             if input_payload_bytes is not None:
                 started_attrs["input_payload_bytes"] = input_payload_bytes
             _emit_log_event("app_vitals.act.started", started_attrs)
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # never block activity on observability
 
         status = "succeeded"
@@ -552,7 +654,6 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         error_message = ""
         error_class = ""
         cause_chain: list[str] = []
-        retriable = False
         stack_trace = ""
         assets_processed: int | None = None
 
@@ -563,10 +664,9 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         except Exception as exc:
             status = "failed"
             error_type = classify_error(exc)
-            error_message = str(exc)[:500]
+            error_message = str(exc)
             error_class = type(exc).__name__
             cause_chain = extract_cause_chain(exc)
-            retriable = is_retriable(exc, error_type)
             stack_trace = _format_stack_trace(exc)
             raise
         finally:
@@ -596,7 +696,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             activity_start_time_iso = (
                 info.started_time.isoformat() if info.started_time else ""
             )
-            activity_end_time_iso = datetime.now(timezone.utc).isoformat()
+            activity_end_time_iso = datetime.now(UTC).isoformat()
             event_attrs: dict[str, Any] = {
                 **common,
                 "workflow_id": info.workflow_id or "",
@@ -621,7 +721,6 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             if error_message:
                 event_attrs["error_message"] = error_message
                 event_attrs["error_class"] = error_class
-                event_attrs["is_retriable"] = retriable
                 event_attrs["error_fingerprint"] = _compute_error_fingerprint(
                     info.activity_type or "", error_type, error_class
                 )
@@ -661,7 +760,7 @@ class AppVitalsInterceptor(Interceptor):
 
     def workflow_interceptor_class(
         self,
-        input: WorkflowInterceptorClassInput,  # noqa: ARG002
+        input: WorkflowInterceptorClassInput,
     ) -> type[WorkflowInboundInterceptor] | None:
         return _AppVitalsWorkflowInboundInterceptor
 

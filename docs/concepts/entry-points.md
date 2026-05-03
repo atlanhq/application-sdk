@@ -31,11 +31,11 @@ Alternatively, set the `ATLAN_APP_MODULE` environment variable. This is mandator
 
 ## Dockerfile Configuration
 
-The base image (`registry.atlan.com/public/app-runtime-base:main-latest`) includes the `application-sdk` CLI, Dapr, and the entrypoint. You do not need a custom `ENTRYPOINT`, `CMD`, or `entrypoint.sh`. The base image handles mode selection at runtime.
+The base image (`registry.atlan.com/public/app-runtime-base:3`) includes the `application-sdk` CLI, Dapr, and the entrypoint. You do not need a custom `ENTRYPOINT`, `CMD`, or `entrypoint.sh`. The base image handles mode selection at runtime.
 
 ```dockerfile
 # Application-sdk v3 base image (Chainguard-based)
-FROM registry.atlan.com/public/app-runtime-base:main-latest
+FROM registry.atlan.com/public/app-runtime-base:3
 
 WORKDIR /app
 
@@ -67,9 +67,8 @@ For local development and integration tests, use `run_dev_combined()`:
 import asyncio
 from application_sdk.main import run_dev_combined
 from my_package.apps import MyExtractor
-from my_package.handlers import MyHandler
 
-asyncio.run(run_dev_combined(MyExtractor, handler_class=MyHandler))
+asyncio.run(run_dev_combined(MyExtractor))
 ```
 
 This starts both the Temporal worker and the HTTP handler service in a single process. It derives the module path automatically from the class.
@@ -84,7 +83,6 @@ from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyExtractor,
-    handler_class=MyHandler,
     secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
     state_store=MockStateStore(),
 ))

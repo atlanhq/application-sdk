@@ -28,33 +28,40 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 import warnings
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
 import orjson
+import temporalio.service
 from fastapi import FastAPI, File, Form, HTTPException
 from fastapi import Path as PathParam
 from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
+from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import DEPLOYMENT_NAME, ENABLE_PROMETHEUS_METRICS
+from application_sdk.constants import (
+    DEPLOYMENT_NAME,
+    ENABLE_PROMETHEUS_METRICS,
+    LOCAL_ENVIRONMENT,
+)
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
     AuthInput,
-    AuthStatus,
     EventTriggerConfig,
     FileUploadResponse,
     HandlerCredential,
@@ -103,29 +110,6 @@ def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
                     {"key": f"extra.{k}", "value": _serialize_credential_value(v)}
                 )
     return pairs
-
-
-def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
-    """Convert v3 [{key, value}] pairs to a flat credential dict.
-
-    Reverse of ``_flatten_to_pairs``.  ``extra.*`` keys are nested under
-    an ``extra`` dict so ``parse_credentials_extra()`` works correctly.
-
-    Note: all values remain strings — no type coercion is performed.
-    A round-trip through ``_flatten_to_pairs`` then ``_pairs_to_flat``
-    will stringify non-string values (e.g. ``int 5432`` → ``str "5432"``).
-    """
-    flat: dict[str, Any] = {}
-    extra: dict[str, Any] = {}
-    for p in pairs:
-        key, value = p["key"], p["value"]
-        if key.startswith("extra."):
-            extra[key[len("extra.") :]] = value
-        else:
-            flat[key] = value
-    if extra:
-        flat["extra"] = extra
-    return flat
 
 
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
@@ -178,7 +162,6 @@ if TYPE_CHECKING:
 
     from application_sdk.app.base import App
     from application_sdk.infrastructure.secrets import SecretStore
-    from application_sdk.infrastructure.state import StateStore
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +254,6 @@ class WorkflowClientConfig:
 _temporal_client: Client | None = None
 _workflow_config: WorkflowClientConfig = WorkflowClientConfig()
 _handler_auth_manager: Any | None = None
-_state_store: StateStore | None = None
 _secret_store: SecretStore | None = None
 _storage: ObjectStore | None = None
 
@@ -315,11 +297,16 @@ async def _get_temporal_client() -> Client:
     if _temporal_client is not None:
         return _temporal_client
 
-    from application_sdk.execution import create_temporal_client
+    from application_sdk.execution import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+        create_temporal_client,
+    )
 
     api_key: str | None = None
     if _workflow_config.auth_enabled:
-        from application_sdk.execution import TemporalAuthConfig, TemporalAuthManager
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+            TemporalAuthConfig,
+            TemporalAuthManager,
+        )
 
         auth_config = TemporalAuthConfig(
             client_id=_workflow_config.auth_client_id,
@@ -333,11 +320,11 @@ async def _get_temporal_client() -> Client:
         logger.info("Acquired auth token for handler Temporal client")
 
     logger.info(
-        "Connecting to Temporal for workflow execution",
-        host=_workflow_config.host,
-        namespace=_workflow_config.namespace,
-        tls_enabled=_workflow_config.tls_enabled,
-        auth_enabled=_workflow_config.auth_enabled,
+        "Connecting to Temporal for workflow execution host=%s namespace=%s tls=%s auth=%s",
+        _workflow_config.host,
+        _workflow_config.namespace,
+        _workflow_config.tls_enabled,
+        _workflow_config.auth_enabled,
     )
 
     _temporal_client = await create_temporal_client(
@@ -385,7 +372,6 @@ def create_app_handler_service(
     auth_token_url: str = "",
     auth_base_url: str = "",
     auth_scopes: str = "",
-    state_store: StateStore | None = None,
     secret_store: SecretStore | None = None,
     storage: ObjectStore | None = None,
     event_triggers: list[EventTriggerConfig] | None = None,
@@ -395,6 +381,10 @@ def create_app_handler_service(
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
     frontend_assets_path: str = "app/generated/frontend/static",
+    # Deprecated: state_store is no longer used. Credential resolution now
+    # goes through DaprCredentialVault exclusively. Passing this parameter
+    # emits a DeprecationWarning. Will be removed in v3.2.0.
+    state_store: Any = None,
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
@@ -406,12 +396,7 @@ def create_app_handler_service(
         temporal_namespace: Temporal namespace.
         task_queue: Task queue name (default: "{app_name}-queue").
         data_converter: Optional custom Temporal DataConverter.
-        state_store: Optional state store for workflow config persistence.
-        secret_store: Optional secret store for credential interception.
-            When provided, the ``/start`` handler stores inline credentials
-            here and replaces them with a ``credential_guid`` so secrets
-            never travel over Temporal.  Passed directly to avoid ContextVar
-            propagation issues with uvicorn ASGI request handlers.
+        secret_store: Optional secret store for credential resolution.
         storage: Optional obstore store for file uploads.
         title: OpenAPI title.
         description: OpenAPI description.
@@ -423,9 +408,17 @@ def create_app_handler_service(
     Returns:
         Configured FastAPI application.
     """
-    global _workflow_config, _state_store, _secret_store, _storage
+    global _workflow_config, _secret_store, _storage
 
-    _state_store = state_store
+    if state_store is not None:
+        warnings.warn(
+            "state_store parameter is deprecated and ignored. "
+            "Credential resolution now uses DaprCredentialVault exclusively. "
+            "Will be removed in v3.2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     _secret_store = secret_store
     _storage = storage
     _workflow_config = WorkflowClientConfig(
@@ -447,12 +440,18 @@ def create_app_handler_service(
         auth_scopes=auth_scopes,
     )
 
-    from application_sdk.constants import ENABLE_MCP
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
+        ENABLE_MCP,
+    )
 
     if ENABLE_MCP and app_name:
-        from contextlib import asynccontextmanager
+        from contextlib import (  # noqa: PLC0415 — cold path: lifespan setup, only when MCP enabled
+            asynccontextmanager,
+        )
 
-        from application_sdk.server.mcp import MCPServer
+        from application_sdk.server.mcp import (  # noqa: PLC0415 — cold path: only when ENABLE_MCP set
+            MCPServer,
+        )
 
         _mcp_server = MCPServer(application_name=app_name)
 
@@ -473,7 +472,10 @@ def create_app_handler_service(
     else:
         app = FastAPI(title=title, description=description, version=version)
 
-    from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware
+    from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
+        LogMiddleware,
+        MetricsMiddleware,
+    )
 
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(LogMiddleware)
@@ -485,7 +487,6 @@ def create_app_handler_service(
             started_at=datetime.now(UTC),
             _credentials=credentials,
             _secret_store=_secret_store,
-            _state_store=_state_store,
         )
 
     # ------------------------------------------------------------------
@@ -514,11 +515,12 @@ def create_app_handler_service(
                 result.status.value,
             )
             return JSONResponse(
+                status_code=result.status.http_status,
                 content=_wrap_response(
                     result.model_dump(),
                     message=result.message or f"Authentication {result.status.value}",
-                    success=result.status == AuthStatus.SUCCESS,
-                )
+                    success=result.status.is_success,
+                ),
             )
         except HandlerError as e:
             logger.error(
@@ -766,48 +768,13 @@ def create_app_handler_service(
                     detail=f"App class {app_cls.__name__} entry point has no input type.",
                 )
 
-            # Save inline credentials to the secret store and replace with a
-            # credential_guid so raw secrets never travel over Temporal.
-            # Uses the closure-captured _secret_store (passed directly to
-            # create_app_handler_service) instead of get_infrastructure()
-            # because ContextVar does not propagate to uvicorn ASGI request
-            # handlers.
             body = _normalize_credentials(body)
-            if "credentials" in body and body["credentials"]:
-                # Credential interception: store inline credentials in state
-                # store and replace with a credential_guid. This path is
-                # guarded to local-dev only — in production, credentials are
-                # pre-provisioned in Dapr secret store by the platform.
-                is_local_dev = os.environ.get(
-                    "ATLAN_LOCAL_DEVELOPMENT", ""
-                ).lower() in (
-                    "true",
-                    "1",
-                )
-                if is_local_dev and _state_store is not None:
-                    credential_guid = str(uuid4())
-                    flat_creds = _pairs_to_flat(body["credentials"])
-                    await _state_store.save(f"cred:{credential_guid}", flat_creds)
-                    body["credential_guid"] = credential_guid
-                    del body["credentials"]
-                    logger.debug(
-                        "Saved inline credentials to state store: guid=%s",
-                        credential_guid,
-                    )
-                else:
-                    # Always strip raw credentials — never pass through to
-                    # Temporal history, regardless of mode or store availability.
-                    del body["credentials"]
-                    if not is_local_dev:
-                        logger.warning(
-                            "Inline credentials stripped in non-local mode; "
-                            "use credential_guid for production workflows."
-                        )
-                    else:
-                        logger.warning(
-                            "State store not available; inline credentials stripped "
-                            "to prevent exposure in Temporal history."
-                        )
+            if "credentials" in body:
+                # Always strip raw credentials — never pass through to
+                # Temporal history. Credentials are resolved at runtime
+                # via DaprCredentialVault using credential_guid.
+                del body["credentials"]
+                logger.debug("Stripped inline credentials from /start request body")
 
             input_data = input_type.model_validate(body)
 
@@ -833,7 +800,7 @@ def create_app_handler_service(
             input_data.correlation_id = correlation_id
             input_data._correlation_id = correlation_id
 
-            from application_sdk.observability.correlation import (
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
                 CorrelationContext,
                 set_correlation_context,
             )
@@ -863,20 +830,6 @@ def create_app_handler_service(
                 handle.result_run_id,
                 correlation_id,
             )
-
-            if _state_store is not None:
-                try:
-                    config_to_store = {
-                        k: v for k, v in body.items() if k != "credentials"
-                    }
-                    config_to_store["workflow_id"] = handle.id
-                    await _state_store.save(f"workflows/{handle.id}", config_to_store)
-                except Exception:
-                    logger.warning(
-                        "Failed to save workflow config to state store for workflow %s",
-                        handle.id,
-                        exc_info=True,
-                    )
 
             return JSONResponse(
                 content={
@@ -921,8 +874,10 @@ def create_app_handler_service(
                 content={"success": True, "message": "Workflow terminated successfully"}
             )
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
@@ -930,7 +885,7 @@ def create_app_handler_service(
                 "Failed to stop workflow %s run %s: %s",
                 workflow_id,
                 run_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -966,11 +921,12 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except WorkflowFailureError as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow execution failed for workflow_id=%s error_type=%s",
                         workflow_id,
-                        e,
+                        type(exc).__name__,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -980,6 +936,25 @@ def create_app_handler_service(
                                 "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
+                            success=False,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Workflow result decode failed for workflow_id=%s error_type=%s",
+                        workflow_id,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content=_wrap_response(
+                            {
+                                "status": "result_decode_failed",
+                                "workflow_id": workflow_id,
+                                "error_type": type(exc).__name__,
+                            },
+                            message="Workflow result could not be decoded",
+                            success=False,
                         )
                     )
 
@@ -1015,11 +990,12 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except WorkflowFailureError as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow execution failed for workflow_id=%s error_type=%s",
                         workflow_id,
-                        e,
+                        type(exc).__name__,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -1029,6 +1005,25 @@ def create_app_handler_service(
                                 "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
+                            success=False,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Workflow result decode failed for workflow_id=%s error_type=%s",
+                        workflow_id,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content=_wrap_response(
+                            {
+                                "status": "result_decode_failed",
+                                "workflow_id": workflow_id,
+                                "error_type": type(exc).__name__,
+                            },
+                            message="Workflow result could not be decoded",
+                            success=False,
                         )
                     )
             elif status in ("FAILED", "TERMINATED", "CANCELED", "TIMED_OUT"):
@@ -1040,6 +1035,7 @@ def create_app_handler_service(
                             "error": f"Workflow {status.lower()}",
                         },
                         message="Workflow failed",
+                        success=False,
                     )
                 )
             else:
@@ -1055,15 +1051,17 @@ def create_app_handler_service(
                 )
 
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
             logger.error(
                 "Failed to get workflow result for %s: %s",
                 workflow_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -1105,8 +1103,10 @@ def create_app_handler_service(
                 )
             )
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
@@ -1114,7 +1114,7 @@ def create_app_handler_service(
                 "Failed to get workflow status for %s run %s: %s",
                 workflow_id,
                 run_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -1134,7 +1134,9 @@ def create_app_handler_service(
             raise ValueError(f"Invalid config_id: {config_id!r}")
         if not _CONFIG_KEY_RE.match(config_type):
             raise ValueError(f"Invalid config_type: {config_type!r}")
-        from application_sdk.constants import APPLICATION_NAME
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app paths
+            APPLICATION_NAME,
+        )
 
         return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
 
@@ -1154,8 +1156,10 @@ def create_app_handler_service(
         try:
             await download_file(key, safe_tmp, _storage)
             return orjson.loads(Path(safe_tmp).read_bytes())
-        except Exception as exc:
-            logger.warning("Object-store config load failed for key=%s: %r", key, exc)
+        except Exception:
+            logger.warning(
+                "Object-store config load failed for key=%s", key, exc_info=True
+            )
             return None
         finally:
             if os.path.exists(safe_tmp):
@@ -1179,28 +1183,13 @@ def create_app_handler_service(
         config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
         type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
-        """Fetch workflow config — tries statestore first, falls back to object store."""
-        config = None
+        """Fetch workflow config from object store."""
+        config = await _config_load_from_objectstore(config_id, config_type=type)
 
-        # Try statestore
-        if _state_store is not None:
-            try:
-                config = await _state_store.load(f"workflows/{config_id}")
-            except Exception:
-                logger.warning(
-                    "State store load failed for config %s (type=%s), trying object store",
-                    config_id,
-                    type,
-                )
-
-        # Fallback to object store (S3)
-        if config is None:
-            config = await _config_load_from_objectstore(config_id, config_type=type)
-
-        if config is None and _state_store is None and _storage is None:
+        if config is None and _storage is None:
             raise HTTPException(
                 status_code=503,
-                detail="No state store or object store configured",
+                detail="No object store configured",
             )
         if config is None:
             raise HTTPException(
@@ -1219,36 +1208,23 @@ def create_app_handler_service(
         request: Request,
         type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
-        """Save workflow config — tries statestore first, falls back to object store.
-
-        Object store fallback is only used for non-credential config types
-        to avoid persisting sensitive credential data to S3.
-        """
+        """Save workflow config to object store."""
         body = await request.json()
-        saved = False
 
-        # Try statestore
-        if _state_store is not None:
-            try:
-                await _state_store.save(f"workflows/{config_id}", body)
-                saved = True
-            except Exception:
-                logger.warning(
-                    "State store save failed for config %s (type=%s), trying object store",
-                    config_id,
-                    type,
-                )
+        if type == "workflows":
+            warnings.warn(
+                "Saving config with type='workflows' is deprecated; "
+                "use a specific config type instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
-        # Fallback to object store (S3) for all config types.
-        # Credential configs only contain non-sensitive metadata (host, port,
-        # authType, extra) — actual secrets are managed by Heracles/Vault.
-        if not saved:
-            saved = await _config_save_to_objectstore(config_id, body, config_type=type)
+        saved = await _config_save_to_objectstore(config_id, body, config_type=type)
 
         if not saved:
             raise HTTPException(
                 status_code=503,
-                detail="No state store or object store configured",
+                detail="No object store configured",
             )
         return JSONResponse(
             content=_wrap_response(
@@ -1271,12 +1247,9 @@ def create_app_handler_service(
         if _storage is None:
             raise HTTPException(status_code=503, detail="Storage not configured")
 
-        import asyncio
-        import os
-        import shutil
-        from pathlib import PurePosixPath
-
-        from application_sdk.storage.ops import upload_file as _upload_file
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
+            upload_file as _upload_file,
+        )
 
         raw_name = filename or file.filename or "upload"
         # Strip non-alphanumeric chars and cap at 16 chars for object-store key safety.
@@ -1347,7 +1320,9 @@ def create_app_handler_service(
 
     @app.get("/dapr/subscribe")
     async def get_dapr_subscriptions() -> JSONResponse:
-        from application_sdk.constants import EVENT_STORE_NAME
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when emitting events
+            EVENT_STORE_NAME,
+        )
 
         result: list[dict[str, Any]] = []
 
@@ -1474,8 +1449,10 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/configmap/{config_map_id}")
     async def get_configmap(config_map_id: str) -> JSONResponse:
+        available_configmaps: list[str] = []
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                available_configmaps.append(json_file.stem)
                 if json_file.stem == config_map_id:
                     with open(json_file) as f:
                         raw = json.load(f)
@@ -1491,7 +1468,14 @@ def create_app_handler_service(
                             message="ConfigMap fetched successfully",
                         )
                     )
-        return JSONResponse(content=_wrap_response({}, message="ConfigMap not found"))
+        logger.warning(
+            "ConfigMap not found: requested=%s available=%s",
+            config_map_id,
+            sorted(available_configmaps),
+        )
+        raise HTTPException(
+            status_code=404, detail=f"ConfigMap '{config_map_id}' not found"
+        )
 
     @app.get("/workflows/v1/configmaps")
     async def list_configmaps() -> JSONResponse:
@@ -1581,6 +1565,97 @@ def create_app_handler_service(
         return await get_manifest(entrypoint=entrypoint)
 
     # ------------------------------------------------------------------
+    # Dev-only: local credential provisioning
+    # ------------------------------------------------------------------
+
+    SENSITIVE_FIELDS = {
+        "username",
+        "password",
+        "extra",
+        "url",
+        "driverProperties",
+        "sodaConnection",
+    }
+
+    async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONResponse:
+        """Split credentials into sensitive/non-sensitive and persist locally.
+
+        Sensitive fields are written to ``./local/dapr/secrets/secrets.json`` keyed by guid.
+        Non-sensitive fields are written to object storage via the config endpoint.
+        """
+        if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
+            raise HTTPException(status_code=403, detail="Dev-only endpoint")
+
+        sensitive: dict[str, Any] = {}
+        non_sensitive: dict[str, Any] = {}
+        for key, value in body.items():
+            if key in SENSITIVE_FIELDS:
+                sensitive[key] = value
+            else:
+                non_sensitive[key] = value
+
+        # Write sensitive fields to the local secrets file.
+        # All secrets are stored in a single JSON file keyed by guid
+        # (avoids user input in filenames — CodeQL path-traversal).
+        secrets_dir = Path(".", "local", "dapr", "secrets")
+        secrets_dir.mkdir(parents=True, exist_ok=True)
+        secrets_file = secrets_dir / "secrets.json"
+        all_secrets: dict[str, Any] = {}
+        if secrets_file.exists():
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+        all_secrets[guid] = sensitive
+
+        # Atomic write: stage to a sibling temp file, then rename. This avoids
+        # a partial/truncated secrets.json if the process is killed mid-write.
+        tmp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=str(secrets_dir),
+                delete=False,
+                mode="wb",
+                suffix=".json.tmp",
+            ) as tmp:
+                tmp.write(orjson.dumps(all_secrets))
+                tmp_path = tmp.name
+            os.replace(tmp_path, str(secrets_file))
+            tmp_path = None  # ownership transferred to secrets_file
+        finally:
+            if tmp_path is not None and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        # Write non-sensitive fields to object storage
+        non_sensitive["credentialSource"] = non_sensitive.get(
+            "credentialSource", "direct"
+        )
+        await _config_save_to_objectstore(
+            guid, non_sensitive, config_type="credentials"
+        )
+
+        logger.info(
+            "Provisioned local credentials: guid=%s sensitive_keys=%s non_sensitive_keys=%s",
+            guid,
+            sorted(sensitive.keys()),
+            sorted(non_sensitive.keys()),
+        )
+
+        return JSONResponse(
+            content=_wrap_response(
+                {"credential_guid": guid},
+                message="Credentials provisioned successfully",
+            )
+        )
+
+    @app.post("/workflows/v1/dev/local-vault")
+    async def provision_local_vault(request: Request) -> JSONResponse:
+        """Provision credentials for local development (auto-generates GUID)."""
+        body: dict[str, Any] = await request.json()
+        guid = uuid4().hex
+        return await _provision_local_vault(guid, body)
+
+    # ------------------------------------------------------------------
     # Health probes
     # ------------------------------------------------------------------
 
@@ -1603,7 +1678,10 @@ def create_app_handler_service(
         @app.get("/metrics")
         async def prometheus_metrics() -> Response:
             """Expose application metrics in Prometheus exposition format."""
-            from prometheus_client import REGISTRY, generate_latest
+            from prometheus_client import (  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
+                REGISTRY,
+                generate_latest,
+            )
 
             return Response(
                 content=generate_latest(REGISTRY),
@@ -1616,8 +1694,6 @@ def create_app_handler_service(
 
     @app.get("/")
     async def frontend_home() -> HTMLResponse:
-        import os
-
         frontend_html_path = os.path.join(frontend_assets_path, "index.html")
         if os.path.exists(frontend_html_path):
             with open(frontend_html_path, encoding="utf-8") as f:
@@ -1661,7 +1737,7 @@ def run_app_handler_service(
         **kwargs: Additional keyword arguments forwarded to
             ``create_app_handler_service()``.
     """
-    import uvicorn
+    import uvicorn  # noqa: PLC0415 — cold path: uvicorn only when starting standalone server
 
     app = create_app_handler_service(handler, **kwargs)
     uvicorn.run(app, host=host, port=port, log_level=log_level)
