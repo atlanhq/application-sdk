@@ -1,9 +1,12 @@
-"""Tests for every categorical leaf — category, default_retryable, code, and fields."""
+"""Tests for every categorical leaf — category, default_retryable, code, audience, and fields."""
 
 import pytest
 
-from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
+    AlreadyExistsError,
+    AppPermissionDeniedError,
+    AppTimeoutError,
     AuthError,
     CancelledError,
     DataIntegrityError,
@@ -11,11 +14,10 @@ from application_sdk.errors.leaves import (
     InternalError,
     InvalidInputError,
     NotFoundError,
-    PermissionError,
     PreconditionError,
     RateLimitedError,
     ResourceExhaustedError,
-    TimeoutError,
+    UnimplementedError,
 )
 
 _LEAVES = [
@@ -24,13 +26,15 @@ _LEAVES = [
         FailureCategory.CANCELLED,
         False,
         "CANCELLED",
+        Audience.UNKNOWN,
         ["cancelled_by", "reason"],
     ),
     (
-        TimeoutError,
+        AppTimeoutError,
         FailureCategory.TIMEOUT,
         True,
         "TIMEOUT",
+        Audience.UNKNOWN,
         ["operation", "timeout_seconds", "elapsed_seconds"],
     ),
     (
@@ -38,6 +42,7 @@ _LEAVES = [
         FailureCategory.RATE_LIMITED,
         True,
         "RATE_LIMITED",
+        Audience.USER,
         ["limit_type", "retry_after_seconds", "quota_name"],
     ),
     (
@@ -45,13 +50,15 @@ _LEAVES = [
         FailureCategory.AUTH,
         False,
         "AUTH",
+        Audience.USER,
         ["auth_method", "principal", "failure_reason"],
     ),
     (
-        PermissionError,
+        AppPermissionDeniedError,
         FailureCategory.PERMISSION,
         False,
         "PERMISSION",
+        Audience.USER,
         ["principal", "resource", "required_action"],
     ),
     (
@@ -59,6 +66,15 @@ _LEAVES = [
         FailureCategory.NOT_FOUND,
         False,
         "NOT_FOUND",
+        Audience.USER,
+        ["resource_type", "resource_identifier"],
+    ),
+    (
+        AlreadyExistsError,
+        FailureCategory.ALREADY_EXISTS,
+        False,
+        "ALREADY_EXISTS",
+        Audience.USER,
         ["resource_type", "resource_identifier"],
     ),
     (
@@ -66,6 +82,7 @@ _LEAVES = [
         FailureCategory.INVALID_INPUT,
         False,
         "INVALID_INPUT",
+        Audience.USER,
         ["field", "constraint", "value_summary"],
     ),
     (
@@ -73,6 +90,7 @@ _LEAVES = [
         FailureCategory.PRECONDITION,
         False,
         "PRECONDITION",
+        Audience.USER,
         ["resource", "expected_state", "actual_state"],
     ),
     (
@@ -80,6 +98,7 @@ _LEAVES = [
         FailureCategory.DEPENDENCY_UNAVAILABLE,
         True,
         "DEPENDENCY_UNAVAILABLE",
+        Audience.PLATFORM,
         ["service", "target", "network_error"],
     ),
     (
@@ -87,6 +106,7 @@ _LEAVES = [
         FailureCategory.RESOURCE_EXHAUSTED,
         True,
         "RESOURCE_EXHAUSTED",
+        Audience.PLATFORM,
         ["resource", "limit", "observed"],
     ),
     (
@@ -94,6 +114,7 @@ _LEAVES = [
         FailureCategory.DATA_INTEGRITY,
         False,
         "DATA_INTEGRITY",
+        Audience.FRAMEWORK,
         ["expectation", "observed", "location"],
     ),
     (
@@ -101,27 +122,49 @@ _LEAVES = [
         FailureCategory.INTERNAL,
         False,
         "INTERNAL",
+        Audience.FRAMEWORK,
         ["component", "invariant", "classification_pending"],
+    ),
+    (
+        UnimplementedError,
+        FailureCategory.UNIMPLEMENTED,
+        False,
+        "UNIMPLEMENTED",
+        Audience.FRAMEWORK,
+        ["operation", "reason"],
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "cls,expected_cat,expected_retryable,expected_code,expected_fields", _LEAVES
+    "cls,expected_cat,expected_retryable,expected_code,expected_audience,expected_fields",
+    _LEAVES,
 )
 def test_leaf_metadata(
-    cls, expected_cat, expected_retryable, expected_code, expected_fields
+    cls,
+    expected_cat,
+    expected_retryable,
+    expected_code,
+    expected_audience,
+    expected_fields,
 ) -> None:
     assert cls.category is expected_cat
     assert cls.default_retryable is expected_retryable
     assert cls.code == expected_code
+    assert cls.audience is expected_audience
 
 
 @pytest.mark.parametrize(
-    "cls,expected_cat,expected_retryable,expected_code,expected_fields", _LEAVES
+    "cls,expected_cat,expected_retryable,expected_code,expected_audience,expected_fields",
+    _LEAVES,
 )
 def test_leaf_has_expected_fields(
-    cls, expected_cat, expected_retryable, expected_code, expected_fields
+    cls,
+    expected_cat,
+    expected_retryable,
+    expected_code,
+    expected_audience,
+    expected_fields,
 ) -> None:
     import dataclasses
 
@@ -131,14 +174,36 @@ def test_leaf_has_expected_fields(
 
 
 @pytest.mark.parametrize(
-    "cls,expected_cat,expected_retryable,expected_code,expected_fields", _LEAVES
+    "cls,expected_cat,expected_retryable,expected_code,expected_audience,expected_fields",
+    _LEAVES,
 )
 def test_leaf_constructs_with_message_only(
-    cls, expected_cat, expected_retryable, expected_code, expected_fields
+    cls,
+    expected_cat,
+    expected_retryable,
+    expected_code,
+    expected_audience,
+    expected_fields,
 ) -> None:
     e = cls(message="test")
     assert str(e) == "test"
     assert e.category is expected_cat
+
+
+@pytest.mark.parametrize(
+    "cls,expected_cat,expected_retryable,expected_code,expected_audience,expected_fields",
+    _LEAVES,
+)
+def test_leaf_audience_in_failure_details(
+    cls,
+    expected_cat,
+    expected_retryable,
+    expected_code,
+    expected_audience,
+    expected_fields,
+) -> None:
+    fd = cls(message="test").to_failure_details()
+    assert fd.audience is expected_audience
 
 
 def test_internal_error_classification_pending_default() -> None:
@@ -150,3 +215,11 @@ def test_internal_error_classification_pending_set() -> None:
     e = InternalError(message="unclassified failure", classification_pending=True)
     fd = e.to_failure_details()
     assert fd.evidence["classification_pending"] is True
+
+
+def test_builtin_name_aliases_are_canonical_classes() -> None:
+    from application_sdk.errors import PermissionError as SDKPermissionError
+    from application_sdk.errors import TimeoutError as SDKTimeoutError
+
+    assert SDKTimeoutError is AppTimeoutError
+    assert SDKPermissionError is AppPermissionDeniedError

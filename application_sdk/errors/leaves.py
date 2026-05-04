@@ -1,4 +1,4 @@
-"""Twelve categorical leaf error classes — one per FailureCategory."""
+"""Fourteen categorical leaf error classes — one per FailureCategory."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk.errors.base import AppError
-from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.categories import Audience, FailureCategory
 
 
 @dataclass(kw_only=True)
@@ -17,10 +17,23 @@ class CancelledError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.CANCELLED
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "CANCELLED"
+    audience: ClassVar[Audience] = Audience.UNKNOWN
 
 
 @dataclass(kw_only=True)
-class TimeoutError(AppError):
+class AppTimeoutError(AppError):
+    """A bounded wait elapsed.
+
+    Use for network reads, activity start-to-close limits, and heartbeat
+    timeouts.  Default audience is UNKNOWN because the locus varies: a source
+    network timeout is USER-fixable (increase timeout / check VPC), while an
+    internal Temporal deadline is DEPENDENCY-routed.  Override ``audience``
+    on leaf subclasses when the locus is known.
+
+    Builtin ``TimeoutError`` is available as ``application_sdk.errors.TimeoutError``
+    for code that catches the SDK name without renaming.
+    """
+
     operation: str | None = None
     timeout_seconds: float | None = None
     elapsed_seconds: float | None = None
@@ -28,6 +41,7 @@ class TimeoutError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.TIMEOUT
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "TIMEOUT"
+    audience: ClassVar[Audience] = Audience.UNKNOWN
 
 
 @dataclass(kw_only=True)
@@ -39,6 +53,7 @@ class RateLimitedError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.RATE_LIMITED
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "RATE_LIMITED"
+    audience: ClassVar[Audience] = Audience.USER
 
 
 @dataclass(kw_only=True)
@@ -50,10 +65,18 @@ class AuthError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.AUTH
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "AUTH"
+    audience: ClassVar[Audience] = Audience.USER
 
 
 @dataclass(kw_only=True)
-class PermissionError(AppError):
+class AppPermissionDeniedError(AppError):
+    """Authenticated but not authorised.
+
+    Builtin ``PermissionError`` is available as
+    ``application_sdk.errors.PermissionError`` for code that catches the
+    SDK name without renaming.
+    """
+
     principal: str | None = None
     resource: str | None = None
     required_action: str | None = None
@@ -61,6 +84,7 @@ class PermissionError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.PERMISSION
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "PERMISSION"
+    audience: ClassVar[Audience] = Audience.USER
 
 
 @dataclass(kw_only=True)
@@ -71,6 +95,25 @@ class NotFoundError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "NOT_FOUND"
+    audience: ClassVar[Audience] = Audience.USER
+
+
+@dataclass(kw_only=True)
+class AlreadyExistsError(AppError):
+    """Entity the caller tried to create already exists.
+
+    Use for idempotent-create paths (asset already registered, entity already
+    in the store).  Distinct from PRECONDITION — the resource exists and that
+    is the problem, not some other state conflict.
+    """
+
+    resource_type: str | None = None
+    resource_identifier: str | None = None
+
+    category: ClassVar[FailureCategory] = FailureCategory.ALREADY_EXISTS
+    default_retryable: ClassVar[bool] = False
+    code: ClassVar[str] = "ALREADY_EXISTS"
+    audience: ClassVar[Audience] = Audience.USER
 
 
 @dataclass(kw_only=True)
@@ -82,10 +125,21 @@ class InvalidInputError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "INVALID_INPUT"
+    audience: ClassVar[Audience] = Audience.USER
 
 
 @dataclass(kw_only=True)
 class PreconditionError(AppError):
+    """System state forbids the operation.
+
+    Use when inputs are syntactically valid but the current state blocks the
+    action (schema mismatch, version conflict, entity in wrong state).
+
+    Litmus test vs DEPENDENCY_UNAVAILABLE: if retrying the *same call* without
+    any state change is expected to succeed, use DependencyUnavailableError.
+    If explicit state must change first, use PreconditionError.
+    """
+
     resource: str | None = None
     expected_state: str | None = None
     actual_state: str | None = None
@@ -93,10 +147,21 @@ class PreconditionError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.PRECONDITION
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "PRECONDITION"
+    audience: ClassVar[Audience] = Audience.USER
 
 
 @dataclass(kw_only=True)
 class DependencyUnavailableError(AppError):
+    """Required platform service is temporarily down or degraded.
+
+    Covers Dapr, Temporal, object store, and source databases.  Retrying
+    the same call is expected to succeed once the dependency recovers.
+
+    Litmus test vs PRECONDITION: if system state must change before the call
+    can succeed, use PreconditionError.  If the same call would work on retry,
+    use DependencyUnavailableError.
+    """
+
     service: str | None = None
     target: str | None = None
     network_error: str | None = None
@@ -104,6 +169,7 @@ class DependencyUnavailableError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.DEPENDENCY_UNAVAILABLE
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE"
+    audience: ClassVar[Audience] = Audience.PLATFORM
 
 
 @dataclass(kw_only=True)
@@ -115,6 +181,7 @@ class ResourceExhaustedError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.RESOURCE_EXHAUSTED
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "RESOURCE_EXHAUSTED"
+    audience: ClassVar[Audience] = Audience.PLATFORM
 
 
 @dataclass(kw_only=True)
@@ -126,6 +193,7 @@ class DataIntegrityError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.DATA_INTEGRITY
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "DATA_INTEGRITY"
+    audience: ClassVar[Audience] = Audience.FRAMEWORK
 
 
 @dataclass(kw_only=True)
@@ -137,3 +205,21 @@ class InternalError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.INTERNAL
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "INTERNAL"
+    audience: ClassVar[Audience] = Audience.FRAMEWORK
+
+
+@dataclass(kw_only=True)
+class UnimplementedError(AppError):
+    """Operation not supported or capability not yet built.
+
+    Use for known feature gaps so on-call is not paged for an expected absence.
+    Distinct from INTERNAL (unexpected invariant violation / bug).
+    """
+
+    operation: str | None = None
+    reason: str | None = None
+
+    category: ClassVar[FailureCategory] = FailureCategory.UNIMPLEMENTED
+    default_retryable: ClassVar[bool] = False
+    code: ClassVar[str] = "UNIMPLEMENTED"
+    audience: ClassVar[Audience] = Audience.FRAMEWORK

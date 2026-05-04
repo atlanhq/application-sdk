@@ -6,7 +6,7 @@ import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.categories import Audience, FailureCategory
 
 if TYPE_CHECKING:
     from application_sdk.errors.wire import FailureDetails
@@ -21,7 +21,7 @@ _BASE_FIELDS: frozenset[str] = frozenset(
 class AppError(Exception):
     """Canonical SDK exception base.
 
-    Subclass one of the categorical leaves (AuthError, NotFoundError, …)
+    Subclass one of the categorical leaves (AuthError, AppNotFoundError, …)
     to define a typed error. Add dataclass fields to carry structured
     evidence — they appear automatically in ``to_failure_details()``.
     """
@@ -35,6 +35,7 @@ class AppError(Exception):
     category: ClassVar[FailureCategory] = FailureCategory.INTERNAL
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "INTERNAL"
+    audience: ClassVar[Audience] = Audience.UNKNOWN
 
     def __post_init__(self) -> None:
         Exception.__init__(self, self.message)
@@ -71,6 +72,7 @@ class AppError(Exception):
             category=self.category,
             code=self.code,
             retryable=self.effective_retryable,
+            audience=type(self).audience,
             message=self.message,
             evidence=evidence,
             app_name=self.app_name,

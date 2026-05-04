@@ -5,13 +5,21 @@ Canonical API (v3.x+)::
     from application_sdk.errors import (
         AppError,
         FailureCategory,
+        Audience,
         FailureDetails,
-        AuthError, PermissionError, NotFoundError,
+        AuthError,
+        AppPermissionDeniedError, AppTimeoutError,
+        NotFoundError, AlreadyExistsError,
         InvalidInputError, PreconditionError,
-        TimeoutError, RateLimitedError,
+        RateLimitedError, UnimplementedError,
         DependencyUnavailableError, ResourceExhaustedError,
         DataIntegrityError, CancelledError, InternalError,
     )
+
+Builtin-name aliases (prefer the ``App*`` canonical names in new code)::
+
+    from application_sdk.errors import PermissionError   # == AppPermissionDeniedError
+    from application_sdk.errors import TimeoutError      # == AppTimeoutError
 
 Legacy constants (v3.x — deprecated, removed in v4.0)::
 
@@ -22,8 +30,11 @@ from dataclasses import dataclass
 
 # ── New canonical hierarchy ──────────────────────────────────────────────────
 from application_sdk.errors.base import _BASE_FIELDS, AppError
-from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
+    AlreadyExistsError,
+    AppPermissionDeniedError,
+    AppTimeoutError,
     AuthError,
     CancelledError,
     DataIntegrityError,
@@ -31,13 +42,19 @@ from application_sdk.errors.leaves import (
     InternalError,
     InvalidInputError,
     NotFoundError,
-    PermissionError,
     PreconditionError,
     RateLimitedError,
     ResourceExhaustedError,
-    TimeoutError,
+    UnimplementedError,
 )
 from application_sdk.errors.wire import FailureDetails
+
+# ── Builtin-name aliases — shadow Python's TimeoutError / PermissionError ──
+# Prefer the App* canonical names in new code.  These aliases exist so that
+# code written before the rename (or code that intentionally uses the short
+# form) still imports cleanly.
+PermissionError = AppPermissionDeniedError
+TimeoutError = AppTimeoutError
 
 # ── Legacy ErrorCode dataclass + AAF-* constants (deprecated — removed v4.0) ─
 
@@ -114,8 +131,12 @@ __all__ = [
     # New canonical
     "AppError",
     "_BASE_FIELDS",
+    "Audience",
     "FailureCategory",
     "FailureDetails",
+    "AlreadyExistsError",
+    "AppPermissionDeniedError",
+    "AppTimeoutError",
     "AuthError",
     "CancelledError",
     "DataIntegrityError",
@@ -123,10 +144,12 @@ __all__ = [
     "InternalError",
     "InvalidInputError",
     "NotFoundError",
-    "PermissionError",
     "PreconditionError",
     "RateLimitedError",
     "ResourceExhaustedError",
+    "UnimplementedError",
+    # Builtin-name aliases
+    "PermissionError",
     "TimeoutError",
     # Legacy (deprecated — removed in v4.0)
     "ErrorCode",

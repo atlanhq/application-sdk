@@ -66,13 +66,17 @@ def test_qualified_code() -> None:
 
 
 def test_to_failure_details_returns_pydantic_model() -> None:
+    from application_sdk.errors.categories import Audience
+
     e = AuthError(message="bad creds", auth_method="basic", principal="user")
     fd = e.to_failure_details()
     assert isinstance(fd, FailureDetails)
     assert fd.category is FailureCategory.AUTH
     assert fd.code == "AUTH"
     assert fd.retryable is False
+    assert fd.audience is Audience.USER
     assert fd.message == "bad creds"
+    assert fd.suggested_action is None
     assert fd.evidence["auth_method"] == "basic"
     assert fd.evidence["principal"] == "user"
 
@@ -110,6 +114,28 @@ def test_isinstance_hierarchy() -> None:
     e = AuthError(message="x")
     assert isinstance(e, AppError)
     assert isinstance(e, Exception)
+
+
+def test_failure_details_suggested_action_none_by_default() -> None:
+    fd = AuthError(message="x").to_failure_details()
+    assert fd.suggested_action is None
+
+
+def test_failure_details_evidence_denylist_rejects_secret_keys() -> None:
+    from pydantic import ValidationError
+
+    from application_sdk.errors.categories import Audience, FailureCategory
+    from application_sdk.errors.wire import FailureDetails
+
+    with pytest.raises(ValidationError, match="secret-named"):
+        FailureDetails(
+            category=FailureCategory.AUTH,
+            code="AUTH",
+            retryable=False,
+            audience=Audience.USER,
+            message="x",
+            evidence={"token": "bearer abc123"},
+        )
 
 
 def test_base_fields_sentinel() -> None:

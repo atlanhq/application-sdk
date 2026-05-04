@@ -366,14 +366,14 @@ def test_storage_permission_error_importable_from_init() -> None:
 
 
 def test_storage_permission_error_is_app_error() -> None:
-    from application_sdk.errors.leaves import PermissionError as AppPermissionError
+    from application_sdk.errors.leaves import AppPermissionDeniedError
     from application_sdk.storage.errors import StoragePermissionError
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         e = StoragePermissionError("access denied")
     assert isinstance(e, AppError)
-    assert isinstance(e, AppPermissionError)
+    assert isinstance(e, AppPermissionDeniedError)
 
 
 def test_storage_config_error_importable_from_errors() -> None:
