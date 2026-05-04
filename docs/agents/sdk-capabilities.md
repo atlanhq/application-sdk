@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    ee34802aba20150fb913eaa49a3e870efa903037
-source-date:   2026-05-05T00:00:00+01:00
+source-sha:    7bf5e7d019221e76f2c71c96188de021a34684d8
+source-date:   2026-05-05T00:17:40+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 50 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 49 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 20 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -953,13 +953,6 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 ### Constants and Enums
-
-#### `_BASE_FIELDS`
-
-- **Import:** `from application_sdk.errors import _BASE_FIELDS`
-- **Signature:** `_BASE_FIELDS: frozenset[str]`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors/base.py`
 
 #### `APP_ALREADY_REGISTERED`
 
