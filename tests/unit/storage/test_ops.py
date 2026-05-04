@@ -17,7 +17,9 @@ from application_sdk.storage.ops import (
     _put,
     delete,
     download_file,
+    download_file_chunked,
     exists,
+    get_file_size,
     normalize_key,
     put_json,
     upload_file,
@@ -580,6 +582,165 @@ async def test_download_file_wraps_non_404_get_failure(tmp_path) -> None:
     ):
         await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
     assert not isinstance(excinfo.value, StorageNotFoundError)
+
+
+# ---------------------------------------------------------------------------
+# get_file_size (BLDX-1155: new public function)
+# ---------------------------------------------------------------------------
+
+
+class TestGetFileSize:
+    async def test_returns_size_for_existing_key(self, store, tmp_path) -> None:
+        content = b"hello world"
+        await _put("size/file.bin", content, store, normalize=False)
+        size = await get_file_size("size/file.bin", store, normalize=False)
+        assert size == len(content)
+
+    async def test_returns_none_for_missing_key(self, store) -> None:
+        size = await get_file_size("no/such/key.bin", store, normalize=False)
+        assert size is None
+
+    async def test_non_404_error_raises_storage_error(self) -> None:
+        store = MagicMock()
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.head_async",
+                new=AsyncMock(side_effect=RuntimeError("permission denied")),
+            ),
+            pytest.raises(StorageError),
+        ):
+            await get_file_size("k", store, normalize=False)
+
+
+# ---------------------------------------------------------------------------
+# download_file_chunked (BLDX-1155: new public function)
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadFileChunked:
+    async def test_small_file_falls_through_to_download_file(
+        self, store, tmp_path
+    ) -> None:
+        """File <= chunk_size_bytes delegates to the single-stream download_file."""
+        content = b"small"
+        await _put("chunked/small.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        import application_sdk.storage.ops as ops_mod
+
+        with patch.object(
+            ops_mod, "download_file", wraps=ops_mod.download_file
+        ) as mock_dl:
+            result = await download_file_chunked(
+                "chunked/small.bin",
+                dest,
+                store,
+                chunk_size_bytes=1024,
+                normalize=False,
+            )
+
+        mock_dl.assert_awaited_once()
+        assert dest.read_bytes() == content
+        assert result is not None
+        assert len(result) == 64
+
+    async def test_multi_chunk_produces_correct_content(self, store, tmp_path) -> None:
+        """File split into multiple chunks is reassembled byte-for-byte correctly."""
+        import hashlib
+
+        content = b"ABCDEFGHIJ"  # 10 bytes → 4 chunks at chunk_size=3 (3,3,3,1)
+        await _put("chunked/multi.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        sha = await download_file_chunked(
+            "chunked/multi.bin",
+            dest,
+            store,
+            chunk_size_bytes=3,
+            max_concurrent_chunks=2,
+            normalize=False,
+        )
+
+        assert dest.read_bytes() == content
+        assert sha == hashlib.sha256(content).hexdigest()
+
+    async def test_not_found_raises_storage_not_found_error(
+        self, store, tmp_path
+    ) -> None:
+        with pytest.raises(StorageNotFoundError):
+            await download_file_chunked(
+                "no/such/key.bin",
+                tmp_path / "out.bin",
+                store,
+                normalize=False,
+            )
+
+    async def test_compute_hash_false_returns_none(self, store, tmp_path) -> None:
+        content = b"no hash needed"
+        await _put("chunked/nohash.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        result = await download_file_chunked(
+            "chunked/nohash.bin",
+            dest,
+            store,
+            chunk_size_bytes=3,
+            compute_hash=False,
+            normalize=False,
+        )
+
+        assert result is None
+        assert dest.read_bytes() == content
+
+    async def test_compute_hash_true_returns_sha256(self, store, tmp_path) -> None:
+        import hashlib
+
+        content = b"hash me chunked"
+        await _put("chunked/hash.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        result = await download_file_chunked(
+            "chunked/hash.bin",
+            dest,
+            store,
+            chunk_size_bytes=3,
+            compute_hash=True,
+            normalize=False,
+        )
+
+        assert result == hashlib.sha256(content).hexdigest()
+
+    async def test_partial_file_cleaned_up_on_error(self, store, tmp_path) -> None:
+        """If a chunk fails mid-download, the partial output file is deleted."""
+        content = b"ABCDEFGHIJ"
+        await _put("chunked/boom.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        import application_sdk.storage.ops as ops_mod
+
+        real_get_range = ops_mod.obstore.get_range_async
+        call_count = 0
+
+        async def flaky_get_range(st, key, *, start, length):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError("transient chunk failure")
+            return await real_get_range(st, key, start=start, length=length)
+
+        with patch.object(
+            ops_mod.obstore, "get_range_async", side_effect=flaky_get_range
+        ):
+            with pytest.raises((StorageError, RuntimeError)):
+                await download_file_chunked(
+                    "chunked/boom.bin",
+                    dest,
+                    store,
+                    chunk_size_bytes=3,
+                    normalize=False,
+                )
+
+        assert not dest.exists(), "partial file must be cleaned up after chunk failure"
 
 
 async def test_download_file_wraps_stream_failure(tmp_path) -> None:
