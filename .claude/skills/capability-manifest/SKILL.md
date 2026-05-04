@@ -63,7 +63,8 @@ uv run poe regen-capabilities
 ```
 
 This poe task (defined in `pyproject.toml`) runs the full extract → normalize → render pipeline,
-enforces idempotence via `cmp`, and scopes pre-commit to whitespace-only hooks. Equivalent to
+enforces idempotence via `cmp`, and runs pre-commit non-Python hooks (trailing-whitespace,
+fix-byte-order-marker, check-merge-conflict). Equivalent to
 the raw four-command sequence below if you need to run steps individually:
 
 <details>

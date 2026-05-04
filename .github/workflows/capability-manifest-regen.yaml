@@ -25,9 +25,16 @@ permissions:
 jobs:
   regen:
     name: Regenerate Capability Manifest
+    # Only fire for PR comments containing the command, from repo members or above.
+    # CONTRIBUTOR/NONE/FIRST_TIME_CONTRIBUTOR are excluded to prevent outside commenters
+    # from triggering a write to the repo (even though the write is deterministic and
+    # low-risk, the permission gate follows the same pattern as sdk-review).
     if: |
       github.event.issue.pull_request != null &&
-      contains(github.event.comment.body, '/regen-manifest')
+      contains(github.event.comment.body, '/regen-manifest') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -45,6 +52,7 @@ jobs:
             core.setOutput('branch', pr.data.head.ref);
             core.setOutput('number', String(context.issue.number));
             core.setOutput('is_fork', String(pr.data.head.repo.fork));
+            core.setOutput('is_bump_version', String(pr.data.head.ref.startsWith('bump-version')));
 
       - name: Reject on fork
         if: steps.pr.outputs.is_fork == 'true'
@@ -59,8 +67,20 @@ jobs:
             });
             core.setFailed('fork PR — cannot push');
 
+      - name: Skip on bump-version branch
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: 'ℹ️ `/regen-manifest` is skipped on version-bump branches.',
+            });
+
       - name: React to comment
-        if: steps.pr.outputs.is_fork != 'true'
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -72,21 +92,21 @@ jobs:
             });
 
       - uses: actions/checkout@v4
-        if: steps.pr.outputs.is_fork != 'true'
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         with:
           ref: ${{ steps.pr.outputs.branch }}
           token: ${{ secrets.ORG_PAT_GITHUB }}
           fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v4
-        if: steps.pr.outputs.is_fork != 'true'
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
 
       - name: Regenerate capability manifest
-        if: steps.pr.outputs.is_fork != 'true'
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         run: uv run poe regen-capabilities
 
       - name: Commit and push
-        if: steps.pr.outputs.is_fork != 'true'
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         id: commit
         run: |
           git config user.name  "github-actions[bot]"
@@ -104,7 +124,7 @@ jobs:
           fi
 
       - name: Reply on PR
-        if: always() && steps.pr.outputs.is_fork != 'true'
+        if: always() && steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         uses: actions/github-script@v7
         with:
           script: |

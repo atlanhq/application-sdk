@@ -43,6 +43,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the PR branch HEAD, not the synthetic merge commit.
+          # The default pull_request checkout is the GitHub-created test merge of
+          # the PR into the base, so `git log -1 -- application_sdk/` can return a
+          # commit from main that is newer than this branch — making an up-to-date
+          # manifest look stale. Pinning to the PR head SHA gives a deterministic
+          # view of exactly what the contributor pushed.
+          ref: ${{ github.event.pull_request.head.sha }}
           # Full history required: extractor.py resolves source-sha via
           # `git log -1 --format=%H -- application_sdk/`, which fails on shallow clones
           # when the most recent SDK commit is below the shallow boundary.
@@ -82,3 +89,10 @@ jobs:
 
             This check is informational, not blocking. Reviewers should ensure the manifest is
             current before approval so the SDK-surface diff is visible in **Files changed**.
+
+      - name: Clear sticky comment when manifest is current
+        if: success() && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: capability-manifest-drift
+          delete: true
