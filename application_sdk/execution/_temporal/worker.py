@@ -74,7 +74,10 @@ class AppWorker:
             return
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: pushgateway env config only when worker mode enabled
             PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN,
+            PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
             PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS,
+            PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START,
+            PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS,
             PROMETHEUS_PUSHGATEWAY_URL,
             TEMPORAL_PROMETHEUS_BIND_ADDRESS,
         )
@@ -112,6 +115,9 @@ class AppWorker:
             task_queue=self._task_queue,
             interval_s=PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS,
             delete_on_shutdown=PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN,
+            sweep_stale_on_start=PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START,
+            sweep_staleness_seconds=PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS,
+            http_timeout_s=PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
         )
         await self._pusher.start()
 
@@ -126,7 +132,14 @@ class AppWorker:
 
     async def __aenter__(self) -> Worker:
         await _emit_worker_start_event(**self._start_event_params)
-        await self._start_metrics_push()
+        # Metrics is best-effort: never block the worker on a metrics failure.
+        try:
+            await self._start_metrics_push()
+        except Exception:
+            logger.error(
+                "Pushgateway pusher start failed — worker will run without metrics",
+                exc_info=True,
+            )
         return await self._worker.__aenter__()
 
     async def __aexit__(
@@ -146,7 +159,14 @@ class AppWorker:
     async def run(self) -> None:
         """For callers that use worker.run() directly."""
         await _emit_worker_start_event(**self._start_event_params)
-        await self._start_metrics_push()
+        # Metrics is best-effort: never block the worker on a metrics failure.
+        try:
+            await self._start_metrics_push()
+        except Exception:
+            logger.error(
+                "Pushgateway pusher start failed — worker will run without metrics",
+                exc_info=True,
+            )
         try:
             await self._worker.run()
         finally:

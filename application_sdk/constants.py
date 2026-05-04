@@ -161,6 +161,32 @@ PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN = (
     os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN", "true").lower()
     == "true"
 )
+#: When True (default), sweep stale ``{job=mine, instance=other}`` groups on
+#: worker startup before the first push. Covers OOM / eviction / SIGKILL
+#: leaks that DELETE_ON_SHUTDOWN can't catch — the next worker tidies up
+#: after its predecessor. Strictly job-scoped (never touches other apps'
+#: groups) and threshold-gated (never reaps live siblings).
+PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START = (
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START", "true").lower()
+    == "true"
+)
+#: Staleness threshold for the startup sweep. Groups whose last push is more
+#: recent than this are left alone — protects live siblings during Temporal
+#: Worker Deployments overlap (old pod draining + new pod ramping). Default
+#: 300s = 10× the default push interval, comfortably above any normal blip.
+PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS = float(
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS", "300")
+)
+#: Per-request HTTP timeout for every Pushgateway call (push, DELETE,
+#: sweep GET, sweep per-group DELETE). The prometheus_client default of 30s
+#: is too generous for our shape: at shutdown, two back-to-back 30s hangs
+#: (final push + DELETE_ON_SHUTDOWN) would exceed Kubernetes' default 30s
+#: terminationGracePeriodSeconds and SIGKILL the pod before cleanup runs.
+#: 10s leaves 2/3 of the push interval for actual work and ~10s of slack
+#: inside the grace period for the rest of worker shutdown.
+PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS = float(
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS", "10")
+)
 
 # REMOVED: ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING, WORKFLOW_UI_HOST,
 # WORKFLOW_UI_PORT, WORKFLOW_MAX_TIMEOUT_HOURS, WORKFLOW_HOST, WORKFLOW_PORT,

@@ -152,6 +152,35 @@ class TestPushGatewayClientPushNow:
             with pytest.raises(ConnectionError):
                 await client.push_now()
 
+    async def test_push_passes_http_timeout(self, mock_to_thread):
+        """The configured http_timeout_s must reach push_to_gateway so a hung
+        gateway can't tie up the worker thread for the prometheus_client
+        default of 30s."""
+        c = PushGatewayClient(
+            url="http://localhost:9091",
+            job="j",
+            task_queue="tq",
+            http_timeout_s=7.5,
+        )
+        with patch(_PUSH_TARGET) as mock_push:
+            await c.push_now()
+        assert mock_push.call_args.kwargs.get("timeout") == 7.5
+
+    async def test_delete_on_shutdown_passes_http_timeout(self, mock_to_thread):
+        """Same timeout knob must apply to DELETE_ON_SHUTDOWN; otherwise a
+        down gateway at shutdown burns the prometheus_client default 30s
+        and pushes us past terminationGracePeriodSeconds."""
+        c = PushGatewayClient(
+            url="http://localhost:9091",
+            job="j",
+            task_queue="tq",
+            delete_on_shutdown=True,
+            http_timeout_s=7.5,
+        )
+        with patch(_PUSH_TARGET), patch(_DELETE_TARGET) as mock_delete:
+            await c.stop()
+        assert mock_delete.call_args.kwargs.get("timeout") == 7.5
+
 
 class TestPushGatewayClientStop:
     async def test_stop_makes_final_push(self, client, mock_to_thread):
@@ -167,13 +196,13 @@ class TestPushGatewayClientStop:
             delete_on_shutdown=True,
         )
         call_order: list[str] = []
-        with patch(
-            _PUSH_TARGET, side_effect=lambda *a, **kw: call_order.append("push")
-        ):
-            with patch(
+        with (
+            patch(_PUSH_TARGET, side_effect=lambda *a, **kw: call_order.append("push")),
+            patch(
                 _DELETE_TARGET, side_effect=lambda *a, **kw: call_order.append("delete")
-            ):
-                await c.stop()
+            ),
+        ):
+            await c.stop()
         assert call_order == ["push", "delete"]
 
     async def test_stop_calls_delete_when_delete_on_shutdown_true(self, mock_to_thread):
@@ -183,9 +212,8 @@ class TestPushGatewayClientStop:
             task_queue="tq",
             delete_on_shutdown=True,
         )
-        with patch(_PUSH_TARGET):
-            with patch(_DELETE_TARGET) as mock_delete:
-                await c.stop()
+        with patch(_PUSH_TARGET), patch(_DELETE_TARGET) as mock_delete:
+            await c.stop()
         mock_delete.assert_called_once()
         args, kwargs = mock_delete.call_args
         url_arg = args[0] if args else kwargs.get("gateway")
@@ -194,9 +222,8 @@ class TestPushGatewayClientStop:
     async def test_stop_does_not_call_delete_when_flag_false(
         self, client, mock_to_thread
     ):
-        with patch(_PUSH_TARGET):
-            with patch(_DELETE_TARGET) as mock_delete:
-                await client.stop()
+        with patch(_PUSH_TARGET), patch(_DELETE_TARGET) as mock_delete:
+            await client.stop()
         mock_delete.assert_not_called()
 
     async def test_stop_swallows_push_failure(self, client, mock_to_thread):
@@ -218,3 +245,230 @@ class TestPushGatewayClientLifecycle:
             await client.start()
             assert client._task is first_task
             await client.stop()
+
+
+class TestPushGatewayClientSweep:
+    """Startup-sweep behavior: reap stale ``{job=mine, instance=other}`` groups
+    that previous OOM/eviction-killed pods couldn't DELETE themselves."""
+
+    @staticmethod
+    def _gateway_text(*entries: tuple[str, str, float]) -> str:
+        """Build a fake Pushgateway /metrics response with the given
+        ``(job, instance, push_time)`` tuples."""
+        lines = [
+            "# HELP push_time_seconds Last accept time.",
+            "# TYPE push_time_seconds gauge",
+        ]
+        for job, instance, ts in entries:
+            lines.append(f'push_time_seconds{{instance="{instance}",job="{job}"}} {ts}')
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _mock_httpx(text: str, status_code: int = 200):
+        resp = MagicMock(status_code=status_code, text=text)
+        # Match real httpx.Response.raise_for_status semantics: no-op on 2xx,
+        # raises HTTPStatusError on 4xx/5xx. Without this, MagicMock's
+        # auto-mocked raise_for_status would silently return a Mock for any
+        # status, masking the failure path.
+        if status_code >= 400:
+            resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+                f"HTTP {status_code}", request=MagicMock(), response=resp
+            )
+        else:
+            resp.raise_for_status.return_value = None
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        client.get.return_value = resp
+        return client
+
+    @staticmethod
+    def _make_client(
+        *, job: str = "my-app-worker", my_instance: str = "me", staleness: float = 300.0
+    ) -> PushGatewayClient:
+        return PushGatewayClient(
+            url="http://pg:9091",
+            job=job,
+            grouping_key={"instance": my_instance},
+            sweep_stale_on_start=True,
+            sweep_staleness_seconds=staleness,
+        )
+
+    def test_deletes_only_stale_predecessors_in_own_job(self):
+        c = self._make_client()
+        text = self._gateway_text(
+            ("my-app-worker", "live-sibling", 9_999_999_700),  # 300s old (boundary)
+            ("my-app-worker", "live-sibling-recent", 9_999_999_950),  # 50s old
+            ("my-app-worker", "dead-pred", 1.0),  # ancient → must be reaped
+            ("automation-engine-worker", "other-app", 1.0),  # other job → never touched
+        )
+        with (
+            patch(
+                "application_sdk.observability.pushgateway.httpx.Client",
+                return_value=self._mock_httpx(text),
+            ),
+            patch(_DELETE_TARGET) as mock_del,
+            patch("time.time", return_value=10_000_000_000),
+        ):
+            c._sweep_stale_predecessors_blocking()
+        # Exactly one DELETE — the dead-pred only.
+        assert mock_del.call_count == 1
+        kwargs = mock_del.call_args.kwargs
+        assert kwargs["job"] == "my-app-worker"
+        assert kwargs["grouping_key"] == {"instance": "dead-pred"}
+
+    def test_never_deletes_other_apps_jobs(self):
+        c = self._make_client()
+        text = self._gateway_text(
+            ("automation-engine-worker", "ancient-other", 1.0),
+            ("argo-worker", "ancient-argo", 1.0),
+        )
+        with (
+            patch(
+                "application_sdk.observability.pushgateway.httpx.Client",
+                return_value=self._mock_httpx(text),
+            ),
+            patch(_DELETE_TARGET) as mock_del,
+            patch("time.time", return_value=10_000_000_000),
+        ):
+            c._sweep_stale_predecessors_blocking()
+        mock_del.assert_not_called()
+
+    def test_never_deletes_own_instance(self):
+        c = self._make_client(my_instance="me")
+        text = self._gateway_text(("my-app-worker", "me", 1.0))  # ancient self
+        with (
+            patch(
+                "application_sdk.observability.pushgateway.httpx.Client",
+                return_value=self._mock_httpx(text),
+            ),
+            patch(_DELETE_TARGET) as mock_del,
+            patch("time.time", return_value=10_000_000_000),
+        ):
+            c._sweep_stale_predecessors_blocking()
+        mock_del.assert_not_called()
+
+    def test_respects_staleness_threshold(self):
+        c = self._make_client(staleness=300.0)
+        # 250s old — under threshold, must be left alone.
+        text = self._gateway_text(("my-app-worker", "recent", 9_999_999_750))
+        with (
+            patch(
+                "application_sdk.observability.pushgateway.httpx.Client",
+                return_value=self._mock_httpx(text),
+            ),
+            patch(_DELETE_TARGET) as mock_del,
+            patch("time.time", return_value=10_000_000_000),
+        ):
+            c._sweep_stale_predecessors_blocking()
+        mock_del.assert_not_called()
+
+    def test_skips_when_get_fails(self):
+        c = self._make_client()
+        client_mock = MagicMock()
+        client_mock.__enter__ = MagicMock(return_value=client_mock)
+        client_mock.__exit__ = MagicMock(return_value=False)
+        client_mock.get.side_effect = httpx.ConnectError("boom")
+        with (
+            patch(
+                "application_sdk.observability.pushgateway.httpx.Client",
+                return_value=client_mock,
+            ),
+            patch(_DELETE_TARGET) as mock_del,
+        ):
+            c._sweep_stale_predecessors_blocking()
+        mock_del.assert_not_called()
+
+    def test_skips_when_get_returns_5xx(self):
+        c = self._make_client()
+        with (
+            patch(
+                "application_sdk.observability.pushgateway.httpx.Client",
+                return_value=self._mock_httpx("", status_code=503),
+            ),
+            patch(_DELETE_TARGET) as mock_del,
+        ):
+            c._sweep_stale_predecessors_blocking()
+        mock_del.assert_not_called()
+
+    def test_one_delete_failure_does_not_abort_rest(self):
+        c = self._make_client()
+        text = self._gateway_text(
+            ("my-app-worker", "fails", 1.0),
+            ("my-app-worker", "succeeds", 1.0),
+        )
+        delete_calls = []
+
+        def fake_delete(*_a, **kwargs):
+            instance = kwargs["grouping_key"]["instance"]
+            delete_calls.append(instance)
+            if instance == "fails":
+                raise ConnectionError("transient")
+
+        with (
+            patch(
+                "application_sdk.observability.pushgateway.httpx.Client",
+                return_value=self._mock_httpx(text),
+            ),
+            patch(_DELETE_TARGET, side_effect=fake_delete),
+            patch("time.time", return_value=10_000_000_000),
+        ):
+            c._sweep_stale_predecessors_blocking()
+        # Both attempts made; one failure didn't stop the next.
+        assert sorted(delete_calls) == ["fails", "succeeds"]
+
+    def test_sweep_passes_http_timeout_to_get_and_per_group_delete(self):
+        """The configured http_timeout_s must reach both the GET that
+        discovers stale groups and every per-group DELETE. Without the
+        DELETE timeout, a hung gateway during sweep could tie up startup
+        for prometheus_client's default 30s × N stale groups."""
+        c = PushGatewayClient(
+            url="http://pg:9091",
+            job="my-app-worker",
+            grouping_key={"instance": "me"},
+            sweep_stale_on_start=True,
+            sweep_staleness_seconds=300.0,
+            http_timeout_s=7.5,
+        )
+        text = self._gateway_text(("my-app-worker", "dead-pred", 1.0))
+        with (
+            patch(
+                "application_sdk.observability.pushgateway.httpx.Client",
+                return_value=self._mock_httpx(text),
+            ) as mock_httpx,
+            patch(_DELETE_TARGET) as mock_del,
+            patch("time.time", return_value=10_000_000_000),
+        ):
+            c._sweep_stale_predecessors_blocking()
+        # GET timeout
+        assert mock_httpx.call_args.kwargs.get("timeout") == 7.5
+        # Per-group DELETE timeout
+        assert mock_del.call_args.kwargs.get("timeout") == 7.5
+
+    def test_sweep_disabled_when_flag_false(self):
+        c = PushGatewayClient(
+            url="http://pg:9091",
+            job="my-app-worker",
+            sweep_stale_on_start=False,
+        )
+        # Even with stale data sitting in the gateway, sweep is skipped.
+        text = self._gateway_text(("my-app-worker", "ancient", 1.0))
+        with (
+            patch(
+                "application_sdk.observability.pushgateway.httpx.Client",
+                return_value=self._mock_httpx(text),
+            ) as mock_httpx,
+            patch(_DELETE_TARGET) as mock_del,
+        ):
+            # Calling start would normally trigger sweep; since flag=False
+            # the sweep method shouldn't be called at all.
+            import asyncio
+
+            async def _drive():
+                with patch(_PUSH_TARGET):
+                    await c.start()
+                    await c.stop()
+
+            asyncio.run(_drive())
+        mock_httpx.assert_not_called()
+        mock_del.assert_not_called()
