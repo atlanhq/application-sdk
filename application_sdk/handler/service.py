@@ -161,6 +161,7 @@ if TYPE_CHECKING:
     from temporalio.converter import DataConverter
 
     from application_sdk.app.base import App
+    from application_sdk.execution.retry import RetryPolicy
     from application_sdk.infrastructure.secrets import SecretStore
 
 
@@ -246,6 +247,13 @@ class WorkflowClientConfig:
     auth_token_url: str = ""
     auth_base_url: str = ""
     auth_scopes: str = ""
+
+    # Workflow-level retry: applied at client.start_workflow(). When None, no
+    # workflow-level retry runs; the framework's DEFAULT_WORKFLOW_RETRY is used
+    # if create_app_handler_service is called without overriding the kwarg.
+    workflow_retry_policy: RetryPolicy | None = dataclasses.field(
+        default=None, repr=False
+    )
 
     def is_configured(self) -> bool:
         return bool(self.host and self.app_class)
@@ -381,6 +389,7 @@ def create_app_handler_service(
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
     frontend_assets_path: str = "app/generated/frontend/static",
+    workflow_retry_policy: RetryPolicy | None = None,
     # Deprecated: state_store is no longer used. Credential resolution now
     # goes through DaprCredentialVault exclusively. Passing this parameter
     # emits a DeprecationWarning. Will be removed in v3.2.0.
@@ -421,6 +430,14 @@ def create_app_handler_service(
 
     _secret_store = secret_store
     _storage = storage
+
+    if workflow_retry_policy is None:
+        from application_sdk.execution.retry import (  # noqa: PLC0415 — cold path: handler-service init
+            DEFAULT_WORKFLOW_RETRY,
+        )
+
+        workflow_retry_policy = DEFAULT_WORKFLOW_RETRY
+
     _workflow_config = WorkflowClientConfig(
         host=temporal_host,
         namespace=temporal_namespace,
@@ -438,6 +455,7 @@ def create_app_handler_service(
         auth_token_url=auth_token_url,
         auth_base_url=auth_base_url,
         auth_scopes=auth_scopes,
+        workflow_retry_policy=workflow_retry_policy,
     )
 
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
@@ -815,12 +833,23 @@ def create_app_handler_service(
                 _workflow_config.task_queue,
             )
 
+            from application_sdk.execution.retry import (  # noqa: PLC0415 — cold path: per-request workflow start
+                _to_temporal_retry_policy,
+            )
+
+            _temporal_retry = (
+                _to_temporal_retry_policy(_workflow_config.workflow_retry_policy)
+                if _workflow_config.workflow_retry_policy is not None
+                else None
+            )
+
             handle = await client.start_workflow(
                 workflow_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
                 memo=corr_ctx.to_temporal_memo(),
+                retry_policy=_temporal_retry,
             )
 
             logger.info(
@@ -1412,11 +1441,22 @@ def create_app_handler_service(
             # Inject workflow_id so run() can access it via input.workflow_id
             input_data.workflow_id = workflow_id
 
+            from application_sdk.execution.retry import (  # noqa: PLC0415 — cold path: per-request workflow start
+                _to_temporal_retry_policy,
+            )
+
+            _temporal_retry = (
+                _to_temporal_retry_policy(_workflow_config.workflow_retry_policy)
+                if _workflow_config.workflow_retry_policy is not None
+                else None
+            )
+
             handle = await client.start_workflow(
                 app_cls._app_name,  # type: ignore[attr-defined]
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
+                retry_policy=_temporal_retry,
             )
             return JSONResponse(
                 content={

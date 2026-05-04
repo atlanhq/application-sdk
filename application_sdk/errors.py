@@ -32,6 +32,9 @@ APP_CONTEXT_ERROR = ErrorCode("APP", 3)
 APP_NOT_FOUND = ErrorCode("APP", 4)
 APP_ALREADY_REGISTERED = ErrorCode("APP", 5)
 TASK_NOT_FOUND = ErrorCode("APP", 6)
+APP_AUTH = ErrorCode("APP", 7)
+APP_RATE_LIMITED = ErrorCode("APP", 8)
+APP_UPSTREAM_UNAVAILABLE = ErrorCode("APP", 9)
 
 # STR - Storage errors
 STORAGE_NOT_FOUND = ErrorCode("STR", 1)

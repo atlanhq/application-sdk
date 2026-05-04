@@ -82,6 +82,29 @@ AGGRESSIVE_RETRY = RetryPolicy(
 """Aggressive retry policy for transient failures."""
 
 
+DEFAULT_WORKFLOW_RETRY = RetryPolicy(
+    max_attempts=2,
+    initial_interval=timedelta(minutes=2),
+    max_interval=timedelta(minutes=10),
+    backoff_coefficient=2.0,
+    non_retryable_errors=(
+        "NonRetryableError",
+        "AuthError",
+        "ValidationError",
+    ),
+)
+"""Default workflow-level retry policy.
+
+Applied to ``client.start_workflow()`` so a workflow that fails for a transient
+reason (activity exhausted retries, worker host crashed, etc.) gets one fresh
+attempt with a clean activity-retry budget. Deterministic failures
+(``NonRetryableError`` and its subclasses) skip the retry.
+
+Apps that are not idempotent across full workflow restart should pass
+``workflow_retry_policy=NO_RETRY`` to ``create_app_handler_service`` to opt out.
+"""
+
+
 def _to_temporal_retry_policy(policy: RetryPolicy) -> _TemporalRetryPolicy:
     """Convert a framework :class:`RetryPolicy` to ``temporalio.common.RetryPolicy``.
 

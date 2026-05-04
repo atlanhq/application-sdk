@@ -47,9 +47,12 @@ from application_sdk.contracts.storage import (
 )
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.errors import (
+    APP_AUTH,
     APP_CONTEXT_ERROR,
     APP_ERROR,
     APP_NON_RETRYABLE,
+    APP_RATE_LIMITED,
+    APP_UPSTREAM_UNAVAILABLE,
     ErrorCode,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -262,6 +265,40 @@ class RetryableError(AppError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
+
+
+class AuthError(NonRetryableError):
+    """Tenant-side authentication or authorization failure.
+
+    Use for 401/403 from upstream APIs, expired credentials, or revoked tokens.
+    Workflow-level and activity-level retries both stop on this exception
+    (configure RetryPolicy ``non_retryable_error_types`` to include
+    ``"AuthError"``). Resolution requires tenant config change, not retry.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_AUTH
+
+
+class RateLimited(RetryableError):
+    """Upstream rate limit hit (HTTP 429 or equivalent).
+
+    Activity-level retry with exponential backoff usually clears this; if the
+    activity exhausts attempts, workflow-level retry gets a fresh budget after
+    a longer cooldown.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_RATE_LIMITED
+
+
+class UpstreamUnavailable(RetryableError):
+    """Upstream dependency is down or unreachable (HTTP 5xx, connection refused).
+
+    Examples: Atlas metadata store, Iceberg metastore, source DB. Pair with a
+    long-tailed retry policy on dependent activities so the workflow naturally
+    succeeds when the upstream returns.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_UPSTREAM_UNAVAILABLE
 
 
 # =============================================================================

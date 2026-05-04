@@ -3440,3 +3440,110 @@ class TestConfigEndpointPersistence:
             response = client.get("/workflows/v1/config/round-trip")
         assert response.status_code == 200
         assert response.json()["data"] == {"hello": "world"}
+
+
+class TestWorkflowRetryPolicy:
+    """workflow_retry_policy plumbed from create_app_handler_service into start_workflow."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _build_client(self, *, workflow_retry_policy=None, override=False):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+
+        class _RetryApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        handler = _TestHandler()
+        kwargs: dict = {
+            "app_name": "retry-test",
+            "app_class": _RetryApp,
+            "temporal_host": "temporal:7233",
+        }
+        if override:
+            kwargs["workflow_retry_policy"] = workflow_retry_policy
+
+        svc = create_app_handler_service(handler, **kwargs)
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-retry"
+        mock_handle.result_run_id = "run-retry"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        return TestClient(svc, raise_server_exceptions=False), mock_client, patcher
+
+    def test_default_workflow_retry_applied(self) -> None:
+        """Default DEFAULT_WORKFLOW_RETRY is forwarded to start_workflow."""
+        client, mock_client, patcher = self._build_client()
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            retry = kwargs["retry_policy"]
+            assert retry is not None
+            assert retry.maximum_attempts == 2
+            assert "NonRetryableError" in (retry.non_retryable_error_types or [])
+            assert "AuthError" in (retry.non_retryable_error_types or [])
+        finally:
+            patcher.stop()
+
+    def test_explicit_none_disables_workflow_retry(self) -> None:
+        """workflow_retry_policy=NO_RETRY → maximum_attempts=1 (no workflow retry)."""
+        from application_sdk.execution.retry import NO_RETRY
+
+        client, mock_client, patcher = self._build_client(
+            workflow_retry_policy=NO_RETRY, override=True
+        )
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            retry = kwargs["retry_policy"]
+            assert retry is not None
+            assert retry.maximum_attempts == 1
+        finally:
+            patcher.stop()
+
+    def test_custom_policy_with_extra_non_retryables(self) -> None:
+        """Custom RetryPolicy reaches start_workflow unchanged."""
+        from datetime import timedelta
+
+        from application_sdk.execution.retry import RetryPolicy
+
+        custom = RetryPolicy(
+            max_attempts=5,
+            initial_interval=timedelta(seconds=10),
+            non_retryable_errors=("AuthError", "PreflightError"),
+        )
+        client, mock_client, patcher = self._build_client(
+            workflow_retry_policy=custom, override=True
+        )
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            retry = kwargs["retry_policy"]
+            assert retry.maximum_attempts == 5
+            assert retry.initial_interval == timedelta(seconds=10)
+            assert set(retry.non_retryable_error_types or []) == {
+                "AuthError",
+                "PreflightError",
+            }
+        finally:
+            patcher.stop()
