@@ -1,9 +1,9 @@
 # RCA: Temporal Worker Shutdown Deadlock — Phantom Task Slot
 
 **Date:** 2026-03-27
-**Component:** application-sdk (`Worker._shutdown_worker`)
+**Component:** application-sdk (`AppWorker.__aexit__`)
 **Impact:** Worker pod stuck in Terminating state for 12 hours, blocking workflow processing
-**Fix:** Add event loop drain delay before `worker.shutdown()`
+**Fix:** Add event-loop yield in `AppWorker.__aexit__` before delegating to `Worker.__aexit__`
 
 ---
 
@@ -20,9 +20,9 @@ A race condition between SIGTERM signal handling and the Temporal SDK's activity
 1. The worker received an activity (`save_workflow_run_state`, attempt 2)
 2. The activity failed — Atlas API rejected the payload (`appWorkflowRunDag exceeds limit of 100000 characters`)
 3. **3 seconds later**, SIGTERM arrived (deployment rollout)
-4. The signal handler called `asyncio.create_task(self._shutdown_worker())`
-5. `_shutdown_worker()` called `self.workflow_worker.shutdown()` immediately
-6. `shutdown()` stopped all pollers and waited for in-flight task slots to drain
+4. The Temporal Python SDK's `Worker.run()` handles SIGTERM internally: it signals its internal task to stop, causing `worker.run()` to return
+5. The `async with AppWorker(...):` context manager exited, invoking `AppWorker.__aexit__`
+6. `AppWorker.__aexit__` immediately delegated to `Worker.__aexit__`, which called `shutdown()` — stopping all pollers and waiting for in-flight task slots to drain
 
 ### Why it deadlocked
 
@@ -33,7 +33,7 @@ The Temporal Python SDK processes activity completions in an async coroutine (`_
 3. Call `await self._bridge_worker().complete_activity_task(completion)` (line 392) — this sends `RespondActivityTaskFailed` to the Temporal server
 4. Remove the activity from `_running_activities` (line 393) — this frees the task slot
 
-The SIGTERM signal handler created a new asyncio task (`_shutdown_worker`) which competed with the `_run_activity` coroutine on the event loop. Since `_shutdown_worker` had no `await` before calling `shutdown()`, it ran to `shutdown()` without yielding, changing the SDK's internal state before `_run_activity` could reach `complete_activity_task()`.
+When `Worker.run()` returned due to SIGTERM, `AppWorker.__aexit__` was called immediately — with no `await` before delegating to `Worker.__aexit__`. This meant `worker.shutdown()` ran without yielding the event loop, changing the Temporal SDK's internal state before `_run_activity` could reach `complete_activity_task()`.
 
 ### Evidence from production metrics
 
@@ -57,8 +57,8 @@ The worker had zero pollers (shutdown stopped them) but still held 1 activity + 
 |---|---|
 | 11:14:53 | Worker pod `z2rwj` starts |
 | 11:15:05 | Activity `save_workflow_run_state` (attempt 2) received and executed — Atlas error |
-| 11:15:08 | SIGTERM received — `_shutdown_worker` task created |
-| 11:15:08 | `worker.shutdown()` called — pollers stopped, waiting for in-flight slots |
+| 11:15:08 | SIGTERM received — Temporal SDK signals `worker.run()` to stop |
+| 11:15:08 | `worker.run()` returns → `AppWorker.__aexit__` → `Worker.__aexit__` → `worker.shutdown()` called — pollers stopped, waiting for in-flight slots |
 | 11:15:08+ | `_run_activity` never reaches `complete_activity_task()` — slot never freed |
 | 12:46:26 | Temporal server-side terminates the workflow (heartbeat timeout) |
 | 12:46:26+ | Worker never learns about termination (pollers stopped) |
@@ -66,7 +66,7 @@ The worker had zero pollers (shutdown stopped them) but still held 1 activity + 
 
 ## Fix
 
-Add an `asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)` before calling `worker.shutdown()` in `_shutdown_worker()`. This yields the event loop, allowing any pending `_run_activity` coroutines to reach `complete_activity_task()` and flush their RPCs before shutdown changes the SDK state.
+Add an `asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)` in `AppWorker.__aexit__` before delegating to `Worker.__aexit__`. This yields the event loop, allowing any pending `_run_activity` coroutines to reach `complete_activity_task()` and flush their RPCs before shutdown changes the SDK state.
 
 ### Why `asyncio.sleep` is correct here
 
@@ -79,15 +79,15 @@ Once `complete_activity_task()` is called, the Rust core knows about the complet
 **`application_sdk/constants.py`**
 - Added `SHUTDOWN_DRAIN_DELAY_SECONDS` (default: 5, configurable via `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS`)
 
-**`application_sdk/worker.py`**
-- `_shutdown_worker()`: added `await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)` before `worker.shutdown()`
+**`application_sdk/execution/_temporal/worker.py`**
+- `AppWorker.__aexit__()`: added `await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)` before delegating to `self._worker.__aexit__()`
 
-**`tests/unit/test_worker.py`**
+**`tests/unit/execution/test_worker.py`**
 - `TestShutdownDrainDelay`: 4 new tests that reproduce the race condition and prove the fix:
-  - `test_without_fix_activity_completion_is_preempted` — with delay=0 (old code), the activity completion never runs. **Reproduces the bug.**
-  - `test_with_fix_activity_completion_runs_before_shutdown` — with delay>0 (new code), the activity completion runs first. **Proves the fix.**
-  - `test_fix_flushes_multiple_pending_completions` — multiple pending completions all flush
-  - `test_shutdown_completes_even_with_zero_delay` — no regression when no in-flight work
+  - `test_without_drain_delay_activity_completion_preempted` — with delay=0 (old code), the activity completion never runs. **Reproduces the bug.**
+  - `test_with_drain_delay_activity_completes_before_shutdown` — with delay>0 (new code), the activity completion runs first. **Proves the fix.**
+  - `test_drain_delay_flushes_multiple_pending_completions` — multiple pending completions all flush
+  - `test_aexit_completes_even_with_zero_delay` — no regression when no in-flight work
 
 ## Contributing Factors
 

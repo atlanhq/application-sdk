@@ -10,14 +10,17 @@ from application_sdk.observability.correlation import (
     get_correlation_context,
     set_correlation_context,
 )
+from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 
 __all__ = [
-    "ExecutionContext",
-    "get_execution_context",
-    "set_execution_context",
-    "request_context",
-    "correlation_context",
+    "AtlanLoggerAdapter",
     "CorrelationContext",
+    "ExecutionContext",
+    "correlation_context",
     "get_correlation_context",
+    "get_execution_context",
+    "get_logger",
+    "request_context",
     "set_correlation_context",
+    "set_execution_context",
 ]

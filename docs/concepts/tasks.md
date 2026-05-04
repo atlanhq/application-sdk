@@ -42,7 +42,7 @@ Every task boundary is a typed contract. The SDK validates contract fields at cl
 ```python
 from typing import Annotated
 from application_sdk.contracts import Input, Output
-from application_sdk.contracts.types import MaxItems, FileReference
+from application_sdk.contracts import MaxItems, FileReference
 
 class ProcessInput(Input):
     items: Annotated[list[str], MaxItems(5000)]
@@ -83,12 +83,12 @@ class MyProgress(HeartbeatDetails):
 class MyConnector(App):
     @task(heartbeat_timeout_seconds=60)
     async def process_batches(self, input: MyInput) -> MyOutput:
-        prev = await self.task_context.get_heartbeat_details(MyProgress)
+        prev = self.task_context.get_heartbeat_details(MyProgress)
         start_id = prev.last_id if prev else None
 
         for batch in get_batches(start_from=start_id):
             process(batch)
-            await self.task_context.heartbeat(
+            self.task_context.heartbeat(
                 MyProgress(last_id=batch.id, records_done=batch.count)
             )
 ```
@@ -101,10 +101,6 @@ Inside a `@task` method, access infrastructure through `self.context`:
 class MyConnector(App):
     @task
     async def fetch(self, input: FetchInput) -> FetchOutput:
-        # State store
-        prev_state = await self.context.load_state("last_run")
-        await self.context.save_state("last_run", {"timestamp": "2025-01-01"})
-
         # Secret store
         api_key = await self.context.get_secret("my-api-key")
 
@@ -113,26 +109,18 @@ class MyConnector(App):
         ...
 ```
 
-You do not create `DaprClient` instances or call `StateStore`/`SecretStore` statics. Infrastructure is injected by the framework -- Dapr-backed in production, in-memory mocks in tests.
+You do not create `DaprClient` instances or call `SecretStore` statics. Infrastructure is injected by the framework -- Dapr-backed in production, in-memory mocks in tests.
 
 ## Blocking Sync Code
 
-If your task calls a blocking (non-async) library, use `run_in_thread` to avoid stalling the event loop and blocking heartbeats:
-
-```python
-class MyConnector(App):
-    @task(heartbeat_timeout_seconds=60)
-    async def fetch(self, input: FetchInput) -> FetchOutput:
-        result = await self.task_context.run_in_thread(sync_db_call, input.query)
-        return FetchOutput(data=result)
-```
+Prefer native async libraries wherever possible. For legacy sync code that cannot be rewritten, `self.task_context.run_in_thread(fn, *args)` offloads the call to a thread pool, preventing it from stalling the event loop and blocking heartbeats. See [ADR-0010](../adr/0010-async-first-blocking-code.md) for when this is appropriate and the required internal-timeout precautions.
 
 ## FileReference: Passing Large Data Between Tasks
 
 Temporal has a ~2 MB payload limit. Use `FileReference` for large data:
 
 ```python
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts import FileReference
 
 class FetchOutput(Output):
     results: FileReference  # automatically uploaded when output leaves the task

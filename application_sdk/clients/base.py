@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from httpx import Headers
@@ -10,7 +10,7 @@ from httpx._types import (
     RequestFiles,
 )
 
-from application_sdk.clients import ClientInterface
+from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.ssl_utils import get_ssl_context
 from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
 from application_sdk.observability.logger_adaptor import get_logger
@@ -89,7 +89,7 @@ class BaseClient(ClientInterface):
 
     def __init__(
         self,
-        credentials: Dict[str, Any] = {},
+        credentials: dict[str, Any] = {},
         http_headers: HeaderTypes = {},
     ):
         """
@@ -144,11 +144,11 @@ class BaseClient(ClientInterface):
     async def execute_http_get_request(
         self,
         url: str,
-        headers: Optional[HeaderTypes] = None,
-        params: Optional[QueryParamTypes] = None,
-        auth: Optional[AuthTypes] = None,
+        headers: HeaderTypes | None = None,
+        params: QueryParamTypes | None = None,
+        auth: AuthTypes | None = None,
         timeout: int = 10,
-    ) -> Optional[httpx.Response]:
+    ) -> httpx.Response | None:
         """
         Perform an HTTP GET request using the configured transport.
 
@@ -219,17 +219,17 @@ class BaseClient(ClientInterface):
     async def execute_http_post_request(
         self,
         url: str,
-        data: Optional[RequestData] = None,
-        json_data: Optional[Any] = None,
-        content: Optional[bytes] = None,
-        files: Optional[RequestFiles] = None,
-        headers: Optional[HeaderTypes] = None,
-        params: Optional[QueryParamTypes] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        auth: Optional[AuthTypes] = None,
+        data: RequestData | None = None,
+        json_data: Any | None = None,
+        content: bytes | None = None,
+        files: RequestFiles | None = None,
+        headers: HeaderTypes | None = None,
+        params: QueryParamTypes | None = None,
+        cookies: dict[str, str] | None = None,
+        auth: AuthTypes | None = None,
         follow_redirects: bool = True,
         timeout: int = 30,
-    ) -> Optional[httpx.Response]:
+    ) -> httpx.Response | None:
         """
         Perform an HTTP POST request using the configured transport.
 

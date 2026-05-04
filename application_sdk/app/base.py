@@ -888,18 +888,6 @@ class App(ABC):
             f"{type(self).__name__} must implement run() or define @entrypoint methods."
         )
 
-    async def call(self, *args, **kwargs):
-        raise NotImplementedError(
-            "Inter-app call() is deactivated pending BLDX-878. "
-            "Use Automation Engine DAG orchestration for multi-app coordination."
-        )
-
-    async def call_by_name(self, *args, **kwargs):
-        raise NotImplementedError(
-            "Inter-app call_by_name() is deactivated pending BLDX-878. "
-            "Use Automation Engine DAG orchestration for multi-app coordination."
-        )
-
     def continue_with(self, input: Input) -> Never:
         """Restart this App with new input, preserving correlation context.
 

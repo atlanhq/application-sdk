@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.4.0
-source-sha:    89518263a0af59d32605473d0fb31524aae284b2
-source-date:   2026-04-30T12:14:11Z
+sdk-version:   3.5.0
+source-sha:    82a72585d212e61c1467394c6dfd030464cca082
+source-date:   2026-05-04T12:57:19+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,13 +18,17 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy | 15 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 16 |
+| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 27 |
-| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 40 |
+| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 10 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 20 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 8 |
+| `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 10 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 4 |
@@ -34,7 +38,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 ## `application_sdk.app`
 
-Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy
+Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool
 
 ### Classes
 
@@ -144,6 +148,169 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `task(func: F | None = None, ...)`
 - **Summary:** Decorator to mark a method as a task (Temporal activity).
 - **Defined in:** `application_sdk/app/task.py`
+
+### Functions
+
+#### `mcp_tool`
+
+- **Import:** `from application_sdk.app import mcp_tool`
+- **Summary:** _(no docstring)_
+
+## `application_sdk.clients`
+
+Connection clients (SQL, Redis, Azure) and ClientInterface ABC
+
+### Classes
+
+#### `AsyncBaseSQLClient`
+
+- **Import:** `from application_sdk.clients import AsyncBaseSQLClient`
+- **Signature:** `class AsyncBaseSQLClient`
+- **Summary:** Asynchronous SQL client for database operations.
+- **Defined in:** `application_sdk/clients/sql.py`
+
+#### `AzureAuthProvider`
+
+- **Import:** `from application_sdk.clients import AzureAuthProvider`
+- **Signature:** `class AzureAuthProvider()`
+- **Summary:** Azure authentication provider for handling Service Principal authentication.
+- **Defined in:** `application_sdk/clients/azure/auth.py`
+
+#### `AzureClient`
+
+- **Import:** `from application_sdk.clients import AzureClient`
+- **Signature:** `class AzureClient(credentials: dict[str, Any] | None = None, max_workers: int = 10, **kwargs: Any)`
+- **Summary:** Main Azure client for the application-sdk framework.
+- **Defined in:** `application_sdk/clients/azure/client.py`
+
+#### `BaseClient`
+
+- **Import:** `from application_sdk.clients import BaseClient`
+- **Signature:** `class BaseClient(credentials: dict[str, Any] = {}, http_headers: HeaderTypes = {})`
+- **Summary:** Base client for non-SQL based applications.
+- **Defined in:** `application_sdk/clients/base.py`
+
+#### `BaseSQLClient`
+
+- **Import:** `from application_sdk.clients import BaseSQLClient`
+- **Signature:** `class BaseSQLClient(use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR, ...)`
+- **Summary:** SQL client for database operations.
+- **Defined in:** `application_sdk/clients/sql.py`
+
+#### `ClientInterface`
+
+- **Import:** `from application_sdk.clients import ClientInterface`
+- **Signature:** `class ClientInterface`
+- **Summary:** Base interface class for implementing client connections.
+- **Defined in:** `application_sdk/clients/_interface.py`
+
+#### `DatabaseConfig`
+
+- **Import:** `from application_sdk.clients import DatabaseConfig`
+- **Signature:** `class DatabaseConfig`
+- **Summary:** Pydantic model for database connection configuration.
+- **Defined in:** `application_sdk/clients/models.py`
+
+#### `RedisClient`
+
+- **Import:** `from application_sdk.clients import RedisClient`
+- **Signature:** `class RedisClient()`
+- **Summary:** Synchronous Redis client for distributed locking.
+- **Defined in:** `application_sdk/clients/redis.py`
+
+#### `RedisClientAsync`
+
+- **Import:** `from application_sdk.clients import RedisClientAsync`
+- **Signature:** `class RedisClientAsync()`
+- **Summary:** Asynchronous Redis client for distributed locking.
+- **Defined in:** `application_sdk/clients/redis.py`
+
+### Functions
+
+#### `create_ssl_context_with_custom_certs`
+
+- **Import:** `from application_sdk.clients import create_ssl_context_with_custom_certs`
+- **Signature:** `create_ssl_context_with_custom_certs(cert_dir: str)`
+- **Summary:** Create an SSL context that includes both default system certificates and custom certificates.
+- **Defined in:** `application_sdk/clients/ssl_utils.py`
+
+#### `get_ssl_context`
+
+- **Import:** `from application_sdk.clients import get_ssl_context`
+- **Signature:** `get_ssl_context()`
+- **Summary:** Get the SSL verification context for HTTP clients (httpx, aiohttp, etc.).
+- **Defined in:** `application_sdk/clients/ssl_utils.py`
+
+## `application_sdk.common`
+
+Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType
+
+### Classes
+
+#### `DataframeType`
+
+- **Import:** `from application_sdk.common import DataframeType`
+- **Signature:** `class DataframeType`
+- **Summary:** Enumeration of dataframe types.
+- **Defined in:** `application_sdk/common/types.py`
+
+#### `TaskResult`
+
+- **Import:** `from application_sdk.common import TaskResult`
+- **Signature:** `class TaskResult`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/models.py`
+
+#### `TaskStatistics`
+
+- **Import:** `from application_sdk.common import TaskStatistics`
+- **Signature:** `class TaskStatistics(total_record_count: int = 0, ...)`
+- **Summary:** Statistics produced by a completed task.
+- **Defined in:** `application_sdk/common/models.py`
+
+### Functions
+
+#### `get_actual_cpu_count`
+
+- **Import:** `from application_sdk.common import get_actual_cpu_count`
+- **Signature:** `get_actual_cpu_count()`
+- **Summary:** Get the actual number of CPUs available to the current process.
+- **Defined in:** `application_sdk/common/concurrency.py`
+
+#### `get_safe_num_threads`
+
+- **Import:** `from application_sdk.common import get_safe_num_threads`
+- **Signature:** `get_safe_num_threads()`
+- **Summary:** Get recommended number of threads for parallel processing.
+- **Defined in:** `application_sdk/common/concurrency.py`
+
+#### `normalize_filters`
+
+- **Import:** `from application_sdk.common import normalize_filters`
+- **Signature:** `normalize_filters(filter_dict: Dict[str, List[str] | str], is_include: bool)`
+- **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `prepare_filters`
+
+- **Import:** `from application_sdk.common import prepare_filters`
+- **Signature:** `prepare_filters(include_filter_str: str, exclude_filter_str: str)`
+- **Summary:** Prepare include/exclude filters for SQL queries.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `prepare_query`
+
+- **Import:** `from application_sdk.common import prepare_query`
+- **Signature:** `prepare_query(query: Optional[str], ...)`
+- **Summary:** Prepare a SQL query by applying include/exclude filters.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `read_sql_files`
+
+- **Import:** `from application_sdk.common import read_sql_files`
+- **Signature:** `read_sql_files(queries_prefix: str = f'{os.path.dirname(os.path.abspath(__file__))}/queries')`
+- **Summary:** Read all SQL files from a directory and return as a name→content mapping.
+- **Defined in:** `application_sdk/common/sql_filters.py`
 
 ## `application_sdk.contracts`
 
@@ -618,6 +785,13 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Create a CredentialRef for an OAuth client credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
 
+#### `parse_credentials_extra`
+
+- **Import:** `from application_sdk.credentials import parse_credentials_extra`
+- **Signature:** `parse_credentials_extra(credentials: dict[str, Any])`
+- **Summary:** Parse the 'extra' field from credentials, handling both string and dict inputs.
+- **Defined in:** `application_sdk/credentials/utils.py`
+
 #### `register_credential_type`
 
 - **Import:** `from application_sdk.credentials import register_credential_type`
@@ -631,6 +805,84 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Signature:** `transform_agent_credentials(agent_json: dict[str, Any])`
 - **Summary:** Transform raw agent JSON into the format connectors expect.
 - **Defined in:** `application_sdk/common/transforms.py`
+
+## `application_sdk.errors`
+
+Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.)
+
+### Classes
+
+#### `ErrorCode`
+
+- **Import:** `from application_sdk.errors import ErrorCode`
+- **Signature:** `class ErrorCode(component: str, id: int) -> None`
+- **Summary:** Structured error code for monitoring and alerting.
+- **Defined in:** `application_sdk/errors.py`
+
+### Constants and Enums
+
+#### `APP_ERROR`
+
+- **Import:** `from application_sdk.errors import APP_ERROR`
+- **Signature:** `APP_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `APP_NON_RETRYABLE`
+
+- **Import:** `from application_sdk.errors import APP_NON_RETRYABLE`
+- **Signature:** `APP_NON_RETRYABLE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `CONTRACT_VALIDATION`
+
+- **Import:** `from application_sdk.errors import CONTRACT_VALIDATION`
+- **Signature:** `CONTRACT_VALIDATION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `CREDENTIAL_ERROR`
+
+- **Import:** `from application_sdk.errors import CREDENTIAL_ERROR`
+- **Signature:** `CREDENTIAL_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `CREDENTIAL_NOT_FOUND`
+
+- **Import:** `from application_sdk.errors import CREDENTIAL_NOT_FOUND`
+- **Signature:** `CREDENTIAL_NOT_FOUND`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `HANDLER_ERROR`
+
+- **Import:** `from application_sdk.errors import HANDLER_ERROR`
+- **Signature:** `HANDLER_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `PAYLOAD_SAFETY`
+
+- **Import:** `from application_sdk.errors import PAYLOAD_SAFETY`
+- **Signature:** `PAYLOAD_SAFETY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `SECRET_NOT_FOUND`
+
+- **Import:** `from application_sdk.errors import SECRET_NOT_FOUND`
+- **Signature:** `SECRET_NOT_FOUND`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `STORAGE_NOT_FOUND`
+
+- **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
+- **Signature:** `STORAGE_NOT_FOUND`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
 
 ## `application_sdk.execution`
 
@@ -1106,11 +1358,40 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
 
+## `application_sdk.main`
+
+Dev entry point — run_dev_combined() and AppConfig for local execution and container startup
+
+### Classes
+
+#### `AppConfig`
+
+- **Import:** `from application_sdk.main import AppConfig`
+- **Signature:** `class AppConfig(mode: str, ...)`
+- **Summary:** Runtime configuration for app execution.
+- **Defined in:** `application_sdk/main.py`
+
+### Functions
+
+#### `run_dev_combined`
+
+- **Import:** `from application_sdk.main import run_dev_combined`
+- **Signature:** `run_dev_combined(app_class: type[App], ...)`
+- **Summary:** Run worker + handler in a single process for local development.
+- **Defined in:** `application_sdk/main.py`
+
 ## `application_sdk.observability`
 
 Logging context — ExecutionContext, CorrelationContext, request/correlation helpers
 
 ### Classes
+
+#### `AtlanLoggerAdapter`
+
+- **Import:** `from application_sdk.observability import AtlanLoggerAdapter`
+- **Signature:** `class AtlanLoggerAdapter(logger_name: str)`
+- **Summary:** A custom logger adapter for Atlan that extends AtlanObservability.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 #### `CorrelationContext`
 
@@ -1141,6 +1422,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `get_execution_context()`
 - **Summary:** Return the current execution context (never raises).
 - **Defined in:** `application_sdk/observability/context.py`
+
+#### `get_logger`
+
+- **Import:** `from application_sdk.observability import get_logger`
+- **Signature:** `get_logger(name: str | None = None)`
+- **Summary:** Get or create an instance of AtlanLoggerAdapter.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 #### `set_correlation_context`
 
@@ -1498,7 +1786,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ## Contracts
 
-Strongly-typed Inputs/Outputs for SDK methods. All inherit from `application_sdk.contracts.base.{Input, Output}` (Pydantic).
+Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.contracts` inherit from `Input`/`Output`; contracts in `application_sdk.handler.contracts` are direct `pydantic.BaseModel` subclasses.
 
 ### `application_sdk.contracts`
 
@@ -2024,6 +2312,21 @@ Strongly-typed Inputs/Outputs for SDK methods. All inherit from `application_sdk
   - `total_record_count: int` `= 0`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
+#### `FetchViewsInput`
+
+- **Import:** `from application_sdk.templates.contracts import FetchViewsInput`
+- **Summary:** Input for fetching views from the source.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
+#### `FetchViewsOutput`
+
+- **Import:** `from application_sdk.templates.contracts import FetchViewsOutput`
+- **Summary:** Output from fetching views.
+- **Fields:**
+  - `chunk_count: int` `= 0`
+  - `total_record_count: int` `= 0`
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
 #### `IncrementalExtractionInput`
 
 - **Import:** `from application_sdk.templates.contracts import IncrementalExtractionInput`
@@ -2215,18 +2518,18 @@ Strongly-typed Inputs/Outputs for SDK methods. All inherit from `application_sdk
 #### `UploadInput`
 
 - **Import:** `from application_sdk.templates.contracts import UploadInput`
-- **Summary:** Input for the upload_to_atlan task.
+- **Summary:** Input for the deprecated upload_to_atlan task.
 - **Fields:**
-  - `output_path: str` `= ''` — Object store prefix to migrate from the deployment store to the upstream store.
+  - `output_path: str` `= ''` — Local path (file or directory) to push to the platform via App.upload.
 - **Defined in:** `application_sdk/templates/contracts/base_metadata_extraction.py`
 
 #### `UploadOutput`
 
 - **Import:** `from application_sdk.templates.contracts import UploadOutput`
-- **Summary:** Output from the upload_to_atlan task.
+- **Summary:** Output from the deprecated upload_to_atlan task.
 - **Fields:**
-  - `migrated_files: int` `= 0` — Number of files successfully migrated.
-  - `total_files: int` `= 0` — Total number of files found for migration.
+  - `migrated_files: int` `= 0` — Number of files successfully uploaded.
+  - `total_files: int` `= 0` — Total number of files attempted (matches migrated_files on success).
 - **Defined in:** `application_sdk/templates/contracts/base_metadata_extraction.py`
 
 #### `WriteCurrentStateInput`

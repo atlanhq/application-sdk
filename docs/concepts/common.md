@@ -4,36 +4,25 @@ This section describes utility functions and classes in the `application_sdk.com
 
 ## Logging
 
-v3 uses `structlog` for structured logging. The v2 patterns of `workflow.logger` and `activity.logger` from Temporal are no longer used -- all logging goes through `structlog`.
+v3 uses `loguru` (via an `AtlanLoggerAdapter` wrapper) for structured logging. The v2 patterns of `workflow.logger` and `activity.logger` from Temporal are no longer used — all logging goes through `get_logger`.
 
 ### Getting a Logger
 
 ```python
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability import get_logger
 
 logger = get_logger(__name__)
 
 def my_function(data):
-    logger.info("processing_data", data=data)
+    logger.info("processing_data: %s", data)
     try:
         result = process(data)
-        logger.info("processing_complete", rows=result.count)
+        logger.info("processing_complete: rows=%s", result.count)
     except Exception:
         logger.error("processing_failed", exc_info=True)
 ```
 
-### Structured Context
-
-`structlog` automatically includes bound context in every log message. Inside `@task` methods and handlers, the framework binds workflow and request context (workflow_id, run_id, etc.) automatically.
-
-```python
-# Bind context for a block of work
-logger = get_logger(__name__).bind(
-    connection_id="conn-123",
-    step="metadata_extraction",
-)
-logger.info("starting_extraction")  # includes connection_id and step
-```
+Use `%`-style format strings in message bodies. The only kwarg you should ever pass to a log call is `exc_info=True` (or `exc_info=exc`); embed every other field — `correlation_id`, `workflow_id`, `run_id`, etc. — in the message body via %-style so it is always visible in log output regardless of pipeline configuration.
 
 ### Configuration
 
@@ -41,7 +30,7 @@ Logging is configured via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LOG_LEVEL` | `INFO` | Minimum log level |
+| `ATLAN_LOG_LEVEL` | `INFO` | Minimum log level (fallback: `LOG_LEVEL`) |
 | `ENABLE_OTLP_LOGS` | `false` | Export logs via OpenTelemetry Protocol |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP endpoint |
 
@@ -49,9 +38,14 @@ Logging is configured via environment variables:
 
 The SDK provides a standardized error system with error codes and categories.
 
-### Error Code Format
+The SDK has two error-code namespaces:
 
-Error codes follow the format: `Atlan-{Component}-{HTTP_Code}-{Unique_ID}`
+- **`application_sdk.common.error_codes`** — categorised HTTP-style codes for client-facing errors. Format: `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` (e.g. `ATLAN-CLIENT-403-00`).
+- **`application_sdk.errors`** — app-framework codes for Temporal / monitoring signals. Format: `AAF-{COMP}-{NNN}` (e.g. `AAF-APP-001`).
+
+### Error Code Format (`application_sdk.common.error_codes`)
+
+Error codes follow the format: `ATLAN-{Component}-{HTTP_Code}-{Unique_ID}`
 
 Example: `ATLAN-CLIENT-403-00` for a request validation error.
 
@@ -72,8 +66,23 @@ from application_sdk.common.error_codes import ClientError
 try:
     validate_input(data)
 except ValidationError as e:
-    raise ClientError(f"{ClientError.INPUT_VALIDATION_ERROR}: {e}") from e
+    raise ClientError(f"{ClientError.REQUEST_VALIDATION_ERROR}: {e}") from e
 ```
+
+For application-level error codes, use the top-level `application_sdk.errors` module:
+
+```python
+from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, HANDLER_ERROR
+
+# Log structured error codes for monitoring/alerting
+logger.error("Task failed [%s]", APP_ERROR, exc_info=exc)
+
+# Reference error codes in ApplicationError for Temporal retry control
+from application_sdk.execution import ApplicationError
+raise ApplicationError(str(APP_NON_RETRYABLE), non_retryable=True)
+```
+
+Available error constants: `APP_ERROR`, `APP_NON_RETRYABLE`, `HANDLER_ERROR`, `CONTRACT_VALIDATION`, `PAYLOAD_SAFETY`, `CREDENTIAL_ERROR`, `CREDENTIAL_NOT_FOUND`, `STORAGE_NOT_FOUND`, `SECRET_NOT_FOUND`.
 
 ## SQL Utilities
 
@@ -82,7 +91,7 @@ except ValidationError as e:
 Reads all `.sql` files from a directory and returns them as a dictionary:
 
 ```python
-from application_sdk.common.utils import read_sql_files
+from application_sdk.common.sql_filters import read_sql_files
 
 SQL_QUERIES = read_sql_files("/path/to/queries")
 fetch_tables_query = SQL_QUERIES.get("FETCH_TABLES")
@@ -95,7 +104,7 @@ Keys are uppercase filenames without the `.sql` extension.
 Formats a SQL query with include/exclude filters:
 
 ```python
-from application_sdk.common.utils import prepare_query
+from application_sdk.common.sql_filters import prepare_query
 
 query = prepare_query(
     base_query,
@@ -109,7 +118,7 @@ query = prepare_query(
 Parses JSON filter strings into regex patterns for SQL `WHERE` clauses:
 
 ```python
-from application_sdk.common.utils import prepare_filters
+from application_sdk.common.sql_filters import prepare_filters
 
 include_pattern, exclude_pattern = prepare_filters(
     '{"prod_db": ["analytics", "reporting"]}',
@@ -117,40 +126,13 @@ include_pattern, exclude_pattern = prepare_filters(
 )
 ```
 
-## AWS Utilities
-
-Helper functions for AWS RDS IAM authentication:
-
-```python
-from application_sdk.common.aws_utils import (
-    generate_aws_rds_token_with_iam_role,
-    generate_aws_rds_token_with_iam_user,
-    get_region_name_from_hostname,
-)
-
-# IAM role authentication
-token = generate_aws_rds_token_with_iam_role(
-    role_arn="arn:aws:iam::123456789:role/my-role",
-    host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-    user="admin",
-)
-
-# IAM user authentication
-token = generate_aws_rds_token_with_iam_user(
-    aws_access_key_id="AKIA...",
-    aws_secret_access_key="...",
-    host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-    user="admin",
-)
-```
-
 ## General Utilities
 
-| Function | Description |
-|----------|-------------|
-| `get_actual_cpu_count()` | CPU count respecting container limits |
-| `get_safe_num_threads()` | Reasonable thread count for parallel work (`cpu_count + 4`) |
-| `parse_credentials_extra(credentials)` | Parse the `extra` JSON field in a credentials dict |
+| Function | Import | Description |
+|----------|--------|-------------|
+| `get_actual_cpu_count()` | `application_sdk.common` | CPU count respecting container limits |
+| `get_safe_num_threads()` | `application_sdk.common` | Reasonable thread count for parallel work (`cpu_count * 2`, min 2) |
+| `parse_credentials_extra(credentials)` | `application_sdk.credentials` | Parse the `extra` JSON field in a credentials dict |
 
 ## Temporal Configuration
 

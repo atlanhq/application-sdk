@@ -76,6 +76,7 @@ nav:
   - Guides:
       # Core concepts
       - Getting Started: guides/getting-started.md
+      - Build Your First Connector: guides/build-your-first-app.md
       - Architecture: guides/architecture.md
 
       # Development guides
@@ -83,11 +84,20 @@ nav:
       - Contract Toolkit: guides/contract-toolkit.md
       - Custom Frontends with Atlantis: guides/atlantis.md
       - Secret Stores: guides/secretstores.md
+      - PKL Contracts: guides/pkl-contracts.md
+      - Deployment: guides/deployment.md
+      - Multi-App Coordination: guides/multi-app-coordination.md
 
       # Best practices & testing
       - Best Practices: guides/best-practices.md
+      - Integration Testing: guides/integration-testing.md
   - Concepts:
       - Apps: concepts/apps.md
+      - Contracts: concepts/contracts.md
+      - Credentials: concepts/credentials.md
+      - Infrastructure: concepts/infrastructure.md
+      - Storage: concepts/storage.md
+      - State, Secrets, Pub/Sub & Bindings: concepts/state-secrets-pubsub.md
       - Entry Points: concepts/entry-points.md
       - Tasks: concepts/tasks.md
       - Server: concepts/server.md
@@ -96,6 +106,7 @@ nav:
       - Handlers: concepts/handlers.md
       - MCP: concepts/mcp.md
       - Monitoring: concepts/monitoring.md
+      - Transformers: concepts/transformers.md
   - Migration:
       - What's New in v3: whats-new-v3.md
       - Upgrade Guide v3: upgrade-guide-v3.md
@@ -108,6 +119,7 @@ nav:
       - Documentation Updates: agents/docs-updates.md
       - Code Review: agents/review.md
       - DeepWiki MCP: agents/deepwiki.md
+      - SDK Capability Manifest: agents/sdk-capabilities.md
 
   - Standards:
       - Coding: standards/coding.md
@@ -121,8 +133,10 @@ nav:
       - Setup: standards/setup.md
       - DeepWiki MCP: standards/deepwiki.md
       - Review Checklist: standards/review-checklist.md
+      - Release Flow: standards/release-flow.md
+      - v3 Readiness: standards/v3-readiness.md
   - Architecture Decisions:
-      - adr/index.md
+      - Index: adr/index.md
       - adr/0001-per-app-handlers.md
       - adr/0002-per-app-workers.md
       - adr/0003-per-app-observability.md
@@ -134,5 +148,10 @@ nav:
       - adr/0009-separate-handler-worker-deployments.md
       - adr/0010-async-first-blocking-code.md
       - adr/0011-logging-level-guidelines.md
-  - Configuration Reference: configuration.md
+  - Reference:
+      - CLI: reference/cli.md
+      - HTTP API: reference/http-api.md
+      - Configuration: configuration.md
+  - Postmortems:
+      - Shutdown Drain Delay (2026-03-27): rca-shutdown-drain-delay-2026-03-27.md
   - API Reference: https://k.atlan.dev/application-sdk/main/api
