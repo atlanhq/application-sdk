@@ -24,6 +24,7 @@ from urllib.parse import quote_plus
 
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
+from application_sdk.clients.sql_typecasters import install_tolerant_text_decoder_hook
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
@@ -111,6 +112,12 @@ class BaseSQLClient(ClientInterface):
                 connect_args=self.DB_CONFIG.connect_args,
                 pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
+
+            # Install a tolerant UTF-8 text decoder on every new psycopg2/psycopg3
+            # connection so query-history rows containing non-UTF-8 bytes (e.g.
+            # 0x96 from Windows-1252 paste) yield U+FFFD instead of raising
+            # UnicodeDecodeError. Tracking: WARE-970.
+            install_tolerant_text_decoder_hook(self.engine)
 
             # Test connection briefly to validate credentials.
             # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
@@ -591,6 +598,10 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 connect_args=self.DB_CONFIG.connect_args,
                 pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
+
+            # Same WARE-970 tolerant-decoder hook as the sync client. Async
+            # engines surface DBAPI events on the underlying sync_engine.
+            install_tolerant_text_decoder_hook(self.engine.sync_engine)
 
             # Test connection briefly to validate credentials
             async with self.engine.connect() as _:

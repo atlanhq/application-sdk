@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.4.0"
+version = "3.5.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -35,7 +35,7 @@ dependencies = [
     "pyyaml>=6.0.2,<6.1.0",
     "obstore>=0.9.1,<0.10.0",
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
-    "temporalio>=1.7.1,<1.24.0",
+    "temporalio>=1.25.0,<1.27.0",
     "orjson>=3.11.6,<3.12.0",
 ]
 
@@ -51,7 +51,7 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 [project.optional-dependencies]
 # Backwards-compatibility shims (dapr/temporalio/orjson promoted to core in v3.1)
 workflows = [
-    "temporalio>=1.7.1,<1.24.0",
+    "temporalio>=1.25.0,<1.27.0",
     "orjson>=3.11.6,<3.12.0",
 ]
 # SQL connectors: SqlMetadataExtractor, SqlQueryExtractor, and any SQL-based connector
@@ -265,10 +265,11 @@ default-groups = ["dev", "test"]
 constraint-dependencies = [
     "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "protobuf>=6.33.5",          # CVE-2026-0994
-    "authlib>=1.6.7",            # CVE-2026-28802
+    "authlib>=1.6.11",           # CVE-2026-28802, GHSA-jj8c-mmj3-mmgv (CSRF via cache)
     "black>=26.3.1",             # CVE-2026-32274
     "pyjwt>=2.12.0",             # CVE-2026-32597
     "simpleeval>=1.0.5",         # CVE-2026-32640
+    "python-dotenv>=1.2.2",      # CVE-2026-28684 (symlink file overwrite)
 ]
 
 # Uncomment the following section in case you want to publish to testpypi
