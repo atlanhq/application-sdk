@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    022a57ce3df9a10b20e47552f2f9419a483748ac
-source-date:   2026-05-04T22:48:27+01:00
+source-sha:    b26d022d73046268155e1d2ad82aa0a0aa69a78b
+source-date:   2026-05-04T23:31:35+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 47 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 52 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 20 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -819,12 +819,40 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 ### Classes
 
+#### `AlreadyExistsError`
+
+- **Import:** `from application_sdk.errors import AlreadyExistsError`
+- **Signature:** `class AlreadyExistsError(*, ...)`
+- **Summary:** Entity the caller tried to create already exists.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `AppError`
 
 - **Import:** `from application_sdk.errors import AppError`
 - **Signature:** `class AppError(*, ...)`
 - **Summary:** Canonical SDK exception base.
 - **Defined in:** `application_sdk/errors/base.py`
+
+#### `AppPermissionDeniedError`
+
+- **Import:** `from application_sdk.errors import AppPermissionDeniedError`
+- **Signature:** `class AppPermissionDeniedError(*, ...)`
+- **Summary:** Authenticated but not authorised.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `AppTimeoutError`
+
+- **Import:** `from application_sdk.errors import AppTimeoutError`
+- **Signature:** `class AppTimeoutError(*, ...)`
+- **Summary:** A bounded wait elapsed.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `Audience`
+
+- **Import:** `from application_sdk.errors import Audience`
+- **Signature:** `class Audience`
+- **Summary:** Who needs to take action to resolve this failure.
+- **Defined in:** `application_sdk/errors/categories.py`
 
 #### `AuthError`
 
@@ -851,7 +879,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
-- **Summary:** _(no docstring)_
+- **Summary:** Required platform service is temporarily down or degraded.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `ErrorCode`
@@ -865,7 +893,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import FailureCategory`
 - **Signature:** `class FailureCategory`
-- **Summary:** _(no docstring)_
+- **Summary:** Single-axis failure classification.
 - **Defined in:** `application_sdk/errors/categories.py`
 
 #### `FailureDetails`
@@ -896,18 +924,11 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
 
-#### `PermissionError`
-
-- **Import:** `from application_sdk.errors import PermissionError`
-- **Signature:** `class PermissionError(*, ...)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors/leaves.py`
-
 #### `PreconditionError`
 
 - **Import:** `from application_sdk.errors import PreconditionError`
 - **Signature:** `class PreconditionError(*, ...)`
-- **Summary:** _(no docstring)_
+- **Summary:** System state forbids the operation.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `RateLimitedError`
@@ -924,11 +945,11 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
 
-#### `TimeoutError`
+#### `UnimplementedError`
 
-- **Import:** `from application_sdk.errors import TimeoutError`
-- **Signature:** `class TimeoutError(*, ...)`
-- **Summary:** _(no docstring)_
+- **Import:** `from application_sdk.errors import UnimplementedError`
+- **Signature:** `class UnimplementedError(*, ...)`
+- **Summary:** Operation not supported or capability not yet built.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 ### Constants and Enums
@@ -1080,6 +1101,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `PermissionError`
+
+- **Import:** `from application_sdk.errors import PermissionError`
+- **Signature:** `PermissionError`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `PUBSUB_ERROR`
 
 - **Import:** `from application_sdk.errors import PUBSUB_ERROR`
@@ -1147,6 +1175,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import TASK_NOT_FOUND`
 - **Signature:** `TASK_NOT_FOUND`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `TimeoutError`
+
+- **Import:** `from application_sdk.errors import TimeoutError`
+- **Signature:** `TimeoutError`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
 
@@ -1800,7 +1835,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 - **Import:** `from application_sdk.storage import StoragePermissionError`
 - **Signature:** `class StoragePermissionError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.PermissionError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.errors.AppPermissionDeniedError`` — removed in v4.0.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 ### Functions
