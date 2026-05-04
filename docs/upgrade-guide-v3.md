@@ -6,6 +6,15 @@ Application SDK v3.0 introduces three major improvements:
 2. **Infrastructure abstraction** — Protocol-based interfaces decouple services from Dapr
 3. **Temporal abstraction** — `App` + `@task` replace `@workflow.defn` + `@activity.defn`
 
+> **Current version: 3.5.0.** This guide covers the v2 → v3.0 migration steps. For additions since v3.0, see the callout below.
+
+> **Added since v3.0** (highlights for connectors upgrading incrementally):
+>
+> - **v3.1** — `[sql]` extra split; `[azure]` and `[distributed_lock]` extras lazy-loaded so importing core symbols (`App`, `BaseSQLClient`) never pulls optional deps.
+> - **v3.2** — `OAuthTokenService` promoted to public API (`from application_sdk.credentials import OAuthTokenService`).
+> - **v3.4** — `get_logger` and `AtlanLoggerAdapter` (including `.opt()`) exposed as top-level public API (`from application_sdk.observability import get_logger`).
+> - **v3.5** — `mcp_tool` / `MCPServer` lazy-loaded; `clients/__init__` lazy-loads `AzureClient`, `RedisClient`, `RedisClientAsync`.
+
 v3.0 is a clean break from v2. All v2 Python module paths raise `ImportError` — update all imports to their v3 equivalents using the quick reference below. A set of environment-variable aliases remain to ease the infrastructure rollout (e.g. Helm charts that still set `ATLAN_WORKFLOW_HOST` or `APPLICATION_MODE`) — see [Configuration](configuration.md) for the full alias list. One legacy helper, `application_sdk.common.error_codes`, is retained for back-compat; prefer `application_sdk.errors` for new code.
 
 > **Shipping an app?** Run through [`standards/v3-readiness.md`](standards/v3-readiness.md) before declaring the upgrade complete — it's the sign-off checklist for app owners and reviewers.

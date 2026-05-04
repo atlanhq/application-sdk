@@ -104,8 +104,12 @@ class MyHandler(Handler):
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput: ...
 ```
 
-`create_app_handler_service()` creates the FastAPI service. The container entrypoint uses `--mode handler`:
+`create_app_handler_service()` creates the FastAPI service. The container entrypoint uses `--mode handler` (the app module is supplied via `ATLAN_APP_MODULE` env var in the container image; locally use the `application-sdk` console script):
 
 ```bash
+# In container (entrypoint.sh sets ATLAN_APP_MODULE):
 python -m application_sdk.main --mode handler
+
+# Local dev:
+application-sdk --mode handler --app my_pkg.apps:MyExtractor
 ```

@@ -278,6 +278,7 @@ Create `tests/test_connector.py`:
 import json
 import pytest
 from application_sdk.infrastructure import set_infrastructure, clear_infrastructure, InfrastructureContext
+from application_sdk.storage import create_memory_store
 from application_sdk.testing import MockSecretStore
 from app.connector import GitHubConnector
 from app.contracts import RepoFetchInput
@@ -286,6 +287,7 @@ from app.contracts import RepoFetchInput
 @pytest.fixture(autouse=True)
 def infra():
     # MockSecretStore stores secrets as JSON strings keyed by credential name.
+    # create_memory_store() provides an in-process object store so upload_file() works without Dapr.
     set_infrastructure(
         InfrastructureContext(
             secret_store=MockSecretStore({
@@ -294,7 +296,8 @@ def infra():
                     "token": "fake-token",
                     "expires_at": "",
                 })
-            })
+            }),
+            storage=create_memory_store(),
         )
     )
     yield

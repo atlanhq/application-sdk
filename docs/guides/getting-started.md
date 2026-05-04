@@ -136,6 +136,8 @@ curl -s -X POST http://localhost:8000/workflows/v1/start \
 
 Then open [http://localhost:8233](http://localhost:8233) in your browser to see the completed workflow in the Temporal UI.
 
+> **Multi-entrypoint apps:** if your `App` has multiple `@entrypoint` methods, append `?entrypoint=<name>` to select one — e.g. `POST /workflows/v1/start?entrypoint=extract-metadata`. Apps with more than one entry point return HTTP 400 if the parameter is omitted. See [HTTP API reference](../reference/http-api.md).
+
 ---
 
 ## Step 7: (optional) Use run_dev_combined

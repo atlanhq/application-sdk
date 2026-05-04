@@ -36,7 +36,8 @@ Each time a task completes, you've clipped in — progress is secured. If someth
 An `App` is a unit of durable execution. It has a typed input, a typed output, and a `run()` method that defines the sequence of steps.
 
 ```python
-from application_sdk.app import App, Input, Output, task
+from application_sdk.app import App, task
+from application_sdk.contracts import Input, Output
 
 class MyInput(Input):
     source_id: str

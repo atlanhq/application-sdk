@@ -119,15 +119,17 @@ class MyConnector(App):
 
     @task
     async def transform(self, input: TransformInput) -> TransformOutput:
-        await self.download(DownloadInput(ref=input.data_file, local_path="/tmp/"))
-        df = read_parquet("/tmp/data.parquet")
+        # input.local_path was populated by run() before this task was called.
+        df = read_parquet(input.local_path)
         ...
 
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
         fetch = await self.fetch_data(FetchInput(...))
-        # App.upload is a @task itself — call it from run(), not from inside another @task.
+        # App.upload and App.download are @task themselves — call them from run(),
+        # not from inside another @task (tasks must not call tasks in Temporal).
         up = await self.upload(UploadInput(local_path=fetch.local_path))
-        return await self.transform(TransformInput(data_file=up.ref))
+        dl = await self.download(DownloadInput(ref=up.ref, local_path="/tmp/"))
+        return await self.transform(TransformInput(local_path=dl.local_path))
 ```
 
 See [Storage](storage.md) for full `FileReference` and `StorageTier` documentation.

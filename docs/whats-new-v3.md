@@ -4,6 +4,15 @@ Application SDK v3 is a ground-up rethink of how you build apps on the Atlan pla
 If you know v2 well, this guide will orient you quickly — it explains *what* changed, *why*,
 and shows each change side-by-side.
 
+> **Current version: 3.5.0.** This page describes the v3 architecture as of v3.0; for additions since then, see the callout below.
+
+> **Added since v3.0** (highlights for connectors already on v3):
+>
+> - **v3.1** — `[sql]` extra split; `[azure]` and `[distributed_lock]` extras lazy-loaded so `from application_sdk.clients import BaseSQLClient` never pulls azure/redis deps.
+> - **v3.2** — `OAuthTokenService` promoted to public API (`from application_sdk.credentials import OAuthTokenService`).
+> - **v3.4** — `get_logger` and `AtlanLoggerAdapter` (including `.opt()`) exposed as top-level public API (`from application_sdk.observability import get_logger`).
+> - **v3.5** — `mcp_tool` / `MCPServer` lazy-loaded so `from application_sdk.app import App, task` never pulls `fastmcp` for apps without the `[mcp]` extra.
+
 > For a step-by-step upgrade checklist, see [`upgrade-guide-v3.md`](upgrade-guide-v3.md).
 > For the ship-it sign-off checklist, see [`standards/v3-readiness.md`](standards/v3-readiness.md).
 > For automated tooling, see [`tools/migrate_v3/`](../tools/migrate_v3/README.md).

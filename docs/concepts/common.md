@@ -22,7 +22,7 @@ def my_function(data):
         logger.error("processing_failed", exc_info=True)
 ```
 
-Use `%`-style format strings in message bodies. Reserve extra kwargs for `exc_info=True` and framework-bound fields (such as `run_id=`, `correlation_id=`); do not encode user or business data in kwargs.
+Use `%`-style format strings in message bodies. Reserve extra kwargs for `exc_info=True` and Temporal context fields (`workflow_id=`, `run_id=`); embed all other context (including `correlation_id`) in the message body via %-style so it is always visible in log output regardless of pipeline configuration.
 
 ### Configuration
 

@@ -200,15 +200,11 @@ class PostgresHandler(Handler):
 
 v3 uses Python mapper functions to transform raw extraction results into pyatlan entity objects. This replaces the v2 YAML-based `AtlasTransformer` / `QueryBasedTransformer` approach with direct, testable Python code.
 
-> **Note:** The examples below import from the legacy `pyatlan` package (consistent with the
-> built-in `AtlasTransformer` transformers, which still depend on `pyatlan`). If you are
-> building a new connector that uses the `pyatlan_v9` client elsewhere, prefer
-> `from pyatlan_v9.model.assets import ...` and use the v9 serialisation API instead of
-> `.dict()`.
+> **Note:** New connectors must use `pyatlan_v9`. The `pyatlan` (non-v9) import shown as a fallback is retained only for connectors that already depend on the built-in `AtlasTransformer` transformers, which still use `pyatlan` internally. All other code should import from `pyatlan_v9`.
 
 ```python
 # app/asset_mapper.py
-from pyatlan.model.assets import Database, Schema, Table, Column
+from pyatlan_v9.model.assets import Database, Schema, Table, Column
 
 
 def map_database(row: dict, connection_qualified_name: str) -> Database:
@@ -252,7 +248,7 @@ def map_column(row: dict, connection_qualified_name: str) -> Column:
 
 
 def serialize_entity(entity) -> dict:
-    """Convert a pyatlan entity to Atlas nested-entity dict format for publishing."""
+    """Convert a pyatlan_v9 entity to Atlas nested-entity dict format for publishing."""
     return {
         "typeName": entity.type_name,
         "attributes": entity.attributes.model_dump(exclude_none=True),

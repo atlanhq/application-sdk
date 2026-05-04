@@ -170,6 +170,13 @@ store = MockCredentialStore()
 ref = store.add_basic("my-db-creds", username="admin", password="secret")
 ctx = InfrastructureContext(secret_store=store.secret_store)
 set_infrastructure(ctx)
+# Always pair set_infrastructure with clear_infrastructure() in teardown,
+# or use a yield fixture to avoid test pollution:
+#   @pytest.fixture(autouse=True)
+#   def infra():
+#       set_infrastructure(ctx)
+#       yield
+#       clear_infrastructure()
 ```
 
 ---

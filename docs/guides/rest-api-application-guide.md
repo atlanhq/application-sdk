@@ -355,11 +355,13 @@ Use `MockSecretStore` and `MockCredentialStore` to test without real credentials
 import json
 import pytest
 from application_sdk.infrastructure import set_infrastructure, clear_infrastructure, InfrastructureContext
+from application_sdk.storage import create_memory_store
 from application_sdk.testing import MockSecretStore
 
 @pytest.fixture(autouse=True)
 def infra(tmp_path):
     # MockSecretStore stores secrets as JSON strings (same as the real Dapr secret store).
+    # create_memory_store() provides an in-process object store so upload_file() works without Dapr.
     set_infrastructure(
         InfrastructureContext(
             secret_store=MockSecretStore({
@@ -368,7 +370,8 @@ def infra(tmp_path):
                     "api_token": "test-token",
                     "base_url": "http://localhost",
                 })
-            })
+            }),
+            storage=create_memory_store(),
         )
     )
     yield

@@ -2,7 +2,7 @@
 
 ## Exceptions
 
-- **Observability Module**: The `application_sdk/observability/` module uses **loguru** directly to implement the `AtlanLoggerAdapter` / `get_logger` wrapper; stdlib `logging` is used only to silence noisy third-party loggers. All other modules must use `get_logger`.
+- **Observability Module**: The `application_sdk/observability/` module uses **loguru** directly to implement the `AtlanLoggerAdapter` / `get_logger` wrapper. Stdlib `logging` is used internally for fallback error reporting (e.g. `InterceptHandler`, `basicConfig`) and to silence noisy third-party loggers — this is an internal implementation detail. **All application code must use `get_logger`** and must not call stdlib `logging.*` directly, as it bypasses the OTel pipeline.
 
 - **Logger Configuration**
     - Use `AtlanLoggerAdapter` for all logging

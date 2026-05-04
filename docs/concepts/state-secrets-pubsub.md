@@ -31,12 +31,12 @@ async def fetch_pages(self, input: FetchInput) -> FetchOutput:
     if state is None:
         raise RuntimeError("StateStore not configured")
 
-    checkpoint = await state.load(f"checkpoint:{input.run_id}")
+    checkpoint = await state.load(f"checkpoint:{input.workflow_id}")
     start_page = checkpoint["page"] if checkpoint else 1
 
     for page in range(start_page, total_pages + 1):
         # ... fetch page ...
-        await state.save(f"checkpoint:{input.run_id}", {"page": page})
+        await state.save(f"checkpoint:{input.workflow_id}", {"page": page})
 
     return FetchOutput(...)
 ```
@@ -64,7 +64,7 @@ mock_state = MockStateStore()
 
 ## SecretStore
 
-Provides access to secrets at runtime. The SDK uses this internally to resolve credential GUIDs — your app typically does not call `SecretStore` directly; use `CredentialResolver` instead (see [Credentials](credentials.md)).
+Provides access to secrets at runtime. The SDK uses this internally to resolve credential names / refs (legacy: credential GUIDs) — your app typically does not call `SecretStore` directly; use `CredentialResolver` instead (see [Credentials](credentials.md)).
 
 **Protocol:**
 
@@ -141,7 +141,7 @@ async def notify_complete(self, input: NotifyInput) -> NotifyOutput:
         pubsub = DaprPubSub(dapr, pubsub_name=os.getenv("EVENT_STORE_NAME", "eventstore"))
         await pubsub.publish(
             topic="extraction-complete",
-            data={"run_id": input.run_id, "record_count": input.record_count},
+            data={"workflow_id": input.workflow_id, "record_count": input.record_count},
         )
     return NotifyOutput()
 ```
