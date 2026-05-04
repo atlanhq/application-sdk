@@ -28,8 +28,9 @@ Both functions maintain a ``{path}.sha256`` sidecar alongside every file:
   downloads the file via streaming, verifies integrity against the stored
   sidecar (if available), then writes the local sidecar.
 
-For directory references, the fast path is skipped — materialisation always
-re-lists the prefix and re-downloads any missing or changed files.
+For directory references, each file within the prefix is checked individually
+against its local sidecar before downloading.  Files whose hash matches are
+skipped; only changed or absent files are re-downloaded.
 
 The conservative default is: **no stored sidecar → re-download**.  Once a
 sidecar exists, subsequent calls on the same worker skip the download
@@ -38,6 +39,7 @@ entirely.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import tempfile
@@ -203,22 +205,31 @@ async def persist_file_reference(
             tier=str(ref.tier),
         )
 
+        async def _upload_one(file_path: Path) -> None:
+            relative = str(file_path.relative_to(local)).replace(os.sep, "/")
+            file_key = f"{prefix}{relative}"
+            sha256 = await upload_file(file_key, file_path, store, normalize=False)
+            assert sha256 is not None
+            try:
+                await _put(
+                    file_key + ".sha256", sha256.encode(), store, normalize=False
+                )
+            except Exception:
+                logger.warning(
+                    "Sidecar write failed (best-effort, continuing without)",
+                    exc_info=True,
+                )
+
         try:
-            for file_path in files:
-                relative = str(file_path.relative_to(local)).replace(os.sep, "/")
-                file_key = f"{prefix}{relative}"
-                sha256 = await upload_file(file_key, file_path, store, normalize=False)
-                # compute_hash defaults to True, so the digest is always returned here.
-                assert sha256 is not None
-                try:
-                    await _put(
-                        file_key + ".sha256", sha256.encode(), store, normalize=False
-                    )
-                except Exception:
-                    logger.warning(
-                        "Sidecar write failed (best-effort, continuing without)",
-                        exc_info=True,
-                    )
+            from application_sdk.constants import (  # noqa: PLC0415
+                MAX_CONCURRENT_STORAGE_TRANSFERS,
+            )
+            from application_sdk.storage._concurrency import (  # noqa: PLC0415
+                _gather_with_semaphore,
+            )
+
+            sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
+            await _gather_with_semaphore([_upload_one(fp) for fp in files], sem)
         except Exception as exc:
             logger.error(
                 "file_ref.persist.failed",
@@ -513,39 +524,54 @@ async def materialize_file_reference(
             tier=str(ref.tier),
         )
 
+        prefix = ref.storage_path.rstrip("/") + "/"
+
+        async def _download_one(key: str) -> bool:
+            """Download one file from the prefix. Returns True if skipped (cache hit)."""
+            rel = key.removeprefix(prefix)
+            dest = os.path.join(local_directory, rel)
+            dest_path = Path(dest)
+            dest_sidecar = Path(dest + ".sha256")
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Per-file sidecar fast-path: skip re-download when the local
+            # file and its sidecar both exist and their hashes agree.
+            # This makes same-pod retries (Temporal heartbeat timeouts,
+            # OOM recoveries on the same node) free after the first pass.
+            if dest_path.exists() and dest_sidecar.exists():
+                try:
+                    local_hash = _sha256_hex_file(dest_path)
+                    if local_hash == dest_sidecar.read_text().strip():
+                        logger.debug(
+                            "file_ref.materialize.skipped",
+                            storage_path=key,
+                            local_path=dest,
+                            is_cache_hit=True,
+                        )
+                        return True
+                except Exception:  # noqa: S110,BLE001
+                    pass  # sidecar check failed — fall through to re-download
+
+            sha256 = await download_file(
+                key, dest, store, compute_hash=True, normalize=False
+            )
+            if sha256 is not None:
+                _write_local_sidecar(dest, sha256)
+            return False
+
         try:
-            prefix = ref.storage_path.rstrip("/") + "/"
-            skipped = 0
-            for key in data_keys:
-                rel = key.removeprefix(prefix)
-                dest = os.path.join(local_directory, rel)
-                dest_path = Path(dest)
-                dest_sidecar = Path(dest + ".sha256")
+            from application_sdk.constants import (  # noqa: PLC0415
+                MAX_CONCURRENT_STORAGE_TRANSFERS,
+            )
+            from application_sdk.storage._concurrency import (  # noqa: PLC0415
+                _gather_with_semaphore,
+            )
 
-                # Per-file sidecar fast-path: skip re-download when the local
-                # file and its sidecar both exist and their hashes agree.
-                # This makes same-pod retries (Temporal heartbeat timeouts,
-                # OOM recoveries on the same node) free after the first pass.
-                if dest_path.exists() and dest_sidecar.exists():
-                    try:
-                        local_hash = _sha256_hex_file(dest_path)
-                        if local_hash == dest_sidecar.read_text().strip():
-                            skipped += 1
-                            logger.debug(
-                                "file_ref.materialize.skipped",
-                                storage_path=key,
-                                local_path=dest,
-                                is_cache_hit=True,
-                            )
-                            continue
-                    except Exception:  # noqa: S110,BLE001
-                        pass  # sidecar check failed — fall through to re-download
-
-                sha256 = await download_file(
-                    key, dest, store, compute_hash=True, normalize=False
-                )
-                if sha256 is not None:
-                    _write_local_sidecar(dest, sha256)
+            sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
+            results = await _gather_with_semaphore(
+                [_download_one(k) for k in data_keys], sem
+            )
+            skipped = sum(results)
         except Exception as exc:
             logger.error(
                 "file_ref.materialize.failed",
