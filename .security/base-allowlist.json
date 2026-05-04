@@ -210,6 +210,41 @@
     "expires": "2026-05-23",
     "added_by": "mananjain99"
   },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGACL-16394931": {
+    "package": "github.com/dapr/dapr/pkg/acl",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17.0 sub-package. Same root issue as GHSA-85gx-3qv6-4463 reported under Snyk's per-package IDs. Fix available in 1.17.5, awaiting SDK base rebuild.",
+    "expires": "2026-05-23",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGACTORSTARGETSAPP-16394932": {
+    "package": "github.com/dapr/dapr/pkg/actors/targets/app",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17.0 sub-package. Same root issue as GHSA-85gx-3qv6-4463 reported under Snyk's per-package IDs. Fix available in 1.17.5, awaiting SDK base rebuild.",
+    "expires": "2026-05-23",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGAPIGRPC-16394933": {
+    "package": "github.com/dapr/dapr/pkg/api/grpc",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17.0 sub-package. Same root issue as GHSA-85gx-3qv6-4463 reported under Snyk's per-package IDs. Fix available in 1.17.5, awaiting SDK base rebuild.",
+    "expires": "2026-05-23",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGAPIHTTP-16394934": {
+    "package": "github.com/dapr/dapr/pkg/api/http",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17.0 sub-package. Same root issue as GHSA-85gx-3qv6-4463 reported under Snyk's per-package IDs. Fix available in 1.17.5, awaiting SDK base rebuild.",
+    "expires": "2026-05-23",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGMESSAGING-16394937": {
+    "package": "github.com/dapr/dapr/pkg/messaging",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr 1.17.0 sub-package. Same root issue as GHSA-85gx-3qv6-4463 reported under Snyk's per-package IDs. Fix available in 1.17.5, awaiting SDK base rebuild.",
+    "expires": "2026-05-23",
+    "added_by": "mananjain99"
+  },
   "CVE-2026-35469": {
     "package": "github.com/moby/spdystream",
     "severity": "HIGH",
