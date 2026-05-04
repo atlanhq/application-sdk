@@ -1,0 +1,131 @@
+# Merge Queue — auto-update and auto-merge approved PRs
+#
+# Ensures CI runs on the merged result before merging (catches A+B conflicts).
+# Only processes PRs with auto-merge enabled OR 'auto-merge' label.
+# Processes one PR at a time (FIFO) to avoid race conditions.
+
+name: Merge Queue
+
+on:
+  push:
+    branches: [main]
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: merge-queue
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  process-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Process merge queue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const { data: prs } = await github.rest.pulls.list({
+              owner, repo,
+              state: 'open',
+              base: 'main',
+              sort: 'created',
+              direction: 'asc',
+            });
+
+            for (const pr of prs) {
+              // ONLY process PRs with auto-merge enabled OR 'auto-merge' label
+              const autoMergeEnabled = pr.auto_merge !== null;
+              const hasAutoMergeLabel = pr.labels.some(l => l.name === 'auto-merge');
+
+              if (!autoMergeEnabled && !hasAutoMergeLabel) continue;
+
+              // Must be approved
+              const { data: reviews } = await github.rest.pulls.listReviews({
+                owner, repo, pull_number: pr.number,
+              });
+              const approved = reviews.some(r => r.state === 'APPROVED');
+              if (!approved) continue;
+
+              console.log(`PR #${pr.number}: eligible (approved + auto-merge)`);
+
+              const { data: prData } = await github.rest.pulls.get({
+                owner, repo, pull_number: pr.number,
+              });
+
+              if (prData.mergeable_state === 'behind') {
+                try {
+                  await github.rest.pulls.updateBranch({
+                    owner, repo, pull_number: pr.number,
+                  });
+                  console.log(`PR #${pr.number}: branch updated, CI will run on merged result`);
+                  return;
+                } catch (e) {
+                  if (e.status === 422) {
+                    try {
+                      await github.rest.issues.addLabels({
+                        owner, repo, issue_number: pr.number,
+                        labels: ['needs-rebase'],
+                      });
+                    } catch (_) {}
+                    await github.rest.issues.createComment({
+                      owner, repo, issue_number: pr.number,
+                      body: 'Merge queue: branch has conflicts. Manual rebase needed, or comment `@sdk-review` to re-trigger with conflict resolution.',
+                    });
+                    console.log(`PR #${pr.number}: conflicts, labeled needs-rebase`);
+                    continue;
+                  }
+                  throw e;
+                }
+              }
+
+              if (prData.mergeable_state === 'clean') {
+                if (!autoMergeEnabled) {
+                  try {
+                    await github.rest.pulls.merge({
+                      owner, repo, pull_number: pr.number,
+                      merge_method: 'squash',
+                    });
+                    console.log(`PR #${pr.number}: merged via merge queue`);
+                  } catch (e) {
+                    console.log(`PR #${pr.number}: merge failed: ${e.message}`);
+                    continue;
+                  }
+                } else {
+                  console.log(`PR #${pr.number}: clean + auto-merge enabled, GitHub will merge`);
+                }
+                return;
+              }
+
+              if (prData.mergeable_state === 'unstable') {
+                const hasApprovedLabel = pr.labels.some(l => l.name === 'sdk-review-approved');
+                if (hasApprovedLabel) {
+                  // CI failed after branch update on an approved PR.
+                  // Auto-trigger @sdk-review — Phase 0 will fix CI (Sonnet),
+                  // update branch, and re-review. Zero human intervention.
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner, repo, issue_number: pr.number,
+                      name: 'sdk-review-approved',
+                    });
+                  } catch (_) {}
+                  await github.rest.issues.createComment({
+                    owner, repo, issue_number: pr.number,
+                    body: '@sdk-review ci-fix CI failing after branch update — fix CI and do minimal delta review only.',
+                  });
+                  console.log(`PR #${pr.number}: CI unstable after update, auto-triggered @sdk-review`);
+                }
+                continue;
+              }
+
+              console.log(`PR #${pr.number}: ${prData.mergeable_state}, skipping`);
+            }
+
+            console.log('No eligible PRs to process');
