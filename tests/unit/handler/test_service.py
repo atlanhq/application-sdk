@@ -398,11 +398,13 @@ class TestPreflightEndpoint:
             },
         )
         assert response.status_code == 200
-        assert received == [{
-            "extraction-type": "objectstore",
-            "manifest-source": "atlan",
-            "core-extract-output-prefix": "artifacts/dbt/prod",
-        }]
+        assert received == [
+            {
+                "extraction-type": "objectstore",
+                "manifest-source": "atlan",
+                "core-extract-output-prefix": "artifacts/dbt/prod",
+            }
+        ]
 
     def test_preflight_metadata_absent_defaults_to_empty(self) -> None:
         """Callers that don't send metadata get an empty dict — no regression."""
