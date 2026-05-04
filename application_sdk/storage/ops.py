@@ -576,7 +576,8 @@ async def download_file_chunked(
 
     For files larger than *chunk_size_bytes*, issues multiple independent
     ``get_range_async`` requests (up to *max_concurrent_chunks* in flight at
-    once) and writes each chunk to the correct file offset via ``os.pwrite``.
+    once) and writes each chunk to the correct file offset via ``os.lseek`` +
+    ``os.write`` (``os.pwrite`` is unavailable on Windows).
     Each chunk gets its own obstore retry budget, so a mid-stream stall only
     retries the affected chunk — not the entire file.
 
@@ -636,7 +637,7 @@ async def download_file_chunked(
             key, local_path, resolved, compute_hash=compute_hash, normalize=False
         )
 
-    # Pre-allocate the file at the target size so pwrite can address any offset.
+    # Pre-allocate the file at the target size so lseek can address any offset.
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
     try:
         os.ftruncate(fd, file_size)
@@ -654,6 +655,13 @@ async def download_file_chunked(
                     resolved, key, start=offset, length=length
                 )
             )
+            # lseek+write instead of pwrite (Windows lacks pwrite). Safe only
+            # because asyncio is single-threaded: no await between the two
+            # calls means no other coroutine can interleave on the fd position.
+            # WARNING: if _fetch_chunk is ever moved into a thread (e.g. via
+            # asyncio.to_thread), lseek+write becomes a data race — two threads
+            # could interleave their seeks and corrupt each other's writes.
+            # Use os.pwrite (or a per-thread fd) instead if that happens.
             os.lseek(fd, offset, os.SEEK_SET)
             os.write(fd, raw)
 
