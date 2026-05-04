@@ -765,13 +765,8 @@ async def test_get_infrastructure_visible_in_http_handler():
 
 
 # ---------------------------------------------------------------------------
-# Workflow-level RetryPolicy plumbing (PR #1648)
+# Workflow-level RetryPolicy plumbing
 # ---------------------------------------------------------------------------
-# Verifies the workflow_retry_policy kwarg on create_app_handler_service
-# reaches Temporal as a real RetryPolicy on the WorkflowExecutionStarted
-# event. Reading from history (rather than asserting on the mocked client
-# call) confirms the wire-format conversion via _to_temporal_retry_policy
-# works end-to-end against a live Temporal server.
 
 
 async def _started_event_retry_policy(temporal_client, wf_id: str):
