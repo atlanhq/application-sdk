@@ -308,6 +308,45 @@ SEVERITY_MAPPING = {
 }
 
 
+class _LazyLoggerProxy:
+    """Returned by AtlanLoggerAdapter.opt(); context is pre-bound, loguru handles lazy eval."""
+
+    __slots__ = ("_logger",)
+
+    def __init__(self, bound_opt_logger: Any) -> None:
+        self._logger = bound_opt_logger
+
+    def debug(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.debug(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy debug logging", exc_info=True)
+
+    def info(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.info(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy info logging", exc_info=True)
+
+    def warning(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.warning(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy warning logging", exc_info=True)
+
+    def error(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.error(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy error logging", exc_info=True)
+
+    def critical(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.critical(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy critical logging", exc_info=True)
+
+
 class AtlanLoggerAdapter(AtlanObservability[Any]):
     """A custom logger adapter for Atlan that extends AtlanObservability.
 
@@ -799,6 +838,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         except Exception:
             logging.error("Error in critical logging", exc_info=True)
             self._sync_flush()
+
+    def opt(
+        self, *, lazy: bool = False, **loguru_opt_kwargs: Any
+    ) -> "_LazyLoggerProxy":
+        """Return a proxy with loguru opt() flags applied and context pre-bound.
+
+        Primary use case is lazy=True for performance-critical debug paths where
+        the argument expression is expensive to compute:
+
+            self.logger.opt(lazy=True).debug("record {data}", data=lambda: json.dumps(record))
+
+        The lambda is evaluated only when DEBUG is enabled. Use loguru's {key}
+        format (not %-style) when passing lazy kwargs.
+        """
+        _, ctx_kwargs = self.process("", {})
+        bound = self.logger.bind(**ctx_kwargs).opt(lazy=lazy, **loguru_opt_kwargs)
+        return _LazyLoggerProxy(bound)
 
     def activity(self, msg: str, *args: Any, **kwargs: Any):
         """Log an activity-specific message with activity context.

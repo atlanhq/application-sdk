@@ -698,13 +698,13 @@ def create_app_handler_service(
 
         if legacy_workflow_type is not None and entrypoint_param is None:
             warnings.warn(
-                f"App {app_name}: 'workflow_type' body field is deprecated and will be "
-                "removed in v3.1.0. Use ?entrypoint=<name> query param instead.",
+                f"App {app_name}: 'workflow_type' body field is deprecated. "
+                "Use ?entrypoint=<name> query param instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )
             logger.warning(
-                "App %s: 'workflow_type' body field is deprecated (removed in v3.1.0); "
+                "App %s: 'workflow_type' body field is deprecated; "
                 "use ?entrypoint=<name> query param instead.",
                 app_name,
             )

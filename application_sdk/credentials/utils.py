@@ -3,19 +3,19 @@
 import base64
 import json
 import os
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import orjson
 
 from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import download_file_from_upload_response
 from application_sdk.constants import TEMPORARY_PATH
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability import get_logger
 
 logger = get_logger(__name__)
 
 
-def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
+def parse_credentials_extra(credentials: dict[str, Any]) -> dict[str, Any]:
     """Parse the 'extra' field from credentials, handling both string and dict inputs.
 
     Args:
@@ -27,7 +27,7 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
     Raises:
         CommonError: If the extra field contains invalid JSON.
     """
-    extra: Union[str, Dict[str, Any]] = credentials.get("extra", {})
+    extra: str | dict[str, Any] = credentials.get("extra", {})
 
     if isinstance(extra, str):
         try:
@@ -41,10 +41,10 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def resolve_credential_file(
-    value: Optional[str],
+    value: str | None,
     filename: str,
     dest_dir: str = os.path.join(TEMPORARY_PATH, "credential_files"),
-) -> Optional[str]:
+) -> str | None:
     """Resolve a credential file field value to a local file path.
 
     Handles two input formats transparently, allowing customers to choose

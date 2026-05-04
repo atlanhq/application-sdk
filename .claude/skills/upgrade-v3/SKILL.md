@@ -1131,7 +1131,7 @@ Key rules:
 - Base image: `registry.atlan.com/public/app-runtime-base:3` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
 - `COPY app/ app/` — only app code, NOT the entire repo
 - `ATLAN_APP_MODULE` — always a single `module:ClassName` entry; use `@entrypoint` methods to expose multiple workflows (comma-separated multi-app is not supported)
-- No `CMD` — the base image handles mode via `APPLICATION_MODE` env var set by Helm
+- No `CMD` — the base image handles mode via `ATLAN_APP_MODE` env var set by Helm (`APPLICATION_MODE` is the v2-compat fallback; use `ATLAN_APP_MODE` for v3)
 - No `entrypoint.sh`, `supervisord.conf`, `otel-config.yaml` — v3 base image handles all of these
 
 ### output_path and output_prefix must be computed
