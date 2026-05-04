@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.3.0-BLDX-968+fix (May 5, 2026)
+
+### Bug Fixes
+
+- **Fix `fetch_procedures` writing to wrong directory**: `fetch_procedures` wrote parquet to `raw/procedure/` but `transform_procedures` reads from `raw/extras-procedure/` — the transform always returned 0 records because the directory never matched. Fixed by aligning `fetch_procedures` to write to `raw/extras-procedure/`.
+
 ## v3.3.0-BLDX-968 (May 2, 2026)
 
 ### Bug Fixes

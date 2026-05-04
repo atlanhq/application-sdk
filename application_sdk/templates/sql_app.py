@@ -324,7 +324,7 @@ class SqlApp(App):
             logger.info("Fetched %d procedures", count)
             output_path = self._resolve_output_path(input)
             if count > 0 and output_path:
-                output_dir = Path(output_path) / "raw" / "procedure"
+                output_dir = Path(output_path) / "raw" / "extras-procedure"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
             return FetchProceduresOutput(
