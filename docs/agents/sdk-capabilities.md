@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    b26d022d73046268155e1d2ad82aa0a0aa69a78b
-source-date:   2026-05-04T23:31:35+01:00
+source-sha:    ee34802aba20150fb913eaa49a3e870efa903037
+source-date:   2026-05-05T00:00:00+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 52 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 50 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 20 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -667,7 +667,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `OAuthTokenError`
 
 - **Import:** `from application_sdk.credentials import OAuthTokenError`
-- **Signature:** `class OAuthTokenError`
+- **Signature:** `class OAuthTokenError(message: str, *, cause: Exception | None = None)`
 - **Summary:** Raised when an OAuth 2.0 token exchange fails.
 - **Defined in:** `application_sdk/credentials/oauth.py`
 
