@@ -201,14 +201,21 @@ Every `except` block must either:
 
 ### Exception Chaining
 
+Use the categorical leaf class that matches the failure; pass `cause=e` (the dataclass field) and also chain with `from e` so the traceback is preserved:
+
 ```python
-# BAD — loses original traceback
+from application_sdk.errors import DependencyUnavailableError
+
+# BAD — loses traceback, plain base class
 except ConnectionError as e:
     raise AppError("Connection failed")
 
-# GOOD — preserves chain
+# GOOD — typed leaf, cause preserved
 except ConnectionError as e:
-    raise AppError("Connection failed") from e
+    raise DependencyUnavailableError(
+        message="Connection failed",
+        service="database", cause=e,
+    ) from e
 ```
 
 ---

@@ -13,8 +13,8 @@
 
 ### **Specific Exception Types**
 - **Use specific exception types** instead of generic `Exception`
-- **Examples**: `ValueError`, `ConnectionError`, `TimeoutError`, `FileNotFoundError`
-- **Create custom exceptions** in `application_sdk/errors.py` (top-level structured error codes, format `AAF-{COMP}-{ID:03d}`) for domain-specific errors (the legacy `application_sdk/common/error_codes.py` is retained for backward compatibility only)
+- **Examples**: `ValueError`, `ConnectionError`, `FileNotFoundError`; for SDK-domain errors use the categorical leaf classes (see below)
+- **Create custom exceptions** using the categorical hierarchy in `application_sdk/errors/` — pick the leaf that matches the failure (e.g. `DependencyUnavailableError`, `InvalidInputError`, `AuthError`). The legacy `application_sdk/common/error_codes.py` `AAF-{COMP}-{ID:03d}` format is retained for backward compatibility only — do not use it in new code.
 - **Anti-pattern**: `except Exception:` - Too broad, masks real issues
 
 ## Exception Handling Patterns
@@ -217,12 +217,37 @@ When reviewing code, check for:
 3. **Error Context**: Do error messages include sufficient context for debugging?
 4. **Resource Cleanup**: Are resources properly cleaned up in finally blocks?
 5. **Non-Critical Operations**: Are non-critical operations (logging, metrics) handled appropriately?
-6. **Custom Exceptions**: Are domain-specific exceptions defined in `application_sdk/errors.py`?
+6. **Custom Exceptions**: Are domain-specific exceptions using the categorical leaf classes from `application_sdk/errors`?
 7. **Exception Documentation**: Are exceptions documented in function docstrings?
 
 ## Implementation Notes
 
-- **Custom Exceptions**: Define new structured error codes in `application_sdk/errors.py` (format: `AAF-{COMP}-{ID:03d}`). The legacy `application_sdk/common/error_codes.py` is retained for backward compatibility only.
+- **Custom Exceptions**: Use the categorical leaf classes from `application_sdk/errors` for new code. Pick the leaf whose `FailureCategory` matches the failure:
+  ```python
+  from application_sdk.errors import (
+      AuthError, DependencyUnavailableError, InvalidInputError,
+      NotFoundError, AlreadyExistsError, PreconditionError,
+      RateLimitedError, AppTimeoutError, ResourceExhaustedError,
+      DataIntegrityError, InternalError, UnimplementedError,
+      AppPermissionDeniedError, CancelledError,
+  )
+
+  # DependencyUnavailableError — retryable=True, audience=PLATFORM
+  raise DependencyUnavailableError(
+      message="S3 bucket unreachable",
+      service="s3", target="my-bucket", cause=exc,
+  )
+
+  # InvalidInputError — retryable=False, audience=USER
+  raise InvalidInputError(
+      message="page_size must be between 1 and 1000",
+      field="page_size", constraint="1 ≤ x ≤ 1000",
+  )
+  ```
+  The legacy `application_sdk/common/error_codes.py` `AAF-{COMP}-{ID:03d}` format is retained for backward compatibility only — do not use it in new code.
+
+- **Audience routing**: Each leaf sets a default `audience` (`USER | PLATFORM | FRAMEWORK | UNKNOWN`) that downstream consumers (AE, SLA dashboards) use to route the failure. Override it on a custom subclass when the default doesn't fit.
+- **Builtin-name aliases**: `application_sdk.errors.TimeoutError` and `application_sdk.errors.PermissionError` are aliases for `AppTimeoutError` and `AppPermissionDeniedError`. Prefer the `App*` canonical names in new code to avoid shadowing Python builtins.
 - **Logging**: Use `AtlanLoggerAdapter` for all logging with proper context
 - **Context**: Always include relevant context in error messages (query, filename, operation, etc.)
 - **Documentation**: Document all exceptions that functions can raise in docstrings
@@ -231,4 +256,4 @@ When reviewing code, check for:
   from application_sdk.execution import ApplicationError
   raise ApplicationError("invalid schema", type="ValidationError", non_retryable=True)
   ```
-  Use `AppError` for framework-level errors that Temporal does not need to classify.
+  Use the categorical `AppError` leaf classes for framework-level errors that Temporal does not need to classify.

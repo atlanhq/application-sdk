@@ -262,27 +262,33 @@ def create_distributed_lock(
 **Critical exception handling rules:**
 
 - **Always re-raise exceptions** after logging unless in non-critical operations
-- **Use SDK-specific exceptions**: Use structured error codes from `application_sdk/errors.py` (format: `AAF-{COMP}-{ID:03d}`) for new code; `application_sdk/common/error_codes.py` is retained for backward compatibility only
+- **Use categorical leaf classes**: Raise the most specific leaf from `application_sdk.errors` (`DependencyUnavailableError`, `InvalidInputError`, `AuthError`, etc.) — do not raise the bare `AppError` base or use the legacy `AAF-{COMP}-{ID:03d}` format in new code
 - **Add comprehensive try-catch**: Operations that can fail must be wrapped in try-catch with specific exception types
 - **Error context**: Error messages must include debugging context (operation, parameters, state)
 - **Resource cleanup**: Failed operations must be logged with appropriate detail
 - **Non-critical operations**: May swallow exceptions to prevent cascading failures
 
 ```python
-# DO (v3 preferred): use AppError from application_sdk.app
-from application_sdk.app import AppError
+# DO: use categorical leaf from application_sdk.errors
+from application_sdk.errors import DependencyUnavailableError, InvalidInputError
 
 try:
     result = database_connection.execute_query(query)
     return result
 except ConnectionError as e:
     logger.error("Database connection failed for query %s: %s", query[:50], e, exc_info=True)
-    raise AppError("Database connection failed: %s" % e) from e
+    raise DependencyUnavailableError(
+        message="Database connection failed: %s" % e,
+        service="database", cause=e,
+    ) from e
 except ValueError as e:
     logger.error("Invalid query parameters: %s", e, exc_info=True)
-    raise AppError("Query validation failed: %s" % e) from e
+    raise InvalidInputError(
+        message="Query validation failed: %s" % e,
+        field="query", cause=e,
+    ) from e
 
-# DON'T: f-strings, missing exc_info, generic exception
+# DON'T: f-strings, missing exc_info, generic exception, plain AppError
 try:
     result = some_operation()
 except Exception as e:
@@ -541,7 +547,7 @@ def good_validation(max_value: int) -> int:
 - Use generators for memory-efficient iteration
 - Follow asyncio best practices for concurrent code
 - Use Pydantic `BaseModel` for structured data crossing workflow/task boundaries; `@dataclass` only for internal value types
-- Implement proper exception hierarchies in `errors.py` (new code) — `error_codes.py` is back-compat only
+- Implement proper exception hierarchies using categorical leaf classes from `application_sdk/errors/` (new code) — `error_codes.py` is back-compat only
 
 **Temporal workflow patterns:**
 

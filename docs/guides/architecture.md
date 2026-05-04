@@ -376,7 +376,8 @@ application_sdk/
 │   └── integration/        # Integration test runner and fixtures
 │
 ├── discovery.py            # Auto-discovery helpers for apps and handlers
-├── errors.py               # ErrorCode constants (AAF-{COMPONENT}-{ID} format)
+├── errors/                 # Categorical error hierarchy: AppError, FailureCategory, Audience, 14 leaf classes
+│   │                       # Legacy errors.py shim kept for back-compat (AAF-{COMPONENT}-{ID} constants)
 ├── constants.py            # Import-time configuration (env vars, path templates)
 ├── version.py              # Package version (__version__)
 └── main.py                 # Unified CLI entry point (--mode worker|handler|combined)

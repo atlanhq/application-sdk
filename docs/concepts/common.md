@@ -36,53 +36,56 @@ Logging is configured via environment variables:
 
 ## Error Handling
 
-The SDK provides a standardized error system with error codes and categories.
+The SDK provides a structured error hierarchy in `application_sdk/errors/` with a closed `FailureCategory` enum and an orthogonal `Audience` enum for routing.
 
-The SDK has two error-code namespaces:
+### Categorical hierarchy (new code)
 
-- **`application_sdk.common.error_codes`** — categorised HTTP-style codes for client-facing errors. Format: `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` (e.g. `ATLAN-CLIENT-403-00`).
-- **`application_sdk.errors`** — app-framework codes for Temporal / monitoring signals. Format: `AAF-{COMP}-{NNN}` (e.g. `AAF-APP-001`).
-
-### Error Code Format (`application_sdk.common.error_codes`)
-
-Error codes follow the format: `ATLAN-{Component}-{HTTP_Code}-{Unique_ID}`
-
-Example: `ATLAN-CLIENT-403-00` for a request validation error.
-
-### Error Categories
-
-| Category | Import | Description |
-|----------|--------|-------------|
-| `ClientError` | `application_sdk.common.error_codes` | Client-related errors (400-499) |
-| `ApiError` | `application_sdk.common.error_codes` | Server and API errors (500-599) |
-| `OrchestratorError` | `application_sdk.common.error_codes` | Workflow and task errors |
-| `IOError` | `application_sdk.common.error_codes` | Input/Output errors |
-
-### Usage
+Raise the leaf class whose `FailureCategory` matches the failure. Each leaf sets `retryable` and `audience` defaults:
 
 ```python
-from application_sdk.common.error_codes import ClientError
+from application_sdk.errors import (
+    AuthError,              # CATEGORY=AUTH,  retryable=False, audience=USER
+    DependencyUnavailableError,  # retryable=True,  audience=PLATFORM
+    InvalidInputError,      # retryable=False, audience=USER
+    NotFoundError,          # retryable=False, audience=USER
+    AlreadyExistsError,     # retryable=False, audience=USER
+    PreconditionError,      # retryable=False, audience=USER
+    RateLimitedError,       # retryable=True,  audience=USER
+    AppTimeoutError,        # retryable=True,  audience=UNKNOWN
+    AppPermissionDeniedError, # retryable=False, audience=USER
+    ResourceExhaustedError, # retryable=True,  audience=PLATFORM
+    DataIntegrityError,     # retryable=False, audience=FRAMEWORK
+    InternalError,          # retryable=False, audience=FRAMEWORK
+    UnimplementedError,     # retryable=False, audience=FRAMEWORK
+    CancelledError,         # retryable=False, audience=UNKNOWN
+)
 
-try:
-    validate_input(data)
-except ValidationError as e:
-    raise ClientError(f"{ClientError.REQUEST_VALIDATION_ERROR}: {e}") from e
+raise DependencyUnavailableError(
+    message="Temporal frontend unreachable",
+    service="temporal", target="temporal-frontend:7233", cause=exc,
+)
 ```
 
-For application-level error codes, use the top-level `application_sdk.errors` module:
+`Audience` values route failures to: `USER` (customer self-service), `PLATFORM` (infra ops), `FRAMEWORK` (SDK engineering), `UNKNOWN` (triage).
+
+`FailureDetails` (the Pydantic wire envelope on `AppError.to_failure_details()`) carries `category`, `code`, `retryable`, `audience`, `message`, and an optional `suggested_action` (imperative remediation hint).
+
+### Legacy error-code namespaces (backward-compat only)
+
+- **`application_sdk.common.error_codes`** — `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` HTTP-style codes. Do not use in new code.
+- **`application_sdk.errors` legacy constants** — `AAF-{COMP}-{NNN}` format (`APP_ERROR`, `HANDLER_ERROR`, etc.). Do not use in new code; retained for v3.x back-compat, removed in v4.0.
+
+### Legacy constant usage (back-compat shim)
 
 ```python
+# Still works for existing code — do not use in new code
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, HANDLER_ERROR
 
-# Log structured error codes for monitoring/alerting
 logger.error("Task failed [%s]", APP_ERROR, exc_info=exc)
 
-# Reference error codes in ApplicationError for Temporal retry control
 from application_sdk.execution import ApplicationError
 raise ApplicationError(str(APP_NON_RETRYABLE), non_retryable=True)
 ```
-
-Available error constants: `APP_ERROR`, `APP_NON_RETRYABLE`, `HANDLER_ERROR`, `CONTRACT_VALIDATION`, `PAYLOAD_SAFETY`, `CREDENTIAL_ERROR`, `CREDENTIAL_NOT_FOUND`, `STORAGE_NOT_FOUND`, `SECRET_NOT_FOUND`.
 
 ## SQL Utilities
 

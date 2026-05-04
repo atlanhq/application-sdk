@@ -56,18 +56,19 @@ Flag:
 
 ### Actionable Error Messages (Critical)
 
-Every user-facing exception must tell the developer: (1) what went wrong, (2) why it matters, and (3) how to fix it.
+Every user-facing exception must tell the developer: (1) what went wrong, (2) why it matters, and (3) how to fix it. Use the most specific categorical leaf class from `application_sdk.errors`.
 
 ```python
-# BAD -- opaque
+# BAD -- opaque, wrong base class
 raise AppError("Invalid configuration")
 
-# GOOD -- what + why + fix
-raise AppError(
-    "Credential not found for connection 'snowflake-prod'. "
-    "Ensure the credential is provisioned in the Atlan UI under "
-    "Settings > Credentials before running this workflow.",
-    error_code=CREDENTIAL_NOT_FOUND,
+# GOOD -- typed leaf, what + why + fix, optional suggested_action
+from application_sdk.errors import AuthError
+raise AuthError(
+    message="Credential not found for connection 'snowflake-prod'. "
+            "Ensure the credential is provisioned in the Atlan UI under "
+            "Settings > Credentials before running this workflow.",
+    auth_method="credential_guid",
 )
 ```
 
@@ -75,17 +76,30 @@ Flag:
 - Exception messages with fewer than 10 words and no guidance
 - Raw Python exceptions surfaced to connector developers without wrapping
 - Error messages that reference internal SDK implementation details instead of developer actions
+- New code using bare `AppError` instead of a categorical leaf
+- New code using legacy `error_code=` / `AAF-{COMP}-{ID:03d}` format (back-compat only — do not use in new code)
 
-### AAF Error Codes Required (Critical)
+### Categorical Leaf Selection Required (Critical)
 
-All SDK exceptions raised to connector code must carry a structured `ErrorCode` following the `AAF-{COMP}-{ID:03d}` format defined in `application_sdk/errors.py`.
+New SDK exceptions must use the most specific leaf from `application_sdk.errors`:
 
-Current components: APP, STR, CTR, HDL, EXE, INF, CRD, DSC, EVT.
+| Situation | Leaf |
+|-----------|------|
+| Credentials missing/expired/invalid | `AuthError` |
+| Authenticated but not authorized | `AppPermissionDeniedError` |
+| External service temporarily down | `DependencyUnavailableError` |
+| Caller input malformed | `InvalidInputError` |
+| Entity does not exist | `NotFoundError` |
+| Entity already exists (idempotent-create) | `AlreadyExistsError` |
+| State conflict requires explicit fix | `PreconditionError` |
+| Source returned 429 / quota | `RateLimitedError` |
+| Bounded wait elapsed | `AppTimeoutError` |
+| Local resource limit hit | `ResourceExhaustedError` |
+| Returned data corrupt | `DataIntegrityError` |
+| Feature not yet built | `UnimplementedError` |
+| Unexpected invariant violation / bug | `InternalError` |
 
-Flag:
-- New exception classes without an `error_code` parameter
-- New error scenarios that reuse a generic code when a specific one would be more useful
-- Error codes that break the naming convention
+Each leaf sets a default `audience` (`USER | PLATFORM | FRAMEWORK | UNKNOWN`) and `retryable` flag that consumers use for routing and retry decisions.
 
 ### Debuggable Log Output (Important)
 
