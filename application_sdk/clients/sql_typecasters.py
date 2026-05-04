@@ -42,7 +42,15 @@ logger = get_logger(__name__)
 # psycopg3 itself registers ``TextLoader``/``TextBinaryLoader`` for: text(25),
 # varchar(1043), bpchar(1042), name(19), char(18), unknown(705).
 # Sourced from ``psycopg.postgres.types`` for the canonical names.
-_PSYCOPG3_TEXT_OIDS: tuple[int, ...] = (18, 19, 25, 705, 1042, 1043)
+#
+# We also register for OID 0 (``InvalidOid``). Some Postgres-compatible proxies
+# — notably PgBouncer in transaction-pooling mode, Azure Flex Server's built-in
+# pooler, and AWS RDS Proxy — can return OID 0 on prepared-statement metadata
+# (e.g. ``pg_catalog.version()``), which psycopg3 otherwise hands to the caller
+# as raw bytes. SQLAlchemy's Postgres dialect then runs a string regex against
+# those bytes in ``_get_server_version_info`` and raises ``TypeError: cannot
+# use a string pattern on a bytes-like object`` before any query can run.
+_PSYCOPG3_TEXT_OIDS: tuple[int, ...] = (0, 18, 19, 25, 705, 1042, 1043)
 
 
 def _decode_tolerant_utf8(data: Any) -> str:

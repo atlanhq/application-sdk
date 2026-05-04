@@ -164,8 +164,9 @@ class TestAttachPsycopg3:
             c.args[0] for c in fake_adapters.register_loader.call_args_list
         ]
         # Hardcode the canonical psycopg postgres OIDs; if these change upstream
-        # we want a loud test failure.
-        for oid in (18, 19, 25, 705, 1042, 1043):
+        # we want a loud test failure. OID 0 is ``InvalidOid`` — see the module
+        # docstring for the PgBouncer transaction-pooling rationale.
+        for oid in (0, 18, 19, 25, 705, 1042, 1043):
             assert oid in registered_oids, f"missing loader for OID {oid}"
 
         # Every registered class must subclass Loader.
