@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.app.base import App
+from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution.retry import NO_RETRY, RetryPolicy
 from application_sdk.handler.base import Handler, HandlerError
@@ -3505,14 +3506,10 @@ class TestWorkflowRetryPolicy:
     """workflow_retry_policy plumbed from create_app_handler_service into start_workflow."""
 
     def setup_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
         AppRegistry.reset()
         TaskRegistry.reset()
 
     def teardown_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
         AppRegistry.reset()
         TaskRegistry.reset()
 
