@@ -38,6 +38,8 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchSchemasOutput,
     FetchTablesInput,
     FetchTablesOutput,
+    FetchViewsInput,
+    FetchViewsOutput,
     TransformInput,
     TransformOutput,
 )
@@ -68,6 +70,8 @@ __all__ = [
     "FetchSchemasOutput",
     "FetchTablesInput",
     "FetchTablesOutput",
+    "FetchViewsInput",
+    "FetchViewsOutput",
     "TransformInput",
     "TransformOutput",
     # Incremental SQL

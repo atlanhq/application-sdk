@@ -4,6 +4,15 @@ Application SDK v3 is a ground-up rethink of how you build apps on the Atlan pla
 If you know v2 well, this guide will orient you quickly — it explains *what* changed, *why*,
 and shows each change side-by-side.
 
+> **Current version: 3.5.0.** This page describes the v3 architecture as of v3.0; for additions since then, see the callout below.
+
+> **Added since v3.0** (highlights for connectors already on v3):
+>
+> - **v3.1** — `[sql]` extra split; `[azure]` and `[distributed_lock]` extras lazy-loaded so `from application_sdk.clients import BaseSQLClient` never pulls azure/redis deps.
+> - **v3.2** — `OAuthTokenService` promoted to public API (`from application_sdk.credentials import OAuthTokenService`).
+> - **v3.4** — `get_logger` and `AtlanLoggerAdapter` (including `.opt()`) exposed as top-level public API (`from application_sdk.observability import get_logger`).
+> - **v3.5** — `mcp_tool` / `MCPServer` lazy-loaded so `from application_sdk.app import App, task` never pulls `fastmcp` for apps without the `[mcp]` extra.
+
 > For a step-by-step upgrade checklist, see [`upgrade-guide-v3.md`](upgrade-guide-v3.md).
 > For the ship-it sign-off checklist, see [`standards/v3-readiness.md`](standards/v3-readiness.md).
 > For automated tooling, see [`tools/migrate_v3/`](../tools/migrate_v3/README.md).
@@ -20,7 +29,7 @@ Three interlocking changes define v3:
 | **Data contracts** | `Dict[str, Any]` everywhere | Typed `Input` / `Output` Pydantic models |
 | **Infrastructure** | Direct Dapr/Temporal SDK calls | Protocol-based interfaces via `self.context` |
 
-v3.0 is a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. Update all imports to their v3 equivalents before upgrading.
+v3.0 is a clean break from v2. All v2 Python module paths raise `ImportError` — update all imports to their v3 equivalents before upgrading. A set of environment-variable aliases remain to ease the infrastructure rollout (Helm charts that still set `ATLAN_WORKFLOW_HOST` or `APPLICATION_MODE` continue to work); see [Configuration](configuration.md) for the full alias list.
 
 **Import mapping (v2 → v3):**
 
@@ -30,11 +39,11 @@ v3.0 is a clean break from v2. All v2 modules and APIs have been removed — the
 | `application_sdk.activities.ActivitiesInterface` | `application_sdk.app.task` |
 | `application_sdk.handlers.HandlerInterface` | `application_sdk.handler.Handler` |
 | `application_sdk.worker.Worker` | `application_sdk.execution.create_worker` |
-| `application_sdk.application.BaseApplication` | `application_sdk.main.run_dev_combined` |
+| `application_sdk.application.BaseApplication` | Dev loop: `application_sdk.main.run_dev_combined`; Prod: `application-sdk` CLI (invoked by the base image) |
 | `application_sdk.services.objectstore.ObjectStore` | `application_sdk.storage` |
 | `application_sdk.services.statestore.StateStore` | `application_sdk.infrastructure.StateStore` |
 | `application_sdk.services.secretstore.SecretStore` | `application_sdk.infrastructure.SecretStore` |
-| `application_sdk.clients.atlan.get_async_client` | `application_sdk.credentials.atlan_client.create_async_atlan_client` |
+| `application_sdk.clients.atlan.get_async_client` | `application_sdk.credentials.create_async_atlan_client` |
 | `application_sdk.test_utils.*` | `application_sdk.testing.*` |
 
 ---
@@ -121,7 +130,8 @@ class MyConnectorActivities(ActivitiesInterface):
 #### v3 — one class, @task, heartbeating built-in
 
 ```python
-from application_sdk.app import App, task, Input, Output
+from application_sdk.app import App, task
+from application_sdk.contracts import Input, Output
 
 class FetchInput(Input):
     connection_id: str
@@ -159,9 +169,9 @@ on the class:
 # v2 — at worker startup
 Worker(workflow_client=client, passthrough_modules=["my_connector"])
 
-# v3 — on the class
-class MyConnector(App, passthrough_modules=["my_connector", "third_party_lib"]):
-    ...
+# v3 — class-level attribute (set, not list)
+class MyConnector(App):
+    passthrough_modules = {"my_connector", "third_party_lib"}
 ```
 
 **SQL template apps** get an even bigger reduction. The whole
@@ -236,7 +246,7 @@ in the contract. The framework handles the rest automatically:
   skipped entirely (verified via sha256 sidecar comparison).
 
 ```python
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts import FileReference
 
 class FetchOutput(Output):
     results: FileReference  # automatically uploaded when this output leaves the task
@@ -315,10 +325,10 @@ class MyConnector(App):
 
 **The key improvements:**
 
-- **No Dapr sidecar in tests.** Inject `MockStateStore` / `MockSecretStore` from `application_sdk.testing.mocks` and run your task methods in pure Python — no sidecar, no gRPC, no environment variables.
+- **No Dapr sidecar in tests.** Inject `MockStateStore` / `MockSecretStore` from `application_sdk.testing` and run your task methods in pure Python — no sidecar, no gRPC, no environment variables.
 - **No gRPC size limits.** Object storage is now backed by `obstore`, which talks directly to
-  S3/GCS/Azure or the local filesystem. The Dapr gRPC binding had a ~4 MB message limit that
-  bit connectors with large files; that limit is gone.
+  S3/GCS/Azure or the local filesystem. The historic 4 MB Dapr gRPC message limit that
+  bit connectors with large files is gone.
 - **Portable.** Because infrastructure is injected via Protocols, the framework could swap
   Temporal or Dapr for another engine without touching your app code.
 
@@ -333,15 +343,15 @@ keys = await list_keys(prefix="output/")
 await delete("output/old.parquet")
 ```
 
-**Local dev with custom secrets:**
+**Local dev with credentials:**
 
 ```python
-from application_sdk.testing.mocks import MockSecretStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
-    secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
+    credentials={"host": "localhost", "authType": "basic",
+                 "username": "dev", "password": "dev-secret"},
 ))
 ```
 
@@ -471,11 +481,10 @@ asyncio.run(run_dev_combined(MyExtractor))
 `App` subclasses are defined) and registers everything automatically:
 
 ```python
-from application_sdk.execution import create_worker
-from application_sdk.execution._temporal.backend import create_temporal_client
+from application_sdk.execution import create_temporal_client, create_worker
 
-client = await create_temporal_client()  # reads TEMPORAL_HOST, TEMPORAL_NAMESPACE etc.
-worker = await create_worker(client)     # discovers all App subclasses automatically
+client = await create_temporal_client(host="localhost:7233")  # pass host/namespace explicitly
+worker = create_worker(client)                                 # discovers all App subclasses automatically
 await worker.run()
 ```
 
@@ -541,10 +550,9 @@ await legacy_client.load(raw)  # dict[str, Any]
 **AtlanClientMixin** — for apps that call the Atlan SDK directly:
 
 ```python
-from application_sdk.credentials.atlan_client import AtlanClientMixin
-from application_sdk.credentials import atlan_api_token_ref
+from application_sdk.credentials import AtlanClientMixin, atlan_api_token_ref
 
-class MyConnector(App, AtlanClientMixin):
+class MyConnector(AtlanClientMixin, App):
     @task
     async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
         ref = atlan_api_token_ref("atlan-token")
@@ -597,12 +605,12 @@ class MyProgress(HeartbeatDetails):
 
 @task(heartbeat_timeout_seconds=60)
 async def process_batches(self, input: MyInput) -> MyOutput:
-    prev = await self.task_context.get_heartbeat_details(MyProgress)
+    prev = self.task_context.get_heartbeat_details(MyProgress)
     start_id = prev.last_id if prev else None
 
     for batch in get_batches(start_from=start_id):
         process(batch)
-        await self.task_context.heartbeat(MyProgress(last_id=batch.id, records_done=batch.count))
+        self.task_context.heartbeat(MyProgress(last_id=batch.id, records_done=batch.count))
 ```
 
 **Blocking sync code** — if your task calls a blocking (non-async) library (e.g., a sync DB
@@ -697,12 +705,16 @@ async def test_fetch_data():
 #### clean_app_registry fixture
 
 `App.__init_subclass__` registers every subclass in `AppRegistry` at import time. If test
-modules define `App` subclasses, they can bleed into each other. Import the autouse fixture
-to reset the registries between tests:
+modules define `App` subclasses, they can bleed into each other. Import the fixture and
+add it to each test that needs registry isolation:
 
 ```python
-# conftest.py
-from application_sdk.testing.fixtures import clean_app_registry  # noqa: F401
+# conftest.py — makes the fixture available project-wide
+from application_sdk.testing import clean_app_registry
+
+# test_my_app.py
+async def test_something(clean_app_registry):
+    ...
 ```
 
 #### MockHeartbeatController
@@ -714,7 +726,7 @@ from application_sdk.testing import MockHeartbeatController
 
 controller = MockHeartbeatController()
 # inject into task context during test setup
-# controller.recorded_heartbeats contains all heartbeat calls
+# controller.get_heartbeat_calls() returns the list of heartbeat calls
 ```
 
 ---
@@ -726,6 +738,6 @@ controller = MockHeartbeatController()
 - **Design rationale (ADRs):**
   - [ADR-0005: Infrastructure Abstraction](adr/0005-infrastructure-abstraction.md)
   - [ADR-0006: Schema-Driven Contracts](adr/0006-schema-driven-contracts.md)
-  - [ADR-0007: Apps as Coordination Unit](adr/0007-apps-as-coordination-unit.md)
+  - [ADR-0007: Apps as Coordination Unit](adr/0007-apps-as-coordination-unit.md) *(superseded — direct inter-app calls permanently removed)*
   - [ADR-0008: Payload-Safe Bounded Types](adr/0008-payload-safe-bounded-types.md)
   - [ADR-0010: Async-First Blocking Code](adr/0010-async-first-blocking-code.md)

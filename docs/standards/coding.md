@@ -19,7 +19,7 @@ This document outlines the development standards for the Application SDK, includ
     - Use Google-style docstrings
     - Include type information in docstrings
     - Document all public APIs
-    - Build docs using `uv sync --group docs --all-extras && uv run poe generate-apidocs`
+    - Build docs using `uv sync --all-extras --all-groups && uv run poe generate-apidocs`
     - Docs must go under ./docs
 
 - **Single Responsibility**

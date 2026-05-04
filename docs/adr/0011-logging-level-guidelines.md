@@ -5,7 +5,7 @@
 
 ## Context
 
-The SDK uses structlog with JSON output, forwarded to an OpenTelemetry collector and stored in Loki (or equivalent) for querying by correlation ID, workflow ID, or structured field values.
+The SDK uses **loguru** (via `AtlanLoggerAdapter`) with structured output, forwarded to an OpenTelemetry collector and stored in Loki (or equivalent) for querying by correlation ID, workflow ID, or structured field values.
 
 Without a shared definition of what belongs at each level, developers make inconsistent choices: DEBUG entries appear in production INFO streams (noisy, expensive), transient issues get logged at ERROR (drowning real alerts), and non-recoverable failures are sometimes swallowed entirely.
 
@@ -29,20 +29,22 @@ Use exactly four levels — **DEBUG**, **INFO**, **WARNING**, **ERROR** — with
 - Retry attempt details (attempt number, backoff duration)
 
 ```python
-self.logger.debug("credential cache hit", credential_name=ref.name)
-self.logger.debug("Atlan async client created", credential_type=type(cred).__name__)
-self.logger.debug("Type discovered", type_name=typename, asset_count=count)
+self.logger.debug("credential cache hit name=%s", ref.name)
+self.logger.debug("Atlan async client created credential_type=%s", type(cred).__name__)
+self.logger.debug("Type discovered type_name=%s asset_count=%s", typename, count)
 ```
 
-**Performance note**: Avoid computing expensive values just to pass to `logger.debug()`:
+**Performance note**: Avoid computing expensive values just to pass to `logger.debug()`. The project logger does not expose stdlib's `isEnabledFor()`. Use `opt(lazy=True)` instead — `AtlanLoggerAdapter.opt()` pre-binds context and delegates lazy evaluation to loguru:
 ```python
 # BAD — serializes the full record even when DEBUG is disabled
-self.logger.debug("record", data=json.dumps(record))
+self.logger.debug("record %s", json.dumps(record))
 
-# GOOD — skip expensive work when not needed
-if self.logger.isEnabledFor(logging.DEBUG):
-    self.logger.debug("record", data=json.dumps(record))
+# GOOD — loguru evaluates the lambda only when DEBUG is enabled
+# Note: opt(lazy=True) uses {key} format (not %-style) for the lazy kwargs
+self.logger.opt(lazy=True).debug("record {data}", data=lambda: json.dumps(record))
 ```
+
+**Known-benign probes**: Use DEBUG (not WARNING) for expected, transient failures used as a probe pattern — e.g., trying a cache lookup before falling back to a live fetch. A WARNING implies human attention is warranted; a cache miss does not.
 
 **Anti-patterns:**
 - Do NOT log every iteration of a hot inner loop at DEBUG — use sampling or batch-level summaries
@@ -62,14 +64,14 @@ if self.logger.isEnabledFor(logging.DEBUG):
 - Child app calls starting and completing
 
 ```python
-self.logger.info("Connecting to Temporal", host=temporal_host)
-self.logger.info("Extraction complete", records=count, elapsed_s=round(elapsed, 2))
+self.logger.info("Connecting to Temporal host=%s", temporal_host)
+self.logger.info("Extraction complete records=%s elapsed_s=%.2f", count, round(elapsed, 2))
 self.logger.info("Shutdown signal received")
 ```
 
 **Anti-patterns:**
 - Do NOT log at INFO inside a loop that runs per-record (use DEBUG or batch summaries)
-- Do NOT duplicate context in prose: `logger.info(f"Processing {n} records")` → `logger.info("Processing records", count=n)`
+- Do NOT interpolate values via f-string: `logger.info(f"Processing {n} records")` → `logger.info("Processing records count=%s", n)`
 
 ---
 
@@ -106,27 +108,27 @@ self.logger.warning("Redis unavailable, using local capacity pool", exc_info=Tru
 - A required external call failed after all retries are exhausted
 - An unrecoverable state was detected for a specific unit of work (but not the whole process)
 
-**Always include `exc_info=True`** (or use `logger.exception()` which sets it automatically):
+**Always include `exc_info=True`:**
 ```python
-self.logger.error("Batch failed, continuing", batch_num=n, exc_info=True)
-self.logger.error("Request failed", path=request.path, status_code=500, exc_info=True)
+self.logger.error("Batch failed, continuing; batch_num=%s", n, exc_info=True)
+self.logger.error("Request failed; path=%s status=%s", request.path, 500, exc_info=True)
 ```
 
-**`logger.exception()` vs `logger.error(..., exc_info=True)`:**
-Use `logger.exception()` only inside an `except` block where you are not re-raising:
+**Never use `logger.exception()` in app code** — always use `logger.error(..., exc_info=True)` instead. This keeps the level mental model clean: `{debug, info, warning, error, critical}` with no aliases. (The SDK adapter still exposes `exception()` internally so third-party callers like `temporalio.activity.logger` work correctly; this prohibition applies to connector and app code only.)
+
 ```python
-# GOOD — terminal handling
+# GOOD
 try:
     run_main(config)
 except Exception as e:
-    logger.exception("Fatal error", error=str(e))
+    logger.error("Fatal error: %s", e, exc_info=True)
     sys.exit(1)
 
 # GOOD — re-raising after logging
 try:
     result = do_work()
-except SomeError:
-    logger.error("Work failed, will retry", exc_info=True)
+except SomeError as e:
+    logger.error("Work failed, will retry: %s", e, exc_info=True)
     raise
 ```
 
@@ -136,19 +138,19 @@ except SomeError:
 
 ---
 
-## Structured Fields over String Interpolation
+## %-style over f-strings
 
-Always pass context as keyword arguments, never interpolate into the message string:
+Always use `%`-style placeholders in log message strings. Never use f-strings or `str.format()`:
 
 ```python
-# BAD — context is buried in the string, unsearchable
+# BAD — f-string; values are not indexable and may include sensitive data
 self.logger.info(f"Loaded {count} records in {elapsed:.2f}s for app {app_name}")
 
-# GOOD — context is structured, queryable by field name
-self.logger.info("Records loaded", count=count, elapsed_s=round(elapsed, 2), app=app_name)
+# GOOD — %-style; values are rendered lazily and the pattern is grep-able
+self.logger.info("Loaded %s records in %.2fs for app %s", count, elapsed, app_name)
 ```
 
-This is critical because the OTEL/Loki pipeline indexes structured fields for fast querying. String-embedded values are not indexed.
+Do **not** pass extra per-field kwargs (e.g. `logger.info("msg", count=n)`). Only Temporal context kwargs (`workflow_id`, `run_id`, etc.) are promoted to indexed fields in the OTEL/Loki pipeline — all other kwargs land in an opaque JSON blob. Embed differentiating context in the message body using `%-style` so it is always visible in log output regardless of pipeline configuration.
 
 ## Never Swallow Exceptions Silently
 
@@ -175,7 +177,7 @@ except Exception:
 | DEBUG | Off (`ATLAN_LOG_LEVEL=INFO`) | No (add manually if needed) | Very high — per-item |
 | INFO | On | No | Low — per-phase |
 | WARNING | On | Yes (`exc_info=True`) | Very low — per-anomaly |
-| ERROR | On | Yes (`exc_info=True` or `logger.exception()`) | Near-zero — per-failure |
+| ERROR | On | Yes (`exc_info=True`) | Near-zero — per-failure |
 
 ## Consequences
 
@@ -194,6 +196,6 @@ No framework changes required — these are conventions enforced in code review:
 
 1. Does any new `logger.warning()` or `logger.error()` that catches an exception include `exc_info=True`?
 2. Are INFO calls inside tight loops? (Use DEBUG or batch summaries instead.)
-3. Are structured fields used instead of f-string interpolation?
+3. Are `%-style` placeholders used in the message body instead of f-strings or kwargs?
 
 Log level is controlled by the `ATLAN_LOG_LEVEL` env var and defaults to `INFO`. Debug logs are never visible in production unless explicitly enabled.
