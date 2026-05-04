@@ -59,6 +59,7 @@ from application_sdk.common.sql_filters import normalize_filters
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.execution import build_output_path
+from application_sdk.execution._temporal.activity_utils import get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.transfer import upload as transfer_upload
@@ -498,12 +499,24 @@ class SqlApp(App):
         if input.connection and input.connection.attributes:
             connection_qn = input.connection.attributes.qualified_name or ""
 
+        # Derive the output path the same way _resolve_output_path() does in
+        # activity context: TEMPORARY_PATH + build_output_path(). This ensures
+        # get_object_store_prefix() can strip the local prefix and return the
+        # correct S3 key (e.g. artifacts/apps/mysql/workflows/wf-id/transformed).
+        # When input.output_path is already set (local dev / tests), use it directly.
+        resolved_base = input.output_path or os.path.join(
+            TEMPORARY_PATH, build_output_path()
+        )
+
         return ExtractionOutput(
             databases_extracted=db_result.total_record_count,
             schemas_extracted=schema_result.total_record_count,
             tables_extracted=table_result.total_record_count,
             columns_extracted=column_result.total_record_count,
             connection_qualified_name=connection_qn,
+            transformed_data_prefix=get_object_store_prefix(
+                os.path.join(resolved_base, "transformed")
+            ),
         )
 
     # =====================================================================
