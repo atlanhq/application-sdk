@@ -90,6 +90,7 @@ DEFAULT_WORKFLOW_RETRY = RetryPolicy(
     non_retryable_errors=(
         "NonRetryableError",
         "AuthError",
+        "ContractValidationError",
         "ValidationError",
     ),
 )
@@ -97,8 +98,27 @@ DEFAULT_WORKFLOW_RETRY = RetryPolicy(
 
 Applied to ``client.start_workflow()`` so a workflow that fails for a transient
 reason (activity exhausted retries, worker host crashed, etc.) gets one fresh
-attempt with a clean activity-retry budget. Deterministic failures
-(``NonRetryableError`` and its subclasses) skip the retry.
+attempt with a clean activity-retry budget. Deterministic failures skip the
+retry and fail terminally on first attempt.
+
+Note: Temporal matches ``non_retryable_errors`` against the failed
+``ApplicationFailure.error_type`` by *exact class name*, not by isinstance. New
+``NonRetryableError`` subclasses introduced by app code are NOT auto-covered by
+the ``"NonRetryableError"`` entry — their concrete class name must be added
+here (or apps should raise ``NonRetryableError`` directly).
+
+Listed entries:
+
+- ``"NonRetryableError"`` — explicit non-retryable raises from app code
+- ``"AuthError"`` — auth/credential failures (subclass of ``NonRetryableError``)
+- ``"ContractValidationError"`` — SDK contract validation failure
+  (``application_sdk/contracts/base.py``)
+- ``"ValidationError"`` — pydantic input validation failure
+  (``pydantic.ValidationError``)
+
+The ``backoff_coefficient`` and ``max_interval`` values are inert at the
+default ``max_attempts=2`` (only one wait period elapses) and are reserved
+for future increases to ``max_attempts``.
 
 Apps that are not idempotent across full workflow restart should pass
 ``workflow_retry_policy=NO_RETRY`` to ``create_app_handler_service`` to opt out.

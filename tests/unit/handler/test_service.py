@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import warnings
 from dataclasses import dataclass
@@ -3457,7 +3458,11 @@ class TestWorkflowRetryPolicy:
         AppRegistry.reset()
         TaskRegistry.reset()
 
+    @contextlib.contextmanager
     def _build_client(self, *, workflow_retry_policy=None, override=False):
+        """Yield (TestClient, mock_temporal_client). Patch lifetime is scoped
+        to the ``with`` block — exceptions in the test body don't leak the
+        patch into other tests."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from application_sdk.app.base import App
@@ -3481,17 +3486,15 @@ class TestWorkflowRetryPolicy:
         mock_handle.id = "wf-retry"
         mock_handle.result_run_id = "run-retry"
         mock_client.start_workflow = AsyncMock(return_value=mock_handle)
-        patcher = patch(
+        with patch(
             "application_sdk.handler.service._get_temporal_client",
             new=AsyncMock(return_value=mock_client),
-        )
-        patcher.start()
-        return TestClient(svc, raise_server_exceptions=False), mock_client, patcher
+        ):
+            yield TestClient(svc, raise_server_exceptions=False), mock_client
 
     def test_default_workflow_retry_applied(self) -> None:
         """Default DEFAULT_WORKFLOW_RETRY is forwarded to start_workflow."""
-        client, mock_client, patcher = self._build_client()
-        try:
+        with self._build_client() as (client, mock_client):
             response = client.post("/workflows/v1/start", json={"name": "x"})
             assert response.status_code == 200
             kwargs = mock_client.start_workflow.call_args.kwargs
@@ -3500,25 +3503,23 @@ class TestWorkflowRetryPolicy:
             assert retry.maximum_attempts == 2
             assert "NonRetryableError" in (retry.non_retryable_error_types or [])
             assert "AuthError" in (retry.non_retryable_error_types or [])
-        finally:
-            patcher.stop()
+            assert "ContractValidationError" in (retry.non_retryable_error_types or [])
+            assert "ValidationError" in (retry.non_retryable_error_types or [])
 
-    def test_explicit_none_disables_workflow_retry(self) -> None:
+    def test_explicit_no_retry_disables_workflow_retry(self) -> None:
         """workflow_retry_policy=NO_RETRY → maximum_attempts=1 (no workflow retry)."""
         from application_sdk.execution.retry import NO_RETRY
 
-        client, mock_client, patcher = self._build_client(
-            workflow_retry_policy=NO_RETRY, override=True
-        )
-        try:
+        with self._build_client(workflow_retry_policy=NO_RETRY, override=True) as (
+            client,
+            mock_client,
+        ):
             response = client.post("/workflows/v1/start", json={"name": "x"})
             assert response.status_code == 200
             kwargs = mock_client.start_workflow.call_args.kwargs
             retry = kwargs["retry_policy"]
             assert retry is not None
             assert retry.maximum_attempts == 1
-        finally:
-            patcher.stop()
 
     def test_custom_policy_with_extra_non_retryables(self) -> None:
         """Custom RetryPolicy reaches start_workflow unchanged."""
@@ -3531,10 +3532,10 @@ class TestWorkflowRetryPolicy:
             initial_interval=timedelta(seconds=10),
             non_retryable_errors=("AuthError", "PreflightError"),
         )
-        client, mock_client, patcher = self._build_client(
-            workflow_retry_policy=custom, override=True
-        )
-        try:
+        with self._build_client(workflow_retry_policy=custom, override=True) as (
+            client,
+            mock_client,
+        ):
             response = client.post("/workflows/v1/start", json={"name": "x"})
             assert response.status_code == 200
             kwargs = mock_client.start_workflow.call_args.kwargs
@@ -3545,5 +3546,3 @@ class TestWorkflowRetryPolicy:
                 "AuthError",
                 "PreflightError",
             }
-        finally:
-            patcher.stop()

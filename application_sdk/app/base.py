@@ -272,8 +272,10 @@ class AuthError(NonRetryableError):
 
     Use for 401/403 from upstream APIs, expired credentials, or revoked tokens.
     Workflow-level and activity-level retries both stop on this exception
-    (configure RetryPolicy ``non_retryable_error_types`` to include
-    ``"AuthError"``). Resolution requires tenant config change, not retry.
+    (configure :class:`~application_sdk.execution.retry.RetryPolicy`
+    ``non_retryable_errors`` to include ``"AuthError"``;
+    :data:`~application_sdk.execution.retry.DEFAULT_WORKFLOW_RETRY` already
+    does). Resolution requires tenant config change, not retry.
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_AUTH
@@ -1774,10 +1776,14 @@ __all__ = [
     "App",
     "AppError",
     "AppStateAccessor",
+    "AuthError",
     "FileReference",
     "NonRetryableError",
     "PersistentStateAccessor",
+    "RateLimited",
+    "RetryableError",
     "TaskStateAccessor",
+    "UpstreamUnavailable",
     "_app_state",
     "_app_state_lock",
     "_apply_app_registration",
