@@ -152,10 +152,13 @@ PROMETHEUS_PUSHGATEWAY_URL = os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_URL", "")
 PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS = float(
     os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS", "30")
 )
-#: When True, call ``delete_from_gateway`` on graceful worker shutdown so
-#: stopped pods don't leave sticky data in the Pushgateway.
+#: When True (default), call ``delete_from_gateway`` on graceful worker
+#: shutdown so stopped pods don't leave sticky data in the Pushgateway.
+#: Pushgateway has no built-in TTL, so without this every pod ever scraped
+#: leaks its series until manually deleted. Opt out only if you specifically
+#: need the last interval of metrics to persist after a graceful exit.
 PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN = (
-    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN", "false").lower()
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN", "true").lower()
     == "true"
 )
 
