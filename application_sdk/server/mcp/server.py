@@ -54,7 +54,9 @@ class MCPServer:
         Args:
             app_name: The app name used to look up tasks in the registry.
         """
-        from application_sdk.app.registry import TaskRegistry
+        from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.registry imports execution-related modules
+            TaskRegistry,
+        )
 
         tasks = TaskRegistry.get_instance().get_tasks_for_app(app_name)
         for task_meta in tasks:
@@ -62,17 +64,17 @@ class MCPServer:
                 task_meta.func, MCP_METADATA_KEY, None
             )
             if not mcp_metadata:
-                self.logger.info(
-                    "No MCP metadata found on task, skipping tool registration",
-                    task_name=task_meta.name,
+                self.logger.debug(
+                    "No MCP metadata found on task %s, skipping tool registration",
+                    task_meta.name,
                 )
                 continue
 
             if mcp_metadata.visible:
                 self.logger.info(
-                    "Registering MCP tool",
-                    tool_name=mcp_metadata.name,
-                    description=mcp_metadata.description,
+                    "Registering MCP tool %s: %s",
+                    mcp_metadata.name,
+                    mcp_metadata.description,
                 )
                 self.server.tool(
                     task_meta.func,
@@ -89,9 +91,9 @@ class MCPServer:
 
         tools = await self.server.get_tools()
         self.logger.info(
-            "Registered MCP tools from registry",
-            count=len(tools),
-            tools=list(tools.keys()),
+            "Registered %d MCP tools from registry: %s",
+            len(tools),
+            list(tools.keys()),
         )
 
     async def get_http_app(self) -> StarletteWithLifespan:

@@ -1,7 +1,7 @@
 """Unit tests for application_sdk.contracts.base."""
 
-import logging
 from typing import Annotated, Any, Optional
+from unittest.mock import patch
 
 import pytest
 from pydantic import ConfigDict, Field, ValidationError
@@ -512,7 +512,7 @@ def _reset_unknown_keys_seen() -> Any:
 
 class TestUnknownKeyWarning:
     def test_kebab_case_extra_warns_with_snake_case_hint(
-        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+        self, _reset_unknown_keys_seen: Any
     ) -> None:
         class ExtractionInput(Input):
             credential_guid: str = ""
@@ -522,15 +522,16 @@ class TestUnknownKeyWarning:
             "credential-guid": "abc-123",
             "include-filter": '{"^qa$":[".*"]}',
         }
-        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+        with patch("application_sdk.contracts.base._logger") as mock_logger:
             obj = ExtractionInput.model_validate(payload)
 
         # Silent drop still happens — we only observe, not normalize.
         assert obj.credential_guid == ""
         assert obj.include_filter == "{}"
 
-        assert len(caplog.records) == 1
-        msg = caplog.records[0].getMessage()
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args[0]
+        msg = call_args[0] % call_args[1:]
         assert "ExtractionInput" in msg
         assert "credential-guid" in msg
         assert "include-filter" in msg
@@ -538,42 +539,41 @@ class TestUnknownKeyWarning:
         assert "include_filter" in msg
 
     def test_arbitrary_extras_warn_without_kebab_hint(
-        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+        self, _reset_unknown_keys_seen: Any
     ) -> None:
         class MyInput(Input):
             name: str = ""
 
-        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+        with patch("application_sdk.contracts.base._logger") as mock_logger:
             MyInput.model_validate({"name": "ok", "stray_key": 1})
 
-        assert len(caplog.records) == 1
-        msg = caplog.records[0].getMessage()
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args[0]
+        msg = call_args[0] % call_args[1:]
         assert "stray_key" in msg
         assert "Kebab-case" not in msg
 
     def test_no_warning_when_all_keys_known(
-        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+        self, _reset_unknown_keys_seen: Any
     ) -> None:
         class MyInput(Input):
             name: str = ""
 
-        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+        with patch("application_sdk.contracts.base._logger") as mock_logger:
             MyInput.model_validate({"name": "ok", "workflow_id": "wf-1"})
 
-        assert caplog.records == []
+        mock_logger.warning.assert_not_called()
 
-    def test_no_warning_when_extra_allow(
-        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
-    ) -> None:
+    def test_no_warning_when_extra_allow(self, _reset_unknown_keys_seen: Any) -> None:
         class PermissiveInput(Input):
             model_config = ConfigDict(extra="allow")
 
             name: str = ""
 
-        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+        with patch("application_sdk.contracts.base._logger") as mock_logger:
             PermissiveInput.model_validate({"name": "ok", "anything": 1})
 
-        assert caplog.records == []
+        mock_logger.warning.assert_not_called()
 
     def test_non_dict_input_does_not_crash(self, _reset_unknown_keys_seen: Any) -> None:
         class MyInput(Input):
@@ -585,25 +585,25 @@ class TestUnknownKeyWarning:
         assert MyInput.model_validate(original).name == "x"
 
     def test_same_extras_logged_once_per_process(
-        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+        self, _reset_unknown_keys_seen: Any
     ) -> None:
         class MyInput(Input):
             name: str = ""
 
-        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+        with patch("application_sdk.contracts.base._logger") as mock_logger:
             for _ in range(5):
                 MyInput.model_validate({"name": "ok", "stray": 1})
 
-        assert len(caplog.records) == 1
+        assert mock_logger.warning.call_count == 1
 
     def test_different_extras_each_warn_once(
-        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+        self, _reset_unknown_keys_seen: Any
     ) -> None:
         class MyInput(Input):
             name: str = ""
 
-        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+        with patch("application_sdk.contracts.base._logger") as mock_logger:
             MyInput.model_validate({"name": "ok", "a": 1})
             MyInput.model_validate({"name": "ok", "b": 2})
 
-        assert len(caplog.records) == 2
+        assert mock_logger.warning.call_count == 2

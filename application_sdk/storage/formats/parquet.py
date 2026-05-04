@@ -24,6 +24,7 @@ from application_sdk.storage.formats.utils import (
     is_empty_dataframe,
     path_gen,
 )
+from application_sdk.storage.ops import normalize_key
 from application_sdk.storage.ops import upload_file as _upload_file
 
 logger = get_logger(__name__)
@@ -100,14 +101,16 @@ class ParquetFileReader(Reader):
                 f"Either provide a directory path with file_names, or specify the exact file path without file_names."
             )
 
+        # Initialise the Reader base class so `_is_closed` and
+        # `_downloaded_files` are per-instance state (not shared via the old
+        # class-level mutable defaults). Required after BLDX-1167.
+        super().__init__()
         self.path = path
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
         self.file_names = file_names
         self.dataframe_type = dataframe_type
         self.cleanup_on_close = cleanup_on_close
-        self._is_closed = False
-        self._downloaded_files: List[str] = []
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """Read the data from the parquet files and return as a single DataFrame.
@@ -185,7 +188,7 @@ class ParquetFileReader(Reader):
         - Only reads files in the specified directory
         """
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -245,7 +248,7 @@ class ParquetFileReader(Reader):
         - Only reads files in the specified directory
         """
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -253,9 +256,7 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(
-                "Reading parquet files in batches", file_count=len(parquet_files)
-            )
+            logger.info("Reading %d parquet files in batches", len(parquet_files))
 
             # Process each file individually to maintain memory efficiency
             for parquet_file in parquet_files:
@@ -297,7 +298,7 @@ class ParquetFileReader(Reader):
         - Column schemas must be compatible across files
         """
         try:
-            import daft  # type: ignore
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -305,9 +306,7 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(
-                "Reading parquet files with daft", file_count=len(parquet_files)
-            )
+            logger.info("Reading %d parquet files with daft", len(parquet_files))
 
             # Use the discovered/downloaded files directly
             return daft.read_parquet(parquet_files)
@@ -356,7 +355,7 @@ class ParquetFileReader(Reader):
         - Files processed individually for memory efficiency
         """
         try:
-            import daft  # type: ignore
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -364,9 +363,7 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(
-                "Reading parquet files as daft batches", file_count=len(parquet_files)
-            )
+            logger.info("Reading %d parquet files as daft batches", len(parquet_files))
 
             # Unify parquet schemas before reading: when early files have
             # null-typed columns and later files have string-typed columns,
@@ -375,8 +372,8 @@ class ParquetFileReader(Reader):
             # daft so it reads all files with consistent types. See BLDX-837.
             daft_schema = None
             try:
-                import pyarrow as pa
-                import pyarrow.parquet as pq_meta
+                import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+                import pyarrow.parquet as pq_meta  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
                 pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
                 unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
@@ -388,11 +385,10 @@ class ParquetFileReader(Reader):
                     )
                     for field in unified
                 }
-            except Exception as exc:
+            except Exception:
                 logger.debug(
-                    "Could not unify parquet schemas (%s); "
-                    "falling back to daft default schema inference",
-                    type(exc).__name__,
+                    "Could not unify parquet schemas, falling back to daft default schema inference",
+                    exc_info=True,
                 )
 
             lazy_df = daft.read_parquet(parquet_files, schema=daft_schema)
@@ -429,6 +425,8 @@ class ParquetFileWriter(Writer):
         end_marker (Optional[str]): End marker for query extraction.
         retain_local_copy (bool): Whether to retain the local copy of the files.
         use_consolidation (bool): Whether to use consolidation.
+        replace_prefix (bool): Whether to clear the existing object-store prefix before
+            the first write.
     """
 
     def __init__(
@@ -446,6 +444,7 @@ class ParquetFileWriter(Writer):
         retain_local_copy: Optional[bool] = False,
         use_consolidation: Optional[bool] = False,
         dataframe_type: DataframeType = DataframeType.pandas,
+        replace_prefix: bool = False,
     ):
         """Initialize the Parquet output handler.
 
@@ -466,6 +465,8 @@ class ParquetFileWriter(Writer):
             use_consolidation (bool, optional): Whether to use consolidation.
                 Defaults to False.
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
+            replace_prefix (bool, optional): Clear existing object-store keys under
+                the writer prefix before the first write. Defaults to False.
         """
         self.extension = PARQUET_FILE_EXTENSION
         self.path = path
@@ -490,6 +491,8 @@ class ParquetFileWriter(Writer):
         self.dataframe_type = dataframe_type
         self._is_closed = False
         self._statistics = None
+        self.replace_prefix = replace_prefix
+        self._prefix_replaced = False
 
         # Consolidation-specific attributes
         # Use consolidation to efficiently write parquet files in buffered manner
@@ -513,6 +516,36 @@ class ParquetFileWriter(Writer):
             self.path = os.path.join(self.path, self.typename)
         SafeFileOps.makedirs(self.path, exist_ok=True)
 
+    async def _ensure_prefix_replaced(self) -> None:
+        """Clear the object-store prefix once for replacing writes."""
+        if not self.replace_prefix or self._prefix_replaced:
+            return
+
+        normalized_prefix = normalize_key(self.path)
+        if not normalized_prefix:
+            raise ValueError(
+                "replace_prefix=True requires a non-empty object-store prefix"
+            )
+
+        try:
+            deleted_count = await _delete_prefix(self.path)
+        except RuntimeError as exc:
+            if "No ObjectStore provided" not in str(exc):
+                raise
+            logger.debug("No object store configured, skipping prefix replacement")
+        else:
+            logger.info(
+                "Cleared existing parquet object-store prefix",
+                prefix=normalized_prefix,
+                deleted_count=deleted_count,
+            )
+        self._prefix_replaced = True
+
+    async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
+        """Write a pandas DataFrame after optional prefix replacement."""
+        await self._ensure_prefix_replaced()
+        await super()._write_dataframe(dataframe, **kwargs)
+
     async def _write_batched_dataframe(
         self,
         batched_dataframe: Union[
@@ -532,6 +565,8 @@ class ParquetFileWriter(Writer):
         Args:
             batched_dataframe: AsyncGenerator or Generator of pandas DataFrames to write.
         """
+        await self._ensure_prefix_replaced()
+
         if not self.use_consolidation:
             # Fallback to base class implementation
             await super()._write_batched_dataframe(batched_dataframe)
@@ -596,7 +631,9 @@ class ParquetFileWriter(Writer):
             - If partition_cols is set, creates Hive-style directory structure
         """
         try:
-            import daft
+            await self._ensure_prefix_replaced()
+
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Convert string to enum if needed for backward compatibility
             if isinstance(write_mode, str):
@@ -667,7 +704,6 @@ class ParquetFileWriter(Writer):
                 },
                 description="Number of errors while writing to Parquet files",
             )
-            logger.error("Error writing daft dataframe to parquet", exc_info=True)
             raise
 
     def get_full_path(self) -> str:
@@ -758,7 +794,7 @@ class ParquetFileWriter(Writer):
             return
 
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Read all parquet files in temp folder
             pattern = os.path.join(self.current_temp_folder_path, f"*{self.extension}")
@@ -807,9 +843,9 @@ class ParquetFileWriter(Writer):
             )
 
             logger.info(
-                "Consolidated folder",
-                folder_index=self.temp_folder_index,
-                record_count=self.current_folder_records,
+                "Consolidated folder index=%d record_count=%d",
+                self.temp_folder_index,
+                self.current_folder_records,
             )
 
         except Exception:
@@ -884,8 +920,8 @@ class ParquetFileWriter(Writer):
         conflict by using ``null`` for ALL rows, dropping actual data from files
         that had the column typed as ``string``. See BLDX-837.
         """
-        import pyarrow as pa
-        import pyarrow.parquet as pq
+        import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+        import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
         table = pa.Table.from_pandas(chunk, preserve_index=False)
 

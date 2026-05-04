@@ -1,0 +1,19 @@
+# Hand-curated one-line purposes for each application_sdk subpackage.
+# Key = short subpackage name (without application_sdk. prefix).
+# Survives regenerations — edit here and re-run the skill to update the index table.
+
+app: Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy
+clients: Connection clients (SQL, Redis, Azure) and ClientInterface ABC
+common: Shared utilities — paths, file ops, SQL filters, concurrency helpers
+contracts: Typed Pydantic Input/Output base classes, payload safety, storage and type helpers
+credentials: Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
+execution: Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client
+handler: HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory
+infrastructure: Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool)
+observability: Logging context — ExecutionContext, CorrelationContext, request/correlation helpers
+outputs: Output collectors and record models for Automation Engine
+server: FastAPI server, MCP integration, middleware, health endpoint
+storage: Object-store abstraction — factory, formats, batch, transfer, cloud bindings
+templates: SQL metadata extractor templates and their contracts
+testing: Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers
+transformers: Data transformation — TransformerInterface ABC, Atlas, common, query transformers

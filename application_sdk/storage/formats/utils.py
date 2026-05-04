@@ -109,7 +109,7 @@ async def _download_files(
     Raises:
         IOError: When no files found locally or in object store
     """
-    from pathlib import Path as _Path
+    from pathlib import Path as _Path  # noqa: PLC0415 — stdlib pathlib; lazy use only
 
     # Step 1: Check if files exist locally
     local_files: List[str] = find_local_files_by_extension(
@@ -208,17 +208,17 @@ def estimate_dataframe_record_size(
     # Sample up to 10 records to estimate average size
     sample_size = min(10, len(dataframe))
     sample = dataframe.head(sample_size)
-    compression_factor = 1
     if file_extension == JSON_FILE_EXTENSION:
         sample_file = sample.to_json(orient="records", lines=True)
     elif file_extension == PARQUET_FILE_EXTENSION:
         sample_file = sample.to_parquet(index=False, compression="snappy")
-        compression_factor = 0.01
     else:
         raise ValueError(f"Unsupported file extension: {file_extension}")
 
     if sample_file is not None:
-        avg_record_size = len(sample_file) / sample_size * compression_factor
+        # Parquet samples are already snappy-compressed above, so use the
+        # measured sample size directly instead of applying another factor.
+        avg_record_size = len(sample_file) / sample_size
         return int(avg_record_size)
 
     return 0
@@ -328,13 +328,13 @@ def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bo
         If daft is not available and a daft DataFrame is passed, the function
         will log a warning and return True.
     """
-    import pandas as pd
+    import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
     if isinstance(dataframe, pd.DataFrame):
         return dataframe.empty
 
     try:
-        import daft
+        import daft  # noqa: PLC0415 — optional dep: daft
 
         if isinstance(dataframe, daft.DataFrame):
             return dataframe.count_rows() == 0

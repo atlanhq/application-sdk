@@ -11,6 +11,9 @@ permissions:
   issues: write
   security-events: write
 
+env:
+  TEMPORAL_CLI_VERSION: "1.5.1"  # bundles Server 1.29.1 — matches tenant Server 1.29.4
+
 jobs:
   # Detect which files changed
   changes:
@@ -107,7 +110,7 @@ jobs:
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          fail-under: "50"
+          fail-under: "85"
           python-version: ${{ matrix.python-version }}
 
   integration:
@@ -122,9 +125,8 @@ jobs:
 
       - name: Install Temporal CLI
         run: |
-          TEMPORAL_VERSION="1.3.0"
           mkdir -p "$HOME/.temporalio/bin"
-          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_VERSION}/temporal_cli_${TEMPORAL_VERSION}_linux_amd64.tar.gz" \
+          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_CLI_VERSION}/temporal_cli_${TEMPORAL_CLI_VERSION}_linux_amd64.tar.gz" \
             -o /tmp/temporal.tar.gz
           tar -xzf /tmp/temporal.tar.gz -C /tmp
           mv /tmp/temporal "$HOME/.temporalio/bin/temporal"
@@ -206,7 +208,7 @@ jobs:
           # Get the target branch of PR
           TARGET_BRANCH="${{ github.base_ref }}"
           # Default matrix if no label provided
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-postgres-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Parse labels from GitHub Script output

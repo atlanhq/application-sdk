@@ -54,6 +54,7 @@ Example:
 import os
 from enum import Enum
 
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=".env")
@@ -188,6 +189,16 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 #   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
 #   - @task(timeout_seconds=..., heartbeat_timeout_seconds=...) for per-task timeouts
 
+#: Delay before initiating worker shutdown after receiving a termination signal.
+#: This gives the event loop time to flush in-flight activity completions
+#: (e.g. RespondActivityTaskFailed/Completed RPCs) that are already queued
+#: but haven't been sent yet. Without this, a SIGTERM that arrives right
+#: after an activity fails can preempt the _run_activity coroutine before
+#: it reaches complete_activity_task(), leaving the SDK with a phantom
+#: "in-use" task slot that blocks shutdown for the entire
+#: graceful_shutdown_timeout.
+SHUTDOWN_DRAIN_DELAY_SECONDS = int(os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5))
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
 USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
@@ -207,6 +218,18 @@ EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 DAPR_BINDING_OPERATION_CREATE = "create"
 #: Version of worker start events used in the application
 WORKER_START_EVENT_VERSION = "v1"
+
+# HTTP Connection Pool Configuration (BLDX-1153).
+# Prevents CLOSE_WAIT zombie socket accumulation and infinite blocking.
+# keepalive_expiry=30s < nginx keepalive_timeout=75s → client retires idle
+# connections before nginx sends FIN that httpcore can't detect.
+# pool timeout=30s → threads raise PoolTimeout instead of blocking forever.
+_HTTP_POOL_LIMITS = httpx.Limits(
+    max_connections=50,
+    max_keepalive_connections=10,
+    keepalive_expiry=30.0,
+)
+_HTTP_POOL_TIMEOUT_SECONDS = 30.0
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"

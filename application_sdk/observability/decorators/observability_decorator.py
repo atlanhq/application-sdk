@@ -32,10 +32,10 @@ def _record_success_observability(
 
     # Debug logging before recording trace
     logger.debug(
-        "Recording success trace",
-        func_name=func_name,
-        trace_id=trace_id,
-        span_id=span_id,
+        "Recording success trace func=%s trace_id=%s span_id=%s",
+        func_name,
+        trace_id,
+        span_id,
     )
 
     try:
@@ -114,7 +114,7 @@ def _record_error_observability(
                 {
                     "name": f"{func_name}_failure",
                     "timestamp": time.time(),
-                    "attributes": {"error": str(error)},
+                    "attributes": {"error": type(error).__name__},
                 }
             ],
             duration_ms=duration_ms,
@@ -129,7 +129,7 @@ def _record_error_observability(
             name=f"{func_name}_failure",
             value=1,
             metric_type=MetricType.COUNTER,
-            labels={"function": func_name, "error": str(error)},
+            labels={"function": func_name, "error": type(error).__name__},
             description=f"Failed {func_name}",
             unit="count",
         )
@@ -188,9 +188,7 @@ def observability(
         is_async = inspect.iscoroutinefunction(func)
 
         # Debug logging for function decoration
-        actual_logger.debug(
-            "Decorating function", func_name=func_name, is_async=is_async
-        )
+        actual_logger.debug("Decorating function %s (is_async=%s)", func_name, is_async)
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> T:

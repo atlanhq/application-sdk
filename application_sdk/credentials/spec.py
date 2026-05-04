@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 import orjson
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AgentCredentialSpec(BaseModel):
@@ -61,10 +61,11 @@ class AgentCredentialSpec(BaseModel):
         populate_by_name=True,
     )
 
-    # ---- Always present (the "envelope") ----
+    # ---- Envelope fields (all optional, default to empty) ----
 
     agent_name: str = Field(default="", alias="agent-name")
-    """Name of the Secure Agent instance."""
+    """Name of the Secure Agent instance. Used by ``is_populated()`` to
+    determine if this spec carries a real agent payload."""
 
     secret_manager: str = Field(default="", alias="secret-manager")
     """Secret store backend: ``awssecretmanager``, ``azurekeyvault``,
@@ -72,6 +73,13 @@ class AgentCredentialSpec(BaseModel):
 
     secret_path: str = Field(default="", alias="secret-path")
     """Path / ARN / name of the secret in the external secret manager."""
+
+    @field_validator("secret_path", mode="before")
+    @classmethod
+    def _strip_secret_path(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
     auth_type: str = Field(default="", alias="auth-type")
     """Authentication strategy: ``basic``, ``noauth``, ``gcp-wif``,
@@ -115,14 +123,18 @@ class AgentCredentialSpec(BaseModel):
             try:
                 parsed = orjson.loads(data)
             except Exception as exc:
-                from application_sdk.credentials.errors import CredentialParseError
+                from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                    CredentialParseError,
+                )
 
                 raise CredentialParseError(
                     f"agent_json is not valid JSON: {exc}",
                     cause=exc,
                 ) from exc
             if not isinstance(parsed, dict):
-                from application_sdk.credentials.errors import CredentialParseError
+                from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                    CredentialParseError,
+                )
 
                 raise CredentialParseError(
                     f"agent_json must be a JSON object, got {type(parsed).__name__}",

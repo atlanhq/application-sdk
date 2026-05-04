@@ -145,7 +145,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
 
             # Add Prometheus metric reader if enabled
             if ENABLE_PROMETHEUS_METRICS:
-                from opentelemetry.exporter.prometheus import PrometheusMetricReader
+                from opentelemetry.exporter.prometheus import (  # noqa: PLC0415 — cold path: prometheus exporter only when ENABLE_PROMETHEUS_METRICS
+                    PrometheusMetricReader,
+                )
 
                 self._prometheus_reader = PrometheusMetricReader()
                 metric_readers.append(self._prometheus_reader)
@@ -248,22 +250,22 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
-                    description=metric_record.description,
-                    unit=metric_record.unit,
+                    description=metric_record.otel_description,
+                    unit=metric_record.otel_unit,
                 )
                 counter.add(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.GAUGE:
-                gauge = self.meter.create_observable_gauge(
+                gauge = self.meter.create_gauge(
                     name=metric_record.name,
-                    description=metric_record.description,
-                    unit=metric_record.unit,
+                    description=metric_record.otel_description,
+                    unit=metric_record.otel_unit,
                 )
-                gauge.add(metric_record.value, otel_attrs)
+                gauge.set(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.HISTOGRAM:
                 histogram = self.meter.create_histogram(
                     name=metric_record.name,
-                    description=metric_record.description,
-                    unit=metric_record.unit,
+                    description=metric_record.otel_description,
+                    unit=metric_record.otel_unit,
                 )
                 histogram.record(metric_record.value, otel_attrs)
         except Exception:

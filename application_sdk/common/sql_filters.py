@@ -53,16 +53,19 @@ def extract_database_names_from_regex_common(
                     if len(parts) < 2:
                         logger.warning("Invalid database name format: %s", pattern)
                         continue
-                    db_name = parts[0].strip()
-                    schema_part = parts[1].strip()
+                    db_name = parts[0].strip().lstrip("^")
+                    schema_part = parts[1].strip().rstrip("$")
+                    # Accept both legacy ``*`` and anchored ``.*`` wildcard forms.
                     if not (
-                        db_name and db_name not in (".*", "^$") and schema_part == "*"
+                        db_name
+                        and db_name not in (".*", "^$")
+                        and schema_part in ("*", ".*")
                     ):
                         continue
                 else:
                     if not parts:
                         continue
-                    db_name = parts[0].strip()
+                    db_name = parts[0].strip().lstrip("^")
                     if not (db_name and db_name not in (".*", "^$")):
                         continue
 
@@ -80,8 +83,8 @@ def extract_database_names_from_regex_common(
 
     except Exception:
         logger.error(
-            "Error extracting database names from regex",
-            normalized_regex=normalized_regex,
+            "Error extracting database names from regex: %s",
+            normalized_regex,
             exc_info=True,
         )
         return empty_default
@@ -198,10 +201,10 @@ def prepare_query(
     except CommonError as e:
         error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
         logger.error(
-            "Error preparing query",
-            query=query,
-            error_message=error_message,
-            error_code=CommonError.QUERY_PREPARATION_ERROR.code,
+            "Error preparing query: error_code=%s error_message=%s",
+            CommonError.QUERY_PREPARATION_ERROR.code,
+            error_message,
+            exc_info=True,
         )
         return None
 
@@ -304,31 +307,41 @@ def prepare_filters(
 def normalize_filters(
     filter_dict: Dict[str, List[str] | str], is_include: bool
 ) -> List[str]:
-    """Normalize filter dict to regex patterns.
+    """Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
+
+    Each emitted pattern is anchored with ``^`` and ``$`` so that callers
+    using POSIX ``~`` (substring match by default) get exact ``db.schema``
+    semantics rather than substring matches.
+
+    Mapping:
+        - ``{"^db$": []}`` or ``{"^db$": "*"}`` → ``^db\\..*$`` (every schema in db)
+        - ``{"^db$": ["^sch$"]}`` → ``^db\\.sch$`` (exactly that schema)
+
+    The previous implementation emitted unanchored ``db\\.*`` (literal dot,
+    zero-or-more), which substring-matched targets like ``something.atlan_dev``
+    when the user only meant database ``dev``.
 
     Args:
-        filter_dict: The filter dictionary.
-        is_include: Whether the filter is an include filter.
+        filter_dict: Filter dict, e.g. ``{"^db$": ["^schema$"]}``.
+        is_include: Whether this is an include filter (currently unused — both
+            include and exclude need the same anchored shape; kept for API
+            stability).
 
     Returns:
-        List of normalized filter patterns.
+        List of anchored regex segments suitable for joining with ``|``.
     """
     normalized_filter_list: List[str] = []
     for filtered_db, filtered_schemas in filter_dict.items():
         db = filtered_db.strip("^$")
 
-        if filtered_schemas == "*":
-            normalized_filter_list.append(f"{db}\\.*")
-            continue
-
-        if not filtered_schemas:
-            normalized_filter_list.append(f"{db}\\.*")
+        if filtered_schemas == "*" or not filtered_schemas:
+            normalized_filter_list.append(f"^{db}\\..*$")
             continue
 
         if isinstance(filtered_schemas, list):
             for schema in filtered_schemas:
-                sch = schema.lstrip("^")
-                normalized_filter_list.append(f"{db}\\.{sch}")
+                sch = schema.strip("^$")
+                normalized_filter_list.append(f"^{db}\\.{sch}$")
 
     return normalized_filter_list
 
