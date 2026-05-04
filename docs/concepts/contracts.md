@@ -102,33 +102,42 @@ The `MaxItems` annotation enforces a maximum list length both at class-definitio
 Use `FileReference` to pass large data between tasks through object storage rather than the Temporal payload:
 
 ```python
-from application_sdk.contracts import Input, Output, FileReference, UploadInput, DownloadInput
+from application_sdk.contracts import Input, Output, FileReference, UploadInput
 
 class FetchOutput(Output):
-    local_path: str  # task returns the local path; App.upload runs in run()
+    data_file: FileReference
 
 class TransformInput(Input):
     data_file: FileReference
+
+class TransformOutput(Output):
+    output_path: str
+    record_count: int
+
+class ExtractionOutput(Output):
+    output_file: FileReference
+    record_count: int
 
 class MyConnector(App):
     @task
     async def fetch_data(self, input: FetchInput) -> FetchOutput:
         path = "/tmp/data.parquet"
         write_parquet(path, records)
-        return FetchOutput(local_path=path)
+        return FetchOutput(data_file=FileReference.from_local(path))
 
     @task
     async def transform(self, input: TransformInput) -> TransformOutput:
-        # input.data_file.local_path is valid only if the file was downloaded first.
         df = read_parquet(input.data_file.local_path)
         ...
+        return TransformOutput(output_path="/tmp/output.parquet", record_count=len(df))
 
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
         fetch = await self.fetch_data(FetchInput(...))
-        # App.upload is a @task itself — call it from run(),
-        # not from inside another @task (tasks must not call tasks in Temporal).
-        up = await self.upload(UploadInput(local_path=fetch.local_path))
-        return await self.transform(TransformInput(data_file=up.ref))
+        # FileReference passes through the contract automatically — no manual upload between tasks.
+        transformed = await self.transform(TransformInput(data_file=fetch.data_file))
+        # Upload the final result at the end of run(), after all processing is complete.
+        up = await self.upload(UploadInput(local_path=transformed.output_path))
+        return ExtractionOutput(output_file=up.ref, record_count=transformed.record_count)
 ```
 
 See [Storage](storage.md) for full `FileReference` and `StorageTier` documentation.
