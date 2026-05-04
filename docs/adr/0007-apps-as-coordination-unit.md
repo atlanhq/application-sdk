@@ -2,14 +2,14 @@
 
 > **🚫 Status: Superseded**
 >
-> Direct inter-app calls (`call()` / `call_by_name()`) are **deactivated** in the SDK (raising `NotImplementedError`; tracked for removal in BLDX-878). The original decision to support child-workflow invocation is superseded by a strategic direction change: orchestration will move to event-driven, event-triggered coordination. In this future model apps will not be responsible for defining orchestration themselves — triggering and sequencing will be the platform's concern, not the App's. The content below is retained for historical context only.
+> Direct inter-app calls (`call()` / `call_by_name()`) are **permanently removed** from the SDK. The original decision to support child-workflow invocation is superseded by a strategic direction change: orchestration will move to event-driven, event-triggered coordination. In this future model apps will not be responsible for defining orchestration themselves — triggering and sequencing will be the platform's concern, not the App's. The content below is retained for historical context only.
 
 ## Status
 **Superseded**
 
 ## Resolution
 
-Direct inter-app calls are deactivated (tracked for removal in BLDX-878). Apps must not coordinate other apps — neither via `call_by_name()` nor any equivalent SDK primitive.
+Direct inter-app calls are permanently removed. Apps must not coordinate other apps — neither via `call_by_name()` nor any equivalent SDK primitive.
 
 The Automation Engine DAG pattern (encoding orchestration in `manifest.json`) is the current supported mechanism for multi-phase connectors, and is itself transitional. The strategic direction is to move orchestration entirely out of apps and into an event-driven platform layer: apps will be triggered by events and will emit events on completion; sequencing will be handled externally. This removes the need for apps to reason about other apps at all.
 
