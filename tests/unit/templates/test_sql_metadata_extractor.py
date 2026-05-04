@@ -972,9 +972,8 @@ class TestTaskInputHelper:
 class TestRunOrchestration:
     def _build(self) -> Any:
         """Construct an extractor with all tasks stubbed via AsyncMock."""
-        from application_sdk.templates.contracts.base_metadata_extraction import (
-            UploadOutput,
-        )
+        from application_sdk.contracts.storage import UploadOutput
+        from application_sdk.contracts.types import FileReference
         from application_sdk.templates.contracts.sql_metadata import (
             FetchColumnsOutput,
             FetchDatabasesOutput,
@@ -998,7 +997,9 @@ class TestRunOrchestration:
         ext.fetch_columns = AsyncMock(
             return_value=FetchColumnsOutput(total_record_count=100)
         )
-        ext.upload_to_atlan = AsyncMock(return_value=UploadOutput(migrated_files=12))
+        ext.upload = AsyncMock(
+            return_value=UploadOutput(ref=FileReference(file_count=12))
+        )
         return ext
 
     async def test_run_happy_path(self) -> None:
@@ -1033,7 +1034,7 @@ class TestRunOrchestration:
         assert out.connection_qualified_name == "default/test/c"
         assert out.output_path == "/tmp/out"
         ext.fetch_databases.assert_awaited_once()
-        ext.upload_to_atlan.assert_awaited_once()
+        ext.upload.assert_awaited_once()
 
     async def test_run_skips_upload_when_no_output_path(self) -> None:
         from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
@@ -1052,7 +1053,7 @@ class TestRunOrchestration:
         )
         out = await SqlMetadataExtractor.run(ext, inp)
         assert out.records_uploaded == 0
-        ext.upload_to_atlan.assert_not_awaited()
+        ext.upload.assert_not_awaited()
 
     async def test_run_uses_legacy_credential_guid_fallback(self) -> None:
         """credential_ref None + credential_guid set → calls legacy_credential_ref."""

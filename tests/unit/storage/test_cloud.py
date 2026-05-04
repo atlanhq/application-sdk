@@ -307,6 +307,101 @@ class TestCloudStoreOps:
         assert len(files) == 1
         assert files[0].read_bytes() == content
 
+
+# ---------------------------------------------------------------------------
+# Log-format regression: "Downloaded", "Uploaded", "Listing" must include the
+# storage path / size in the message *body* so an SRE running ``kubectl logs``
+# can grep without first having to query OTLP attributes.  An earlier revision
+# of this PR used structured-only kwargs (e.g. ``info("Downloaded",
+# storage_path=key)``) which left the body as just ``"Downloaded"``.
+# ---------------------------------------------------------------------------
+
+
+class TestCloudStoreLogMessageFormat:
+    """Pin the message-body content for the four cloud.py log sites.
+
+    cloud.py routes through ``get_logger()`` which uses loguru sinks — pytest's
+    ``caplog`` only captures stdlib logging, so we patch ``_log()`` and inspect
+    the call args directly.  We're verifying message-body shape, not delivery.
+    """
+
+    def _make_store(self, tmp_path: Path) -> CloudStore:
+        store_root = tmp_path / "bucket"
+        store_root.mkdir()
+        return CloudStore(LocalStore(prefix=str(store_root)), provider="local")
+
+    @staticmethod
+    def _info_calls(spy):
+        """Return the positional message-format strings passed to ``info()``."""
+        return [
+            call.args[0] for call in spy.return_value.info.call_args_list if call.args
+        ]
+
+    @staticmethod
+    def _info_call_args(spy):
+        """Return the (msg, *positional_args) tuples for each info() call."""
+        return [
+            tuple(call.args)
+            for call in spy.return_value.info.call_args_list
+            if call.args
+        ]
+
+    async def test_upload_log_message_inlines_key_and_size(self, tmp_path) -> None:
+        from unittest.mock import patch
+
+        store = self._make_store(tmp_path)
+        local = tmp_path / "payload.bin"
+        local.write_bytes(b"hello world")
+        with patch("application_sdk.storage.cloud._log") as spy:
+            await store.upload(local, "artifacts/payload.bin")
+        # %-style: ("Uploaded key=%s bytes=%d", key, size)
+        triples = [args for args in self._info_call_args(spy) if "Uploaded" in args[0]]
+        assert any(
+            "key=%s" in args[0]
+            and "bytes=%d" in args[0]
+            and args[1:] == ("artifacts/payload.bin", 11)
+            for args in triples
+        ), f"Uploaded line did not inline key+size, got: {triples}"
+
+    async def test_download_single_log_message_inlines_key_and_local_path(
+        self, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        store = self._make_store(tmp_path)
+        await store.upload_bytes("artifacts/x.bin", b"data")
+        out = tmp_path / "out"
+        with patch("application_sdk.storage.cloud._log") as spy:
+            await store.download(key="artifacts/x.bin", output_dir=out)
+        triples = [
+            args for args in self._info_call_args(spy) if "Downloaded" in args[0]
+        ]
+        assert any(
+            "key=%s" in args[0]
+            and "local_path=%s" in args[0]
+            and args[1] == "artifacts/x.bin"
+            for args in triples
+        ), f"Downloaded line did not inline key+local_path, got: {triples}"
+
+    async def test_download_prefix_log_messages_inline_prefix_and_count(
+        self, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        store = self._make_store(tmp_path)
+        await store.upload_bytes("dir/a.bin", b"a")
+        await store.upload_bytes("dir/b.bin", b"bb")
+        out = tmp_path / "out"
+        with patch("application_sdk.storage.cloud._log") as spy:
+            await store.download(prefix="dir", output_dir=out)
+        formats = self._info_calls(spy)
+        assert any(
+            "Listing objects under prefix=%s" in fmt for fmt in formats
+        ), f"Listing line did not use %-style prefix, got: {formats}"
+        assert any(
+            "Downloaded %d files from prefix=%s" in fmt for fmt in formats
+        ), f"Downloaded-N line did not use %-style, got: {formats}"
+
     async def test_large_file_upload_streaming(self, tmp_path):
         """upload() streams a multi-chunk local file without reading it all into memory."""
         store = self._make_store(tmp_path)

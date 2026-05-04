@@ -903,6 +903,21 @@ await self.upload(UploadInput(local_path=output_file_path, storage_path=storage_
 
 Note that this is NOT necessary inside each task — task-to-task uploading/downloading of files within the same app is handled _automatically_ purely by virtue of a `FileReference` being included in the Output of a task (automatically uploaded, if not already in the object store) or the Input of a task (automatically downloaded, if not already present in the worker).
 
+**Selective materialization with `Lazy()`:** If a task declares a `FileReference` input field it doesn't always need (e.g. a heavy artifact only read under certain conditions), mark it `Lazy` to skip the automatic pre-download:
+
+```python
+from typing import Annotated
+from application_sdk.contracts.types import FileReference, Lazy
+
+class MyInput(Input):
+    manifest: FileReference | None = None                            # eager (always downloaded)
+    heavy_artifact: Annotated[FileReference | None, Lazy()] = None  # lazy (skipped)
+```
+
+Call `await fetch(ref)` from `application_sdk.storage.reference` inside the task to download on demand. The SHA-256 sidecar fast-path means a second call is cheap if the file is already on disk. Use `Lazy()` on any field the activity may not read — it prevents unnecessary downloads and reduces timeout risk for lightweight activities on large inputs.
+
+**Dedup is automatic:** if the same `storage_path` appears on multiple input fields (fan-out pattern), the SDK downloads it once and reuses the local path. No manual dedup needed.
+
 Reasons every connector must use this shape:
 
 - `self.upload()` is an SDK `@task` with a dedicated retry policy and activity-level recording. A worker swap mid-run will not re-upload; a hand-rolled `obstore.put` will.
