@@ -21,7 +21,15 @@ Usage::
             return await self.fetch_data(input)
 """
 
-from application_sdk.app.base import App, AppError, NonRetryableError, RetryableError
+from application_sdk.app.base import (
+    App,
+    AppError,
+    AuthError,
+    NonRetryableError,
+    RateLimited,
+    RetryableError,
+    UpstreamUnavailable,
+)
 from application_sdk.app.context import AppContext
 from application_sdk.app.entrypoint import EntryPointMetadata, entrypoint
 from application_sdk.app.registry import AppRegistry, TaskRegistry
@@ -36,14 +44,17 @@ __all__ = [
     "AtlanClientMixin",
     "AppError",
     "AppRegistry",
+    "AuthError",
     "EntryPointMetadata",
     "Input",
     "NonRetryableError",
     "Output",
+    "RateLimited",
     "RetryableError",
     "RetryPolicy",
     "TaskMetadata",
     "TaskRegistry",
+    "UpstreamUnavailable",
     "entrypoint",
     "task",
 ]

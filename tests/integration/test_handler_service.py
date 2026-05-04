@@ -762,3 +762,165 @@ async def test_get_infrastructure_visible_in_http_handler():
 
     assert resp.status_code == 200
     assert resp.json()["found"] is True
+
+
+# ---------------------------------------------------------------------------
+# Workflow-level RetryPolicy plumbing (PR #1648)
+# ---------------------------------------------------------------------------
+# Verifies the workflow_retry_policy kwarg on create_app_handler_service
+# reaches Temporal as a real RetryPolicy on the WorkflowExecutionStarted
+# event. Reading from history (rather than asserting on the mocked client
+# call) confirms the wire-format conversion via _to_temporal_retry_policy
+# works end-to-end against a live Temporal server.
+
+
+async def _started_event_retry_policy(temporal_client, wf_id: str):
+    """Return ``RetryPolicy`` from the WorkflowExecutionStarted event, or
+    None if the event has no policy attached."""
+    handle = temporal_client.get_workflow_handle(wf_id)
+    history = await handle.fetch_history()
+    for event in history.events:
+        if event.HasField("workflow_execution_started_event_attributes"):
+            attrs = event.workflow_execution_started_event_attributes
+            if attrs.HasField("retry_policy"):
+                return attrs.retry_policy
+            return None
+    raise AssertionError(f"No WorkflowExecutionStarted event for {wf_id}")
+
+
+async def _build_retry_client(
+    temporal_client,
+    task_queue: str,
+    reregister_app,
+    *,
+    workflow_retry_policy=None,
+    override: bool = False,
+):
+    """Build a TestClient for TrivialApp configured with an optional retry
+    policy. Returns (httpx.AsyncClient, app)."""
+    from application_sdk.handler import service as svc
+    from application_sdk.handler.service import create_app_handler_service
+
+    reregister_app(TrivialApp)
+
+    handler = DefaultHandler()
+    kwargs: dict = {
+        "app_name": "trivial-retry",
+        "app_class": TrivialApp,
+        "temporal_host": "localhost:7233",
+        "task_queue": task_queue,
+    }
+    if override:
+        kwargs["workflow_retry_policy"] = workflow_retry_policy
+
+    app = create_app_handler_service(handler, **kwargs)
+    svc._temporal_client = temporal_client
+    return app
+
+
+@pytest.mark.integration
+async def test_workflow_retry_policy_default_lands_in_history(
+    run_worker, temporal_client, task_queue, reregister_app
+):
+    """Default DEFAULT_WORKFLOW_RETRY is recorded in Temporal's start event."""
+    app = await _build_retry_client(temporal_client, task_queue, reregister_app)
+
+    async with run_worker():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/workflows/v1/start", json={"name": "retry-default"}
+            )
+            assert resp.status_code == 200
+            wf_id = resp.json()["data"]["workflow_id"]
+
+        retry = await _started_event_retry_policy(temporal_client, wf_id)
+
+    assert (
+        retry is not None
+    ), "Default workflow_retry_policy was not forwarded to Temporal"
+    assert retry.maximum_attempts == 2
+    expected_non_retryable = {
+        "NonRetryableError",
+        "AuthError",
+        "ContractValidationError",
+        "ValidationError",
+    }
+    assert expected_non_retryable.issubset(set(retry.non_retryable_error_types))
+    # initial_interval is a google.protobuf.Duration in the history payload
+    assert retry.initial_interval.seconds == 120
+
+
+@pytest.mark.integration
+async def test_workflow_retry_policy_no_retry_disables_workflow_retry(
+    run_worker, temporal_client, task_queue, reregister_app
+):
+    """workflow_retry_policy=NO_RETRY → maximum_attempts=1 in start event."""
+    from application_sdk.execution.retry import NO_RETRY
+
+    app = await _build_retry_client(
+        temporal_client,
+        task_queue,
+        reregister_app,
+        workflow_retry_policy=NO_RETRY,
+        override=True,
+    )
+
+    async with run_worker():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post("/workflows/v1/start", json={"name": "no-retry"})
+            assert resp.status_code == 200
+            wf_id = resp.json()["data"]["workflow_id"]
+
+        retry = await _started_event_retry_policy(temporal_client, wf_id)
+
+    assert retry is not None
+    assert retry.maximum_attempts == 1
+
+
+@pytest.mark.integration
+async def test_workflow_retry_policy_custom_reaches_temporal(
+    run_worker, temporal_client, task_queue, reregister_app
+):
+    """Custom RetryPolicy is preserved through the conversion to Temporal."""
+    from datetime import timedelta
+
+    from application_sdk.execution.retry import RetryPolicy
+
+    custom = RetryPolicy(
+        max_attempts=5,
+        initial_interval=timedelta(seconds=7),
+        max_interval=timedelta(minutes=3),
+        backoff_coefficient=3.0,
+        non_retryable_errors=("AuthError", "PreflightError"),
+    )
+
+    app = await _build_retry_client(
+        temporal_client,
+        task_queue,
+        reregister_app,
+        workflow_retry_policy=custom,
+        override=True,
+    )
+
+    async with run_worker():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/workflows/v1/start", json={"name": "custom-retry"}
+            )
+            assert resp.status_code == 200
+            wf_id = resp.json()["data"]["workflow_id"]
+
+        retry = await _started_event_retry_policy(temporal_client, wf_id)
+
+    assert retry is not None
+    assert retry.maximum_attempts == 5
+    assert retry.initial_interval.seconds == 7
+    assert retry.maximum_interval.seconds == 180
+    assert retry.backoff_coefficient == 3.0
+    assert set(retry.non_retryable_error_types) == {"AuthError", "PreflightError"}

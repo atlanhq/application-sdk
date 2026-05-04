@@ -6,13 +6,16 @@ import contextlib
 import json
 import warnings
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from application_sdk.app.base import App
 from application_sdk.contracts.base import Input, Output
+from application_sdk.execution.retry import NO_RETRY, RetryPolicy
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -3518,9 +3521,6 @@ class TestWorkflowRetryPolicy:
         """Yield (TestClient, mock_temporal_client). Patch lifetime is scoped
         to the ``with`` block — exceptions in the test body don't leak the
         patch into other tests."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from application_sdk.app.base import App
 
         class _RetryApp(App):
             async def run(self, input: _RoutingInput) -> _RoutingOutput:
@@ -3563,8 +3563,6 @@ class TestWorkflowRetryPolicy:
 
     def test_explicit_no_retry_disables_workflow_retry(self) -> None:
         """workflow_retry_policy=NO_RETRY → maximum_attempts=1 (no workflow retry)."""
-        from application_sdk.execution.retry import NO_RETRY
-
         with self._build_client(workflow_retry_policy=NO_RETRY, override=True) as (
             client,
             mock_client,
@@ -3578,10 +3576,6 @@ class TestWorkflowRetryPolicy:
 
     def test_custom_policy_with_extra_non_retryables(self) -> None:
         """Custom RetryPolicy reaches start_workflow unchanged."""
-        from datetime import timedelta
-
-        from application_sdk.execution.retry import RetryPolicy
-
         custom = RetryPolicy(
             max_attempts=5,
             initial_interval=timedelta(seconds=10),

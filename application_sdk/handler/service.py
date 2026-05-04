@@ -58,6 +58,10 @@ from application_sdk.constants import (
     ENABLE_PROMETHEUS_METRICS,
     LOCAL_ENVIRONMENT,
 )
+from application_sdk.execution.retry import (
+    DEFAULT_WORKFLOW_RETRY,
+    _to_temporal_retry_policy,
+)
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
@@ -248,17 +252,16 @@ class WorkflowClientConfig:
     auth_base_url: str = ""
     auth_scopes: str = ""
 
-    # Workflow-level retry: applied at client.start_workflow(). When None, no
-    # workflow-level retry runs; the framework's DEFAULT_WORKFLOW_RETRY is used
-    # if create_app_handler_service is called without overriding the kwarg.
+    # Construction default. create_app_handler_service resolves None to
+    # DEFAULT_WORKFLOW_RETRY; pass NO_RETRY to disable workflow-level retry.
+    # After init, this field reflects the resolved policy used at runtime.
     workflow_retry_policy: RetryPolicy | None = dataclasses.field(
         default=None, repr=False
     )
 
     # Pre-converted Temporal RetryPolicy. Computed once in
     # create_app_handler_service after default resolution so per-request
-    # handlers don't repeat the conversion. None when workflow_retry_policy
-    # is explicitly set to None (no workflow retry).
+    # /start handlers don't repeat the conversion.
     temporal_workflow_retry_policy: Any = dataclasses.field(default=None, repr=False)
 
     def is_configured(self) -> bool:
@@ -419,6 +422,13 @@ def create_app_handler_service(
         frontend_assets_path: Path to the directory containing frontend static assets.
             Serves ``index.html`` at ``GET /`` and mounts remaining assets as static
             files. Defaults to ``"app/generated/frontend/static"``.
+        workflow_retry_policy: Retry policy applied at workflow level via
+            ``client.start_workflow()``. Defaults to
+            :data:`~application_sdk.execution.retry.DEFAULT_WORKFLOW_RETRY` (one
+            retry after a 2-minute backoff, skipping deterministic failures).
+            Pass :data:`~application_sdk.execution.retry.NO_RETRY` to disable
+            workflow-level retry — recommended for apps that are not idempotent
+            across a full workflow restart.
 
     Returns:
         Configured FastAPI application.
@@ -440,16 +450,7 @@ def create_app_handler_service(
     # Sentinel default → use framework default. Callers that want NO retry
     # must pass NO_RETRY explicitly.
     if workflow_retry_policy is None:
-        from application_sdk.execution.retry import (  # noqa: PLC0415 — cold path: handler-service init
-            DEFAULT_WORKFLOW_RETRY,
-            _to_temporal_retry_policy,
-        )
-
         workflow_retry_policy = DEFAULT_WORKFLOW_RETRY
-    else:
-        from application_sdk.execution.retry import (  # noqa: PLC0415 — cold path: handler-service init
-            _to_temporal_retry_policy,
-        )
 
     _temporal_workflow_retry_policy = _to_temporal_retry_policy(workflow_retry_policy)
 
