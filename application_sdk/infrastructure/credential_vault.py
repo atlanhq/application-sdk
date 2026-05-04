@@ -6,18 +6,21 @@ is a pointer to a credential record that may itself contain references to
 secrets in a separate store.
 """
 
+import warnings
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from application_sdk.errors import CREDENTIAL_VAULT_ERROR, ErrorCode
+from application_sdk.errors.leaves import DependencyUnavailableError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
-class CredentialVaultError(Exception):
-    """Raised when credential vault operations fail."""
+class CredentialVaultError(DependencyUnavailableError):
+    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VAULT_ERROR
+    code: ClassVar[str] = "CREDENTIAL_VAULT"
 
     def __init__(
         self,
@@ -27,10 +30,14 @@ class CredentialVaultError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
+        warnings.warn(
+            "CredentialVaultError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.credential_guid = credential_guid
-        self.cause = cause
         self._error_code = error_code
 
     @property

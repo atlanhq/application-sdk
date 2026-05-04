@@ -1,9 +1,11 @@
 """Secrets management abstraction."""
 
 import os
+import warnings
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
+from application_sdk.errors.leaves import DependencyUnavailableError, NotFoundError
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -71,10 +73,11 @@ async def get_deployment_secret(key: str) -> Any:
         return None
 
 
-class SecretStoreError(Exception):
-    """Raised when secret store operations fail."""
+class SecretStoreError(DependencyUnavailableError):
+    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
+    code: ClassVar[str] = "SECRET_STORE"
 
     def __init__(
         self,
@@ -84,10 +87,14 @@ class SecretStoreError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
+        warnings.warn(
+            "SecretStoreError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.secret_name = secret_name
-        self.cause = cause
         self._error_code = error_code
 
     @property
@@ -107,16 +114,32 @@ class SecretStoreError(Exception):
         return " | ".join(parts)
 
 
-class SecretNotFoundError(SecretStoreError):
-    """Raised when a secret is not found."""
+class SecretNotFoundError(NotFoundError):
+    """Deprecated: use ``application_sdk.errors.NotFoundError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_NOT_FOUND
+    code: ClassVar[str] = "SECRET_NOT_FOUND"
 
     def __init__(self, secret_name: str) -> None:
-        super().__init__(
-            f"Secret '{secret_name}' not found",
-            secret_name=secret_name,
+        warnings.warn(
+            "SecretNotFoundError is deprecated; use application_sdk.errors.NotFoundError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
         )
+        NotFoundError.__init__(self, message=f"Secret '{secret_name}' not found")
+        self.secret_name = secret_name
+        self._error_code = SECRET_NOT_FOUND
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._error_code
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        if self.secret_name:
+            parts.append(f"secret={self.secret_name}")
+        return " | ".join(parts)
 
 
 class SecretStore(Protocol):

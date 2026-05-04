@@ -64,7 +64,9 @@ class TestHandlerError:
 class TestHandlerContextProperty:
     def test_context_outside_invocation_raises(self):
         handler = DefaultHandler()
-        with pytest.raises(RuntimeError, match="context is not set"):
+        from application_sdk.app.base import AppContextError
+
+        with pytest.raises(AppContextError, match="context is not set"):
             _ = handler.context
 
     def test_context_set_and_cleared(self):

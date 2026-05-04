@@ -1,0 +1,18 @@
+"""Closed failure category enum — the stable vocabulary the SDK owns."""
+
+from enum import Enum
+
+
+class FailureCategory(Enum):
+    CANCELLED = "CANCELLED"
+    TIMEOUT = "TIMEOUT"
+    RATE_LIMITED = "RATE_LIMITED"
+    AUTH = "AUTH"
+    PERMISSION = "PERMISSION"
+    NOT_FOUND = "NOT_FOUND"
+    INVALID_INPUT = "INVALID_INPUT"
+    PRECONDITION = "PRECONDITION"
+    DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE"
+    RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
+    DATA_INTEGRITY = "DATA_INTEGRITY"
+    INTERNAL = "INTERNAL"

@@ -1,16 +1,19 @@
 """Pub/sub abstraction."""
 
-from collections.abc import Awaitable
+import warnings
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Protocol
+from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import PUBSUB_ERROR, ErrorCode
+from application_sdk.errors.leaves import DependencyUnavailableError
 
 
-class PubSubError(Exception):
-    """Raised when pub/sub operations fail."""
+class PubSubError(DependencyUnavailableError):
+    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PUBSUB_ERROR
+    code: ClassVar[str] = "PUBSUB"
 
     def __init__(
         self,
@@ -21,11 +24,15 @@ class PubSubError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
+        warnings.warn(
+            "PubSubError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.topic = topic
         self.operation = operation
-        self.cause = cause
         self._error_code = error_code
 
     @property
