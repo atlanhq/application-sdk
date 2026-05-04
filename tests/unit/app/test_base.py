@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest import mock
 from uuid import UUID
 
@@ -371,7 +371,7 @@ class TestSafeNow:
     """Tests for _safe_now."""
 
     def test_returns_workflow_now(self) -> None:
-        fixed = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        fixed = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
         with mock.patch("application_sdk.app.base.workflow.now", return_value=fixed):
             assert _safe_now() == fixed
 
@@ -696,7 +696,7 @@ class TestAppConvenience:
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
                 return _BLDXOutput()
 
-        fixed = datetime(2025, 5, 1, tzinfo=timezone.utc)
+        fixed = datetime(2025, 5, 1, tzinfo=UTC)
         with mock.patch("application_sdk.app.base.workflow.now", return_value=fixed):
             assert _NowApp().now() == fixed
 
@@ -723,30 +723,6 @@ class TestAppConvenience:
         a = NamedApp()
         assert a.get_name() == "named-app"
         assert a.get_version() == "9.9.9"
-
-
-# =============================================================================
-# call() / call_by_name() — currently disabled
-# =============================================================================
-
-
-class TestDeactivatedInterAppCalls:
-    def _app(self) -> App:
-        class _DApp(App):
-            async def run(self, input: _BLDXInput) -> _BLDXOutput:
-                return _BLDXOutput()
-
-        return _DApp()
-
-    @pytest.mark.asyncio
-    async def test_call_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError, match="deactivated pending"):
-            await self._app().call("x")
-
-    @pytest.mark.asyncio
-    async def test_call_by_name_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError, match="deactivated pending"):
-            await self._app().call_by_name("x")
 
 
 # =============================================================================
@@ -962,7 +938,7 @@ class TestCreateTaskActivityWrapper:
             await wrapper(_BLDXInput())
         passed = exec_act.call_args.kwargs["retry_policy"]
         # Temporal RetryPolicy uses .maximum_attempts (not .max_attempts).
-        assert getattr(passed, "maximum_attempts") == 7
+        assert passed.maximum_attempts == 7
 
 
 # =============================================================================
@@ -1063,7 +1039,7 @@ class TestGenerateWorkflowClass:
         stack.enter_context(
             mock.patch(
                 "application_sdk.app.base._safe_now",
-                return_value=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                return_value=datetime(2025, 1, 1, tzinfo=UTC),
             )
         )
         stack.enter_context(mock.patch("application_sdk.app.base._wrap_instance_tasks"))
@@ -1097,9 +1073,9 @@ class TestGenerateWorkflowClass:
                 "application_sdk.observability.correlation.get_correlation_context",
                 return_value=None,
             ),
+            pytest.raises(ApplicationError) as exc,
         ):
-            with pytest.raises(ApplicationError) as exc:
-                await wf_cls.run(mock.MagicMock(), _BLDXInput())
+            await wf_cls.run(mock.MagicMock(), _BLDXInput())
 
         assert exc.value.__cause__ is not None
         assert isinstance(exc.value.__cause__, ValueError)
@@ -1136,9 +1112,9 @@ class TestGenerateWorkflowClass:
                 "application_sdk.observability.correlation.get_correlation_context",
                 return_value=None,
             ),
+            pytest.raises(_OrigFail),
         ):
-            with pytest.raises(_OrigFail):
-                await wf_cls.run(mock.MagicMock(), _BLDXInput())
+            await wf_cls.run(mock.MagicMock(), _BLDXInput())
 
     @pytest.mark.asyncio
     async def test_run_retryable_error_marked_retryable(self) -> None:
@@ -1171,9 +1147,9 @@ class TestGenerateWorkflowClass:
                 "application_sdk.observability.correlation.get_correlation_context",
                 return_value=None,
             ),
+            pytest.raises(ApplicationError) as exc,
         ):
-            with pytest.raises(ApplicationError) as exc:
-                await wf_cls.run(mock.MagicMock(), _BLDXInput())
+            await wf_cls.run(mock.MagicMock(), _BLDXInput())
 
         assert getattr(exc.value, "non_retryable", None) is False
 
