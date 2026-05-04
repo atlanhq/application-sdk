@@ -197,6 +197,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `ATLAN_SERVICE_NAME` | _(empty)_ | Runtime override for OTel service name. `AppConfig` reads this first; if set, it supersedes both `OTEL_SERVICE_NAME` and the name derived from the `--app` module. Import-time telemetry reads `OTEL_SERVICE_NAME` only — set both if you need consistent naming across all telemetry paths. |
 | `OTEL_SERVICE_NAME` | `atlan-application-sdk` | Service name in telemetry data. At runtime, `AppConfig` overrides this with `ATLAN_SERVICE_NAME` (if set) or a name derived from the `--app` module; import-time telemetry (traces/metrics adaptors) reads only `OTEL_SERVICE_NAME` directly. |
 | `OTEL_SERVICE_VERSION` | _(SDK version)_ | Service version in telemetry data. |
 | `OTEL_RESOURCE_ATTRIBUTES` | _(empty)_ | Additional OTel resource attributes (key=value pairs). |

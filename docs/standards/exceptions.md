@@ -226,3 +226,9 @@ When reviewing code, check for:
 - **Logging**: Use `AtlanLoggerAdapter` for all logging with proper context
 - **Context**: Always include relevant context in error messages (query, filename, operation, etc.)
 - **Documentation**: Document all exceptions that functions can raise in docstrings
+- **Temporal task boundaries**: When a task needs Temporal to classify the failure (e.g. mark non-retryable or tag with a failure type), use `ApplicationError` from `application_sdk.execution` instead of `AppError`:
+  ```python
+  from application_sdk.execution import ApplicationError
+  raise ApplicationError("invalid schema", type="ValidationError", non_retryable=True)
+  ```
+  Use `AppError` for framework-level errors that Temporal does not need to classify.
