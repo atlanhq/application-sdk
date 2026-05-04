@@ -150,7 +150,7 @@ jobs:
             exit 1
           fi
 
-      - name: "§3 Dockerfile base — app-runtime-base:3.0.0"
+      - name: "§3 Dockerfile base — exact semver tag (e.g. :3.0.0)"
         id: dockerfile_base
         continue-on-error: true
         working-directory: app
@@ -160,8 +160,9 @@ jobs:
             echo "No Dockerfile — skipping §3 check"
             exit 0
           fi
-          if ! grep -E '^FROM[[:space:]]+registry\.atlan\.com/public/app-runtime-base:3\.0\.0[[:space:]]*$' Dockerfile; then
-            echo "::error::Dockerfile must 'FROM registry.atlan.com/public/app-runtime-base:3.0.0' (exact tag)"
+          # Must pin an exact semver tag. Floating tags like :3 or :3-latest are NOT acceptable.
+          if ! grep -E '^FROM[[:space:]]+registry\.atlan\.com/public/app-runtime-base:[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' Dockerfile; then
+            echo "::error::Dockerfile must pin app-runtime-base to an exact semver tag (e.g. :3.0.0). Floating tags like :3, :latest, or :3-latest are not acceptable."
             grep -n '^FROM' Dockerfile || true
             exit 1
           fi
@@ -176,8 +177,9 @@ jobs:
             exit 0
           fi
           failed=0
-          if grep -Ein '^[[:space:]]*(CMD|ENTRYPOINT)[[:space:]]' Dockerfile; then
-            echo "::error::Dockerfile must NOT override CMD or ENTRYPOINT — the base image's entrypoint launches the SDK CLI and co-runs daprd with graceful-shutdown handling"
+          # Match any CMD or ENTRYPOINT line (including CMD [] which is still an override)
+          if grep -Ein '^[[:space:]]*(CMD|ENTRYPOINT)\b' Dockerfile; then
+            echo "::error::Dockerfile must NOT override CMD or ENTRYPOINT (including 'CMD []') — the base image's entrypoint launches the SDK CLI and co-runs daprd with graceful-shutdown handling. Remove the line entirely."
             failed=1
           fi
           if ! grep -Eq '^[[:space:]]*ENV[[:space:]]+ATLAN_APP_MODULE\b' Dockerfile; then

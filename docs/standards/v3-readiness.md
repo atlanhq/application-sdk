@@ -32,6 +32,8 @@ Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migrati
 - [ ] **Async clients** — no sync `get_client()`. Use `create_async_atlan_client()` with an `AtlanApiToken` credential.
 - [ ] **Entry point** — dev uses `run_dev_combined(...)`; containers invoke the `application-sdk --mode combined` CLI (usually via `ATLAN_APP_MODULE`). No `BaseApplication(...)`.
 - [ ] **No direct infrastructure** — no `DaprClient()`, `self._state`, or raw `loguru`/`logging.getLogger()` in app code. Go through `self.context.*` and `application_sdk.observability.logger_adaptor.get_logger()`.
+- [ ] **No private SDK imports** — no imports from `application_sdk.execution._temporal`, `application_sdk._internal`, or other `_`-prefixed sub-packages. These are implementation details that change without notice. If you need something from a private module, open an SDK issue to promote it to the public API.
+- [ ] **Handler lives inside `app/` package** — if the app has a `Handler` subclass, it must live under `app/` (e.g. `app/handler.py`), not in a top-level `handlers/` directory. A stale `handlers/` directory outside `app/` is a leftover v2 layout; move the module and update imports. `check_migration.py` flags this as `handler-outside-app`.
 
 ## 2 — Contract & config
 
@@ -44,6 +46,8 @@ The SDK generates workflow/credential/manifest/input artifacts from a single `co
 - [ ] **`poe generate` task wired** in `pyproject.toml` and produces no diff on a clean checkout (i.e. generated files are not stale).
 - [ ] **`PklProject.deps.json`** lockfile committed.
 - [ ] **No stale overrides** — `app/templates/`, `get_configmap()` / `get_manifest()` handler overrides are removed; the SDK auto-serves generated artifacts.
+- [ ] **No duplicate generated directory** — only `app/generated/` should contain generated JSON artifacts. If a `contract/generated/` directory also exists with the same files, delete it — it's a stale intermediate output. The `poe generate` task should write directly to `app/generated/` and `app/contracts/_input.py`.
+- [ ] **`_input.py` location matches SDK expectations** — the generated input contract must be at `app/contracts/_input.py` (or `app/generated/_input.py` if the app uses that convention). Verify the `poe generate` task places it where the app actually imports it from.
 
 ## 3 — Dockerfile & deployment
 
@@ -51,7 +55,7 @@ The SDK generates workflow/credential/manifest/input artifacts from a single `co
   ```dockerfile
   FROM registry.atlan.com/public/app-runtime-base:3.0.0
   ```
-  No `*-latest` tags, no dev-branch tags (e.g. `refactor-v3-latest`), no other `app-runtime-base` image. Bump this pin in lockstep with the SDK `>=3.0.0,<4.0.0` major version.
+  No `*-latest` tags, no dev-branch tags (e.g. `refactor-v3-latest`), no floating major tags (`:3`), no other `app-runtime-base` image. A bare `:3` resolves to whatever the latest `3.x.y` happens to be at build time — it is **not** equivalent to `:3.0.0`. Bump this pin in lockstep with the SDK `>=3.0.0,<4.0.0` major version. `check_migration.py` now flags floating tags as `dockerfile-floating-base-tag`.
 - [ ] **Non-root `appuser`** runs the app process.
 - [ ] **No secrets in build layers** — credentials resolved at runtime via Dapr / `SecretStore`.
 - [ ] **No `ENTRYPOINT` / `CMD` override** — the app Dockerfile inherits the base image's entrypoint (`/usr/local/bin/entrypoint.sh`, which launches `python -m application_sdk.main` and co-runs `daprd` with graceful-shutdown handling). The app only needs `ENV ATLAN_APP_MODULE=<module>:<AppClass>`; the runtime mode (`worker`/`handler`/`combined`) is supplied by Helm via `ATLAN_APP_MODE`.
@@ -60,7 +64,9 @@ The SDK generates workflow/credential/manifest/input artifacts from a single `co
   ```dockerfile
   CMD ["python", "main.py"]
   ENTRYPOINT ["uv", "run", "application-sdk"]
+  CMD []
   ```
+  Note: `CMD []` is still a CMD override — Docker treats any `CMD` instruction as replacing the base image's CMD. Remove the line entirely.
 
   ✅ Correct — inherit everything from the base image:
   ```dockerfile
@@ -68,6 +74,7 @@ The SDK generates workflow/credential/manifest/input artifacts from a single `co
   ENV ATLAN_APP_MODULE=app.connector:OpenAPIConnector
   # (no CMD or ENTRYPOINT)
   ```
+- [ ] **Dapr component versions match SDK** — if the app uses a `poe download-components` task (or similar) to fetch Dapr component YAML from the SDK repo, the version it fetches must match the SDK version in `pyproject.toml`. A stale version pin (e.g. `v0.1.1rc52` while SDK is `v3.x`) means the app runs with mismatched component schemas.
 
 ## 4 — Tests that must pass
 
@@ -100,6 +107,7 @@ E2E coverage is **not** limited to the happy path. Every user-observable scenari
   - Multi-tenant isolation (if applicable): two tenants running concurrently never see each other's artifacts or state.
 - [ ] **Scenario coverage matrix in the repo** — `tests/e2e/README.md` (or equivalent) lists each scenario above and the test that covers it. Reviewers use this table to confirm coverage is complete; missing rows block v3-readiness.
 - [ ] **Replay test** — at least one workflow uses `TestWorkflowEnvironment` + a pinned history JSON to prove determinism across SDK upgrades.
+- [ ] **No stub-only E2E tests** — every E2E test file must contain at least one assertion. A test whose body is just `pass` or `TODO` is not a test — it silently passes in CI and gives false confidence. If a test cannot be implemented yet, mark it `@pytest.mark.skip(reason="...")` so CI reports it as skipped, not passed.
 
 ## 5 — SDK-triggered validation
 
@@ -166,17 +174,20 @@ Paste this into the description of the PR that declares an app v3-ready. Reviewe
 - [ ] `pyproject.toml` pins `atlan-application-sdk[...]==3.0.0` (exact version); `uv tree` confirms the resolved version is `3.0.0` (any source allowed — `[tool.uv.sources]` OK)
 - [ ] `python -m tools.migrate_v3.check_migration` reports zero FAILs
 - [ ] One `App` subclass, `@task`-only, typed Input/Output at every boundary
+- [ ] No private SDK imports (`_temporal`, `_internal`); handler lives under `app/`
 
 ### Contract (§2)
-- [ ] `contract/app.pkl` + generated artifacts committed
+- [ ] `contract/app.pkl` + generated artifacts committed; no duplicate `contract/generated/` dir
 - [ ] `poe generate` produces no diff on a clean checkout
 
 ### Deployment (§3)
-- [ ] Dockerfile `FROM registry.atlan.com/public/app-runtime-base:3.0.0` (exact tag)
-- [ ] No `CMD`/`ENTRYPOINT` override; `ENV ATLAN_APP_MODULE` set; mode comes from `ATLAN_APP_MODE` at runtime
+- [ ] Dockerfile `FROM registry.atlan.com/public/app-runtime-base:3.0.0` (exact patch tag — not `:3` or `:3-latest`)
+- [ ] No `CMD`/`ENTRYPOINT` override (including `CMD []`); `ENV ATLAN_APP_MODULE` set; mode comes from `ATLAN_APP_MODE` at runtime
+- [ ] Dapr component version (if fetched via `poe download-components`) matches SDK version
 
 ### Tests (§4)
-- [ ] Unit tests cover App instantiation, every `@task`, and contract round-trips
+- [ ] Unit tests cover App instantiation, every `@task`, contract round-trips, handler methods, and credential registration
+- [ ] No stub-only E2E tests — every test has assertions (not just `pass`/`TODO`); unimplemented tests use `@pytest.mark.skip`
 - [ ] E2E scenario matrix documented (`tests/e2e/README.md`) and **every listed scenario has a passing E2E test** — happy path + each branch of `run()` + each `Handler` flow + error/edge cases + multi-tenant isolation
 - [ ] Boot probe verifies `/health`, `/manifest`, and `/workflows/v1/configmap/{name}` match committed artifacts
 - [ ] Replay test pinned for every workflow that runs in production

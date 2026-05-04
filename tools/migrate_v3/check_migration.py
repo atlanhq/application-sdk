@@ -154,6 +154,22 @@ _RE_DIRECT_LOGURU = re.compile(
 # Only flag when the file also doesn't import get_logger (i.e. it's not the adaptor itself).
 _RE_LOGGING_GETLOGGER = re.compile(r"\blogging\.getLogger\s*\(")
 
+# ── E6: CloudSQL-derived checks ──────────────────────────────────────────────
+
+# Private SDK imports — reaching into _temporal, _internal, etc.
+_RE_PRIVATE_SDK_IMPORT = re.compile(
+    r"from\s+application_sdk\.\w*\._\w+\s+import\b"
+)
+
+# Stub-only E2E tests — a test function whose body is just docstring/comments + `pass`.
+# Matches: def test_foo(...):\n    """..."""\n    # comment\n    pass
+_RE_STUB_TEST = re.compile(
+    r"^(?:async\s+)?def\s+(test_\w+)\s*\([^)]*\)[^:]*:\s*\n"
+    r"(?:\s+(?:\"\"\"[\s\S]*?\"\"\"|\#[^\n]*)?\s*\n)*"
+    r"\s+pass\s*$",
+    re.MULTILINE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Core checker
@@ -383,6 +399,35 @@ def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
             ),
         )
 
+    # ── WARN: private SDK imports ────────────────────────────────────────
+    if not is_test:
+        results += _find_pattern(
+            lines,
+            _RE_PRIVATE_SDK_IMPORT,
+            path=path,
+            level=WARN,
+            rule="no-private-sdk-imports",
+            message_template=(
+                "Import from a private SDK sub-package (e.g. _temporal, _internal). "
+                "These are implementation details that change without notice. "
+                "Open an SDK issue to promote it to the public API."
+            ),
+        )
+
+    # ── WARN: stub-only E2E test ─────────────────────────────────────────
+    if is_test and _RE_STUB_TEST.search(full_text):
+        results.append(
+            CheckResult(
+                level=WARN,
+                rule="no-stub-tests",
+                message=(
+                    "Test function has only `pass` as its body — it silently passes in CI. "
+                    "Add assertions or use @pytest.mark.skip(reason='...') for unimplemented tests."
+                ),
+                file=path,
+            )
+        )
+
     # ── WARN: response format changed in v3 ──────────────────────────────
     # Only fires for Handler subclasses that haven't migrated to v3 typed
     # contracts yet. If the signature already uses MetadataInput/PreflightInput,
@@ -533,6 +578,79 @@ def check_directory(
                 "present. Consolidate into app/<app_name>.py and delete the empty "
                 "directory. See Phase 2c of the migration skill."
             )
+
+    # ── WARN: handler directory outside app/ ─────────────────────────────
+    handlers_dir = root / "handlers"
+    if handlers_dir.is_dir() and any(handlers_dir.glob("*.py")):
+        advisories.append(
+            "WARN [handler-outside-app]: 'handlers/' directory with Python files "
+            "exists outside 'app/'. Move handler modules under app/ (e.g. "
+            "app/handler.py) and update imports. A top-level handlers/ dir is a "
+            "stale v2 layout."
+        )
+
+    # ── WARN: duplicate contract/generated/ directory ────────────────────
+    contract_gen = root / "contract" / "generated"
+    app_gen = root / "app" / "generated"
+    if contract_gen.is_dir() and app_gen.is_dir():
+        advisories.append(
+            "WARN [duplicate-generated-dir]: Both 'contract/generated/' and "
+            "'app/generated/' exist. Only 'app/generated/' is used by the SDK "
+            "at runtime. Delete 'contract/generated/' and update 'poe generate' "
+            "to write directly to 'app/generated/'."
+        )
+
+    # ── FAIL: Dockerfile floating base-image tag ─────────────────────────
+    dockerfile = root / "Dockerfile"
+    if dockerfile.is_file():
+        try:
+            df_text = dockerfile.read_text(encoding="utf-8")
+            # Match FROM with app-runtime-base but NOT an exact x.y.z tag
+            for lineno, line in enumerate(df_text.splitlines(), start=1):
+                stripped = line.strip()
+                if not stripped.upper().startswith("FROM"):
+                    continue
+                if "app-runtime-base" not in stripped:
+                    continue
+                # Check for exact semver tag (e.g. :3.0.0) — anything else is floating.
+                if not re.search(r"app-runtime-base:\d+\.\d+\.\d+\s*$", stripped):
+                    all_results.append(
+                        CheckResult(
+                            level=FAIL,
+                            rule="dockerfile-floating-base-tag",
+                            message=(
+                                "Dockerfile base image must pin an exact semver tag "
+                                "(e.g. :3.0.0). Floating tags like :3, :latest, or "
+                                ":3-latest resolve to different images over time."
+                            ),
+                            file=dockerfile,
+                            line=lineno,
+                            excerpt=stripped,
+                        )
+                    )
+            # Check for CMD/ENTRYPOINT overrides (including CMD [])
+            for lineno, line in enumerate(df_text.splitlines(), start=1):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if re.match(r"(?i)^(CMD|ENTRYPOINT)\s", stripped):
+                    all_results.append(
+                        CheckResult(
+                            level=FAIL,
+                            rule="dockerfile-no-cmd-entrypoint",
+                            message=(
+                                "Dockerfile must not override CMD or ENTRYPOINT — "
+                                "the base image's entrypoint launches the SDK CLI "
+                                "and co-runs daprd. Remove this line entirely "
+                                "(CMD [] is still an override)."
+                            ),
+                            file=dockerfile,
+                            line=lineno,
+                            excerpt=stripped,
+                        )
+                    )
+        except OSError:
+            pass
 
     return all_results, advisories
 
