@@ -20,6 +20,7 @@ from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from application_sdk.app.registry import AppRegistry
 from application_sdk.constants import APP_BUILD_ID, APP_DEPLOYMENT_NAME
 from application_sdk.execution._temporal.activities import get_all_task_activities
+from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS, build_sdr_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig
 from application_sdk.execution.settings import (
@@ -189,11 +190,6 @@ def create_worker(
     task_activities = get_all_task_activities()
 
     if enable_sdr and handler is not None:
-        from application_sdk.execution._temporal.sdr import (
-            SDR_WORKFLOWS,
-            build_sdr_activities,
-        )
-
         sdr_registry = AppRegistry.get_instance()
         sdr_registered_apps = sdr_registry.list_all()
         sdr_app_name = (
