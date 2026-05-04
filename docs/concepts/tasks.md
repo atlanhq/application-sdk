@@ -113,15 +113,7 @@ You do not create `DaprClient` instances or call `SecretStore` statics. Infrastr
 
 ## Blocking Sync Code
 
-If your task calls a blocking (non-async) library, use `run_in_thread` to avoid stalling the event loop and blocking heartbeats:
-
-```python
-class MyConnector(App):
-    @task(heartbeat_timeout_seconds=60)
-    async def fetch(self, input: FetchInput) -> FetchOutput:
-        result = await self.task_context.run_in_thread(sync_db_call, input.query)
-        return FetchOutput(data=result)
-```
+Prefer native async libraries wherever possible. For legacy sync code that cannot be rewritten, `self.task_context.run_in_thread(fn, *args)` offloads the call to a thread pool, preventing it from stalling the event loop and blocking heartbeats. See [ADR-0010](../adr/0010-async-first-blocking-code.md) for when this is appropriate and the required internal-timeout precautions.
 
 ## FileReference: Passing Large Data Between Tasks
 

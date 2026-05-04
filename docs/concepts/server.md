@@ -62,7 +62,7 @@ All routes registered by `create_app_handler_service()`:
 | `/workflows/v1/configmaps` | GET | List all configmaps |
 | `/workflows/v1/manifest` | GET | Retrieve the app manifest (supports `?entrypoint=<name>`) |
 | `/manifest` | GET | Alias for `/workflows/v1/manifest` (for backward compat) |
-| `/workflows/v1/dev/local-vault` | POST | Provision credentials in the local dev vault |
+| `/workflows/v1/dev/local-vault` | POST | Provision credentials in the local dev vault (local dev only — requires `ATLAN_DEPLOYMENT_NAME=local`; returns 403 otherwise) |
 | `/dapr/subscribe` | GET | Dapr pub/sub subscription list |
 | `/events/v1/event/{event_id}` | POST | Handle a Dapr event |
 | `/events/v1/drop` | POST | Return a Dapr `DROP` status, instructing the sidecar to drop the received event without retry or dead-lettering |

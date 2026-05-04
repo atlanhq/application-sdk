@@ -316,14 +316,20 @@ async def fetch_entities(self, input: FetchEntitiesInput) -> FetchEntitiesOutput
     ...
 ```
 
-For tasks where you want manual control (e.g. to include progress in the heartbeat):
+For tasks where you want manual control (e.g. to include progress in the heartbeat), define a typed `HeartbeatDetails` subclass so that `task_context.get_heartbeat_details(cls)` can recover state on retry:
 
 ```python
+from application_sdk.contracts import HeartbeatDetails
+
+class PageProgress(HeartbeatDetails):
+    page: int = 0
+    total: int = 0
+
 @task(timeout_seconds=7200)
 async def fetch_entities(self, input: FetchEntitiesInput) -> FetchEntitiesOutput:
     for page in range(total_pages):
         # process page...
-        self.task_context.heartbeat({"page": page, "total": total_pages})
+        self.task_context.heartbeat(PageProgress(page=page, total=total_pages))
 ```
 
 Never import from `temporalio` directly — use `self.task_context.heartbeat()` which wraps the Temporal primitive.

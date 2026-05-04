@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    5189bdb502f95d7636ec5ff68122c9856634d4dd
-source-date:   2026-05-01T18:58:18+01:00
+source-sha:    82a72585d212e61c1467394c6dfd030464cca082
+source-date:   2026-05-04T12:57:19+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2308,6 +2308,21 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Output from fetching tables.
 - **Fields:**
   - `tables: Annotated[list[str], MaxItems(100000)]` `= Field(default_factory=list)`
+  - `chunk_count: int` `= 0`
+  - `total_record_count: int` `= 0`
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
+#### `FetchViewsInput`
+
+- **Import:** `from application_sdk.templates.contracts import FetchViewsInput`
+- **Summary:** Input for fetching views from the source.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
+#### `FetchViewsOutput`
+
+- **Import:** `from application_sdk.templates.contracts import FetchViewsOutput`
+- **Summary:** Output from fetching views.
+- **Fields:**
   - `chunk_count: int` `= 0`
   - `total_record_count: int` `= 0`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`

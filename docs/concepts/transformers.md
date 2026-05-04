@@ -1,6 +1,6 @@
 # Transformers (Legacy)
 
-> **Deprecation notice:** The `application_sdk.transformers` stack — `TransformerInterface`, `AtlasTransformer`, and `QueryBasedTransformer` — is a **legacy, back-compat-only** subsystem. New connectors should use the typed-record + pyatlan mapper pattern described in the [v3 migration guide](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction). No public `__all__` is exposed; import from the submodules directly and treat them as internal.
+> **Deprecation notice:** The `application_sdk.transformers` stack — `TransformerInterface`, `AtlasTransformer`, and `QueryBasedTransformer` — is a **legacy, back-compat-only** subsystem. New connectors should use the typed-record + pyatlan_v9 mapper pattern described in the [v3 migration guide](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction). No public `__all__` is exposed; import from the submodules directly and treat them as internal.
 
 ## Background
 

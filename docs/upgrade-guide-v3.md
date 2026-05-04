@@ -1185,7 +1185,7 @@ All of the following were removed in v3.0.0. They no longer exist — importing 
 | Deprecated | Replacement |
 |---|---|
 | `application_sdk.clients.atlan.get_client` | removed — sync client no longer supported |
-| `application_sdk.clients.atlan.get_async_client` | `application_sdk.credentials.atlan_client.create_async_atlan_client` |
+| `application_sdk.clients.atlan.get_async_client` | `application_sdk.credentials.create_async_atlan_client` |
 | `application_sdk.clients.atlan_auth.AtlanAuthClient` | `application_sdk.credentials.OAuthTokenService` |
 
 ### Test Utilities

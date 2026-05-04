@@ -124,6 +124,12 @@ POST /workflows/v1/start?entrypoint=extract-metadata
 
 `correlation_id` is echoed from the caller-supplied `correlation_id` body field if present; otherwise a new UUID is generated. Use it to correlate logs and traces across services.
 
+**Error responses:**
+
+- `400 {"detail": "Invalid entrypoint."}` — `?entrypoint=<name>` does not match any registered entry point.
+- `400 {"detail": "entrypoint is required for this app."}` — multi-entry-point app called without `?entrypoint=`.
+- `503 {"detail": "Workflow execution not configured. Set ATLAN_TEMPORAL_HOST."}` — Temporal is not configured (missing `ATLAN_TEMPORAL_HOST`).
+
 ---
 
 ### `POST /workflows/v1/stop/{workflow_id}/{run_id}`
@@ -220,6 +226,12 @@ Return the Automation Engine DAG manifest (from `app/generated/manifest.json`).
 **Query param:** `?entrypoint=<name>` (optional). When provided, returns the per-entry-point manifest from `app/generated/<name>/manifest.json`. When omitted, falls back to the root `app/generated/manifest.json`.
 
 **Response:** `AppManifest` JSON — see [Multi-App Coordination](../guides/multi-app-coordination.md).
+
+**Error responses:**
+
+- `400 {"detail": "Invalid entrypoint name"}` — `?entrypoint=` value fails the `^[a-zA-Z][a-zA-Z0-9_-]*$` validation regex.
+- `404 {"detail": "No manifest found for entrypoint '<name>'"}` — no `app/generated/<name>/manifest.json` exists.
+- `404 {"detail": "No manifest available"}` — no `?entrypoint=` provided and `app/generated/manifest.json` does not exist.
 
 ---
 

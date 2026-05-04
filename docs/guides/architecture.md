@@ -79,7 +79,7 @@ async def my_task(self, input: TaskInput) -> TaskOutput:
 
 - `@task` validates the single-model contract (one `Input` model, one `Output` model) **at class definition time** — before any code runs.
 - Tasks run outside the Temporal sandbox; they can import any library without passthrough concerns.
-- Auto-heartbeating is built in. Use `self.task_context.run_in_thread(fn, *args)` to run blocking code without blocking the event loop (see [ADR-0010](../adr/0010-async-first-blocking-code.md)).
+- Auto-heartbeating is built in. For unavoidable blocking (non-async) code, `self.task_context.run_in_thread(fn, *args)` offloads to a thread pool; see [ADR-0010](../adr/0010-async-first-blocking-code.md) for requirements and caveats.
 
 ### Typed Contracts — Input and Output
 
@@ -288,10 +288,12 @@ application_sdk/
 │   └── utils.py            # parse_credentials_extra and credential helpers
 │
 ├── clients/                # External-system client base classes and utilities
-│   ├── azure/              # Azure-specific auth and client helpers
+│   │                       # Note: azure/* and redis.py symbols are lazy-loaded via __getattr__;
+│   │                       # require the [azure] or [distributed_lock] extras respectively.
+│   ├── azure/              # Azure-specific auth and client helpers ([azure] extra)
 │   ├── base.py             # BaseClient ABC
 │   ├── models.py           # DatabaseConfig and shared client models
-│   ├── redis.py            # RedisClient
+│   ├── redis.py            # RedisClient, RedisClientAsync (lazy via [distributed_lock] extra)
 │   ├── sql.py              # BaseSQLClient (load, run_query, run_count_query)
 │   └── ssl_utils.py        # Custom CA certificate loading for httpx/aiohttp
 │

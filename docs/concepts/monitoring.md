@@ -165,7 +165,7 @@ The `correlation_id` propagates automatically across:
 
 - The handler (set by the incoming request from Heracles)
 - All `@task` log entries (bound by the framework)
-- Child-app calls (carried in the Temporal workflow headers)
+- Cross-app correlation (propagated via `correlation_id` when one App's output triggers another via Automation Engine DAG)
 
 In Grafana/Loki, filter by `correlation_id` to see the full trace of a multi-phase connector run across all apps.
 

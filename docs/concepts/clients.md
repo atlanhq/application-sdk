@@ -180,6 +180,8 @@ class MyApiClient(BaseClient):
 
 `RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement a low-level acquire/release lock protocol via Redis. The internal lock primitives (`_acquire_lock`, `_release_lock`) are exposed by the higher-level `CapacityPool` abstraction, which is the recommended interface for managing concurrency slots across pods. See [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool).
 
+Requires the `[distributed_lock]` extra: `uv add 'atlan-application-sdk[distributed_lock]'`.
+
 Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/configuration.md` for the full list including sentinel and lock settings.
 
 ## Azure Client (`azure/`)
@@ -188,6 +190,8 @@ Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/
 
 - `AzureClient` (`azure/client.py`) — base client for Azure service interactions.
 - `AzureAuthProvider` (`azure/auth.py`) — handles Azure Service Principal authentication.
+
+Requires the `[azure]` extra: `uv add 'atlan-application-sdk[azure]'`.
 
 ```python
 from application_sdk.clients import AzureClient, AzureAuthProvider
