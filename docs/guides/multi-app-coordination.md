@@ -101,14 +101,6 @@ See [Apps — `continue_with()`](../concepts/apps.md#app-lifecycle) for usage de
 
 ---
 
-## Direct Inter-App Calls (Deactivated)
-
-> **Note:** `App.call_by_name()` is **deactivated** pending resolution of [BLDX-878](https://linear.app/atlan-epd/issue/BLDX-878/clarify-inter-app-calls-in-sdk-v3). Do not use it in new connectors. Use the Automation Engine DAG pattern instead.
-
-The SDK originally supported direct child-workflow invocation as described in [ADR-0007](../adr/0007-apps-as-coordination-unit.md). This was deactivated to avoid duplication with the AE DAG orchestration layer.
-
----
-
 ## Passing Data Between Apps
 
 When apps coordinate via AE, the downstream app receives inputs via the `args` block in `manifest.json`. Use JSONPath references (`$.upstream_node.outputs.field`) to pass structured data.
