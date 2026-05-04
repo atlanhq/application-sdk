@@ -369,6 +369,61 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 500
 
+    def test_preflight_metadata_forwarded_to_handler(self) -> None:
+        """metadata survives _normalize_credentials and reaches the handler.
+
+        Uses Format 2 credentials (nested dict) — the format heracles sends for
+        native-app preflight calls — to verify that {**body, "credentials": ...}
+        preserves the metadata key through normalization.
+        """
+        received: list[dict] = []
+
+        class _MetadataCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(dict(input.metadata))
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_MetadataCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            # Format 2: credentials as a nested dict, which is what heracles sends
+            # for native-app preflight calls. _normalize_credentials converts this
+            # to v3 list via {**body, "credentials": ...}, metadata must survive.
+            json={
+                "credentials": {"connectorConfigName": "atlan-connectors-dbt"},
+                "metadata": {
+                    "extraction-type": "objectstore",
+                    "manifest-source": "atlan",
+                    "core-extract-output-prefix": "artifacts/dbt/prod",
+                },
+            },
+        )
+        assert response.status_code == 200
+        assert received == [
+            {
+                "extraction-type": "objectstore",
+                "manifest-source": "atlan",
+                "core-extract-output-prefix": "artifacts/dbt/prod",
+            }
+        ]
+
+    def test_preflight_metadata_absent_defaults_to_empty(self) -> None:
+        """Callers that don't send metadata get an empty dict — no regression."""
+        received: list[dict] = []
+
+        class _MetadataCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(dict(input.metadata))
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_MetadataCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        assert received == [{}]
+
 
 class TestMetadataEndpoint:
     """Tests for POST /workflows/v1/metadata."""
