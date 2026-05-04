@@ -16,12 +16,7 @@ from application_sdk.errors import (
     STORAGE_PERMISSION,
     ErrorCode,
 )
-from application_sdk.errors.leaves import (
-    AppPermissionDeniedError,
-    DependencyUnavailableError,
-    InvalidInputError,
-    NotFoundError,
-)
+from application_sdk.errors.leaves import DependencyUnavailableError
 
 
 class StorageError(DependencyUnavailableError):
@@ -65,7 +60,7 @@ class StorageError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
-class StorageNotFoundError(NotFoundError):
+class StorageNotFoundError(StorageError):
     """Deprecated: use ``application_sdk.errors.NotFoundError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_NOT_FOUND
@@ -85,7 +80,8 @@ class StorageNotFoundError(NotFoundError):
             DeprecationWarning,
             stacklevel=2,
         )
-        NotFoundError.__init__(self, message=message, cause=cause)
+        # Call the AppError leaf directly to avoid double-warning from StorageError.__init__.
+        DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.key = key
         self._error_code = error_code
 
@@ -106,7 +102,7 @@ class StorageNotFoundError(NotFoundError):
         return " | ".join(parts)
 
 
-class StoragePermissionError(AppPermissionDeniedError):
+class StoragePermissionError(StorageError):
     """Deprecated: use ``application_sdk.errors.AppPermissionDeniedError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_PERMISSION
@@ -126,7 +122,7 @@ class StoragePermissionError(AppPermissionDeniedError):
             DeprecationWarning,
             stacklevel=2,
         )
-        AppPermissionDeniedError.__init__(self, message=message, cause=cause)
+        DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.key = key
         self._error_code = error_code
 
@@ -147,7 +143,7 @@ class StoragePermissionError(AppPermissionDeniedError):
         return " | ".join(parts)
 
 
-class StorageConfigError(InvalidInputError):
+class StorageConfigError(StorageError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_CONFIG
@@ -167,7 +163,7 @@ class StorageConfigError(InvalidInputError):
             DeprecationWarning,
             stacklevel=2,
         )
-        InvalidInputError.__init__(self, message=message, cause=cause)
+        DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.key = key
         self._error_code = error_code
 

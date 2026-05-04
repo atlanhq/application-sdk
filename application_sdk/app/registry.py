@@ -80,6 +80,10 @@ class AppNotFoundError(InvalidInputError):
         self.version = version
         self._legacy_error_code = error_code or APP_NOT_FOUND
 
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
+
     def __str__(self) -> str:
         return f"[{self._legacy_error_code}] {self.message}"
 
@@ -104,6 +108,10 @@ class AppAlreadyRegisteredError(InvalidInputError):
         self.name = name
         self.version = version
         self._legacy_error_code = error_code or APP_ALREADY_REGISTERED
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
 
     def __str__(self) -> str:
         return f"[{self._legacy_error_code}] {self.message}"

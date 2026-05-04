@@ -64,6 +64,10 @@ class EntryPointContractError(InvalidInputError):
         InvalidInputError.__init__(self, message=message)
         self._legacy_error_code = error_code or CONTRACT_VALIDATION
 
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
+
     def __str__(self) -> str:
         return f"[{self._legacy_error_code}] {self.message}"
 

@@ -54,6 +54,10 @@ class DiscoveryError(InvalidInputError):
         self.module_path = module_path
         self._legacy_error_code = error_code or DISCOVERY_ERROR
 
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
+
     def __str__(self) -> str:
         parts = [f"[{self._legacy_error_code}] {self.message}"]
         if self.module_path:

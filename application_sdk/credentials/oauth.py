@@ -40,6 +40,9 @@ class OAuthTokenError(AuthError):
 
     code: ClassVar[str] = "OAUTH_TOKEN"
 
+    def __init__(self, message: str, *, cause: Exception | None = None) -> None:
+        AuthError.__init__(self, message=message, cause=cause)
+
 
 class OAuthTokenService:
     """General-purpose OAuth 2.0 client_credentials token service.

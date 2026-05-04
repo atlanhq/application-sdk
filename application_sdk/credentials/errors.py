@@ -15,7 +15,7 @@ from application_sdk.errors import (
     CREDENTIAL_VALIDATION_ERROR,
     ErrorCode,
 )
-from application_sdk.errors.leaves import AuthError, InvalidInputError
+from application_sdk.errors.leaves import AuthError
 
 
 class CredentialError(AuthError):
@@ -59,7 +59,7 @@ class CredentialError(AuthError):
         return " | ".join(parts)
 
 
-class CredentialNotFoundError(AuthError):
+class CredentialNotFoundError(CredentialError):
     """Deprecated: use ``application_sdk.errors.AuthError`` with ``code='CREDENTIAL_NOT_FOUND'``
     — removed in v4.0.
     """
@@ -74,6 +74,7 @@ class CredentialNotFoundError(AuthError):
             DeprecationWarning,
             stacklevel=2,
         )
+        # Call the AppError leaf directly to avoid double-warning from CredentialError.__init__.
         AuthError.__init__(
             self,
             message=f"Credential '{credential_name}' not found",
@@ -92,7 +93,7 @@ class CredentialNotFoundError(AuthError):
         return " | ".join(parts)
 
 
-class CredentialParseError(InvalidInputError):
+class CredentialParseError(CredentialError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_PARSE_ERROR
@@ -112,7 +113,7 @@ class CredentialParseError(InvalidInputError):
             DeprecationWarning,
             stacklevel=2,
         )
-        InvalidInputError.__init__(self, message=message, cause=cause)
+        AuthError.__init__(self, message=message, cause=cause)
         self.credential_name = credential_name
         self._error_code = error_code
 
@@ -133,7 +134,7 @@ class CredentialParseError(InvalidInputError):
         return " | ".join(parts)
 
 
-class CredentialValidationError(InvalidInputError):
+class CredentialValidationError(CredentialError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VALIDATION_ERROR
@@ -153,7 +154,7 @@ class CredentialValidationError(InvalidInputError):
             DeprecationWarning,
             stacklevel=2,
         )
-        InvalidInputError.__init__(self, message=message, cause=cause)
+        AuthError.__init__(self, message=message, cause=cause)
         self.credential_name = credential_name
         self._error_code = error_code
 

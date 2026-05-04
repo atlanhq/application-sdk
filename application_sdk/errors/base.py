@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 # Fields present on every AppError — excluded from the wire `evidence` dict.
 _BASE_FIELDS: frozenset[str] = frozenset(
-    {"message", "retryable", "cause", "app_name", "run_id"}
+    {"message", "retryable", "cause", "app_name", "run_id", "suggested_action"}
 )
 
 
@@ -31,6 +31,7 @@ class AppError(Exception):
     cause: BaseException | None = None
     app_name: str | None = None
     run_id: str | None = None
+    suggested_action: str | None = None
 
     category: ClassVar[FailureCategory] = FailureCategory.INTERNAL
     default_retryable: ClassVar[bool] = False
@@ -74,6 +75,7 @@ class AppError(Exception):
             retryable=self.effective_retryable,
             audience=type(self).audience,
             message=self.message,
+            suggested_action=self.suggested_action,
             evidence=evidence,
             app_name=self.app_name,
             run_id=self.run_id,

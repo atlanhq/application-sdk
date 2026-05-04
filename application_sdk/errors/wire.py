@@ -57,7 +57,16 @@ class FailureDetails(BaseModel):
     @field_validator("evidence")
     @classmethod
     def _no_secret_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
-        bad = {k for k in v if k.lower() in _EVIDENCE_KEY_DENYLIST}
+        # Exact match covers standalone names; suffix match catches compound variants
+        # like ``client_secret`` or ``db_password`` without blocking generic names
+        # such as ``object_key`` or ``cache_key``.
+        _SUFFIX_DENYLIST = ("_secret", "_password", "_token")
+        bad = {
+            k
+            for k in v
+            if k.lower() in _EVIDENCE_KEY_DENYLIST
+            or any(k.lower().endswith(s) for s in _SUFFIX_DENYLIST)
+        }
         if bad:
             raise ValueError(
                 "evidence keys may not use secret-named fields: %s" % sorted(bad)
