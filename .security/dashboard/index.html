@@ -261,11 +261,14 @@ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'
 
 function animateCount(el,target){let cur=0;const step=Math.max(1,Math.ceil(target/30));const timer=setInterval(()=>{cur+=step;if(cur>=target){cur=target;clearInterval(timer);}el.textContent=cur;},30);}
 
+// Cache-bust every fetch. Browsers aggressively cache the per-repo / per-history JSON
+// responses across hard refreshes — only incognito tabs would otherwise see updates.
+const cb=()=>'?t='+Date.now();
 async function load(){
     try{
-        const mr=await fetch('repos.json');
+        const mr=await fetch('repos.json'+cb());
         if(mr.ok){const files=await mr.json();
-            for(const f of files){try{const rr=await fetch('repos/'+f);const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
+            for(const f of files){try{const rr=await fetch('repos/'+f+cb());const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
         buildVM();renderAll();
     }catch(e){document.getElementById('empty').style.display='block';document.getElementById('empty').textContent='No data yet.';}
 }
@@ -514,13 +517,13 @@ let historyData={};
 
 async function loadHistory(){
     try{
-        const mr=await fetch('repos.json');
+        const mr=await fetch('repos.json'+cb());
         if(!mr.ok)return;
         const files=await mr.json();
         for(const f of files){
             const repo=f.replace('.json','').replace('atlanhq_','atlanhq/');
             try{
-                const r=await fetch('history/'+f.replace('.json','.jsonl'));
+                const r=await fetch('history/'+f.replace('.json','.jsonl')+cb());
                 if(r.ok){const txt=await r.text();historyData[repo]=txt.trim().split('\n').filter(l=>l).map(l=>JSON.parse(l));}
             }catch(e){}
         }
