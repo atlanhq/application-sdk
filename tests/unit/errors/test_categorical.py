@@ -215,11 +215,3 @@ def test_internal_error_classification_pending_set() -> None:
     e = InternalError(message="unclassified failure", classification_pending=True)
     fd = e.to_failure_details()
     assert fd.evidence["classification_pending"] is True
-
-
-def test_builtin_name_aliases_are_canonical_classes() -> None:
-    from application_sdk.errors import PermissionError as SDKPermissionError
-    from application_sdk.errors import TimeoutError as SDKTimeoutError
-
-    assert SDKTimeoutError is AppTimeoutError
-    assert SDKPermissionError is AppPermissionDeniedError

@@ -1101,13 +1101,6 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
 
-#### `PermissionError`
-
-- **Import:** `from application_sdk.errors import PermissionError`
-- **Signature:** `PermissionError`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors/__init__.py`
-
 #### `PUBSUB_ERROR`
 
 - **Import:** `from application_sdk.errors import PUBSUB_ERROR`
@@ -1175,13 +1168,6 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import TASK_NOT_FOUND`
 - **Signature:** `TASK_NOT_FOUND`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `TimeoutError`
-
-- **Import:** `from application_sdk.errors import TimeoutError`
-- **Signature:** `TimeoutError`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
 

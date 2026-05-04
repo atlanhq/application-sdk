@@ -247,7 +247,6 @@ When reviewing code, check for:
   The legacy `application_sdk/common/error_codes.py` `AAF-{COMP}-{ID:03d}` format is retained for backward compatibility only — do not use it in new code.
 
 - **Audience routing**: Each leaf sets a default `audience` (`USER | PLATFORM | FRAMEWORK | UNKNOWN`) that downstream consumers (AE, SLA dashboards) use to route the failure. Override it on a custom subclass when the default doesn't fit.
-- **Builtin-name aliases**: `application_sdk.errors.TimeoutError` and `application_sdk.errors.PermissionError` are aliases for `AppTimeoutError` and `AppPermissionDeniedError`. Prefer the `App*` canonical names in new code to avoid shadowing Python builtins.
 - **Logging**: Use `AtlanLoggerAdapter` for all logging with proper context
 - **Context**: Always include relevant context in error messages (query, filename, operation, etc.)
 - **Documentation**: Document all exceptions that functions can raise in docstrings

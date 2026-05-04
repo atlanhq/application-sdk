@@ -16,11 +16,6 @@ Canonical API (v3.x+)::
         DataIntegrityError, CancelledError, InternalError,
     )
 
-Builtin-name aliases (prefer the ``App*`` canonical names in new code)::
-
-    from application_sdk.errors import PermissionError   # == AppPermissionDeniedError
-    from application_sdk.errors import TimeoutError      # == AppTimeoutError
-
 Legacy constants (v3.x — deprecated, removed in v4.0)::
 
     from application_sdk.errors import ErrorCode, APP_ERROR, CREDENTIAL_NOT_FOUND, ...
@@ -48,13 +43,6 @@ from application_sdk.errors.leaves import (
     UnimplementedError,
 )
 from application_sdk.errors.wire import FailureDetails
-
-# ── Builtin-name aliases — shadow Python's TimeoutError / PermissionError ──
-# Prefer the App* canonical names in new code.  These aliases exist so that
-# code written before the rename (or code that intentionally uses the short
-# form) still imports cleanly.
-PermissionError = AppPermissionDeniedError
-TimeoutError = AppTimeoutError
 
 # ── Legacy ErrorCode dataclass + AAF-* constants (deprecated — removed v4.0) ─
 
@@ -148,9 +136,6 @@ __all__ = [
     "RateLimitedError",
     "ResourceExhaustedError",
     "UnimplementedError",
-    # Builtin-name aliases
-    "PermissionError",
-    "TimeoutError",
     # Legacy (deprecated — removed in v4.0)
     "ErrorCode",
     "APP_ERROR",
