@@ -3,6 +3,7 @@
 - Setup and local run workflow: `docs/guides/getting-started.md` (uv sync, poe tasks, example run).
 - Task runner and common scripts live in `pyproject.toml` under `[tool.poe.tasks]`.
 - Docs build configuration is in `mkdocs.yml` (install with `uv sync --all-extras --all-groups`, then `uv run poe generate-apidocs`).
+- Capability manifest: `uv run poe regen-capabilities` — refreshes `docs/agents/sdk-capabilities.md` from `application_sdk/` HEAD. CI surfaces drift on every PR; comment `/regen-manifest` on a PR to have a bot regenerate and push.
 
 ## Pre-commit Checks
 
