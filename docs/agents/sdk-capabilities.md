@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    49fc15fee2f73524b07b9286f84570f8c93d14fb
-source-date:   2026-05-04T13:46:17+01:00
+source-sha:    f16e58db2b028551686457584a4fa9fbda4febc6
+source-date:   2026-05-04T14:30:59+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -21,7 +21,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 16 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 27 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 10 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
@@ -387,6 +387,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Signature:** `class InputContract`
 - **Summary:** Protocol marker for App input contracts.
 - **Defined in:** `application_sdk/contracts/base.py`
+
+#### `Lazy`
+
+- **Import:** `from application_sdk.contracts import Lazy`
+- **Signature:** `class Lazy`
+- **Summary:** Marker: this FileReference field is NOT auto-materialized before the activity runs.
+- **Defined in:** `application_sdk/contracts/types.py`
 
 #### `MaxItems`
 
@@ -1844,6 +1851,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `is_durable: bool` `= False`
   - `file_count: int` `= 1`
   - `tier: StorageTier` `= StorageTier.TRANSIENT`
+  - `auto_materialize: bool` `= True`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `GitReference`
@@ -1856,7 +1864,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `path: str` `= ''`
   - `tag: str` `= ''`
   - `commit: str` `= ''`
-  - `credential: 'CredentialRef | None'`
+  - `credential: CredentialRef | None`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `HeartbeatDetails`
@@ -2519,7 +2527,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `UploadInput`
 
 - **Import:** `from application_sdk.templates.contracts import UploadInput`
-- **Summary:** Input for the deprecated upload_to_atlan task.
+- **Summary:** Input for the deprecated ``upload_to_atlan`` task.
 - **Fields:**
   - `output_path: str` `= ''` — Local path (file or directory) to push to the platform via App.upload.
 - **Defined in:** `application_sdk/templates/contracts/base_metadata_extraction.py`
@@ -2527,10 +2535,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `UploadOutput`
 
 - **Import:** `from application_sdk.templates.contracts import UploadOutput`
-- **Summary:** Output from the deprecated upload_to_atlan task.
+- **Summary:** Output from the deprecated ``upload_to_atlan`` task.
 - **Fields:**
   - `migrated_files: int` `= 0` — Number of files successfully uploaded.
-  - `total_files: int` `= 0` — Total number of files attempted (matches migrated_files on success).
+  - `total_files: int` `= 0` — Total number of files attempted (matches ``migrated_files`` on success).
 - **Defined in:** `application_sdk/templates/contracts/base_metadata_extraction.py`
 
 #### `WriteCurrentStateInput`
