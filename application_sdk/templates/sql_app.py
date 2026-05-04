@@ -361,6 +361,20 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
+    async def transform_procedures(self, input: TransformInput) -> TransformOutput:
+        """Transform raw procedure records to Atlan Procedure assets using map_procedure().
+
+        Writes to the ``extras-procedure`` entity type so the publish-app can
+        parse the SQL ``definition`` field and derive lineage (Process / ColumnProcess
+        entities) automatically — matching the legacy Argo crawler output.
+        """
+        return await self._transform_entity(
+            "extras-procedure", self.map_procedure, input
+        )
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
     async def transform_data(self, input: TransformInput) -> TransformOutput:
         """Legacy single transform — override for custom logic, or use
         per-entity transforms (transform_tables, transform_columns, etc.)."""
