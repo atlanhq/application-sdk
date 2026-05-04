@@ -71,10 +71,13 @@ jobs:
           # source-sha / source-date are excluded: with squash merges the final
           # SHA doesn't exist during the PR, so these fields are always stale
           # until the manifest is regenerated post-merge.
+          # || true: grep exits 1 on no matches; with pipefail that would kill the
+          # script before the [ -z ] check, producing a false drift failure.
           SEMANTIC=$(git diff -- docs/agents/sdk-capabilities.md \
             | grep '^[+-]' \
             | grep -v '^+++\|^---' \
-            | grep -v '^[+-]source-sha:\|^[+-]source-date:')
+            | grep -v '^[+-]source-sha:\|^[+-]source-date:' \
+            || true)
           if [ -z "$SEMANTIC" ]; then
             echo "status=clean" >> "$GITHUB_OUTPUT"
           else
