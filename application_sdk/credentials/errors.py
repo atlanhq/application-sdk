@@ -15,7 +15,7 @@ from application_sdk.errors import (
     CREDENTIAL_VALIDATION_ERROR,
     ErrorCode,
 )
-from application_sdk.errors.leaves import AuthError
+from application_sdk.errors.leaves import AuthError, InvalidInputError
 
 
 class CredentialError(AuthError):
@@ -93,7 +93,7 @@ class CredentialNotFoundError(CredentialError):
         return " | ".join(parts)
 
 
-class CredentialParseError(CredentialError):
+class CredentialParseError(CredentialError, InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_PARSE_ERROR
@@ -134,7 +134,7 @@ class CredentialParseError(CredentialError):
         return " | ".join(parts)
 
 
-class CredentialValidationError(CredentialError):
+class CredentialValidationError(CredentialError, InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VALIDATION_ERROR

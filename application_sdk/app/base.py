@@ -193,7 +193,7 @@ class AppError(_NewAppError):
         return " | ".join(parts)
 
 
-class AppContextError(_InternalError, RuntimeError):
+class AppContextError(_InternalError):
     """Raised when App or task context is accessed outside of valid execution scope.
 
     This is a programming error — it indicates that context-dependent methods

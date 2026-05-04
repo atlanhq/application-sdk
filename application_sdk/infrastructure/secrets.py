@@ -5,7 +5,7 @@ import warnings
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
-from application_sdk.errors.leaves import DependencyUnavailableError
+from application_sdk.errors.leaves import DependencyUnavailableError, NotFoundError
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -114,7 +114,7 @@ class SecretStoreError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
-class SecretNotFoundError(SecretStoreError):
+class SecretNotFoundError(SecretStoreError, NotFoundError):
     """Deprecated: use ``application_sdk.errors.NotFoundError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_NOT_FOUND
