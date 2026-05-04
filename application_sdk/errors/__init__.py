@@ -24,7 +24,7 @@ Legacy constants (v3.x — deprecated, removed in v4.0)::
 from dataclasses import dataclass
 
 # ── New canonical hierarchy ──────────────────────────────────────────────────
-from application_sdk.errors.base import _BASE_FIELDS, AppError
+from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AlreadyExistsError,
@@ -118,7 +118,6 @@ SEGMENT_ERROR = ErrorCode("EVT", 3)
 __all__ = [
     # New canonical
     "AppError",
-    "_BASE_FIELDS",
     "Audience",
     "FailureCategory",
     "FailureDetails",
