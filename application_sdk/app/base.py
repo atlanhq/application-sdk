@@ -221,7 +221,7 @@ class AppContextError(_InternalError):
 
 
 class NonRetryableError(AppError):
-    """Deprecated: use a typed ``AppError`` subclass with ``retryable=False`` — removed in v4.0.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
 
     Use this for failures that are deterministic and will never succeed on retry:
     - Authentication failures (invalid credentials)
