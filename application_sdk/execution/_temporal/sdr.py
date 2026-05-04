@@ -115,11 +115,11 @@ class SdrFetchMetadataWorkflow:
         )
 
 
-SDR_WORKFLOWS: list[type] = [
+SDR_WORKFLOWS: tuple[type, ...] = (
     SdrTestAuthWorkflow,
     SdrPreflightCheckWorkflow,
     SdrFetchMetadataWorkflow,
-]
+)
 
 
 @dataclass
@@ -136,9 +136,10 @@ def build_sdr_activities(
 
     Each activity mirrors the dispatch done by ``handler/service.py`` for
     its HTTP counterpart: it builds a ``HandlerContext`` from the input's
-    credentials (and the worker's secret store, if any), sets
-    ``handler._context`` for the duration of the call, and clears it in
-    ``finally``.
+    credentials (and the worker's secret store, if any), binds it via
+    ``bind_handler_context`` (ContextVar-backed) for the duration of the
+    call, ensuring concurrent activities on a shared handler cannot
+    overwrite each other's context.
 
     Activities registered here have closure access to ``handler``; they
     are resolved by name from the workflows in :data:`SDR_WORKFLOWS`.

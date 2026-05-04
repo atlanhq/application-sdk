@@ -121,7 +121,6 @@ class TestBuildSdrActivities:
             SDR_FETCH_METADATA_ACTIVITY,
         }
 
-    @pytest.mark.asyncio
     async def test_test_auth_activity_dispatches_and_sets_context(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
@@ -140,7 +139,6 @@ class TestBuildSdrActivities:
         with pytest.raises(AppContextError):
             _ = handler.context
 
-    @pytest.mark.asyncio
     async def test_preflight_activity_dispatches(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
@@ -157,7 +155,6 @@ class TestBuildSdrActivities:
         with pytest.raises(AppContextError):
             _ = handler.context
 
-    @pytest.mark.asyncio
     async def test_fetch_metadata_activity_dispatches(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
@@ -174,7 +171,6 @@ class TestBuildSdrActivities:
         with pytest.raises(AppContextError):
             _ = handler.context
 
-    @pytest.mark.asyncio
     async def test_context_app_name_and_credentials_are_populated(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
@@ -194,7 +190,6 @@ class TestBuildSdrActivities:
         assert len(captured.credentials) == 1  # type: ignore[attr-defined]
         assert captured.get_credential("api_key") == "secret123"  # type: ignore[attr-defined]
 
-    @pytest.mark.asyncio
     async def test_context_clears_even_when_handler_raises(self) -> None:
         class _FailingHandler(Handler):
             async def test_auth(self, input: AuthInput) -> AuthOutput:
@@ -219,7 +214,6 @@ class TestBuildSdrActivities:
         with pytest.raises(AppContextError):
             _ = handler.context
 
-    @pytest.mark.asyncio
     async def test_secret_store_pulled_from_infrastructure_context(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
@@ -243,7 +237,6 @@ class TestBuildSdrActivities:
             handler.context_during_call._secret_store is fake_secret_store  # type: ignore[attr-defined]
         )
 
-    @pytest.mark.asyncio
     async def test_secret_store_is_none_when_no_infrastructure(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
@@ -261,7 +254,6 @@ class TestBuildSdrActivities:
         assert handler.context_during_call is not None
         assert handler.context_during_call._secret_store is None  # type: ignore[attr-defined]
 
-    @pytest.mark.asyncio
     async def test_concurrent_activities_see_independent_contexts(self) -> None:
         """Regression: concurrent SDR activities on a shared handler must not
         overwrite each other's context (ContextVar isolation)."""
