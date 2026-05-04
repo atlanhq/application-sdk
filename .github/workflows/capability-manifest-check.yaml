@@ -1,0 +1,84 @@
+# Capability Manifest Drift Check
+#
+# Runs on every PR push. Regenerates docs/agents/sdk-capabilities.md via
+# `uv run poe regen-capabilities` and fails if the committed file differs.
+#
+# This is an informational check — it is NOT a required status check. Reviewers
+# should ensure the manifest is up to date before approval so any SDK-surface
+# changes are visible in the PR's Files Changed tab.
+#
+# On drift: a sticky comment tells the contributor how to resolve:
+#   - Comment `/regen-manifest` on the PR — the bot pushes the fix.
+#   - Run `uv run poe regen-capabilities` locally and push.
+#   - Run the `/capability-manifest` Claude Code skill locally and push.
+#
+# Skipped for: bump-version-* branches (they only touch version/lockfile artefacts).
+# No comment posted for: fork PRs (no ORG_PAT_GITHUB access anyway).
+
+name: Capability Manifest Check
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+# Cancel in-flight runs when the PR receives a new push, so we don't
+# post duplicate sticky comments or waste runner time on stale SHAs.
+concurrency:
+  group: capability-manifest-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  drift-check:
+    name: Capability Manifest Drift
+    # Skip bot-owned version-bump PRs (mirrors the skip in release.yaml:12).
+    if: ${{ !startsWith(github.event.pull_request.head.ref, 'bump-version') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history required: extractor.py resolves source-sha via
+          # `git log -1 --format=%H -- application_sdk/`, which fails on shallow clones
+          # when the most recent SDK commit is below the shallow boundary.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Regenerate capability manifest
+        run: uv run poe regen-capabilities
+
+      - name: Check for drift
+        id: drift
+        run: |
+          if git diff --exit-code -- docs/agents/sdk-capabilities.md; then
+            echo "status=clean" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=drift" >> "$GITHUB_OUTPUT"
+            echo "Manifest is stale. Lines changed:"
+            git diff --stat -- docs/agents/sdk-capabilities.md
+            exit 1
+          fi
+
+      - name: Post sticky comment on drift
+        if: failure() && steps.drift.outputs.status == 'drift' && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: capability-manifest-drift
+          message: |
+            ### 📚 Capability manifest drift detected
+
+            `docs/agents/sdk-capabilities.md` is stale relative to the SDK source on this branch.
+
+            **To resolve, pick one:**
+            - Comment `/regen-manifest` on this PR — a bot will regenerate and push the update.
+            - Run `uv run poe regen-capabilities` locally and push the result.
+            - Run the `/capability-manifest` Claude Code skill locally and push.
+
+            This check is informational, not blocking. Reviewers should ensure the manifest is
+            current before approval so the SDK-surface diff is visible in **Files changed**.

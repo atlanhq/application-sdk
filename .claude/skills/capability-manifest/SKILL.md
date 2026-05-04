@@ -56,71 +56,40 @@ If output is non-empty: **stop**. Report:
 
 ---
 
-## Phase 1 — Extract
+## Phases 1–3 — Extract, normalize, render
+
+```bash
+uv run poe regen-capabilities
+```
+
+This poe task (defined in `pyproject.toml`) runs the full extract → normalize → render pipeline,
+enforces idempotence via `cmp`, and scopes pre-commit to whitespace-only hooks. Equivalent to
+the raw four-command sequence below if you need to run steps individually:
+
+<details>
+<summary>Raw commands (for debugging)</summary>
 
 ```bash
 mkdir -p /tmp/capability-manifest
-uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py dump \
-  > /tmp/capability-manifest/raw.json
-```
-
-Prints progress to stderr. Output is griffe-extracted JSON with `meta`, `subpackages`, and `contracts` keys.
-
----
-
-## Phase 2 — Normalize
-
-```bash
-uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py \
-  normalize /tmp/capability-manifest/raw.json \
-  > /tmp/capability-manifest/normalized.json
-```
-
-Filters to `__all__`, sorts deterministically (Classes → Decorators → Functions → Constants/Enums;
-alphabetical within each group), extracts Pydantic fields.
-
----
-
-## Phase 3 — Render and idempotence check
-
-```bash
-uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py \
-  render /tmp/capability-manifest/normalized.json \
-  .claude/skills/capability-manifest/references/subpackage-purposes.yaml \
-  > /tmp/capability-manifest/fresh1.md
-
-# Second render for idempotence check
-uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py \
-  render /tmp/capability-manifest/normalized.json \
-  .claude/skills/capability-manifest/references/subpackage-purposes.yaml \
-  > /tmp/capability-manifest/fresh2.md
-
+EXTRACTOR=.claude/skills/capability-manifest/references/extractor.py
+PURPOSES=.claude/skills/capability-manifest/references/subpackage-purposes.yaml
+uv run --with griffe python "$EXTRACTOR" dump > /tmp/capability-manifest/raw.json
+uv run --with griffe python "$EXTRACTOR" normalize /tmp/capability-manifest/raw.json > /tmp/capability-manifest/normalized.json
+uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh1.md
+uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh2.md
 cmp /tmp/capability-manifest/fresh1.md /tmp/capability-manifest/fresh2.md \
   && echo "IDEMPOTENCE OK" \
   || { echo "IDEMPOTENCE FAILURE — fix extractor before proceeding"; exit 1; }
-```
-
-If they differ, debug `extractor.py` until `cmp` passes. Do not proceed with a non-deterministic render.
-
-**Copy to output location:**
-
-```bash
 cp /tmp/capability-manifest/fresh1.md docs/agents/sdk-capabilities.md
 ```
 
-**Run pre-commit to normalise whitespace:**
+</details>
 
-```bash
-uv run pre-commit run --files docs/agents/sdk-capabilities.md
-```
-
-If pre-commit modifies the file, re-run the idempotence check against the post-hook file:
-
-```bash
-cmp /tmp/capability-manifest/fresh1.md docs/agents/sdk-capabilities.md \
-  && echo "Pre-commit: no changes" \
-  || echo "Pre-commit applied whitespace fixes — verify with git diff"
-```
+**CI integration:** the drift-detector workflow (`.github/workflows/capability-manifest-check.yaml`)
+runs `uv run poe regen-capabilities` on every PR push and fails if the committed manifest differs from
+the regenerated output. To trigger an automatic regeneration commit, comment `/regen-manifest` on
+the PR — the slash-command workflow (`.github/workflows/capability-manifest-regen.yaml`) will push
+the updated file as `github-actions[bot]`.
 
 ---
 

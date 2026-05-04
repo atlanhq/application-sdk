@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    82a72585d212e61c1467394c6dfd030464cca082
-source-date:   2026-05-04T12:57:19+01:00
+source-sha:    49fc15fee2f73524b07b9286f84570f8c93d14fb
+source-date:   2026-05-04T13:46:17+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2077,6 +2077,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
   - `connection_config: dict[str, Any]` `= {}` — Connection configuration (host, port, database, etc.).
+  - `metadata: dict[str, Any]` `= {}` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
   - `timeout_seconds: int` `= 60` — Maximum seconds to wait for all checks.
 - **Defined in:** `application_sdk/handler/contracts.py`

@@ -157,6 +157,23 @@ test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-
 # or TOML nests it inside the sub-table rather than the parent tasks namespace
 generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
 
+# Capability manifest — regenerate docs/agents/sdk-capabilities.md from application_sdk/
+# Used by the /capability-manifest skill, devs, and CI. Idempotent and deterministic;
+# the cmp gate exits non-zero if rendering is non-deterministic.
+regen-capabilities.shell = """
+set -euo pipefail
+mkdir -p /tmp/capability-manifest
+EXTRACTOR=.claude/skills/capability-manifest/references/extractor.py
+PURPOSES=.claude/skills/capability-manifest/references/subpackage-purposes.yaml
+uv run --with griffe python "$EXTRACTOR" dump > /tmp/capability-manifest/raw.json
+uv run --with griffe python "$EXTRACTOR" normalize /tmp/capability-manifest/raw.json > /tmp/capability-manifest/normalized.json
+uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh1.md
+uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh2.md
+cmp /tmp/capability-manifest/fresh1.md /tmp/capability-manifest/fresh2.md
+cp /tmp/capability-manifest/fresh1.md docs/agents/sdk-capabilities.md
+uv run pre-commit run --files docs/agents/sdk-capabilities.md || true
+"""
+
 # Local credential provisioning
 [tool.poe.tasks.provision-credentials]
 help = "Provision credentials for local development"
