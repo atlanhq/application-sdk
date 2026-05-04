@@ -1,25 +1,24 @@
-"""Unit tests for BaseMetadataExtractor template."""
+"""Unit tests for BaseMetadataExtractor — deprecated upload_to_atlan wrapper."""
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
-from unittest.mock import patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from application_sdk.app.base import App
 from application_sdk.app.task import is_task
-from application_sdk.common.error_codes import ActivityError
 from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.storage import UploadInput as StorageUploadInput
+from application_sdk.contracts.storage import UploadOutput as StorageUploadOutput
+from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.base_metadata_extraction import (
     UploadInput,
     UploadOutput,
 )
-
-# ---------------------------------------------------------------------------
-# Minimal concrete subclass (run() is required by App)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -37,114 +36,70 @@ class _ConcreteExtractor(BaseMetadataExtractor):
         return _TestOutput()
 
 
-# ---------------------------------------------------------------------------
-# Structure tests
-# ---------------------------------------------------------------------------
-
-
 class TestBaseMetadataExtractorStructure:
     def test_is_app_subclass(self) -> None:
         assert issubclass(BaseMetadataExtractor, App)
 
-    def test_has_upload_to_atlan_task(self) -> None:
+    def test_upload_to_atlan_is_registered_as_task(self) -> None:
         assert is_task(BaseMetadataExtractor.upload_to_atlan)
 
-    def test_upload_to_atlan_accepts_upload_input(self) -> None:
+    def test_upload_to_atlan_signature(self) -> None:
         from typing import get_type_hints
 
         hints = get_type_hints(BaseMetadataExtractor.upload_to_atlan)
         assert hints.get("input") is UploadInput
-
-    def test_upload_to_atlan_returns_upload_output(self) -> None:
-        from typing import get_type_hints
-
-        hints = get_type_hints(BaseMetadataExtractor.upload_to_atlan)
         assert hints.get("return") is UploadOutput
 
 
-# ---------------------------------------------------------------------------
-# Functional tests for upload_to_atlan
-# ---------------------------------------------------------------------------
+class TestUploadToAtlanRedirect:
+    """upload_to_atlan must redirect to App.upload and emit a DeprecationWarning."""
 
-MODULE = "application_sdk.templates.base_metadata_extractor"
-
-
-class TestUploadToAtlan:
     @pytest.fixture
     def extractor(self):
         return _ConcreteExtractor()
 
-    @patch(f"{MODULE}.create_store_from_binding")
-    @patch(f"{MODULE}.list_keys")
-    @patch(f"{MODULE}.download_file")
-    @patch(f"{MODULE}.upload_file")
-    async def test_success(
-        self, mock_upload, mock_download, mock_list_keys, mock_create_store, extractor
-    ):
-        """All files migrate successfully → UploadOutput with correct counts."""
-        mock_create_store.return_value = object()
-        mock_list_keys.return_value = [f"file{i}.json" for i in range(10)]
-        mock_download.return_value = None
-        mock_upload.return_value = "sha256sum"
-
-        result = await extractor.upload_to_atlan(
-            UploadInput(output_path="/tmp/test/output")
+    async def test_redirects_to_app_upload(self, extractor) -> None:
+        extractor.upload = AsyncMock(
+            return_value=StorageUploadOutput(
+                ref=FileReference(file_count=10), synced=True, reason="uploaded"
+            )
         )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = await extractor.upload_to_atlan(
+                UploadInput(output_path="/tmp/test/output")
+            )
+
+        extractor.upload.assert_awaited_once()
+        forwarded = extractor.upload.await_args.args[0]
+        assert isinstance(forwarded, StorageUploadInput)
+        assert forwarded.local_path == "/tmp/test/output"
+        assert forwarded.tier is StorageTier.RETAINED
 
         assert isinstance(result, UploadOutput)
         assert result.migrated_files == 10
         assert result.total_files == 10
-        assert mock_upload.call_count == 10
 
-    @patch(f"{MODULE}.create_store_from_binding")
-    @patch(f"{MODULE}.list_keys")
-    @patch(f"{MODULE}.download_file")
-    @patch(f"{MODULE}.upload_file")
-    async def test_partial_failures_raise(
-        self, mock_upload, mock_download, mock_list_keys, mock_create_store, extractor
-    ):
-        """Any upload failure raises ActivityError with failure counts."""
-        mock_create_store.return_value = object()
-        mock_list_keys.return_value = ["file1.json", "file2.json", "file3.json"]
-        mock_download.return_value = None
-        mock_upload.side_effect = [
-            "sha256sum",
-            Exception("Connection timeout"),
-            Exception("Permission denied"),
-        ]
-
-        with pytest.raises(ActivityError) as exc_info:
-            await extractor.upload_to_atlan(UploadInput(output_path="/tmp/test/output"))
-
-        assert "Atlan upload failed with 2 errors" in str(exc_info.value)
-        assert "Failed migrations: 2" in str(exc_info.value)
-
-    @patch(f"{MODULE}.create_store_from_binding")
-    @patch(f"{MODULE}.list_keys")
-    async def test_no_files(self, mock_list_keys, mock_create_store, extractor):
-        """Empty prefix returns zero counts without error."""
-        mock_create_store.return_value = object()
-        mock_list_keys.return_value = []
-
-        result = await extractor.upload_to_atlan(
-            UploadInput(output_path="/tmp/test/output")
+    async def test_emits_deprecation_warning(self, extractor) -> None:
+        extractor.upload = AsyncMock(
+            return_value=StorageUploadOutput(
+                ref=FileReference(file_count=0), synced=False, reason="skipped"
+            )
         )
 
-        assert isinstance(result, UploadOutput)
-        assert result.migrated_files == 0
-        assert result.total_files == 0
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", DeprecationWarning)
+            await extractor.upload_to_atlan(UploadInput(output_path="/tmp/x"))
 
-    @patch(f"{MODULE}.create_store_from_binding")
-    @patch(f"{MODULE}.list_keys")
-    async def test_uses_output_path_as_prefix(
-        self, mock_list_keys, mock_create_store, extractor
-    ):
-        """list_keys is called with the exact output_path from UploadInput."""
-        mock_create_store.return_value = object()
-        mock_list_keys.return_value = []
+        deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert deprecations, "expected upload_to_atlan to emit a DeprecationWarning"
+        assert "App.upload" in str(deprecations[0].message)
 
-        await extractor.upload_to_atlan(UploadInput(output_path="artifacts/run-42"))
+    async def test_propagates_upload_exception(self, extractor) -> None:
+        extractor.upload = AsyncMock(side_effect=RuntimeError("boom"))
 
-        mock_list_keys.assert_called_once()
-        call_args = mock_list_keys.call_args
-        assert call_args.args[0] == "artifacts/run-42"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            with pytest.raises(RuntimeError, match="boom"):
+                await extractor.upload_to_atlan(UploadInput(output_path="/tmp/x"))

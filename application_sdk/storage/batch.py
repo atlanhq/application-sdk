@@ -332,7 +332,10 @@ async def upload_file_from_bytes(
         tmp_path = tmp.name
 
     try:
-        return await upload_file(key, tmp_path, store, normalize=normalize)
+        sha256 = await upload_file(key, tmp_path, store, normalize=normalize)
+        # compute_hash defaults to True, so upload_file always returns the digest here.
+        assert sha256 is not None
+        return sha256
     finally:
         try:
             os.unlink(tmp_path)

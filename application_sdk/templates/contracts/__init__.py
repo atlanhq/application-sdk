@@ -53,7 +53,7 @@ from application_sdk.templates.contracts.sql_query import (
 )
 
 __all__ = [
-    # Base metadata extraction
+    # Base metadata extraction (deprecated upload_to_atlan task)
     "UploadInput",
     "UploadOutput",
     # SQL metadata — base

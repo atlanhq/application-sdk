@@ -40,6 +40,12 @@ from application_sdk.observability.utils import (
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
+# SDK-side allowlist that gates which kwargs reach OTLP.  When a logger is called
+# with structured kwargs (e.g. ``_log().info("Downloaded", storage_path=key)``),
+# loguru places the kwargs on ``record["extra"]`` rather than in the message
+# string.  ``_build_extra_dict`` filters that dict through this set before it is
+# copied into the emitted OTLP LogRecord's ``attributes`` map — keys not listed
+# here are dropped and never reach the exporter.
 _KNOWN_EXTRA_KEYS = frozenset(
     {
         "client_host",
@@ -122,6 +128,30 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "circuit_breaker_tripped",
         "bottleneck_activity_type",
         "bottleneck_duration_ms",
+        # ── ObjectStore operations ───────────────────────────────────────
+        "storage_op",
+        "store_path",
+        "elapsed_ms",
+        "size_bytes",
+        "throughput_mibps",
+        # ── FileReference transfers ──────────────────────────────────────
+        "storage_path",
+        "local_path",
+        "file_size_bytes",
+        "bytes_uploaded",
+        "bytes_downloaded",
+        "bytes_transferred_before_failure",
+        "sha256",
+        "tier",
+        "file_count",
+        "chunk_size_bytes",
+        "chunks_total",
+        "chunks_completed",
+        "is_cache_hit",
+        "reused_local_path",
+        "dedup_key",
+        "chunk_offset",
+        "chunk_length",
     }
 )
 
