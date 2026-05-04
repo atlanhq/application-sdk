@@ -12,6 +12,11 @@
 #   - Run `uv run poe regen-capabilities` locally and push.
 #   - Run the `/capability-manifest` Claude Code skill locally and push.
 #
+# source-sha / source-date header lines are excluded from the diff.
+# These fields reflect the last commit that touched application_sdk/ and are
+# squash-merge-incompatible during a PR (the final squash SHA doesn't exist yet).
+# They are updated whenever the manifest is regenerated post-merge.
+#
 # Skipped for: bump-version-* branches (they only touch version/lockfile artefacts).
 # No comment posted for: fork PRs (no ORG_PAT_GITHUB access anyway).
 
@@ -63,7 +68,14 @@ jobs:
       - name: Check for drift
         id: drift
         run: |
-          if git diff --exit-code -- docs/agents/sdk-capabilities.md; then
+          # source-sha / source-date are excluded: with squash merges the final
+          # SHA doesn't exist during the PR, so these fields are always stale
+          # until the manifest is regenerated post-merge.
+          SEMANTIC=$(git diff -- docs/agents/sdk-capabilities.md \
+            | grep '^[+-]' \
+            | grep -v '^+++\|^---' \
+            | grep -v '^[+-]source-sha:\|^[+-]source-date:')
+          if [ -z "$SEMANTIC" ]; then
             echo "status=clean" >> "$GITHUB_OUTPUT"
           else
             echo "status=drift" >> "$GITHUB_OUTPUT"
