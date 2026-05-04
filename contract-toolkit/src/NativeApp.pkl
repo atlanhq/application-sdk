@@ -1153,8 +1153,10 @@ class PopularityNode extends DAGNode {
   /// Maximum users retained per asset.
   topNUsers: Int(this >= 1) = 10
 
-  /// Storage backend for parsed/mined/access-history/cache/output paths.
-  lakeProvider: "local"|"aws"|"gcp"|"azure" = "aws"
+  /// Optional storage backend override for parsed/mined/access-history/cache/output
+  /// paths. Omit to let the Popularity app use its own trigger defaults and
+  /// deployment environment.
+  lakeProvider: ("local"|"aws"|"gcp"|"azure")? = null
 
   /// Source-specific query-history column mapping. Omit to use the app's
   /// Snowflake-compatible defaults.
@@ -1207,7 +1209,7 @@ class PopularityNode extends DAGNode {
     ["window_days"] = windowDays
     ["top_n_queries"] = topNQueries
     ["top_n_users"] = topNUsers
-    ["lake_provider"] = lakeProvider
+    when (lakeProvider != null) { ["lake_provider"] = lakeProvider }
     when (mineColumnMapping != null) {
       ["mine_column_mapping"] = renderPopularityMineColumnMapping(mineColumnMapping!!)
     }

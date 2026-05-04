@@ -1299,7 +1299,8 @@ Pre-built Popularity app workflow node. Defaults:
 - `appName = "popularity"`
 - `taskQueue = "atlan-popularity-{deployment_name}"`
 - waits for `queryIntelligenceNode = "qi"` and `assetPublishNode = "publish"` to succeed
-- `windowDays = 30`, `topNQueries = 5`, `topNUsers = 10`, `lakeProvider = "aws"`, `dryRun = false`
+- `windowDays = 30`, `topNQueries = 5`, `topNUsers = 10`, `dryRun = false`
+- omits `lake_provider` unless `lakeProvider` is explicitly set
 
 Required:
 - `tenantId`
@@ -1312,6 +1313,9 @@ Required:
 user-editable form value. `connectionCachePath` must be the exact SQLite cache
 object key or local file path. For cloud runs the popularity app downloads this
 single object; a directory prefix such as `connection-cache` is not sufficient.
+By default the node omits `lake_provider` so the Popularity app can use its own
+trigger defaults and deployment environment. Set `lakeProvider` only as an
+explicit storage override.
 
 ```pkl
 class PopularityNode extends DAGNode {
@@ -1329,7 +1333,7 @@ class PopularityNode extends DAGNode {
   windowDays: Int = 30
   topNQueries: Int = 5
   topNUsers: Int = 10
-  lakeProvider: "local"|"aws"|"gcp"|"azure" = "aws"
+  lakeProvider: ("local"|"aws"|"gcp"|"azure")? = null
   mineColumnMapping: PopularityMineColumnMapping?
   includeFilter: Mapping<String, Listing<String>>?
   excludeFilter: Mapping<String, Listing<String>>?
@@ -1354,7 +1358,6 @@ Rendered args:
   "window_days": 30,
   "top_n_queries": 5,
   "top_n_users": 10,
-  "lake_provider": "aws",
   "dry_run": false
 }
 ```

@@ -688,6 +688,10 @@ Optional popularity knobs:
 - `mineColumnMapping = new PopularityMineColumnMapping { ... }` for non-Snowflake miner schemas
 - `extraArgs`
 
+By default the node omits `lake_provider` so the Popularity app can use its own
+trigger defaults and deployment environment. Set `lakeProvider` only as an
+explicit storage override.
+
 When relying on the standard `PublishNode` to produce the connection cache,
 amend that publish node's args:
 

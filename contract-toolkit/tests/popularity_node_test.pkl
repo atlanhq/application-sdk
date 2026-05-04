@@ -1,0 +1,30 @@
+// Tests for the built-in PopularityNode manifest contract.
+
+amends "pkl:test"
+
+import "../src/NativeApp.pkl" as NativeApp
+
+local defaultPopularityNode = new NativeApp.PopularityNode {
+  tenantId = "tenant"
+  parsedDataPrefix = "parsed"
+  minedDataPrefix = "mined"
+  connectionCachePath = "cache.db"
+  outputPrefix = "output"
+}
+local explicitStoragePopularityNode = new NativeApp.PopularityNode {
+  tenantId = "tenant"
+  parsedDataPrefix = "parsed"
+  minedDataPrefix = "mined"
+  connectionCachePath = "cache.db"
+  outputPrefix = "output"
+  lakeProvider = "aws"
+}
+
+facts {
+  ["Popularity node omits storage override by default"] {
+    !defaultPopularityNode.args.containsKey("lake_provider")
+  }
+  ["Popularity node can explicitly override storage args"] {
+    explicitStoragePopularityNode.args["lake_provider"] == "aws"
+  }
+}
