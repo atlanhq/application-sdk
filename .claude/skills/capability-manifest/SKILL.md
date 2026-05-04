@@ -15,7 +15,7 @@ optional_triggers:
   - "what does the SDK expose"
   - "list public methods of the SDK"
 owner: connector-platform-team
-last_updated: "2026-05-01"
+last_updated: "2026-05-04"
 staleness_days: 30
 inputs:
   - mode: "create | refresh | verify (auto-detected from existing state)"
@@ -159,14 +159,21 @@ The `staleness_days: 30` frontmatter is a secondary cadence reminder; prefer the
 
 ## Audit-and-refresh flow (manifest already exists)
 
-### Step A — Re-render to tempfile
+### Step A — Snapshot committed file, then re-render
 
-Run Phases 1–3 but write to `/tmp/capability-manifest/fresh.md`; do not overwrite committed file yet.
+`poe regen-capabilities` overwrites `docs/agents/sdk-capabilities.md` in place as its last step,
+so the committed version must be snapshotted *before* the poe task runs — otherwise Step B's
+diff compares the already-overwritten file against itself and always reports no drift.
+
+```bash
+cp docs/agents/sdk-capabilities.md /tmp/capability-manifest/committed.md
+uv run poe regen-capabilities
+```
 
 ### Step B — Compare
 
 ```bash
-diff -u docs/agents/sdk-capabilities.md /tmp/capability-manifest/fresh.md
+diff -u /tmp/capability-manifest/committed.md docs/agents/sdk-capabilities.md
 ```
 
 - Empty diff → **manifest is current**. Report "no drift" and exit.
@@ -187,9 +194,7 @@ Report counts per bucket. If in-depth bucketing is too brittle, count diff hunks
 
 ### Step D — Apply
 
-```bash
-cp /tmp/capability-manifest/fresh.md docs/agents/sdk-capabilities.md
-```
+`poe regen-capabilities` already wrote the updated file in Step A. No copy needed here.
 
 The skill **never auto-commits**. Leave the diff for the user to review.
 
@@ -224,5 +229,6 @@ The YAML key is the short name (e.g., `app`), not the full import path.
 - **Idempotence failure** — check for `datetime.now()`, `random`, or dict-ordering issues in `extractor.py`.
 - **Missing symbols** — symbol not in `__all__`? Not exposed at subpackage level? Check the `__init__.py`.
 - **Dirty-tree refusal** — stash or commit changes under `application_sdk/` before running.
+- **"No drift" when CI says stale** — most likely the committed snapshot was not saved before running poe (Step A). The `poe regen-capabilities` task overwrites `docs/agents/sdk-capabilities.md` in place; if you diff the file against itself it always looks clean. Verify with `git diff HEAD docs/agents/sdk-capabilities.md` — if that shows drift, commit the file.
 - **Fallback** — if griffe fails, use `ast`-only mode: parse source files with `ast.FunctionDef`/`ast.ClassDef`
   and note the fallback in `references/retro-log.md`.
