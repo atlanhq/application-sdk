@@ -654,7 +654,8 @@ async def download_file_chunked(
                     resolved, key, start=offset, length=length
                 )
             )
-            os.pwrite(fd, raw, offset)
+            os.lseek(fd, offset, os.SEEK_SET)
+            os.write(fd, raw)
 
     try:
         await asyncio.gather(

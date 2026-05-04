@@ -728,17 +728,19 @@ class TestDownloadFileChunked:
                 raise RuntimeError("transient chunk failure")
             return await real_get_range(st, key, start=start, length=length)
 
-        with patch.object(
-            ops_mod.obstore, "get_range_async", side_effect=flaky_get_range
+        with (
+            patch.object(
+                ops_mod.obstore, "get_range_async", side_effect=flaky_get_range
+            ),
+            pytest.raises((StorageError, RuntimeError)),
         ):
-            with pytest.raises((StorageError, RuntimeError)):
-                await download_file_chunked(
-                    "chunked/boom.bin",
-                    dest,
-                    store,
-                    chunk_size_bytes=3,
-                    normalize=False,
-                )
+            await download_file_chunked(
+                "chunked/boom.bin",
+                dest,
+                store,
+                chunk_size_bytes=3,
+                normalize=False,
+            )
 
         assert not dest.exists(), "partial file must be cleaned up after chunk failure"
 
