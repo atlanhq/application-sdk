@@ -531,6 +531,10 @@ class SqlApp(App):
             transformed_data_prefix=get_object_store_prefix(
                 os.path.join(resolved_base, "transformed")
             ),
+            # Expose the resolved local base path so subclasses can derive
+            # additional prefixes (e.g. lineage-specific dirs) without calling
+            # workflow.info() a second time.
+            output_path=resolved_base,
         )
 
     # =====================================================================

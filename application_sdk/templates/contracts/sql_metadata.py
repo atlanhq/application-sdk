@@ -200,6 +200,10 @@ class ExtractionOutput(Output, PublishInputMixin):
     processes_extracted: int = 0
     records_uploaded: int = 0
     error: str = ""
+    output_path: str = ""
+    """Resolved local base path used during extraction. Subclasses that need
+    additional output prefixes (e.g. lineage-specific dirs) can derive them
+    from this field instead of re-calling workflow.info()."""
 
 
 class ExtractionTaskInput(Input, allow_unbounded_fields=True):
