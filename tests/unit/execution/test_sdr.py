@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest import mock
 
 import pytest
 
+from application_sdk.app.base import AppContextError
 from application_sdk.execution._temporal.sdr import (
     SDR_FETCH_METADATA_ACTIVITY,
     SDR_PREFLIGHT_ACTIVITY,
@@ -41,17 +43,17 @@ class _StubHandler(Handler):
 
     async def test_auth(self, input: AuthInput) -> AuthOutput:
         self.auth_input = input
-        self.context_during_call = self._context
+        self.context_during_call = self.context
         return AuthOutput(status=AuthStatus.SUCCESS, message="ok")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         self.preflight_input = input
-        self.context_during_call = self._context
+        self.context_during_call = self.context
         return PreflightOutput(status=PreflightStatus.READY, checks=[])
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         self.metadata_input = input
-        self.context_during_call = self._context
+        self.context_during_call = self.context
         return SqlMetadataOutput(objects=[])
 
 
@@ -135,7 +137,8 @@ class TestBuildSdrActivities:
         assert handler.auth_input is input_obj
         # Context was set during the call, and cleared afterwards.
         assert handler.context_during_call is not None
-        assert handler._context is None
+        with pytest.raises(AppContextError):
+            _ = handler.context
 
     @pytest.mark.asyncio
     async def test_preflight_activity_dispatches(self) -> None:
@@ -151,7 +154,8 @@ class TestBuildSdrActivities:
 
         assert result.status == PreflightStatus.READY
         assert handler.preflight_input is input_obj
-        assert handler._context is None
+        with pytest.raises(AppContextError):
+            _ = handler.context
 
     @pytest.mark.asyncio
     async def test_fetch_metadata_activity_dispatches(self) -> None:
@@ -167,7 +171,8 @@ class TestBuildSdrActivities:
 
         assert result.objects == []
         assert handler.metadata_input is input_obj
-        assert handler._context is None
+        with pytest.raises(AppContextError):
+            _ = handler.context
 
     @pytest.mark.asyncio
     async def test_context_app_name_and_credentials_are_populated(self) -> None:
@@ -211,7 +216,8 @@ class TestBuildSdrActivities:
         with pytest.raises(RuntimeError, match="boom"):
             await test_auth(AuthInput(credentials=[]))
 
-        assert handler._context is None
+        with pytest.raises(AppContextError):
+            _ = handler.context
 
     @pytest.mark.asyncio
     async def test_secret_store_pulled_from_infrastructure_context(self) -> None:
@@ -254,3 +260,45 @@ class TestBuildSdrActivities:
 
         assert handler.context_during_call is not None
         assert handler.context_during_call._secret_store is None  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_activities_see_independent_contexts(self) -> None:
+        """Regression: concurrent SDR activities on a shared handler must not
+        overwrite each other's context (ContextVar isolation)."""
+        from application_sdk.handler.contracts import HandlerCredential
+
+        # Each invocation records the credential it sees mid-call.
+        seen_credentials: list[str | None] = []
+        barrier = asyncio.Event()
+
+        class _SlowHandler(Handler):
+            async def test_auth(self, input: AuthInput) -> AuthOutput:
+                # Both tasks reach here before either records — forces overlap.
+                barrier.set()
+                await asyncio.sleep(0)  # yield to let the other task run
+                seen_credentials.append(self.context.get_credential("api_key"))
+                return AuthOutput(status=AuthStatus.SUCCESS, message="ok")
+
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+            async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
+                return SqlMetadataOutput(objects=[])
+
+        handler = _SlowHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        test_auth = by_name[SDR_TEST_AUTH_ACTIVITY]
+
+        creds_a = [HandlerCredential(key="api_key", value="user-A")]
+        creds_b = [HandlerCredential(key="api_key", value="user-B")]
+
+        await asyncio.gather(
+            test_auth(AuthInput(credentials=creds_a)),
+            test_auth(AuthInput(credentials=creds_b)),
+        )
+
+        # Each concurrent call must have seen only its own credential.
+        assert set(seen_credentials) == {"user-A", "user-B"}

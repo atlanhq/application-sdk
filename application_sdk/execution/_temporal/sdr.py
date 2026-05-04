@@ -15,17 +15,18 @@ without a Handler (see ``create_worker(handler=...)``).
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from application_sdk.handler.context import HandlerContext
+    from application_sdk.handler.context import HandlerContext, bind_handler_context
     from application_sdk.handler.contracts import (
         AuthInput,
         AuthOutput,
@@ -123,12 +124,12 @@ SDR_WORKFLOWS: list[type] = [
 
 @dataclass
 class _SdrBinding:
-    handler: "Handler"
+    handler: Handler
     app_name: str
 
 
 def build_sdr_activities(
-    handler: "Handler",
+    handler: Handler,
     app_name: str,
 ) -> list[Callable[..., Awaitable[Any]]]:
     """Build three Temporal activity callables bound to a Handler instance.
@@ -169,11 +170,10 @@ def build_sdr_activities(
 
 @contextmanager
 def _bind_context(binding: _SdrBinding, credentials: list[Any]):
-    """Populate ``handler._context`` for the duration of the block.
+    """Bind a per-invocation HandlerContext for the duration of the block.
 
-    Mirrors the HTTP service's pattern (handler/service.py) so
-    ``self.context`` works identically whether the handler was invoked
-    over HTTP or via the SDR workflow.
+    Uses bind_handler_context (ContextVar-backed) so concurrent SDR activities
+    on a shared handler instance cannot overwrite each other's context.
     """
     infra = get_infrastructure()
     secret_store = infra.secret_store if infra is not None else None
@@ -185,8 +185,5 @@ def _bind_context(binding: _SdrBinding, credentials: list[Any]):
         _credentials=list(credentials),
         _secret_store=secret_store,
     )
-    binding.handler._context = context
-    try:
+    with bind_handler_context(context):
         yield context
-    finally:
-        binding.handler._context = None
