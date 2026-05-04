@@ -738,6 +738,6 @@ controller = MockHeartbeatController()
 - **Design rationale (ADRs):**
   - [ADR-0005: Infrastructure Abstraction](adr/0005-infrastructure-abstraction.md)
   - [ADR-0006: Schema-Driven Contracts](adr/0006-schema-driven-contracts.md)
-  - [ADR-0007: Apps as Coordination Unit](adr/0007-apps-as-coordination-unit.md)
+  - [ADR-0007: Apps as Coordination Unit](adr/0007-apps-as-coordination-unit.md) *(superseded — direct inter-app calls permanently removed)*
   - [ADR-0008: Payload-Safe Bounded Types](adr/0008-payload-safe-bounded-types.md)
   - [ADR-0010: Async-First Blocking Code](adr/0010-async-first-blocking-code.md)

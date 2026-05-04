@@ -876,7 +876,7 @@ Only async clients are exposed. Use the credential system to supply the token:
 ```python
 from application_sdk.credentials import create_async_atlan_client, AtlanApiToken
 
-cred = AtlanApiToken(api_token="my-token", base_url="https://my-tenant.atlan.com")
+cred = AtlanApiToken(token="my-token", base_url="https://my-tenant.atlan.com")
 client = create_async_atlan_client(cred)
 ```
 

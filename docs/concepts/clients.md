@@ -20,7 +20,7 @@ Provides classes for interacting with SQL databases using SQLAlchemy.
 
 *   **`BaseSQLClient(ClientInterface)`**:
     *   **Purpose:** Handles synchronous connections and query execution using SQLAlchemy's standard engine and connection pool. Good for `@task` methods or setup steps that don't require high concurrency within the client itself.
-    *   **Query Execution:** Dispatches `run_query` through `task_context.run_in_thread` to avoid blocking the asyncio event loop during potentially long-running synchronous database operations while keeping Temporal heartbeats alive.
+    *   **Query Execution:** Dispatches `run_query` via `loop.run_in_executor` with a private `ThreadPoolExecutor` so the event loop (and the framework's auto-heartbeat task) keeps running during synchronous query execution.
 *   **`AsyncBaseSQLClient(BaseSQLClient)`**:
     *   **Purpose:** Handles asynchronous connections and query execution using SQLAlchemy's async features (`create_async_engine`, `AsyncConnection`). Suitable for scenarios requiring non-blocking database I/O.
     *   **Query Execution:** Uses `async/await` directly with the async SQLAlchemy connection for `run_query`.
@@ -61,7 +61,7 @@ class SnowflakeClient(BaseSQLClient):
         required=["username", "password", "account_id"],
         parameters=["warehouse", "role"],
         defaults={"client_session_keep_alive": "true"},
-        connect_args={"sslmode": "require"},  # Optional: driver-specific connection arguments
+        connect_args={},  # Optional: driver-specific connection arguments (e.g. {"connect_timeout": 30} for PostgreSQL)
         pool_pre_ping=True,  # Optional: disable only if the dialect's pre-ping path is unsafe
     )
 ```
@@ -224,6 +224,6 @@ The `clients` module abstracts interactions with external services.
 
 `BaseSQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine and query execution methods used by `@task` methods to fetch data. See [`docs/concepts/apps.md`](apps.md) for how `App` + `@task` orchestrate extraction and [`docs/concepts/tasks.md`](tasks.md) for the task contract pattern.
 
-Temporal worker lifecycle (startup, shutdown, workflow dispatch) is managed by `application_sdk.execution` — see the execution layer documentation in `docs/concepts/apps.md`.
+Temporal worker lifecycle (startup, shutdown, workflow dispatch) is managed by `application_sdk.execution` — see [`docs/concepts/entry-points.md`](entry-points.md) for how workers are started and how entrypoints map to workflows.
 
 `BaseClient` provides a foundation for non-SQL data sources with HTTP request support through the `execute_http_get_request` and `execute_http_post_request` methods. The class also allows for custom retry logic to be configured through the `http_retry_transport` attribute which can be set to a `httpx.AsyncBaseTransport` instance, either through the `httpx` default transport or a custom transport from libraries like `httpx-retries`.

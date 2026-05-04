@@ -33,7 +33,7 @@ We chose **workflow-to-workflow coordination**: Apps call other Apps as Temporal
 
 Apps invoke other Apps as child workflows via `app/client.py`:
 
-> **⚠️ Historical — do not copy.** `call_by_name()` is deactivated (BLDX-878). Use [Automation Engine DAG orchestration](../guides/multi-app-coordination.md) instead.
+> **⚠️ Historical — do not copy.** `call_by_name()` was permanently removed. Use [Automation Engine DAG orchestration](../guides/multi-app-coordination.md) instead.
 
 ```python
 class Orchestrator(App):
@@ -109,7 +109,7 @@ Require Apps to directly import each other's App classes.
 
 Child workflow invocation was implemented in `application_sdk/app/client.py`. The `App` exposed it through `self.context` inside `run()`. Import only the target app's contract models — not the app class itself — to maintain type safety while keeping deployments independent:
 
-> **⚠️ Historical — do not copy.** `call_by_name()` is deactivated (BLDX-878). Use [Automation Engine DAG orchestration](../guides/multi-app-coordination.md) instead.
+> **⚠️ Historical — do not copy.** `call_by_name()` was permanently removed. Use [Automation Engine DAG orchestration](../guides/multi-app-coordination.md) instead.
 
 ```python
 # Import ONLY the contracts from the target app's package
