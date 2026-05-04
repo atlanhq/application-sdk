@@ -56,7 +56,7 @@ pkl eval -m examples/trino/generated examples/trino/app.pkl
 - New native credential behavior belongs in `NativeApp.pkl`, not `Credential.pkl`.
 - New workflow widgets belong in `Config.pkl`.
 - Native rendering belongs in `NativeApp.pkl` / `NativeAppBundle.pkl`, not `Renderers.pkl`.
-- If `src/` changes, update `README.md`, `docs/reference.md`, and `docs/index.html`.
+- If `src/` changes, update `README.md` and `docs/reference.md`.
 - Add or update an example when adding behavior.
 - Commit regenerated example outputs with the source change.
 - Toolkit repo skills live at the SDK repo root. Mirror changes between

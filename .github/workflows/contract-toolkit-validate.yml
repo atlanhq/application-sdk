@@ -164,8 +164,7 @@ jobs:
           missing=""
           for doc in \
             contract-toolkit/README.md \
-            contract-toolkit/docs/reference.md \
-            contract-toolkit/docs/index.html
+            contract-toolkit/docs/reference.md
           do
             if ! git diff --name-only "$base" "$head" | grep -q "^${doc}$"; then
               missing="${missing}\n- \`${doc}\`"
@@ -184,7 +183,6 @@ jobs:
           Per toolkit convention, public PKL changes should update:
           - \`contract-toolkit/README.md\`
           - \`contract-toolkit/docs/reference.md\`
-          - \`contract-toolkit/docs/index.html\`
 
           Ignore this reminder only when the source change is internal and has no author-facing impact.
           EOF

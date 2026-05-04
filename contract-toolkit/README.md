@@ -1084,12 +1084,11 @@ Set `flatManifestArgs = false` only for legacy workflows that intentionally read
 
 ## Documentation
 
-Docs live in three places — all must be updated together when changing PKL modules:
+Docs live in two places — both must be updated together when changing PKL modules:
 
 | File | Format | Content |
 |------|--------|---------|
 | `docs/reference.md` | Markdown | Detailed reference (classes, properties, examples) |
-| `docs/index.html` | HTML | Standalone docs page (hand-written, not generated from reference.md) |
 | `README.md` | Markdown | Quick start guide and widget summary tables |
 
 ## PKL Reserved Keywords in Dynamic Objects

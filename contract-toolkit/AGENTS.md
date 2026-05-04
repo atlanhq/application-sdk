@@ -161,8 +161,8 @@ from the repo. Do not assume the report is correct or complete.
    default-behavior assertion when backward compatibility matters.
 7. Add or update an executable example that shows the intended usage, then
    regenerate and commit generated output.
-8. Update `README.md`, `docs/reference.md`, and `docs/index.html` with enough
-   detail for app authors to use the feature without reading the implementation.
+8. Update `README.md` and `docs/reference.md` with enough detail for app
+   authors to use the feature without reading the implementation.
 9. Commit with a conventional subject and an extended body covering root cause,
    change, compatibility, and validation.
 10. Open the PR with triage/design/value-flow sections, then run and post
@@ -194,10 +194,9 @@ find examples -maxdepth 2 -name app.pkl | sort
   `.claude/skills/<name>/SKILL.md` and verify both files match. Do not add
   nested `.agents/` or `.claude/` directories under `contract-toolkit/`.
 
-When changing any PKL module, update all three docs in the same PR:
+When changing any PKL module, update both docs in the same PR:
 
 - `docs/reference.md`
-- `docs/index.html`
 - `README.md`
 
 Also add or update an example and generated output for new behavior.
