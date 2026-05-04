@@ -256,7 +256,7 @@ application_sdk/
 ├── execution/              # Temporal abstraction layer (not for direct use)
 │   ├── decorators.py       # Execution-layer decorators
 │   ├── errors.py           # Execution error types
-│   ├── heartbeat.py        # HeartbeatController, run_in_thread
+│   ├── heartbeat.py        # HeartbeatController (Protocol + implementations), blocking executor backing run_in_thread
 │   ├── retry.py            # RetryPolicy (framework wrapper)
 │   ├── sandbox.py          # SandboxConfig with framework defaults
 │   ├── settings.py         # Worker and activity settings

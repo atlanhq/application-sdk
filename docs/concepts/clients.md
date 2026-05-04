@@ -20,7 +20,7 @@ Provides classes for interacting with SQL databases using SQLAlchemy.
 
 *   **`BaseSQLClient(ClientInterface)`**:
     *   **Purpose:** Handles synchronous connections and query execution using SQLAlchemy's standard engine and connection pool. Good for `@task` methods or setup steps that don't require high concurrency within the client itself.
-    *   **Query Execution:** Uses `run_in_thread` internally for `run_query` to avoid blocking the asyncio event loop during potentially long-running synchronous database operations while keeping Temporal heartbeats alive.
+    *   **Query Execution:** Dispatches `run_query` through `task_context.run_in_thread` to avoid blocking the asyncio event loop during potentially long-running synchronous database operations while keeping Temporal heartbeats alive.
 *   **`AsyncBaseSQLClient(BaseSQLClient)`**:
     *   **Purpose:** Handles asynchronous connections and query execution using SQLAlchemy's async features (`create_async_engine`, `AsyncConnection`). Suitable for scenarios requiring non-blocking database I/O.
     *   **Query Execution:** Uses `async/await` directly with the async SQLAlchemy connection for `run_query`.

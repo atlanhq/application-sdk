@@ -112,8 +112,7 @@ Extend `BaseSQLClient` to define the connection string template for your databas
 
 ```python
 # app/clients.py
-from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.clients.models import DatabaseConfig
+from application_sdk.clients import BaseSQLClient, DatabaseConfig
 
 
 class PostgresClient(BaseSQLClient):

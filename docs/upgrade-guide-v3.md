@@ -285,26 +285,35 @@ Wire them into extract/transform tasks on your `App` subclass:
 ```python
 # app/app.py
 from application_sdk.app import App, task
-from application_sdk.contracts import FileReference
+from application_sdk.contracts import Input, Output, FileReference
 from app.api_types import TopicRecord
 from app.asset_mapper import map_topic
 
+class FetchOutput(Output):
+    file: FileReference
+
+class TransformInput(Input):
+    file: FileReference
+
+class TransformOutput(Output):
+    file: FileReference
+
 class MyConnector(App):
     @task
-    async def extract_topics(self, input: MyInput) -> FileReference:
+    async def extract_topics(self, input: MyInput) -> FetchOutput:
         records = [TopicRecord(**row) async for row in self.client.list_topics()]
         local_path = "/tmp/topics.jsonl"
         write_jsonl(local_path, records)  # your serialisation helper
-        return FileReference.from_local(local_path)  # framework auto-uploads
+        return FetchOutput(file=FileReference.from_local(local_path))  # framework auto-uploads
 
     @task
-    async def transform_topics(self, input: FileReference) -> FileReference:
-        # framework auto-downloads before this task runs; input.local_path is set
-        records = read_jsonl(input.local_path, TopicRecord)  # your parse helper
+    async def transform_topics(self, input: TransformInput) -> TransformOutput:
+        # framework auto-downloads input.file before this task runs; input.file.local_path is set
+        records = read_jsonl(input.file.local_path, TopicRecord)  # your parse helper
         assets = [map_topic(r, self.connection_qn, self.connection_name) for r in records]
         local_path = "/tmp/topics_assets.jsonl"
         write_jsonl(local_path, assets)  # your serialisation helper
-        return FileReference.from_local(local_path)  # framework auto-uploads
+        return TransformOutput(file=FileReference.from_local(local_path))  # framework auto-uploads
 ```
 
 ### Rules for mapper functions

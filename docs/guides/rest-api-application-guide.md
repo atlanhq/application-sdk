@@ -349,7 +349,7 @@ async def fetch_entities(self, input: FetchEntitiesInput) -> FetchEntitiesOutput
 
 ## Testing
 
-Use `MockSecretStore` and `MockCredentialStore` to test without real credentials:
+Use `MockSecretStore` to test without real credentials:
 
 ```python
 import json

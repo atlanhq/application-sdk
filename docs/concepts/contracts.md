@@ -29,11 +29,7 @@ class ExtractOutput(Output):
 ### Importing
 
 ```python
-# Preferred: top-level re-export
 from application_sdk.contracts import Input, Output, HeartbeatDetails
-
-# Also works
-from application_sdk.contracts.base import Input, Output, HeartbeatDetails
 ```
 
 ---
