@@ -2518,18 +2518,18 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `UploadInput`
 
 - **Import:** `from application_sdk.templates.contracts import UploadInput`
-- **Summary:** Input for the upload_to_atlan task.
+- **Summary:** Input for the deprecated upload_to_atlan task.
 - **Fields:**
-  - `output_path: str` `= ''` — Object store prefix to migrate from the deployment store to the upstream store.
+  - `output_path: str` `= ''` — Local path (file or directory) to push to the platform via App.upload.
 - **Defined in:** `application_sdk/templates/contracts/base_metadata_extraction.py`
 
 #### `UploadOutput`
 
 - **Import:** `from application_sdk.templates.contracts import UploadOutput`
-- **Summary:** Output from the upload_to_atlan task.
+- **Summary:** Output from the deprecated upload_to_atlan task.
 - **Fields:**
-  - `migrated_files: int` `= 0` — Number of files successfully migrated.
-  - `total_files: int` `= 0` — Total number of files found for migration.
+  - `migrated_files: int` `= 0` — Number of files successfully uploaded.
+  - `total_files: int` `= 0` — Total number of files attempted (matches migrated_files on success).
 - **Defined in:** `application_sdk/templates/contracts/base_metadata_extraction.py`
 
 #### `WriteCurrentStateInput`

@@ -41,7 +41,8 @@ logger = get_logger(__name__)
 class SqlQueryExtractor(BaseMetadataExtractor):
     """Abstract base class for SQL query extraction apps.
 
-    Inherits ``upload_to_atlan`` from ``BaseMetadataExtractor``.
+    Inherits ``client_class``, ``handler_class``, and ``transformer_class``
+    from ``BaseMetadataExtractor``.
 
     The ``run()`` method orchestrates the full extraction:
     ``get_query_batches`` → ``fetch_queries`` (per batch) → aggregate output.

@@ -1547,3 +1547,51 @@ def test_reset_for_testing_also_resets_flush_task_started():
     AtlanLoggerAdapter._flush_task_started = True
     AtlanLoggerAdapter._reset_for_testing()
     assert AtlanLoggerAdapter._flush_task_started is False
+
+
+# ---------------------------------------------------------------------------
+# _KNOWN_EXTRA_KEYS allowlist — pin the file_ref.* and obstore observability
+# vocabulary so a future contributor can't silently drop a field that the
+# downstream OTLP/ClickHouse pipeline expects.
+# ---------------------------------------------------------------------------
+
+
+class TestKnownExtraKeysAllowlist:
+    """Guard against accidental removal of allowlisted attribute keys."""
+
+    def test_file_ref_transfer_keys_in_allowlist(self) -> None:
+        from application_sdk.observability.logger_adaptor import _KNOWN_EXTRA_KEYS
+
+        # Each of these is emitted as a kwarg on a file_ref.* event in
+        # storage/reference.py or storage/file_ref_sync.py.  Dropping any of
+        # them silently zeroes out the OTLP attribute payload for that field.
+        required = {
+            "storage_path",
+            "local_path",
+            "file_size_bytes",
+            "bytes_uploaded",
+            "bytes_downloaded",
+            "bytes_transferred_before_failure",
+            "sha256",
+            "tier",
+            "file_count",
+            "chunk_size_bytes",
+            "chunks_total",
+            "chunks_completed",
+            "is_cache_hit",
+            "reused_local_path",
+            "dedup_key",
+            "chunk_offset",
+            "chunk_length",
+        }
+        missing = required - _KNOWN_EXTRA_KEYS
+        assert not missing, f"_KNOWN_EXTRA_KEYS missing required keys: {missing}"
+
+    def test_kwarg_outside_allowlist_is_dropped(self) -> None:
+        from application_sdk.observability.logger_adaptor import _build_extra_dict
+
+        result = _build_extra_dict(
+            {"storage_path": "s3://x", "definitely_not_in_allowlist": "drop me"}
+        )
+        assert "storage_path" in result
+        assert "definitely_not_in_allowlist" not in result
