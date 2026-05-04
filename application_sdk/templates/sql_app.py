@@ -53,10 +53,16 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
+from temporalio import workflow as _temporal_workflow
+
 from application_sdk.app.base import App
 from application_sdk.app.task import task
 from application_sdk.common.sql_filters import normalize_filters
-from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    TEMPORARY_PATH,
+    WORKFLOW_OUTPUT_PATH_TEMPLATE,
+)
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.execution import build_output_path
 from application_sdk.execution._temporal.activity_utils import get_object_store_prefix
@@ -499,14 +505,22 @@ class SqlApp(App):
         if input.connection and input.connection.attributes:
             connection_qn = input.connection.attributes.qualified_name or ""
 
-        # Derive the output path the same way _resolve_output_path() does in
-        # activity context: TEMPORARY_PATH + build_output_path(). This ensures
-        # get_object_store_prefix() can strip the local prefix and return the
-        # correct S3 key (e.g. artifacts/apps/mysql/workflows/wf-id/transformed).
-        # When input.output_path is already set (local dev / tests), use it directly.
-        resolved_base = input.output_path or os.path.join(
-            TEMPORARY_PATH, build_output_path()
-        )
+        # Derive the output path using the workflow context (run() is a Temporal
+        # workflow method, not an activity — build_output_path() would fail with
+        # "Not in activity context"). workflow.info() is always available here.
+        # get_object_store_prefix() strips TEMPORARY_PATH to yield the S3 key.
+        if input.output_path:
+            resolved_base = input.output_path
+        else:
+            info = _temporal_workflow.info()
+            resolved_base = os.path.join(
+                TEMPORARY_PATH,
+                WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
+                    application_name=APPLICATION_NAME or self._app_name or "app",
+                    workflow_id=info.workflow_id,
+                    run_id=info.run_id,
+                ),
+            )
 
         return ExtractionOutput(
             databases_extracted=db_result.total_record_count,

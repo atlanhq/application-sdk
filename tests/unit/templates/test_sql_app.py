@@ -14,14 +14,13 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     FetchColumnsInput,
     FetchDatabasesInput,
+    FetchProceduresInput,
     FetchSchemasInput,
     FetchTablesInput,
     FetchViewsInput,
-    FetchProceduresInput,
     TransformInput,
 )
 from application_sdk.templates.sql_app import SqlApp
-
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -385,3 +384,223 @@ class TestClassHierarchy:
         from application_sdk.templates import SqlApp as Imported
 
         assert Imported is SqlApp
+
+
+# ---------------------------------------------------------------------------
+# SqlApp.run() — transformed_data_prefix derivation
+# ---------------------------------------------------------------------------
+
+
+class TestRunOutputPrefixes:
+    """Verify SqlApp.run() derives transformed_data_prefix from workflow context.
+
+    The fix for https://github.com/atlanhq/atlan-mysql-app/issues/64:
+    run() is a Temporal *workflow* method, not an activity — calling
+    build_output_path() (which calls activity.info()) raised
+    "Not in activity context". The fix uses workflow.info() instead.
+    """
+
+    def _make_minimal_app(self):
+        app = SqlApp.__new__(SqlApp)
+        app._app_name = "test-app"
+        return app
+
+    def test_uses_input_output_path_when_set(self):
+        """When input.output_path is provided, use it directly (no workflow context needed)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.contracts.types import ConnectionRef
+        from application_sdk.templates.contracts.sql_metadata import (
+            ExtractionInput,
+            ExtractionOutput,
+        )
+
+        app = self._make_minimal_app()
+        mock_result = ExtractionOutput(
+            databases_extracted=1,
+            schemas_extracted=1,
+            tables_extracted=2,
+            columns_extracted=10,
+            connection_qualified_name="default/mysql/123",
+        )
+
+        input_ = ExtractionInput(
+            output_path="./local/tmp/artifacts/apps/test/workflows/wf-1/run-1"
+        )
+
+        with (
+            patch.object(
+                SqlApp,
+                "fetch_databases",
+                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_schemas",
+                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_tables",
+                new=AsyncMock(return_value=MagicMock(total_record_count=2)),
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_columns",
+                new=AsyncMock(return_value=MagicMock(total_record_count=10)),
+            ),
+            patch.object(
+                SqlApp, "transform_databases", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "transform_schemas", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "transform_tables", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "transform_columns", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
+        ):
+            import asyncio
+
+            result = asyncio.get_event_loop().run_until_complete(app.run(input_))
+
+        # With output_path set, transformed_data_prefix uses it directly
+        assert (
+            "artifacts/apps/test/workflows/wf-1/run-1/transformed"
+            in result.transformed_data_prefix
+        )
+
+    def test_uses_workflow_info_when_output_path_empty(self):
+        """When input.output_path is empty, derive path from workflow.info()."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+
+        app = self._make_minimal_app()
+
+        # Simulate workflow.info() returning a known workflow_id/run_id
+        mock_wf_info = MagicMock()
+        mock_wf_info.workflow_id = "test-wf-123"
+        mock_wf_info.run_id = "test-run-456"
+
+        input_ = ExtractionInput(output_path="")  # empty — should use workflow context
+
+        with (
+            patch(
+                "application_sdk.templates.sql_app._temporal_workflow.info",
+                return_value=mock_wf_info,
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_databases",
+                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_schemas",
+                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_tables",
+                new=AsyncMock(return_value=MagicMock(total_record_count=2)),
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_columns",
+                new=AsyncMock(return_value=MagicMock(total_record_count=10)),
+            ),
+            patch.object(
+                SqlApp, "transform_databases", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "transform_schemas", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "transform_tables", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "transform_columns", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
+        ):
+            import asyncio
+
+            result = asyncio.get_event_loop().run_until_complete(app.run(input_))
+
+        # Must contain the workflow_id and run_id from workflow.info()
+        assert "test-wf-123" in result.transformed_data_prefix
+        assert "test-run-456" in result.transformed_data_prefix
+        assert result.transformed_data_prefix.endswith("/transformed")
+
+    def test_build_output_path_not_called_in_run(self):
+        """build_output_path() (activity-only) must NOT be called from run()."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+
+        app = self._make_minimal_app()
+        mock_wf_info = MagicMock()
+        mock_wf_info.workflow_id = "wf-x"
+        mock_wf_info.run_id = "run-x"
+
+        input_ = ExtractionInput(output_path="")
+
+        with (
+            patch(
+                "application_sdk.templates.sql_app._temporal_workflow.info",
+                return_value=mock_wf_info,
+            ),
+            patch("application_sdk.templates.sql_app.build_output_path") as mock_bop,
+            patch.object(
+                SqlApp,
+                "fetch_databases",
+                new=AsyncMock(return_value=MagicMock(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_schemas",
+                new=AsyncMock(return_value=MagicMock(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_tables",
+                new=AsyncMock(return_value=MagicMock(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp,
+                "fetch_columns",
+                new=AsyncMock(return_value=MagicMock(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp, "transform_databases", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "transform_schemas", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "transform_tables", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "transform_columns", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(
+                SqlApp, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
+        ):
+            import asyncio
+
+            asyncio.get_event_loop().run_until_complete(app.run(input_))
+
+        # build_output_path must NOT be called from run() — it would crash in workflow context
+        mock_bop.assert_not_called()
