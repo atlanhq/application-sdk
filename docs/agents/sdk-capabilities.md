@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    7bf5e7d019221e76f2c71c96188de021a34684d8
-source-date:   2026-05-05T00:17:40+01:00
+source-sha:    43fdf7dedd3ff023a0e3496ef6a6b06a10571d96
+source-date:   2026-05-05T00:26:26+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -95,7 +95,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import NonRetryableError`
 - **Signature:** `class NonRetryableError`
-- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``retryable=False`` — removed in v4.0.
+- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
 - **Defined in:** `application_sdk/app/base.py`
 
 #### `Output`
