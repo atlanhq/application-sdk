@@ -25,6 +25,13 @@ _REMOVED_ENV_VARS: frozenset[str] = frozenset(
         # App Vitals interceptor was replaced by the unified LogInterceptor
         # + lifecycle log lines.
         "ATLAN_ENABLE_APP_VITALS",
+        # Bespoke OTLP metric exporter was removed; metrics now flow through
+        # the Prometheus reader (FastAPI /metrics + Pushgateway).
+        "ATLAN_ENABLE_OTLP_METRICS",
+        # Renamed to ATLAN_ENABLE_TEMPORAL_CORE_METRICS — the previous name
+        # implied control over all Prometheus metrics, but the flag now only
+        # gates the Temporal Rust-core endpoint bind / proxy.
+        "ATLAN_ENABLE_PROMETHEUS_METRICS",
         # The dedicated TraceAdapter and its parquet pipeline were removed
         # in favour of standard OTLP trace export.
         "ATLAN_TRACES_BATCH_SIZE",

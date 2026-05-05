@@ -53,6 +53,16 @@ def _get_or_create_runtime(
                     )
                 )
                 logger.info("Temporal Prometheus metrics enabled on %s", bind_addr)
+                _host = bind_addr.split(":", 1)[0]
+                if _host in ("127.0.0.1", "::1", "localhost"):
+                    logger.info(
+                        "Temporal Prometheus endpoint bound to loopback (%s) — "
+                        "external scrapes of this address will receive no data. "
+                        "Scrape via the FastAPI /metrics route on the handler "
+                        "port (default 8000); the SDK proxies the Temporal "
+                        "Rust-core series through that endpoint.",
+                        bind_addr,
+                    )
         return _prometheus_runtime
     else:
         with _prometheus_lock:

@@ -1312,7 +1312,7 @@ class TestRunDevCombined:
         assert cfg.handler_host == "127.0.0.1"
         assert cfg.handler_port == 9999
         # Dev should not start prometheus by default (port collision)
-        assert cfg.enable_prometheus_metrics is False
+        assert cfg.enable_temporal_core_metrics is False
         # Dev uses ephemeral health port to avoid collision
         assert cfg.health_port == 0
 

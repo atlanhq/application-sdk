@@ -32,9 +32,9 @@ def _minimal_args(**overrides: str) -> argparse.Namespace:
 class TestAppConfigDefaults:
     """Default values for new runtime flags."""
 
-    def test_enable_prometheus_metrics_default_true(self):
+    def test_enable_temporal_core_metrics_default_true(self):
         config = AppConfig(mode="worker", app_module="app:MyApp")
-        assert config.enable_prometheus_metrics is True
+        assert config.enable_temporal_core_metrics is True
 
     def test_prometheus_bind_address_default(self):
         config = AppConfig(mode="worker", app_module="app:MyApp")
@@ -55,10 +55,10 @@ class TestAppConfigFromEnv:
     """Environment variable fallbacks for runtime flags."""
 
     def test_prometheus_enabled_from_env(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_TEMPORAL_CORE_METRICS", "false")
         monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
         config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_prometheus_metrics is False
+        assert config.enable_temporal_core_metrics is False
 
     def test_prometheus_bind_address_from_env(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9999")
@@ -81,11 +81,11 @@ class TestAppConfigFromEnv:
     def test_prometheus_default_true_when_env_unset(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """Prod behavior: ATLAN_ENABLE_PROMETHEUS_METRICS not set → True."""
-        monkeypatch.delenv("ATLAN_ENABLE_PROMETHEUS_METRICS", raising=False)
+        """Prod behavior: ATLAN_ENABLE_TEMPORAL_CORE_METRICS not set → True."""
+        monkeypatch.delenv("ATLAN_ENABLE_TEMPORAL_CORE_METRICS", raising=False)
         monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
         config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_prometheus_metrics is True
+        assert config.enable_temporal_core_metrics is True
 
 
 class TestAuthUrlFallback:
@@ -307,36 +307,36 @@ class TestRealWorldDevScenarios:
     """Simulate real developer workflows using AppConfig + env vars."""
 
     def test_local_dev_with_dotenv(self, monkeypatch: pytest.MonkeyPatch):
-        """Dev has .env with: ATLAN_ENABLE_PROMETHEUS_METRICS=false
+        """Dev has .env with: ATLAN_ENABLE_TEMPORAL_CORE_METRICS=false
         → AppConfig picks it up, no port collision on hot reload."""
-        monkeypatch.setenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_TEMPORAL_CORE_METRICS", "false")
         monkeypatch.setenv("ATLAN_APP_MODULE", "app.my_app:MyApp")
         config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_prometheus_metrics is False
+        assert config.enable_temporal_core_metrics is False
 
     def test_prod_deployment_no_env_override(self, monkeypatch: pytest.MonkeyPatch):
-        """Prod: ATLAN_ENABLE_PROMETHEUS_METRICS not set → defaults to True.
+        """Prod: ATLAN_ENABLE_TEMPORAL_CORE_METRICS not set → defaults to True.
         Temporal Runtime binds loopback; FastAPI ``/metrics`` proxies it."""
-        monkeypatch.delenv("ATLAN_ENABLE_PROMETHEUS_METRICS", raising=False)
+        monkeypatch.delenv("ATLAN_ENABLE_TEMPORAL_CORE_METRICS", raising=False)
         monkeypatch.setenv("ATLAN_APP_MODULE", "app.my_app:MyApp")
         config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_prometheus_metrics is True
+        assert config.enable_temporal_core_metrics is True
         assert config.prometheus_bind_address == "127.0.0.1:9464"
 
     def test_prod_deployment_with_helm_env(self, monkeypatch: pytest.MonkeyPatch):
-        """Prod: Helm chart sets ATLAN_ENABLE_PROMETHEUS_METRICS=true explicitly."""
-        monkeypatch.setenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "true")
+        """Prod: Helm chart sets ATLAN_ENABLE_TEMPORAL_CORE_METRICS=true explicitly."""
+        monkeypatch.setenv("ATLAN_ENABLE_TEMPORAL_CORE_METRICS", "true")
         monkeypatch.setenv("ATLAN_APP_MODULE", "app.my_app:MyApp")
         config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_prometheus_metrics is True
+        assert config.enable_temporal_core_metrics is True
 
     def test_dev_custom_prometheus_port(self, monkeypatch: pytest.MonkeyPatch):
         """Dev wants Prometheus on a different port to avoid conflicts."""
-        monkeypatch.setenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "true")
+        monkeypatch.setenv("ATLAN_ENABLE_TEMPORAL_CORE_METRICS", "true")
         monkeypatch.setenv("ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9999")
         monkeypatch.setenv("ATLAN_APP_MODULE", "app.my_app:MyApp")
         config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_prometheus_metrics is True
+        assert config.enable_temporal_core_metrics is True
         assert config.prometheus_bind_address == "127.0.0.1:9999"
 
     def test_dev_enables_mcp_server(self, monkeypatch: pytest.MonkeyPatch):
@@ -361,7 +361,7 @@ class TestRealWorldDevScenarios:
         monkeypatch.setenv("ATLAN_HANDLER_HOST", "0.0.0.0")
         monkeypatch.setenv("ATLAN_HANDLER_PORT", "8000")
         monkeypatch.setenv("ATLAN_LOG_LEVEL", "INFO")
-        monkeypatch.setenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "true")
+        monkeypatch.setenv("ATLAN_ENABLE_TEMPORAL_CORE_METRICS", "true")
         monkeypatch.setenv("ATLAN_AUTH_ENABLED", "true")
 
         config = AppConfig.from_args_and_env(
@@ -372,20 +372,20 @@ class TestRealWorldDevScenarios:
         assert config.handler_host == "0.0.0.0"
         assert config.handler_port == 8000
         assert config.log_level == "INFO"
-        assert config.enable_prometheus_metrics is True
+        assert config.enable_temporal_core_metrics is True
         assert config.auth_enabled is True
 
     def test_full_local_dev_env(self, monkeypatch: pytest.MonkeyPatch):
         """Simulate a local dev environment with minimal env vars."""
         monkeypatch.setenv("ATLAN_APP_MODULE", "app.my_app:MyApp")
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
-        monkeypatch.setenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_TEMPORAL_CORE_METRICS", "false")
         monkeypatch.delenv("ATLAN_TEMPORAL_HOST", raising=False)
         monkeypatch.delenv("ATLAN_AUTH_ENABLED", raising=False)
 
         config = AppConfig.from_args_and_env(_minimal_args())
         assert config.temporal_host == "localhost:7233"  # default
-        assert config.enable_prometheus_metrics is False
+        assert config.enable_temporal_core_metrics is False
         assert config.auth_enabled is False  # default
         assert config.log_level == "INFO"  # default
 

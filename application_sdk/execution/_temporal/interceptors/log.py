@@ -206,7 +206,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         self._correlation_id = correlation_id
         set_correlation_context(CorrelationContext(correlation_id=correlation_id))
 
-        identity = {
+        identity: dict[str, str | int | float] = {
             "temporal.workflow.id": info.workflow_id or "",
             "temporal.workflow.run_id": info.run_id or "",
             "temporal.workflow.type": info.workflow_type or "",
@@ -229,7 +229,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             raise
         finally:
             duration_ms = round((time.monotonic_ns() - start_ns) / 1_000_000, 1)
-            ended_attrs = {
+            ended_attrs: dict[str, str | int | float] = {
                 **identity,
                 "otel.status_code": status,
                 "temporal.workflow.duration_ms": duration_ms,
@@ -307,7 +307,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
         if not correlation_id:
             correlation_id = _correlation_id_or_empty()
 
-        identity = {
+        identity: dict[str, str | int | float] = {
             "temporal.activity.id": info.activity_id or "",
             "temporal.activity.type": info.activity_type or "",
             "temporal.activity.attempt": str(info.attempt or 0),
@@ -333,7 +333,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
             raise
         finally:
             duration_ms = round((time.monotonic_ns() - start_ns) / 1_000_000, 1)
-            ended_attrs = {
+            ended_attrs: dict[str, str | int | float] = {
                 **identity,
                 "otel.status_code": status,
                 "temporal.activity.duration_ms": duration_ms,

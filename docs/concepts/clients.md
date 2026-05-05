@@ -226,7 +226,7 @@ families, and `prometheus_client` defaults — through a single FastAPI
 `/metrics` endpoint on `containerPort` (default 8000). The Temporal
 Rust-core endpoint at `127.0.0.1:9464` is loopback-only and proxied
 in-process; operators don't scrape it directly.
-`ATLAN_ENABLE_PROMETHEUS_METRICS` (default `true`) gates only that
+`ATLAN_ENABLE_TEMPORAL_CORE_METRICS` (default `true`) gates only that
 loopback binding, not the FastAPI route. See
 [`docs/concepts/monitoring.md`](monitoring.md) for the full
 architecture, including the Pushgateway path used by worker pods in

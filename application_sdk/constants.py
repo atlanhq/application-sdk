@@ -142,6 +142,15 @@ OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observa
 TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
     "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
 )
+#: Per-request HTTP timeout for the in-process FastAPI ``/metrics`` proxy
+#: that fetches Temporal Rust-core metrics from the loopback endpoint. Too
+#: low and a GC pause / CPU throttle silently drops ~460 series per scrape;
+#: too high and the outer Prometheus scrape (typical 10s budget) hits its
+#: own timeout. Default 5s gives ~2.5× tail-latency headroom while staying
+#: well inside vmagent's per-target budget.
+TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float = float(
+    os.getenv("ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS", "5.0")
+)
 
 # Prometheus Pushgateway (worker-only deployments)
 #: Pushgateway URL workers push to. Empty disables push (combined-mode
@@ -374,9 +383,6 @@ LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
 # Metrics batching / sink configuration
-ENABLE_OTLP_METRICS: bool = (
-    os.getenv("ATLAN_ENABLE_OTLP_METRICS", "false").lower() == "true"
-)
 METRICS_BATCH_SIZE = int(os.environ.get("ATLAN_METRICS_BATCH_SIZE", 100))
 METRICS_FLUSH_INTERVAL_SECONDS = int(
     os.environ.get("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", 10)

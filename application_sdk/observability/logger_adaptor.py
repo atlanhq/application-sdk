@@ -62,6 +62,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "in_activity",
         "workflow_id",
         "workflow_run_id",
+        # Backwards-compat alias for ``workflow_run_id``.
+        "run_id",
         "workflow_type",
         "namespace",
         "task_queue",

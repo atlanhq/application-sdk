@@ -154,11 +154,13 @@ class AppConfig:
     auth_scopes: str = ""
 
     # Runtime flags (env-var defaults, overridable per execution mode)
-    enable_prometheus_metrics: bool = True
-    """Enable Temporal Runtime's loopback Prometheus metrics endpoint. Default
-    True so the FastAPI ``/metrics`` proxy can pull Temporal core metrics, and
-    so worker-mode's ``TemporalCoreCollector`` can read them. Set False in
-    ``run_dev_combined()`` to avoid port collisions on reload."""
+    enable_temporal_core_metrics: bool = True
+    """Enable Temporal Runtime's loopback Prometheus endpoint that exposes
+    the Rust-core metric set (``temporal_workflow_*``, ``temporal_activity_*``
+    etc.). Default ``True`` so the FastAPI ``/metrics`` proxy can pull these
+    metrics, and so worker-mode's ``TemporalCoreCollector`` can read them
+    locally to feed the Pushgateway push. Set to ``False`` in
+    ``run_dev_combined()`` to avoid port collisions on hot reload."""
 
     prometheus_bind_address: str = "127.0.0.1:9464"
     """Loopback bind address for the Temporal Runtime Prometheus endpoint.
@@ -295,8 +297,8 @@ class AppConfig:
                 "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
             ),
             # Runtime flags
-            enable_prometheus_metrics=_env_bool(
-                "ATLAN_ENABLE_PROMETHEUS_METRICS", default=True
+            enable_temporal_core_metrics=_env_bool(
+                "ATLAN_ENABLE_TEMPORAL_CORE_METRICS", default=True
             ),
             prometheus_bind_address=_env(
                 "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
@@ -701,7 +703,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_prometheus_metrics,
+        enable_prometheus=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
     )
 
@@ -956,7 +958,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_prometheus_metrics,
+        enable_prometheus=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
     )
 
@@ -1152,10 +1154,11 @@ async def run_dev_combined(
         handler_port=port,
         log_level="DEBUG",
         service_name=_derive_service_name(app_module),
-        # Dev-friendly: disable Prometheus to avoid port 9464 collision on
-        # hot reload, and use ephemeral health port to avoid 8081 collision.
-        enable_prometheus_metrics=os.environ.get(
-            "ATLAN_ENABLE_PROMETHEUS_METRICS", ""
+        # Dev-friendly: disable Temporal Rust-core Prometheus binding to
+        # avoid port 9464 collision on hot reload, and use ephemeral health
+        # port to avoid 8081 collision.
+        enable_temporal_core_metrics=os.environ.get(
+            "ATLAN_ENABLE_TEMPORAL_CORE_METRICS", ""
         ).lower()
         in ("true", "1"),
         health_port=0,

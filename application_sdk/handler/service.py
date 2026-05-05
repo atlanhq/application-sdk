@@ -72,6 +72,30 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
+def _record_proxy_failure(reason: str, log_message: str) -> None:
+    """Record a Temporal-core ``/metrics`` proxy failure.
+
+    Increments the ``temporal_core_metrics_proxy_failures_total`` counter
+    so failures are observable from VictoriaMetrics (and not just buried
+    in the WARNING logs), and emits the warning. ``reason`` should be a
+    bounded label value — exception class name or ``http_<status>``."""
+    from application_sdk.observability import (  # noqa: PLC0415 — cold path: only on proxy failure
+        metrics as _metrics_module,
+    )
+
+    counter = _metrics_module.create_counter(
+        "temporal_core_metrics_proxy_failures",
+        description=(
+            "Failures fetching the Temporal Rust-core /metrics endpoint via "
+            "the in-process FastAPI proxy. Each increment is one scrape "
+            "where Temporal-core series were not retrievable."
+        ),
+        unit="1",
+    )
+    counter.add(1, {"reason": reason})
+    logger.warning(log_message, exc_info=True)
+
+
 def _serialize_credential_value(v: Any) -> str:
     if isinstance(v, str):
         return v
@@ -1695,6 +1719,7 @@ def create_app_handler_service(
         )
 
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when /metrics is hit
+            TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
             TEMPORAL_PROMETHEUS_BIND_ADDRESS,
         )
 
@@ -1704,14 +1729,24 @@ def create_app_handler_service(
             try:
                 import httpx  # noqa: PLC0415 — cold path: only when Temporal Rust-core proxy enabled
 
-                async with httpx.AsyncClient(timeout=2.0) as client:
+                async with httpx.AsyncClient(
+                    timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
+                ) as client:
                     resp = await client.get(
                         f"http://{TEMPORAL_PROMETHEUS_BIND_ADDRESS}/metrics"
                     )
                     if resp.status_code == 200:
                         body = body + b"\n" + resp.content
-            except Exception:
-                logger.warning("Temporal core metrics unavailable", exc_info=True)
+                    else:
+                        _record_proxy_failure(
+                            f"http_{resp.status_code}",
+                            f"Temporal core metrics proxy returned HTTP {resp.status_code}",
+                        )
+            except Exception as exc:
+                _record_proxy_failure(
+                    type(exc).__name__,
+                    "Temporal core metrics unavailable",
+                )
 
         return Response(
             content=body,

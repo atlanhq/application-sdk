@@ -118,10 +118,14 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             )
 
             resource = build_otel_resource()
-            # EnrichedPrometheusMetricReader inlines app.name / app.version
-            # onto every series so PromQL doesn't need a target_info join to
-            # filter by app. The bounded enrichment subset keeps cardinality
-            # flat — see _prometheus_enrichment.py for the rationale.
+            # EnrichedPrometheusMetricReader inlines a single Resource
+            # attribute — ``app.name`` — onto every series so PromQL can
+            # filter by connector identity without a ``target_info`` join.
+            # Every other Resource attribute (app.type, app.version,
+            # app.release_id, app.sdk_version, app.release_channel, k8s.*)
+            # is reachable via the ``target_info`` gauge through a query-time
+            # ``* on(instance) group_left(...)`` join. See the cardinality
+            # rationale in observability/utils.py:METRIC_ENRICHMENT_KEYS.
             self._prometheus_reader = EnrichedPrometheusMetricReader(resource=resource)
             self.meter_provider = MeterProvider(
                 resource=resource,

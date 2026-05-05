@@ -52,11 +52,11 @@ The FastAPI `/metrics` endpoint (or a worker push) merges:
 - **`prometheus_client` defaults** (`process_*`, `python_gc_*`,
   `python_info`)
 
-### `ATLAN_ENABLE_PROMETHEUS_METRICS`
+### `ATLAN_ENABLE_TEMPORAL_CORE_METRICS`
 
-Despite the name, this env var **does not gate the FastAPI `/metrics`
-route** — that endpoint is always registered. The flag controls only
-whether the Temporal Rust-core endpoint binds `127.0.0.1:9464`:
+This env var **does not gate the FastAPI `/metrics` route** — that
+endpoint is always registered. The flag controls only whether the
+Temporal Rust-core endpoint binds `127.0.0.1:9464`:
 
 | Value | Effect |
 |---|---|
@@ -154,7 +154,8 @@ Enable OpenTelemetry trace export to send spans to your cluster's OTLP collector
 ENABLE_OTLP_LOGS=true                              # export log records via OTLP
 OTEL_EXPORTER_OTLP_ENDPOINT=http://$(K8S_NODE_IP):4317  # node-local collector
 ATLAN_ENABLE_OTLP_TRACES=true                      # export trace spans
-ATLAN_ENABLE_OTLP_METRICS=true                     # export metric points
+# Metrics use the Prometheus path (FastAPI /metrics + Pushgateway).
+# The previous OTLP metric exporter was removed in PR #1573.
 ```
 
 In Kubernetes, set `OTEL_EXPORTER_OTLP_ENDPOINT` using the Downward API:

@@ -22,18 +22,27 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.context import correlation_context
 
-#: Resource attribute keys we inline as labels onto every metric series so
-#: PromQL can filter by app/version/type without joining ``target_info``.
-#: All entries must be bounded *per-process* constants — adding a label that
-#: varies within a process multiplies series count.
-METRIC_ENRICHMENT_KEYS: tuple[str, ...] = (
-    "app.name",
-    "app.version",
-    "app.type",
-    "app.release_channel",
-    "app.release_id",
-    "app.sdk_version",
-)
+#: Resource attribute keys we inline as labels onto every metric series.
+#: Kept deliberately minimal — every additional inline key multiplies the
+#: per-series label set across the entire fleet of pods.
+#:
+#: Why ``app.name`` only:
+#:   - ``app.name`` is the connector identity; filtering by app is the most
+#:     common operator query, and the alternative (``target_info`` join) is
+#:     awkward to type for ad-hoc PromQL.
+#:   - ``app.version`` / ``app.release_id`` / ``app.sdk_version`` /
+#:     ``app.release_channel`` change across deploys or channel promotions
+#:     and would multiply indexdb cardinality across the retention window.
+#:
+#: All non-inlined Resource attributes still travel via the OTel exporter's
+#: ``target_info`` gauge (one row per pod with the full Resource), so
+#: PromQL joins continue to work::
+#:
+#:     sum by (app_release_id) (
+#:       rate(http_server_request_duration_seconds_count[5m])
+#:         * on(instance) group_left(app_release_id) target_info
+#:     )
+METRIC_ENRICHMENT_KEYS: tuple[str, ...] = ("app.name",)
 
 
 def get_metric_enrichment_labels() -> dict[str, str]:

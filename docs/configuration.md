@@ -171,12 +171,11 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_ENABLE_OTLP_METRICS` | `false` | Export metrics via OTLP. |
 | `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
 | `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between parquet sink flushes. |
 | `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain parquet metric files. |
 | `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Uses `.lower() == "true"` — safe to set to `"false"` to disable. |
-| `ATLAN_ENABLE_PROMETHEUS_METRICS` | `true` | Bind the Temporal Rust-core Prometheus endpoint at `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (loopback). The FastAPI `/metrics` route is always exposed regardless of this flag — when this flag is `false`, the response simply omits the proxied Temporal Rust-core families. `run_dev_combined()` auto-sets this to `false` to avoid hot-reload port collisions. See [Monitoring](concepts/monitoring.md). |
+| `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` | `true` | Bind the Temporal Rust-core Prometheus endpoint at `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (loopback) so its metric set (`temporal_workflow_*`, `temporal_activity_*`, etc.) is reachable for the FastAPI `/metrics` proxy and the worker's `TemporalCoreCollector`. The FastAPI `/metrics` route is always exposed regardless of this flag — when this flag is `false`, the response simply omits the proxied Temporal Rust-core families. `run_dev_combined()` defaults to `false` to avoid hot-reload port collisions. See [Monitoring](concepts/monitoring.md). |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` | _(empty)_ | Pushgateway URL workers push to (split deployment). Empty disables push — combined-mode pods leave it unset and rely on direct `/metrics` scrape. |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS` | `30` | Periodic push interval. A final push always happens on shutdown. |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN` | `true` | DELETE the worker's group from the gateway on graceful shutdown so stopped pods don't leave sticky data. |
@@ -277,7 +276,7 @@ ATLAN_AUTH_TOKEN_URL=https://auth.internal/oauth2/token
 ATLAN_AUTH_CLIENT_ID=…                        # or use deployment secret store
 ATLAN_AUTH_CLIENT_SECRET=…
 ENABLE_ATLAN_UPLOAD=true
-ATLAN_ENABLE_PROMETHEUS_METRICS=true          # default; binds Temporal Rust-core on 127.0.0.1:9464 (loopback) for FastAPI /metrics to proxy
+ATLAN_ENABLE_TEMPORAL_CORE_METRICS=true       # default; binds Temporal Rust-core on 127.0.0.1:9464 (loopback) for FastAPI /metrics to proxy
 # /metrics is always exposed on the FastAPI handler port (default 8000) — no env-var gate
 # For worker-only pods (split deployment), set the Pushgateway URL instead:
 # ATLAN_PROMETHEUS_PUSHGATEWAY_URL=http://prometheus-pushgateway.monitoring.svc.cluster.local:9091

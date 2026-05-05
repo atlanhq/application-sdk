@@ -609,3 +609,42 @@ class TestPrometheusMetrics:
                 AtlanMetricsAdapter()
                 call_kwargs = mock_provider.call_args[1]
                 assert len(call_kwargs["metric_readers"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# METRIC_ENRICHMENT_KEYS — pin the inline label set. The minimum-viable inline
+# set keeps per-series cardinality flat across the fleet; everything else
+# travels on ``target_info`` for query-time joins.
+# ---------------------------------------------------------------------------
+
+
+class TestMetricEnrichmentKeys:
+    """Cardinality discipline guard: only ``app.name`` is inlined. Adding
+    more keys multiplies the per-series label set across every pod and
+    every metric. Per-release attributes additionally compound indexdb
+    cardinality across the retention window."""
+
+    def test_enrichment_set_is_exactly_app_name(self) -> None:
+        from application_sdk.observability.utils import METRIC_ENRICHMENT_KEYS
+
+        assert set(METRIC_ENRICHMENT_KEYS) == {"app.name"}
+
+    def test_per_release_attrs_are_excluded(self) -> None:
+        """``app.version`` / ``app.release_id`` / ``app.sdk_version`` cycle
+        on every deploy, ``app.release_channel`` cycles on channel
+        promotions. None of them are bounded over retention; inlining any
+        of them on every series produces a 60×-class indexdb multiplier."""
+        from application_sdk.observability.utils import METRIC_ENRICHMENT_KEYS
+
+        forbidden = {
+            "app.version",
+            "app.release_id",
+            "app.sdk_version",
+            "app.release_channel",
+        }
+        leaked = set(METRIC_ENRICHMENT_KEYS) & forbidden
+        assert not leaked, (
+            f"Per-release attrs leaked into METRIC_ENRICHMENT_KEYS: {leaked}. "
+            "These would multiply indexdb series across the metrics retention "
+            "window — keep them on target_info instead."
+        )

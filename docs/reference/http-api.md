@@ -328,7 +328,7 @@ response merges all in-process metric sources:
 - `prometheus_client` defaults (`process_*`, `python_*`)
 
 See [Monitoring](../concepts/monitoring.md) for the full architecture
-and the role of `ATLAN_ENABLE_PROMETHEUS_METRICS` (which gates only
+and the role of `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` (which gates only
 the loopback Rust-core endpoint binding, not this route).
 
 ### `GET /`

@@ -27,7 +27,6 @@ short-lived workers — no per-call configuration required.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Iterable, Sequence
 
 from opentelemetry import metrics as _otel_metrics
@@ -44,11 +43,13 @@ from opentelemetry.metrics import (
     UpDownCounter,
 )
 
+from application_sdk.observability.logger_adaptor import get_logger
+
 #: Type for observable-instrument callbacks. OTel passes the callback a
 #: ``CallbackOptions`` and expects an iterable of ``Observation`` back.
 ObservableCallback = Callable[[CallbackOptions], Iterable[Observation]]
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 _warned_noop_meter = False
 
 

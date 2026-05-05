@@ -133,23 +133,46 @@ follow the unified pattern.)
 
 ## Inline resource enrichment (always present)
 
-Six per-process-constant resource attributes are inlined onto **every**
-metric series by `EnrichedPrometheusMetricReader` (and onto Temporal
-Rust-core series via `TelemetryConfig.global_tags`). Don't duplicate
-them in `record_metric()` calls — they're added automatically:
+Exactly **one** Resource attribute is inlined onto every metric series by
+`EnrichedPrometheusMetricReader` (and onto Temporal Rust-core series via
+`TelemetryConfig.global_tags`). Don't duplicate it in `record_metric()`
+calls — it's added automatically:
 
-| Always-present label | OTel resource source |
+| Always-present label | OTel resource source | Bounded by |
+|---|---|---|
+| `app_name` | `app.name` | Number of connectors |
+
+`sum by (app_name) (rate(...))` works without a `target_info` JOIN.
+
+Everything else lives on `target_info` and is recovered at query time
+via a join. This keeps per-series cardinality minimal (only the labels
+that genuinely vary by request/dimension end up multiplied) while
+preserving the ability to filter or group by deployment metadata:
+
+| Available via `target_info` (join required) | OTel resource source |
 |---|---|
-| `app_name` | `app.name` |
-| `app_version` | `app.version` |
 | `app_type` | `app.type` |
-| `app_release_channel` | `app.release_channel` |
+| `app_version` | `app.version` |
 | `app_release_id` | `app.release_id` |
 | `app_sdk_version` | `app.sdk_version` |
+| `app_release_channel` | `app.release_channel` |
+| `k8s_pod_name`, `k8s_domain_name`, etc. | `k8s.*` |
 
-These are constants for the lifetime of the process — they multiply
-series count by 1 (no live cardinality cost). Cross-app aggregations
-like `sum by (app_name) (rate(...))` work without a `target_info` JOIN.
+```promql
+# Group by release-id at query time, not in storage:
+sum by (app_release_id) (
+  rate(http_server_request_duration_seconds_count[5m])
+    * on(instance) group_left(app_release_id) target_info
+)
+```
+
+```promql
+# Filter / group by release at query time, NOT in storage
+sum by (app_release_id) (
+  rate(http_server_request_duration_seconds_count[5m])
+    * on(instance) group_left(app_release_id) target_info
+)
+```
 
 ## Reserved by Pushgateway (worker mode)
 
@@ -284,7 +307,7 @@ draft. Both increase the series count, but only one is a problem.
 **Multi-tenant fanout (safe, linear).** Each customer's pod adds a
 constant `tenant_id` / `cluster_name` label to every series it emits
 — the value is fixed for that pod's lifetime, same shape as the
-`app_name` / `app_version` resource enrichment we already inline.
+`app_name` / `app_type` resource enrichment we already inline.
 Series count scales linearly with the number of customers running
 the app:
 

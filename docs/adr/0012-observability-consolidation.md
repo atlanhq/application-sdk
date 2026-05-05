@@ -48,24 +48,25 @@ seven-interceptor stack on the Temporal worker:
 
 ### Resource-attribute enrichment (inline on every series)
 
-`EnrichedPrometheusMetricReader` injects a bounded subset of OTel
-resource attributes onto every metric series so PromQL doesn't need a
-`target_info` JOIN to filter by app:
+`EnrichedPrometheusMetricReader` injects a single OTel resource
+attribute (`app.name`) onto every metric series so PromQL can filter
+by connector identity without a `target_info` join:
 
 | Label (Prometheus) | Source (OTel) |
 |---|---|
 | `app_name` | `app.name` |
-| `app_version` | `app.version` |
-| `app_type` | `app.type` |
-| `app_release_channel` | `app.release_channel` |
-| `app_release_id` | `app.release_id` |
-| `app_sdk_version` | `app.sdk_version` |
 
-All six are per-process constants — adding them as labels multiplies
-series count by 1 (no live cardinality cost; co-vary 1:1 with `instance`).
-The same enrichment is mirrored onto Temporal Rust-core metrics via
-`TelemetryConfig.global_tags`, so the previously-unenriched `temporal_*`
-families now match the rest of the surface.
+The inline set is deliberately minimal. Per-release attributes
+(`app.version`, `app.release_id`, `app.sdk_version`,
+`app.release_channel`) are NOT inlined — they cycle on every deploy /
+channel promotion and would multiply indexdb cardinality across the
+metrics retention window. Apps that need to filter or group by these
+attributes use a query-time join against `target_info` (which carries
+the full Resource as a single info gauge per pod).
+
+The same single-key enrichment is mirrored onto Temporal Rust-core
+metrics via `TelemetryConfig.global_tags`, so the `temporal_*` families
+match the rest of the surface.
 
 ### Worker side — 7 interceptors → 3
 
@@ -173,7 +174,8 @@ dev-workstation convenience and unused in production.
 ### Env var sweep (no backwards compat)
 
 **Removed:** `ENABLE_APP_VITALS`, `ENABLE_PROMETHEUS_METRICS`,
-`ATLAN_ENABLE_PROMETHEUS_METRICS`, `ENABLE_OTLP_METRICS`,
+`ATLAN_ENABLE_PROMETHEUS_METRICS` (renamed to
+`ATLAN_ENABLE_TEMPORAL_CORE_METRICS`), `ENABLE_OTLP_METRICS`,
 `ENABLE_OTLP_TRACES` (consolidated to `ATLAN_ENABLE_OTLP_TRACES`),
 `ENABLE_OTLP_WORKFLOW_LOGS`, `OTEL_WORKFLOW_LOGS_ENDPOINT`,
 `METRICS_*` (batch / flush / retention / cleanup),
@@ -181,6 +183,12 @@ dev-workstation convenience and unused in production.
 `enable_correlation_interceptor`.
 
 **Added:**
+- `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` (default `true`) — replaces
+  `ATLAN_ENABLE_PROMETHEUS_METRICS`; gates only the Temporal Rust-core
+  loopback bind, not the FastAPI `/metrics` route.
+- `ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS` (default `5.0`) —
+  per-request timeout for the in-process FastAPI `/metrics` proxy that
+  fetches Temporal Rust-core series.
 - `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` (no default — opt out by leaving unset)
 - `ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS` (default `30`)
 - `ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN` (default **`true`**)
