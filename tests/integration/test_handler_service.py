@@ -13,7 +13,7 @@ from uuid import UUID
 import httpx
 import pytest
 
-from application_sdk.app.base import App
+from application_sdk.app.base import App, AppContextError
 from application_sdk.app.entrypoint import entrypoint
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
@@ -193,18 +193,20 @@ async def test_handler_context_secret_store_access(context_client_with_secrets):
 
 @pytest.mark.integration
 async def test_handler_context_cleanup_between_requests(context_client):
-    """G6.3: Each request gets an independent request_id; _context is None between requests."""
+    """G6.3: Each request gets an independent request_id; context is cleared between requests."""
     client, handler = context_client
 
     body = {"credentials": []}
     resp1 = await client.post("/workflows/v1/auth", json=body)
     assert resp1.status_code == 200
-    # After the first request, context should be cleared
-    assert handler._context is None
+    # After each request, context should be cleared (ContextVar reset by bind_handler_context).
+    with pytest.raises(AppContextError):
+        _ = handler.context
 
     resp2 = await client.post("/workflows/v1/auth", json=body)
     assert resp2.status_code == 200
-    assert handler._context is None
+    with pytest.raises(AppContextError):
+        _ = handler.context
 
     # Each request got a distinct request_id
     assert len(handler.captured_request_ids) == 2
