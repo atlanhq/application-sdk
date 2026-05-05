@@ -3789,13 +3789,20 @@ class TestPerEntrypointHandlerHook:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """No app.<snake>.handler module → app-level Handler.test_auth runs."""
-        # Contract dir contains "csa-hello-a" but we won't install its module.
-        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-a"])
+        # Contract dir contains a contrived entrypoint name that has no
+        # matching `app.*.handler` module on PYTHONPATH (the suffix
+        # ``sdk-fallback-noep`` would collide with real fixture apps if we
+        # reused names like ``csa-hello-a`` in dev environments where the
+        # uber-app repo is editable-installed alongside the SDK).
+        self._set_contract_dir(monkeypatch, tmp_path, ["sdk-fallback-noep-auth"])
 
         client = _make_client()
         response = client.post(
             "/workflows/v1/auth",
-            json={"connector": "test-bundle-csa-hello-a", "credentials": []},
+            json={
+                "connector": "test-bundle-sdk-fallback-noep-auth",
+                "credentials": [],
+            },
         )
         assert response.status_code == 200
         # _TestHandler returns SUCCESS with "auth ok"
@@ -3810,6 +3817,62 @@ class TestPerEntrypointHandlerHook:
         )
         assert response.status_code == 200
         assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_dispatches_when_connector_equals_entrypoint_exactly(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Connector lacking a bundle prefix (e.g. ``asset-export-advanced``)
+        still routes to the per-entrypoint module. Heracles' configmap-based
+        path derives ``connector`` from the configmap name and drops the
+        bundle (see ``DeriveAppName`` in ``credentialhelper``)."""
+        captured: dict[str, object] = {}
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            captured["connector"] = input.connector
+            return AuthOutput(status=AuthStatus.SUCCESS, message="entrypoint says yes")
+
+        self._install_fake_handler(
+            monkeypatch, "asset-export-advanced", test_auth=test_auth
+        )
+        self._set_contract_dir(monkeypatch, tmp_path, ["asset-export-advanced"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"connector": "asset-export-advanced", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "entrypoint says yes"
+        assert captured["connector"] == "asset-export-advanced"
+
+    def test_auth_dispatches_via_connector_config_name_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """When Heracles omits ``connector`` and only sends
+        ``connectorConfigName`` (e.g. ``atlan-connectors-asset-export-advanced``),
+        the dispatch still resolves to the per-entrypoint module via the
+        suffix-match on the configmap name."""
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            return AuthOutput(
+                status=AuthStatus.SUCCESS, message="resolved via configmap"
+            )
+
+        self._install_fake_handler(
+            monkeypatch, "asset-export-advanced", test_auth=test_auth
+        )
+        self._set_contract_dir(monkeypatch, tmp_path, ["asset-export-advanced"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={
+                "connectorConfigName": "atlan-connectors-asset-export-advanced",
+                "credentials": [],
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "resolved via configmap"
 
     def test_auth_falls_back_when_connector_matches_no_known_entrypoint(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -3878,12 +3941,16 @@ class TestPerEntrypointHandlerHook:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """No app.<snake>.handler module → app-level Handler.preflight_check runs."""
-        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-b"])
+        # Contrived entrypoint name (see test_auth_falls_back_when_no_entrypoint_module).
+        self._set_contract_dir(monkeypatch, tmp_path, ["sdk-fallback-noep-check"])
 
         client = _make_client()
         response = client.post(
             "/workflows/v1/check",
-            json={"connector": "test-bundle-csa-hello-b", "credentials": []},
+            json={
+                "connector": "test-bundle-sdk-fallback-noep-check",
+                "credentials": [],
+            },
         )
         assert response.status_code == 200
         assert response.json()["success"] is True
@@ -3925,12 +3992,16 @@ class TestPerEntrypointHandlerHook:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """No app.<snake>.handler module → app-level Handler.fetch_metadata runs."""
-        self._set_contract_dir(monkeypatch, tmp_path, ["csa-hello-d"])
+        # Contrived entrypoint name (see test_auth_falls_back_when_no_entrypoint_module).
+        self._set_contract_dir(monkeypatch, tmp_path, ["sdk-fallback-noep-meta"])
 
         client = _make_client()
         response = client.post(
             "/workflows/v1/metadata",
-            json={"connector": "test-bundle-csa-hello-d", "credentials": []},
+            json={
+                "connector": "test-bundle-sdk-fallback-noep-meta",
+                "credentials": [],
+            },
         )
         assert response.status_code == 200
         # _TestHandler returns empty SqlMetadataOutput

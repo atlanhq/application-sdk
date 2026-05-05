@@ -305,10 +305,13 @@ def _entrypoint_from_connector(connector: str) -> str:
 
     Instead, match against the set of known entrypoints — subdirectories
     of ``CONTRACT_GENERATED_DIR`` that contain a ``manifest.json``. Pick
-    the longest entrypoint name that appears as a hyphen-suffix of
-    ``connector``. Returns ``""`` for empty connector, no contract dir,
-    or no matching entrypoint (single-entrypoint apps fall through to the
-    app-level ``Handler`` instance).
+    the longest entrypoint name that either equals ``connector`` exactly
+    or appears as a hyphen-suffix of it. Exact match handles Heracles
+    paths that derive ``connector`` from a configmap (e.g.
+    ``atlan-connectors-asset-export-advanced`` → ``asset-export-advanced``)
+    and drop the bundle prefix. Returns ``""`` for empty connector, no
+    contract dir, or no matching entrypoint (single-entrypoint apps fall
+    through to the app-level ``Handler`` instance).
     """
     if not connector:
         return ""
@@ -320,10 +323,29 @@ def _entrypoint_from_connector(connector: str) -> str:
         return ""
     best = ""
     for ep in entrypoints:
-        suffix = f"-{ep}"
-        if connector.endswith(suffix) and len(ep) > len(best):
+        if (connector == ep or connector.endswith(f"-{ep}")) and len(ep) > len(best):
             best = ep
     return best
+
+
+def _resolve_entrypoint(body: dict[str, Any], connector: str) -> str:
+    """Resolve the entrypoint name from request body fields.
+
+    Heracles' credential metadata path doesn't always include a ``connector``
+    field in the body — for native multi-entrypoint apps the configmap-based
+    flow forwards ``connectorConfigName`` (e.g.
+    ``atlan-connectors-asset-export-advanced``) instead. The hyphen-suffix
+    match in :func:`_entrypoint_from_connector` works on either value, so we
+    try ``connector`` first and fall back to ``connectorConfigName`` when the
+    primary field doesn't resolve.
+    """
+    ep = _entrypoint_from_connector(connector)
+    if ep:
+        return ep
+    config_name = body.get("connectorConfigName")
+    if isinstance(config_name, str) and config_name:
+        return _entrypoint_from_connector(config_name)
+    return ""
 
 
 def _discover_handler_fn(entrypoint: str, fn_name: str):
@@ -614,10 +636,12 @@ def create_app_handler_service(
                 "Auth test started: app=%s request=%s", app_name, context.request_id_str
             )
             # Per-entrypoint dispatch: multi-entrypoint apps may ship
-            # `app.<entrypoint_snake>.handler.test_auth`. When `connector`
-            # resolves to a known per-entrypoint module, route to it; else
-            # fall through to the app-level `Handler` instance.
-            entrypoint = _entrypoint_from_connector(auth_input.connector)
+            # `app.<entrypoint_snake>.handler.test_auth`. Resolve the
+            # entrypoint from `connector` (or `connectorConfigName` when
+            # Heracles' configmap path omits the former); when it maps to
+            # a known per-entrypoint module, route to it; else fall
+            # through to the app-level `Handler` instance.
+            entrypoint = _resolve_entrypoint(body, auth_input.connector)
             ep_fn = (
                 _discover_handler_fn(entrypoint, "test_auth") if entrypoint else None
             )
@@ -684,7 +708,7 @@ def create_app_handler_service(
                 context.request_id_str,
             )
             # Per-entrypoint dispatch (see test_auth above for rationale).
-            entrypoint = _entrypoint_from_connector(preflight_input.connector)
+            entrypoint = _resolve_entrypoint(body, preflight_input.connector)
             ep_fn = (
                 _discover_handler_fn(entrypoint, "preflight_check")
                 if entrypoint
@@ -764,7 +788,7 @@ def create_app_handler_service(
                 context.request_id_str,
             )
             # Per-entrypoint dispatch (see test_auth above for rationale).
-            entrypoint = _entrypoint_from_connector(metadata_input.connector)
+            entrypoint = _resolve_entrypoint(body, metadata_input.connector)
             ep_fn = (
                 _discover_handler_fn(entrypoint, "fetch_metadata")
                 if entrypoint
