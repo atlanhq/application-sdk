@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    1a64415bea17af468d3f13f33f75519592d37855
-source-date:   2026-05-05T18:47:26+05:30
+source-sha:    c6942de1c95617f4cd44137743b465a93e798070
+source-date:   2026-05-05T18:56:57+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -22,7 +22,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
-| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 42 |
+| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 10 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
@@ -684,13 +684,6 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Signature:** `class RawCredential`
 - **Summary:** Wrapper for raw dict credentials (legacy / unknown types).
 - **Defined in:** `application_sdk/credentials/types.py`
-
-#### `TypedAgentCredentialSpec`
-
-- **Import:** `from application_sdk.credentials import TypedAgentCredentialSpec`
-- **Signature:** `class TypedAgentCredentialSpec`
-- **Summary:** Forward-looking base for agent-shape credential payloads.
-- **Defined in:** `application_sdk/credentials/spec.py`
 
 ### Functions
 
