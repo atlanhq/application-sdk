@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    684b1d55a9a43cb0f56bcf8671098f56b7b00e3a
-source-date:   2026-05-05T19:12:30+05:30
+source-sha:    46fbf541e6cff717ba6e7cb004cc6c16137a5d9d
+source-date:   2026-05-05T19:50:54+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
