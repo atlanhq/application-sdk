@@ -79,6 +79,11 @@ class AuthInput(BaseModel):
     connection_id: str = ""
     """Optional connection ID for context."""
 
+    connector: str = ""
+    """Marketplace connector identifier (``{app_name}-{entrypoint.name}``).
+    Empty for single-entrypoint apps; routed to a per-entrypoint handler
+    when set on multi-entrypoint apps (see ``service.py`` dispatch)."""
+
     timeout_seconds: int = 30
     """Maximum seconds to wait for auth response."""
 
@@ -134,6 +139,11 @@ class PreflightInput(BaseModel):
 
     connection_config: dict[str, Any] = {}
     """Connection configuration (host, port, database, etc.)."""
+
+    connector: str = ""
+    """Marketplace connector identifier (``{app_name}-{entrypoint.name}``).
+    Empty for single-entrypoint apps; routed to a per-entrypoint handler
+    when set on multi-entrypoint apps (see ``service.py`` dispatch)."""
 
     metadata: dict[str, Any] = {}
     """Form-level metadata forwarded by heracles alongside the credential.
@@ -224,6 +234,11 @@ class MetadataInput(BaseModel):
 
     connection_config: dict[str, Any] = {}
     """Connection configuration."""
+
+    connector: str = ""
+    """Marketplace connector identifier (``{app_name}-{entrypoint.name}``).
+    Empty for single-entrypoint apps; routed to a per-entrypoint handler
+    when set on multi-entrypoint apps (see ``service.py`` dispatch)."""
 
     object_filter: str = ""
     """Filter pattern (e.g., 'public.*', 'mydb.myschema.*')."""
