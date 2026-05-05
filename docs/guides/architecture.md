@@ -325,19 +325,21 @@ application_sdk/
 │   └── transfer.py         # High-level transfer orchestration
 │
 ├── observability/          # Logging, tracing, and metrics adaptors
-│   ├── app_vitals.py       # App Vitals lifecycle interceptor
+│   ├── _prometheus_enrichment.py  # EnrichedPrometheusMetricReader: inlines bounded resource attrs onto every series
 │   ├── context.py          # Observability context carrier
 │   ├── correlation.py      # Correlation ID propagation
-│   ├── error_classifier.py # Error type classification for observability
+│   ├── decorators/         # @observability_decorator
 │   ├── logger_adaptor.py   # AtlanLoggerAdapter (loguru-backed)
+│   ├── metrics.py          # User-facing OTel meter shim (create_counter / create_histogram / …)
 │   ├── metrics_adaptor.py  # OTel MeterProvider setup
 │   ├── models.py           # Observability data models
 │   ├── observability.py    # Observability store sink
+│   ├── pushgateway.py      # PushGatewayClient + TemporalCoreCollector (worker push path)
 │   ├── resource_sampler.py # Resource-based sampling helpers
 │   ├── segment_client.py   # Segment analytics client
 │   ├── trace_context.py    # Correlation ID propagation
 │   ├── traces_adaptor.py   # OTel TracerProvider setup
-│   └── utils.py            # Shared observability utilities
+│   └── utils.py            # Shared observability utilities (METRIC_ENRICHMENT_KEYS, etc.)
 │
 ├── server/                 # Internal FastAPI / health-check servers
 │   ├── fastapi/            # FastAPI app factory helpers

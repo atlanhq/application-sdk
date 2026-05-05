@@ -317,17 +317,23 @@ Handler readiness check. Returns `200 OK` with `{"status": "ok"}` when the proce
 
 ### `GET /metrics`
 
-Prometheus metrics endpoint (application-level metrics). Available when `ATLAN_ENABLE_PROMETHEUS_METRICS=true` (default: `true`).
+Prometheus metrics endpoint. Always exposed (no env-var gate). The
+response merges all in-process metric sources:
+
+- Custom metrics from `record_metric()` and direct OTel meter use
+- HTTP server instrumentation (FastAPIInstrumentor, stable OTel HTTP
+  semantic conventions: `http.request.method`, `http.route`, etc.)
+- Temporal SDK Rust-core families (proxied in-process from
+  `127.0.0.1:9464`)
+- `prometheus_client` defaults (`process_*`, `python_*`)
+
+See [Monitoring](../concepts/monitoring.md) for the full architecture
+and the role of `ATLAN_ENABLE_PROMETHEUS_METRICS` (which gates only
+the loopback Rust-core endpoint binding, not this route).
 
 ### `GET /`
 
 Serves the custom frontend `index.html` when present at `ATLAN_FRONTEND_ASSETS_PATH`. Returns a minimal `text/html` 404 page (`<html><body><h1>UI not available</h1></body></html>`) when no frontend bundle is found.
-
----
-
-## Temporal Prometheus Metrics
-
-A second Prometheus endpoint (Temporal SDK built-in metrics) is available separately at `http://host:9464/metrics`. See [Monitoring](../concepts/monitoring.md).
 
 ---
 

@@ -1,98 +1,134 @@
 # Monitoring
 
-The Application SDK exposes built-in metrics for monitoring workflow execution health, worker capacity, and Temporal server connectivity via a Prometheus-compatible endpoint.
+The Application SDK exposes Prometheus metrics covering workflow / activity
+execution, HTTP server traffic, custom application metrics, and Temporal
+SDK internals — all through a single endpoint per pod. Scrape configuration
+differs by deployment topology (combined-mode pods are scraped directly;
+worker-only pods push to a Pushgateway).
 
-## Temporal Prometheus Metrics
+## Architecture
 
-Every application that uses `create_temporal_client()` automatically exposes ~40 built-in Temporal SDK metrics. No code changes are required.
+The SDK funnels every metric source into the in-process
+`prometheus_client.REGISTRY` and exposes that registry to operators by
+one of two transports, depending on pod role:
 
-### Endpoint
+| Pod role | Transport | Endpoint |
+|---|---|---|
+| **Combined / handler** | Direct scrape | `http://<pod>:8000/metrics` (FastAPI) |
+| **Worker** (split deployment) | Push | Pushgateway at `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` |
 
-The metrics endpoint is bound at startup when `create_temporal_client()` is called:
+The Temporal SDK's Rust-core Prometheus endpoint (`127.0.0.1:9464`) is
+bound **loopback only** and is not externally reachable. The FastAPI
+`/metrics` handler proxies it in-process for combined / handler pods;
+the worker's `TemporalCoreCollector` reads it locally and includes the
+families in each Pushgateway push. So scrape configurations always
+target the FastAPI port (or the Pushgateway), never `:9464` directly.
 
-```
-http://<host>:9464/metrics
-```
+### What's in the metric body
 
-Default bind address: `0.0.0.0:9464` (OpenTelemetry Prometheus convention, port 9464).
+Every emitted series carries six bounded resource-attribute labels
+inlined onto every sample (`app_name`, `app_version`, `app_type`,
+`app_release_channel`, `app_release_id`, `app_sdk_version`) so PromQL
+filtering by app/version/type works without `target_info` joins. See
+[Metrics Standards](../standards/metrics.md) for the cardinality rules
+that bound the rest of the label set.
 
-Override with `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS`:
+The FastAPI `/metrics` endpoint (or a worker push) merges:
+
+- **Custom metrics** from `record_metric()` calls and direct OTel meter
+  use (`application_sdk.observability.metrics`)
+- **HTTP server instrumentation** (FastAPIInstrumentor) using stable
+  OTel HTTP semantic conventions: `http.request.method`, `http.route`,
+  `server.address`, `network.protocol.version`,
+  `http.response.status_code`. The metric is named
+  `http_server_request_duration_seconds` (seconds, not milliseconds).
+  Stable conventions are enabled via `OTEL_SEMCONV_STABILITY_OPT_IN=http`
+  — set in the chart by default for v3+ apps.
+- **Temporal SDK** families from `MetricsInterceptor` (counters and
+  histograms emitted by activity/workflow execution) plus the Rust-core
+  families proxied from `127.0.0.1:9464` (`temporal_request_*`,
+  `temporal_workflow_task_*`, `temporal_sticky_cache_*`,
+  `temporal_num_pollers`, etc.)
+- **`prometheus_client` defaults** (`process_*`, `python_gc_*`,
+  `python_info`)
+
+### `ATLAN_ENABLE_PROMETHEUS_METRICS`
+
+Despite the name, this env var **does not gate the FastAPI `/metrics`
+route** — that endpoint is always registered. The flag controls only
+whether the Temporal Rust-core endpoint binds `127.0.0.1:9464`:
+
+| Value | Effect |
+|---|---|
+| `true` (default) | Rust core binds 9464; FastAPI proxy + worker `TemporalCoreCollector` can read it |
+| `false` | Rust core uses `Runtime.default()` (no Prometheus listener); FastAPI `/metrics` still serves SDK + HTTP + python defaults but lacks the `temporal_*` Rust-core families |
+
+`run_dev_combined()` proactively sets it to `false` in local dev so a
+hot-reload-restarted process doesn't fail to bind 9464 (which the
+previous process is still holding in `TIME_WAIT`).
+
+### Pushgateway for worker pods
+
+Worker-only pods (split deployment) don't run a FastAPI server, so
+Prometheus has no scrape target. Instead, they push the local registry
+to a Pushgateway every `ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS`
+(default 30 s) plus a final push on shutdown. Configuration:
 
 ```bash
-ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS=0.0.0.0:9464
+ATLAN_PROMETHEUS_PUSHGATEWAY_URL=http://prometheus-pushgateway.monitoring.svc.cluster.local:9091
+ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS=30
+ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN=true            # default
+ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START=true          # default
+ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS=300        # default
+ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS=10            # default
+ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS=35   # default
 ```
 
-### Available Metrics
+Hardening behaviors that ship by default: graceful exits DELETE the
+group from the gateway (no leak); each new worker sweeps stale
+predecessor groups left by OOM/eviction; every gateway HTTP call is
+bounded to 10 s; the final push is held for 35 s before DELETE so
+Prometheus has a full scrape window. See [ADR-0012](../adr/0012-observability-consolidation.md)
+for the design rationale.
+
+### Available Temporal SDK metrics
+
+A non-exhaustive subset of what flows through the Rust-core path:
 
 | Metric | Description |
 |--------|-------------|
 | `temporal_activity_execution_latency` | Activity execution duration (histogram) |
 | `temporal_activity_schedule_to_start_latency` | Time from activity schedule to start (histogram) |
-| `temporal_workflow_completed` | Total completed workflows (counter) |
+| `temporal_workflow_completed_total` | Total completed workflows (counter) |
 | `temporal_workflow_endtoend_latency` | End-to-end workflow duration (histogram) |
 | `temporal_request_latency` | gRPC request latency to Temporal server (histogram) |
-| `temporal_request_failure` | gRPC request failures (counter) |
+| `temporal_long_request_total` | gRPC long-poll requests (counter) |
 | `temporal_worker_task_slots_available` | Available worker task slots (gauge) |
 | `temporal_worker_task_slots_used` | In-use worker task slots (gauge) |
-| `temporal_sticky_cache_hit` | Sticky cache hits (counter) |
+| `temporal_sticky_cache_hit_total` | Sticky cache hits (counter) |
 | `temporal_sticky_cache_size` | Current sticky cache size (gauge) |
 
-The full list of metrics is defined by the [Temporal Python SDK](https://docs.temporal.io/references/sdk-metrics).
+The full list is defined by the [Temporal Python SDK](https://docs.temporal.io/references/sdk-metrics).
 
-### Prometheus Scrape Configuration
+### Prometheus scrape configuration (combined / handler pods)
 
-Add the following job to your `prometheus.yml`:
-
-```yaml
-scrape_configs:
-  - job_name: temporal-sdk
-    static_configs:
-      - targets:
-          - <app-host>:9464
-```
-
-For Kubernetes deployments using the Prometheus Operator, add a `ServiceMonitor`:
+In Kubernetes the `atlan-app` chart provisions a ServiceMonitor when
+`metrics.enabled: true` is set in the app's values. The scrape uses the
+Service's named port `http`:
 
 ```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: temporal-sdk-metrics
 spec:
-  selector:
-    matchLabels:
-      app: <your-app-label>
   endpoints:
-    - port: temporal-metrics
+    - port: http        # main Service declares 8000 as `name: http`
       path: /metrics
+      interval: 60s     # configurable via metrics.interval
 ```
 
-Expose the port in your `Service`:
-
-```yaml
-ports:
-  - name: temporal-metrics
-    port: 9464
-    targetPort: 9464
-```
-
-### Singleton Runtime
-
-The Temporal `Runtime` that binds the metrics port is a process-level singleton (`_prometheus_runtime` in `backend.py`). Multiple client instances or repeated `create_temporal_client()` calls within the same process reuse the same `Runtime` — the port is bound exactly once per process. See [Clients](clients.md#prometheus-metrics) for additional context.
-
-## Application Metrics (Handler Service)
-
-The handler service can expose an additional Prometheus endpoint at `/metrics` for application-level metrics (request counts, latency, error rates):
-
-```bash
-ATLAN_ENABLE_PROMETHEUS_METRICS=true  # default: true
-```
-
-When enabled, the handler service mounts a `/metrics` route served by `prometheus_client`. Scrape it alongside the Temporal metrics endpoint:
+For raw Prometheus configurations, target the handler port directly:
 
 ```yaml
 scrape_configs:
-  - job_name: app-handler
+  - job_name: <app>-handler
     static_configs:
       - targets:
           - <handler-host>:8000
@@ -103,10 +139,10 @@ scrape_configs:
 
 | Alert | Condition | Severity |
 |-------|-----------|----------|
-| High activity failure rate | `rate(temporal_activity_execution_failed[5m]) > 0.05` | Warning |
+| High activity failure rate | `rate(temporal_activity_execution_failed_total[5m]) > 0.05` | Warning |
 | Worker slots exhausted | `temporal_worker_task_slots_available == 0` | Critical |
-| Elevated workflow latency | `histogram_quantile(0.99, temporal_workflow_endtoend_latency) > 300` | Warning |
-| Temporal server errors | `rate(temporal_request_failure[5m]) > 0` | Warning |
+| Elevated workflow latency | `histogram_quantile(0.99, temporal_workflow_endtoend_latency_bucket) > 300` | Warning |
+| Temporal server errors | `rate(temporal_long_request_failure_total[5m]) > 0` | Warning |
 
 ---
 
