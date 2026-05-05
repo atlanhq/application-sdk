@@ -367,7 +367,7 @@ LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("ATLAN_LOG_FLUSH_INTERVAL_SECOND
 
 # Log Retention configuration
 LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
-LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
+LOG_CLEANUP_ENABLED = os.getenv("ATLAN_LOG_CLEANUP_ENABLED", "false").lower() == "true"
 
 # Log Location configuration
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
@@ -382,7 +382,9 @@ METRICS_FLUSH_INTERVAL_SECONDS = int(
     os.environ.get("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", 10)
 )
 METRICS_RETENTION_DAYS = int(os.environ.get("ATLAN_METRICS_RETENTION_DAYS", 30))
-METRICS_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_METRICS_CLEANUP_ENABLED", False))
+METRICS_CLEANUP_ENABLED = (
+    os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
+)
 METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
