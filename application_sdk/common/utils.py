@@ -616,8 +616,10 @@ async def download_file_from_upload_response(
     return local_path
 
 
-#: Prefix on credential field values that indicates the file lives in the
-#: customer's DEPLOYMENT Dapr object store binding (configured during SDR setup).
+#: Prefix on credential field values that indicates the referenced file lives
+#: in the customer's DEPLOYMENT Dapr object store binding (configured during
+#: SDR setup). Intended for **non-secret companion files** that just happen
+#: to be bundled into the same credential payload — see ``resolve_credential_file``.
 OBJECT_STORE_PREFIX = "objectstore://"
 
 
@@ -626,43 +628,68 @@ async def resolve_credential_file(
     filename: str,
     dest_dir: str = "/tmp/credential_files",
 ) -> Optional[str]:
-    """Resolve a credential file field value to a local file path.
+    """Resolve a credential-payload file field to a local file path.
 
-    Handles three input formats transparently, allowing customers to choose
-    how they provide sensitive files based on their organisation's security policy
-    and the size of the file:
+    A "credential payload" in Atlan can carry both true secrets (passwords,
+    keytabs, private keys) and non-secret companion files (krb5.conf, public
+    CA certificates, kerberos realm configuration) that the connector also
+    needs at runtime. This helper picks the right delivery mechanism for each
+    file based on the format of ``value``.
 
-    1. **Atlan object-store reference** (file uploaded via UI):
-       ``{"key": "some/path", "rawName": "hiveadmin.keytab", "extension": ".keytab"}``
-       Downloads the binary from Atlan's Dapr-backed upload object store.
+    Three input formats are accepted, in priority order:
 
-    2. **Customer object-store path** (large files, SDR mode):
-       ``"objectstore://kerberos/hiveadmin.keytab"``
-       The file lives in the customer's own bucket — the same one wired up as
-       their ``DEPLOYMENT_OBJECT_STORE_NAME`` Dapr binding during SDR setup. The SDK
-       fetches it via the existing binding (no new credentials, cloud-agnostic, no
-       file-size ceiling beyond the Dapr gRPC max-body-size).
-       Recommended for files larger than secret-manager limits (typically 64KB).
+    1. **Atlan object-store reference** (file uploaded via the UI file picker):
+       ``{"key": "workflow_file_upload/...", "rawName": "...", "extension": "..."}``
+       The file was uploaded through the Atlan UI to Atlan's Dapr-backed
+       upload object store. Used for both secrets (small keytabs) and
+       non-secret companion files when the customer is happy to push the
+       file through Atlan's hosted upload pipe.
 
-    3. **Base64-encoded file content** (small files, SDR mode):
-       ``"BQIAAAABAAoASElWRS5MT0NBTA..."``
-       Decodes the binary and writes it directly to disk.
-       Used when the customer base64-encodes the file, stores it in their secret
-       store (AWS / Azure / GCP / K8s), and the SDK resolves the value via
-       ``SecretStore.get_credentials()`` + Dapr at activity runtime.
+    2. **Customer object-store path** (``objectstore://<key>``):
+       e.g. ``"objectstore://kerberos/krb5.conf"``. The file already lives
+       in the customer's own bucket — the same one wired up as their
+       ``DEPLOYMENT_OBJECT_STORE_NAME`` Dapr binding during SDR setup. The
+       SDK fetches it via that existing binding at activity runtime.
+
+       This branch is intended for **non-secret companion files** that
+       ride alongside a true credential — e.g. a Kerberos krb5.conf or a
+       publicly-signed CA certificate. These files don't need
+       secret-manager-grade controls, but they also don't need to be
+       transferred through Atlan's infrastructure when the customer
+       already has a perfectly good object store in their environment.
+
+       Concrete benefits: no file-size ceiling (Dapr binding streams the
+       payload, bounded only by disk), no new credentials to manage (binding
+       auth is already configured), and the file content never traverses
+       Atlan — only the path string does.
+
+       Some customers also use this path for sensitive files (e.g. keytabs)
+       when their secret manager has a value-size cap that the file exceeds,
+       falling back on bucket-level IAM as the security envelope.
+
+    3. **Base64-encoded file content** (raw string, no prefix):
+       ``"BQIAAAABAAoASElWRS5MT0NBTA..."``. Used for **true secrets** — the
+       customer base64-encodes the file, stores it as a value in their
+       secret manager (AWS Secrets Manager / Azure Key Vault / GCP Secret
+       Manager / K8s Secret), and the credential vault resolves the
+       reference via ``SecretStore.get_credentials()`` + Dapr at activity
+       runtime. The SDK sees the resolved base64 content here and decodes
+       it to disk. Bounded by the customer secret manager's value-size cap
+       (typically 1–64 KB depending on provider).
 
     Args:
-        value:    Raw credential field value — JSON object-store reference, an
-                  ``objectstore://`` prefixed key, or a raw base64-encoded string.
-                  Returns ``None`` if empty.
-        filename: Destination filename used for the base64 and object-store paths
-                  (e.g. ``"keytab.keytab"``, ``"krb5.conf"``, ``"ca_cert.pem"``).
-                  Ignored for the Atlan upload path (filename is derived from the key).
+        value:    Raw credential field value — JSON object-store reference,
+                  an ``objectstore://`` prefixed key, or a raw base64-encoded
+                  string. Returns ``None`` if empty.
+        filename: Destination filename used for the base64 and ``objectstore://``
+                  branches (e.g. ``"keytab.keytab"``, ``"krb5.conf"``,
+                  ``"ca_cert.pem"``). Ignored for the Atlan upload branch —
+                  the filename there is derived from the upload key.
         dest_dir: Directory to write or download the file into.
 
     Returns:
-        Absolute path to the resolved file on disk, or ``None`` if ``value`` is
-        empty or resolution fails.
+        Absolute path to the resolved file on disk, or ``None`` if ``value``
+        is empty or resolution fails.
     """
     if not value:
         return None
@@ -677,7 +704,9 @@ async def resolve_credential_file(
     except (orjson.JSONDecodeError, TypeError):
         pass
 
-    # 2. Customer's DEPLOYMENT object store binding — explicit objectstore:// prefix
+    # 2. Customer's DEPLOYMENT object store — explicit objectstore:// prefix.
+    #    Intended for non-secret companion files (krb5.conf, public CA certs)
+    #    bundled with the credential. See docstring for details.
     if stripped.startswith(OBJECT_STORE_PREFIX):
         key = stripped[len(OBJECT_STORE_PREFIX) :]
         # Reject empty keys, absolute paths, and path-traversal segments
