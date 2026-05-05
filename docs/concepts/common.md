@@ -73,7 +73,7 @@ raise DependencyUnavailableError(
 
 There is no `UNKNOWN` escape hatch — if the locus is unclear, the answer is `APP_OWNER` (the team investigates and reclassifies).
 
-`FailureDetails` (the Pydantic wire envelope on `AppError.to_failure_details()`) carries `category`, `code`, `retryable`, `audience`, `message`, an optional `suggested_action` (imperative remediation hint whose voice shifts with the audience), `domain` (read from the SDK `DOMAIN_NAME` constant — the customer-facing tenant subdomain like `acme.atlan.com` — so per-tenant routing works for consumers reading `ApplicationError.details`), `app_name`, `run_id`, and `cause_repr`.
+`FailureDetails` (the Pydantic wire envelope on `AppError.to_failure_details()`) carries `category`, `code`, `retryable`, `audience`, `message`, an optional `suggested_action` (imperative remediation hint whose voice shifts with the audience), `app_name`, `run_id`, and `cause_repr`. Tenant identity is intentionally not on this envelope — per-tenant attribution is the consumer's responsibility, not the producer's.
 
 ### Legacy error-code namespaces (backward-compat only)
 
