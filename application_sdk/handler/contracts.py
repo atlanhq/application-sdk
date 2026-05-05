@@ -23,6 +23,53 @@ from pydantic.alias_generators import to_camel
 from application_sdk.contracts.base import SerializableEnum
 
 
+class BaseConnectionConfig(BaseModel):
+    """Base type for preflight and metadata connection configuration.
+
+    Replaces ``dict[str, Any]`` as the type of ``PreflightInput.connection_config``
+    and ``MetadataInput.connection_config``.  Extra fields are accepted so that
+    existing callers that pass arbitrary dicts continue to work, but a one-time
+    ``UserWarning`` is emitted to encourage app authors to subclass::
+
+        class MyAppConnectionConfig(BaseConnectionConfig):
+            include_filter: str = Field(default="{}", alias="include-filter")
+            exclude_filter: str = Field(default="{}", alias="exclude-filter")
+
+    The subclass can then be used directly in the handler::
+
+        async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+            config = MyAppConnectionConfig.model_validate(
+                input.connection_config.model_dump()
+            )
+
+    If the UI is generated from the contract toolkit (app.pkl), the subclass
+    fields should mirror the ``uiConfig.tasks[*].inputs`` entries so the
+    generated preflight metadata contract stays aligned with the UI contract.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class BaseMetadataConfig(BaseModel):
+    """Base type for form-level metadata forwarded alongside preflight credentials.
+
+    Captures the UI form state sent by the frontend (extraction type, filter
+    keys, user-entered prefixes, etc.).  Apps subclass this to declare fields
+    explicitly::
+
+        class MyAppMetadataConfig(BaseMetadataConfig):
+            include_filter: str = Field(default="{}", alias="include-filter")
+            exclude_filter: str = Field(default="{}", alias="exclude-filter")
+            extraction_method: str = Field(default="api", alias="extraction-method")
+
+    If the UI is generated from the contract toolkit (app.pkl), the subclass
+    fields should mirror the ``uiConfig.tasks[*].inputs`` entries so the
+    generated metadata contract stays aligned with the UI contract.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
 class HandlerCredential(BaseModel):
     """A single credential key-value pair for HTTP handler inputs.
 
@@ -132,17 +179,25 @@ class PreflightInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use during preflight."""
 
-    connection_config: dict[str, Any] = {}
-    """Connection configuration (host, port, database, etc.)."""
+    connection_config: BaseConnectionConfig = Field(
+        default_factory=BaseConnectionConfig
+    )
+    """Connection configuration (host, port, database, etc.).
 
-    metadata: dict[str, Any] = {}
+    Pass a :class:`BaseConnectionConfig` subclass for strong typing.  Raw dicts
+    are accepted for backward compatibility via ``extra="allow"``.
+    """
+
+    metadata: BaseMetadataConfig = Field(default_factory=BaseMetadataConfig)
     """Form-level metadata forwarded by heracles alongside the credential.
 
     Contains the full UI form state (extraction type, source, user-entered
-    prefixes, filter keys, etc.) as sent by the frontend. Handlers that need
-    form fields unavailable in the credential body — for example a storage
-    prefix entered as a plain text input rather than inside a credential form
-    — can read them here. All other handlers can ignore this field safely.
+    prefixes, filter keys, etc.) as sent by the frontend.  Handlers that need
+    form fields unavailable in the credential body can read them here.
+    All other handlers can ignore this field safely.
+
+    Pass a :class:`BaseMetadataConfig` subclass for strong typing.  Raw dicts
+    are accepted for backward compatibility via ``extra="allow"``.
     """
 
     checks_to_run: list[str] = []
@@ -222,8 +277,14 @@ class MetadataInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use for metadata discovery."""
 
-    connection_config: dict[str, Any] = {}
-    """Connection configuration."""
+    connection_config: BaseConnectionConfig = Field(
+        default_factory=BaseConnectionConfig
+    )
+    """Connection configuration.
+
+    Pass a :class:`BaseConnectionConfig` subclass for strong typing.  Raw dicts
+    are accepted for backward compatibility via ``extra="allow"``.
+    """
 
     object_filter: str = ""
     """Filter pattern (e.g., 'public.*', 'mydb.myschema.*')."""
