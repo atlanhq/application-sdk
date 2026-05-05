@@ -416,3 +416,192 @@ class TestStoredSidecarFailureSwallowed:
             # Sidecar fetch fails → returns None → conservative re-download path.
             result = await materialize_file_reference(store, ref)
         assert Path(result.local_path).read_bytes() == b"actual"
+
+
+# ---------------------------------------------------------------------------
+# Directory materialize — per-file sidecar fast-path (BLDX-1155)
+# ---------------------------------------------------------------------------
+
+
+class TestDirectoryMaterializeSidecarFastPath:
+    async def test_matching_sidecar_skips_download(self, store, tmp_path) -> None:
+        """File whose local hash matches local sidecar is skipped entirely."""
+        await _put("dir/a.txt", b"aaa", store, normalize=False)
+
+        local_dir = tmp_path / "out"
+        local_dir.mkdir()
+        (local_dir / "a.txt").write_bytes(b"aaa")
+        (local_dir / "a.txt.sha256").write_text(_hash_bytes(b"aaa"))
+
+        ref = FileReference(
+            local_path=str(local_dir), is_durable=True, storage_path="dir"
+        )
+
+        import application_sdk.storage.ops as ops_mod
+
+        with patch.object(
+            ops_mod, "download_file", wraps=ops_mod.download_file
+        ) as mock_dl:
+            result = await materialize_file_reference(store, ref)
+
+        mock_dl.assert_not_awaited()
+        assert result.file_count == 1
+        assert (local_dir / "a.txt").read_bytes() == b"aaa"
+
+    async def test_hash_mismatch_triggers_redownload(self, store, tmp_path) -> None:
+        """Local file hash doesn't match local sidecar → falls through to re-download.
+
+        The fast-path checks local_hash == local_sidecar_content.  When they
+        disagree (corrupt local file or sidecar written for a different version),
+        the file is re-downloaded from the store.
+        """
+        await _put("dir2/f.txt", b"server-version", store, normalize=False)
+
+        local_dir = tmp_path / "out"
+        local_dir.mkdir()
+        (local_dir / "f.txt").write_bytes(b"stale-local")
+        # Sidecar records a DIFFERENT hash than the actual local file has,
+        # so local_hash != sidecar → fast-path falls through to re-download.
+        (local_dir / "f.txt.sha256").write_text(_hash_bytes(b"server-version"))
+
+        ref = FileReference(
+            local_path=str(local_dir), is_durable=True, storage_path="dir2"
+        )
+        result = await materialize_file_reference(store, ref)
+
+        assert (local_dir / "f.txt").read_bytes() == b"server-version"
+        assert result.file_count == 1
+
+    async def test_mixed_cached_and_new_files(self, store, tmp_path) -> None:
+        """Cached files are skipped; only uncached files are downloaded."""
+        await _put("dir3/cached.txt", b"cached", store, normalize=False)
+        await _put("dir3/fresh.txt", b"fresh", store, normalize=False)
+
+        local_dir = tmp_path / "out"
+        local_dir.mkdir()
+        # Pre-populate one file with a matching sidecar
+        (local_dir / "cached.txt").write_bytes(b"cached")
+        (local_dir / "cached.txt.sha256").write_text(_hash_bytes(b"cached"))
+        # fresh.txt is absent locally
+
+        ref = FileReference(
+            local_path=str(local_dir), is_durable=True, storage_path="dir3"
+        )
+
+        import application_sdk.storage.ops as ops_mod
+
+        download_calls: list[str] = []
+        real_dl = ops_mod.download_file
+
+        async def tracking_dl(key, *args, **kwargs):
+            download_calls.append(key)
+            return await real_dl(key, *args, **kwargs)
+
+        with patch.object(ops_mod, "download_file", side_effect=tracking_dl):
+            result = await materialize_file_reference(store, ref)
+
+        # Only fresh.txt should have been downloaded
+        assert len(download_calls) == 1
+        assert download_calls[0].endswith("fresh.txt")
+        assert result.file_count == 2
+        assert (local_dir / "cached.txt").read_bytes() == b"cached"
+        assert (local_dir / "fresh.txt").read_bytes() == b"fresh"
+
+    async def test_all_cached_no_downloads(self, store, tmp_path) -> None:
+        """When all files are cached with matching sidecars, zero downloads occur."""
+        await _put("dir4/x.txt", b"xxx", store, normalize=False)
+        await _put("dir4/y.txt", b"yyy", store, normalize=False)
+
+        local_dir = tmp_path / "out"
+        local_dir.mkdir()
+        for name, content in [("x.txt", b"xxx"), ("y.txt", b"yyy")]:
+            (local_dir / name).write_bytes(content)
+            (local_dir / f"{name}.sha256").write_text(_hash_bytes(content))
+
+        ref = FileReference(
+            local_path=str(local_dir), is_durable=True, storage_path="dir4"
+        )
+
+        import application_sdk.storage.ops as ops_mod
+
+        with patch.object(
+            ops_mod, "download_file", wraps=ops_mod.download_file
+        ) as mock_dl:
+            result = await materialize_file_reference(store, ref)
+
+        mock_dl.assert_not_awaited()
+        assert result.file_count == 2
+
+    async def test_nested_subdirectory_files_downloaded(self, store, tmp_path) -> None:
+        """Files in subdirs within a prefix are placed at the correct local paths."""
+        await _put("dir5/sub/deep.txt", b"deep", store, normalize=False)
+        await _put("dir5/top.txt", b"top", store, normalize=False)
+
+        local_dir = tmp_path / "out"
+        ref = FileReference(
+            local_path=str(local_dir), is_durable=True, storage_path="dir5"
+        )
+        result = await materialize_file_reference(store, ref)
+
+        assert result.file_count == 2
+        assert (local_dir / "top.txt").read_bytes() == b"top"
+        assert (local_dir / "sub" / "deep.txt").read_bytes() == b"deep"
+
+
+# ---------------------------------------------------------------------------
+# Directory persist — concurrent upload (BLDX-1155)
+# ---------------------------------------------------------------------------
+
+
+class TestDirectoryPersistConcurrent:
+    async def test_all_files_uploaded_with_sidecars(self, store, tmp_path) -> None:
+        """Every file in the directory is uploaded with a remote .sha256 sidecar."""
+        (tmp_path / "a.txt").write_bytes(b"aaa")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "b.txt").write_bytes(b"bbb")
+
+        ref = FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
+        result = await persist_file_reference(store, ref)
+
+        assert result.is_durable is True
+        assert result.file_count == 2
+        prefix = result.storage_path
+        assert await _get_bytes(f"{prefix}a.txt", store, normalize=False) == b"aaa"
+        assert await _get_bytes(f"{prefix}sub/b.txt", store, normalize=False) == b"bbb"
+        sidecar = await _get_bytes(f"{prefix}a.txt.sha256", store, normalize=False)
+        assert sidecar is not None
+        assert sidecar.decode().strip() == _hash_bytes(b"aaa")
+
+    async def test_concurrent_uploads_respect_semaphore(self, store, tmp_path) -> None:
+        """Upload concurrency is bounded by MAX_CONCURRENT_STORAGE_TRANSFERS."""
+        from unittest.mock import patch
+
+        import application_sdk.storage.ops as ops_mod
+
+        for i in range(6):
+            (tmp_path / f"f{i}.bin").write_bytes(f"content{i}".encode())
+
+        max_active = 0
+        active = 0
+        real_upload = ops_mod.upload_file
+
+        async def tracking_upload(*args, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            try:
+                return await real_upload(*args, **kwargs)
+            finally:
+                active -= 1
+
+        with patch.object(ops_mod, "upload_file", side_effect=tracking_upload):
+            from application_sdk import constants
+
+            with patch.object(constants, "MAX_CONCURRENT_STORAGE_TRANSFERS", 2):
+                ref = FileReference(
+                    local_path=str(tmp_path), tier=StorageTier.TRANSIENT
+                )
+                result = await persist_file_reference(store, ref)
+
+        assert result.file_count == 6
+        assert max_active <= 2, f"Expected max 2 concurrent uploads, got {max_active}"

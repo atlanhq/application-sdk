@@ -149,6 +149,18 @@ MAX_CONCURRENT_STORAGE_TRANSFERS = int(
     os.getenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "4")
 )
 
+# FileReference chunked-download configuration
+#: File size threshold above which downloads use parallel range GETs (default 32 MiB)
+FILE_REF_CHUNKED_THRESHOLD_BYTES = int(
+    os.getenv("ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES", str(32 * 1024 * 1024))
+)
+#: Size of each range-GET chunk in a chunked download (default 16 MiB)
+FILE_REF_CHUNK_SIZE_BYTES = int(
+    os.getenv("ATLAN_FILE_REF_CHUNK_SIZE_BYTES", str(16 * 1024 * 1024))
+)
+#: Maximum concurrent range-GET chunks per file (default 4)
+FILE_REF_CHUNK_CONCURRENCY = int(os.getenv("ATLAN_FILE_REF_CHUNK_CONCURRENCY", "4"))
+
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.
@@ -188,6 +200,16 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 # These were never used. See ExecutionSettings for the actual runtime values:
 #   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
 #   - @task(timeout_seconds=..., heartbeat_timeout_seconds=...) for per-task timeouts
+
+#: Delay before initiating worker shutdown after receiving a termination signal.
+#: This gives the event loop time to flush in-flight activity completions
+#: (e.g. RespondActivityTaskFailed/Completed RPCs) that are already queued
+#: but haven't been sent yet. Without this, a SIGTERM that arrives right
+#: after an activity fails can preempt the _run_activity coroutine before
+#: it reaches complete_activity_task(), leaving the SDK with a phantom
+#: "in-use" task slot that blocks shutdown for the entire
+#: graceful_shutdown_timeout.
+SHUTDOWN_DRAIN_DELAY_SECONDS = int(os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5))
 
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations

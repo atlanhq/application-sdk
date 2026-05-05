@@ -6,6 +6,7 @@ import json
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -366,6 +367,61 @@ class TestPreflightEndpoint:
             json={"credentials": []},
         )
         assert response.status_code == 500
+
+    def test_preflight_metadata_forwarded_to_handler(self) -> None:
+        """metadata survives _normalize_credentials and reaches the handler.
+
+        Uses Format 2 credentials (nested dict) — the format heracles sends for
+        native-app preflight calls — to verify that {**body, "credentials": ...}
+        preserves the metadata key through normalization.
+        """
+        received: list[dict] = []
+
+        class _MetadataCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(dict(input.metadata))
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_MetadataCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            # Format 2: credentials as a nested dict, which is what heracles sends
+            # for native-app preflight calls. _normalize_credentials converts this
+            # to v3 list via {**body, "credentials": ...}, metadata must survive.
+            json={
+                "credentials": {"connectorConfigName": "atlan-connectors-dbt"},
+                "metadata": {
+                    "extraction-type": "objectstore",
+                    "manifest-source": "atlan",
+                    "core-extract-output-prefix": "artifacts/dbt/prod",
+                },
+            },
+        )
+        assert response.status_code == 200
+        assert received == [
+            {
+                "extraction-type": "objectstore",
+                "manifest-source": "atlan",
+                "core-extract-output-prefix": "artifacts/dbt/prod",
+            }
+        ]
+
+    def test_preflight_metadata_absent_defaults_to_empty(self) -> None:
+        """Callers that don't send metadata get an empty dict — no regression."""
+        received: list[dict] = []
+
+        class _MetadataCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(dict(input.metadata))
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_MetadataCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        assert received == [{}]
 
 
 class TestMetadataEndpoint:
@@ -822,17 +878,26 @@ class TestRunIdPathParam:
 class TestConfigMapEndpoints:
     """Tests for GET /workflows/v1/configmap/{id} and /configmaps."""
 
-    def test_configmap_not_found_returns_empty(self, tmp_path: Path) -> None:
+    def test_configmap_not_found_returns_404_and_logs_available_stems(
+        self, tmp_path: Path
+    ) -> None:
         from application_sdk.handler import service as svc_module
+
+        (tmp_path / "sap-hana.json").write_text("{}")
 
         original = svc_module.CONTRACT_GENERATED_DIR
         svc_module.CONTRACT_GENERATED_DIR = tmp_path
         try:
             client = _make_client()
-            response = client.get("/workflows/v1/configmap/nonexistent")
-            assert response.status_code == 200
-            body = response.json()
-            assert body["data"] == {}
+            with patch("application_sdk.handler.service.logger") as mock_logger:
+                response = client.get("/workflows/v1/configmap/saphana")
+            assert response.status_code == 404
+            assert response.json()["detail"] == "ConfigMap 'saphana' not found"
+            mock_logger.warning.assert_called_once_with(
+                "ConfigMap not found: requested=%s available=%s",
+                "saphana",
+                ["sap-hana"],
+            )
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 

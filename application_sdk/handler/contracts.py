@@ -145,6 +145,16 @@ class PreflightInput(BaseModel):
     Empty for single-entrypoint apps; routed to a per-entrypoint handler
     when set on multi-entrypoint apps (see ``service.py`` dispatch)."""
 
+    metadata: dict[str, Any] = {}
+    """Form-level metadata forwarded by heracles alongside the credential.
+
+    Contains the full UI form state (extraction type, source, user-entered
+    prefixes, filter keys, etc.) as sent by the frontend. Handlers that need
+    form fields unavailable in the credential body — for example a storage
+    prefix entered as a plain text input rather than inside a credential form
+    — can read them here. All other handlers can ignore this field safely.
+    """
+
     checks_to_run: list[str] = []
     """Specific checks to run (empty = run all)."""
 

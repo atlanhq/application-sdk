@@ -2,7 +2,8 @@
 
 - Setup and local run workflow: `docs/guides/getting-started.md` (uv sync, poe tasks, example run).
 - Task runner and common scripts live in `pyproject.toml` under `[tool.poe.tasks]`.
-- Docs build configuration is in `mkdocs.yml` (install with `uv sync --group docs`, then `uv run poe generate-apidocs`).
+- Docs build configuration is in `mkdocs.yml` (install with `uv sync --all-extras --all-groups`, then `uv run poe generate-apidocs`).
+- Capability manifest: `uv run poe regen-capabilities` — refreshes `docs/agents/sdk-capabilities.md` from `application_sdk/` HEAD. CI surfaces drift on every PR; comment `/regen-manifest` on a PR to have a bot regenerate and push.
 
 ## Pre-commit Checks
 
@@ -40,16 +41,24 @@ uv run pre-commit install
 uv sync
 ```
 
-### Step 2: Download Dapr components (one-time)
+### Step 2: Verify Dapr components are present
+
+The `components/*.yaml` files are committed to the repo and do not need downloading. Confirm they exist:
 
 ```bash
-uv run poe download-components
+ls components/
 ```
 
 ### Step 3: Start Dapr + Temporal
 
 ```bash
 uv run poe start-deps
+```
+
+To provision credentials into the local vault without running the full app (useful for standalone handler tests):
+
+```bash
+uv run poe provision-credentials
 ```
 
 ### Step 4: Run the app with `run_dev_combined`
@@ -70,7 +79,6 @@ asyncio.run(
             "authType": "basic",
             "username": "myuser",
             "password": "mypassword",
-            "connectorConfigName": "my-connector",
             "extra": {"database": "mydb"},
         },
         example_input={
@@ -101,7 +109,7 @@ and use curl:
 
 ```bash
 # Start the app
-uv run python main.py
+uv run application-sdk --mode combined --app app.connector:MyApp
 
 # Provision credentials (app must be running)
 curl -s -X POST http://localhost:8000/workflows/v1/dev/local-vault \
@@ -109,7 +117,7 @@ curl -s -X POST http://localhost:8000/workflows/v1/dev/local-vault \
   -d '{"host": "localhost", "port": "5432", "authType": "basic",
        "username": "myuser", "password": "mypassword",
        "extra": {"database": "mydb"}}'
-# Returns: {"credential_guid": "..."}
+# Returns: {"data": {"credential_guid": "..."}, "success": true, "message": "Credentials provisioned successfully"}
 
 # Start the workflow
 curl -s -X POST http://localhost:8000/workflows/v1/start \
@@ -125,7 +133,7 @@ curl -s -X POST http://localhost:8000/workflows/v1/start \
 uv run pytest
 
 # Run specific test file with verbose output
-uv run pytest tests/unit/io/test_file.py -v -s
+uv run pytest tests/unit/storage/test_file_ref_sync.py -v -s
 
 # Run tests matching a pattern
 uv run pytest -k "test_name_pattern" -v

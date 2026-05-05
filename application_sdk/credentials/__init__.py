@@ -84,6 +84,7 @@ from application_sdk.credentials.types import (
     OAuthClientCredential,
     RawCredential,
 )
+from application_sdk.credentials.utils import parse_credentials_extra
 
 __all__ = [
     # Core ref + spec + protocol
@@ -137,4 +138,6 @@ __all__ = [
     "camel_to_kebab",
     "expand_dotted_keys",
     "transform_agent_credentials",
+    # Utilities
+    "parse_credentials_extra",
 ]

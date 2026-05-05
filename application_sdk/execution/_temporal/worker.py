@@ -7,6 +7,7 @@ named activities.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import timedelta
 
@@ -17,7 +18,11 @@ from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVe
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 from application_sdk.app.registry import AppRegistry
-from application_sdk.constants import APP_BUILD_ID, APP_DEPLOYMENT_NAME
+from application_sdk.constants import (
+    APP_BUILD_ID,
+    APP_DEPLOYMENT_NAME,
+    SHUTDOWN_DRAIN_DELAY_SECONDS,
+)
 from application_sdk.execution._temporal.activities import get_all_task_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig
@@ -50,6 +55,12 @@ class AppWorker:
     async def __aexit__(
         self, exc_type: type[BaseException] | None, *args: object
     ) -> None:
+        # Yield to the event loop so in-flight activity result RPCs
+        # (e.g. RespondActivityTaskFailed) can complete before we stop
+        # the transport. Without this, a race between SIGTERM and
+        # activity completion can leave orphaned task slots that block
+        # shutdown for the entire graceful_shutdown_timeout.
+        await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)
         await self._worker.__aexit__(exc_type, *args)
 
     async def run(self) -> None:
