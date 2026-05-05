@@ -14,7 +14,7 @@ Python's Global Interpreter Lock (GIL) limits native multi-threading, but we can
 - Temporal operates on a worker-pool model with separate processes
 - Workers register to handle specific workflows and activities
 - Applications bundle with workers that execute workflows and activities
-- Production deployments require at least 3 workers for high availability
+- Workers scale 0→N via KEDA based on Temporal task-queue depth; handlers run a min-1 replica deployment
 - Workers can run multiple workflows and activities concurrently while listening on activity queues
 
 This architecture enables concurrency at both workflow and activity levels based on worker availability.

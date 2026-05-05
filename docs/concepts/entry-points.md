@@ -49,7 +49,7 @@ RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
 COPY --chown=appuser:appuser . .
 
 # App-specific environment variables
-ENV ATLAN_APP_HTTP_PORT=8000
+ENV ATLAN_HANDLER_PORT=8000
 ENV ATLAN_APP_MODULE=app.connector:MyApp
 ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
 
@@ -75,16 +75,16 @@ This starts both the Temporal worker and the HTTP handler service in a single pr
 
 ### Custom Secrets for Local Dev
 
-Pass mock infrastructure for local development without a Dapr sidecar:
+Pass credentials directly for local development — `run_dev_combined` auto-provisions them
+through the local vault so the flow mirrors production exactly:
 
 ```python
-from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyExtractor,
-    secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
-    state_store=MockStateStore(),
+    credentials={"host": "localhost", "port": "5432", "authType": "basic",
+                 "username": "dev", "password": "dev-secret"},
 ))
 ```
 
@@ -98,11 +98,10 @@ You no longer register workflow or activity classes explicitly. The worker disco
 If you need a worker handle directly (for integration tests):
 
 ```python
-from application_sdk.execution import create_worker
-from application_sdk.execution._temporal.backend import create_temporal_client
+from application_sdk.execution import create_temporal_client, create_worker
 
-client = await create_temporal_client()  # reads TEMPORAL_HOST, TEMPORAL_NAMESPACE, etc.
-worker = await create_worker(client)     # discovers all App subclasses automatically
+client = await create_temporal_client(host="localhost:7233")  # pass host/namespace explicitly
+worker = create_worker(client)                                 # discovers all App subclasses automatically
 await worker.run()
 ```
 
@@ -112,8 +111,8 @@ await worker.run()
 |----------|----------|-------------|
 | `ATLAN_APP_MODULE` | Yes (production) | Python module path, e.g. `app.app:MyExtractor` |
 | `ATLAN_CONTRACT_GENERATED_DIR` | Recommended | Path to generated contract JSON files |
-| `TEMPORAL_HOST` | Yes | Temporal server host |
-| `TEMPORAL_NAMESPACE` | Yes | Temporal namespace |
+| `ATLAN_TEMPORAL_HOST` | Recommended | Temporal server host (defaults to `localhost:7233`; v2 fallback: `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT`) |
+| `ATLAN_TEMPORAL_NAMESPACE` | Recommended | Temporal namespace (defaults to `default`; v2 fallback: `ATLAN_WORKFLOW_NAMESPACE`) |
 
 ---
 
@@ -123,7 +122,7 @@ A single `App` can expose multiple independently-triggerable workflows by decora
 
 ```python
 from application_sdk.app import App, entrypoint, task
-from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts import Input, Output
 
 class ExtractionInput(Input):
     connection_qualified_name: str = ""
@@ -184,7 +183,7 @@ curl -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=mine-queries' 
 
 For single-entry-point apps, `?entrypoint=` is optional — the sole entry point is selected automatically. For multi-entry-point apps it is **required** (returns 400 otherwise).
 
-> **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with existing Argo templates and Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
+> **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with legacy Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
 
 ### Shared infrastructure
 

@@ -111,7 +111,7 @@ Scenario(
 | `metadata` | `/workflows/v1/metadata` | Fetch metadata |
 | `preflight` | `/workflows/v1/check` | Validate configuration |
 | `workflow` | `/workflows/v1/start` (default) | Start workflow |
-| `config` | `/workflows/v1/config/{id}` | Get or update credential config (object store backed) |
+| `config` | `/workflows/v1/config/{config_id}` | Get or update workflow config blob (object-store backed) |
 
 **v3 Response Shapes:**
 
@@ -120,9 +120,9 @@ Auth responses include a `data` envelope:
 {"success": true, "message": "Authentication success", "data": {"status": "success", "message": "", "identities": [], "scopes": []}}
 ```
 
-Preflight responses use a flat `checks` array instead of named sub-checks:
+Preflight responses use named sub-check keys under `data` (the first character of each check name is lower-cased; spaces and inner capitals are preserved), with a `success` field inside each sub-check:
 ```json
-{"success": true, "data": {"status": "ready", "checks": [{"name": "connectivity", "passed": true, "message": "OK"}]}}
+{"success": true, "data": {"connectivityCheck": {"success": true, "message": "OK"}}}
 ```
 
 ### Lazy Evaluation
@@ -300,8 +300,7 @@ preflight_scenarios = [
         }),
         assert_that={
             "success": equals(True),
-            "data.status": equals("ready"),
-            "data.checks.0.passed": equals(True),
+            "data.connectivityCheck.success": equals(True),
         }
     ),
 
@@ -315,7 +314,7 @@ preflight_scenarios = [
         }),
         assert_that={
             "success": equals(True),
-            "data.checks.0.passed": equals(False),
+            "data.connectivityCheck.success": equals(False),
         }
     ),
 ]

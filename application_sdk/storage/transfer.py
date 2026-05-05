@@ -366,16 +366,29 @@ async def download(
 
     if not is_prefix:
         # ── Single file ────────────────────────────────────────────────────
+        owns_temp = False
         if local_path is not None:
             dest = Path(local_path)
         else:
             suffix = Path(norm_path).suffix or ""
-            _, tmp = tempfile.mkstemp(suffix=suffix)
+            fd, tmp = tempfile.mkstemp(suffix=suffix)
+            os.close(fd)
             dest = Path(tmp)
+            owns_temp = True
 
-        transferred, reason = await _download_one(
-            resolved, norm_path, dest, skip_if_exists=skip_if_exists
-        )
+        try:
+            transferred, reason = await _download_one(
+                resolved, norm_path, dest, skip_if_exists=skip_if_exists
+            )
+        except BaseException:
+            # Don't leave an empty temp file behind on download failure
+            # (BLDX-1155 #5).
+            if owns_temp:
+                try:
+                    dest.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
         ref = FileReference(
             local_path=str(dest),
             storage_path=norm_path,
