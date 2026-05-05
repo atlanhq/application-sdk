@@ -51,13 +51,13 @@ from application_sdk.errors import (
     AlreadyExistsError,     # retryable=False, audience=USER
     PreconditionError,      # retryable=False, audience=USER
     RateLimitedError,       # retryable=True,  audience=USER
-    AppTimeoutError,        # retryable=True,  audience=UNKNOWN
+    AppTimeoutError,        # retryable=True,  audience=APP_OWNER
     AppPermissionDeniedError, # retryable=False, audience=USER
     ResourceExhaustedError, # retryable=True,  audience=PLATFORM
-    DataIntegrityError,     # retryable=False, audience=FRAMEWORK
-    InternalError,          # retryable=False, audience=FRAMEWORK
-    UnimplementedError,     # retryable=False, audience=FRAMEWORK
-    CancelledError,         # retryable=False, audience=UNKNOWN
+    DataIntegrityError,     # retryable=False, audience=APP_OWNER
+    InternalError,          # retryable=False, audience=APP_OWNER
+    UnimplementedError,     # retryable=False, audience=APP_OWNER
+    CancelledError,         # retryable=False, audience=APP_OWNER
 )
 
 raise DependencyUnavailableError(
@@ -66,9 +66,14 @@ raise DependencyUnavailableError(
 )
 ```
 
-`Audience` values route failures to: `USER` (customer self-service), `PLATFORM` (infra ops), `FRAMEWORK` (SDK engineering), `UNKNOWN` (triage).
+`Audience` is a closed three-value enum — every leaf must pick one:
+- `USER` — customer self-service (credentials, IAM, source config)
+- `PLATFORM` — infra ops (shared deps down: Dapr, Temporal, object store, pod health)
+- `APP_OWNER` — the team that wrote the failing code (connector or SDK): file a bug, add a more specific subclass, or investigate
 
-`FailureDetails` (the Pydantic wire envelope on `AppError.to_failure_details()`) carries `category`, `code`, `retryable`, `audience`, `message`, and an optional `suggested_action` (imperative remediation hint).
+There is no `UNKNOWN` escape hatch — if the locus is unclear, the answer is `APP_OWNER` (the team investigates and reclassifies).
+
+`FailureDetails` (the Pydantic wire envelope on `AppError.to_failure_details()`) carries `category`, `code`, `retryable`, `audience`, `message`, an optional `suggested_action` (imperative remediation hint whose voice shifts with the audience), `app_name`, `run_id`, and `cause_repr`. Tenant identity is intentionally not on this envelope — per-tenant attribution is the consumer's responsibility, not the producer's.
 
 ### Legacy error-code namespaces (backward-compat only)
 

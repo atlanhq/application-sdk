@@ -99,7 +99,7 @@ New SDK exceptions must use the most specific leaf from `application_sdk.errors`
 | Feature not yet built | `UnimplementedError` |
 | Unexpected invariant violation / bug | `InternalError` |
 
-Each leaf sets a default `audience` (`USER | PLATFORM | FRAMEWORK | UNKNOWN`) and `retryable` flag that consumers use for routing and retry decisions.
+Each leaf sets a default `audience` (`USER | PLATFORM | APP_OWNER`) and `retryable` flag that consumers use for routing and retry decisions. The audience enum is closed three-valued — there is no `UNKNOWN` escape hatch; if the locus is unclear, use `APP_OWNER` (the team that wrote the code investigates and reclassifies).
 
 ### Debuggable Log Output (Important)
 

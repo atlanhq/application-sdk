@@ -26,7 +26,7 @@ _LEAVES = [
         FailureCategory.CANCELLED,
         False,
         "CANCELLED",
-        Audience.UNKNOWN,
+        Audience.APP_OWNER,
         ["cancelled_by", "reason"],
     ),
     (
@@ -34,7 +34,7 @@ _LEAVES = [
         FailureCategory.TIMEOUT,
         True,
         "TIMEOUT",
-        Audience.UNKNOWN,
+        Audience.APP_OWNER,
         ["operation", "timeout_seconds", "elapsed_seconds"],
     ),
     (
@@ -114,7 +114,7 @@ _LEAVES = [
         FailureCategory.DATA_INTEGRITY,
         False,
         "DATA_INTEGRITY",
-        Audience.FRAMEWORK,
+        Audience.APP_OWNER,
         ["expectation", "observed", "location"],
     ),
     (
@@ -122,7 +122,7 @@ _LEAVES = [
         FailureCategory.INTERNAL,
         False,
         "INTERNAL",
-        Audience.FRAMEWORK,
+        Audience.APP_OWNER,
         ["component", "invariant", "classification_pending"],
     ),
     (
@@ -130,7 +130,7 @@ _LEAVES = [
         FailureCategory.UNIMPLEMENTED,
         False,
         "UNIMPLEMENTED",
-        Audience.FRAMEWORK,
+        Audience.APP_OWNER,
         ["operation", "reason"],
     ),
 ]

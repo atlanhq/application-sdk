@@ -33,12 +33,22 @@ class FailureDetails(BaseModel):
 
     Field semantics:
     - ``category``: the closed FailureCategory enum — what happened.
-    - ``audience``: who needs to act (USER / PLATFORM / FRAMEWORK / UNKNOWN).
+    - ``audience``: who needs to act (USER / PLATFORM / APP_OWNER). Closed
+      three-value enum; every leaf must pick one. There is no UNKNOWN
+      escape hatch — if the locus is unclear the answer is APP_OWNER
+      (the team that wrote the code investigates and reclassifies).
     - ``code``: app-owned string for fine-grained identification.
     - ``suggested_action``: optional imperative hint ("regrant Glue read access").
-      Audience-neutral — survives whether the reader is a customer, an on-call
-      engineer, or a runbook agent.
+      The voice shifts with the audience: customer-facing text when
+      ``audience=USER``, engineer-facing remediation when ``audience=APP_OWNER``,
+      runbook hint when ``audience=PLATFORM``.
     - ``evidence``: per-error context whose schema is the producing dataclass.
+
+    Tenant identity is intentionally NOT carried on this envelope. Per-tenant
+    attribution is the consumer's job — the producer (the failing app) does
+    not know or carry tenant context. The Automation Engine (or any other
+    consumer that reads ``ApplicationError.details``) attaches tenant from
+    its own context when it ingests the failure.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -46,7 +56,7 @@ class FailureDetails(BaseModel):
     category: FailureCategory
     code: str
     retryable: bool
-    audience: Audience = Audience.UNKNOWN
+    audience: Audience = Audience.APP_OWNER
     message: str
     suggested_action: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)

@@ -75,15 +75,18 @@ class Audience(Enum):
     """Who needs to take action to resolve this failure.
 
     Orthogonal to ``FailureCategory`` (what happened) and ``suggested_action``
-    (what to do).  Leaf classes set a per-category default; apps can override
-    per-leaf.  Consumers (AE, SLA dashboards) route on this field without
-    reading every leaf code.
+    (what to do).  Every leaf must pick one of three values — there is no
+    UNKNOWN escape hatch.  If you don't know who owns it, the answer is
+    APP_OWNER (the team that wrote the code investigates and reclassifies).
+    Consumers (AE, SLA dashboards) route on this field without reading
+    every leaf code.
 
     First-responder mapping:
-    - USER     → customer self-service / support ticket to the connector owner
-    - PLATFORM → infra ops: check dashboards (Dapr, Temporal, pod health, S3)
-    - FRAMEWORK → SDK/app engineering: file a bug or add a feature
-    - UNKNOWN  → triage required before routing
+    - USER      → customer self-service / support ticket to the connector owner
+    - PLATFORM  → infra ops: check dashboards (Dapr, Temporal, pod health, S3)
+    - APP_OWNER → the team that wrote the failing code (connector or SDK):
+                  file a bug, add a feature, or add a more specific subclass
+                  to migrate this case out of the catch-all bucket
     """
 
     USER = "USER"
@@ -94,9 +97,9 @@ class Audience(Enum):
     """Infra ops must act — a shared service or infrastructure component is
     unavailable or exhausted (Dapr, Temporal, object store, pod OOM)."""
 
-    FRAMEWORK = "FRAMEWORK"
-    """SDK or application engineering must act — a logic bug, invariant
-    violation, data integrity failure, or unimplemented capability."""
-
-    UNKNOWN = "UNKNOWN"
-    """Not enough information to route; triage required."""
+    APP_OWNER = "APP_OWNER"
+    """The app team that owns the failing code must act — a connector bug,
+    an SDK bug, an unimplemented capability, a data-integrity failure, or
+    a caught-but-unclassified failure pending triage. From production
+    routing's standpoint, SDK and connector code share an owner: the team
+    debugs first, escalates to the SDK team if needed."""

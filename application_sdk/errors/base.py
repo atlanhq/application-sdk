@@ -36,7 +36,7 @@ class AppError(Exception):
     category: ClassVar[FailureCategory] = FailureCategory.INTERNAL
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "INTERNAL"
-    audience: ClassVar[Audience] = Audience.UNKNOWN
+    audience: ClassVar[Audience] = Audience.APP_OWNER
 
     def __post_init__(self) -> None:
         Exception.__init__(self, self.message)
@@ -61,6 +61,12 @@ class AppError(Exception):
 
         Non-base fields become ``evidence``. The Error dataclass is the schema
         source — no separate model to keep in sync.
+
+        Tenant identity is intentionally NOT included here. The producer
+        (the failing app) does not know or carry tenant context; per-tenant
+        attribution is the consumer's responsibility (the Automation Engine
+        or another consumer reading ``ApplicationError.details`` attaches
+        tenant from its own context at ingest time).
         """
         from application_sdk.errors.wire import FailureDetails  # noqa: PLC0415
 
