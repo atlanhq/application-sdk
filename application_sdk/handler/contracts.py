@@ -179,7 +179,9 @@ class PreflightInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use during preflight."""
 
-    connection_config: BaseConnectionConfig = Field(default_factory=BaseConnectionConfig)
+    connection_config: BaseConnectionConfig = Field(
+        default_factory=BaseConnectionConfig
+    )
     """Connection configuration (host, port, database, etc.).
 
     Pass a :class:`BaseConnectionConfig` subclass for strong typing.  Raw dicts
@@ -275,7 +277,9 @@ class MetadataInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use for metadata discovery."""
 
-    connection_config: BaseConnectionConfig = Field(default_factory=BaseConnectionConfig)
+    connection_config: BaseConnectionConfig = Field(
+        default_factory=BaseConnectionConfig
+    )
     """Connection configuration.
 
     Pass a :class:`BaseConnectionConfig` subclass for strong typing.  Raw dicts

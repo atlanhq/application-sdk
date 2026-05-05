@@ -1,20 +1,19 @@
-"""AgentCredentialSpec — typed Pydantic model for agent-shape credential payloads.
+"""Typed Pydantic models for agent-shape credential payloads.
 
-Replaces the untyped ``str`` / ``dict[str, Any]`` representation of
-``agent_json`` with a model that captures the ~80 % of the structure
-that is consistent across all connectors, while allowing connector-
-and auth-type-specific dotted keys (``basic.username``,
-``gcp-wif.extra.project_id``, …) to pass through as ``extra`` fields.
+Two base classes are exposed:
 
-The model accepts three input shapes:
+* :class:`AgentCredentialSpec` — the original envelope. Has
+  ``extra="allow"`` to accept connector-specific dotted keys
+  (``basic.username``, ``noauth.extra.security_protocol``, …) without
+  declaring them up-front.  Kept for backward compatibility.
 
-* **JSON string** — the wire format from Argo / Temporal.
-* **dict** — an already-parsed dict (e.g. from ``input.model_dump()``).
-* **AgentCredentialSpec instance** — returned as-is.
+* :class:`TypedAgentCredentialSpec` — forward-looking base for new
+  connectors.  Has ``extra="forbid"``, so subclasses must declare
+  every dotted key they expect.  Unknown keys raise a validation
+  error at parse time, catching contract drift early.
 
-Connector-specific keys (everything not in the typed envelope) land in
-:pyattr:`pydantic.BaseModel.model_extra` and are accessible via
-:meth:`to_raw_dict`.
+Both accept the same input shapes (JSON string / dict / instance) and
+flow through the resolver identically via :meth:`to_raw_dict`.
 """
 
 from __future__ import annotations
@@ -33,26 +32,17 @@ class AgentCredentialSpec(BaseModel):
     ``noauth.extra.security_protocol``, …) are captured by
     ``extra="allow"`` and are available via :meth:`to_raw_dict`.
 
-    Examples of payloads this model handles::
+    .. note::
 
-        # JDBC — CloudSQL Postgres (basic auth)
-        {"agent-name": "cloudsql-postgres-agent", "secret-manager": "awssecretmanager",
-         "secret-path": "atlan/dev/cloudsql", "auth-type": "basic",
-         "host": "34.x.x.x", "port": 5432,
-         "basic.username": "username", "basic.password": "password",
-         "extra.database": "postgres"}
-
-        # API — BigQuery (GCP WIF auth)
-        {"agent-name": "bigquery-gke-bq-agent", "secret-manager": "gcpsecretmanager",
-         "secret-path": "...", "auth-type": "gcp-wif",
-         "host": "https://bigquery.googleapis.com", "port": 443,
-         "gcp-wif.extra.project_id": "my-project", ...}
-
-        # Streaming — Kafka (noauth)
-        {"agent-name": "kafka-agent", "secret-manager": "awssecretmanager",
-         "secret-path": "atlan-dev-kafka", "auth-type": "noauth",
-         "host": "broker:9092", "port": 9092,
-         "noauth.extra.security_protocol": "PLAINTEXT", ...}
+        ``extra="allow"`` here is **transitional**, kept for connectors
+        whose dotted-key schemas have not yet been declared explicitly.
+        New connectors should subclass :class:`TypedAgentCredentialSpec`
+        instead — that base disallows extras, so unknown dotted keys
+        fail validation at parse time and contract drift is caught
+        early.  Existing connectors can keep using this base; the
+        resolver flow (:meth:`to_raw_dict` → secret-bundle substitution
+        → flat dict) is unchanged whether the input is a base or a
+        typed subclass.
     """
 
     model_config = ConfigDict(
@@ -159,3 +149,40 @@ class AgentCredentialSpec(BaseModel):
     def is_populated(self) -> bool:
         """Return True if this spec carries a real agent payload."""
         return bool(self.agent_name)
+
+
+class TypedAgentCredentialSpec(AgentCredentialSpec):
+    """Forward-looking base for agent-shape credential payloads.
+
+    Subclass this (instead of :class:`AgentCredentialSpec`) to declare
+    every connector-specific dotted key explicitly.  ``extra="forbid"``
+    means unknown keys raise a validation error at parse time, so
+    contract drift is caught early instead of failing in some
+    downstream consumer.
+
+    Example — subclass with explicit dotted-key fields::
+
+        from pydantic import Field
+        from application_sdk.credentials.spec import TypedAgentCredentialSpec
+
+        class MyAppAgentSpec(TypedAgentCredentialSpec):
+            api_token: str = Field(default="", alias="api.token")
+            api_endpoint: str = Field(default="", alias="api.endpoint")
+            extra_region: str = Field(default="", alias="extra.region")
+
+    Wire it into the extraction input by overriding the field type::
+
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+
+        class MyAppExtractionInput(ExtractionInput):
+            agent_json: MyAppAgentSpec | None = None
+
+    The resolver flow is unchanged — :meth:`to_raw_dict` returns the
+    same flat dict shape, with dotted keys preserved via aliases.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        populate_by_name=True,
+    )
