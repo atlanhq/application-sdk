@@ -23,6 +23,33 @@ from pydantic.alias_generators import to_camel
 from application_sdk.contracts.base import SerializableEnum
 
 
+class BaseConnectionConfig(BaseModel):
+    """Base type for preflight and metadata connection configuration.
+
+    Replaces ``dict[str, Any]`` as the type of ``PreflightInput.connection_config``
+    and ``MetadataInput.connection_config``.  Extra fields are accepted so that
+    existing callers that pass arbitrary dicts continue to work, but a one-time
+    ``UserWarning`` is emitted to encourage app authors to subclass::
+
+        class MyAppConnectionConfig(BaseConnectionConfig):
+            include_filter: str = Field(default="{}", alias="include-filter")
+            exclude_filter: str = Field(default="{}", alias="exclude-filter")
+
+    The subclass can then be used directly in the handler::
+
+        async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+            config = MyAppConnectionConfig.model_validate(
+                input.connection_config.model_dump()
+            )
+
+    If the UI is generated from the contract toolkit (app.pkl), the subclass
+    fields should mirror the ``uiConfig.tasks[*].inputs`` entries so the
+    generated preflight metadata contract stays aligned with the UI contract.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
 class HandlerCredential(BaseModel):
     """A single credential key-value pair for HTTP handler inputs.
 
@@ -132,8 +159,12 @@ class PreflightInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use during preflight."""
 
-    connection_config: dict[str, Any] = {}
-    """Connection configuration (host, port, database, etc.)."""
+    connection_config: BaseConnectionConfig = Field(default_factory=BaseConnectionConfig)
+    """Connection configuration (host, port, database, etc.).
+
+    Pass a :class:`BaseConnectionConfig` subclass for strong typing.  Raw dicts
+    are accepted for backward compatibility via ``extra="allow"``.
+    """
 
     checks_to_run: list[str] = []
     """Specific checks to run (empty = run all)."""
@@ -212,8 +243,12 @@ class MetadataInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use for metadata discovery."""
 
-    connection_config: dict[str, Any] = {}
-    """Connection configuration."""
+    connection_config: BaseConnectionConfig = Field(default_factory=BaseConnectionConfig)
+    """Connection configuration.
+
+    Pass a :class:`BaseConnectionConfig` subclass for strong typing.  Raw dicts
+    are accepted for backward compatibility via ``extra="allow"``.
+    """
 
     object_filter: str = ""
     """Filter pattern (e.g., 'public.*', 'mydb.myschema.*')."""
