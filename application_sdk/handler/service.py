@@ -59,7 +59,7 @@ from application_sdk.constants import (
     LOCAL_ENVIRONMENT,
 )
 from application_sdk.handler.base import Handler, HandlerError
-from application_sdk.handler.context import HandlerContext
+from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
     EventTriggerConfig,
@@ -501,49 +501,49 @@ def create_app_handler_service(
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
         context = _create_context(credentials)
-        handler._context = context
-
-        try:
-            logger.info(
-                "Auth test started: app=%s request=%s", app_name, context.request_id_str
-            )
-            result = await handler.test_auth(auth_input)
-            logger.info(
-                "Auth test completed: app=%s request=%s status=%s",
-                app_name,
-                context.request_id_str,
-                result.status.value,
-            )
-            return JSONResponse(
-                status_code=result.status.http_status,
-                content=_wrap_response(
-                    result.model_dump(),
-                    message=result.message or f"Authentication {result.status.value}",
-                    success=result.status.is_success,
-                ),
-            )
-        except HandlerError as e:
-            logger.error(
-                "Auth test failed for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except Exception as e:
-            logger.error(
-                "Auth test failed unexpectedly for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-        finally:
-            handler._context = None
+        with bind_handler_context(context):
+            try:
+                logger.info(
+                    "Auth test started: app=%s request=%s",
+                    app_name,
+                    context.request_id_str,
+                )
+                result = await handler.test_auth(auth_input)
+                logger.info(
+                    "Auth test completed: app=%s request=%s status=%s",
+                    app_name,
+                    context.request_id_str,
+                    result.status.value,
+                )
+                return JSONResponse(
+                    status_code=result.status.http_status,
+                    content=_wrap_response(
+                        result.model_dump(),
+                        message=result.message
+                        or f"Authentication {result.status.value}",
+                        success=result.status.is_success,
+                    ),
+                )
+            except HandlerError as e:
+                logger.error(
+                    "Auth test failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except Exception as e:
+                logger.error(
+                    "Auth test failed unexpectedly for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Preflight
@@ -558,62 +558,60 @@ def create_app_handler_service(
             for c in preflight_input.credentials
         ]
         context = _create_context(credentials)
-        handler._context = context
-
-        try:
-            logger.info(
-                "Preflight check started: app=%s request=%s",
-                app_name,
-                context.request_id_str,
-            )
-            result = await handler.preflight_check(preflight_input)
-            logger.info(
-                "Preflight check completed: app=%s request=%s status=%s checks=%d",
-                app_name,
-                context.request_id_str,
-                result.status.value,
-                len(result.checks),
-            )
-            # Build v2-compatible response: each check becomes a top-level
-            # key in data so the frontend can iterate check names directly.
-            # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
-            v2_data: dict[str, Any] = {}
-            for check in result.checks:
-                # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
-                key = check.name[0].lower() + check.name[1:]
-                v2_data[key] = {
-                    "success": check.passed,
-                    "message": check.message or "",
-                }
-            return JSONResponse(
-                content=_wrap_response(
-                    v2_data,
-                    message=result.message or f"Preflight check {result.status.value}",
-                    success=result.status == PreflightStatus.READY,
+        with bind_handler_context(context):
+            try:
+                logger.info(
+                    "Preflight check started: app=%s request=%s",
+                    app_name,
+                    context.request_id_str,
                 )
-            )
-        except HandlerError as e:
-            logger.error(
-                "Preflight check failed for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except Exception as e:
-            logger.error(
-                "Preflight check failed unexpectedly for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-        finally:
-            handler._context = None
+                result = await handler.preflight_check(preflight_input)
+                logger.info(
+                    "Preflight check completed: app=%s request=%s status=%s checks=%d",
+                    app_name,
+                    context.request_id_str,
+                    result.status.value,
+                    len(result.checks),
+                )
+                # Build v2-compatible response: each check becomes a top-level
+                # key in data so the frontend can iterate check names directly.
+                # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
+                v2_data: dict[str, Any] = {}
+                for check in result.checks:
+                    # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
+                    key = check.name[0].lower() + check.name[1:]
+                    v2_data[key] = {
+                        "success": check.passed,
+                        "message": check.message or "",
+                    }
+                return JSONResponse(
+                    content=_wrap_response(
+                        v2_data,
+                        message=result.message
+                        or f"Preflight check {result.status.value}",
+                        success=result.status == PreflightStatus.READY,
+                    )
+                )
+            except HandlerError as e:
+                logger.error(
+                    "Preflight check failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except Exception as e:
+                logger.error(
+                    "Preflight check failed unexpectedly for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Metadata
@@ -628,53 +626,50 @@ def create_app_handler_service(
             for c in metadata_input.credentials
         ]
         context = _create_context(credentials)
-        handler._context = context
+        with bind_handler_context(context):
+            try:
+                logger.info(
+                    "Metadata fetch started: app=%s request=%s",
+                    app_name,
+                    context.request_id_str,
+                )
+                result = await handler.fetch_metadata(metadata_input)
 
-        try:
-            logger.info(
-                "Metadata fetch started: app=%s request=%s",
-                app_name,
-                context.request_id_str,
-            )
-            result = await handler.fetch_metadata(metadata_input)
-
-            # Both SqlMetadataOutput and ApiMetadataOutput expose
-            # .objects — model_dump() produces the correct shape for
-            # the corresponding frontend widget (sqltree / apitree).
-            data = [obj.model_dump() for obj in result.objects]
-            count = len(result.objects)
-            logger.info(
-                "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
-                app_name,
-                context.request_id_str,
-                type(result).__name__,
-                count,
-            )
-            return JSONResponse(
-                content=_wrap_response(data, message=f"Fetched {count} objects")
-            )
-        except HandlerError as e:
-            logger.error(
-                "Metadata fetch failed for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except Exception as e:
-            logger.error(
-                "Metadata fetch failed unexpectedly for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-        finally:
-            handler._context = None
+                # Both SqlMetadataOutput and ApiMetadataOutput expose
+                # .objects — model_dump() produces the correct shape for
+                # the corresponding frontend widget (sqltree / apitree).
+                data = [obj.model_dump() for obj in result.objects]
+                count = len(result.objects)
+                logger.info(
+                    "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
+                    app_name,
+                    context.request_id_str,
+                    type(result).__name__,
+                    count,
+                )
+                return JSONResponse(
+                    content=_wrap_response(data, message=f"Fetched {count} objects")
+                )
+            except HandlerError as e:
+                logger.error(
+                    "Metadata fetch failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except Exception as e:
+                logger.error(
+                    "Metadata fetch failed unexpectedly for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Workflow lifecycle
