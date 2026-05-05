@@ -11,6 +11,41 @@ by `LogInterceptor` already carry `exception.type`, `exception.message`,
 `atlan.exception.cause_chain`, and `atlan.exception.fingerprint` — do not
 duplicate that detail as metric labels.
 
+## Understanding cardinality
+
+Authoritative definitions from the
+[VictoriaMetrics FAQ](https://docs.victoriametrics.com/FAQ.html):
+
+| Term | Definition |
+|---|---|
+| **Time series** | A unique combination of metric name + label key/value set. `chunks_written_total{type="pandas",mode="append"}` and `chunks_written_total{type="parquet",mode="append"}` are two distinct series of the same metric. |
+| **Active time series** ([VM docs](https://docs.victoriametrics.com/FAQ.html#what-is-an-active-time-series)) | A series that received at least one sample in the last hour. The metric of operational interest — what the TSDB has to keep "hot" in memory for fast lookups. |
+| **Cardinality** ([VM docs](https://docs.victoriametrics.com/FAQ.html#what-is-high-cardinality)) | The total number of distinct active time series. "High cardinality" is when this number is high enough to cause memory pressure or slow inserts. |
+| **Churn rate** ([VM docs](https://docs.victoriametrics.com/FAQ.html#what-is-high-churn-rate)) | The rate at which old series are replaced by new ones — e.g. every pod restart or new release adds a new `instance` label value, retiring the old one. High churn bloats the on-disk index even if the active series count is bounded. |
+| **Slow inserts** ([VM docs](https://docs.victoriametrics.com/FAQ.html#what-is-a-slow-insert)) | The symptom: the in-memory active-series cache overflows, the TSDB falls back to disk lookups, write throughput drops. Caused by either high cardinality or high churn. |
+
+### Why the cardinality discipline matters
+
+A single carelessly-introduced label can multiply series count by orders
+of magnitude:
+
+- `error="some specific error message with timestamp 2026-05-04T12:00:00 and table foo"`
+  — every distinct message is a new series. Over time: thousands of new
+  series that never repeat (high churn) and accumulate in the index.
+- `workflow_id="<uuid>"` — every workflow run is one series. With 10 K
+  workflow runs per day, that's 10 K new series per day per metric.
+- `request_path="/api/users/12345/profile"` — without route templating
+  (`/api/users/{id}/profile`), every distinct path is a new series.
+
+Each of those exhibits both high cardinality (lots of unique combinations
+*right now*) **and** high churn (those combinations stop receiving samples
+quickly, get replaced). The TSDB pays twice: once for the active-series
+cache pressure, once for the index bloat from churn.
+
+The bounded label discipline below is what keeps an Atlan app's surface
+sub-thousand active series — comfortably below any VM tier's slow-insert
+threshold — and keeps churn flat across releases.
+
 ## Critical Rules
 
 ### **Never use exception messages as metric labels**
@@ -126,7 +161,7 @@ body and grouping key"):
 
 | Reserved label | Set by |
 |---|---|
-| `job` | `PushGatewayClient.job` (e.g. `teradata-app-worker`) |
+| `job` | `PushGatewayClient.job` (e.g. `<app-name>-worker`) |
 | `instance` | `_default_grouping_key` → `socket.gethostname()` |
 
 ## Approved Label Keys
@@ -192,6 +227,99 @@ requests.add(1, {"sql": query_text})           # explodes
 # RIGHT
 requests.add(1, {"endpoint": "/foo", "status": "ok"})  # bounded
 ```
+
+## Volume estimate (current SDK surface)
+
+These numbers describe a split-deployment app (1 server pod + 1 worker
+pod) running on the SDK's current observability surface. They're
+order-of-magnitude — meant for headroom planning and to make the cost
+of new metrics visible — and don't replace measuring your own
+deployment.
+
+### Per server pod (handler / combined mode)
+
+| Source | Active series |
+|---|---|
+| FastAPI HTTP server instrumentation | ~30 (templated `http.route`, status code, method) |
+| SDK custom metrics (`record_metric()`) | ~5 |
+| Temporal Rust core (proxied through `/metrics`) | ~150 |
+| `prometheus_client` defaults (`python_*`, `process_*`) | ~20 |
+| **Total per pod** | **≈ 200 active series** |
+
+At a 15 s scrape interval that's ~800 K samples per pod per day.
+
+### Per worker pod (split deployment, push to Pushgateway)
+
+| Source | Active series |
+|---|---|
+| SDK custom metrics + interceptor `temporal_*` (record_metric path) | ~380 |
+| Temporal Rust core (via `TemporalCoreCollector` bridge) | ~460 |
+| `prometheus_client` defaults | ~20 |
+| **Total per pod** | **≈ 840 active series** |
+
+At a 30 s push interval that's ~2.4 M samples per pod per day pushed to
+the Pushgateway.
+
+### Per app (one server + one worker, split-deployment)
+
+- **~1,040 active series**
+- **~3.2 M samples/day**
+
+### Headroom
+
+- VictoriaMetrics single-node tier handles ~10 M active series with
+  sub-second insert latency on 8-core / 32 GB. A single app is at
+  ~0.01 % of that ceiling; even a fleet of dozens of comparable apps
+  stays well under 1 %.
+- Churn from daily releases adds ~1,000 new pod-instance series per
+  app per day. With 30-day retention, the index carries ~30 K series
+  fingerprints per app — well under the slow-inserts threshold.
+
+### Multi-tenant SaaS fanout vs. cardinality bombs
+
+These two scaling vectors look superficially similar but have very
+different cost profiles, and the doc above conflated them in an earlier
+draft. Both increase the series count, but only one is a problem.
+
+**Multi-tenant fanout (safe, linear).** Each customer's pod adds a
+constant `tenant_id` / `cluster_name` label to every series it emits
+— the value is fixed for that pod's lifetime, same shape as the
+`app_name` / `app_version` resource enrichment we already inline.
+Series count scales linearly with the number of customers running
+the app:
+
+  - 100 customers × ~1,040 series/app = ~104 K active series — fine
+  - 1,000 customers × 1,040 = ~1 M — still well within VM single-node
+  - 10,000 customers × 1,040 = ~10 M — at single-node ceiling, time
+    to plan VMCluster sharding, but not a *cardinality bug*
+
+This is the normal SaaS pattern and what VM is built to handle.
+
+**Intra-pod cardinality bomb (dangerous, multiplicative).** A label
+whose value varies *within a single pod's lifetime* multiplies the
+series count regardless of how many customers you have:
+
+  - `workflow_id` — UUID per workflow run; one pod processing
+    1,000 workflows/day adds 1,000 new series per metric per pod per day
+  - `request_id`, `correlation_id` — per-request, same shape
+  - `error="<full message>"` — per occurrence; embeds session IDs,
+    file paths, error codes
+  - `query_text`, `path` (raw, not route-templated) — varies per call
+
+These both inflate the active count *and* contribute high churn. A
+single such label can take a pod from ~840 active series to hundreds
+of thousands — and the storage cost compounds across every customer
+running the app.
+
+**Other things that change the math:**
+
+- Doubling the worker replica count doubles the worker active-series
+  contribution per customer (worker side dominates the per-app number).
+- An app whose `temporal_*` metrics fan out across thousands of
+  distinct task queues or build IDs (similar shape to known cardinality
+  bugs on the Temporal **server** side) could grow per-pod active
+  series into the hundreds of thousands. Worth a separate analysis if
+  you see this pattern.
 
 ## Review Checklist for Metric-related PRs
 
