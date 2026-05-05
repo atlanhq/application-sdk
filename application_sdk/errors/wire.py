@@ -33,12 +33,20 @@ class FailureDetails(BaseModel):
 
     Field semantics:
     - ``category``: the closed FailureCategory enum — what happened.
-    - ``audience``: who needs to act (USER / PLATFORM / FRAMEWORK / UNKNOWN).
+    - ``audience``: who needs to act (USER / PLATFORM / APP_OWNER). Closed
+      three-value enum; every leaf must pick one. There is no UNKNOWN
+      escape hatch — if the locus is unclear the answer is APP_OWNER
+      (the team that wrote the code investigates and reclassifies).
     - ``code``: app-owned string for fine-grained identification.
     - ``suggested_action``: optional imperative hint ("regrant Glue read access").
-      Audience-neutral — survives whether the reader is a customer, an on-call
-      engineer, or a runbook agent.
+      The voice shifts with the audience: customer-facing text when
+      ``audience=USER``, engineer-facing remediation when ``audience=APP_OWNER``,
+      runbook hint when ``audience=PLATFORM``.
     - ``evidence``: per-error context whose schema is the producing dataclass.
+    - ``tenant_id``: identifies which tenant's pod produced the failure.
+      Read from the SDK ``APP_TENANT_ID`` constant; consumers reading the
+      failure via Temporal's API only see ``ApplicationError.details`` (no
+      k8s resource attributes) so per-tenant routing depends on this field.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -46,11 +54,12 @@ class FailureDetails(BaseModel):
     category: FailureCategory
     code: str
     retryable: bool
-    audience: Audience = Audience.UNKNOWN
+    audience: Audience = Audience.APP_OWNER
     message: str
     suggested_action: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
     app_name: str | None = None
+    tenant_id: str | None = None
     run_id: str | None = None
     cause_repr: str | None = None
 

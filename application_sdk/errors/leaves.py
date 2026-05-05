@@ -17,7 +17,7 @@ class CancelledError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.CANCELLED
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "CANCELLED"
-    audience: ClassVar[Audience] = Audience.UNKNOWN
+    audience: ClassVar[Audience] = Audience.APP_OWNER
 
 
 @dataclass(kw_only=True)
@@ -25,10 +25,11 @@ class AppTimeoutError(AppError):
     """A bounded wait elapsed.
 
     Use for network reads, activity start-to-close limits, and heartbeat
-    timeouts.  Default audience is UNKNOWN because the locus varies: a source
-    network timeout is USER-fixable (increase timeout / check VPC), while an
-    internal Temporal deadline is DEPENDENCY-routed.  Override ``audience``
-    on leaf subclasses when the locus is known.
+    timeouts.  Default audience is APP_OWNER because the locus is rarely
+    obvious and the app team is best placed to investigate and reclassify
+    (a source network timeout is USER-fixable; an internal Temporal deadline
+    is PLATFORM-routed).  Override ``audience`` on leaf subclasses when the
+    locus is known — do not leave it as the default if you can pick.
 
     Builtin ``TimeoutError`` is available as ``application_sdk.errors.TimeoutError``
     for code that catches the SDK name without renaming.
@@ -41,7 +42,7 @@ class AppTimeoutError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.TIMEOUT
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "TIMEOUT"
-    audience: ClassVar[Audience] = Audience.UNKNOWN
+    audience: ClassVar[Audience] = Audience.APP_OWNER
 
 
 @dataclass(kw_only=True)
@@ -193,7 +194,7 @@ class DataIntegrityError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.DATA_INTEGRITY
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "DATA_INTEGRITY"
-    audience: ClassVar[Audience] = Audience.FRAMEWORK
+    audience: ClassVar[Audience] = Audience.APP_OWNER
 
 
 @dataclass(kw_only=True)
@@ -205,7 +206,7 @@ class InternalError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.INTERNAL
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "INTERNAL"
-    audience: ClassVar[Audience] = Audience.FRAMEWORK
+    audience: ClassVar[Audience] = Audience.APP_OWNER
 
 
 @dataclass(kw_only=True)
@@ -222,4 +223,4 @@ class UnimplementedError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.UNIMPLEMENTED
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "UNIMPLEMENTED"
-    audience: ClassVar[Audience] = Audience.FRAMEWORK
+    audience: ClassVar[Audience] = Audience.APP_OWNER

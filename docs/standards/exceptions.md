@@ -246,7 +246,7 @@ When reviewing code, check for:
   ```
   The legacy `application_sdk/common/error_codes.py` `AAF-{COMP}-{ID:03d}` format is retained for backward compatibility only — do not use it in new code.
 
-- **Audience routing**: Each leaf sets a default `audience` (`USER | PLATFORM | FRAMEWORK | UNKNOWN`) that downstream consumers (AE, SLA dashboards) use to route the failure. Override it on a custom subclass when the default doesn't fit.
+- **Audience routing**: Each leaf sets a default `audience` (`USER | PLATFORM | APP_OWNER`) that downstream consumers (AE, SLA dashboards) use to route the failure. Override it on a custom subclass when the default doesn't fit. The enum is closed three-valued — there is no `UNKNOWN` escape hatch; if the locus is unclear, the answer is `APP_OWNER` (the team that wrote the code investigates and reclassifies).
 - **Logging**: Use `AtlanLoggerAdapter` for all logging with proper context
 - **Context**: Always include relevant context in error messages (query, filename, operation, etc.)
 - **Documentation**: Document all exceptions that functions can raise in docstrings
