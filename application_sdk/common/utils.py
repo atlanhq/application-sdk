@@ -663,9 +663,11 @@ async def resolve_credential_file(
        auth is already configured), and the file content never traverses
        Atlan — only the path string does.
 
-       Some customers also use this path for sensitive files (e.g. keytabs)
-       when their secret manager has a value-size cap that the file exceeds,
-       falling back on bucket-level IAM as the security envelope.
+       **Not** intended for true secrets. Anything sensitive (passwords,
+       keytabs, private keys) belongs in the secret-store branch (#3
+       below) so it benefits from secret-manager controls (audit, rotation,
+       break-glass). Use this branch only for the non-secret companion
+       files that ship alongside a credential.
 
     3. **Base64-encoded file content** (raw string, no prefix):
        ``"BQIAAAABAAoASElWRS5MT0NBTA..."``. Used for **true secrets** — the
