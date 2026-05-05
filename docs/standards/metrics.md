@@ -96,6 +96,39 @@ record_metric(name="records_written", labels={"format": "parquet", "engine": "da
 (Note: the SDK currently has the legacy fragmented form. New metrics should
 follow the unified pattern.)
 
+## Inline resource enrichment (always present)
+
+Six per-process-constant resource attributes are inlined onto **every**
+metric series by `EnrichedPrometheusMetricReader` (and onto Temporal
+Rust-core series via `TelemetryConfig.global_tags`). Don't duplicate
+them in `record_metric()` calls — they're added automatically:
+
+| Always-present label | OTel resource source |
+|---|---|
+| `app_name` | `app.name` |
+| `app_version` | `app.version` |
+| `app_type` | `app.type` |
+| `app_release_channel` | `app.release_channel` |
+| `app_release_id` | `app.release_id` |
+| `app_sdk_version` | `app.sdk_version` |
+
+These are constants for the lifetime of the process — they multiply
+series count by 1 (no live cardinality cost). Cross-app aggregations
+like `sum by (app_name) (rate(...))` work without a `target_info` JOIN.
+
+## Reserved by Pushgateway (worker mode)
+
+When the worker pushes to a Pushgateway, two labels are added by the
+gateway from the push grouping key. **Do NOT pass them as labels in
+`record_metric()` calls** — the duplicate would cause Pushgateway to
+reject the push with `400 Bad Request` ("label appears in both metric
+body and grouping key"):
+
+| Reserved label | Set by |
+|---|---|
+| `job` | `PushGatewayClient.job` (e.g. `teradata-app-worker`) |
+| `instance` | `_default_grouping_key` → `socket.gethostname()` |
+
 ## Approved Label Keys
 
 For metrics emitted via `record_metric()` or via the OTel meter, the
@@ -103,7 +136,6 @@ canonical bounded label set is:
 
 | Key | Source | Bounded by |
 |---|---|---|
-| `app_name` | `get_metric_labels()` | `APPLICATION_NAME` constant |
 | `workflow_type` | `get_metric_labels()` | Number of registered workflow classes |
 | `activity_type` | `get_metric_labels()` | Number of registered activity functions |
 | `task_queue` | `MetricsInterceptor` | Number of task queues per app (typically 1-2) |
@@ -116,6 +148,31 @@ canonical bounded label set is:
 | `error_type` | `record_metric` callers | `type(e).__name__` |
 
 Any new label not on this list needs justification: prove it's bounded.
+
+(Note: `app_name` is also automatically present per the inline
+enrichment above — don't pass it explicitly in `record_metric()`.)
+
+## Canonical metric inventory
+
+Names emitted by the consolidated SDK surface (all use OTel base units
+— seconds for durations, bytes for sizes — and snake_case with the
+`_total` suffix on counters):
+
+| Metric | Type | Source |
+|---|---|---|
+| `chunks_written_total` | counter | `record_metric()` in `storage/formats/` |
+| `write_records_total` | counter | same |
+| `write_errors_total` | counter | same |
+| `temporal_activity_executions_total` | counter | `MetricsInterceptor` |
+| `temporal_activity_errors_total` | counter | same (label `exception_type=type(e).__name__`) |
+| `temporal_activity_duration_seconds` | histogram | same |
+| `temporal_workflow_executions_total` | counter | same |
+| `temporal_workflow_duration_seconds` | histogram | same |
+| `http_server_request_duration_seconds` | histogram | FastAPIInstrumentor (stable HTTP semconv) |
+| `http_server_request_body_size_bytes` | histogram | same |
+| `http_server_response_body_size_bytes` | histogram | same |
+| `http_server_active_requests` | gauge | same |
+| `temporal_*` (Rust-core families) | various | Temporal SDK Rust core, scraped via FastAPI proxy or pushed via `TemporalCoreCollector` |
 
 ## User-facing Metrics Shim
 

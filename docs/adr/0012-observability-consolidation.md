@@ -32,16 +32,40 @@ seven-interceptor stack on the Temporal worker:
 ### Server side
 
 - Replace `MetricsMiddleware` with `opentelemetry-instrumentation-fastapi`.
-  HTTP metrics now use OTel semantic conventions
-  (`http.server.duration`, `http.server.active_requests`) with
-  **route-templated** `http.route` labels, eliminating the cardinality
-  blow-up.
+  HTTP metrics now use the **stable** OTel HTTP semantic conventions
+  (`http.request.method`, `http.route`, `server.address`,
+  `network.protocol.version`, `http.response.status_code`) — opt-in via
+  `OTEL_SEMCONV_STABILITY_OPT_IN=http`. The metric `http_server_duration_milliseconds`
+  is renamed to `http_server_request_duration_seconds` (unit corrected
+  from ms → seconds; matches the upstream-recommended base unit). Route
+  templating eliminates the path-cardinality blow-up.
 - Rewrite the `/metrics` endpoint to merge two sources into one response:
   the OTel `PrometheusMetricReader` registry and the Temporal Runtime's
   loopback Rust-core endpoint. Operators get **one** scrape target per
   server pod.
 - Bind Temporal Runtime to `127.0.0.1:9464` so the second port is not
   externally reachable.
+
+### Resource-attribute enrichment (inline on every series)
+
+`EnrichedPrometheusMetricReader` injects a bounded subset of OTel
+resource attributes onto every metric series so PromQL doesn't need a
+`target_info` JOIN to filter by app:
+
+| Label (Prometheus) | Source (OTel) |
+|---|---|
+| `app_name` | `app.name` |
+| `app_version` | `app.version` |
+| `app_type` | `app.type` |
+| `app_release_channel` | `app.release_channel` |
+| `app_release_id` | `app.release_id` |
+| `app_sdk_version` | `app.sdk_version` |
+
+All six are per-process constants — adding them as labels multiplies
+series count by 1 (no live cardinality cost; co-vary 1:1 with `instance`).
+The same enrichment is mirrored onto Temporal Rust-core metrics via
+`TelemetryConfig.global_tags`, so the previously-unenriched `temporal_*`
+families now match the rest of the surface.
 
 ### Worker side — 7 interceptors → 3
 
@@ -76,8 +100,28 @@ seven-interceptor stack on the Temporal worker:
   off — `/metrics` already covers everything via in-process proxy and
   pushing would double-count.
 - Multi-pod safety: hostname-keyed grouping prevents cross-generation
-  overwrite. Optional `ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN`
-  for graceful exits.
+  overwrite.
+- **`DELETE_ON_SHUTDOWN` defaults to `true`** — graceful exits drop
+  their group from the gateway, no leak. Pushgateway has no built-in
+  TTL, so without this every pod ever scraped leaked its series until
+  manually deleted.
+- **Startup sweep:** every new worker pod, before its first push, reaps
+  any stale `{job=mine, instance=other}` groups left by predecessors
+  that died ungracefully (OOM kill, eviction, SIGKILL, node loss —
+  cases where `DELETE_ON_SHUTDOWN` doesn't fire). Four safety guards:
+  strict job-equality, skip own grouping_key, threshold gate (default
+  300s — protects live siblings during rolling deploys), per-group
+  soft-fail. Runs once on startup; never blocks the periodic loop.
+- **Bounded HTTP timeout** (default 10s, env
+  `ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS`) on every gateway
+  call (push, sweep GET, sweep DELETE, final push, final DELETE).
+  Without this, a downed gateway would burn the prometheus_client
+  default 30s × 2 calls at shutdown and exhaust Kubernetes'
+  `terminationGracePeriodSeconds`.
+- **Metrics is best-effort, never blocks the worker.**
+  `_start_metrics_push` is wrapped in `try/except` at the worker's
+  `__aenter__` / `run()` boundary so any unexpected metrics failure
+  cannot prevent the worker from accepting Temporal tasks.
 
 ### App Vitals
 
@@ -123,9 +167,15 @@ dev-workstation convenience and unused in production.
 `TRACES_*` (batch / flush / retention / cleanup),
 `enable_correlation_interceptor`.
 
-**Added:** `ATLAN_PROMETHEUS_PUSHGATEWAY_URL`,
-`ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS`,
-`ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN`.
+**Added:**
+- `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` (no default — opt out by leaving unset)
+- `ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS` (default `30`)
+- `ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN` (default **`true`**)
+- `ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START` (default `true`)
+- `ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS` (default `300`)
+- `ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS` (default `10`)
+- `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` (Temporal worker drain delay before
+  transport teardown — see PR #1174)
 
 ## Consequences
 
@@ -161,11 +211,15 @@ dev-workstation convenience and unused in production.
 
 ### Sequenced rollout
 
-1. SDK PR ships first.
-2. ClickHouse views + Prometheus dashboards / alerts updated to read
+1. **atlan-app chart PRs** (preprod / staging / beta lanes) ship first
+   so clusters understand the new chart values that pair with this SDK
+   release.
+2. **This SDK PR** ships next.
+3. **global-marketplace** auto-injection PR follows.
+4. ClickHouse views + Prometheus dashboards / alerts updated to read
    the new attribute / metric names.
-3. SDK consumers bump the dependency only after step 2 has merged into
-   the environments scraping them.
+5. SDK consumer apps bump the dependency only after step 4 has merged
+   into the environments scraping them.
 
 ## Alternatives considered
 
