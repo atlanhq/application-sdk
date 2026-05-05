@@ -50,6 +50,26 @@ class BaseConnectionConfig(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
+class BaseMetadataConfig(BaseModel):
+    """Base type for form-level metadata forwarded alongside preflight credentials.
+
+    Captures the UI form state sent by the frontend (extraction type, filter
+    keys, user-entered prefixes, etc.).  Apps subclass this to declare fields
+    explicitly::
+
+        class MyAppMetadataConfig(BaseMetadataConfig):
+            include_filter: str = Field(default="{}", alias="include-filter")
+            exclude_filter: str = Field(default="{}", alias="exclude-filter")
+            extraction_method: str = Field(default="api", alias="extraction-method")
+
+    If the UI is generated from the contract toolkit (app.pkl), the subclass
+    fields should mirror the ``uiConfig.tasks[*].inputs`` entries so the
+    generated metadata contract stays aligned with the UI contract.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
 class HandlerCredential(BaseModel):
     """A single credential key-value pair for HTTP handler inputs.
 
@@ -166,7 +186,7 @@ class PreflightInput(BaseModel):
     are accepted for backward compatibility via ``extra="allow"``.
     """
 
-    metadata: BaseConnectionConfig = Field(default_factory=BaseConnectionConfig)
+    metadata: BaseMetadataConfig = Field(default_factory=BaseMetadataConfig)
     """Form-level metadata forwarded by heracles alongside the credential.
 
     Contains the full UI form state (extraction type, source, user-entered
@@ -174,7 +194,7 @@ class PreflightInput(BaseModel):
     form fields unavailable in the credential body can read them here.
     All other handlers can ignore this field safely.
 
-    Pass a :class:`BaseConnectionConfig` subclass for strong typing.  Raw dicts
+    Pass a :class:`BaseMetadataConfig` subclass for strong typing.  Raw dicts
     are accepted for backward compatibility via ``extra="allow"``.
     """
 
