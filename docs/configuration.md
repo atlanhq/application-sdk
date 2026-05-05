@@ -21,9 +21,9 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 | `ATLAN_CONTRACT_GENERATED_DIR` | `app/generated` | Directory for generated contract JSON (configmaps, manifest). In Docker (`WORKDIR=/app`) this resolves to `/app/app/generated`. |
 | `ATLAN_FRONTEND_ASSETS_PATH` | `app/generated/frontend/static` | Path to static frontend assets served by the handler. |
 
-### App Vitals (release metadata)
+### Release metadata
 
-Injected by the Local Marketplace into the Helm release at deploy time. Leave empty for local development.
+Injected by the Local Marketplace into the Helm release at deploy time, and exposed to consumers via the OTel `target_info` gauge (one row per pod). Leave empty for local development.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

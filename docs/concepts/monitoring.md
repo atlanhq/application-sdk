@@ -26,10 +26,13 @@ target the FastAPI port (or the Pushgateway), never `:9464` directly.
 
 ### What's in the metric body
 
-Every emitted series carries six bounded resource-attribute labels
-inlined onto every sample (`app_name`, `app_version`, `app_type`,
-`app_release_channel`, `app_release_id`, `app_sdk_version`) so PromQL
-filtering by app/version/type works without `target_info` joins. See
+Every emitted series carries one inlined resource-attribute label —
+`app_name` — so the most common operator query (filter by connector)
+works without a `target_info` join. Per-release attributes
+(`app_version`, `app_release_id`, `app_sdk_version`,
+`app_release_channel`) and the rest of the OTel `Resource` travel via
+the `target_info` gauge (one row per pod) and are recovered at query
+time with `* on(instance) group_left(...) target_info`. See
 [Metrics Standards](../standards/metrics.md) for the cardinality rules
 that bound the rest of the label set.
 
@@ -232,7 +235,7 @@ When set, workflow log records are sent to both `OTEL_EXPORTER_OTLP_ENDPOINT` an
 
 ## Observability Store Sink
 
-By default, logs, metrics, and traces are also written to parquet files in the object store under `artifacts/apps/{app_name}/{deployment_name}/observability/`. This enables historical querying even when the OTLP pipeline is unavailable.
+By default, logs, metrics, and traces are also written to parquet files in the object store under `artifacts/apps/{app_name}/{deployment_name}/observability/`. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
 
 Control with:
 
