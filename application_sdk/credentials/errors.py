@@ -8,6 +8,7 @@ resolves there first) and from ``CredentialError`` (second base, so
 MRO convention: categorical leaf first, domain base second.
 """
 
+from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk.errors import (
@@ -21,11 +22,14 @@ from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
 
 
+@dataclass(kw_only=True)
 class CredentialError(AuthError):
     """Generic credential-subsystem failure (category=AUTH).
 
     Use more specific subclasses when the failure mode is known.
     """
+
+    credential_name: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_ERROR
     code: ClassVar[str] = "CREDENTIAL"
@@ -59,6 +63,7 @@ class CredentialError(AuthError):
         return " | ".join(parts)
 
 
+@dataclass(kw_only=True)
 class CredentialNotFoundError(NotFoundError, CredentialError):
     """The requested credential was not found in the secret store or registry.
 
@@ -90,6 +95,7 @@ class CredentialNotFoundError(NotFoundError, CredentialError):
         return " | ".join(parts)
 
 
+@dataclass(kw_only=True)
 class CredentialParseError(InvalidInputError, CredentialError):
     """Credential data could not be parsed (malformed payload).
 
@@ -132,6 +138,7 @@ class CredentialParseError(InvalidInputError, CredentialError):
         return " | ".join(parts)
 
 
+@dataclass(kw_only=True)
 class CredentialValidationError(InvalidInputError, CredentialError):
     """Credential failed schema or business-rule validation.
 

@@ -1,6 +1,7 @@
 """Secrets management abstraction."""
 
 import os
+from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
@@ -73,12 +74,15 @@ async def get_deployment_secret(key: str) -> Any:
         return None
 
 
+@dataclass(kw_only=True)
 class SecretStoreError(DependencyUnavailableError):
     """Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 
     Use ``SecretNotFoundError`` when the secret key is absent; use this class
     for connectivity, permission, or other store-level failures.
     """
+
+    secret_name: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
     code: ClassVar[str] = "SECRET_STORE"
@@ -112,6 +116,7 @@ class SecretStoreError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
+@dataclass(kw_only=True)
 class SecretNotFoundError(NotFoundError, SecretStoreError):
     """The requested secret key was not found in the secret store.
 

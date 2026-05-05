@@ -10,6 +10,7 @@ MRO convention: categorical leaf first, domain base second.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk.errors import (
@@ -28,11 +29,14 @@ from application_sdk.errors.leaves import (
 )
 
 
+@dataclass(kw_only=True)
 class StorageError(DependencyUnavailableError):
     """Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
 
     Use more specific subclasses when the failure mode is known.
     """
+
+    key: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
     code: ClassVar[str] = "STORAGE"
@@ -66,6 +70,7 @@ class StorageError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
+@dataclass(kw_only=True)
 class StorageNotFoundError(NotFoundError, StorageError):
     """Object or key not found in the store.
 
@@ -108,6 +113,7 @@ class StorageNotFoundError(NotFoundError, StorageError):
         return " | ".join(parts)
 
 
+@dataclass(kw_only=True)
 class StoragePermissionError(AppPermissionDeniedError, StorageError):
     """Bucket or object access denied.
 
@@ -150,6 +156,7 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
         return " | ".join(parts)
 
 
+@dataclass(kw_only=True)
 class StorageConfigError(InvalidInputError, StorageError):
     """Storage configuration is invalid (e.g., missing bucket name).
 
