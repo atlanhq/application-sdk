@@ -122,6 +122,19 @@ families now match the rest of the surface.
   `_start_metrics_push` is wrapped in `try/except` at the worker's
   `__aenter__` / `run()` boundary so any unexpected metrics failure
   cannot prevent the worker from accepting Temporal tasks.
+- **Pre-DELETE delay** (default 35s, env
+  `ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS`) holds the
+  group in the gateway between the final push and the
+  `DELETE_ON_SHUTDOWN` call so Prometheus has at least one scrape window
+  to read the final batch. Without it, the DELETE fires within
+  milliseconds of the push and Prometheus' next scrape finds nothing —
+  the last interval of metrics (often the failure increments that
+  triggered the scale-down) would be lost. The default of 35s is one
+  full 30s scrape interval (the cluster's vmagent default applied to
+  the Pushgateway scrape — confirmed by inspecting the rendered
+  `vmagent.env.yaml`) plus a 5s jitter buffer. Worker pods have a 12h
+  `terminationGracePeriodSeconds`, so the extra wait is negligible
+  against the kill timeout.
 
 ### App Vitals
 
@@ -174,6 +187,10 @@ dev-workstation convenience and unused in production.
 - `ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START` (default `true`)
 - `ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS` (default `300`)
 - `ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS` (default `10`)
+- `ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS` (default `35`) —
+  sleep between final push and DELETE so Prometheus can scrape the final
+  batch before the group is wiped (covers one full 30s cluster scrape
+  interval + 5s jitter)
 - `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` (Temporal worker drain delay before
   transport teardown — see PR #1174)
 

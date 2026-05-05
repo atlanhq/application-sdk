@@ -149,6 +149,7 @@ class PushGatewayClient:
         sweep_stale_on_start: bool = False,
         sweep_staleness_seconds: float = 300.0,
         http_timeout_s: float = 10.0,
+        shutdown_delete_delay_s: float = 35.0,
         registry: CollectorRegistry = REGISTRY,
         task_queue: str = "",
     ) -> None:
@@ -164,6 +165,7 @@ class PushGatewayClient:
         self._sweep_stale_on_start = sweep_stale_on_start
         self._sweep_staleness_seconds = sweep_staleness_seconds
         self._http_timeout_s = http_timeout_s
+        self._shutdown_delete_delay_s = shutdown_delete_delay_s
         self._registry = registry
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
@@ -215,6 +217,27 @@ class PushGatewayClient:
             logger.warning("Final Pushgateway push failed", exc_info=True)
 
         if self._delete_on_shutdown:
+            # Sleep before DELETE so Prometheus has at least one scrape window
+            # to read the just-pushed final batch. Without this, the DELETE
+            # fires within milliseconds of the push and Prometheus' next scrape
+            # finds nothing — the last interval of metrics (often the failure
+            # increments that triggered scale-down) is lost. Worker
+            # terminationGracePeriodSeconds is 12h so the wait is negligible
+            # against the kill timeout.
+            if self._shutdown_delete_delay_s > 0:
+                logger.info(
+                    "Holding Pushgateway group for %.0fs before DELETE so "
+                    "Prometheus can scrape the final push",
+                    self._shutdown_delete_delay_s,
+                )
+                try:
+                    await asyncio.sleep(self._shutdown_delete_delay_s)
+                except asyncio.CancelledError:
+                    # If shutdown is itself being cancelled (e.g. caller bound
+                    # __aexit__ to a tighter timeout), skip the delay and the
+                    # DELETE — the group will be reaped by the next pod's
+                    # startup sweep instead.
+                    raise
             try:
                 await asyncio.to_thread(self._delete_blocking)
             except Exception:

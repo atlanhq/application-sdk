@@ -187,6 +187,19 @@ PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS = float(
 PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS = float(
     os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS", "10")
 )
+#: Sleep interval between the final push and the DELETE_ON_SHUTDOWN call
+#: so Prometheus has at least one scrape opportunity to read the final
+#: batch before we wipe the group. Without this delay, the DELETE happens
+#: milliseconds after the push and the last push window of metrics — in
+#: particular, the activity-failure increments that often trigger the
+#: scale-down — never reaches Prometheus. Default 35s = one full 30s
+#: scrape interval (the cluster default for the Pushgateway scrape, see
+#: vmagent's rendered config) plus a 5s jitter buffer. Worker pods have a
+#: 12h terminationGracePeriodSeconds, so the extra wait doesn't approach
+#: the kill timeout. Set to 0 to disable.
+PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS = float(
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS", "35")
+)
 
 # REMOVED: ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING, WORKFLOW_UI_HOST,
 # WORKFLOW_UI_PORT, WORKFLOW_MAX_TIMEOUT_HOURS, WORKFLOW_HOST, WORKFLOW_PORT,

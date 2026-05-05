@@ -176,6 +176,7 @@ class TestPushGatewayClientPushNow:
             task_queue="tq",
             delete_on_shutdown=True,
             http_timeout_s=7.5,
+            shutdown_delete_delay_s=0,
         )
         with patch(_PUSH_TARGET), patch(_DELETE_TARGET) as mock_delete:
             await c.stop()
@@ -194,6 +195,7 @@ class TestPushGatewayClientStop:
             job="j",
             task_queue="tq",
             delete_on_shutdown=True,
+            shutdown_delete_delay_s=0,
         )
         call_order: list[str] = []
         with (
@@ -211,6 +213,7 @@ class TestPushGatewayClientStop:
             job="my-job",
             task_queue="tq",
             delete_on_shutdown=True,
+            shutdown_delete_delay_s=0,
         )
         with patch(_PUSH_TARGET), patch(_DELETE_TARGET) as mock_delete:
             await c.stop()
@@ -218,6 +221,65 @@ class TestPushGatewayClientStop:
         args, kwargs = mock_delete.call_args
         url_arg = args[0] if args else kwargs.get("gateway")
         assert "localhost:9091" in str(url_arg)
+
+    async def test_stop_sleeps_before_delete_to_allow_prometheus_scrape(
+        self, mock_to_thread
+    ):
+        """Default behavior: between final push and DELETE, sleep for the
+        shutdown_delete_delay_s window so Prometheus has at least one scrape
+        opportunity to read the just-pushed final batch before it's wiped."""
+        c = PushGatewayClient(
+            url="http://localhost:9091",
+            job="j",
+            task_queue="tq",
+            delete_on_shutdown=True,
+            shutdown_delete_delay_s=15.0,
+        )
+        events: list[str] = []
+
+        async def fake_sleep(seconds):
+            events.append(("sleep", seconds))
+
+        with (
+            patch(_PUSH_TARGET, side_effect=lambda *a, **kw: events.append(("push",))),
+            patch(
+                _DELETE_TARGET, side_effect=lambda *a, **kw: events.append(("delete",))
+            ),
+            patch(
+                "application_sdk.observability.pushgateway.asyncio.sleep",
+                side_effect=fake_sleep,
+            ),
+        ):
+            await c.stop()
+        # push → sleep → delete, in that order
+        assert events == [("push",), ("sleep", 15.0), ("delete",)]
+
+    async def test_stop_skips_sleep_when_delay_is_zero(self, mock_to_thread):
+        """shutdown_delete_delay_s=0 disables the wait — useful for tests and for
+        apps that want the legacy fast-shutdown behavior."""
+        c = PushGatewayClient(
+            url="http://localhost:9091",
+            job="j",
+            task_queue="tq",
+            delete_on_shutdown=True,
+            shutdown_delete_delay_s=0,
+        )
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        with (
+            patch(_PUSH_TARGET),
+            patch(_DELETE_TARGET),
+            patch(
+                "application_sdk.observability.pushgateway.asyncio.sleep",
+                side_effect=fake_sleep,
+            ),
+        ):
+            await c.stop()
+        # No sleep call when delay is 0
+        assert sleep_calls == []
 
     async def test_stop_does_not_call_delete_when_flag_false(
         self, client, mock_to_thread
