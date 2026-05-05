@@ -33,10 +33,7 @@ _EXPIRY_BUFFER_SECONDS = 60
 
 
 class OAuthTokenError(AuthError):
-    """Raised when an OAuth 2.0 token exchange fails.
-
-    Deprecated: use ``application_sdk.errors.AuthError`` directly — removed in v4.0.
-    """
+    """Raised when an OAuth 2.0 token exchange or refresh fails (category=AUTH)."""
 
     code: ClassVar[str] = "OAUTH_TOKEN"
 

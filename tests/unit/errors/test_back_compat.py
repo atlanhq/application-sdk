@@ -227,9 +227,7 @@ def test_credential_error_importable_from_init() -> None:
 def test_credential_error_is_app_error() -> None:
     from application_sdk.credentials.errors import CredentialError
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = CredentialError("cred failed")
+    e = CredentialError("cred failed")
     assert isinstance(e, AppError)
     assert isinstance(e, AuthError)
 
@@ -243,22 +241,26 @@ def test_credential_not_found_importable_from_init() -> None:
 
 
 def test_credential_not_found_is_app_error() -> None:
-    from application_sdk.credentials.errors import CredentialNotFoundError
+    from application_sdk.credentials.errors import (
+        CredentialError,
+        CredentialNotFoundError,
+    )
+    from application_sdk.errors.categories import FailureCategory
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = CredentialNotFoundError("my-cred")
+    e = CredentialNotFoundError("my-cred")
     assert isinstance(e, AppError)
+    assert isinstance(e, NotFoundError)
+    assert isinstance(e, CredentialError)
+    # AuthError still in MRO via CredentialError — broad except blocks keep catching
     assert isinstance(e, AuthError)
     assert isinstance(e, Exception)
+    assert e.category == FailureCategory.NOT_FOUND
 
 
 def test_credential_not_found_accepts_positional_name() -> None:
     from application_sdk.credentials.errors import CredentialNotFoundError
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = CredentialNotFoundError("my-cred-guid")
+    e = CredentialNotFoundError("my-cred-guid")
     assert "my-cred-guid" in str(e)
 
 
@@ -271,13 +273,12 @@ def test_credential_parse_error_importable_from_init() -> None:
 
 
 def test_credential_parse_error_is_app_error() -> None:
-    from application_sdk.credentials.errors import CredentialParseError
+    from application_sdk.credentials.errors import CredentialError, CredentialParseError
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = CredentialParseError("could not parse")
+    e = CredentialParseError("could not parse")
     assert isinstance(e, AppError)
     assert isinstance(e, InvalidInputError)
+    assert isinstance(e, CredentialError)
 
 
 def test_credential_validation_error_importable_from_errors() -> None:
@@ -291,13 +292,15 @@ def test_credential_validation_error_importable_from_init() -> None:
 
 
 def test_credential_validation_error_is_app_error() -> None:
-    from application_sdk.credentials.errors import CredentialValidationError
+    from application_sdk.credentials.errors import (
+        CredentialError,
+        CredentialValidationError,
+    )
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = CredentialValidationError("invalid cred")
+    e = CredentialValidationError("invalid cred")
     assert isinstance(e, AppError)
     assert isinstance(e, InvalidInputError)
+    assert isinstance(e, CredentialError)
 
 
 def test_oauth_token_error_importable_from_oauth() -> None:
@@ -332,9 +335,7 @@ def test_storage_error_importable_from_init() -> None:
 def test_storage_error_is_app_error() -> None:
     from application_sdk.storage.errors import StorageError
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = StorageError("bucket gone")
+    e = StorageError("bucket gone")
     assert isinstance(e, AppError)
     assert isinstance(e, DependencyUnavailableError)
 
@@ -348,13 +349,14 @@ def test_storage_not_found_importable_from_init() -> None:
 
 
 def test_storage_not_found_is_app_error() -> None:
-    from application_sdk.storage.errors import StorageNotFoundError
+    from application_sdk.errors.categories import FailureCategory
+    from application_sdk.storage.errors import StorageError, StorageNotFoundError
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = StorageNotFoundError("no such key")
+    e = StorageNotFoundError("no such key")
     assert isinstance(e, AppError)
     assert isinstance(e, NotFoundError)
+    assert isinstance(e, StorageError)
+    assert e.category == FailureCategory.NOT_FOUND
 
 
 def test_storage_permission_error_importable_from_errors() -> None:
@@ -367,13 +369,12 @@ def test_storage_permission_error_importable_from_init() -> None:
 
 def test_storage_permission_error_is_app_error() -> None:
     from application_sdk.errors.leaves import AppPermissionDeniedError
-    from application_sdk.storage.errors import StoragePermissionError
+    from application_sdk.storage.errors import StorageError, StoragePermissionError
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = StoragePermissionError("access denied")
+    e = StoragePermissionError("access denied")
     assert isinstance(e, AppError)
     assert isinstance(e, AppPermissionDeniedError)
+    assert isinstance(e, StorageError)
 
 
 def test_storage_config_error_importable_from_errors() -> None:
@@ -385,13 +386,12 @@ def test_storage_config_error_importable_from_init() -> None:
 
 
 def test_storage_config_error_is_app_error() -> None:
-    from application_sdk.storage.errors import StorageConfigError
+    from application_sdk.storage.errors import StorageConfigError, StorageError
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = StorageConfigError("bad config")
+    e = StorageConfigError("bad config")
     assert isinstance(e, AppError)
     assert isinstance(e, InvalidInputError)
+    assert isinstance(e, StorageError)
 
 
 # =============================================================================
@@ -410,9 +410,7 @@ def test_secret_store_error_importable_from_init() -> None:
 def test_secret_store_error_is_app_error() -> None:
     from application_sdk.infrastructure.secrets import SecretStoreError
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = SecretStoreError("store unavailable")
+    e = SecretStoreError("store unavailable")
     assert isinstance(e, AppError)
     assert isinstance(e, DependencyUnavailableError)
 
@@ -426,21 +424,23 @@ def test_secret_not_found_importable_from_init() -> None:
 
 
 def test_secret_not_found_is_app_error() -> None:
-    from application_sdk.infrastructure.secrets import SecretNotFoundError
+    from application_sdk.errors.categories import FailureCategory
+    from application_sdk.infrastructure.secrets import (
+        SecretNotFoundError,
+        SecretStoreError,
+    )
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = SecretNotFoundError("MY_SECRET")
+    e = SecretNotFoundError("MY_SECRET")
     assert isinstance(e, AppError)
     assert isinstance(e, NotFoundError)
+    assert isinstance(e, SecretStoreError)
+    assert e.category == FailureCategory.NOT_FOUND
 
 
 def test_secret_not_found_accepts_positional_name() -> None:
     from application_sdk.infrastructure.secrets import SecretNotFoundError
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        e = SecretNotFoundError("DB_PASSWORD")
+    e = SecretNotFoundError("DB_PASSWORD")
     assert "DB_PASSWORD" in str(e)
 
 

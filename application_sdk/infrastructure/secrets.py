@@ -1,10 +1,10 @@
 """Secrets management abstraction."""
 
 import os
-import warnings
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import DependencyUnavailableError, NotFoundError
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
@@ -74,7 +74,11 @@ async def get_deployment_secret(key: str) -> Any:
 
 
 class SecretStoreError(DependencyUnavailableError):
-    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
+    """Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
+
+    Use ``SecretNotFoundError`` when the secret key is absent; use this class
+    for connectivity, permission, or other store-level failures.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
     code: ClassVar[str] = "SECRET_STORE"
@@ -87,12 +91,6 @@ class SecretStoreError(DependencyUnavailableError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "SecretStoreError is deprecated; use application_sdk.errors.DependencyUnavailableError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.secret_name = secret_name
         self._error_code = error_code
@@ -114,23 +112,21 @@ class SecretStoreError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
-class SecretNotFoundError(SecretStoreError, NotFoundError):
-    """Deprecated: use ``application_sdk.errors.NotFoundError`` — removed in v4.0."""
+class SecretNotFoundError(NotFoundError, SecretStoreError):
+    """The requested secret key was not found in the secret store.
+
+    Categorical parent is ``NotFoundError`` (category=NOT_FOUND); domain
+    parent is ``SecretStoreError`` so ``except SecretStoreError:`` still catches.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_NOT_FOUND
     code: ClassVar[str] = "SECRET_NOT_FOUND"
+    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.USER
 
     def __init__(self, secret_name: str) -> None:
-        warnings.warn(
-            "SecretNotFoundError is deprecated; use application_sdk.errors.NotFoundError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        # Call the AppError leaf directly to avoid double-warning from SecretStoreError.__init__.
-        DependencyUnavailableError.__init__(
-            self, message=f"Secret '{secret_name}' not found"
-        )
+        NotFoundError.__init__(self, message=f"Secret '{secret_name}' not found")
         self.secret_name = secret_name
         self._error_code = SECRET_NOT_FOUND
 

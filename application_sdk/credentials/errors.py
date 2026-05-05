@@ -1,11 +1,13 @@
 """Credential exception hierarchy.
 
-Legacy classes below are deprecated shims that preserve back-compat for v3.x.
-Migrate to ``application_sdk.errors.AuthError`` / ``InvalidInputError``.
-All legacy names are removed in v4.0.
+Domain errors from the credentials subsystem.  Each specialised class inherits
+from the appropriate categorical leaf (first base, so ``category`` ClassVar
+resolves there first) and from ``CredentialError`` (second base, so
+``except CredentialError:`` domain-catch blocks keep working).
+
+MRO convention: categorical leaf first, domain base second.
 """
 
-import warnings
 from typing import ClassVar
 
 from application_sdk.errors import (
@@ -15,11 +17,15 @@ from application_sdk.errors import (
     CREDENTIAL_VALIDATION_ERROR,
     ErrorCode,
 )
-from application_sdk.errors.leaves import AuthError, InvalidInputError
+from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
 
 
 class CredentialError(AuthError):
-    """Deprecated: use ``application_sdk.errors.AuthError`` — removed in v4.0."""
+    """Generic credential-subsystem failure (category=AUTH).
+
+    Use more specific subclasses when the failure mode is known.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_ERROR
     code: ClassVar[str] = "CREDENTIAL"
@@ -32,12 +38,6 @@ class CredentialError(AuthError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "CredentialError is deprecated; use application_sdk.errors.AuthError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         AuthError.__init__(self, message=message, cause=cause)
         self.credential_name = credential_name
         self._error_code = error_code
@@ -59,25 +59,22 @@ class CredentialError(AuthError):
         return " | ".join(parts)
 
 
-class CredentialNotFoundError(CredentialError):
-    """Deprecated: use ``application_sdk.errors.AuthError`` with ``code='CREDENTIAL_NOT_FOUND'``
-    — removed in v4.0.
+class CredentialNotFoundError(NotFoundError, CredentialError):
+    """The requested credential was not found in the secret store or registry.
+
+    Categorical parent is ``NotFoundError`` (category=NOT_FOUND); domain
+    parent is ``CredentialError`` so ``except CredentialError:`` still catches.
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_NOT_FOUND
     code: ClassVar[str] = "CREDENTIAL_NOT_FOUND"
+    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.USER
 
     def __init__(self, credential_name: str) -> None:
-        warnings.warn(
-            "CredentialNotFoundError is deprecated; use application_sdk.errors.AuthError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        # Call the AppError leaf directly to avoid double-warning from CredentialError.__init__.
-        AuthError.__init__(
-            self,
-            message=f"Credential '{credential_name}' not found",
+        NotFoundError.__init__(
+            self, message=f"Credential '{credential_name}' not found"
         )
         self.credential_name = credential_name
         self._error_code = CREDENTIAL_NOT_FOUND
@@ -93,11 +90,18 @@ class CredentialNotFoundError(CredentialError):
         return " | ".join(parts)
 
 
-class CredentialParseError(CredentialError, InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+class CredentialParseError(InvalidInputError, CredentialError):
+    """Credential data could not be parsed (malformed payload).
+
+    Categorical parent is ``InvalidInputError`` (category=INVALID_INPUT);
+    domain parent is ``CredentialError``.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_PARSE_ERROR
     code: ClassVar[str] = "CREDENTIAL_PARSE"
+    category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.USER
 
     def __init__(
         self,
@@ -107,13 +111,7 @@ class CredentialParseError(CredentialError, InvalidInputError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "CredentialParseError is deprecated; use application_sdk.errors.InvalidInputError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        AuthError.__init__(self, message=message, cause=cause)
+        InvalidInputError.__init__(self, message=message, cause=cause)
         self.credential_name = credential_name
         self._error_code = error_code
 
@@ -134,11 +132,18 @@ class CredentialParseError(CredentialError, InvalidInputError):
         return " | ".join(parts)
 
 
-class CredentialValidationError(CredentialError, InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+class CredentialValidationError(InvalidInputError, CredentialError):
+    """Credential failed schema or business-rule validation.
+
+    Categorical parent is ``InvalidInputError`` (category=INVALID_INPUT);
+    domain parent is ``CredentialError``.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VALIDATION_ERROR
     code: ClassVar[str] = "CREDENTIAL_VALIDATION"
+    category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.USER
 
     def __init__(
         self,
@@ -148,13 +153,7 @@ class CredentialValidationError(CredentialError, InvalidInputError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "CredentialValidationError is deprecated; use application_sdk.errors.InvalidInputError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        AuthError.__init__(self, message=message, cause=cause)
+        InvalidInputError.__init__(self, message=message, cause=cause)
         self.credential_name = credential_name
         self._error_code = error_code
 

@@ -1,12 +1,15 @@
 """Storage error classes.
 
-Legacy classes below are deprecated shims that preserve back-compat for v3.x.
-Migrate to ``application_sdk.errors.*``. All legacy names are removed in v4.0.
+Domain errors from the storage subsystem.  Each specialised class inherits
+from the appropriate categorical leaf (first base, so ``category`` ClassVar
+resolves there first) and from ``StorageError`` (second base, so
+``except StorageError:`` domain-catch blocks keep working).
+
+MRO convention: categorical leaf first, domain base second.
 """
 
 from __future__ import annotations
 
-import warnings
 from typing import ClassVar
 
 from application_sdk.errors import (
@@ -16,6 +19,7 @@ from application_sdk.errors import (
     STORAGE_PERMISSION,
     ErrorCode,
 )
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AppPermissionDeniedError,
     DependencyUnavailableError,
@@ -25,7 +29,10 @@ from application_sdk.errors.leaves import (
 
 
 class StorageError(DependencyUnavailableError):
-    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
+    """Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
+
+    Use more specific subclasses when the failure mode is known.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
     code: ClassVar[str] = "STORAGE"
@@ -38,12 +45,6 @@ class StorageError(DependencyUnavailableError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "StorageError is deprecated; use application_sdk.errors.DependencyUnavailableError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.key = key
         self._error_code = error_code
@@ -65,11 +66,18 @@ class StorageError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
-class StorageNotFoundError(StorageError, NotFoundError):
-    """Deprecated: use ``application_sdk.errors.NotFoundError`` — removed in v4.0."""
+class StorageNotFoundError(NotFoundError, StorageError):
+    """Object or key not found in the store.
+
+    Categorical parent is ``NotFoundError`` (category=NOT_FOUND); domain
+    parent is ``StorageError`` so ``except StorageError:`` still catches.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_NOT_FOUND
     code: ClassVar[str] = "STORAGE_NOT_FOUND"
+    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.USER
 
     def __init__(
         self,
@@ -79,14 +87,7 @@ class StorageNotFoundError(StorageError, NotFoundError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "StorageNotFoundError is deprecated; use application_sdk.errors.NotFoundError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        # Bypass StorageError.__init__ to avoid a second deprecation warning.
-        DependencyUnavailableError.__init__(self, message=message, cause=cause)
+        NotFoundError.__init__(self, message=message, cause=cause)
         self.key = key
         self._error_code = error_code
 
@@ -107,11 +108,18 @@ class StorageNotFoundError(StorageError, NotFoundError):
         return " | ".join(parts)
 
 
-class StoragePermissionError(StorageError, AppPermissionDeniedError):
-    """Deprecated: use ``application_sdk.errors.AppPermissionDeniedError`` — removed in v4.0."""
+class StoragePermissionError(AppPermissionDeniedError, StorageError):
+    """Bucket or object access denied.
+
+    Categorical parent is ``AppPermissionDeniedError`` (category=PERMISSION);
+    domain parent is ``StorageError``.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_PERMISSION
     code: ClassVar[str] = "STORAGE_PERMISSION"
+    category: ClassVar[FailureCategory] = FailureCategory.PERMISSION
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.USER
 
     def __init__(
         self,
@@ -121,13 +129,7 @@ class StoragePermissionError(StorageError, AppPermissionDeniedError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "StoragePermissionError is deprecated; use application_sdk.errors.AppPermissionDeniedError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        DependencyUnavailableError.__init__(self, message=message, cause=cause)
+        AppPermissionDeniedError.__init__(self, message=message, cause=cause)
         self.key = key
         self._error_code = error_code
 
@@ -148,11 +150,18 @@ class StoragePermissionError(StorageError, AppPermissionDeniedError):
         return " | ".join(parts)
 
 
-class StorageConfigError(StorageError, InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+class StorageConfigError(InvalidInputError, StorageError):
+    """Storage configuration is invalid (e.g., missing bucket name).
+
+    Categorical parent is ``InvalidInputError`` (category=INVALID_INPUT);
+    domain parent is ``StorageError``.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_CONFIG
     code: ClassVar[str] = "STORAGE_CONFIG"
+    category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.USER
 
     def __init__(
         self,
@@ -162,13 +171,7 @@ class StorageConfigError(StorageError, InvalidInputError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "StorageConfigError is deprecated; use application_sdk.errors.InvalidInputError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        DependencyUnavailableError.__init__(self, message=message, cause=cause)
+        InvalidInputError.__init__(self, message=message, cause=cause)
         self.key = key
         self._error_code = error_code
 

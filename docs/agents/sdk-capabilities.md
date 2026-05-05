@@ -591,21 +591,21 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 
 - **Import:** `from application_sdk.credentials import CredentialError`
 - **Signature:** `class CredentialError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.AuthError`` — removed in v4.0.
+- **Summary:** Generic credential-subsystem failure (category=AUTH).
 - **Defined in:** `application_sdk/credentials/errors.py`
 
 #### `CredentialNotFoundError`
 
 - **Import:** `from application_sdk.credentials import CredentialNotFoundError`
 - **Signature:** `class CredentialNotFoundError(credential_name: str)`
-- **Summary:** Deprecated: use ``application_sdk.errors.AuthError`` with ``code='CREDENTIAL_NOT_FOUND'``
+- **Summary:** The requested credential was not found in the secret store or registry.
 - **Defined in:** `application_sdk/credentials/errors.py`
 
 #### `CredentialParseError`
 
 - **Import:** `from application_sdk.credentials import CredentialParseError`
 - **Signature:** `class CredentialParseError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
+- **Summary:** Credential data could not be parsed (malformed payload).
 - **Defined in:** `application_sdk/credentials/errors.py`
 
 #### `CredentialRef`
@@ -640,7 +640,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 
 - **Import:** `from application_sdk.credentials import CredentialValidationError`
 - **Signature:** `class CredentialValidationError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
+- **Summary:** Credential failed schema or business-rule validation.
 - **Defined in:** `application_sdk/credentials/errors.py`
 
 #### `GitSshCredential`
@@ -668,7 +668,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 
 - **Import:** `from application_sdk.credentials import OAuthTokenError`
 - **Signature:** `class OAuthTokenError(message: str, *, cause: Exception | None = None)`
-- **Summary:** Raised when an OAuth 2.0 token exchange fails.
+- **Summary:** Raised when an OAuth 2.0 token exchange or refresh fails (category=AUTH).
 - **Defined in:** `application_sdk/credentials/oauth.py`
 
 #### `OAuthTokenService`
@@ -1547,7 +1547,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import SecretNotFoundError`
 - **Signature:** `class SecretNotFoundError(secret_name: str)`
-- **Summary:** Deprecated: use ``application_sdk.errors.NotFoundError`` — removed in v4.0.
+- **Summary:** The requested secret key was not found in the secret store.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `SecretStore`
@@ -1561,7 +1561,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import SecretStoreError`
 - **Signature:** `class SecretStoreError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `StateStore`
@@ -1793,28 +1793,28 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 - **Import:** `from application_sdk.storage import StorageConfigError`
 - **Signature:** `class StorageConfigError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
+- **Summary:** Storage configuration is invalid (e.g., missing bucket name).
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageError`
 
 - **Import:** `from application_sdk.storage import StorageError`
 - **Signature:** `class StorageError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageNotFoundError`
 
 - **Import:** `from application_sdk.storage import StorageNotFoundError`
 - **Signature:** `class StorageNotFoundError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.NotFoundError`` — removed in v4.0.
+- **Summary:** Object or key not found in the store.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StoragePermissionError`
 
 - **Import:** `from application_sdk.storage import StoragePermissionError`
 - **Signature:** `class StoragePermissionError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.AppPermissionDeniedError`` — removed in v4.0.
+- **Summary:** Bucket or object access denied.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 ### Functions
