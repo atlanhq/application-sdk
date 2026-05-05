@@ -27,9 +27,9 @@ class BaseConnectionConfig(BaseModel):
     """Base type for preflight and metadata connection configuration.
 
     Replaces ``dict[str, Any]`` as the type of ``PreflightInput.connection_config``
-    and ``MetadataInput.connection_config``.  Extra fields are accepted so that
-    existing callers that pass arbitrary dicts continue to work, but a one-time
-    ``UserWarning`` is emitted to encourage app authors to subclass::
+    and ``MetadataInput.connection_config``.  ``extra="allow"`` keeps raw-dict
+    inputs from breaking on ingress; apps should subclass and declare fields
+    explicitly to get strong typing::
 
         class MyAppConnectionConfig(BaseConnectionConfig):
             include_filter: str = Field(default="{}", alias="include-filter")
@@ -45,6 +45,18 @@ class BaseConnectionConfig(BaseModel):
     If the UI is generated from the contract toolkit (app.pkl), the subclass
     fields should mirror the ``uiConfig.tasks[*].inputs`` entries so the
     generated preflight metadata contract stays aligned with the UI contract.
+
+    .. note::
+
+        **Consumption pattern changed.**  Wire-format ingress is unchanged
+        (raw dicts validate via ``extra="allow"``), but downstream access no
+        longer works like a dict.  Update callers::
+
+            cfg["host"]               → cfg.host  (declared field)
+                                      → cfg.model_extra["host"]  (extra)
+            cfg.get("host", default)  → getattr(cfg, "host", default)
+                                      → cfg.model_extra.get("host", default)
+            dict(cfg)                 → still works (yields all keys)
     """
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
@@ -65,6 +77,14 @@ class BaseMetadataConfig(BaseModel):
     If the UI is generated from the contract toolkit (app.pkl), the subclass
     fields should mirror the ``uiConfig.tasks[*].inputs`` entries so the
     generated metadata contract stays aligned with the UI contract.
+
+    .. note::
+
+        **Consumption pattern changed.**  Same caveat as
+        :class:`BaseConnectionConfig` — wire-format ingress is unchanged,
+        but downstream callers must replace ``cfg["key"]`` / ``cfg.get(...)``
+        with attribute access or ``cfg.model_extra``.  See
+        :class:`BaseConnectionConfig` for the migration table.
     """
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)

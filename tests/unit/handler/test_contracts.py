@@ -1,7 +1,7 @@
 """Unit tests for handler contracts."""
 
 import pytest
-from pydantic import ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -9,9 +9,13 @@ from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
+    BaseConnectionConfig,
+    BaseMetadataConfig,
     HandlerCredential,
+    MetadataInput,
     MetadataOutput,
     PreflightCheck,
+    PreflightInput,
     PreflightOutput,
     PreflightStatus,
     SqlMetadataObject,
@@ -195,3 +199,157 @@ class TestMetadataOutput:
                 title="P",
                 children=["not-an-object"],  # type: ignore[list-item]
             )
+
+
+class TestBaseConnectionConfig:
+    """Tests for the BaseConnectionConfig public extension point."""
+
+    def test_default_construction(self):
+        cfg = BaseConnectionConfig()
+        assert cfg.model_extra == {}
+        assert cfg.model_dump() == {}
+
+    def test_dict_input_lands_in_model_extra(self):
+        """Raw dict ingress: extras preserved on model_extra (extra='allow')."""
+        cfg = BaseConnectionConfig.model_validate(
+            {"host": "db.local", "port": 5432, "database": "prod"}
+        )
+        assert cfg.model_extra == {
+            "host": "db.local",
+            "port": 5432,
+            "database": "prod",
+        }
+
+    def test_dict_round_trip(self):
+        """dict(model) yields all keys; model_dump() round-trips through validate."""
+        original = {"host": "db", "port": 5432}
+        cfg = BaseConnectionConfig.model_validate(original)
+        assert dict(cfg) == original
+        round_tripped = BaseConnectionConfig.model_validate(cfg.model_dump())
+        assert round_tripped.model_extra == original
+
+    def test_subclass_with_aliased_fields(self):
+        """Migration path: subclass declares typed fields with hyphenated aliases."""
+
+        class MyConnectionConfig(BaseConnectionConfig):
+            include_filter: str = Field(default="{}", alias="include-filter")
+            exclude_filter: str = Field(default="{}", alias="exclude-filter")
+            page_size: int = Field(default=500, alias="page-size")
+
+        cfg = MyConnectionConfig.model_validate(
+            {
+                "include-filter": '{"db": ["public"]}',
+                "exclude-filter": "{}",
+                "page-size": 1000,
+            }
+        )
+        assert cfg.include_filter == '{"db": ["public"]}'
+        assert cfg.exclude_filter == "{}"
+        assert cfg.page_size == 1000
+
+    def test_subclass_dict_returns_declared_and_extras(self):
+        """dict(subclass_instance) covers both declared fields and inherited extras."""
+
+        class MyConnectionConfig(BaseConnectionConfig):
+            include_filter: str = Field(default="{}", alias="include-filter")
+
+        cfg = MyConnectionConfig.model_validate(
+            {"include-filter": "{}", "unexpected": "value"}
+        )
+        as_dict = dict(cfg)
+        assert as_dict["include_filter"] == "{}"
+        assert as_dict["unexpected"] == "value"
+
+    def test_subclass_model_dump_by_alias_preserves_wire_keys(self):
+        """model_dump(by_alias=True) emits the original hyphenated wire keys."""
+
+        class MyConnectionConfig(BaseConnectionConfig):
+            include_filter: str = Field(default="{}", alias="include-filter")
+            page_size: int = Field(default=500, alias="page-size")
+
+        cfg = MyConnectionConfig(**{"include-filter": '{"a": ["b"]}', "page-size": 100})
+        dumped = cfg.model_dump(by_alias=True)
+        assert dumped == {
+            "include-filter": '{"a": ["b"]}',
+            "page-size": 100,
+        }
+
+    def test_subclass_can_forbid_extras(self):
+        """Apps subclass and override extra='forbid' for strict validation."""
+
+        class StrictConfig(BaseConnectionConfig):
+            model_config = ConfigDict(
+                extra="forbid", populate_by_name=True, frozen=True
+            )
+
+            host: str = Field(default="")
+
+        # Declared key passes
+        cfg = StrictConfig(host="db.local")
+        assert cfg.host == "db.local"
+
+        # Undeclared key rejected at parse time
+        with pytest.raises(ValidationError):
+            StrictConfig.model_validate({"host": "db", "random_typo": "x"})
+
+
+class TestBaseMetadataConfig:
+    """Tests for the BaseMetadataConfig public extension point."""
+
+    def test_default_construction(self):
+        cfg = BaseMetadataConfig()
+        assert cfg.model_extra == {}
+        assert cfg.model_dump() == {}
+
+    def test_dict_input_lands_in_model_extra(self):
+        cfg = BaseMetadataConfig.model_validate(
+            {"include-filter": "{}", "extraction-method": "api"}
+        )
+        assert cfg.model_extra == {
+            "include-filter": "{}",
+            "extraction-method": "api",
+        }
+
+    def test_subclass_with_aliased_fields(self):
+        class MyMetadataConfig(BaseMetadataConfig):
+            extraction_method: str = Field(default="api", alias="extraction-method")
+            include_filter: str = Field(default="{}", alias="include-filter")
+
+        cfg = MyMetadataConfig.model_validate(
+            {"extraction-method": "core", "include-filter": '{"x": ["y"]}'}
+        )
+        assert cfg.extraction_method == "core"
+        assert cfg.include_filter == '{"x": ["y"]}'
+
+
+class TestPreflightInputFieldTypes:
+    """Verify PreflightInput coerces dict inputs into the typed bases."""
+
+    def test_dict_inputs_coerced_to_typed_bases(self):
+        inp = PreflightInput.model_validate(
+            {
+                "credentials": [],
+                "connection_config": {"host": "db", "port": 5432},
+                "metadata": {"extraction-method": "api"},
+            }
+        )
+        assert isinstance(inp.connection_config, BaseConnectionConfig)
+        assert isinstance(inp.metadata, BaseMetadataConfig)
+        assert inp.connection_config.model_extra == {"host": "db", "port": 5432}
+        assert inp.metadata.model_extra == {"extraction-method": "api"}
+
+    def test_defaults_are_empty_typed_instances(self):
+        inp = PreflightInput()
+        assert isinstance(inp.connection_config, BaseConnectionConfig)
+        assert isinstance(inp.metadata, BaseMetadataConfig)
+        assert inp.connection_config.model_extra == {}
+        assert inp.metadata.model_extra == {}
+
+
+class TestMetadataInputFieldTypes:
+    def test_dict_input_coerced_to_typed_base(self):
+        inp = MetadataInput.model_validate(
+            {"credentials": [], "connection_config": {"host": "db"}}
+        )
+        assert isinstance(inp.connection_config, BaseConnectionConfig)
+        assert inp.connection_config.model_extra == {"host": "db"}
