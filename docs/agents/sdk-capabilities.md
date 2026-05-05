@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    f16e58db2b028551686457584a4fa9fbda4febc6
-source-date:   2026-05-04T14:30:59+01:00
+source-sha:    ae4ca986f9df8f1d441f7efda1330da7781ce7dd
+source-date:   2026-05-05T11:14:11+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -28,7 +28,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 20 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 10 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 4 |
@@ -907,8 +907,8 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `AppWorker`
 
 - **Import:** `from application_sdk.execution import AppWorker`
-- **Signature:** `class AppWorker(worker: Worker, *, start_event_params: dict)`
-- **Summary:** Wraps Temporal Worker to emit worker_start on startup.
+- **Signature:** `class AppWorker(worker: Worker, ...)`
+- **Summary:** Wraps Temporal Worker to emit worker_start on startup and to push
 - **Defined in:** `application_sdk/execution/_temporal/worker.py`
 
 #### `TemporalAuthConfig`
@@ -1436,6 +1436,12 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `get_logger(name: str | None = None)`
 - **Summary:** Get or create an instance of AtlanLoggerAdapter.
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `metrics`
+
+- **Import:** `from application_sdk.observability import metrics`
+- **Summary:** OTel-native metrics API for app authors.
+- **Defined in:** `application_sdk/observability/metrics.py`
 
 #### `set_correlation_context`
 
