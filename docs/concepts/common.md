@@ -36,44 +36,127 @@ Logging is configured via environment variables:
 
 ## Error Handling
 
-The SDK provides a structured error hierarchy in `application_sdk/errors/` with a closed `FailureCategory` enum and an orthogonal `Audience` enum for routing.
+The SDK provides a structured error hierarchy in `application_sdk/errors/` built on two axes: a
+closed `FailureCategory` enum (*what happened*) and an orthogonal `Audience` enum (*who must act*).
 
-### Categorical hierarchy (new code)
+### Two-level hierarchy
 
-Raise the leaf class whose `FailureCategory` matches the failure. Each leaf sets `retryable` and `audience` defaults:
+```
+AppError  (base — application_sdk.errors)
+│
+├── Categorical leaves  (application_sdk.errors.leaves)
+│   ├── AuthError              CATEGORY=AUTH              retryable=False  audience=USER
+│   ├── AppPermissionDeniedError  PERMISSION             retryable=False  audience=USER
+│   ├── NotFoundError          NOT_FOUND                  retryable=False  audience=USER
+│   ├── AlreadyExistsError     ALREADY_EXISTS             retryable=False  audience=USER
+│   ├── InvalidInputError      INVALID_INPUT              retryable=False  audience=USER
+│   ├── PreconditionError      PRECONDITION               retryable=False  audience=USER
+│   ├── RateLimitedError       RATE_LIMITED               retryable=True   audience=USER
+│   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
+│   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
+│   ├── AppTimeoutError        TIMEOUT                    retryable=True   audience=APP_OWNER
+│   ├── CancelledError         CANCELLED                  retryable=False  audience=APP_OWNER
+│   ├── DataIntegrityError     DATA_INTEGRITY             retryable=False  audience=APP_OWNER
+│   ├── InternalError          INTERNAL                   retryable=False  audience=APP_OWNER
+│   └── UnimplementedError     UNIMPLEMENTED              retryable=False  audience=APP_OWNER
+│
+└── Domain umbrellas  (leaf-first multi-inheritance)
+    ├── CredentialError(AuthError)
+    │   ├── CredentialNotFoundError(NotFoundError, CredentialError)
+    │   ├── CredentialParseError(InvalidInputError, CredentialError)
+    │   └── CredentialValidationError(InvalidInputError, CredentialError)
+    ├── StorageError(DependencyUnavailableError)
+    │   ├── StorageNotFoundError(NotFoundError, StorageError)
+    │   ├── StoragePermissionError(AppPermissionDeniedError, StorageError)
+    │   └── StorageConfigError(InvalidInputError, StorageError)
+    └── SecretStoreError(DependencyUnavailableError)
+        └── SecretNotFoundError(NotFoundError, SecretStoreError)
+```
+
+The **categorical leaf** (listed first in the MRO) drives `category`, `audience`, and
+`default_retryable` on the wire. The **domain umbrella** (listed second) keeps legacy
+`except StorageError:` / `except CredentialError:` catch sites alive. A single exception
+instance satisfies both hierarchies simultaneously.
+
+### Raise by failure shape
+
+Pick the leaf whose `FailureCategory` best describes what happened. Prefer a domain subclass
+when the calling context is clearly within that subsystem:
 
 ```python
 from application_sdk.errors import (
-    AuthError,              # CATEGORY=AUTH,  retryable=False, audience=USER
-    DependencyUnavailableError,  # retryable=True,  audience=PLATFORM
-    InvalidInputError,      # retryable=False, audience=USER
-    NotFoundError,          # retryable=False, audience=USER
-    AlreadyExistsError,     # retryable=False, audience=USER
-    PreconditionError,      # retryable=False, audience=USER
-    RateLimitedError,       # retryable=True,  audience=USER
-    AppTimeoutError,        # retryable=True,  audience=APP_OWNER
-    AppPermissionDeniedError, # retryable=False, audience=USER
-    ResourceExhaustedError, # retryable=True,  audience=PLATFORM
-    DataIntegrityError,     # retryable=False, audience=APP_OWNER
-    InternalError,          # retryable=False, audience=APP_OWNER
-    UnimplementedError,     # retryable=False, audience=APP_OWNER
-    CancelledError,         # retryable=False, audience=APP_OWNER
+    DependencyUnavailableError,
+    InvalidInputError,
+    NotFoundError,
+    RateLimitedError,
 )
+from application_sdk.storage.errors import StorageNotFoundError
 
+# Generic categorical leaf — any context
 raise DependencyUnavailableError(
     message="Temporal frontend unreachable",
     service="temporal", target="temporal-frontend:7233", cause=exc,
 )
+
+# Domain subclass — storage context; routes as NOT_FOUND, catchable as StorageError
+raise StorageNotFoundError(
+    message="Object not found in bucket",
+    key="artifacts/run-123/output.parquet",
+)
 ```
 
+### Catch by shape or by domain
+
+```python
+from application_sdk.errors import NotFoundError, AppError
+from application_sdk.storage.errors import StorageError
+
+# Catch any not-found regardless of domain:
+except NotFoundError as e:
+    ...
+
+# Catch any storage failure regardless of category:
+except StorageError as e:
+    ...
+
+# Catch everything the SDK can raise:
+except AppError as e:
+    fd = e.to_failure_details()
+    logger.error("failure category=%s audience=%s", fd.category, fd.audience, exc_info=True)
+```
+
+### Audience
+
 `Audience` is a closed three-value enum — every leaf must pick one:
-- `USER` — customer self-service (credentials, IAM, source config)
-- `PLATFORM` — infra ops (shared deps down: Dapr, Temporal, object store, pod health)
-- `APP_OWNER` — the team that wrote the failing code (connector or SDK): file a bug, add a more specific subclass, or investigate
 
-There is no `UNKNOWN` escape hatch — if the locus is unclear, the answer is `APP_OWNER` (the team investigates and reclassifies).
+| Value | First-responder |
+|---|---|
+| `USER` | Customer self-service (credentials, IAM, source config) |
+| `PLATFORM` | Infra ops — shared deps down: Dapr, Temporal, object store, pod health |
+| `APP_OWNER` | The team that wrote the failing code (connector or SDK): file a bug, add a specific subclass, investigate |
 
-`FailureDetails` (the Pydantic wire envelope on `AppError.to_failure_details()`) carries `category`, `code`, `retryable`, `audience`, `message`, an optional `suggested_action` (imperative remediation hint whose voice shifts with the audience), `app_name`, `run_id`, and `cause_repr`. Tenant identity is intentionally not on this envelope — per-tenant attribution is the consumer's responsibility, not the producer's.
+There is no `UNKNOWN` escape hatch. If the locus is unclear, `APP_OWNER` means "the team
+that wrote this code investigates and reclassifies."
+
+### Wire envelope
+
+`AppError.to_failure_details()` builds a Pydantic `FailureDetails` envelope suitable for
+`ApplicationError.details=[…]` in Temporal:
+
+```python
+fd = e.to_failure_details()
+# fd.category      — FailureCategory enum (routing: what happened)
+# fd.audience      — Audience enum (routing: who acts)
+# fd.retryable     — bool (resolved from class default or per-instance override)
+# fd.code          — str (app-owned fine-grained code, e.g. "STORAGE_NOT_FOUND")
+# fd.suggested_action — str | None (imperative hint; voice shifts with audience)
+# fd.evidence      — dict of per-error structured context (dataclass fields)
+# fd.cause_repr    — str | None (repr of wrapped exception; never the live object)
+```
+
+Tenant identity is intentionally absent from `FailureDetails`. Per-tenant attribution is
+the consumer's responsibility (e.g., the Automation Engine attaches tenant from its own
+session at ingest time).
 
 ### Legacy error-code namespaces (backward-compat only)
 
