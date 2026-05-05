@@ -2,15 +2,16 @@
 
 Two base classes are exposed:
 
-* :class:`AgentCredentialSpec` — the original envelope. Has
+* :class:`AgentCredentialSpec` — the original envelope.  Has
   ``extra="allow"`` to accept connector-specific dotted keys
   (``basic.username``, ``noauth.extra.security_protocol``, …) without
-  declaring them up-front.  Kept for backward compatibility.
+  declaring them up-front.  **The ``extra="allow"`` behavior will be
+  deprecated soon** — connectors should migrate to a typed subclass.
 
-* :class:`TypedAgentCredentialSpec` — forward-looking base for new
-  connectors.  Has ``extra="forbid"``, so subclasses must declare
-  every dotted key they expect.  Unknown keys raise a validation
-  error at parse time, catching contract drift early.
+* :class:`TypedAgentCredentialSpec` — the recommended base for all
+  new and migrating connectors.  Has ``extra="forbid"``, so subclasses
+  must declare every dotted key they expect.  Unknown keys raise a
+  validation error at parse time, catching contract drift early.
 
 Both accept the same input shapes (JSON string / dict / instance) and
 flow through the resolver identically via :meth:`to_raw_dict`.
@@ -32,17 +33,17 @@ class AgentCredentialSpec(BaseModel):
     ``noauth.extra.security_protocol``, …) are captured by
     ``extra="allow"`` and are available via :meth:`to_raw_dict`.
 
-    .. note::
+    .. warning::
 
-        ``extra="allow"`` here is **transitional**, kept for connectors
-        whose dotted-key schemas have not yet been declared explicitly.
-        New connectors should subclass :class:`TypedAgentCredentialSpec`
-        instead — that base disallows extras, so unknown dotted keys
-        fail validation at parse time and contract drift is caught
-        early.  Existing connectors can keep using this base; the
-        resolver flow (:meth:`to_raw_dict` → secret-bundle substitution
-        → flat dict) is unchanged whether the input is a base or a
-        typed subclass.
+        ``extra="allow"`` here will be **deprecated soon**.  It is kept
+        only for connectors whose dotted-key schemas have not yet been
+        declared explicitly.  New connectors should subclass
+        :class:`TypedAgentCredentialSpec` instead — that base disallows
+        extras, so unknown dotted keys fail validation at parse time
+        and contract drift is caught early.  Existing connectors should
+        plan to migrate; the resolver flow (:meth:`to_raw_dict` →
+        secret-bundle substitution → flat dict) is unchanged whether
+        the input is a base or a typed subclass.
     """
 
     model_config = ConfigDict(
