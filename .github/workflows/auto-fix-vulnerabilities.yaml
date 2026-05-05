@@ -230,11 +230,14 @@ jobs:
                   # Check if package already exists (case-insensitive)
                   existing = re.search(rf'"{pkg}[><=!]', content, re.IGNORECASE)
                   if existing:
-                      # Update existing entry
+                      # Update existing entry. Group 1 already captures the leading `"`
+                      # plus the package name (e.g. `"black`), so the replacement MUST NOT
+                      # prepend another `"`. The previous f'"\\1>=...' produced
+                      # `""black>=26.3.1"` and corrupted pyproject.toml on every run.
                       patterns = [
-                          (rf'("{pkg})(>=[\d.]+)"', f'"\\1>={min_version}"'),
-                          (rf'("{pkg})(==[\d.]+)"', f'"\\1>={min_version}"'),
-                          (rf'("{pkg})"', f'"\\1>={min_version}"'),
+                          (rf'("{pkg})(>=[\d.]+)"', f'\\1>={min_version}"'),
+                          (rf'("{pkg})(==[\d.]+)"', f'\\1>={min_version}"'),
+                          (rf'("{pkg})"', f'\\1>={min_version}"'),
                       ]
                       for pattern, replacement in patterns:
                           new_content, count = re.subn(pattern, replacement, content, flags=re.IGNORECASE)

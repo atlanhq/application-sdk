@@ -180,7 +180,7 @@ def _wrap_response(
 
 
 async def _get_workflow_result(
-    client: "Client",
+    client: Client,
     *,
     workflow_id: str,
     output_type: type | None,
@@ -703,13 +703,13 @@ def create_app_handler_service(
 
         if legacy_workflow_type is not None and entrypoint_param is None:
             warnings.warn(
-                f"App {app_name}: 'workflow_type' body field is deprecated and will be "
-                "removed in v3.1.0. Use ?entrypoint=<name> query param instead.",
+                f"App {app_name}: 'workflow_type' body field is deprecated. "
+                "Use ?entrypoint=<name> query param instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )
             logger.warning(
-                "App %s: 'workflow_type' body field is deprecated (removed in v3.1.0); "
+                "App %s: 'workflow_type' body field is deprecated; "
                 "use ?entrypoint=<name> query param instead.",
                 app_name,
             )
@@ -1142,7 +1142,7 @@ def create_app_handler_service(
 
     async def _config_load_from_objectstore(
         config_id: str, config_type: str = "workflows"
-    ) -> "dict[str, Any] | None":
+    ) -> dict[str, Any] | None:
         """Load workflow config from object store (S3) fallback."""
         if _storage is None:
             return None
@@ -1166,7 +1166,7 @@ def create_app_handler_service(
                 os.unlink(safe_tmp)
 
     async def _config_save_to_objectstore(
-        config_id: str, body: "dict[str, Any]", config_type: str = "workflows"
+        config_id: str, body: dict[str, Any], config_type: str = "workflows"
     ) -> bool:
         """Save workflow config to object store (S3) fallback."""
         if _storage is None:
@@ -1449,8 +1449,10 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/configmap/{config_map_id}")
     async def get_configmap(config_map_id: str) -> JSONResponse:
+        available_configmaps: list[str] = []
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                available_configmaps.append(json_file.stem)
                 if json_file.stem == config_map_id:
                     with open(json_file) as f:
                         raw = json.load(f)
@@ -1466,7 +1468,14 @@ def create_app_handler_service(
                             message="ConfigMap fetched successfully",
                         )
                     )
-        return JSONResponse(content=_wrap_response({}, message="ConfigMap not found"))
+        logger.warning(
+            "ConfigMap not found: requested=%s available=%s",
+            config_map_id,
+            sorted(available_configmaps),
+        )
+        raise HTTPException(
+            status_code=404, detail=f"ConfigMap '{config_map_id}' not found"
+        )
 
     @app.get("/workflows/v1/configmaps")
     async def list_configmaps() -> JSONResponse:

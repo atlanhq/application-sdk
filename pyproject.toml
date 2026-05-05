@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.4.0"
+version = "3.5.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -33,7 +33,7 @@ dependencies = [
     "pyyaml>=6.0.2,<6.1.0",
     "obstore>=0.9.1,<0.10.0",
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
-    "temporalio>=1.7.1,<1.24.0",
+    "temporalio>=1.25.0,<1.27.0",
     "orjson>=3.11.6,<3.12.0",
 ]
 
@@ -49,7 +49,7 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 [project.optional-dependencies]
 # Backwards-compatibility shims (dapr/temporalio/orjson promoted to core in v3.1)
 workflows = [
-    "temporalio>=1.7.1,<1.24.0",
+    "temporalio>=1.25.0,<1.27.0",
     "orjson>=3.11.6,<3.12.0",
 ]
 # SQL connectors: SqlMetadataExtractor, SqlQueryExtractor, and any SQL-based connector
@@ -57,7 +57,7 @@ sql = [
     "pandas>=2.2.3,<2.4.0",
     "pyarrow>=20.0.0,<23.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
-    "duckdb>=1.1.3,<1.5.0",
+    "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
 ]
 # Daft transformer engine
@@ -69,7 +69,7 @@ incremental = [
     "pandas>=2.2.3,<2.4.0",
     "pyarrow>=20.0.0,<23.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
-    "duckdb>=1.1.3,<1.5.0",
+    "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
     "daft>=0.7.1,<0.8.0",
     "rocksdict>=0.3.0",
@@ -161,6 +161,27 @@ generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api applic
 [tool.poe.tasks.provision-credentials]
 help = "Provision credentials for local development"
 cmd = "python -m application_sdk.tools.provision_credentials"
+
+# Capability manifest — regenerate docs/agents/sdk-capabilities.md from application_sdk/
+# Used by the /capability-manifest skill, devs, and CI. Idempotent and deterministic;
+# the cmp gate exits non-zero if rendering is non-deterministic.
+# interpreter = "bash" is required: poe defaults to /usr/bin/sh (dash on Ubuntu),
+# which does not support `set -o pipefail`.
+[tool.poe.tasks.regen-capabilities]
+interpreter = "bash"
+shell = """
+set -euo pipefail
+mkdir -p /tmp/capability-manifest
+EXTRACTOR=.claude/skills/capability-manifest/references/extractor.py
+PURPOSES=.claude/skills/capability-manifest/references/subpackage-purposes.yaml
+uv run --with griffe python "$EXTRACTOR" dump > /tmp/capability-manifest/raw.json
+uv run --with griffe python "$EXTRACTOR" normalize /tmp/capability-manifest/raw.json > /tmp/capability-manifest/normalized.json
+uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh1.md
+uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh2.md
+cmp /tmp/capability-manifest/fresh1.md /tmp/capability-manifest/fresh2.md
+cp /tmp/capability-manifest/fresh1.md docs/agents/sdk-capabilities.md
+uv run pre-commit run --files docs/agents/sdk-capabilities.md || true
+"""
 
 [build-system]
 requires = ["hatchling"]
@@ -263,10 +284,11 @@ default-groups = ["dev", "test"]
 constraint-dependencies = [
     "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "protobuf>=6.33.5",          # CVE-2026-0994
-    "authlib>=1.6.7",            # CVE-2026-28802
+    "authlib>=1.6.11",           # CVE-2026-28802, GHSA-jj8c-mmj3-mmgv (CSRF via cache)
     "black>=26.3.1",             # CVE-2026-32274
     "pyjwt>=2.12.0",             # CVE-2026-32597
     "simpleeval>=1.0.5",         # CVE-2026-32640
+    "python-dotenv>=1.2.2",      # CVE-2026-28684 (symlink file overwrite)
 ]
 
 # Uncomment the following section in case you want to publish to testpypi

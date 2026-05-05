@@ -21,12 +21,12 @@ When started (via the CLI `--mode handler` or `--mode combined`), this creates a
 
 ## Health Check Endpoints
 
-Every handler service exposes:
+Every handler service exposes health checks at two equivalent paths each:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/server/health` | GET | Liveness probe |
-| `/server/ready` | GET | Readiness probe |
+| `/health` (alias: `/server/health`) | GET | Liveness probe |
+| `/ready` (alias: `/server/ready`) | GET | Readiness probe |
 
 These are registered automatically. No configuration is needed.
 
@@ -36,11 +36,40 @@ The service maps your `Handler` methods to HTTP endpoints:
 
 | Handler method | HTTP endpoint | Method |
 |---------------|---------------|--------|
-| `test_auth()` | `/workflows/v1/test_auth` | POST |
-| `preflight_check()` | `/workflows/v1/preflight_check` | POST |
+| `test_auth()` | `/workflows/v1/auth` | POST |
+| `preflight_check()` | `/workflows/v1/check` | POST |
 | `fetch_metadata()` | `/workflows/v1/metadata` | POST |
 
 The service layer injects `self.context` into the handler before each request and clears it after. Your handler methods receive typed `Input` objects and return typed `Output` objects.
+
+## Full Endpoint Reference
+
+All routes registered by `create_app_handler_service()`:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/workflows/v1/auth` | POST | Test authentication credentials |
+| `/workflows/v1/check` | POST | Run preflight connectivity checks |
+| `/workflows/v1/metadata` | POST | Browse source metadata (schemas, tables) |
+| `/workflows/v1/start` | POST | Start a workflow run (use `?entrypoint=<name>` for multi-entry-point apps) |
+| `/workflows/v1/stop/{workflow_id}/{run_id}` | POST | Terminate a running workflow |
+| `/workflows/v1/result/{workflow_id}` | GET | Fetch the final result of a completed workflow |
+| `/workflows/v1/status/{workflow_id}/{run_id}` | GET | Poll workflow execution status |
+| `/workflows/v1/config/{config_id}` | GET | Retrieve a workflow config (configmap) |
+| `/workflows/v1/config/{config_id}` | POST | Update a workflow config |
+| `/workflows/v1/file` | POST | Upload a file to the handler |
+| `/workflows/v1/configmap/{config_map_id}` | GET | Retrieve a configmap by ID |
+| `/workflows/v1/configmaps` | GET | List all configmaps |
+| `/workflows/v1/manifest` | GET | Retrieve the app manifest (supports `?entrypoint=<name>`) |
+| `/manifest` | GET | Alias for `/workflows/v1/manifest` (for backward compat) |
+| `/workflows/v1/dev/local-vault` | POST | Provision credentials in the local dev vault (local dev only — requires `ATLAN_DEPLOYMENT_NAME=local`; returns 403 otherwise) |
+| `/dapr/subscribe` | GET | Dapr pub/sub subscription list |
+| `/events/v1/event/{event_id}` | POST | Handle a Dapr event |
+| `/events/v1/drop` | POST | Return a Dapr `DROP` status, instructing the sidecar to drop the received event without retry or dead-lettering |
+| `/health`, `/server/health` | GET | Liveness probe |
+| `/ready`, `/server/ready` | GET | Readiness probe |
+| `/metrics` | GET | Prometheus metrics (enabled when `ATLAN_ENABLE_PROMETHEUS_METRICS=true`) |
+| `/` | GET | API root / service info |
 
 ## MCP Server Integration
 
