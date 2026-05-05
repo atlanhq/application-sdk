@@ -187,9 +187,14 @@
         <div class="card" style="margin-bottom:16px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                 <div class="card-title" style="margin:0">Vulnerability Trend <span style="color:#b0b3c6;font-weight:500;font-size:10px;text-transform:none;letter-spacing:0;margin-left:8px">end-of-day snapshots · today appears at midnight</span></div>
-                <div class="filter-group"><label>Stack by</label><select id="fTrendMetric" onchange="renderTrends()" style="margin-left:6px">
-                    <option value="source" selected>Source (App / Base)</option><option value="severity">Severity (Critical / High)</option><option value="status">Status (New / Allowlisted)</option>
-                </select></div>
+                <div style="display:flex;gap:10px;align-items:center">
+                    <div class="filter-group"><label>Window</label><select id="fTrendWindow" onchange="renderTrends()" style="margin-left:6px">
+                        <option value="7" selected>Last 7 days</option><option value="15">Last 15 days</option><option value="30">Last 30 days</option>
+                    </select></div>
+                    <div class="filter-group"><label>Stack by</label><select id="fTrendMetric" onchange="renderTrends()" style="margin-left:6px">
+                        <option value="source" selected>Source (App / Base)</option><option value="severity">Severity (Critical / High)</option><option value="status">Status (New / Allowlisted)</option>
+                    </select></div>
+                </div>
             </div>
             <div id="trendChart" style="min-height:200px;position:relative;"></div>
         </div>
@@ -735,12 +740,29 @@ function renderTrends(){
             let latest=null;
             for(let i=h.length-1;i>=0;i--){if(h[i].date<=d){latest=h[i];break;}}
             if(!latest)return;
-            Object.entries(ID_KEYS).forEach(([k,jsonKey])=>{
-                if(Array.isArray(latest[jsonKey])){
-                    if(jsonKey==='ids')dateSets[d].hasIds=true;
-                    latest[jsonKey].forEach(id=>dateSets[d][k].add(id));
-                }
-            });
+            // If the matching history entry predates the ids-tracking schema (no `ids` field),
+            // fall back to the repo's CURRENT vulnerability list as the best approximation.
+            // Without this, repos that haven't been rescanned since the schema bump silently
+            // drop out of historical chart points and undercount the trend.
+            if(!Array.isArray(latest.ids)){
+                (D.repos[r].vulnerabilities||[]).forEach(v=>{
+                    dateSets[d].hasIds=true;
+                    dateSets[d].total.add(v.id);
+                    if(v.source_type==='app')dateSets[d].app.add(v.id);
+                    else if(v.source_type==='base_image')dateSets[d].base_image.add(v.id);
+                    if(v.severity==='CRITICAL')dateSets[d].critical.add(v.id);
+                    else if(v.severity==='HIGH')dateSets[d].high.add(v.id);
+                    if((v.status||'new')==='new')dateSets[d].new.add(v.id);
+                    else if(v.status==='allowlisted')dateSets[d].allowlisted.add(v.id);
+                });
+            }else{
+                Object.entries(ID_KEYS).forEach(([k,jsonKey])=>{
+                    if(Array.isArray(latest[jsonKey])){
+                        if(jsonKey==='ids')dateSets[d].hasIds=true;
+                        latest[jsonKey].forEach(id=>dateSets[d][k].add(id));
+                    }
+                });
+            }
             KEYS.forEach(k=>{dateMap[d][k]+=(latest[k]||0);});
         });
     });
@@ -758,7 +780,8 @@ function renderTrends(){
         status:[{key:'new',label:'Blocking',color:'#ef4444'},{key:'allowlisted',label:'Allowlisted',color:'#22c55e'}]
     };
     const layers=stackConfig[stackBy];
-    const dates=Object.keys(dateMap).sort();
+    const windowDays=parseInt(document.getElementById('fTrendWindow')?.value||'7',10);
+    const dates=Object.keys(dateMap).sort().slice(-windowDays);
 
     if(!dates.length){
         document.getElementById('trendChart').innerHTML='<div class="empty" style="padding:40px">Trends will appear after merges accumulate data.</div>';
