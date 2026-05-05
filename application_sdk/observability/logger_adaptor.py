@@ -92,6 +92,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         # ── ObjectStore operations ───────────────────────────────────────
         "storage_op",
         "store_path",
+        "outcome",
         "elapsed_ms",
         "size_bytes",
         "throughput_mibps",
@@ -105,6 +106,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "sha256",
         "tier",
         "file_count",
+        "files_skipped",
+        "files_downloaded",
         "chunk_size_bytes",
         "chunks_total",
         "chunks_completed",
@@ -240,15 +243,29 @@ def _has_remote_otlp_endpoint() -> bool:
         return False
 
 
-# Add a Loguru handler for the Python logging system
-class InterceptHandler(logging.Handler):
-    """A custom logging handler that intercepts Python's standard logging and forwards it to Loguru.
+#: Built-in attributes set on every ``logging.LogRecord``. Computed once at
+#: import time from a dummy record so this stays correct across Python
+#: versions (``taskName`` was added in 3.12, future versions may add more).
+#: Anything on a record's ``__dict__`` outside this set came from a
+#: caller-supplied ``extra={...}`` and needs to flow to loguru.
+_LOGRECORD_RESERVED_ATTRS: frozenset[str] = frozenset(
+    logging.LogRecord(
+        name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None
+    ).__dict__
+)
 
-    This handler ensures that all Python standard library logging is properly formatted and
-    forwarded to Loguru's logging system, maintaining consistent logging across the application.
+
+class InterceptHandler(logging.Handler):
+    """Bridge Python's stdlib logging into loguru, preserving ``extra={...}``.
+
+    Without forwarding the extras, callers like ``storage/ops.py`` that use
+    stdlib ``logging.getLogger`` and emit ``logger.log(..., extra={"outcome":
+    "success", ...})`` would have their structured fields silently dropped
+    on the way to the OTLP exporter — ``outcome``, ``elapsed_ms``, etc.
+    would never reach the exporter.
     """
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
         # Get corresponding Loguru level if it exists
         try:
             level = logger.level(record.levelname).name
@@ -266,8 +283,17 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        # Add logger_name to extra to prevent KeyError
-        logger_extras = {"logger_name": record.name}
+        # Forward caller-supplied ``extra={...}``. Python's stdlib spreads
+        # ``extra`` directly into ``record.__dict__``; the delta vs. a blank
+        # LogRecord is exactly what the caller passed.
+        logger_extras: dict[str, object] = {
+            k: v
+            for k, v in record.__dict__.items()
+            if k not in _LOGRECORD_RESERVED_ATTRS
+        }
+        # SDK convention: ``logger_name`` always tracks ``record.name``.
+        # Set last so callers can't shadow it via ``extra``.
+        logger_extras["logger_name"] = record.name
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()

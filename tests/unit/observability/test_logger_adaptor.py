@@ -1597,6 +1597,8 @@ class TestKnownExtraKeysAllowlist:
             "sha256",
             "tier",
             "file_count",
+            "files_skipped",
+            "files_downloaded",
             "chunk_size_bytes",
             "chunks_total",
             "chunks_completed",
@@ -1609,6 +1611,26 @@ class TestKnownExtraKeysAllowlist:
         missing = required - _KNOWN_EXTRA_KEYS
         assert not missing, f"_KNOWN_EXTRA_KEYS missing required keys: {missing}"
 
+    def test_storage_op_outcome_keys_in_allowlist(self) -> None:
+        """``storage/ops.py:_log_storage_event`` emits these via stdlib
+        ``logger.log(..., extra={...})``. They reach OTLP via the
+        ``InterceptHandler`` stdlib→loguru bridge — which then filters
+        through ``_KNOWN_EXTRA_KEYS``. Dropping any of them silently zeroes
+        out the per-attempt observability payload."""
+        from application_sdk.observability.logger_adaptor import _KNOWN_EXTRA_KEYS
+
+        required = {
+            "storage_op",
+            "store_path",
+            "outcome",
+            "elapsed_ms",
+            "size_bytes",
+            "throughput_mibps",
+            "error_class",
+        }
+        missing = required - _KNOWN_EXTRA_KEYS
+        assert not missing, f"_KNOWN_EXTRA_KEYS missing required keys: {missing}"
+
     def test_kwarg_outside_allowlist_is_dropped(self) -> None:
         from application_sdk.observability.logger_adaptor import _build_extra_dict
 
@@ -1617,3 +1639,138 @@ class TestKnownExtraKeysAllowlist:
         )
         assert "storage_path" in result
         assert "definitely_not_in_allowlist" not in result
+
+
+# ---------------------------------------------------------------------------
+# InterceptHandler — stdlib → loguru bridge
+# ---------------------------------------------------------------------------
+
+
+class TestInterceptHandlerStdlibBridge:
+    """``storage/ops.py`` and ``observability/pushgateway.py`` use stdlib
+    ``logging.getLogger(...)`` and emit ``extra={...}``. The bridge must
+    forward those structured fields to loguru so they reach OTLP — without
+    them, every ObjectStore success / failure log loses its dimensions."""
+
+    def test_reserved_attrs_set_includes_modern_python_fields(self) -> None:
+        """Sanity check: the auto-derived reserved set covers all the
+        well-known stdlib LogRecord fields, so the bridge doesn't accidentally
+        forward them as if they were caller extras."""
+        from application_sdk.observability.logger_adaptor import (
+            _LOGRECORD_RESERVED_ATTRS,
+        )
+
+        # A representative subset that's been stable across Python 3.x.
+        for built_in in (
+            "name",
+            "msg",
+            "args",
+            "levelname",
+            "levelno",
+            "pathname",
+            "filename",
+            "module",
+            "exc_info",
+            "lineno",
+            "funcName",
+            "created",
+            "msecs",
+            "thread",
+            "threadName",
+            "process",
+            "processName",
+        ):
+            assert (
+                built_in in _LOGRECORD_RESERVED_ATTRS
+            ), f"{built_in} should be a reserved LogRecord attribute"
+
+    def test_caller_extras_forwarded_to_loguru_bind(self) -> None:
+        """A stdlib ``logger.log(..., extra={"outcome": "success"})`` call
+        must end up binding ``outcome`` on the loguru record, not silently
+        dropping it."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=42,
+            msg="storage event",
+            args=(),
+            exc_info=None,
+        )
+        # Stdlib logging spreads ``extra={...}`` directly onto the record.
+        record.outcome = "success"
+        record.storage_op = "upload"
+        record.elapsed_ms = 12.3
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            handler.emit(record)
+
+        bind_call = mock_log.opt.return_value.bind
+        bind_call.assert_called_once()
+        bind_kwargs = bind_call.call_args.kwargs
+        assert bind_kwargs["outcome"] == "success"
+        assert bind_kwargs["storage_op"] == "upload"
+        assert bind_kwargs["elapsed_ms"] == 12.3
+        assert bind_kwargs["logger_name"] == "test_logger"
+
+    def test_logger_name_is_not_overridden_by_caller_extra(self) -> None:
+        """SDK convention: ``logger_name`` must always be ``record.name``;
+        a stdlib caller passing ``extra={"logger_name": "other"}`` must not
+        shadow it."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name="real_logger",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=42,
+            msg="x",
+            args=(),
+            exc_info=None,
+        )
+        record.logger_name = "shadow_attempt"
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            handler.emit(record)
+
+        bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
+        assert bind_kwargs["logger_name"] == "real_logger"
+
+    def test_record_with_no_extras_only_forwards_logger_name(self) -> None:
+        """A vanilla stdlib log call (no ``extra=``) shouldn't accidentally
+        forward built-in record attributes as caller fields."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name="vanilla",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="plain",
+            args=(),
+            exc_info=None,
+        )
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            handler.emit(record)
+
+        bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
+        # Only the SDK-injected key, no spurious built-in record fields.
+        assert bind_kwargs == {"logger_name": "vanilla"}
