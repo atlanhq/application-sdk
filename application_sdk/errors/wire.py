@@ -43,10 +43,13 @@ class FailureDetails(BaseModel):
       ``audience=USER``, engineer-facing remediation when ``audience=APP_OWNER``,
       runbook hint when ``audience=PLATFORM``.
     - ``evidence``: per-error context whose schema is the producing dataclass.
-    - ``tenant_id``: identifies which tenant's pod produced the failure.
-      Read from the SDK ``APP_TENANT_ID`` constant; consumers reading the
+    - ``domain``: the customer-facing tenant subdomain (e.g. ``acme.atlan.com``).
+      Read from the SDK ``DOMAIN_NAME`` constant. Consumers reading the
       failure via Temporal's API only see ``ApplicationError.details`` (no
-      k8s resource attributes) so per-tenant routing depends on this field.
+      k8s resource attributes), so per-tenant routing depends on this field.
+      Chosen over ``ATLAN_TENANT_ID`` (which is uniformly ``"default"`` in
+      production) and over ``ATLAN_INSTANCE_NAME`` (which is unset on
+      pre-v3 pods); ``ATLAN_DOMAIN_NAME`` is reliably set across the fleet.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -59,7 +62,7 @@ class FailureDetails(BaseModel):
     suggested_action: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
     app_name: str | None = None
-    tenant_id: str | None = None
+    domain: str | None = None
     run_id: str | None = None
     cause_repr: str | None = None
 

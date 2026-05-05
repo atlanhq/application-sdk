@@ -62,15 +62,15 @@ class AppError(Exception):
         Non-base fields become ``evidence``. The Error dataclass is the schema
         source — no separate model to keep in sync.
 
-        ``tenant_id`` is read from ``APP_TENANT_ID`` so the wire payload
-        always identifies which tenant's pod produced the failure. Consumers
+        ``domain`` is read from ``DOMAIN_NAME`` (``ATLAN_DOMAIN_NAME``) so the
+        wire payload identifies which tenant produced the failure. Consumers
         reading the failure via Temporal's API (e.g. the Automation Engine
         via ``temporal workflow show``) only see ``ApplicationError.details``
         — k8s resource attributes are not on that wire — so embedding the
         tenant in the payload itself is the only way per-tenant routing
         works for that consumer.
         """
-        from application_sdk.constants import APP_TENANT_ID  # noqa: PLC0415
+        from application_sdk.constants import DOMAIN_NAME  # noqa: PLC0415
         from application_sdk.errors.wire import FailureDetails  # noqa: PLC0415
 
         evidence: dict[str, Any] = {
@@ -87,7 +87,7 @@ class AppError(Exception):
             suggested_action=self.suggested_action,
             evidence=evidence,
             app_name=self.app_name,
-            tenant_id=APP_TENANT_ID,
+            domain=DOMAIN_NAME if DOMAIN_NAME != "atlan.com" else None,
             run_id=self.run_id,
             cause_repr=repr(self.cause) if self.cause else None,
         )
