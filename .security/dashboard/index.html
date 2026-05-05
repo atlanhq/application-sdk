@@ -201,9 +201,12 @@
         <!-- Section 3: Per repo table -->
         <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                <div class="card-title" style="margin:0">Per Repo Progress</div>
+                <div class="card-title" style="margin:0">Per Repo Progress <span id="trendTableCount" style="color:#b0b3c6;font-weight:500"></span></div>
                 <div style="display:flex;gap:10px;align-items:center">
                     <div class="filter-group"><label>SDK</label><select id="fTrendSdk" multiple size="1" onchange="renderTrends()" style="margin-left:6px;min-width:140px;height:32px" title="Hold Cmd/Ctrl to select multiple"><option value="all">All</option></select></div>
+                    <div class="filter-group"><label>CVEs</label><select id="fTrendBucket" onchange="renderTrends()" style="margin-left:6px">
+                        <option value="all">All</option><option value="0">Clean (0)</option><option value="1-5">1–5</option><option value="6-20">6–20</option><option value="20+">20+</option>
+                    </select></div>
                     <div class="filter-group"><label>Compare</label><select id="fTrendDays" onchange="renderTrends()" style="margin-left:6px">
                         <option value="1">Yesterday</option><option value="2">2 days ago</option><option value="3">3 days ago</option><option value="7" selected>7 days ago</option><option value="14">14 days ago</option><option value="30">30 days ago</option>
                     </select></div>
@@ -212,7 +215,7 @@
             </div>
             <div style="overflow-x:auto">
                 <table id="trendTable"><thead><tr>
-                    <th data-ts="repo">Repo</th><th data-ts="sdk">SDK Version</th><th data-ts="app">App CVEs</th><th data-ts="base">Base CVEs</th><th data-ts="now">Total CVEs</th><th data-ts="old" id="thCompare">7d ago</th><th data-ts="delta">Change</th><th>Status</th>
+                    <th style="width:40px">#</th><th data-ts="repo">Repo</th><th data-ts="sdk">SDK Version</th><th data-ts="app">App CVEs</th><th data-ts="base">Base CVEs</th><th data-ts="now">Total CVEs</th><th data-ts="old" id="thCompare">7d ago</th><th data-ts="delta">Change</th><th>Status</th>
                 </tr></thead><tbody id="trendTableBody"></tbody></table>
             </div>
         </div>
@@ -288,7 +291,7 @@ function renderStats(repoFilter){
     let v2=0,v3=0;
     repos.forEach(r=>{const sdk=(D.repos[r].sdk_version||'');if(sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3'))v3++;else if(sdk!=='unknown')v2++;});
     document.getElementById('stats').innerHTML=`
-        <div class="stat s-total" onclick="qf('all')"><div class="stat-glow"></div><div class="stat-icon">&#128202;</div><div class="stat-value" data-count="${vs.length}">0</div><div class="stat-label">Total CVEs</div><div class="stat-bar" style="width:100%;background:linear-gradient(90deg,#6366f1,#a855f7)"></div></div>
+        <div class="stat s-total" onclick="qf('all')"><div class="stat-glow"></div><div class="stat-icon">&#128202;</div><div class="stat-value" data-count="${vs.length}">0</div><div class="stat-label">Unique CVEs</div><div class="stat-bar" style="width:100%;background:linear-gradient(90deg,#6366f1,#a855f7)"></div></div>
         <div class="stat s-crit" onclick="qf('CRITICAL')"><div class="stat-glow"></div><div class="stat-icon">&#9888;&#65039;</div><div class="stat-value" data-count="${c}">0</div><div class="stat-label">Critical</div><div class="stat-bar" style="width:${pct(c,vs.length)}%;background:#ef4444"></div></div>
         <div class="stat s-new" onclick="qf('new')"><div class="stat-glow"></div><div class="stat-icon">&#10060;</div><div class="stat-value" data-count="${nw}">0</div><div class="stat-label">Blocking</div><div class="stat-bar" style="width:${pct(nw,vs.length)}%;background:#ef4444"></div></div>
         <div class="stat s-ok" onclick="qf('allowlisted')"><div class="stat-glow"></div><div class="stat-icon">&#10004;&#65039;</div><div class="stat-value" data-count="${al}">0</div><div class="stat-label">Allowlisted</div><div class="stat-bar" style="width:${pct(al,vs.length)}%;background:#22c55e"></div></div>`;
@@ -834,10 +837,21 @@ function renderTrends(){
     ).join(''):'<div class="empty" style="padding:20px;font-size:12px;color:#22c55e">No regressions — all repos stable or improving.</div>';
 
     // Section 3: Per repo table
+    // Apply CVE-count bucket filter before sorting
+    const bucket=document.getElementById('fTrendBucket').value;
+    const inBucket=(now)=>{
+        if(bucket==='all')return true;
+        if(bucket==='0')return now===0;
+        if(bucket==='1-5')return now>=1&&now<=5;
+        if(bucket==='6-20')return now>=6&&now<=20;
+        if(bucket==='20+')return now>20;
+        return true;
+    };
+    const filteredRepoDeltas=repoDeltas.filter(r=>inBucket(r.now));
     // Sort the per-repo table. Default = biggest regression first (delta desc), users can click headers to override.
     const ts=window._trendSort||{col:'delta',dir:'desc'};
     const numericCols=new Set(['app','base','now','old','delta']);
-    const sorted=[...repoDeltas].sort((a,b)=>{
+    const sorted=[...filteredRepoDeltas].sort((a,b)=>{
         const av=a[ts.col],bv=b[ts.col];
         if(numericCols.has(ts.col))return ts.dir==='asc'?av-bv:bv-av;
         const sa=(av||'').toString().toLowerCase(),sb=(bv||'').toString().toLowerCase();
@@ -862,13 +876,15 @@ function renderTrends(){
         const labels={1:'Yesterday',2:'2d ago',3:'3d ago',7:'7d ago',14:'14d ago',30:'30d ago'};
         thOld.textContent=(labels[days]||days+'d ago')+(isActive?(ts.dir==='asc'?' ▲':' ▼'):'');
     }
-    document.getElementById('trendTableBody').innerHTML=sorted.map(r=>{
+    document.getElementById('trendTableCount').textContent=`(${sorted.length} repo${sorted.length===1?'':'s'})`;
+    document.getElementById('trendTableBody').innerHTML=sorted.map((r,i)=>{
         const cls=r.delta>0?'up':r.delta<0?'down':'flat';
         const arrow=r.delta>0?'&#9650;':r.delta<0?'&#9660;':'&#8212;';
         const status=r.now===0?'Clean':r.delta<0?'Improving':r.delta>0?'Degraded':'Stable';
         const statusColor=r.now===0?'#22c55e':r.delta<0?'#22c55e':r.delta>0?'#ef4444':'#8c8fa3';
         const isV3=r.sdk.startsWith('3')||r.sdk.includes('v3')||r.sdk.includes('refactor-v3');
         return`<tr>
+            <td style="color:#b0b3c6;font-weight:600">${i+1}</td>
             <td><span class="repo-tag">${esc(r.repo.split('/').pop())}</span></td>
             <td><span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'}">${esc(r.sdk)}</span></td>
             <td>${r.app}</td>
