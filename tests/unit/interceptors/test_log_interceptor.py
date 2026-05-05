@@ -29,6 +29,12 @@ from application_sdk.observability.correlation import (
 
 
 @dataclass
+class MockParentInfo:
+    workflow_id: str = "parent-wf-id"
+    run_id: str = "parent-run-id"
+
+
+@dataclass
 class MockWorkflowInfo:
     workflow_id: str = "wf-id"
     run_id: str = "run-id"
@@ -36,6 +42,7 @@ class MockWorkflowInfo:
     task_queue: str = "default"
     namespace: str = "ns"
     attempt: int = 1
+    parent: MockParentInfo | None = None
 
 
 @dataclass
@@ -183,11 +190,13 @@ class TestLogWorkflowInboundInterceptor:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
             mock_wf.memo.return_value = {}
-            with patch(
-                "application_sdk.execution._temporal.interceptors.log.logger"
-            ) as mock_logger:
-                with pytest.raises(ValueError, match="fail"):
-                    await interceptor.execute_workflow(MockExecuteWorkflowInput())
+            with (
+                patch(
+                    "application_sdk.execution._temporal.interceptors.log.logger"
+                ) as mock_logger,
+                pytest.raises(ValueError, match="fail"),
+            ):
+                await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         ended_calls = [
             c for c in mock_logger.error.call_args_list if c[0][0] == "workflow.ended"
@@ -339,11 +348,13 @@ class TestLogActivityInboundInterceptor:
             "application_sdk.execution._temporal.interceptors.log.activity"
         ) as mock_act:
             mock_act.info.return_value = MockActivityInfo()
-            with patch(
-                "application_sdk.execution._temporal.interceptors.log.logger"
-            ) as mock_logger:
-                with pytest.raises(RuntimeError, match="activity fail"):
-                    await interceptor.execute_activity(MockExecuteActivityInput())
+            with (
+                patch(
+                    "application_sdk.execution._temporal.interceptors.log.logger"
+                ) as mock_logger,
+                pytest.raises(RuntimeError, match="activity fail"),
+            ):
+                await interceptor.execute_activity(MockExecuteActivityInput())
 
         ended_calls = [
             c for c in mock_logger.error.call_args_list if c[0][0] == "activity.ended"
@@ -404,3 +415,163 @@ class TestLogInterceptor:
         mock_next = MagicMock()
         result = interceptor.intercept_activity(mock_next)
         assert isinstance(result, _LogActivityInboundInterceptor)
+
+
+# ---------------------------------------------------------------------------
+# Parent identity propagation (workflow → activity)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowInboundCachesParentIdentity:
+    """``info.parent`` is read once on entry and cached on the inbound instance
+    so the outbound interceptor can inject it without a ContextVar read."""
+
+    @pytest.fixture
+    def mock_next(self):
+        n = AsyncMock()
+        n.execute_workflow = AsyncMock(return_value=None)
+        return n
+
+    @pytest.fixture
+    def interceptor(self, mock_next):
+        return _LogWorkflowInboundInterceptor(mock_next)
+
+    async def test_top_level_workflow_caches_empty_parent(self, interceptor):
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo(parent=None)
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert interceptor._parent_workflow_id == ""
+        assert interceptor._parent_run_id == ""
+
+    async def test_child_workflow_caches_parent_identity(self, interceptor):
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo(
+                parent=MockParentInfo(workflow_id="A", run_id="A_run")
+            )
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert interceptor._parent_workflow_id == "A"
+        assert interceptor._parent_run_id == "A_run"
+
+    async def test_parent_identity_propagates_to_execution_context(self, interceptor):
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo(
+                parent=MockParentInfo(workflow_id="A", run_id="A_run")
+            )
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        ctx = _execution_ctx.get()
+        assert ctx.parent_workflow_id == "A"
+        assert ctx.parent_run_id == "A_run"
+
+
+class TestWorkflowOutboundInjectsParentHeaders:
+    """The outbound interceptor reads parent identity from the inbound instance
+    and injects it as Temporal headers so activities inherit it."""
+
+    def _make_outbound(
+        self,
+        *,
+        correlation_id: str = "",
+        parent_workflow_id: str = "",
+        parent_run_id: str = "",
+    ):
+        inbound = _LogWorkflowInboundInterceptor(MagicMock())
+        inbound._correlation_id = correlation_id
+        inbound._parent_workflow_id = parent_workflow_id
+        inbound._parent_run_id = parent_run_id
+        return _LogWorkflowOutboundInterceptor(MagicMock(), inbound)
+
+    def test_omits_parent_headers_when_empty(self):
+        outbound = self._make_outbound(correlation_id="cid")
+        result = outbound._inject({})
+
+        assert "atlan-parent-workflow-id" not in result
+        assert "atlan-parent-run-id" not in result
+        assert "x-correlation-id" in result
+
+    def test_returns_unchanged_when_all_empty(self):
+        outbound = self._make_outbound()
+        result = outbound._inject({})
+        assert result == {}
+
+    def test_injects_parent_headers_when_present(self):
+        outbound = self._make_outbound(
+            correlation_id="cid",
+            parent_workflow_id="A",
+            parent_run_id="A_run",
+        )
+        result = outbound._inject({})
+
+        converter = default_converter().payload_converter
+        assert (
+            converter.from_payload(result["atlan-parent-workflow-id"], type_hint=str)
+            == "A"
+        )
+        assert (
+            converter.from_payload(result["atlan-parent-run-id"], type_hint=str)
+            == "A_run"
+        )
+
+    def test_injects_only_parent_workflow_id_when_run_id_missing(self):
+        outbound = self._make_outbound(parent_workflow_id="A")
+        result = outbound._inject({})
+
+        assert "atlan-parent-workflow-id" in result
+        assert "atlan-parent-run-id" not in result
+
+
+class TestActivityInboundReadsParentHeaders:
+    """Activity inbound reads ``atlan-parent-*`` headers and stores them on
+    the activity's ExecutionContext."""
+
+    @pytest.fixture
+    def mock_next(self):
+        n = AsyncMock()
+        n.execute_activity = AsyncMock(return_value=None)
+        return n
+
+    @pytest.fixture
+    def interceptor(self, mock_next):
+        return _LogActivityInboundInterceptor(mock_next)
+
+    async def test_no_parent_headers_leaves_execution_context_empty(self, interceptor):
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            await interceptor.execute_activity(MockExecuteActivityInput(headers={}))
+
+        ctx = _execution_ctx.get()
+        assert ctx.parent_workflow_id == ""
+        assert ctx.parent_run_id == ""
+
+    async def test_parent_headers_populate_execution_context(self, interceptor):
+        headers = {
+            "atlan-parent-workflow-id": _encode_header("A"),
+            "atlan-parent-run-id": _encode_header("A_run"),
+        }
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            await interceptor.execute_activity(
+                MockExecuteActivityInput(headers=headers)
+            )
+
+        ctx = _execution_ctx.get()
+        assert ctx.parent_workflow_id == "A"
+        assert ctx.parent_run_id == "A_run"

@@ -113,6 +113,12 @@ def get_workflow_context() -> dict[str, str]:
         "activity_id": ctx.activity_id,
         "activity_type": ctx.activity_type,
     }
+    # Parent identity is only populated on child workflows; omit when empty
+    # so we don't pollute the extra dict on top-level workflows / activities.
+    if ctx.parent_workflow_id:
+        context["parent_workflow_id"] = ctx.parent_workflow_id
+    if ctx.parent_run_id:
+        context["parent_run_id"] = ctx.parent_run_id
 
     # Merge correlation context (atlan- prefixed headers for distributed tracing)
     corr_ctx = correlation_context.get()

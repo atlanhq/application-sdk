@@ -27,22 +27,46 @@ short-lived workers — no per-call configuration required.
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+import logging
+from collections.abc import Callable, Iterable, Sequence
 
 from opentelemetry import metrics as _otel_metrics
 from opentelemetry.metrics import (
+    CallbackOptions,
     Counter,
     Histogram,
     Meter,
+    NoOpMeter,
     ObservableCounter,
     ObservableGauge,
     ObservableUpDownCounter,
+    Observation,
     UpDownCounter,
 )
 
+#: Type for observable-instrument callbacks. OTel passes the callback a
+#: ``CallbackOptions`` and expects an iterable of ``Observation`` back.
+ObservableCallback = Callable[[CallbackOptions], Iterable[Observation]]
+
+_logger = logging.getLogger(__name__)
+_warned_noop_meter = False
+
 
 def _meter() -> Meter:
-    return _otel_metrics.get_meter("application_sdk.user")
+    """Resolve the global meter, warning once if ``MeterProvider`` is the no-op
+    variant. The no-op provider silently drops every observation, which is
+    surprising when ``create_*`` is called before ``run_main()`` initialises
+    metrics (e.g. in tests, CLI scripts, early-import paths)."""
+    meter = _otel_metrics.get_meter("application_sdk.user")
+    global _warned_noop_meter
+    if not _warned_noop_meter and isinstance(meter, NoOpMeter):
+        _warned_noop_meter = True
+        _logger.warning(
+            "MeterProvider is the no-op default — instruments created now will "
+            "drop every observation. Initialise the SDK via run_main() or "
+            "AtlanMetricsAdapter() before creating instruments."
+        )
+    return meter
 
 
 def create_counter(name: str, *, unit: str = "", description: str = "") -> Counter:
@@ -63,7 +87,7 @@ def create_histogram(name: str, *, unit: str = "", description: str = "") -> His
 
 def create_observable_counter(
     name: str,
-    callbacks: Iterable[Any],
+    callbacks: Sequence[ObservableCallback],
     *,
     unit: str = "",
     description: str = "",
@@ -75,7 +99,7 @@ def create_observable_counter(
 
 def create_observable_up_down_counter(
     name: str,
-    callbacks: Iterable[Any],
+    callbacks: Sequence[ObservableCallback],
     *,
     unit: str = "",
     description: str = "",
@@ -87,7 +111,7 @@ def create_observable_up_down_counter(
 
 def create_observable_gauge(
     name: str,
-    callbacks: Iterable[Any],
+    callbacks: Sequence[ObservableCallback],
     *,
     unit: str = "",
     description: str = "",
@@ -99,9 +123,9 @@ def create_observable_gauge(
 
 __all__ = [
     "create_counter",
-    "create_up_down_counter",
     "create_histogram",
     "create_observable_counter",
-    "create_observable_up_down_counter",
     "create_observable_gauge",
+    "create_observable_up_down_counter",
+    "create_up_down_counter",
 ]

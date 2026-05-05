@@ -46,6 +46,7 @@ from application_sdk.version import __version__ as _SDK_VERSION
 # here are dropped and never reach the exporter.
 _KNOWN_EXTRA_KEYS = frozenset(
     {
+        # ── HTTP request/response ────────────────────────────────────────
         "client_host",
         "duration_ms",
         "method",
@@ -53,79 +54,41 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "request_id",
         "status_code",
         "url",
+        # ── Temporal workflow / activity context ─────────────────────────
+        # Auto-injected by `process()` + `get_workflow_context()` on every log
+        # emitted inside a workflow/activity (see logger_adaptor.process and
+        # observability/utils.get_workflow_context).
+        "in_workflow",
+        "in_activity",
         "workflow_id",
-        "run_id",
-        "workflow_run_id",  # App Vitals uses this alias alongside run_id
+        "workflow_run_id",
         "workflow_type",
         "namespace",
         "task_queue",
         "attempt",
         "activity_id",
         "activity_type",
+        # Parent identity — only emitted on child workflows (workflow.info().parent)
+        "parent_workflow_id",
+        "parent_run_id",
+        # Activity timeout fields — emitted by app authors logging activity
+        # configuration; not auto-injected.
         "schedule_to_close_timeout",
         "start_to_close_timeout",
         "schedule_to_start_timeout",
         "heartbeat_timeout",
+        # ── Outcome / error ──────────────────────────────────────────────
+        "status",
+        "error_type",
+        "error_class",
+        "error_message",
+        "stack_trace",
+        # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",
         "trace_id",
         "span_id",
         "correlation_id",
-        # ── App Vitals ───────────────────────────────────────────────────
-        # Deterministic filter flag — marks every App Vitals log event
-        "app_vitals",
-        # Per-workflow identity (deployment-level fields are on OTel Resource;
-        # tenant_id is redundant with ResourceAttributes['k8s.cluster.name'])
-        # Outcome
-        "status",
-        "error_type",
-        "error_class",
-        "error_message",
-        "error_cause_chain",
-        "stack_trace",
-        "error_fingerprint",
-        # Metric classification
-        "dimension",
-        "source",
-        "metric_name",
-        # Throughput
-        "assets_processed",
-        # Efficiency (per-activity resource deltas)
-        "cpu_seconds",
-        "mem_gb_sec",
-        # Performance timings
-        "schedule_to_start_ms",
-        "timeout_budget_total_ms",
-        "timeout_budget_used_pct",
-        # Retry context
-        "retry_max_attempts",
-        # Payload size
-        "input_payload_bytes",
-        # Activity wall-clock timestamps (ISO 8601)
-        "activity_start_time",
-        "activity_end_time",
-        # Workflow hierarchy
-        "parent_workflow_id",
-        "parent_run_id",
-        "continued_run_id",
-        "cron_schedule",
-        # Workflow-level timeout budget
-        "wf_timeout_budget_total_ms",
-        "wf_timeout_budget_used_pct",
-        "history_length",
-        # Workflow summary — activity duration rollup
-        "sum_activity_duration_ms",
-        # Workflow summary (app_vitals.wf.summary event)
-        "total_activities",
-        "succeeded_activities",
-        "failed_activities",
-        "total_child_workflows",
-        "first_failure_activity_type",
-        "first_failure_error_type",
-        "preflight_passed",
-        "circuit_breaker_tripped",
-        "bottleneck_activity_type",
-        "bottleneck_duration_ms",
         # ── ObjectStore operations ───────────────────────────────────────
         "storage_op",
         "store_path",

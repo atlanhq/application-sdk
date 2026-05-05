@@ -61,6 +61,13 @@ _HEADER_CORRELATION_ID = "x-correlation-id"
 # so AE-dispatched workflows inherit correlation_id without AE-side changes.
 _HEADER_CORRELATION_ID_LEGACY = "correlation_id"
 
+# Activity-only: workflow's own ``info.parent`` propagated to activity inbound
+# so activity logs carry the same ``parent_workflow_id`` / ``parent_run_id`` as
+# the workflow that scheduled them. Child workflows don't need this — Temporal
+# sets ``workflow.info().parent`` natively from the parent-child relationship.
+_HEADER_PARENT_WORKFLOW_ID = "atlan-parent-workflow-id"
+_HEADER_PARENT_RUN_ID = "atlan-parent-run-id"
+
 
 def _correlation_id_or_empty() -> str:
     ctx = get_correlation_context()
@@ -85,16 +92,32 @@ class _LogWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
         self._inbound = inbound
 
     def _inject(self, headers: Mapping[str, Payload]) -> dict[str, Payload]:
+        # All read from the workflow-execution-scoped inbound interceptor
+        # instance — Temporal creates a fresh inbound per workflow execution,
+        # so these attrs are isolated across concurrent workflows on the
+        # same worker (see _workflow_instance.py:390).
         correlation_id = self._inbound._correlation_id
-        if not correlation_id:
+        parent_workflow_id = self._inbound._parent_workflow_id
+        parent_run_id = self._inbound._parent_run_id
+
+        if not correlation_id and not parent_workflow_id and not parent_run_id:
             return dict(headers)
         try:
             converter = default_converter().payload_converter
             new_headers: dict[str, Payload] = dict(headers)
-            new_headers[_HEADER_CORRELATION_ID] = converter.to_payload(correlation_id)
+            if correlation_id:
+                new_headers[_HEADER_CORRELATION_ID] = converter.to_payload(
+                    correlation_id
+                )
+            if parent_workflow_id:
+                new_headers[_HEADER_PARENT_WORKFLOW_ID] = converter.to_payload(
+                    parent_workflow_id
+                )
+            if parent_run_id:
+                new_headers[_HEADER_PARENT_RUN_ID] = converter.to_payload(parent_run_id)
             return new_headers
         except Exception:
-            logger.warning("Failed to inject correlation header", exc_info=True)
+            logger.warning("Failed to inject correlation/parent headers", exc_info=True)
             return dict(headers)
 
     def start_activity(self, input: StartActivityInput) -> Any:
@@ -115,6 +138,12 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     def __init__(self, next_: WorkflowInboundInterceptor) -> None:
         super().__init__(next_)
         self._correlation_id: str = ""
+        # Cached on entry; the outbound interceptor reads these to inject
+        # ``atlan-parent-*`` headers on activities so they inherit the same
+        # parent identity. Per-workflow-execution (Temporal creates a fresh
+        # interceptor instance per workflow run).
+        self._parent_workflow_id: str = ""
+        self._parent_run_id: str = ""
 
     def init(self, outbound: WorkflowOutboundInterceptor) -> None:
         super().init(_LogWorkflowOutboundInterceptor(outbound, self))
@@ -155,6 +184,9 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             return await self.next.execute_workflow(input)
 
         info = workflow.info()
+        parent = getattr(info, "parent", None)
+        self._parent_workflow_id = (parent.workflow_id if parent else "") or ""
+        self._parent_run_id = (parent.run_id if parent else "") or ""
 
         set_execution_context(
             ExecutionContext(
@@ -165,6 +197,8 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 namespace=info.namespace or "",
                 task_queue=info.task_queue or "",
                 attempt=info.attempt or 0,
+                parent_workflow_id=self._parent_workflow_id,
+                parent_run_id=self._parent_run_id,
             )
         )
 
@@ -221,6 +255,24 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         info = activity.info()
 
+        # Read parent identity from headers injected by the workflow's
+        # outbound interceptor. ``activity.Info`` itself doesn't expose
+        # parent info, so we propagate it via Temporal headers.
+        parent_workflow_id = ""
+        parent_run_id = ""
+        try:
+            converter = default_converter().payload_converter
+            payload = input.headers.get(_HEADER_PARENT_WORKFLOW_ID)
+            if payload is not None:
+                parent_workflow_id = converter.from_payload(payload, type_hint=str)
+            payload = input.headers.get(_HEADER_PARENT_RUN_ID)
+            if payload is not None:
+                parent_run_id = converter.from_payload(payload, type_hint=str)
+        except Exception:
+            logger.warning(
+                "Failed to read parent identity headers in activity", exc_info=True
+            )
+
         set_execution_context(
             ExecutionContext(
                 execution_type="activity",
@@ -230,6 +282,8 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 activity_type=info.activity_type or "",
                 task_queue=info.task_queue or "",
                 attempt=info.attempt or 0,
+                parent_workflow_id=parent_workflow_id,
+                parent_run_id=parent_run_id,
             )
         )
 

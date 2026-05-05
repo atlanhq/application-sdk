@@ -209,6 +209,46 @@ class TestCreateWorker:
         assert "_filter-app-a" in user_app_names
         assert "_filter-app-b" in user_app_names
 
+    def test_rejects_caller_supplied_log_interceptor(self) -> None:
+        """``create_worker(interceptors=[LogInterceptor()])`` must fail loudly:
+        the SDK adds the observability trio automatically and a duplicate would
+        double-count metrics and emit duplicate lifecycle log lines."""
+        from application_sdk.execution._temporal.interceptors.log import LogInterceptor
+
+        class _DupApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        with pytest.raises(ValueError, match="LogInterceptor"):
+            create_worker(client, interceptors=[LogInterceptor()])
+
+    def test_rejects_caller_supplied_metrics_interceptor(self) -> None:
+        from application_sdk.execution._temporal.interceptors.metrics import (
+            MetricsInterceptor,
+        )
+
+        class _DupApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        with pytest.raises(ValueError, match="MetricsInterceptor"):
+            create_worker(client, interceptors=[MetricsInterceptor()])
+
+    def test_rejects_caller_supplied_trace_interceptor(self) -> None:
+        from application_sdk.execution._temporal.interceptors.trace import (
+            TraceInterceptor,
+        )
+
+        class _DupApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        with pytest.raises(ValueError, match="TraceInterceptor"):
+            create_worker(client, interceptors=[TraceInterceptor()])
+
     def test_passthrough_modules_included_in_sandbox(self) -> None:
         class _SandboxApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:

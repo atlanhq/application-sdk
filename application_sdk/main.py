@@ -1232,6 +1232,12 @@ async def run_dev_combined(
 
 def run_main(config: AppConfig) -> None:
     """Route to worker, handler, or combined mode based on config."""
+    from application_sdk.common.env_warnings import (  # noqa: PLC0415 — cold path: startup-only check
+        warn_removed_env_vars,
+    )
+
+    warn_removed_env_vars()
+
     # Bootstrap the global MeterProvider once per process so any meter
     # consumer (instrumentors, interceptors, decorators, …) resolves to the
     # configured provider. Without this, handler-mode /metrics serves only

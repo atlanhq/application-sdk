@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING
 
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior
@@ -32,6 +32,10 @@ from application_sdk.execution.settings import (
     load_interceptor_settings,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+
+if TYPE_CHECKING:
+    # Imported lazily inside _start_metrics_push (cold path) — type-only here.
+    from application_sdk.observability.pushgateway import PushGatewayClient
 
 logger = get_logger(__name__)
 
@@ -67,7 +71,7 @@ class AppWorker:
         self._enable_pushgateway = enable_pushgateway
         self._primary_app_name = primary_app_name
         self._task_queue = task_queue
-        self._pusher: Any = None
+        self._pusher: PushGatewayClient | None = None
 
     async def _start_metrics_push(self) -> None:
         if not self._enable_pushgateway:
@@ -309,6 +313,21 @@ def create_worker(
         MetricsInterceptor,
         TraceInterceptor,
     )
+
+    # Guard against double-registration: callers migrating from v2 may pass
+    # one of these explicitly via ``interceptors=...``. Running them twice
+    # would double-count metrics and emit duplicate lifecycle log lines —
+    # silent corruption that's hard to diagnose. Fail loudly at startup.
+    _builtin_types = (LogInterceptor, MetricsInterceptor, TraceInterceptor)
+    _duplicates = [
+        type(i).__name__ for i in (interceptors or []) if isinstance(i, _builtin_types)
+    ]
+    if _duplicates:
+        raise ValueError(
+            f"create_worker(interceptors=...) contains {_duplicates}, but the SDK "
+            "now adds LogInterceptor / MetricsInterceptor / TraceInterceptor "
+            "automatically. Remove them from your `interceptors` list."
+        )
 
     all_interceptors: list[TemporalInterceptor] = [
         LogInterceptor(),

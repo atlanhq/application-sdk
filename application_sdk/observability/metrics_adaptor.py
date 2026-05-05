@@ -206,11 +206,20 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             Exception: If sending fails, logs error and continues
         """
         try:
-            otel_attrs = {
-                k: v
-                for k, v in metric_record.labels.items()
-                if isinstance(v, (str, int, float, bool))
-            }
+            otel_attrs: dict[str, str | int | float | bool] = {}
+            dropped: list[str] = []
+            for k, v in metric_record.labels.items():
+                if isinstance(v, (str, int, float, bool)):
+                    otel_attrs[k] = v
+                else:
+                    dropped.append(k)
+            if dropped:
+                logger.warning(
+                    "Dropping non-scalar label values for metric %s: %s. "
+                    "OTel attributes must be str/int/float/bool — coerce upstream.",
+                    metric_record.name,
+                    dropped,
+                )
             if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
@@ -271,7 +280,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         name: str,
         value: float,
         metric_type: MetricType,
-        labels: dict[str, Any],
+        labels: dict[str, str | int | float | bool],
         description: str | None = None,
         unit: str | None = None,
     ):
@@ -281,7 +290,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             name (str): Name of the metric
             value (float): Numeric value of the metric
             metric_type (str): Type of metric (counter, gauge, or histogram)
-            labels (Dict[str, Any]): Key-value pairs for metric dimensions
+            labels: Key-value pairs for metric dimensions. Values must be
+                str/int/float/bool — OTel attributes do not accept other types.
             description (Optional[str]): Optional description of the metric
             unit (Optional[str]): Optional unit of measurement
 
