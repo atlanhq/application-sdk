@@ -166,14 +166,16 @@ class PreflightInput(BaseModel):
     are accepted for backward compatibility via ``extra="allow"``.
     """
 
-    metadata: dict[str, Any] = {}
+    metadata: BaseConnectionConfig = Field(default_factory=BaseConnectionConfig)
     """Form-level metadata forwarded by heracles alongside the credential.
 
     Contains the full UI form state (extraction type, source, user-entered
-    prefixes, filter keys, etc.) as sent by the frontend. Handlers that need
-    form fields unavailable in the credential body — for example a storage
-    prefix entered as a plain text input rather than inside a credential form
-    — can read them here. All other handlers can ignore this field safely.
+    prefixes, filter keys, etc.) as sent by the frontend.  Handlers that need
+    form fields unavailable in the credential body can read them here.
+    All other handlers can ignore this field safely.
+
+    Pass a :class:`BaseConnectionConfig` subclass for strong typing.  Raw dicts
+    are accepted for backward compatibility via ``extra="allow"``.
     """
 
     checks_to_run: list[str] = []
