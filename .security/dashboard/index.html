@@ -186,10 +186,15 @@
         <!-- Section 2: Line chart -->
         <div class="card" style="margin-bottom:16px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                <div class="card-title" style="margin:0">Vulnerability Trend</div>
-                <div class="filter-group"><label>Stack by</label><select id="fTrendMetric" onchange="renderTrends()" style="margin-left:6px">
-                    <option value="source" selected>Source (App / Base)</option><option value="severity">Severity (Critical / High)</option><option value="status">Status (New / Allowlisted)</option>
-                </select></div>
+                <div class="card-title" style="margin:0">Vulnerability Trend <span style="color:#b0b3c6;font-weight:500;font-size:10px;text-transform:none;letter-spacing:0;margin-left:8px">end-of-day snapshots · today appears at midnight</span></div>
+                <div style="display:flex;gap:10px;align-items:center">
+                    <div class="filter-group"><label>Window</label><select id="fTrendWindow" onchange="renderTrends()" style="margin-left:6px">
+                        <option value="7" selected>Last 7 days</option><option value="15">Last 15 days</option><option value="30">Last 30 days</option>
+                    </select></div>
+                    <div class="filter-group"><label>Stack by</label><select id="fTrendMetric" onchange="renderTrends()" style="margin-left:6px">
+                        <option value="source" selected>Source (App / Base)</option><option value="severity">Severity (Critical / High)</option><option value="status">Status (New / Allowlisted)</option>
+                    </select></div>
+                </div>
             </div>
             <div id="trendChart" style="min-height:200px;position:relative;"></div>
         </div>
@@ -578,7 +583,7 @@ function trendHover(e){
             <span style="color:#fdba74">App deps</span><span style="text-align:right">${fmt(d.app)}</span>
             <span style="color:#fca5a5">Critical</span><span style="text-align:right">${fmt(d.critical)}</span>
             <span style="color:#fdba74">High</span><span style="text-align:right">${fmt(d.high)}</span>
-            <span style="color:#fca5a5">New (blocking)</span><span style="text-align:right">${fmt(d.new)}</span>
+            <span style="color:#fca5a5">Blocking</span><span style="text-align:right">${fmt(d.new)}</span>
             <span style="color:#86efac">Allowlisted</span><span style="text-align:right">${fmt(d.allowlisted)}</span>
         </div>`;
     tip.style.display='block';
@@ -709,57 +714,74 @@ function renderTrends(){
         <div class="stat" style="cursor:help" title="${esc(deltaIsApprox?tipNewApprox:tipNewUnique)}"><div class="stat-icon" style="background:#fef2f2;color:#ef4444">&#10060;</div><div class="stat-value" style="color:#ef4444">${newValue}</div><div class="stat-label">New (${days}d)</div></div>`;
 
     // Section 2: Stacked area chart
-    // For each date, prefer unique CVE counts via the `ids*` arrays in history; if no repo
-    // on that date has `ids`, fall back to per-repo summed counts (legacy, overstates).
+    // For each date, compute "state of the org as of that date": every in-scope repo
+    // contributes its MOST RECENT history entry at-or-before that date. This gives a
+    // stable cumulative trend instead of a noisy "scans that happened on this exact day"
+    // view (which would jump up and down based on scan cadence, not real CVE direction).
     const KEYS=['total','new','app','base_image','critical','high','allowlisted'];
     const ID_KEYS={total:'ids',app:'ids_app',base_image:'ids_base',critical:'ids_critical',high:'ids_high',new:'ids_new',allowlisted:'ids_allowlisted'};
+    // Pre-sort each repo's history ascending so we can find "most recent at-or-before" cheaply
+    const sortedHistory={};
+    repos.forEach(r=>{sortedHistory[r]=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));});
+    // Distinct dates we render on the X axis — the union of all scan dates seen, but
+    // EXCLUDING today. Today's value keeps moving as fresh scans land throughout the day,
+    // so plotting it would create misleading mid-day spikes. We only show fully-completed
+    // days; "today" appears on the chart at midnight tomorrow once the day is locked.
+    const allDatesSet=new Set();
+    repos.forEach(r=>(sortedHistory[r]||[]).forEach(e=>{if(e.date<today)allDatesSet.add(e.date);}));
     const dateMap={};
-    const dateSets={};  // date -> {<key>:Set, hasIds:bool}
-    repos.forEach(r=>{(historyData[r]||[]).forEach(e=>{
-        if(!dateMap[e.date]){const o={};KEYS.forEach(k=>o[k]=0);dateMap[e.date]=o;}
-        if(!dateSets[e.date]){const s={hasIds:false};Object.keys(ID_KEYS).forEach(k=>s[k]=new Set());dateSets[e.date]=s;}
-        Object.entries(ID_KEYS).forEach(([k,jsonKey])=>{
-            if(Array.isArray(e[jsonKey])){
-                if(jsonKey==='ids')dateSets[e.date].hasIds=true;
-                e[jsonKey].forEach(id=>dateSets[e.date][k].add(id));
+    const dateSets={};
+    [...allDatesSet].sort().forEach(d=>{
+        const m={};KEYS.forEach(k=>m[k]=0);dateMap[d]=m;
+        const s={hasIds:false};Object.keys(ID_KEYS).forEach(k=>s[k]=new Set());dateSets[d]=s;
+        repos.forEach(r=>{
+            const h=sortedHistory[r];if(!h||!h.length)return;
+            // Find latest entry at-or-before d (binary-style scan since h is sorted)
+            let latest=null;
+            for(let i=h.length-1;i>=0;i--){if(h[i].date<=d){latest=h[i];break;}}
+            if(!latest)return;
+            // If the matching history entry predates the ids-tracking schema (no `ids` field),
+            // fall back to the repo's CURRENT vulnerability list as the best approximation.
+            // Without this, repos that haven't been rescanned since the schema bump silently
+            // drop out of historical chart points and undercount the trend.
+            if(!Array.isArray(latest.ids)){
+                (D.repos[r].vulnerabilities||[]).forEach(v=>{
+                    dateSets[d].hasIds=true;
+                    dateSets[d].total.add(v.id);
+                    if(v.source_type==='app')dateSets[d].app.add(v.id);
+                    else if(v.source_type==='base_image')dateSets[d].base_image.add(v.id);
+                    if(v.severity==='CRITICAL')dateSets[d].critical.add(v.id);
+                    else if(v.severity==='HIGH')dateSets[d].high.add(v.id);
+                    if((v.status||'new')==='new')dateSets[d].new.add(v.id);
+                    else if(v.status==='allowlisted')dateSets[d].allowlisted.add(v.id);
+                });
+            }else{
+                Object.entries(ID_KEYS).forEach(([k,jsonKey])=>{
+                    if(Array.isArray(latest[jsonKey])){
+                        if(jsonKey==='ids')dateSets[d].hasIds=true;
+                        latest[jsonKey].forEach(id=>dateSets[d][k].add(id));
+                    }
+                });
             }
+            KEYS.forEach(k=>{dateMap[d][k]+=(latest[k]||0);});
         });
-        // Always keep summed values too — used as legacy fallback
-        KEYS.forEach(k=>{dateMap[e.date][k]+=(e[k]||0);});
-    });});
-    // Override summed values with unique-count Set sizes when ids are present for that key
+    });
+    // Override summed totals with unique-set sizes when IDs are present
     Object.keys(dateSets).forEach(d=>{
         if(!dateSets[d].hasIds)return;
         Object.keys(ID_KEYS).forEach(k=>{if(dateSets[d][k].size)dateMap[d][k]=dateSets[d][k].size;});
     });
-    if(!dateMap[today]){
-        dateMap[today]={
-            total:totalToday,new:newToday,
-            app:collectIds(repos,v=>v.source_type==='app').size,
-            base_image:collectIds(repos,v=>v.source_type==='base_image').size,
-            critical:collectIds(repos,v=>v.severity==='CRITICAL').size,
-            high:collectIds(repos,v=>v.severity==='HIGH').size,
-            allowlisted:collectIds(repos,(v,r)=>(v.status||(v.statuses&&v.statuses[r]))==='allowlisted').size
-        };
-    }else{
-        // Today entry exists in history — recompute from current per-repo data so it always reflects "now"
-        dateMap[today].total=totalToday;
-        dateMap[today].new=newToday;
-        dateMap[today].app=collectIds(repos,v=>v.source_type==='app').size;
-        dateMap[today].base_image=collectIds(repos,v=>v.source_type==='base_image').size;
-        dateMap[today].critical=collectIds(repos,v=>v.severity==='CRITICAL').size;
-        dateMap[today].high=collectIds(repos,v=>v.severity==='HIGH').size;
-        dateMap[today].allowlisted=collectIds(repos,(v,r)=>(v.status||(v.statuses&&v.statuses[r]))==='allowlisted').size;
-    }
+    // Note: today is intentionally not in dateMap — chart only renders completed days.
 
     const stackBy=(metric==='source'||metric==='severity'||metric==='status')?metric:'source';
     const stackConfig={
         source:[{key:'base_image',label:'Base image',color:'#6366f1'},{key:'app',label:'App deps',color:'#f97316'}],
         severity:[{key:'critical',label:'Critical',color:'#ef4444'},{key:'high',label:'High',color:'#f97316'}],
-        status:[{key:'new',label:'New (blocking)',color:'#ef4444'},{key:'allowlisted',label:'Allowlisted',color:'#22c55e'}]
+        status:[{key:'new',label:'Blocking',color:'#ef4444'},{key:'allowlisted',label:'Allowlisted',color:'#22c55e'}]
     };
     const layers=stackConfig[stackBy];
-    const dates=Object.keys(dateMap).sort();
+    const windowDays=parseInt(document.getElementById('fTrendWindow')?.value||'7',10);
+    const dates=Object.keys(dateMap).sort().slice(-windowDays);
 
     if(!dates.length){
         document.getElementById('trendChart').innerHTML='<div class="empty" style="padding:40px">Trends will appear after merges accumulate data.</div>';
