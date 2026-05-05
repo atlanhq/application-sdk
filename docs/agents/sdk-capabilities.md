@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    ae4ca986f9df8f1d441f7efda1330da7781ce7dd
-source-date:   2026-05-05T11:14:11+05:30
+source-sha:    a986d44bc78759f6dcd558eee29f73a44400c553
+source-date:   2026-05-05T18:26:06+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1462,14 +1462,14 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 #### `correlation_context`
 
 - **Import:** `from application_sdk.observability import correlation_context`
-- **Signature:** `correlation_context: ContextVar[Dict[str, Any] | None]`
+- **Signature:** `correlation_context: ContextVar[dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
 
 #### `request_context`
 
 - **Import:** `from application_sdk.observability import request_context`
-- **Signature:** `request_context: ContextVar[Dict[str, Any] | None]`
+- **Signature:** `request_context: ContextVar[dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
 
