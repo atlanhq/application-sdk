@@ -33,11 +33,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.sql_filters import normalize_filters
+from application_sdk.contracts.storage import UploadInput
+from application_sdk.contracts.types import StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
-from application_sdk.templates.contracts.base_metadata_extraction import UploadInput
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -69,7 +70,7 @@ def _task_input(
     input_cls: type[_ET],
     src: ExtractionInput,
     *,
-    cred_ref: "CredentialRef | None",
+    cred_ref: CredentialRef | None,
 ) -> _ET:
     """Build a typed task input from the top-level extraction input."""
     return input_cls(
@@ -89,11 +90,9 @@ def _task_input(
 class SqlMetadataExtractor(BaseMetadataExtractor):
     """Base class for SQL metadata extraction apps.
 
-    Inherits ``upload_to_atlan`` from ``BaseMetadataExtractor``.
-
     The ``run()`` method orchestrates the full extraction:
-    fetch (databases, schemas, tables, columns) → transform → upload.
-    Override ``run()`` to change the orchestration.
+    fetch (databases, schemas, tables, columns) → transform → upload via
+    :meth:`App.upload`.  Override ``run()`` to change the orchestration.
 
     All task timeouts default to 30 minutes. Override via::
 
@@ -428,10 +427,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
 
             # Upload extracted data to Atlan
             if input.output_path:
-                upload_result = await self.upload_to_atlan(
-                    UploadInput(output_path=input.output_path)
+                upload_result = await self.upload(
+                    UploadInput(local_path=input.output_path, tier=StorageTier.RETAINED)
                 )
-                records_uploaded = upload_result.migrated_files
+                records_uploaded = upload_result.ref.file_count or 0
             else:
                 records_uploaded = 0
 

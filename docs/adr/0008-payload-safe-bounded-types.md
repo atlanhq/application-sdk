@@ -33,7 +33,7 @@ Forbid unbounded types at class definition time and provide safe alternatives:
 ```python
 from typing import Annotated
 from application_sdk.contracts import Input, Output
-from application_sdk.contracts.types import MaxItems, FileReference
+from application_sdk.contracts import MaxItems, FileReference
 
 class ProcessInput(Input):
     # SAFE: bounded list
@@ -116,4 +116,4 @@ Automatically split large payloads into chunks, reassemble transparently.
 
 **`MaxItems`** (`application_sdk/contracts/types.py`): `@dataclass(frozen=True)` constraint marker used with `Annotated`.
 
-**`FileReference`** (`application_sdk/contracts/types.py`): dataclass with `path: str`, optional `size_bytes`, `checksum`, and `content_type`. Store large data via `application_sdk.storage.upload_file()` and pass only the reference through Temporal.
+**`FileReference`** (`application_sdk/contracts/types.py`): frozen Pydantic `BaseModel` with fields `local_path`, `storage_path`, `is_durable`, `file_count`, and `tier (StorageTier)`. Store large data via `application_sdk.storage.upload_file()` and pass only the reference through Temporal.

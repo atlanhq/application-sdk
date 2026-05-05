@@ -4,9 +4,38 @@ Error code format: AAF-{COMP}-{ID:03d}
 - AAF = Atlan App Framework prefix
 - {COMP} = 3-letter component code
 - {ID} = 3-digit zero-padded sequential number
+
+Public API (cross-component-boundary codes apps catch or raise)::
+
+    from application_sdk.errors import (
+        ErrorCode,
+        APP_ERROR, APP_NON_RETRYABLE,
+        HANDLER_ERROR,
+        CONTRACT_VALIDATION, PAYLOAD_SAFETY,
+        CREDENTIAL_ERROR, CREDENTIAL_NOT_FOUND,
+        STORAGE_NOT_FOUND, SECRET_NOT_FOUND,
+    )
 """
 
 from dataclasses import dataclass
+
+__all__ = [
+    "ErrorCode",
+    # App
+    "APP_ERROR",
+    "APP_NON_RETRYABLE",
+    # Handler
+    "HANDLER_ERROR",
+    # Contracts
+    "CONTRACT_VALIDATION",
+    "PAYLOAD_SAFETY",
+    # Credentials
+    "CREDENTIAL_ERROR",
+    "CREDENTIAL_NOT_FOUND",
+    # Storage / secrets
+    "STORAGE_NOT_FOUND",
+    "SECRET_NOT_FOUND",
+]
 
 
 @dataclass(frozen=True)

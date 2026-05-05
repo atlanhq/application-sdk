@@ -5,8 +5,8 @@ Handlers implement the API contract for your application's HTTP endpoints: authe
 ## Defining a Handler
 
 ```python
-from application_sdk.handler import Handler
-from application_sdk.handler.contracts import (
+from application_sdk.handler import (
+    Handler,
     AuthInput, AuthOutput, AuthStatus,
     PreflightInput, PreflightOutput, PreflightStatus, PreflightCheck,
     MetadataInput, SqlMetadataOutput, SqlMetadataObject,
@@ -33,15 +33,19 @@ class MyHandler(Handler):
 
 Every handler method takes a single typed `Input` and returns a single typed `Output`. The contracts are defined in `application_sdk.handler.contracts`:
 
+All contract classes are Pydantic `BaseModel` subclasses. Import them from `application_sdk.handler.contracts`.
+
 ### AuthInput / AuthOutput
 
 ```python
-class AuthInput:
+from pydantic import BaseModel
+
+class AuthInput(BaseModel):
     credentials: list[HandlerCredential] = []  # credential key/value pairs
     connection_id: str = ""                     # optional connection ID
     timeout_seconds: int = 30                   # max wait time
 
-class AuthOutput:
+class AuthOutput(BaseModel):
     status: AuthStatus       # SUCCESS, FAILED, EXPIRED, or INVALID_CREDENTIALS
     message: str = ""        # optional detail message
     identities: list[str] = []  # verified identities (usernames, roles)
@@ -54,13 +58,13 @@ Each `HandlerCredential` has a `key: str` and `value: str`.
 ### PreflightInput / PreflightOutput
 
 ```python
-class PreflightInput:
+class PreflightInput(BaseModel):
     credentials: list[HandlerCredential] = []  # credentials for preflight
     connection_config: dict[str, Any] = {}     # host, port, database, etc.
     checks_to_run: list[str] = []              # specific checks (empty = all)
     timeout_seconds: int = 60                  # max wait time
 
-class PreflightOutput:
+class PreflightOutput(BaseModel):
     status: PreflightStatus           # READY, NOT_READY, or PARTIAL
     checks: list[PreflightCheck] = [] # individual check results
     message: str = ""                 # human-readable summary
@@ -70,7 +74,7 @@ class PreflightOutput:
 ### MetadataInput / MetadataOutput
 
 ```python
-class MetadataInput:
+class MetadataInput(BaseModel):
     credentials: list[HandlerCredential] = []  # credentials for discovery
     connection_config: dict[str, Any] = {}     # connection configuration
     object_filter: str = ""                    # filter pattern (e.g. 'public.*')
@@ -78,7 +82,7 @@ class MetadataInput:
     max_objects: int = 1000                    # max objects to return
     timeout_seconds: int = 120                 # max wait time
 
-class MetadataOutput:
+class MetadataOutput(BaseModel):
     objects: list[Any] = []  # base class — use SqlMetadataOutput or ApiMetadataOutput
 
 class SqlMetadataOutput(MetadataOutput):
@@ -86,6 +90,41 @@ class SqlMetadataOutput(MetadataOutput):
 
 class ApiMetadataOutput(MetadataOutput):
     objects: list[ApiMetadataObject] = []  # for apitree widget
+```
+
+### Event and Subscription Contracts
+
+For event-driven handlers, additional contracts are available:
+
+```python
+from application_sdk.handler.contracts import (
+    EventTriggerConfig,   # configure a Dapr subscription trigger
+    SubscriptionConfig,   # full Dapr pub/sub subscription spec
+    CloudEventEnvelope,   # typed wrapper for incoming Dapr cloud events
+    FileUploadResponse,   # response for file upload endpoints
+)
+```
+
+### DefaultHandler
+
+`DefaultHandler` is a pre-built `Handler` subclass that implements all three methods with sensible no-op responses. Useful for apps that only need workflow orchestration and don't expose auth/preflight/metadata UI.
+
+Handler selection is convention-based: the SDK looks for `{AppClassName}Handler` in the same module as your `App`, then scans for any `Handler` subclass, and finally falls back to `DefaultHandler` automatically. There is no `handler_class` attribute on `App` — to rely on `DefaultHandler`, simply don't define a `Handler` subclass.
+
+To specify a handler explicitly, use the `--handler` CLI flag or `ATLAN_HANDLER_MODULE` env var (see [CLI reference](../reference/cli.md)):
+
+```bash
+application-sdk --mode handler --handler myapp.handlers:MyHandler
+```
+
+To define a custom handler using the convention-based approach:
+
+```python
+from application_sdk.handler import Handler, AuthInput, AuthOutput
+
+class MyAppHandler(Handler):   # name must be {AppClassName}Handler
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        ...
 ```
 
 ## Context Injection

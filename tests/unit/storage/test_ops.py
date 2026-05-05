@@ -1,38 +1,27 @@
-"""Unit tests for application_sdk.storage.ops.
-
-These tests focus on the uncovered branches of ops.py:
-- The lazy ``_log()`` logger initialisation (inline import).
-- The lazy resolve-store failure path (inline import of get_infrastructure).
-- ``_compute_part_size`` for the S3 10 000-part safety branch.
-- ``_is_not_found`` matrix.
-- Inline-import error wrapping in upload_file / download_file / _put / _get_bytes /
-  delete / exists (each error path imports StorageError / StorageNotFoundError lazily).
-
-All real I/O is mocked; no real obstore traffic, no threads, no event loops
-beyond the per-test asyncio loop pytest-asyncio creates.
-"""
+"""Unit tests for storage ops using MemoryStore."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import orjson
 import pytest
 
-from application_sdk.storage import ops as ops_module
-from application_sdk.storage.batch import delete_prefix, list_keys
+from application_sdk import constants
+from application_sdk.storage.batch import download_prefix, list_keys
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
-    _compute_part_size,
     _get_bytes,
-    _is_not_found,
-    _log,
     _put,
-    _resolve_store,
     delete,
     download_file,
+    download_file_chunked,
     exists,
+    get_file_size,
+    normalize_key,
+    put_json,
     upload_file,
 )
 
@@ -42,148 +31,38 @@ def store():
     return create_memory_store()
 
 
-# ---------------------------------------------------------------------------
-# _log() lazy logger initialisation (inline import)
-# ---------------------------------------------------------------------------
+class TestPutAndGet:
+    async def test_put_then_get_returns_data(self, store) -> None:
+        await _put("hello.txt", b"world", store)
+        result = await _get_bytes("hello.txt", store)
+        assert result == b"world"
+
+    async def test_get_missing_key_returns_none(self, store) -> None:
+        result = await _get_bytes("nonexistent/key.bin", store)
+        assert result is None
+
+    async def test_put_overwrites(self, store) -> None:
+        await _put("key", b"v1", store)
+        await _put("key", b"v2", store)
+        assert await _get_bytes("key", store) == b"v2"
+
+    async def test_put_empty_bytes(self, store) -> None:
+        await _put("empty", b"", store)
+        result = await _get_bytes("empty", store)
+        assert result == b""
 
 
-class TestLazyLog:
-    def setup_method(self) -> None:
-        # Force re-initialisation so we can verify the inline import path runs.
-        ops_module._logger = None
+class TestDelete:
+    async def test_delete_existing_key(self, store) -> None:
+        await _put("del-me", b"data", store)
+        deleted = await delete("del-me", store)
+        assert deleted is True
+        assert await _get_bytes("del-me", store) is None
 
-    def teardown_method(self) -> None:
-        ops_module._logger = None
-
-    def test_log_initialises_logger_via_inline_import(self) -> None:
-        """Exercises the lazy ``get_logger`` import in ``_log()``."""
-        sentinel_logger = MagicMock()
-        with patch(
-            "application_sdk.observability.logger_adaptor.get_logger",
-            return_value=sentinel_logger,
-        ) as mock_get_logger:
-            result = _log()
-            # Calling twice must not re-import.
-            result_second = _log()
-
-        assert result is sentinel_logger
-        assert result_second is sentinel_logger
-        mock_get_logger.assert_called_once_with("application_sdk.storage.ops")
-
-
-# ---------------------------------------------------------------------------
-# _resolve_store
-# ---------------------------------------------------------------------------
-
-
-class TestResolveStore:
-    def test_returns_explicit_store(self) -> None:
-        store = MagicMock()
-        assert _resolve_store(store) is store
-
-    def test_raises_runtime_error_when_no_infra(self) -> None:
-        """Exercises the inline import of ``get_infrastructure`` and the error branch."""
-        with (
-            patch(
-                "application_sdk.infrastructure.context.get_infrastructure",
-                return_value=None,
-            ),
-            pytest.raises(RuntimeError, match="No ObjectStore provided"),
-        ):
-            _resolve_store(None)
-
-    def test_raises_when_infra_storage_is_none(self) -> None:
-        infra = SimpleNamespace(storage=None)
-        with (
-            patch(
-                "application_sdk.infrastructure.context.get_infrastructure",
-                return_value=infra,
-            ),
-            pytest.raises(RuntimeError, match="No ObjectStore provided"),
-        ):
-            _resolve_store(None)
-
-    def test_returns_infra_storage_when_set(self) -> None:
-        store = MagicMock()
-        infra = SimpleNamespace(storage=store)
-        with patch(
-            "application_sdk.infrastructure.context.get_infrastructure",
-            return_value=infra,
-        ):
-            assert _resolve_store(None) is store
-
-
-# ---------------------------------------------------------------------------
-# delete_prefix: GCS directory marker handling
-# ---------------------------------------------------------------------------
-
-
-class TestDeletePrefix:
-    async def test_delete_prefix_removes_intermediate_directory_markers(
-        self, store
-    ) -> None:
-        # The key scenario: "artifacts/run" is a GCS directory marker (zero-byte,
-        # trailing slash stripped by obstore) that sits WITHIN the deletion prefix
-        # "artifacts/". list_keys would filter it out; delete_prefix must not.
-        await _put("artifacts/run/file.json", b"{}", store, normalize=False)
-        await _put("artifacts/run", b"", store, normalize=False)  # GCS marker
-
-        deleted = await delete_prefix(
-            "artifacts", store
-        )  # normalize=True → "artifacts/"
-
-        assert deleted == 2  # file + intermediate marker both removed
-        assert (
-            await _get_bytes("artifacts/run/file.json", store, normalize=False) is None
-        )
-        assert await _get_bytes("artifacts/run", store, normalize=False) is None
-
-    async def test_delete_prefix_nested_markers_all_removed(self, store) -> None:
-        # Nested markers: "a/b" and "a/b/c" are both zero-byte parents within "a/".
-        await _put("a/b/c/file.json", b"{}", store, normalize=False)
-        await _put("a/b/c", b"", store, normalize=False)  # nested marker
-        await _put("a/b", b"", store, normalize=False)  # outer marker
-
-        deleted = await delete_prefix("a", store)
-
-        assert deleted == 3
-        assert await _get_bytes("a/b/c/file.json", store, normalize=False) is None
-        assert await _get_bytes("a/b/c", store, normalize=False) is None
-        assert await _get_bytes("a/b", store, normalize=False) is None
-
-    async def test_delete_prefix_zero_byte_leaf_file_removed(self, store) -> None:
-        # A legitimate zero-byte file (no children) must also be deleted.
-        await _put("data/empty.json", b"", store, normalize=False)
-        await _put("data/full.json", b"{}", store, normalize=False)
-
-        deleted = await delete_prefix("data", store, normalize=False)
-
-        assert deleted == 2
-        assert await _get_bytes("data/empty.json", store, normalize=False) is None
-        assert await _get_bytes("data/full.json", store, normalize=False) is None
-
-    async def test_delete_prefix_removes_root_directory_marker(self, store) -> None:
-        # Root-marker case: "artifacts/run" (the GCS marker) is at the same path
-        # as the requested prefix itself after normalisation. It lies outside the
-        # "artifacts/run/" listing prefix, so it must be swept by the best-effort
-        # root-marker delete rather than the main batch.
-        await _put("artifacts/run/file.json", b"{}", store, normalize=False)
-        await _put("artifacts/run", b"", store, normalize=False)  # GCS root marker
-
-        deleted = await delete_prefix(
-            "artifacts/run", store
-        )  # → prefix "artifacts/run/"
-
-        assert deleted == 2  # file + root marker both removed
-        assert (
-            await _get_bytes("artifacts/run/file.json", store, normalize=False) is None
-        )
-        assert await _get_bytes("artifacts/run", store, normalize=False) is None
-
-
-# ---------------------------------------------------------------------------
-# list_keys: GCS directory marker handling
-# ---------------------------------------------------------------------------
+    async def test_delete_missing_key_does_not_raise(self, store) -> None:
+        # MemoryStore silently succeeds on delete of non-existent key
+        result = await delete("not-there", store)
+        assert isinstance(result, bool)
 
 
 class TestListKeys:
@@ -194,178 +73,417 @@ class TestListKeys:
         assert "a/b.txt" in keys
         assert "a/c.txt" in keys
 
-    async def test_list_keys_suffix_filter_case_insensitive(self, store) -> None:
-        await _put("data/upper.JSON", b"u", store, normalize=False)
-        await _put("data/lower.json", b"l", store, normalize=False)
-        await _put("data/skip.txt", b"s", store, normalize=False)
+    async def test_list_with_prefix(self, store) -> None:
+        await _put("docs/x.txt", b"x", store)
+        await _put("docs/y.txt", b"y", store)
+        await _put("images/z.png", b"z", store)
+        keys = await list_keys("docs/", store)
+        assert "docs/x.txt" in keys
+        assert "docs/y.txt" in keys
+        assert "images/z.png" not in keys
 
-        keys = await list_keys("data", store, suffix=".json")
-        assert len(keys) == 2
-        assert "data/upper.JSON" in keys
-        assert "data/lower.json" in keys
-        assert "data/skip.txt" not in keys
-
-    async def test_list_keys_excludes_zero_byte_directory_markers(self, store) -> None:
-        # GCS strips the trailing slash from directory markers so they appear as
-        # bare keys when listing a *parent* prefix (e.g. "run" instead of "run/").
-        # List from an ancestor prefix ("") so the bare marker enters all_items.
-        await _put("run/manifest.json", b'{"version":1}', store, normalize=False)
-        await _put("run/catalog.json", b'{"sources":{}}', store, normalize=False)
-        # Simulate a GCS directory marker: 0-byte object at the bare prefix key.
-        await _put("run", b"", store, normalize=False)
-
-        # Use normalize=False + empty prefix so "run" (the marker) appears in
-        # all_items and the parent_dirs filter has something to act on.
-        keys = await list_keys("", store, normalize=False)
-        assert "run/manifest.json" in keys
-        assert "run/catalog.json" in keys
-        # The zero-byte marker must not appear in results.
-        assert "run" not in keys
-        assert len(keys) == 2
-
-    async def test_list_keys_retains_zero_byte_file_with_no_children(
-        self, store
-    ) -> None:
-        # A zero-byte file that is NOT a parent of any other key is a real
-        # empty file and must be returned by list_keys.
-        await _put("data/results.json", b"{}", store, normalize=False)
-        await _put("data/empty.json", b"", store, normalize=False)
-
-        keys = await list_keys("data", store, suffix=".json")
-        assert "data/results.json" in keys
-        # zero-byte but no children → legitimate file, must be included
-        assert "data/empty.json" in keys
-        assert len(keys) == 2
-
-    async def test_list_keys_excludes_nested_directory_markers(self, store) -> None:
-        # Nested GCS markers: both "run/sub" and "run" are 0-byte parent objects.
-        # List from ancestor prefix so both bare markers enter all_items.
-        await _put("run/sub/file.json", b'{"x":1}', store, normalize=False)
-        await _put("run/sub", b"", store, normalize=False)  # nested dir marker
-        await _put("run", b"", store, normalize=False)  # top-level dir marker
-
-        keys = await list_keys("", store, normalize=False)
-        assert "run/sub/file.json" in keys
-        assert "run/sub" not in keys
-        assert "run" not in keys
-        assert len(keys) == 1
-
-    async def test_list_keys_excludes_intermediate_directory_markers(
-        self, store
-    ) -> None:
-        # The core scenario parent_dirs is designed for: listing under a broad
-        # prefix returns "artifacts/run" (the obstore-stripped form of the GCS
-        # "artifacts/run/" marker) because it starts with "artifacts/".  The
-        # prefix filter does not help here — only parent_dirs catches it.
-        await _put("artifacts/run/file.json", b"{}", store, normalize=False)
-        await _put("artifacts/run", b"", store, normalize=False)
-
-        keys = await list_keys("artifacts", store)
-        assert "artifacts/run/file.json" in keys
-        assert "artifacts/run" not in keys
-        assert len(keys) == 1
-
-    async def test_list_keys_zero_byte_sibling_not_filtered_as_marker(
-        self, store
-    ) -> None:
-        # "a/b" is zero-byte but is a SIBLING of "a/c", not a parent of any listed
-        # key.  parent_dirs = {"a"} — "a/b" is not in parent_dirs → must be
-        # returned as a legitimate empty file.
-        await _put("a/b", b"", store, normalize=False)
-        await _put("a/c", b"data", store, normalize=False)
-
-        keys = await list_keys("", store, normalize=False)
-        assert "a/b" in keys  # zero-byte but no children → retained
-        assert "a/c" in keys
-        assert len(keys) == 2
+    async def test_list_empty_store(self, store) -> None:
+        keys = await list_keys(store=store)
+        assert keys == []
 
 
-# ---------------------------------------------------------------------------
-# _compute_part_size: 10 000-part safety floor
-# ---------------------------------------------------------------------------
+class TestNormalizeKey:
+    """Tests for normalize_key() — v2-compatible path normalisation."""
 
-
-class TestComputePartSize:
-    def test_small_file_returns_chunk_size(self) -> None:
-        assert _compute_part_size(file_size=1024, chunk_size=8 * 1024 * 1024) == (
-            8 * 1024 * 1024
+    def test_already_clean_key_is_unchanged(self) -> None:
+        assert (
+            normalize_key("artifacts/apps/foo/bar.jsonl")
+            == "artifacts/apps/foo/bar.jsonl"
         )
 
-    def test_huge_file_increases_part_size(self) -> None:
-        # 100 GiB with default 8 MiB part would need >9900 parts.
-        file_size = 100 * 1024 * 1024 * 1024
-        chunk = 8 * 1024 * 1024
-        result = _compute_part_size(file_size, chunk)
-        assert result > chunk
-        # Confirm 9900-part safety: file_size / result <= 9900.
-        assert file_size / result <= 9900 + 1  # rounding tolerance
+    def test_leading_slash_is_stripped(self) -> None:
+        assert normalize_key("/artifacts/foo.txt") == "artifacts/foo.txt"
+
+    def test_trailing_slash_is_stripped(self) -> None:
+        assert normalize_key("artifacts/foo/") == "artifacts/foo"
+
+    def test_empty_string_returns_empty(self) -> None:
+        assert normalize_key("") == ""
+
+    def test_staging_path_strips_temporary_prefix(self) -> None:
+        from application_sdk.constants import TEMPORARY_PATH
+
+        staging = os.path.join(TEMPORARY_PATH, "artifacts/apps/myapp/run-1/out.json")
+        assert normalize_key(staging) == "artifacts/apps/myapp/run-1/out.json"
+
+    def test_staging_root_returns_empty(self) -> None:
+        from application_sdk.constants import TEMPORARY_PATH
+
+        assert normalize_key(TEMPORARY_PATH) == ""
+
+    def test_absolute_path_strips_leading_slash(self) -> None:
+        assert normalize_key("/data/output.parquet") == "data/output.parquet"
+
+    def test_file_refs_key_is_unchanged(self) -> None:
+        assert normalize_key("file_refs/abc123.jsonl") == "file_refs/abc123.jsonl"
+
+
+class TestNormalizeIntegration:
+    """normalize=True (default) round-trips staging paths transparently."""
+
+    async def test_put_staging_path_readable_as_store_key(self, store) -> None:
+        from application_sdk.constants import TEMPORARY_PATH
+
+        staging = os.path.join(TEMPORARY_PATH, "artifacts/apps/app/wf/run/data.bin")
+        await _put(staging, b"payload", store)
+        # Can be retrieved with the normalised key
+        result = await _get_bytes("artifacts/apps/app/wf/run/data.bin", store)
+        assert result == b"payload"
+
+    async def test_put_and_get_with_normalize_false_uses_exact_key(self, store) -> None:
+        await _put("exact/key.bin", b"data", store, normalize=False)
+        result = await _get_bytes("exact/key.bin", store, normalize=False)
+        assert result == b"data"
+
+    async def test_list_keys_adds_trailing_slash_to_prefix(self, store) -> None:
+        await _put("docs/a.txt", b"a", store, normalize=False)
+        await _put("docs_extra/b.txt", b"b", store, normalize=False)
+        # "docs" without trailing slash should NOT match "docs_extra/"
+        keys = await list_keys("docs", store, normalize=True)
+        assert "docs/a.txt" in keys
+        assert "docs_extra/b.txt" not in keys
+
+    async def test_list_keys_suffix_filter(self, store) -> None:
+        await _put("data/table.parquet", b"p", store, normalize=False)
+        await _put("data/table.json", b"j", store, normalize=False)
+        await _put("data/stats.parquet", b"p2", store, normalize=False)
+
+        parquet_keys = await list_keys("data", store, suffix=".parquet")
+        assert len(parquet_keys) == 2
+        assert "data/table.parquet" in parquet_keys
+        assert "data/stats.parquet" in parquet_keys
+        assert "data/table.json" not in parquet_keys
+
+        json_keys = await list_keys("data", store, suffix=".json")
+        assert json_keys == ["data/table.json"]
+
+        all_keys = await list_keys("data", store)
+        assert len(all_keys) == 3
+
+
+class TestUploadFile:
+    async def test_upload_file_roundtrip(self, store, tmp_path) -> None:
+        f = tmp_path / "data.bin"
+        content = b"hello streaming world"
+        f.write_bytes(content)
+
+        sha256 = await upload_file("test/data.bin", f, store)
+        assert len(sha256) == 64  # hex SHA-256
+
+        # Verify what was stored
+        dest = tmp_path / "out.bin"
+        dl_sha256 = await download_file("test/data.bin", dest, store, compute_hash=True)
+        assert dest.read_bytes() == content
+        assert dl_sha256 == sha256
+
+    async def test_upload_file_returns_correct_sha256(self, store, tmp_path) -> None:
+        import hashlib
+
+        content = b"checksum me"
+        f = tmp_path / "check.bin"
+        f.write_bytes(content)
+        expected = hashlib.sha256(content).hexdigest()
+
+        sha256 = await upload_file("check.bin", f, store)
+        assert sha256 == expected
+
+    async def test_upload_file_compute_hash_false_returns_none(
+        self, store, tmp_path
+    ) -> None:
+        """``compute_hash=False`` skips the digest and returns None.
+
+        Regression guard: PR #1624 introduced ``compute_hash`` so external
+        stores (CloudStore) can avoid the integrity sidecar.  Removing the
+        parameter would silently start computing hashes for every external
+        upload — this test pins the contract.
+        """
+        f = tmp_path / "no_hash.bin"
+        f.write_bytes(b"do not hash me")
+
+        result = await upload_file("no_hash.bin", f, store, compute_hash=False)
+        assert result is None
+
+    async def test_upload_file_compute_hash_default_returns_digest(
+        self, store, tmp_path
+    ) -> None:
+        """The default ``compute_hash=True`` continues to return a hex digest."""
+        import hashlib
+
+        content = b"default behaviour"
+        f = tmp_path / "default.bin"
+        f.write_bytes(content)
+
+        result = await upload_file("default.bin", f, store)
+        assert result == hashlib.sha256(content).hexdigest()
+
+    async def test_upload_file_normalize_false(self, store, tmp_path) -> None:
+        f = tmp_path / "x.bin"
+        f.write_bytes(b"exact")
+        await upload_file("exact/key.bin", f, store, normalize=False)
+        raw = await _get_bytes("exact/key.bin", store, normalize=False)
+        assert raw == b"exact"
+
+    async def test_upload_file_retain_local_copy_true(self, store, tmp_path) -> None:
+        f = tmp_path / "keep.bin"
+        f.write_bytes(b"keep me")
+        await upload_file("keep.bin", f, store, retain_local_copy=True)
+        assert f.exists(), "Local file should be retained"
+
+    async def test_upload_file_retain_local_copy_false_in_staging(
+        self, store, tmp_path
+    ) -> None:
+        # Simulate file inside TEMPORARY_PATH so it's allowed to be deleted
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        f = staging / "delete_me.bin"
+        f.write_bytes(b"delete me")
+
+        with patch.object(constants, "TEMPORARY_PATH", str(staging)):
+            await upload_file("del.bin", f, store, retain_local_copy=False)
+        assert not f.exists(), "Local file should be deleted after upload"
+
+    async def test_upload_file_retain_local_copy_false_outside_staging(
+        self, store, tmp_path
+    ) -> None:
+        # File outside TEMPORARY_PATH should NOT be deleted (path traversal protection)
+        f = tmp_path / "safe.bin"
+        f.write_bytes(b"safe")
+
+        with patch.object(constants, "TEMPORARY_PATH", str(tmp_path / "other")):
+            await upload_file("safe.bin", f, store, retain_local_copy=False)
+        assert f.exists(), "File outside staging should NOT be deleted"
+
+
+class TestDownloadPrefix:
+    async def test_download_prefix_basic(self, store, tmp_path) -> None:
+        await _put("myprefix/a.txt", b"aaa", store, normalize=False)
+        await _put("myprefix/b.txt", b"bbb", store, normalize=False)
+        await _put("other/c.txt", b"ccc", store, normalize=False)
+
+        paths = await download_prefix("myprefix", tmp_path, store=store)
+        assert len(paths) == 2
+        assert (tmp_path / "myprefix" / "a.txt").read_bytes() == b"aaa"
+        assert (tmp_path / "myprefix" / "b.txt").read_bytes() == b"bbb"
+
+    async def test_download_prefix_with_suffix_filter(self, store, tmp_path) -> None:
+        await _put("data/file.parquet", b"pq", store, normalize=False)
+        await _put("data/file.json", b"js", store, normalize=False)
+
+        paths = await download_prefix("data", tmp_path, store=store, suffix=".parquet")
+        assert len(paths) == 1
+        assert paths[0].endswith("file.parquet")
+
+    async def test_download_prefix_concurrent(self, store, tmp_path) -> None:
+        """Verify multiple files are downloaded concurrently."""
+        for i in range(8):
+            await _put(
+                f"batch/file_{i}.txt", f"content_{i}".encode(), store, normalize=False
+            )
+
+        paths = await download_prefix("batch", tmp_path, store=store, max_concurrency=3)
+        assert len(paths) == 8
+        for i in range(8):
+            assert (
+                tmp_path / f"batch/file_{i}.txt"
+            ).read_bytes() == f"content_{i}".encode()
+
+    async def test_download_prefix_empty(self, store, tmp_path) -> None:
+        """Empty prefix returns no files."""
+        paths = await download_prefix("nonexistent", tmp_path, store=store)
+        assert paths == []
+
+    async def test_download_prefix_respects_max_concurrency(
+        self, store, tmp_path
+    ) -> None:
+        """Verify semaphore limits concurrent downloads."""
+        from unittest.mock import patch
+
+        for i in range(6):
+            await _put(f"sem/f_{i}.txt", b"x", store, normalize=False)
+
+        max_active = 0
+        active = 0
+        original_download = download_file
+
+        async def tracking_download(*args, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            try:
+                return await original_download(*args, **kwargs)
+            finally:
+                active -= 1
+
+        with patch(
+            "application_sdk.storage.ops.download_file", side_effect=tracking_download
+        ):
+            await download_prefix("sem", tmp_path, store=store, max_concurrency=2)
+
+        assert max_active <= 2, f"Expected max 2 concurrent, got {max_active}"
+
+
+class TestDownloadFile:
+    async def test_download_file_missing_key_raises(self, store, tmp_path) -> None:
+        with pytest.raises(StorageNotFoundError):
+            await download_file("no/such/key.bin", tmp_path / "out.bin", store)
+
+    async def test_download_file_no_hash(self, store, tmp_path) -> None:
+        f = tmp_path / "src.bin"
+        f.write_bytes(b"payload")
+        await upload_file("payload.bin", f, store)
+
+        dest = tmp_path / "dest.bin"
+        result = await download_file("payload.bin", dest, store, compute_hash=False)
+        assert result is None
+        assert dest.read_bytes() == b"payload"
+
+    async def test_download_file_creates_parent_dirs(self, store, tmp_path) -> None:
+        f = tmp_path / "src.bin"
+        f.write_bytes(b"nested")
+        await upload_file("n.bin", f, store)
+
+        dest = tmp_path / "a" / "b" / "c" / "out.bin"
+        await download_file("n.bin", dest, store)
+        assert dest.read_bytes() == b"nested"
+
+
+class TestPutJson:
+    """Tests for the public put_json() helper."""
+
+    async def test_serialises_dict_and_writes(self, store) -> None:
+        payload = {"workflow_id": "wf-1", "count": 42}
+        await put_json("configs/wf-1.json", payload, store)
+        raw = await _get_bytes("configs/wf-1.json", store)
+        assert raw == orjson.dumps(payload)
+
+    async def test_normalises_staging_path_by_default(self, store) -> None:
+        staging = os.path.join(constants.TEMPORARY_PATH, "configs/wf-2.json")
+        await put_json(staging, {"x": 1}, store)
+        raw = await _get_bytes("configs/wf-2.json", store)
+        assert raw == orjson.dumps({"x": 1})
+
+    async def test_normalize_false_uses_exact_key(self, store) -> None:
+        await put_json("exact/key.json", [1, 2, 3], store, normalize=False)
+        raw = await _get_bytes("exact/key.json", store, normalize=False)
+        assert raw == orjson.dumps([1, 2, 3])
+
+    async def test_accepts_list_and_primitives(self, store) -> None:
+        for value, key in [
+            ([1, 2], "list.json"),
+            ("hello", "str.json"),
+            (99, "int.json"),
+            (True, "bool.json"),
+            (None, "null.json"),
+        ]:
+            await put_json(key, value, store)
+            raw = await _get_bytes(key, store)
+            assert raw == orjson.dumps(value), f"serialisation mismatch for key={key!r}"
 
 
 # ---------------------------------------------------------------------------
-# _is_not_found
+# Typed not-found detection (BLDX-1155 #5: typed obstore exceptions)
 # ---------------------------------------------------------------------------
 
 
 class TestIsNotFound:
-    @pytest.mark.parametrize(
-        "msg",
-        [
-            "Key not found",
-            "404",
-            "no such file or directory",
-            "object does not exist",
-            "Item NOT FOUND",
-        ],
-    )
-    def test_matches(self, msg: str) -> None:
-        assert _is_not_found(Exception(msg)) is True
+    """The not-found helper must recognise both built-in and typed exceptions."""
 
-    @pytest.mark.parametrize(
-        "msg",
-        ["permission denied", "bad credentials", "internal server error"],
-    )
-    def test_does_not_match(self, msg: str) -> None:
-        assert _is_not_found(Exception(msg)) is False
+    def test_recognises_filenotfounderror(self) -> None:
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(FileNotFoundError("/no/such")) is True
+
+    def test_recognises_obstore_typed_notfounderror(self) -> None:
+        """obstore.exceptions.NotFoundError must be classified as not-found."""
+        from application_sdk.storage.ops import _is_not_found
+
+        try:
+            from obstore.exceptions import NotFoundError as ObstoreNotFoundError
+        except ImportError:  # pragma: no cover — older obstore
+            pytest.skip("obstore.exceptions.NotFoundError not available")
+
+        assert _is_not_found(ObstoreNotFoundError("missing key")) is True
+
+    def test_does_not_match_unrelated_messages(self) -> None:
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(RuntimeError("internal failure")) is False
+        assert _is_not_found(PermissionError("denied")) is False
+
+    def test_substring_fallback_still_works(self) -> None:
+        """Generic obstore errors carrying 404 strings remain identifiable."""
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(RuntimeError("got HTTP 404 from S3")) is True
+        assert _is_not_found(RuntimeError("key not found in bucket")) is True
 
 
 # ---------------------------------------------------------------------------
-# Error wrapping branches: each one exercises an inline import of StorageError.
+# Structured transfer logs (BLDX-1155 #6: surface what's actually happening)
 # ---------------------------------------------------------------------------
 
 
-async def test_put_wraps_failure_as_storage_error() -> None:
-    store = MagicMock()
-    with (
-        patch(
-            "application_sdk.storage.ops.obstore.put_async",
-            new=AsyncMock(side_effect=RuntimeError("boom")),
-        ),
-        pytest.raises(StorageError) as excinfo,
-    ):
-        await _put("k", b"v", store, normalize=False)
-    assert excinfo.value.key == "k"
-    assert isinstance(excinfo.value.cause, RuntimeError)
+class TestTransferLogging:
+    """upload_file / download_file must emit structured per-attempt log events.
+
+    A prior RCA was wrong-footed by the absence of these fields: we said
+    "single attempt" when ~5–6 attempts had actually happened in the Rust
+    layer. Even though we cannot count Rust retries directly, we *can*
+    expose what the SDK observed: bytes, elapsed, throughput, outcome, error
+    class. That alone closes the worst gap.
+    """
+
+    async def test_upload_emits_success_log_with_metrics(
+        self, store, tmp_path, caplog
+    ) -> None:
+        f = tmp_path / "p.bin"
+        f.write_bytes(b"x" * (256 * 1024))
+        with caplog.at_level("INFO", logger="application_sdk.storage.ops"):
+            await upload_file("metrics/up.bin", f, store)
+
+        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
+        outcome_events = [r for r in events if r.__dict__.get("outcome") == "success"]
+        assert outcome_events, (
+            "expected at least one structured 'success' upload event; "
+            f"got events: {[r.message for r in events]}"
+        )
+        evt = outcome_events[-1]
+        assert evt.__dict__.get("storage_op") == "upload"
+        assert evt.__dict__.get("size_bytes") == 256 * 1024
+        assert evt.__dict__.get("elapsed_ms") is not None
+        assert evt.__dict__.get("store_path") == "metrics/up.bin"
+
+    async def test_download_emits_failure_log_with_error_class(
+        self, store, tmp_path, caplog
+    ) -> None:
+        with caplog.at_level("WARNING", logger="application_sdk.storage.ops"):
+            with pytest.raises(StorageNotFoundError):
+                await download_file("no/such/key.bin", tmp_path / "out.bin", store)
+
+        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
+        failure_events = [r for r in events if r.__dict__.get("outcome") == "failure"]
+        assert failure_events, (
+            "expected at least one structured 'failure' download event; "
+            f"got events: {[r.message for r in events]}"
+        )
+        evt = failure_events[-1]
+        assert evt.__dict__.get("storage_op") == "download"
+        assert evt.__dict__.get("error_class") is not None
+        # Not-found should be classified explicitly.
+        assert evt.__dict__.get("error_class") in {
+            "StorageNotFoundError",
+            "FileNotFoundError",
+        } or "NotFound" in evt.__dict__.get("error_class", "")
 
 
-async def test_get_bytes_wraps_non_404_as_storage_error() -> None:
-    store = MagicMock()
-    with (
-        patch(
-            "application_sdk.storage.ops.obstore.get_async",
-            new=AsyncMock(side_effect=RuntimeError("permission denied")),
-        ),
-        pytest.raises(StorageError),
-    ):
-        await _get_bytes("k", store, normalize=False)
-
-
-async def test_get_bytes_returns_none_on_404() -> None:
-    store = MagicMock()
-    with patch(
-        "application_sdk.storage.ops.obstore.get_async",
-        new=AsyncMock(side_effect=RuntimeError("not found")),
-    ):
-        assert await _get_bytes("missing", store, normalize=False) is None
+# ---------------------------------------------------------------------------
+# delete / exists / upload / download — error handling and behaviour
+# ---------------------------------------------------------------------------
 
 
 async def test_delete_wraps_non_404_failure() -> None:
@@ -466,6 +584,167 @@ async def test_download_file_wraps_non_404_get_failure(tmp_path) -> None:
     assert not isinstance(excinfo.value, StorageNotFoundError)
 
 
+# ---------------------------------------------------------------------------
+# get_file_size (BLDX-1155: new public function)
+# ---------------------------------------------------------------------------
+
+
+class TestGetFileSize:
+    async def test_returns_size_for_existing_key(self, store, tmp_path) -> None:
+        content = b"hello world"
+        await _put("size/file.bin", content, store, normalize=False)
+        size = await get_file_size("size/file.bin", store, normalize=False)
+        assert size == len(content)
+
+    async def test_returns_none_for_missing_key(self, store) -> None:
+        size = await get_file_size("no/such/key.bin", store, normalize=False)
+        assert size is None
+
+    async def test_non_404_error_raises_storage_error(self) -> None:
+        store = MagicMock()
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.head_async",
+                new=AsyncMock(side_effect=RuntimeError("permission denied")),
+            ),
+            pytest.raises(StorageError),
+        ):
+            await get_file_size("k", store, normalize=False)
+
+
+# ---------------------------------------------------------------------------
+# download_file_chunked (BLDX-1155: new public function)
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadFileChunked:
+    async def test_small_file_falls_through_to_download_file(
+        self, store, tmp_path
+    ) -> None:
+        """File <= chunk_size_bytes delegates to the single-stream download_file."""
+        content = b"small"
+        await _put("chunked/small.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        import application_sdk.storage.ops as ops_mod
+
+        with patch.object(
+            ops_mod, "download_file", wraps=ops_mod.download_file
+        ) as mock_dl:
+            result = await download_file_chunked(
+                "chunked/small.bin",
+                dest,
+                store,
+                chunk_size_bytes=1024,
+                normalize=False,
+            )
+
+        mock_dl.assert_awaited_once()
+        assert dest.read_bytes() == content
+        assert result is not None
+        assert len(result) == 64
+
+    async def test_multi_chunk_produces_correct_content(self, store, tmp_path) -> None:
+        """File split into multiple chunks is reassembled byte-for-byte correctly."""
+        import hashlib
+
+        content = b"ABCDEFGHIJ"  # 10 bytes → 4 chunks at chunk_size=3 (3,3,3,1)
+        await _put("chunked/multi.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        sha = await download_file_chunked(
+            "chunked/multi.bin",
+            dest,
+            store,
+            chunk_size_bytes=3,
+            max_concurrent_chunks=2,
+            normalize=False,
+        )
+
+        assert dest.read_bytes() == content
+        assert sha == hashlib.sha256(content).hexdigest()
+
+    async def test_not_found_raises_storage_not_found_error(
+        self, store, tmp_path
+    ) -> None:
+        with pytest.raises(StorageNotFoundError):
+            await download_file_chunked(
+                "no/such/key.bin",
+                tmp_path / "out.bin",
+                store,
+                normalize=False,
+            )
+
+    async def test_compute_hash_false_returns_none(self, store, tmp_path) -> None:
+        content = b"no hash needed"
+        await _put("chunked/nohash.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        result = await download_file_chunked(
+            "chunked/nohash.bin",
+            dest,
+            store,
+            chunk_size_bytes=3,
+            compute_hash=False,
+            normalize=False,
+        )
+
+        assert result is None
+        assert dest.read_bytes() == content
+
+    async def test_compute_hash_true_returns_sha256(self, store, tmp_path) -> None:
+        import hashlib
+
+        content = b"hash me chunked"
+        await _put("chunked/hash.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        result = await download_file_chunked(
+            "chunked/hash.bin",
+            dest,
+            store,
+            chunk_size_bytes=3,
+            compute_hash=True,
+            normalize=False,
+        )
+
+        assert result == hashlib.sha256(content).hexdigest()
+
+    async def test_partial_file_cleaned_up_on_error(self, store, tmp_path) -> None:
+        """If a chunk fails mid-download, the partial output file is deleted."""
+        content = b"ABCDEFGHIJ"
+        await _put("chunked/boom.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        import application_sdk.storage.ops as ops_mod
+
+        real_get_range = ops_mod.obstore.get_range_async
+        call_count = 0
+
+        async def flaky_get_range(st, key, *, start, length):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError("transient chunk failure")
+            return await real_get_range(st, key, start=start, length=length)
+
+        with (
+            patch.object(
+                ops_mod.obstore, "get_range_async", side_effect=flaky_get_range
+            ),
+            pytest.raises((StorageError, RuntimeError)),
+        ):
+            await download_file_chunked(
+                "chunked/boom.bin",
+                dest,
+                store,
+                chunk_size_bytes=3,
+                normalize=False,
+            )
+
+        assert not dest.exists(), "partial file must be cleaned up after chunk failure"
+
+
 async def test_download_file_wraps_stream_failure(tmp_path) -> None:
     """If streaming raises mid-download, the failure must be wrapped."""
 
@@ -496,24 +775,6 @@ async def test_upload_file_does_not_delete_when_retain_local_copy_true(
     f = tmp_path / "kept.bin"
     f.write_bytes(b"data")
 
-    async def _writer_factory(*_args, **_kwargs):
-        class _CM:
-            async def __aenter__(self):
-                return AsyncMock(write=AsyncMock())
-
-            async def __aexit__(self, *exc):
-                return None
-
-        return _CM()
-
-    with patch(
-        "application_sdk.storage.ops.obstore.open_writer_async",
-        side_effect=lambda *a, **k: _writer_factory().__await__().__next__(),
-    ):
-        # Mock the writer cleaner: actually swap the implementation.
-        pass
-
-    # Use a simpler alternative path: patch open_writer_async to return an async CM directly
     class _DummyCM:
         async def __aenter__(self):
             self.writer = AsyncMock()

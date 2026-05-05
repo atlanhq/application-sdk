@@ -1,0 +1,146 @@
+# Regenerate Capability Manifest — slash-command workflow
+#
+# Triggered when a PR participant comments "/regen-manifest".
+# Regenerates docs/agents/sdk-capabilities.md via `uv run poe regen-capabilities`
+# and pushes the result as github-actions[bot].
+#
+# Modelled on auto-fix-vulnerabilities.yaml. Key design choices:
+#   - ORG_PAT_GITHUB checkout token so the resulting push re-fires PR check workflows
+#     (same pattern as auto-fix-vulnerabilities.yaml and release-version-bump.yaml).
+#   - github-actions[bot] identity, NOT atlan-ci, so the bot commit does not
+#     auto-satisfy the wildcard CODEOWNERS rule that includes @atlan-ci.
+#   - Fork PRs are rejected immediately with an explanatory comment.
+#   - fetch-depth: 0 for the same reason as the drift-check workflow (source-sha).
+
+name: Regenerate Capability Manifest
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  regen:
+    name: Regenerate Capability Manifest
+    # Only fire for PR comments containing the command, from repo members or above.
+    # CONTRIBUTOR/NONE/FIRST_TIME_CONTRIBUTOR are excluded to prevent outside commenters
+    # from triggering a write to the repo (even though the write is deterministic and
+    # low-risk, the permission gate follows the same pattern as sdk-review).
+    if: |
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '/regen-manifest') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Get PR metadata
+        id: pr
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('branch', pr.data.head.ref);
+            core.setOutput('number', String(context.issue.number));
+            core.setOutput('is_fork', String(pr.data.head.repo.fork));
+            core.setOutput('is_bump_version', String(pr.data.head.ref.startsWith('bump-version')));
+
+      - name: Reject on fork
+        if: steps.pr.outputs.is_fork == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '🚫 `/regen-manifest` cannot push to fork branches. Please run `uv run poe regen-capabilities` locally and push.',
+            });
+            core.setFailed('fork PR — cannot push');
+
+      - name: Skip on bump-version branch
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: 'ℹ️ `/regen-manifest` is skipped on version-bump branches.',
+            });
+
+      - name: React to comment
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket',
+            });
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+
+      - name: Regenerate capability manifest
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        run: uv run poe regen-capabilities
+
+      - name: Commit and push
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        id: commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/agents/sdk-capabilities.md
+          if git diff --staged --quiet; then
+            echo "status=clean" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "chore(docs): regenerate capability manifest
+
+          Triggered by /regen-manifest on PR #${{ steps.pr.outputs.number }}.
+          Generated by .claude/skills/capability-manifest."
+            git push
+            echo "status=pushed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reply on PR
+        if: always() && steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const status = '${{ steps.commit.outputs.status }}';
+            let body;
+            if (status === 'pushed') {
+              body = '✅ Capability manifest regenerated and pushed. The updated SDK-surface diff is now visible in **Files changed**.';
+            } else if (status === 'clean') {
+              body = 'ℹ️ Capability manifest is already current — nothing to commit.';
+            } else {
+              body = '⚠️ Regeneration failed or was skipped. Check the [workflow logs](' +
+                `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

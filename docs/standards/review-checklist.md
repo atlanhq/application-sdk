@@ -100,7 +100,7 @@ Review for critical issues first - these take priority over everything else.
 ```python
 # REJECT: Poor file organization
 # Decorators far from their consumers
-application_sdk/decorators/locks.py  # Used only by execution/_temporal/
+application_sdk/utils/lock_helpers.py  # Used only by execution/_temporal/
 
 # REQUIRE: Colocate decorators with consumers
 application_sdk/execution/decorators.py  # Lock decorators near lock interceptor
@@ -262,31 +262,31 @@ def create_distributed_lock(
 **Critical exception handling rules:**
 
 - **Always re-raise exceptions** after logging unless in non-critical operations
-- **Use SDK-specific exceptions**: Use `ClientError` and internal error codes from `application_sdk/common/error_codes.py`, not generic exceptions
+- **Use SDK-specific exceptions**: Use structured error codes from `application_sdk/errors.py` (format: `AAF-{COMP}-{ID:03d}`) for new code; `application_sdk/common/error_codes.py` is retained for backward compatibility only
 - **Add comprehensive try-catch**: Operations that can fail must be wrapped in try-catch with specific exception types
 - **Error context**: Error messages must include debugging context (operation, parameters, state)
 - **Resource cleanup**: Failed operations must be logged with appropriate detail
 - **Non-critical operations**: May swallow exceptions to prevent cascading failures
 
 ```python
-# DO: Proper error handling with SDK exceptions
-from application_sdk.common.error_codes import ClientError
+# DO (v3 preferred): use AppError from application_sdk.app
+from application_sdk.app import AppError
 
 try:
     result = database_connection.execute_query(query)
     return result
 except ConnectionError as e:
-    logger.error(f"Database connection failed for query {query[:50]}...: {e}")
-    raise ClientError(f"Database connection failed: {e}")
+    logger.error("Database connection failed for query %s: %s", query[:50], e, exc_info=True)
+    raise AppError("Database connection failed: %s" % e) from e
 except ValueError as e:
-    logger.error(f"Invalid query parameters: {e}")
-    raise ClientError(f"Query validation failed: {e}")
+    logger.error("Invalid query parameters: %s", e, exc_info=True)
+    raise AppError("Query validation failed: %s" % e) from e
 
-# DON'T: Generic exceptions without context
+# DON'T: f-strings, missing exc_info, generic exception
 try:
     result = some_operation()
 except Exception as e:
-    logger.error(f"Error: {e}")  # No context, generic exception
+    logger.error(f"Error: {e}")  # WRONG: f-string, no exc_info=True, no context
 ```
 
 ---
@@ -523,7 +523,7 @@ def good_validation(max_value: int) -> int:
 
 - **Scattered functionality**: Related code spread across multiple inappropriate locations
 - **Import organization violations**: Imports not at the top, wrong order, or unused imports
-- **File misplacement**: Decorators outside `decorators/`, constants not in `constants.py`
+- **File misplacement**: Decorators not co-located with the domain they extend (v3 decorators live in `app/task.py`, `app/entrypoint.py`, `server/mcp/decorators.py`, `execution/decorators.py`, `observability/decorators/observability_decorator.py`), constants not in `constants.py`
 - **Dead code**: Any code marked as "no need" or unused
 - **DRY violations**: Repeated logic that should be extracted into shared functions
 - **Naming inconsistencies**: Using different naming patterns for similar concepts
@@ -541,7 +541,7 @@ def good_validation(max_value: int) -> int:
 - Use generators for memory-efficient iteration
 - Follow asyncio best practices for concurrent code
 - Use Pydantic `BaseModel` for structured data crossing workflow/task boundaries; `@dataclass` only for internal value types
-- Implement proper exception hierarchies in `error_codes.py`
+- Implement proper exception hierarchies in `errors.py` (new code) — `error_codes.py` is back-compat only
 
 **Temporal workflow patterns:**
 

@@ -20,5 +20,7 @@ grype application-sdk:local
 
 # Scan dependencies
 trivy fs uv.lock
-snyk test --file=requirements.txt  # requires: uv export --frozen --no-hashes --no-header -o requirements.txt
+grype dir:.
+# Snyk (optional, requires a requirements.txt export first — the repo has no checked-in requirements.txt):
+# uv export --frozen --no-hashes --no-header -o requirements.txt && snyk test --file=requirements.txt
 ```

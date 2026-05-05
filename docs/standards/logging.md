@@ -2,7 +2,7 @@
 
 ## Exceptions
 
-- **Observability Module**: The `application_sdk/observability/` module uses the standard `logging` module directly since it implements the `get_logger` wrapper. All other modules must use `get_logger`.
+- **Observability Module**: The `application_sdk/observability/` module uses **loguru** directly to implement the `AtlanLoggerAdapter` / `get_logger` wrapper. Stdlib `logging` is used internally for fallback error reporting (e.g. `InterceptHandler`, `basicConfig`) and to silence noisy third-party loggers — this is an internal implementation detail. **All application code must use `get_logger`** and must not call stdlib `logging.*` directly, as it bypasses the OTel pipeline.
 
 - **Logger Configuration**
     - Use `AtlanLoggerAdapter` for all logging
@@ -14,13 +14,19 @@
         - INFO: General operational information
         - WARNING: Warning messages for potential issues
         - ERROR: Error messages for recoverable errors
-        - CRITICAL: Critical errors that may cause system failure
-        - ACTIVITY: Activity-specific logging
+        - CRITICAL: Use ERROR instead; process termination is communicated via exit codes, not log level
 
 - **Log Format**
-    ```python
-    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
+
+    Colorized (terminal):
     ```
+    <green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue><magenta> trace_id=...</magenta><yellow> correlation_id=...</yellow> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>
+    ```
+    Plain (JSON sink / OTEL):
+    ```
+    {time:YYYY-MM-DD HH:mm:ss} [{level}] trace_id=... correlation_id=... {extra[logger_name]} - {message}
+    ```
+    `trace_id` and `correlation_id` are injected by `CorrelationContextInterceptor` / `AtlanLoggerAdapter` — see `application_sdk/observability/logger_adaptor.py`.
 
 - **Logging Best Practices**
     - Include relevant context in log messages
@@ -33,20 +39,20 @@
 
 - **Example Usage**
     ```python
-    from application_sdk.observability.logger_adaptor import get_logger
+    from application_sdk.observability import get_logger
 
     logger = get_logger(__name__)
 
     # Basic logging
     logger.info("Operation completed successfully")
 
-    # Logging with context
-    logger.info("Processing request", extra={"request_id": "123", "user": "john"})
+    # Logging with context — embed values in the message body using %-style
+    logger.info("Processing request request_id=%s user=%s", request_id, user)
 
     # Error logging
     try:
         # Some operation
         pass
     except Exception as e:
-        logger.error("Operation failed", exc_info=True)
+        logger.error("Operation failed; operation=%s error=%s", operation_name, e, exc_info=True)
     ```

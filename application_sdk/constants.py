@@ -198,6 +198,18 @@ MAX_CONCURRENT_STORAGE_TRANSFERS = int(
     os.getenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "4")
 )
 
+# FileReference chunked-download configuration
+#: File size threshold above which downloads use parallel range GETs (default 32 MiB)
+FILE_REF_CHUNKED_THRESHOLD_BYTES = int(
+    os.getenv("ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES", str(32 * 1024 * 1024))
+)
+#: Size of each range-GET chunk in a chunked download (default 16 MiB)
+FILE_REF_CHUNK_SIZE_BYTES = int(
+    os.getenv("ATLAN_FILE_REF_CHUNK_SIZE_BYTES", str(16 * 1024 * 1024))
+)
+#: Maximum concurrent range-GET chunks per file (default 4)
+FILE_REF_CHUNK_CONCURRENCY = int(os.getenv("ATLAN_FILE_REF_CHUNK_CONCURRENCY", "4"))
+
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.
