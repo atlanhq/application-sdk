@@ -212,7 +212,7 @@
             </div>
             <div style="overflow-x:auto">
                 <table id="trendTable"><thead><tr>
-                    <th>Repo</th><th>SDK</th><th>App CVEs</th><th>Base CVEs</th><th>Total CVEs</th><th id="thCompare">7d ago</th><th>Change</th><th>Status</th>
+                    <th data-ts="repo">Repo</th><th data-ts="sdk">SDK Version</th><th data-ts="app">App CVEs</th><th data-ts="base">Base CVEs</th><th data-ts="now">Total CVEs</th><th data-ts="old" id="thCompare">7d ago</th><th data-ts="delta">Change</th><th>Status</th>
                 </tr></thead><tbody id="trendTableBody"></tbody></table>
             </div>
         </div>
@@ -268,7 +268,7 @@ async function load(){
     try{
         const mr=await fetch('repos.json'+cb());
         if(mr.ok){const files=await mr.json();
-            for(const f of files){try{const rr=await fetch('repos/'+f+cb());const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
+            for(const f of files){try{const rr=await fetch('repos/'+f+cb());const d=await rr.json();if(d.repo){D.repos[d.repo]=d;if(d.scanned_at&&(!D.generated_at||d.scanned_at>D.generated_at))D.generated_at=d.scanned_at;}}catch(e){}}}
         buildVM();renderAll();
     }catch(e){document.getElementById('empty').style.display='block';document.getElementById('empty').textContent='No data yet.';}
 }
@@ -336,17 +336,25 @@ function renderSdkVulns(){
     const sevFilter=document.getElementById('fSdkSev').value;
     const stFilter=document.getElementById('fSdkStatus').value;
     const qFilter=document.getElementById('fSdkSearch').value.toLowerCase();
-    const bySdk={};
-    Object.values(VM).filter(v=>v.source_type==='base_image').forEach(v=>{
-        const sdks=[...new Set(v.repos.map(r=>(D.repos[r]||{}).sdk_version||'unknown'))];
-        sdks.forEach(sdk=>{
-            if(!bySdk[sdk])bySdk[sdk]={vulns:[],repos:new Set()};
-            bySdk[sdk].vulns.push(v);
-        });
-    });
+    // Source of truth per SDK = base CVEs from the MOST RECENTLY SCANNED repo on that SDK.
+    // Older scans on the same SDK may show different (often stale) CVE lists because the
+    // base image evolves under rolling tags / between rebuilds. Showing the union would
+    // surface CVEs that newer scans on the same SDK have already cleared. Using the freshest
+    // scan as representative gives an honest "current state of this SDK base" view.
+    const reposBySdk={};
     Object.keys(D.repos).forEach(r=>{
         const sdk=D.repos[r].sdk_version||'unknown';
-        if(bySdk[sdk])bySdk[sdk].repos.add(r);
+        (reposBySdk[sdk]=reposBySdk[sdk]||[]).push(r);
+    });
+    const bySdk={};
+    Object.entries(reposBySdk).forEach(([sdk,repoList])=>{
+        if(sdk==='unknown')return;
+        const sorted=repoList.filter(r=>D.repos[r].scanned_at)
+            .sort((a,b)=>(D.repos[b].scanned_at||'').localeCompare(D.repos[a].scanned_at||''));
+        if(!sorted.length)return;
+        const rep=sorted[0];
+        const baseCves=(D.repos[rep].vulnerabilities||[]).filter(v=>v.source_type==='base_image');
+        bySdk[sdk]={vulns:baseCves,repos:new Set(repoList),representative:rep,scanned_at:D.repos[rep].scanned_at};
     });
     const ord={CRITICAL:0,HIGH:1};
     const sdkVersions=Object.keys(bySdk).sort().filter(s=>sdkFilter==='all'||s===sdkFilter);
@@ -357,7 +365,7 @@ function renderSdkVulns(){
         const seen=new Set();
         let vs=bySdk[sdk].vulns.filter(v=>{if(seen.has(v.id))return false;seen.add(v.id);return true;});
         if(sevFilter!=='all')vs=vs.filter(v=>v.severity===sevFilter);
-        if(stFilter!=='all')vs=vs.filter(v=>Object.values(v.statuses).includes(stFilter));
+        if(stFilter!=='all')vs=vs.filter(v=>(v.status||'new')===stFilter);
         if(qFilter)vs=vs.filter(v=>v.id.toLowerCase().includes(qFilter)||v.package.toLowerCase().includes(qFilter));
         vs.sort((a,b)=>(ord[a.severity]||9)-(ord[b.severity]||9)||a.id.localeCompare(b.id));
         if(!vs.length)return '';
@@ -366,7 +374,7 @@ function renderSdkVulns(){
         const isV3=sdk.startsWith('3')||sdk.includes('v3');
         const sdkBadge=`<span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'};font-size:11px;margin-left:8px">${esc(sdk)}</span>`;
         const rows=vs.map(v=>{
-            const status=Object.values(v.statuses).includes('new')?'new':Object.values(v.statuses).includes('expired')?'expired':'allowlisted';
+            const status=v.status||'new';
             return`<tr><td><span class="badge b-${v.severity.toLowerCase()}">${esc(v.severity)}</span></td>
                 <td><code>${v.id.length>38?esc(v.id.slice(0,38))+'...':esc(v.id)}</code></td>
                 <td><code>${esc(v.package)}</code></td>
@@ -375,7 +383,7 @@ function renderSdkVulns(){
                 <td>${v.fixed?esc(v.fixed):'<span style="color:#b0b3c6">None</span>'}</td></tr>`;
         }).join('');
         return`<div class="card" style="margin-bottom:16px">
-            <div class="card-title" style="display:flex;align-items:center">SDK${sdkBadge}<span style="color:#b0b3c6;font-weight:500;margin-left:auto;font-size:11px">${vs.length} CVE${vs.length===1?'':'s'} · ${repoCount} repo${repoCount===1?'':'s'}</span></div>
+            <div class="card-title" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">SDK${sdkBadge}<span style="color:#b0b3c6;font-weight:500;margin-left:auto;font-size:11px">${vs.length} CVE${vs.length===1?'':'s'} · ${repoCount} repo${repoCount===1?'':'s'}</span><div style="flex-basis:100%;font-size:10px;color:#b0b3c6;font-weight:500;text-transform:none;letter-spacing:0;margin-top:4px">Source: ${esc(bySdk[sdk].representative.split('/').pop())} · scanned ${bySdk[sdk].scanned_at?new Date(bySdk[sdk].scanned_at).toLocaleDateString():'?'}</div></div>
             <div style="overflow-x:auto"><table style="min-width:auto"><thead><tr>
                 <th>Severity</th><th>ID</th><th>Package</th><th>Scanner</th><th>Status</th><th>Fix</th>
             </tr></thead><tbody>${rows}</tbody></table></div>
@@ -510,6 +518,12 @@ function exportVulnsPDF(){
     w.document.write(html);w.document.close();
 }
 document.querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{const c=th.dataset.s;if(sortCol===c)sortDir=sortDir==='asc'?'desc':'asc';else{sortCol=c;sortDir='asc';}renderTable();}));
+// Trend table sort (Per Repo Progress). Click a header to sort by that column; click again to flip direction.
+document.querySelectorAll('#trendTable th[data-ts]').forEach(th=>th.addEventListener('click',()=>{
+    const c=th.dataset.ts;const cur=window._trendSort||{col:'delta',dir:'desc'};
+    window._trendSort=cur.col===c?{col:c,dir:cur.dir==='asc'?'desc':'asc'}:{col:c,dir:'asc'};
+    renderTrends();
+}));
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');if(t.dataset.tab==='trends'){renderTrends();}else if(t.dataset.tab==='sdkvulns'){renderSdkVulns();renderStats();}else{renderStats();}}));
 document.querySelectorAll('.filters-bar select,.filters-bar input').forEach(el=>{el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);});
 // Trend data
@@ -820,7 +834,34 @@ function renderTrends(){
     ).join(''):'<div class="empty" style="padding:20px;font-size:12px;color:#22c55e">No regressions — all repos stable or improving.</div>';
 
     // Section 3: Per repo table
-    const sorted=[...repoDeltas].sort((a,b)=>b.delta-a.delta);
+    // Sort the per-repo table. Default = biggest regression first (delta desc), users can click headers to override.
+    const ts=window._trendSort||{col:'delta',dir:'desc'};
+    const numericCols=new Set(['app','base','now','old','delta']);
+    const sorted=[...repoDeltas].sort((a,b)=>{
+        const av=a[ts.col],bv=b[ts.col];
+        if(numericCols.has(ts.col))return ts.dir==='asc'?av-bv:bv-av;
+        const sa=(av||'').toString().toLowerCase(),sb=(bv||'').toString().toLowerCase();
+        return ts.dir==='asc'?sa.localeCompare(sb):sb.localeCompare(sa);
+    });
+    // Update header arrows
+    document.querySelectorAll('#trendTable th[data-ts]').forEach(th=>{
+        const isActive=th.dataset.ts===ts.col;
+        const arrow=isActive?(ts.dir==='asc'?' ▲':' ▼'):'';
+        const baseLabels={repo:'Repo',sdk:'SDK Version',app:'App CVEs',base:'Base CVEs',now:'Total CVEs',delta:'Change'};
+        if(th.id==='thCompare')return; // compare label is dynamic, handled separately
+        if(baseLabels[th.dataset.ts]!==undefined)th.innerHTML=baseLabels[th.dataset.ts]+arrow;
+        th.style.cursor='pointer';th.style.userSelect='none';
+        th.style.color=isActive?'#6366f1':'';
+    });
+    // Also update the dynamic 7d-ago header arrow
+    const thOld=document.getElementById('thCompare');
+    if(thOld){
+        const isActive=ts.col==='old';
+        thOld.style.cursor='pointer';thOld.style.userSelect='none';
+        thOld.style.color=isActive?'#6366f1':'';
+        const labels={1:'Yesterday',2:'2d ago',3:'3d ago',7:'7d ago',14:'14d ago',30:'30d ago'};
+        thOld.textContent=(labels[days]||days+'d ago')+(isActive?(ts.dir==='asc'?' ▲':' ▼'):'');
+    }
     document.getElementById('trendTableBody').innerHTML=sorted.map(r=>{
         const cls=r.delta>0?'up':r.delta<0?'down':'flat';
         const arrow=r.delta>0?'&#9650;':r.delta<0?'&#9660;':'&#8212;';
