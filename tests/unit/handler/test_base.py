@@ -74,7 +74,9 @@ class TestHandlerContextProperty:
         ctx = HandlerContext(app_name="test-app")
         with bind_handler_context(ctx):
             assert handler.context is ctx
-        with pytest.raises(RuntimeError, match="context is not set"):
+        from application_sdk.app.base import AppContextError
+
+        with pytest.raises(AppContextError, match="context is not set"):
             _ = handler.context
 
     def test_is_abstract(self):
