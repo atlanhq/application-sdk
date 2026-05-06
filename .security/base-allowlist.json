@@ -307,5 +307,12 @@
     "reason": "Connector transitive — lxml pulled in by redshift-connector (aws/amazon-redshift-python-driver). Fix is in lxml>=6.1.0, but redshift-connector 2.1.10 pins lxml<6.0.0 in its package metadata. Bumping lxml in connector apps forces a downgrade of redshift-connector to 2.1.7. Allowlisting until upstream relaxes the cap; tracking via aws/amazon-redshift-python-driver. Connector code uses lxml only for SOAP/XML parsing of trusted Redshift IAM responses, not untrusted input.",
     "expires": "2026-05-28",
     "added_by": "anuj-atlan"
+  },
+  "GHSA-82j2-j2ch-gfr8": {
+    "package": "rustls-webpki",
+    "severity": "HIGH",
+    "reason": "Base image — transitive Rust dep (rustls-webpki@0.103.4) in app-runtime-base:2.8.7-5. Fix available in 0.103.13; resolved upstream by future runtime-base bumps. Tracking via native-migration-app PR #22 (https://github.com/atlanhq/native-migration-app/pull/22) — base image bump to 2.8.7-5 cleared 7 of 8 sibling Go vulns; this is the residual.",
+    "expires": "2026-06-05",
+    "added_by": "sachi-atlan"
   }
 }
