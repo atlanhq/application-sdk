@@ -248,7 +248,13 @@ incremental = [
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 lakehouse = [
+    { name = "pyiceberg" },
+]
+lakehouse-bulk = [
     { name = "daft" },
+    { name = "pyiceberg" },
+]
+lakehouse-sql = [
     { name = "duckdb" },
     { name = "pyiceberg" },
 ]
@@ -321,9 +327,9 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6,<1.43.0" },
     { name = "daft", marker = "extra == 'daft'", specifier = ">=0.7.1,<0.8.0" },
     { name = "daft", marker = "extra == 'incremental'", specifier = ">=0.7.1,<0.8.0" },
-    { name = "daft", marker = "extra == 'lakehouse'", specifier = ">=0.7.1,<0.8.0" },
+    { name = "daft", marker = "extra == 'lakehouse-bulk'", specifier = ">=0.7.1,<0.8.0" },
     { name = "duckdb", marker = "extra == 'incremental'", specifier = ">=1.1.3,<1.5.0" },
-    { name = "duckdb", marker = "extra == 'lakehouse'", specifier = ">=1.0.0" },
+    { name = "duckdb", marker = "extra == 'lakehouse-sql'", specifier = ">=1.0.0" },
     { name = "duckdb", marker = "extra == 'sql'", specifier = ">=1.1.3,<1.5.0" },
     { name = "duckdb-engine", marker = "extra == 'incremental'", specifier = ">=0.17.0,<0.18.0" },
     { name = "duckdb-engine", marker = "extra == 'sql'", specifier = ">=0.17.0,<0.18.0" },
@@ -349,6 +355,8 @@ requires-dist = [
     { name = "pyatlan", specifier = ">=9,<10" },
     { name = "pydantic", specifier = ">=2.10.6,<2.13.0" },
     { name = "pyiceberg", marker = "extra == 'lakehouse'", specifier = ">=0.7.0,<0.9.0" },
+    { name = "pyiceberg", marker = "extra == 'lakehouse-bulk'", specifier = ">=0.7.0,<0.9.0" },
+    { name = "pyiceberg", marker = "extra == 'lakehouse-sql'", specifier = ">=0.7.0,<0.9.0" },
     { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0,<1.4.0" },
     { name = "python-dotenv", specifier = ">=1.1.0,<1.3.0" },
     { name = "pyyaml", specifier = ">=6.0.2,<6.1.0" },
@@ -361,7 +369,7 @@ requires-dist = [
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.7.1,<1.24.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0,<0.23.0" },
 ]
-provides-extras = ["workflows", "sql", "daft", "lakehouse", "incremental", "iam-auth", "azure", "distributed-lock", "mcp", "tests", "scale-data-generator", "sqlalchemy", "pandas"]
+provides-extras = ["workflows", "sql", "daft", "lakehouse", "lakehouse-sql", "lakehouse-bulk", "incremental", "iam-auth", "azure", "distributed-lock", "mcp", "tests", "scale-data-generator", "sqlalchemy", "pandas"]
 
 [package.metadata.requires-dev]
 dev = [

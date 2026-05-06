@@ -72,6 +72,44 @@ class TestLakehouseWriter(unittest.TestCase):
         self.assertIs(args[3], _AUDIT_SCHEMA)
 
 
+class TestLakehouseWriterAppendBulk(unittest.TestCase):
+    @patch("application_sdk.lakehouse._daft.writer.write_bulk")
+    def test_append_bulk_delegates_to_daft_writer(self, write_bulk):
+        write_bulk.return_value = 100
+        writer = LakehouseWriter(MagicMock(), app_namespace="apps.databricks")
+        rows = writer.append_bulk(
+            "metrics",
+            "local/staging/run-001/",
+            schema=_AUDIT_SCHEMA,
+            mode="overwrite",
+        )
+        self.assertEqual(rows, 100)
+        args, kwargs = write_bulk.call_args
+        # positional: (catalog, namespace, table, source_prefix)
+        self.assertEqual(args[1], "apps.databricks")
+        self.assertEqual(args[2], "metrics")
+        self.assertEqual(args[3], "local/staging/run-001/")
+        self.assertEqual(kwargs["mode"], "overwrite")
+        self.assertIs(kwargs["schema"], _AUDIT_SCHEMA)
+
+    @patch("application_sdk.lakehouse._daft.writer.write_bulk")
+    def test_append_bulk_default_mode_is_append(self, write_bulk):
+        write_bulk.return_value = 1
+        writer = LakehouseWriter(MagicMock(), app_namespace="apps.databricks")
+        writer.append_bulk("t", "prefix/")
+        self.assertEqual(write_bulk.call_args.kwargs["mode"], "append")
+
+    @patch("application_sdk.lakehouse._daft.writer.write_bulk")
+    def test_append_bulk_cross_namespace_warns(self, write_bulk):
+        write_bulk.return_value = 1
+        writer = LakehouseWriter(MagicMock(), app_namespace="apps.databricks")
+        with self.assertLogs(
+            "application_sdk.lakehouse.writer", level="WARNING"
+        ) as captured:
+            writer.append_bulk("t", "prefix/", namespace="other_app")
+        self.assertTrue(any("Cross-namespace write" in m for m in captured.output))
+
+
 class TestLakehouseWriterFromEnv(unittest.TestCase):
     @patch("application_sdk.lakehouse.writer._catalog.load_catalog_from_env")
     def test_from_env_binds_namespace(self, loader):

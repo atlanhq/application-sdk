@@ -4,9 +4,10 @@ Public surface — apps should only import from this module:
 
 * :class:`LakehouseReader` / :class:`LakehouseWriter` — generic primitives.
   Apps work with plain ``dict`` records and an SDK :class:`Schema` for
-  record-oriented work, or pass a ``daft.DataFrame`` to
-  :meth:`LakehouseWriter.append_dataframe` for large-batch writes. No
-  pyiceberg / pyarrow types appear on the public boundary.
+  record-oriented work, or stage Parquet files at a prefix path and call
+  :meth:`LakehouseWriter.append_bulk` for large-batch writes. No
+  pyiceberg / pyarrow / daft types appear on the public boundary —
+  records as dicts, source paths as strings.
 
 * :class:`EventsConsumer` — event-trigger wrapper for AE-driven apps. The
   caller passes only an async ``process_fn`` callable; the consumer
@@ -26,31 +27,46 @@ Public surface — apps should only import from this module:
 When to use what
 ----------------
 
-  +-----------------------------+---------------------------------------+
-  | App pattern                 | Right tool                            |
-  +=============================+=======================================+
-  | Append small batches with a | ``LakehouseWriter.append`` (PyArrow + |
-  | typed schema (events,       | PyIceberg under the hood)             |
-  | audit, ack rows)            |                                       |
-  +-----------------------------+---------------------------------------+
-  | Append / overwrite large    | ``LakehouseWriter.append_dataframe``  |
-  | batches (transformed data,  | (Daft ``write_iceberg`` under the     |
-  | DataFrame results)          | hood)                                 |
-  +-----------------------------+---------------------------------------+
-  | Read filtered records from  | ``LakehouseReader.fetch_records``     |
-  | a single table              |                                       |
-  +-----------------------------+---------------------------------------+
-  | Joins / aggregations /      | ``LakehouseQuery.sql`` (DuckDB        |
-  | window functions across     | over Arrow-staged views)              |
-  | multiple tables             |                                       |
-  +-----------------------------+---------------------------------------+
-  | Receive an upstream trigger | ``EventsConsumer.handle_events``      |
-  | and dispatch unprocessed    |                                       |
-  | events to a process_fn      |                                       |
-  +-----------------------------+---------------------------------------+
-  | Publish a Parquet ack to AE | ``EventAckWriter.write``              |
-  | after processing a batch    |                                       |
-  +-----------------------------+---------------------------------------+
+  +-----------------------------+---------------------------------------+----------------+
+  | App pattern                 | Right tool                            | Install extra  |
+  +=============================+=======================================+================+
+  | Append small batches with a | ``LakehouseWriter.append`` (PyArrow + | ``[lakehouse]``|
+  | typed schema (events,       | PyIceberg under the hood)             |                |
+  | audit, ack rows)            |                                       |                |
+  +-----------------------------+---------------------------------------+----------------+
+  | Append / overwrite large    | ``LakehouseWriter.append_bulk`` —     | ``[lakehouse-  |
+  | batches: stage Parquet      | reads Parquet from a prefix path and  | bulk]``        |
+  | files at a prefix path      | commits an Iceberg snapshot via Daft  |                |
+  +-----------------------------+---------------------------------------+----------------+
+  | Read filtered records from  | ``LakehouseReader.fetch_records``     | ``[lakehouse]``|
+  | a single table              |                                       |                |
+  +-----------------------------+---------------------------------------+----------------+
+  | Joins / aggregations /      | ``LakehouseQuery.sql`` (DuckDB        | ``[lakehouse-  |
+  | window functions across     | over Arrow-staged views)              | sql]``         |
+  | multiple tables             |                                       |                |
+  +-----------------------------+---------------------------------------+----------------+
+  | Receive an upstream trigger | ``EventsConsumer.handle_events``      | ``[lakehouse]``|
+  | and dispatch unprocessed    |                                       |                |
+  | events to a process_fn      |                                       |                |
+  +-----------------------------+---------------------------------------+----------------+
+  | Publish a Parquet ack to AE | ``EventAckWriter.write``              | ``[lakehouse]``|
+  | after processing a batch    |                                       |                |
+  +-----------------------------+---------------------------------------+----------------+
+
+Install extras
+--------------
+
+* ``pip install atlan-application-sdk[lakehouse]`` — core: PyIceberg + PyArrow.
+  Covers Reader, Writer.append, EventsConsumer, EventAckWriter, schemas.
+* ``pip install atlan-application-sdk[lakehouse-sql]`` — adds DuckDB.
+  Required for :class:`LakehouseQuery`.
+* ``pip install atlan-application-sdk[lakehouse-bulk]`` — adds Daft.
+  Required for :meth:`LakehouseWriter.append_bulk`.
+
+Apps that don't pull the heavy extras still import everything from
+``application_sdk.lakehouse`` cleanly — the missing dep raises an
+``ImportError`` with a clear install hint only when the corresponding
+method is actually called.
 
 Multi-cloud
 -----------
@@ -85,7 +101,6 @@ PyIceberg / pyarrow / Polaris / DuckDB / Daft specifics live in:
 
 Apps must not import from these underscore-prefixed packages.
 
-Install with: ``pip install atlan-application-sdk[lakehouse]``
 """
 
 from application_sdk.lakehouse.event_ack import EventAckWriter

@@ -9,24 +9,25 @@ Two write paths:
 
 * :meth:`append` — record-oriented. Apps pass ``list[dict]`` and an SDK
   :class:`Schema`. Internally we route through PyIceberg + PyArrow.
-* :meth:`append_dataframe` — DataFrame-oriented. Apps pass a
-  ``daft.DataFrame``. Internally we route through Daft's ``write_iceberg``.
-  Recommended for large batches.
+  Best for small structured batches (events, audit, ack rows).
+* :meth:`append_bulk` — bulk path for staged Parquet. Apps materialise
+  their large dataset as Parquet files (anywhere — local disk, S3, GCS,
+  ADLS) and pass the prefix path. Internally we route through Daft's
+  ``write_iceberg`` for streamed, partition-aware commits. Requires the
+  ``[lakehouse-bulk]`` install extra.
 
-No pyiceberg or pyarrow types appear on the public boundary.
+No pyiceberg, pyarrow, or daft types appear on the public boundary —
+records as dicts and source paths as strings.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from application_sdk.lakehouse._iceberg import ops as _ops
 from application_sdk.lakehouse._polaris import catalog as _catalog
 from application_sdk.lakehouse.schema import Schema
-
-if TYPE_CHECKING:
-    import daft
 
 logger = logging.getLogger(__name__)
 
@@ -106,19 +107,25 @@ class LakehouseWriter:
         self._check_namespace(target_namespace)
         _ops.ensure_table(self._catalog, target_namespace, table_name, schema)
 
-    def append_dataframe(
+    def append_bulk(
         self,
         table_name: str,
-        df: "daft.DataFrame",
+        source_prefix: str,
         *,
         schema: Schema | None = None,
         mode: Literal["append", "overwrite"] = "append",
         namespace: str | None = None,
     ) -> int:
-        """Write a Daft DataFrame to a table. Returns the number of rows written.
+        """Bulk-commit Parquet files at ``source_prefix`` to a table.
 
-        Recommended for large batches — Daft streams Parquet files into the
-        Iceberg table without materialising the whole batch in memory.
+        Apps stage their large dataset as Parquet (local disk, S3, GCS, ADLS)
+        and pass the prefix path. The SDK reads the files via Daft and
+        commits them as a single Iceberg snapshot. Recommended for batches
+        large enough to make the in-memory ``append`` path expensive.
+
+        Requires the ``[lakehouse-bulk]`` install extra. Calling this method
+        without ``daft`` installed raises ``ImportError`` with the install
+        hint.
 
         If ``schema`` is provided and the table does not exist, it is
         auto-created (and its namespace too) using that schema. If ``schema``
@@ -133,11 +140,11 @@ class LakehouseWriter:
 
         target_namespace = namespace or self._app_namespace
         self._check_namespace(target_namespace)
-        return _daft_writer.write_dataframe(
+        return _daft_writer.write_bulk(
             self._catalog,
             target_namespace,
             table_name,
-            df,
+            source_prefix,
             mode=mode,
             schema=schema,
         )

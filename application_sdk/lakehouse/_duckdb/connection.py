@@ -11,18 +11,38 @@ box:
 
 All four are tunable per-call. Public callers (``LakehouseQuery.sql``)
 forward overrides through.
+
+Requires the ``[lakehouse-sql]`` install extra. ``duckdb`` is imported
+lazily inside :func:`make_duckdb_connection` so apps that only need
+``[lakehouse]`` core or ``[lakehouse-bulk]`` don't ImportError on module
+load.
 """
 
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
-import duckdb
+if TYPE_CHECKING:
+    import duckdb
 
 DEFAULT_THREADS = 1
 DEFAULT_MEMORY_LIMIT = "8GB"
 DEFAULT_TEMP_DIR = "/tmp/duckdb_tmp"
 DEFAULT_PRESERVE_INSERTION_ORDER = False
+
+
+def _import_duckdb():
+    """Defer the duckdb import so apps without [lakehouse-sql] don't ImportError."""
+    try:
+        import duckdb as _duckdb  # noqa: PLC0415
+
+        return _duckdb
+    except ImportError as exc:
+        raise ImportError(
+            "duckdb is required for SQL queries. "
+            "Install with: pip install atlan-application-sdk[lakehouse-sql]"
+        ) from exc
 
 
 def make_duckdb_connection(
@@ -31,13 +51,14 @@ def make_duckdb_connection(
     memory_limit: str = DEFAULT_MEMORY_LIMIT,
     temp_dir: str = DEFAULT_TEMP_DIR,
     preserve_insertion_order: bool = DEFAULT_PRESERVE_INSERTION_ORDER,
-) -> duckdb.DuckDBPyConnection:
+) -> "duckdb.DuckDBPyConnection":
     """Create a DuckDB in-memory connection with the given tunables.
 
     All defaults match popularity-app's ``make_duckdb_connection``. Apps
     that need different settings (more threads for parallel scans, larger
     memory limit, alternate spill dir) override the corresponding param.
     """
+    duckdb = _import_duckdb()
     os.makedirs(temp_dir, exist_ok=True)
     conn = duckdb.connect()
     conn.execute(f"SET threads TO {int(threads)}")
