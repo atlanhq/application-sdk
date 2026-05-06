@@ -307,5 +307,61 @@
     "reason": "Connector transitive — lxml pulled in by redshift-connector (aws/amazon-redshift-python-driver). Fix is in lxml>=6.1.0, but redshift-connector 2.1.10 pins lxml<6.0.0 in its package metadata. Bumping lxml in connector apps forces a downgrade of redshift-connector to 2.1.7. Allowlisting until upstream relaxes the cap; tracking via aws/amazon-redshift-python-driver. Connector code uses lxml only for SOAP/XML parsing of trusted Redshift IAM responses, not untrusted input.",
     "expires": "2026-05-28",
     "added_by": "anuj-atlan"
+  },
+  "GHSA-82j2-j2ch-gfr8": {
+    "package": "rustls-webpki",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr Rust transitive dep (rustls-webpki@0.103.4). Fix available in 0.103.13; awaiting Wolfi rebuild of dapr-1.17 with newer rustls-webpki.",
+    "expires": "2026-06-05",
+    "added_by": "sachi-atlan"
+  },
+  "CVE-2026-41491": {
+    "package": "github.com/dapr/dapr",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr runtime (1.17.0). Fix available in 1.17.5; awaiting Wolfi rebuild of dapr-1.17.",
+    "expires": "2026-06-05",
+    "added_by": "sachi-atlan"
+  },
+  "CVE-2026-29181": {
+    "package": "go.opentelemetry.io/otel",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr OpenTelemetry Go transitive dep (otel@1.40.0). Fix available in 1.41.0; awaiting Wolfi rebuild of dapr-1.17 with newer otel.",
+    "expires": "2026-06-05",
+    "added_by": "sachi-atlan"
+  },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGACL-16394931": {
+    "package": "github.com/dapr/dapr/pkg/acl",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr runtime transitive (1.17.0). Fix available in 1.17.5; awaiting Wolfi rebuild of dapr-1.17.",
+    "expires": "2026-06-05",
+    "added_by": "sachi-atlan"
+  },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGACTORSTARGETSAPP-16394932": {
+    "package": "github.com/dapr/dapr/pkg/actors/targets/app",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr runtime transitive (1.17.0). Fix available in 1.17.5; awaiting Wolfi rebuild of dapr-1.17.",
+    "expires": "2026-06-05",
+    "added_by": "sachi-atlan"
+  },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGAPIGRPC-16394933": {
+    "package": "github.com/dapr/dapr/pkg/api/grpc",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr runtime transitive (1.17.0). Fix available in 1.17.5; awaiting Wolfi rebuild of dapr-1.17.",
+    "expires": "2026-06-05",
+    "added_by": "sachi-atlan"
+  },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGAPIHTTP-16394934": {
+    "package": "github.com/dapr/dapr/pkg/api/http",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr runtime transitive (1.17.0). Fix available in 1.17.5; awaiting Wolfi rebuild of dapr-1.17.",
+    "expires": "2026-06-05",
+    "added_by": "sachi-atlan"
+  },
+  "SNYK-GOLANG-GITHUBCOMDAPRDAPRPKGMESSAGING-16394937": {
+    "package": "github.com/dapr/dapr/pkg/messaging",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr runtime transitive (1.17.0). Fix available in 1.17.5; awaiting Wolfi rebuild of dapr-1.17.",
+    "expires": "2026-06-05",
+    "added_by": "sachi-atlan"
   }
 }
