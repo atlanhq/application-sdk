@@ -98,6 +98,24 @@ class MockWorkflowNoMCP(WorkflowInterface):
         ]
 
 
+class RealFastMCPActivities(ActivitiesInterface):
+    """Activities used to exercise the real FastMCP integration."""
+
+    @mcp_tool(name="real_tool", description="Real FastMCP registration test")
+    async def real_tool(self, param: str) -> str:
+        """Tool registered against an actual FastMCP server."""
+        return param
+
+
+class RealFastMCPWorkflow(WorkflowInterface):
+    """Workflow used to exercise the real FastMCP integration."""
+
+    @staticmethod
+    def get_activities(activities: ActivitiesInterface) -> List[Callable[..., Any]]:
+        """Return activities registered on the real FastMCP server."""
+        return [activities.real_tool]  # type: ignore
+
+
 class TestMCPServerInitialization:
     """Test suite for MCPServer initialization."""
 
@@ -113,7 +131,7 @@ class TestMCPServerInitialization:
             mock_fastmcp.assert_called_once_with(
                 name=f"{server.application_name} MCP",
                 instructions=instructions,
-                on_duplicate_tools="error",
+                on_duplicate="error",
             )
 
 
@@ -125,8 +143,8 @@ class TestMCPServerToolRegistration:
         with patch("application_sdk.server.mcp.server.FastMCP") as mock_fastmcp:
             """Fixture providing MCPServer instance."""
             mock_server = Mock()
-            # Mock the async get_tools method
-            mock_server.get_tools = AsyncMock(return_value={})
+            # Mock the async list_tools method
+            mock_server.list_tools = AsyncMock(return_value=[])
             mock_fastmcp.return_value = mock_server
             return MCPServer(application_name="test-app")
 
@@ -188,7 +206,7 @@ class TestMCPServerToolRegistration:
 
         # Verify no tools were registered
         mcp_server.server.tool.assert_not_called()  # type: ignore
-        mcp_server.server.get_tools.assert_called_once()  # type: ignore
+        mcp_server.server.list_tools.assert_called_once()  # type: ignore
 
     async def test_register_tools_multiple_workflows(self, mcp_server):
         """Test tool registration with multiple workflow/activities classes."""
@@ -203,7 +221,7 @@ class TestMCPServerToolRegistration:
 
         # Verify tools from first workflow were registered (4 tools from MockWorkflow)
         assert mcp_server.server.tool.call_count == 4  # type: ignore
-        mcp_server.server.get_tools.assert_called_once()  # type: ignore
+        mcp_server.server.list_tools.assert_called_once()  # type: ignore
 
     async def test_register_tools_empty_list(self, mcp_server):
         """Test tool registration with empty workflow/activities list."""
@@ -215,4 +233,18 @@ class TestMCPServerToolRegistration:
 
         # Verify no tools were registered
         mcp_server.server.tool.assert_not_called()  # type: ignore
-        mcp_server.server.get_tools.assert_called_once()  # type: ignore
+        mcp_server.server.list_tools.assert_called_once()  # type: ignore
+
+    async def test_register_tools_with_real_fastmcp_server(self):
+        """Test tool registration against the real FastMCP server API."""
+        mcp_server = MCPServer(application_name="test-app")
+
+        await mcp_server.register_tools(  # type: ignore
+            [(RealFastMCPWorkflow, RealFastMCPActivities)]
+        )
+
+        tools = await mcp_server.server.list_tools()
+        assert [tool.name for tool in tools] == ["real_tool"]
+
+        http_app = await mcp_server.get_http_app()
+        assert http_app is not None
