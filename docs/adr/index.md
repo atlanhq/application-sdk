@@ -15,3 +15,4 @@ ADRs capture the architectural decisions behind the Application SDK — what was
 | [ADR-0009](0009-separate-handler-worker-deployments.md) | Separate Handler and Worker Deployments |
 | [ADR-0010](0010-async-first-blocking-code.md) | Async-First Design and Blocking Code Pitfalls |
 | [ADR-0011](0011-logging-level-guidelines.md) | Logging Level Guidelines |
+| [ADR-0012](0012-observability-consolidation.md) | Observability Consolidation |

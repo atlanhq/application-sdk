@@ -21,9 +21,9 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 | `ATLAN_CONTRACT_GENERATED_DIR` | `app/generated` | Directory for generated contract JSON (configmaps, manifest). In Docker (`WORKDIR=/app`) this resolves to `/app/app/generated`. |
 | `ATLAN_FRONTEND_ASSETS_PATH` | `app/generated/frontend/static` | Path to static frontend assets served by the handler. |
 
-### App Vitals (release metadata)
+### Release metadata
 
-Injected by the Local Marketplace into the Helm release at deploy time. Leave empty for local development.
+Injected by the Local Marketplace into the Helm release at deploy time, and exposed to consumers via the OTel `target_info` gauge (one row per pod). Leave empty for local development.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -33,7 +33,6 @@ Injected by the Local Marketplace into the Helm release at deploy time. Leave em
 | `ATLAN_SDK_VERSION` | _(empty)_ | SDK version used to build this app image. |
 | `ATLAN_APP_TYPE` | _(empty)_ | App type from Global Marketplace (e.g. `connector`, `system`). |
 | `ATLAN_PUBLISHED_AT` | _(empty)_ | Release publication timestamp (ISO 8601). |
-| `ATLAN_ENABLE_APP_VITALS` | `true` | Enable App Vitals interceptor for automatic lifecycle metrics. |
 
 ---
 
@@ -44,7 +43,7 @@ Injected by the Local Marketplace into the Helm release at deploy time. Leave em
 | `ATLAN_TEMPORAL_HOST` | `localhost:7233` | Temporal server address (`host:port`). **v2-compat fallback:** if unset, the SDK constructs the address from `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` (deprecated; remove when all deployments set `ATLAN_TEMPORAL_HOST`). |
 | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace. **v2-compat fallback:** `ATLAN_WORKFLOW_NAMESPACE`. |
 | `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the app name when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. |
-| `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `0.0.0.0:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). See [Monitoring](concepts/monitoring.md). |
+| `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; the FastAPI `/metrics` handler proxies it in-process. See [Monitoring](concepts/monitoring.md). |
 
 ### Worker Versioning
 
@@ -172,12 +171,19 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_ENABLE_OTLP_METRICS` | `false` | Export metrics via OTLP. |
 | `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
 | `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between parquet sink flushes. |
 | `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain parquet metric files. |
 | `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Uses `.lower() == "true"` — safe to set to `"false"` to disable. |
-| `ATLAN_ENABLE_PROMETHEUS_METRICS` | `true` | Expose a Prometheus `/metrics` endpoint on the handler at port `ATLAN_HANDLER_PORT`. See [Monitoring](concepts/monitoring.md). |
+| `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` | `true` | Bind the Temporal Rust-core Prometheus endpoint at `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (loopback) so its metric set (`temporal_workflow_*`, `temporal_activity_*`, etc.) is reachable for the FastAPI `/metrics` proxy and the worker's `TemporalCoreCollector`. The FastAPI `/metrics` route is always exposed regardless of this flag — when this flag is `false`, the response simply omits the proxied Temporal Rust-core families. `run_dev_combined()` defaults to `false` to avoid hot-reload port collisions. See [Monitoring](concepts/monitoring.md). |
+| `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` | _(empty)_ | Pushgateway URL workers push to (split deployment). Empty disables push — combined-mode pods leave it unset and rely on direct `/metrics` scrape. |
+| `ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS` | `30` | Periodic push interval. A final push always happens on shutdown. |
+| `ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN` | `true` | DELETE the worker's group from the gateway on graceful shutdown so stopped pods don't leave sticky data. |
+| `ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START` | `true` | On worker startup, sweep stale `{job=mine, instance=other}` groups left by predecessors that died ungracefully. |
+| `ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS` | `300` | Don't reap groups whose last push is more recent than this. Protects live siblings during rolling deploys. |
+| `ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS` | `10` | Per-request HTTP timeout for every Pushgateway call. |
+| `ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS` | `35` | Sleep between final push and DELETE on shutdown so Prometheus has at least one scrape window to read the final batch. |
+| `ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS` | `5.0` | Per-request HTTP timeout (seconds) for the in-process FastAPI `/metrics` proxy fetching Temporal Rust-core series from `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS`. Increase if the loopback fetch times out under heavy load. |
 
 ---
 
@@ -186,10 +192,6 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_ENABLE_OTLP_TRACES` | `false` | Export traces via OTLP. |
-| `ATLAN_TRACES_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
-| `ATLAN_TRACES_FLUSH_INTERVAL_SECONDS` | `5` | Seconds between parquet sink flushes. |
-| `ATLAN_TRACES_RETENTION_DAYS` | `30` | Days to retain parquet trace files. |
-| `ATLAN_TRACES_CLEANUP_ENABLED` | `true` | Enable automatic cleanup of old trace files (enabled by default to prevent disk overflow). |
 
 ---
 
@@ -203,8 +205,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `OTEL_RESOURCE_ATTRIBUTES` | _(empty)_ | Additional OTel resource attributes (key=value pairs). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint. Set to the node IP collector in Kubernetes: `$(K8S_NODE_IP):4317`. |
 | `ENABLE_OTLP_LOGS` | `false` | Export logs via OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
-| `OTEL_WORKFLOW_LOGS_ENDPOINT` | _(empty)_ | Secondary OTLP endpoint for workflow logs (for dual export to a tenant-level collector). |
-| `ENABLE_OTLP_WORKFLOW_LOGS` | `false` | Export workflow logs to `OTEL_WORKFLOW_LOGS_ENDPOINT`. |
+
 | `OTEL_WF_NODE_NAME` | _(empty)_ | Kubernetes node name for workflow telemetry. |
 | `OTEL_EXPORTER_TIMEOUT_SECONDS` | `30` | Timeout for OTLP export operations. |
 | `OTEL_BATCH_DELAY_MS` | `5000` | Delay between batch exports (milliseconds). |
@@ -271,8 +272,10 @@ ATLAN_AUTH_TOKEN_URL=https://auth.internal/oauth2/token
 ATLAN_AUTH_CLIENT_ID=…                        # or use deployment secret store
 ATLAN_AUTH_CLIENT_SECRET=…
 ENABLE_ATLAN_UPLOAD=true
-ATLAN_ENABLE_PROMETHEUS_METRICS=true          # scrape at :8000/metrics
-ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS=0.0.0.0:9464  # scrape at :9464/metrics
+ATLAN_ENABLE_TEMPORAL_CORE_METRICS=true       # default; binds Temporal Rust-core on 127.0.0.1:9464 (loopback) for FastAPI /metrics to proxy
+# /metrics is always exposed on the FastAPI handler port (default 8000) — no env-var gate
+# For worker-only pods (split deployment), set the Pushgateway URL instead:
+# ATLAN_PROMETHEUS_PUSHGATEWAY_URL=http://prometheus-pushgateway.monitoring.svc.cluster.local:9091
 ```
 
 ### Performance tuning

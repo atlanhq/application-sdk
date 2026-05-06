@@ -18,6 +18,8 @@ anyio==4.13.0
     #   httpx
     #   starlette
     #   watchfiles
+asgiref==3.11.1
+    # via opentelemetry-instrumentation-asgi
 attrs==26.1.0
     # via aiohttp
 authlib==1.6.11
@@ -152,6 +154,9 @@ opentelemetry-api==1.39.1
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-exporter-prometheus
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
 opentelemetry-exporter-otlp==1.39.1
@@ -166,6 +171,14 @@ opentelemetry-exporter-otlp-proto-http==1.39.1
     # via opentelemetry-exporter-otlp
 opentelemetry-exporter-prometheus==0.60b1
     # via atlan-application-sdk
+opentelemetry-instrumentation==0.60b1
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-asgi==0.60b1
+    # via opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-fastapi==0.60b1
+    # via atlan-application-sdk
 opentelemetry-proto==1.39.1
     # via
     #   opentelemetry-exporter-otlp-proto-common
@@ -177,12 +190,21 @@ opentelemetry-sdk==1.39.1
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-exporter-prometheus
 opentelemetry-semantic-conventions==0.60b1
-    # via opentelemetry-sdk
+    # via
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+    #   opentelemetry-sdk
+opentelemetry-util-http==0.60b1
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
 orjson==3.11.8
     # via atlan-application-sdk
 packaging==26.2
     # via
     #   lazy-loader
+    #   opentelemetry-instrumentation
     #   pytest
 pastel==0.2.1
     # via poethepoet
@@ -195,7 +217,9 @@ pluggy==1.6.0
 poethepoet==0.39.0
 pre-commit==4.5.1
 prometheus-client==0.25.0
-    # via opentelemetry-exporter-prometheus
+    # via
+    #   atlan-application-sdk
+    #   opentelemetry-exporter-prometheus
 propcache==0.4.1
     # via
     #   aiohttp
@@ -276,7 +300,7 @@ sortedcontainers==2.4.0
     # via hypothesis
 starlette==0.50.0
     # via fastapi
-temporalio==1.26.0
+temporalio==1.27.0
     # via atlan-application-sdk
 tenacity==9.1.4
     # via pyatlan
@@ -338,6 +362,8 @@ websockets==16.0
     # via uvicorn
 win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru
+wrapt==1.17.3
+    # via opentelemetry-instrumentation
 yarl==1.23.0
     # via aiohttp
 zipp==3.23.1

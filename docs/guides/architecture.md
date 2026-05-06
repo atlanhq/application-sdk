@@ -202,7 +202,7 @@ Higher-level: `App` provides `self.upload()` and `self.download()` framework tas
 
 Structured logs and OTel traces flow from every worker and handler pod to the cluster's central OTLP collector. Workers configure `OTEL_EXPORTER_OTLP_ENDPOINT` to the node IP (`$(K8S_NODE_IP):4317`) at deploy time.
 
-`self.logger` is available in both `run()` and `@task` methods. It is automatically bound with `app_name`, `run_id`, and `correlation_id` on every entry. When apps call other apps, the correlation ID propagates automatically, linking distributed traces across services. See [ADR-0003](../adr/0003-per-app-observability.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
+`self.logger` is available in both `run()` and `@task` methods. It is automatically bound with `app_name`, `workflow_run_id`, and `correlation_id` on every entry (`run_id` is kept as a backwards-compat alias). When apps call other apps, the correlation ID propagates automatically, linking distributed traces across services. See [ADR-0003](../adr/0003-per-app-observability.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
 
 Errors carry structured codes in `AAF-{COMPONENT}-{ID}` format.
 
@@ -325,19 +325,21 @@ application_sdk/
 │   └── transfer.py         # High-level transfer orchestration
 │
 ├── observability/          # Logging, tracing, and metrics adaptors
-│   ├── app_vitals.py       # App Vitals lifecycle interceptor
+│   ├── _prometheus_enrichment.py  # EnrichedPrometheusMetricReader: inlines bounded resource attrs onto every series
 │   ├── context.py          # Observability context carrier
 │   ├── correlation.py      # Correlation ID propagation
-│   ├── error_classifier.py # Error type classification for observability
+│   ├── decorators/         # @observability_decorator
 │   ├── logger_adaptor.py   # AtlanLoggerAdapter (loguru-backed)
+│   ├── metrics.py          # User-facing OTel meter shim (create_counter / create_histogram / …)
 │   ├── metrics_adaptor.py  # OTel MeterProvider setup
 │   ├── models.py           # Observability data models
 │   ├── observability.py    # Observability store sink
+│   ├── pushgateway.py      # PushGatewayClient + TemporalCoreCollector (worker push path)
 │   ├── resource_sampler.py # Resource-based sampling helpers
 │   ├── segment_client.py   # Segment analytics client
 │   ├── trace_context.py    # Correlation ID propagation
 │   ├── traces_adaptor.py   # OTel TracerProvider setup
-│   └── utils.py            # Shared observability utilities
+│   └── utils.py            # Shared observability utilities (METRIC_ENRICHMENT_KEYS, etc.)
 │
 ├── server/                 # Internal FastAPI / health-check servers
 │   ├── fastapi/            # FastAPI app factory helpers

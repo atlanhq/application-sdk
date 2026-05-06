@@ -16,19 +16,24 @@ from application_sdk.constants import (
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     SERVICE_NAME,
-    TRACES_BATCH_SIZE,
-    TRACES_CLEANUP_ENABLED,
-    TRACES_FILE_NAME,
-    TRACES_FLUSH_INTERVAL_SECONDS,
-    TRACES_RETENTION_DAYS,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import TraceRecord
-from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.observability import (
+    TRACES_FILE_NAME,
+    AtlanObservability,
+)
 from application_sdk.observability.utils import (
     build_otel_resource,
     get_observability_dir,
 )
+
+# Local traces-parquet sink tuning. Hardcoded — production does not yet
+# support traces; the local sink is dormant until the trace pipeline lands.
+_TRACES_BATCH_SIZE = 100
+_TRACES_FLUSH_INTERVAL_SECONDS = 5
+_TRACES_RETENTION_DAYS = 30
+_TRACES_CLEANUP_ENABLED = True
 
 __all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces"]
 
@@ -68,10 +73,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         - Starts periodic flush task for trace buffering
         """
         super().__init__(
-            batch_size=TRACES_BATCH_SIZE,
-            flush_interval=TRACES_FLUSH_INTERVAL_SECONDS,
-            retention_days=TRACES_RETENTION_DAYS,
-            cleanup_enabled=TRACES_CLEANUP_ENABLED,
+            batch_size=_TRACES_BATCH_SIZE,
+            flush_interval=_TRACES_FLUSH_INTERVAL_SECONDS,
+            retention_days=_TRACES_RETENTION_DAYS,
+            cleanup_enabled=_TRACES_CLEANUP_ENABLED,
             data_dir=get_observability_dir(),
             file_name=TRACES_FILE_NAME,
         )

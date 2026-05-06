@@ -102,11 +102,11 @@ class AppConfig:
     (``run_dev_combined``).
 
     **Relationship with constants.py:**
-    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``,
-    ``ENABLE_PROMETHEUS_METRICS``). Those constants serve code that runs at
-    **import time** (observability init, logging.basicConfig) — before AppConfig
-    exists. Both AppConfig and constants.py read the **same env vars with the
-    same defaults** so they stay in sync.
+    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``).
+    Those constants serve code that runs at **import time** (observability
+    init, logging.basicConfig) — before AppConfig exists. Both AppConfig and
+    constants.py read the **same env vars with the same defaults** so they
+    stay in sync.
 
     **Construction paths:**
     - Production: ``main()`` → ``AppConfig.from_args_and_env(args)``
@@ -154,16 +154,18 @@ class AppConfig:
     auth_scopes: str = ""
 
     # Runtime flags (env-var defaults, overridable per execution mode)
-    enable_prometheus_metrics: bool = True
-    """Enable Temporal Prometheus metrics endpoint. Default True for prod,
-    set to False in run_dev_combined() to avoid port collisions on reload."""
+    enable_temporal_core_metrics: bool = True
+    """Enable Temporal Runtime's loopback Prometheus endpoint that exposes
+    the Rust-core metric set (``temporal_workflow_*``, ``temporal_activity_*``
+    etc.). Default ``True`` so the FastAPI ``/metrics`` proxy can pull these
+    metrics, and so worker-mode's ``TemporalCoreCollector`` can read them
+    locally to feed the Pushgateway push. Set to ``False`` in
+    ``run_dev_combined()`` to avoid port collisions on hot reload."""
 
-    prometheus_bind_address: str = "0.0.0.0:9464"
-    """Bind address for Temporal Prometheus metrics."""
-
-    enable_app_vitals: bool = True
-    """Enable App Vitals interceptor for activity-level observability.
-    Reads same env var as constants.ENABLE_APP_VITALS (ATLAN_ENABLE_APP_VITALS)."""
+    prometheus_bind_address: str = "127.0.0.1:9464"
+    """Loopback bind address for the Temporal Runtime Prometheus endpoint.
+    Not externally reachable — only the FastAPI ``/metrics`` proxy and the
+    worker's ``TemporalCoreCollector`` consume it."""
 
     enable_mcp: bool = False
     """Enable Model Context Protocol (MCP) server.
@@ -295,13 +297,12 @@ class AppConfig:
                 "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
             ),
             # Runtime flags
-            enable_prometheus_metrics=_env_bool(
-                "ATLAN_ENABLE_PROMETHEUS_METRICS", default=True
+            enable_temporal_core_metrics=_env_bool(
+                "ATLAN_ENABLE_TEMPORAL_CORE_METRICS", default=True
             ),
             prometheus_bind_address=_env(
-                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
             ),
-            enable_app_vitals=_env_bool("ATLAN_ENABLE_APP_VITALS", default=True),
             enable_mcp=_env_bool("ENABLE_MCP"),
             max_concurrent_storage_transfers=_env_int(
                 "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
@@ -702,7 +703,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_prometheus_metrics,
+        enable_prometheus=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
     )
 
@@ -725,8 +726,15 @@ async def run_worker_mode(config: AppConfig) -> None:
             type(handler_for_sdr).__name__,
         )
 
+    # Worker-only mode pushes metrics to a Pushgateway since the process has
+    # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
+    # leaves enable_pushgateway=False so the FastAPI /metrics endpoint
+    # exposes everything via in-process proxy.
     worker = create_worker(
-        client, task_queue=config.task_queue, handler=handler_for_sdr
+        client,
+        task_queue=config.task_queue,
+        handler=handler_for_sdr,
+        enable_pushgateway=True,
     )
 
     # Log registrations
@@ -950,7 +958,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_prometheus_metrics,
+        enable_prometheus=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
     )
 
@@ -1146,10 +1154,11 @@ async def run_dev_combined(
         handler_port=port,
         log_level="DEBUG",
         service_name=_derive_service_name(app_module),
-        # Dev-friendly: disable Prometheus to avoid port 9464 collision on
-        # hot reload, and use ephemeral health port to avoid 8081 collision.
-        enable_prometheus_metrics=os.environ.get(
-            "ATLAN_ENABLE_PROMETHEUS_METRICS", ""
+        # Dev-friendly: disable Temporal Rust-core Prometheus binding to
+        # avoid port 9464 collision on hot reload, and use ephemeral health
+        # port to avoid 8081 collision.
+        enable_temporal_core_metrics=os.environ.get(
+            "ATLAN_ENABLE_TEMPORAL_CORE_METRICS", ""
         ).lower()
         in ("true", "1"),
         health_port=0,
@@ -1245,6 +1254,22 @@ async def run_dev_combined(
 
 def run_main(config: AppConfig) -> None:
     """Route to worker, handler, or combined mode based on config."""
+    from application_sdk.common.env_warnings import (  # noqa: PLC0415 — cold path: startup-only check
+        warn_removed_env_vars,
+    )
+
+    warn_removed_env_vars()
+
+    # Bootstrap the global MeterProvider once per process so any meter
+    # consumer (instrumentors, interceptors, decorators, …) resolves to the
+    # configured provider. Without this, handler-mode /metrics serves only
+    # the prometheus_client defaults.
+    from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — cold path: meter provider bootstrap at process start
+        get_metrics,
+    )
+
+    get_metrics()
+
     if config.mode == "worker":
         asyncio.run(run_worker_mode(config))
     elif config.mode == "handler":
