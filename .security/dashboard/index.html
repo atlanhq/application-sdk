@@ -199,9 +199,10 @@
             <div id="trendChart" style="min-height:200px;position:relative;"></div>
         </div>
         <!-- Top movers -->
-        <div class="grid-2" style="margin-bottom:16px">
+        <div class="grid-2" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
             <div class="card"><div class="card-title">Biggest Improvements <span id="trendImprovedCount" style="color:#b0b3c6;font-weight:500"></span></div><div id="trendImproved" style="max-height:340px;overflow-y:auto"></div></div>
             <div class="card"><div class="card-title">Needs Attention <span id="trendDegradedCount" style="color:#b0b3c6;font-weight:500"></span></div><div id="trendDegraded" style="max-height:340px;overflow-y:auto"></div></div>
+            <div class="card"><div class="card-title">Newly Onboarded <span id="trendNewRepoCount" style="color:#b0b3c6;font-weight:500"></span></div><div id="trendNewRepo" style="max-height:340px;overflow-y:auto"></div></div>
         </div>
         <!-- Section 3: Per repo table -->
         <div class="card">
@@ -845,8 +846,16 @@ function renderTrends(){
             app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
     });
 
-    const improved=repoDeltas.filter(r=>r.improvementDelta<0).sort((a,b)=>a.improvementDelta-b.improvementDelta);
-    const degraded=repoDeltas.filter(r=>r.delta>0).sort((a,b)=>b.delta-a.delta);
+    // A repo whose earliest history entry falls inside the comparison window is "newly
+    // onboarded" — it has no real baseline, so showing it under Needs Attention would
+    // misrepresent it as a regression. Surface those separately instead.
+    const isNewlyOnboarded=r=>{
+        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        return all.length>0 && all[0].date>cutoffStr;
+    };
+    const improved=repoDeltas.filter(r=>r.improvementDelta<0&&!isNewlyOnboarded(r.repo)).sort((a,b)=>a.improvementDelta-b.improvementDelta);
+    const degraded=repoDeltas.filter(r=>r.delta>0&&!isNewlyOnboarded(r.repo)).sort((a,b)=>b.delta-a.delta);
+    const newlyOnboarded=repoDeltas.filter(r=>isNewlyOnboarded(r.repo)&&r.now>0).sort((a,b)=>b.now-a.now);
 
     document.getElementById('trendImprovedCount').textContent=improved.length?`(${improved.length})`:'';
     document.getElementById('trendImproved').innerHTML=improved.length?improved.map(r=>
@@ -857,6 +866,11 @@ function renderTrends(){
     document.getElementById('trendDegraded').innerHTML=degraded.length?degraded.map(r=>
         `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta up" style="margin-left:auto">&#9650; +${r.delta} (${r.old} → ${r.now})</span></div>`
     ).join(''):'<div class="empty" style="padding:20px;font-size:12px;color:#22c55e">No regressions — all repos stable or improving.</div>';
+
+    document.getElementById('trendNewRepoCount').textContent=newlyOnboarded.length?`(${newlyOnboarded.length})`:'';
+    document.getElementById('trendNewRepo').innerHTML=newlyOnboarded.length?newlyOnboarded.map(r=>
+        `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta up" style="margin-left:auto">+${r.now} (first scan)</span></div>`
+    ).join(''):'<div class="empty" style="padding:20px;font-size:12px">No new repos onboarded in this window.</div>';
 
     // Section 3: Per repo table
     // Apply CVE-count bucket filter before sorting
