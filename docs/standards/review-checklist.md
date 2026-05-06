@@ -618,6 +618,12 @@ def good_validation(max_value: int) -> int:
 **Observability requirements:**
 
 - All operations must include appropriate metrics
+- Metric labels MUST be bounded — see `docs/standards/metrics.md` for the
+  approved label set, the cardinality rules, and forbidden patterns
+  (especially `error=str(e)`, IDs, file paths, query text)
+- For any new `record_metric()` call, the metric-name + label-key set must
+  match every other emission site for the same metric (inconsistent label
+  keys produce malformed Prometheus exposition that Pushgateway rejects)
 - Error conditions must be logged with context
 - Trace information required for critical paths
 - Use `AtlanLoggerAdapter` for all logging with proper context

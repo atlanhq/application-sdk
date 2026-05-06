@@ -1,4 +1,4 @@
-# ADR-0012: Error Hierarchy and Failure Taxonomy
+# ADR-0013: Error Hierarchy and Failure Taxonomy
 
 ## Status
 **Accepted**

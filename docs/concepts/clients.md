@@ -220,7 +220,17 @@ Pass the resulting `ssl.SSLContext` via `DB_CONFIG.connect_args={"ssl": ssl_ctx}
 
 ## Prometheus Metrics
 
-Every deployed application exposes ~40 built-in Temporal SDK metrics at `0.0.0.0:9464/metrics` by default. The bind address is controlled by the `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` env var; the handler-service side is controlled by `ATLAN_ENABLE_PROMETHEUS_METRICS`. See [`docs/concepts/monitoring.md`](monitoring.md) for details.
+Every deployed application exposes its full metrics surface — SDK
+custom metrics, HTTP server instrumentation, Temporal SDK Rust-core
+families, and `prometheus_client` defaults — through a single FastAPI
+`/metrics` endpoint on `containerPort` (default 8000). The Temporal
+Rust-core endpoint at `127.0.0.1:9464` is loopback-only and proxied
+in-process; operators don't scrape it directly.
+`ATLAN_ENABLE_TEMPORAL_CORE_METRICS` (default `true`) gates only that
+loopback binding, not the FastAPI route. See
+[`docs/concepts/monitoring.md`](monitoring.md) for the full
+architecture, including the Pushgateway path used by worker pods in
+split deployments.
 
 ## Summary
 
