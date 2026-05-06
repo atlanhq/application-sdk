@@ -359,14 +359,23 @@ class TestRetryConfiguration:
 
 
 class TestWaitForDaprSidecar:
+    # The implementation early-returns when DEPLOYMENT_NAME == LOCAL_ENVIRONMENT
+    # (skips polling in local dev). Override to "deployed" so the poll loop runs.
+    _DEPLOYED = patch(
+        "application_sdk.infrastructure._dapr.http.DEPLOYMENT_NAME", "deployed"
+    )
+
     async def test_ready_immediately(self):
         """Returns as soon as sidecar responds 204 on first poll."""
         mock_response = MagicMock()
         mock_response.status_code = 204
         mock_get = AsyncMock(return_value=mock_response)
-        with patch(
-            "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
-        ) as mock_cls:
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+        ):
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=MagicMock(get=mock_get)
             )
@@ -381,9 +390,12 @@ class TestWaitForDaprSidecar:
         ready = MagicMock()
         ready.status_code = 204
         mock_get = AsyncMock(side_effect=[not_ready, not_ready, ready])
-        with patch(
-            "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
-        ) as mock_cls:
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+        ):
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=MagicMock(get=mock_get)
             )
@@ -397,6 +409,7 @@ class TestWaitForDaprSidecar:
         not_ready.status_code = 503
         mock_get = AsyncMock(return_value=not_ready)
         with (
+            self._DEPLOYED,
             patch(
                 "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
             ) as mock_cls,
@@ -416,6 +429,7 @@ class TestWaitForDaprSidecar:
 
         mock_get = AsyncMock(side_effect=_httpx.ConnectError("refused"))
         with (
+            self._DEPLOYED,
             patch(
                 "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
             ) as mock_cls,
