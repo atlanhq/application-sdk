@@ -74,8 +74,8 @@ jobs:
       - name: Set up uv (for Snyk Python dep resolution)
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
-      - name: Install Python deps for Snyk resolution
-        run: uv sync --no-dev --frozen
+      - name: Export Python deps for Snyk
+        run: uv export --format requirements-txt --no-dev --frozen --output-file=/tmp/snyk-requirements.txt
 
       - name: Run Snyk Python deps scan (pyproject.toml / uv.lock)
         env:
@@ -83,9 +83,10 @@ jobs:
           SNYK_API: https://api.us.snyk.io
         run: |
           snyk test \
+            --file=/tmp/snyk-requirements.txt \
+            --package-manager=pip \
             --severity-threshold=low \
             --org=bu-apps \
-            --command=.venv/bin/python3 \
             --json-file-output=snyk-python-results.json || true
           if [ ! -f snyk-python-results.json ]; then
             echo "::warning::Snyk Python scan produced no output — check SNYK_TOKEN and org access"
