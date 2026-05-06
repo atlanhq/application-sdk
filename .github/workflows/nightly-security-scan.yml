@@ -184,8 +184,12 @@ jobs:
       - name: Create Linear issue
         if: steps.parse.outputs.total_actionable != '0'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          VULN_DETAIL: ${{ steps.parse.outputs.vuln_detail }}
+          LINEAR_API_KEY:      ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_TEAM_ID:      ${{ vars.LINEAR_SECURITY_SCAN_TEAM_ID }}
+          LINEAR_PROJECT_ID:   ${{ vars.LINEAR_SECURITY_SCAN_PROJECT_ID }}
+          LINEAR_MILESTONE_ID: ${{ vars.LINEAR_SECURITY_SCAN_MILESTONE_ID }}
+          LINEAR_ASSIGNEE_ID:  ${{ vars.LINEAR_SECURITY_SCAN_ASSIGNEE_ID }}
+          VULN_DETAIL:         ${{ steps.parse.outputs.vuln_detail }}
         run: |
           DATE=$(date -u +%Y-%m-%d)
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -222,16 +226,20 @@ DESC
           PAYLOAD=$(jq -n \
             --arg title       "$TITLE" \
             --arg description "$DESCRIPTION" \
+            --arg teamId      "$LINEAR_TEAM_ID" \
+            --arg projectId   "$LINEAR_PROJECT_ID" \
+            --arg milestoneId "$LINEAR_MILESTONE_ID" \
+            --arg assigneeId  "$LINEAR_ASSIGNEE_ID" \
             '{
               query: "mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier url } } }",
               variables: {
                 input: {
                   title:              $title,
                   description:        $description,
-                  teamId:             "b04ad698-db5c-410f-9d42-0399fa3981c5",
-                  projectId:          "ac8fe60d-bee7-47d9-a77c-eae26e268c2d",
-                  projectMilestoneId: "3fb4375c-9a05-4056-b1af-eb338e36dcc8",
-                  assigneeId:         "9cbe7d63-4a8c-4856-8d1f-d1a8b4c5947b",
+                  teamId:             $teamId,
+                  projectId:          $projectId,
+                  projectMilestoneId: $milestoneId,
+                  assigneeId:         $assigneeId,
                   priority:           2
                 }
               }
