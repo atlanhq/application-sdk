@@ -1,4 +1,4 @@
-name: Daily Security Scan — app-runtime-base
+name: Daily Security Scan — app-runtime-base + SDK Python Deps
 
 on:
   schedule:
@@ -13,14 +13,17 @@ env:
 
 jobs:
   scan-and-ticket:
-    name: Scan app-runtime-base:3 for vulnerabilities and raise alerts
+    name: Scan app-runtime-base:3 and SDK Python deps for vulnerabilities
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
       - name: Pull target image
         run: docker pull "$TARGET_IMAGE"
 
-      # ── Trivy scan (all severities for full picture) ──────────────────────
+      # ── Trivy image scan ──────────────────────────────────────────────────
 
       - name: Trivy image scan (JSON)
         uses: aquasecurity/trivy-action@0.35.0
@@ -29,14 +32,31 @@ jobs:
           scanners: vuln
           ignore-unfixed: true
           format: json
-          output: trivy-results.json
+          output: trivy-image-results.json
           severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: '0'
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
-      # ── Snyk scan (all severities) ────────────────────────────────────────
+      # ── Trivy filesystem scan (uv.lock / pyproject.toml) ─────────────────
+
+      - name: Trivy filesystem scan (uv.lock / pyproject.toml)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          ignore-unfixed: true
+          format: json
+          output: trivy-fs-results.json
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: '0'
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+      # ── Snyk scans ────────────────────────────────────────────────────────
 
       - name: Set up Snyk CLI
         uses: snyk/actions/setup@b98d498629f1c368650224d6d212bf7dfa89e4bf # 0.4.0
@@ -49,78 +69,136 @@ jobs:
           snyk container test "$TARGET_IMAGE" \
             --severity-threshold=low \
             --org=partner-images \
-            --json-file-output=snyk-results.json || true
+            --json-file-output=snyk-image-results.json || true
+
+      - name: Run Snyk Python deps scan (pyproject.toml / uv.lock)
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_API: https://api.us.snyk.io
+        run: |
+          snyk test \
+            --severity-threshold=low \
+            --org=partner-images \
+            --json-file-output=snyk-python-results.json || true
 
       # ── Parse results ─────────────────────────────────────────────────────
 
       - name: Parse scan results
         id: parse
         run: |
-          count_trivy() { jq "[.Results[]?.Vulnerabilities[]? | select(.Severity == \"$1\")] | length" trivy-results.json 2>/dev/null || echo 0; }
-          count_snyk()  { jq "[.vulnerabilities[]? | select(.severity == \"$1\")] | length" snyk-results.json  2>/dev/null || echo 0; }
+          count_trivy_file() { jq "[.Results[]?.Vulnerabilities[]? | select(.Severity == \"$2\")] | length" "$1" 2>/dev/null || echo 0; }
+          count_snyk_file()  { jq "[.vulnerabilities[]? | select(.severity == \"$2\")] | length" "$1"  2>/dev/null || echo 0; }
 
-          T_CRIT=0; T_HIGH=0; T_MED=0; T_LOW=0
-          S_CRIT=0; S_HIGH=0; S_MED=0; S_LOW=0
+          TI_CRIT=0; TI_HIGH=0; TI_MED=0; TI_LOW=0
+          TF_CRIT=0; TF_HIGH=0; TF_MED=0; TF_LOW=0
+          SI_CRIT=0; SI_HIGH=0; SI_MED=0; SI_LOW=0
+          SP_CRIT=0; SP_HIGH=0; SP_MED=0; SP_LOW=0
 
-          if [ -f trivy-results.json ]; then
-            T_CRIT=$(count_trivy CRITICAL)
-            T_HIGH=$(count_trivy HIGH)
-            T_MED=$(count_trivy  MEDIUM)
-            T_LOW=$(count_trivy  LOW)
+          if [ -f trivy-image-results.json ]; then
+            TI_CRIT=$(count_trivy_file trivy-image-results.json CRITICAL)
+            TI_HIGH=$(count_trivy_file trivy-image-results.json HIGH)
+            TI_MED=$(count_trivy_file  trivy-image-results.json MEDIUM)
+            TI_LOW=$(count_trivy_file  trivy-image-results.json LOW)
           fi
 
-          if [ -f snyk-results.json ]; then
-            S_CRIT=$(count_snyk critical)
-            S_HIGH=$(count_snyk high)
-            S_MED=$(count_snyk  medium)
-            S_LOW=$(count_snyk  low)
+          if [ -f trivy-fs-results.json ]; then
+            TF_CRIT=$(count_trivy_file trivy-fs-results.json CRITICAL)
+            TF_HIGH=$(count_trivy_file trivy-fs-results.json HIGH)
+            TF_MED=$(count_trivy_file  trivy-fs-results.json MEDIUM)
+            TF_LOW=$(count_trivy_file  trivy-fs-results.json LOW)
           fi
 
-          TOTAL_CRIT=$((T_CRIT + S_CRIT))
-          TOTAL_HIGH=$((T_HIGH + S_HIGH))
-          TOTAL_MED=$((T_MED  + S_MED))
-          TOTAL_LOW=$((T_LOW  + S_LOW))
+          if [ -f snyk-image-results.json ]; then
+            SI_CRIT=$(count_snyk_file snyk-image-results.json critical)
+            SI_HIGH=$(count_snyk_file snyk-image-results.json high)
+            SI_MED=$(count_snyk_file  snyk-image-results.json medium)
+            SI_LOW=$(count_snyk_file  snyk-image-results.json low)
+          fi
+
+          if [ -f snyk-python-results.json ]; then
+            SP_CRIT=$(count_snyk_file snyk-python-results.json critical)
+            SP_HIGH=$(count_snyk_file snyk-python-results.json high)
+            SP_MED=$(count_snyk_file  snyk-python-results.json medium)
+            SP_LOW=$(count_snyk_file  snyk-python-results.json low)
+          fi
+
+          TOTAL_CRIT=$((TI_CRIT + TF_CRIT + SI_CRIT + SP_CRIT))
+          TOTAL_HIGH=$((TI_HIGH + TF_HIGH + SI_HIGH + SP_HIGH))
+          TOTAL_MED=$((TI_MED  + TF_MED  + SI_MED  + SP_MED))
+          TOTAL_LOW=$((TI_LOW  + TF_LOW  + SI_LOW  + SP_LOW))
           TOTAL_ACTIONABLE=$((TOTAL_CRIT + TOTAL_HIGH))
 
-          echo "t_crit=$T_CRIT"   >> "$GITHUB_OUTPUT"
-          echo "t_high=$T_HIGH"   >> "$GITHUB_OUTPUT"
-          echo "t_med=$T_MED"     >> "$GITHUB_OUTPUT"
-          echo "t_low=$T_LOW"     >> "$GITHUB_OUTPUT"
-          echo "s_crit=$S_CRIT"   >> "$GITHUB_OUTPUT"
-          echo "s_high=$S_HIGH"   >> "$GITHUB_OUTPUT"
-          echo "s_med=$S_MED"     >> "$GITHUB_OUTPUT"
-          echo "s_low=$S_LOW"     >> "$GITHUB_OUTPUT"
-          echo "total_crit=$TOTAL_CRIT"           >> "$GITHUB_OUTPUT"
-          echo "total_high=$TOTAL_HIGH"           >> "$GITHUB_OUTPUT"
-          echo "total_med=$TOTAL_MED"             >> "$GITHUB_OUTPUT"
-          echo "total_low=$TOTAL_LOW"             >> "$GITHUB_OUTPUT"
+          echo "ti_crit=$TI_CRIT" >> "$GITHUB_OUTPUT"
+          echo "ti_high=$TI_HIGH" >> "$GITHUB_OUTPUT"
+          echo "ti_med=$TI_MED"   >> "$GITHUB_OUTPUT"
+          echo "ti_low=$TI_LOW"   >> "$GITHUB_OUTPUT"
+          echo "tf_crit=$TF_CRIT" >> "$GITHUB_OUTPUT"
+          echo "tf_high=$TF_HIGH" >> "$GITHUB_OUTPUT"
+          echo "tf_med=$TF_MED"   >> "$GITHUB_OUTPUT"
+          echo "tf_low=$TF_LOW"   >> "$GITHUB_OUTPUT"
+          echo "si_crit=$SI_CRIT" >> "$GITHUB_OUTPUT"
+          echo "si_high=$SI_HIGH" >> "$GITHUB_OUTPUT"
+          echo "si_med=$SI_MED"   >> "$GITHUB_OUTPUT"
+          echo "si_low=$SI_LOW"   >> "$GITHUB_OUTPUT"
+          echo "sp_crit=$SP_CRIT" >> "$GITHUB_OUTPUT"
+          echo "sp_high=$SP_HIGH" >> "$GITHUB_OUTPUT"
+          echo "sp_med=$SP_MED"   >> "$GITHUB_OUTPUT"
+          echo "sp_low=$SP_LOW"   >> "$GITHUB_OUTPUT"
+          echo "total_crit=$TOTAL_CRIT"             >> "$GITHUB_OUTPUT"
+          echo "total_high=$TOTAL_HIGH"             >> "$GITHUB_OUTPUT"
+          echo "total_med=$TOTAL_MED"               >> "$GITHUB_OUTPUT"
+          echo "total_low=$TOTAL_LOW"               >> "$GITHUB_OUTPUT"
           echo "total_actionable=$TOTAL_ACTIONABLE" >> "$GITHUB_OUTPUT"
 
           if [ "$TOTAL_ACTIONABLE" -gt 0 ]; then
             {
               echo 'vuln_detail<<VULN_EOF'
 
-              if [ "$((T_CRIT + T_HIGH))" -gt 0 ]; then
-                echo "### Trivy — CRITICAL/HIGH"
+              if [ "$((TI_CRIT + TI_HIGH))" -gt 0 ]; then
+                echo "### Trivy — Image CRITICAL/HIGH"
                 echo ""
                 echo "| Severity | Package | Installed | Fixed | CVE |"
                 echo "|----------|---------|-----------|-------|-----|"
                 jq -r '.Results[]?.Vulnerabilities[]?
                   | select(.Severity == "CRITICAL" or .Severity == "HIGH")
                   | "| \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") | \(.VulnerabilityID) |"' \
-                  trivy-results.json | sort -t'|' -k2,2 | head -50
+                  trivy-image-results.json | sort -t'|' -k2,2 | head -50
                 echo ""
               fi
 
-              if [ "$((S_CRIT + S_HIGH))" -gt 0 ]; then
-                echo "### Snyk — CRITICAL/HIGH"
+              if [ "$((TF_CRIT + TF_HIGH))" -gt 0 ]; then
+                echo "### Trivy — Python Deps CRITICAL/HIGH"
+                echo ""
+                echo "| Severity | Package | Installed | Fixed | CVE |"
+                echo "|----------|---------|-----------|-------|-----|"
+                jq -r '.Results[]?.Vulnerabilities[]?
+                  | select(.Severity == "CRITICAL" or .Severity == "HIGH")
+                  | "| \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") | \(.VulnerabilityID) |"' \
+                  trivy-fs-results.json | sort -t'|' -k2,2 | head -50
+                echo ""
+              fi
+
+              if [ "$((SI_CRIT + SI_HIGH))" -gt 0 ]; then
+                echo "### Snyk — Image CRITICAL/HIGH"
                 echo ""
                 echo "| Severity | Package | Version | CVE |"
                 echo "|----------|---------|---------|-----|"
                 jq -r '.vulnerabilities[]?
                   | select(.severity == "critical" or .severity == "high")
                   | "| \(.severity) | \(.packageName) | \(.version // "N/A") | \(.id) |"' \
-                  snyk-results.json | sort -t'|' -k2,2 | head -50
+                  snyk-image-results.json | sort -t'|' -k2,2 | head -50
+                echo ""
+              fi
+
+              if [ "$((SP_CRIT + SP_HIGH))" -gt 0 ]; then
+                echo "### Snyk — Python Deps CRITICAL/HIGH"
+                echo ""
+                echo "| Severity | Package | Version | CVE |"
+                echo "|----------|---------|---------|-----|"
+                jq -r '.vulnerabilities[]?
+                  | select(.severity == "critical" or .severity == "high")
+                  | "| \(.severity) | \(.packageName) | \(.version // "N/A") | \(.id) |"' \
+                  snyk-python-results.json | sort -t'|' -k2,2 | head -50
                 echo ""
               fi
 
@@ -128,8 +206,10 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-          echo "Trivy  — C:$T_CRIT H:$T_HIGH M:$T_MED L:$T_LOW"
-          echo "Snyk   — C:$S_CRIT H:$S_HIGH M:$S_MED L:$S_LOW"
+          echo "Trivy Image  — C:$TI_CRIT H:$TI_HIGH M:$TI_MED L:$TI_LOW"
+          echo "Trivy Python — C:$TF_CRIT H:$TF_HIGH M:$TF_MED L:$TF_LOW"
+          echo "Snyk  Image  — C:$SI_CRIT H:$SI_HIGH M:$SI_MED L:$SI_LOW"
+          echo "Snyk  Python — C:$SP_CRIT H:$SP_HIGH M:$SP_MED L:$SP_LOW"
           echo "Actionable (C+H): $TOTAL_ACTIONABLE"
 
       # ── Workflow summary ──────────────────────────────────────────────────
@@ -138,16 +218,16 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Daily Security Scan — \`$TARGET_IMAGE\`"
+            echo "## Daily Security Scan — \`$TARGET_IMAGE\` + SDK Python Deps"
             echo ""
             echo "### Vulnerability Summary"
             echo ""
-            echo "| Severity | Trivy | Snyk | Total |"
-            echo "|----------|------:|-----:|------:|"
-            echo "| 🔴 Critical | ${{ steps.parse.outputs.t_crit || 0 }} | ${{ steps.parse.outputs.s_crit || 0 }} | **${{ steps.parse.outputs.total_crit || 0 }}** |"
-            echo "| 🟠 High     | ${{ steps.parse.outputs.t_high || 0 }} | ${{ steps.parse.outputs.s_high || 0 }} | **${{ steps.parse.outputs.total_high || 0 }}** |"
-            echo "| 🟡 Medium   | ${{ steps.parse.outputs.t_med  || 0 }} | ${{ steps.parse.outputs.s_med  || 0 }} | **${{ steps.parse.outputs.total_med  || 0 }}** |"
-            echo "| 🔵 Low      | ${{ steps.parse.outputs.t_low  || 0 }} | ${{ steps.parse.outputs.s_low  || 0 }} | **${{ steps.parse.outputs.total_low  || 0 }}** |"
+            echo "| Severity | Trivy (Image) | Trivy (Python) | Snyk (Image) | Snyk (Python) | Total |"
+            echo "|----------|:-------------:|:--------------:|:------------:|:-------------:|------:|"
+            echo "| 🔴 Critical | ${{ steps.parse.outputs.ti_crit || 0 }} | ${{ steps.parse.outputs.tf_crit || 0 }} | ${{ steps.parse.outputs.si_crit || 0 }} | ${{ steps.parse.outputs.sp_crit || 0 }} | **${{ steps.parse.outputs.total_crit || 0 }}** |"
+            echo "| 🟠 High     | ${{ steps.parse.outputs.ti_high || 0 }} | ${{ steps.parse.outputs.tf_high || 0 }} | ${{ steps.parse.outputs.si_high || 0 }} | ${{ steps.parse.outputs.sp_high || 0 }} | **${{ steps.parse.outputs.total_high || 0 }}** |"
+            echo "| 🟡 Medium   | ${{ steps.parse.outputs.ti_med  || 0 }} | ${{ steps.parse.outputs.tf_med  || 0 }} | ${{ steps.parse.outputs.si_med  || 0 }} | ${{ steps.parse.outputs.sp_med  || 0 }} | **${{ steps.parse.outputs.total_med  || 0 }}** |"
+            echo "| 🔵 Low      | ${{ steps.parse.outputs.ti_low  || 0 }} | ${{ steps.parse.outputs.tf_low  || 0 }} | ${{ steps.parse.outputs.si_low  || 0 }} | ${{ steps.parse.outputs.sp_low  || 0 }} | **${{ steps.parse.outputs.total_low  || 0 }}** |"
             echo ""
             if [ "${{ steps.parse.outputs.total_actionable || 0 }}" -gt 0 ]; then
               echo "> ⚠️ **${{ steps.parse.outputs.total_actionable }} CRITICAL/HIGH findings — Linear issue created**"
@@ -172,12 +252,13 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           TOTAL="${{ steps.parse.outputs.total_actionable }}"
 
-          TITLE="[Security] app-runtime-base:3 — ${TOTAL} CRITICAL/HIGH vulnerabilities (${DATE})"
+          TITLE="[Security] app-runtime-base:3 + SDK Python deps — ${TOTAL} CRITICAL/HIGH vulnerabilities (${DATE})"
 
           DESCRIPTION=$(
             echo "## Daily Security Scan Results"
             echo ""
             echo "**Image:** \`${TARGET_IMAGE}\`"
+            echo "**Python deps:** \`pyproject.toml\` / \`uv.lock\` (application-sdk)"
             echo "**Scan date:** ${DATE}"
             echo "**Workflow run:** [View logs](${RUN_URL})"
             echo ""
@@ -185,12 +266,12 @@ jobs:
             echo ""
             echo "### Vulnerability Summary"
             echo ""
-            echo "| Severity | Trivy | Snyk | Total |"
-            echo "|----------|------:|-----:|------:|"
-            echo "| 🔴 Critical | ${{ steps.parse.outputs.t_crit }} | ${{ steps.parse.outputs.s_crit }} | **${{ steps.parse.outputs.total_crit }}** |"
-            echo "| 🟠 High     | ${{ steps.parse.outputs.t_high }} | ${{ steps.parse.outputs.s_high }} | **${{ steps.parse.outputs.total_high }}** |"
-            echo "| 🟡 Medium   | ${{ steps.parse.outputs.t_med  }} | ${{ steps.parse.outputs.s_med  }} | **${{ steps.parse.outputs.total_med  }}** |"
-            echo "| 🔵 Low      | ${{ steps.parse.outputs.t_low  }} | ${{ steps.parse.outputs.s_low  }} | **${{ steps.parse.outputs.total_low  }}** |"
+            echo "| Severity | Trivy (Image) | Trivy (Python) | Snyk (Image) | Snyk (Python) | Total |"
+            echo "|----------|:-------------:|:--------------:|:------------:|:-------------:|------:|"
+            echo "| 🔴 Critical | ${{ steps.parse.outputs.ti_crit }} | ${{ steps.parse.outputs.tf_crit }} | ${{ steps.parse.outputs.si_crit }} | ${{ steps.parse.outputs.sp_crit }} | **${{ steps.parse.outputs.total_crit }}** |"
+            echo "| 🟠 High     | ${{ steps.parse.outputs.ti_high }} | ${{ steps.parse.outputs.tf_high }} | ${{ steps.parse.outputs.si_high }} | ${{ steps.parse.outputs.sp_high }} | **${{ steps.parse.outputs.total_high }}** |"
+            echo "| 🟡 Medium   | ${{ steps.parse.outputs.ti_med  }} | ${{ steps.parse.outputs.tf_med  }} | ${{ steps.parse.outputs.si_med  }} | ${{ steps.parse.outputs.sp_med  }} | **${{ steps.parse.outputs.total_med  }}** |"
+            echo "| 🔵 Low      | ${{ steps.parse.outputs.ti_low  }} | ${{ steps.parse.outputs.tf_low  }} | ${{ steps.parse.outputs.si_low  }} | ${{ steps.parse.outputs.sp_low  }} | **${{ steps.parse.outputs.total_low  }}** |"
             echo ""
             printf '%s\n' "${VULN_DETAIL}"
             echo ""
