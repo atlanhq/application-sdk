@@ -1,13 +1,15 @@
 """App and Task discovery and registration."""
 
 import types
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from application_sdk.app.entrypoint import EntryPointMetadata
     from application_sdk.app.task import TaskMetadata
+
 
 from application_sdk.contracts.base import validate_is_contract
 from application_sdk.errors import (
@@ -16,6 +18,7 @@ from application_sdk.errors import (
     TASK_NOT_FOUND,
     ErrorCode,
 )
+from application_sdk.errors.leaves import InvalidInputError
 
 
 @dataclass(frozen=True)
@@ -49,8 +52,10 @@ class AppMetadata:
         return f"{self.name}@{self.version}"
 
 
-class AppNotFoundError(Exception):
-    """Raised when an App is not found in the registry."""
+class AppNotFoundError(InvalidInputError):
+    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+
+    code: ClassVar[str] = "APP_NOT_FOUND"
 
     def __init__(
         self,
@@ -59,32 +64,57 @@ class AppNotFoundError(Exception):
         *,
         error_code: ErrorCode | None = None,
     ) -> None:
+        warnings.warn(
+            "AppNotFoundError is deprecated; use application_sdk.errors.InvalidInputError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        msg = (
+            f"App '{name}' version '{version}' not found"
+            if version
+            else f"App '{name}' not found"
+        )
+        InvalidInputError.__init__(self, message=msg)
         self.name = name
         self.version = version
-        self.error_code = error_code or APP_NOT_FOUND
-        if version:
-            msg = f"App '{name}' version '{version}' not found"
-        else:
-            msg = f"App '{name}' not found"
-        super().__init__(msg)
+        self._legacy_error_code = error_code or APP_NOT_FOUND
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
 
     def __str__(self) -> str:
-        return f"[{self.error_code}] {super().__str__()}"
+        return f"[{self._legacy_error_code}] {self.message}"
 
 
-class AppAlreadyRegisteredError(Exception):
-    """Raised when attempting to register an App that already exists."""
+class AppAlreadyRegisteredError(InvalidInputError):
+    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+
+    code: ClassVar[str] = "APP_ALREADY_REGISTERED"
 
     def __init__(
         self, name: str, version: str, *, error_code: ErrorCode | None = None
     ) -> None:
+        warnings.warn(
+            "AppAlreadyRegisteredError is deprecated; use application_sdk.errors.InvalidInputError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        InvalidInputError.__init__(
+            self, message=f"App '{name}' version '{version}' is already registered"
+        )
         self.name = name
         self.version = version
-        self.error_code = error_code or APP_ALREADY_REGISTERED
-        super().__init__(f"App '{name}' version '{version}' is already registered")
+        self._legacy_error_code = error_code or APP_ALREADY_REGISTERED
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
 
     def __str__(self) -> str:
-        return f"[{self.error_code}] {super().__str__()}"
+        return f"[{self._legacy_error_code}] {self.message}"
 
 
 class AppRegistry:
@@ -292,19 +322,29 @@ class AppRegistry:
         self._apps[name][version] = new_metadata
 
 
-class TaskNotFoundError(Exception):
-    """Raised when a Task is not found in the registry."""
+class TaskNotFoundError(InvalidInputError):
+    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+
+    code: ClassVar[str] = "TASK_NOT_FOUND"
 
     def __init__(
         self, app_name: str, task_name: str, *, error_code: ErrorCode | None = None
     ) -> None:
+        warnings.warn(
+            "TaskNotFoundError is deprecated; use application_sdk.errors.InvalidInputError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        InvalidInputError.__init__(
+            self, message=f"Task '{task_name}' not found in app '{app_name}'"
+        )
         self.app_name = app_name
         self.task_name = task_name
-        self.error_code = error_code or TASK_NOT_FOUND
-        super().__init__(f"Task '{task_name}' not found in app '{app_name}'")
+        self._legacy_error_code = error_code or TASK_NOT_FOUND
 
     def __str__(self) -> str:
-        return f"[{self.error_code}] {super().__str__()}"
+        return f"[{self._legacy_error_code}] {self.message}"
 
 
 class TaskRegistry:

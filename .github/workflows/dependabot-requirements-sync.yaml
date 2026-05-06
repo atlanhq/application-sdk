@@ -1,0 +1,39 @@
+name: Sync requirements.txt for Dependabot
+
+on:
+  push:
+    branches:
+      - 'dependabot/**'
+    paths:
+      - 'uv.lock'
+
+permissions:
+  contents: write
+
+jobs:
+  sync-requirements:
+    name: Sync requirements.txt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.ref }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.7.3"
+
+      - name: Regenerate requirements.txt
+        run: uv export --no-hashes --frozen > requirements.txt
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet requirements.txt; then
+            git add requirements.txt
+            git commit -m "chore: sync requirements.txt with updated uv.lock"
+            git push
+          fi

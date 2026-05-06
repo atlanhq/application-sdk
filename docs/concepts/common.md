@@ -36,53 +36,144 @@ Logging is configured via environment variables:
 
 ## Error Handling
 
-The SDK provides a standardized error system with error codes and categories.
+The SDK provides a structured error hierarchy in `application_sdk/errors/` built on two axes: a
+closed `FailureCategory` enum (*what happened*) and an orthogonal `Audience` enum (*who must act*).
 
-The SDK has two error-code namespaces:
+### Two-level hierarchy
 
-- **`application_sdk.common.error_codes`** — categorised HTTP-style codes for client-facing errors. Format: `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` (e.g. `ATLAN-CLIENT-403-00`).
-- **`application_sdk.errors`** — app-framework codes for Temporal / monitoring signals. Format: `AAF-{COMP}-{NNN}` (e.g. `AAF-APP-001`).
-
-### Error Code Format (`application_sdk.common.error_codes`)
-
-Error codes follow the format: `ATLAN-{Component}-{HTTP_Code}-{Unique_ID}`
-
-Example: `ATLAN-CLIENT-403-00` for a request validation error.
-
-### Error Categories
-
-| Category | Import | Description |
-|----------|--------|-------------|
-| `ClientError` | `application_sdk.common.error_codes` | Client-related errors (400-499) |
-| `ApiError` | `application_sdk.common.error_codes` | Server and API errors (500-599) |
-| `OrchestratorError` | `application_sdk.common.error_codes` | Workflow and task errors |
-| `IOError` | `application_sdk.common.error_codes` | Input/Output errors |
-
-### Usage
-
-```python
-from application_sdk.common.error_codes import ClientError
-
-try:
-    validate_input(data)
-except ValidationError as e:
-    raise ClientError(f"{ClientError.REQUEST_VALIDATION_ERROR}: {e}") from e
+```
+AppError  (base — application_sdk.errors)
+│
+├── Categorical leaves  (application_sdk.errors.leaves)
+│   ├── AuthError              CATEGORY=AUTH              retryable=False  audience=USER
+│   ├── AppPermissionDeniedError  PERMISSION             retryable=False  audience=USER
+│   ├── NotFoundError          NOT_FOUND                  retryable=False  audience=USER
+│   ├── AlreadyExistsError     ALREADY_EXISTS             retryable=False  audience=USER
+│   ├── InvalidInputError      INVALID_INPUT              retryable=False  audience=USER
+│   ├── PreconditionError      PRECONDITION               retryable=False  audience=USER
+│   ├── RateLimitedError       RATE_LIMITED               retryable=True   audience=USER
+│   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
+│   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
+│   ├── AppTimeoutError        TIMEOUT                    retryable=True   audience=APP_OWNER
+│   ├── CancelledError         CANCELLED                  retryable=False  audience=APP_OWNER
+│   ├── DataIntegrityError     DATA_INTEGRITY             retryable=False  audience=APP_OWNER
+│   ├── InternalError          INTERNAL                   retryable=False  audience=APP_OWNER
+│   └── UnimplementedError     UNIMPLEMENTED              retryable=False  audience=APP_OWNER
+│
+└── Domain umbrellas  (leaf-first multi-inheritance)
+    ├── CredentialError(AuthError)
+    │   ├── CredentialNotFoundError(NotFoundError, CredentialError)
+    │   ├── CredentialParseError(InvalidInputError, CredentialError)
+    │   └── CredentialValidationError(InvalidInputError, CredentialError)
+    ├── StorageError(DependencyUnavailableError)
+    │   ├── StorageNotFoundError(NotFoundError, StorageError)
+    │   ├── StoragePermissionError(AppPermissionDeniedError, StorageError)
+    │   └── StorageConfigError(InvalidInputError, StorageError)
+    └── SecretStoreError(DependencyUnavailableError)
+        └── SecretNotFoundError(NotFoundError, SecretStoreError)
 ```
 
-For application-level error codes, use the top-level `application_sdk.errors` module:
+The **categorical leaf** (listed first in the MRO) drives `category`, `audience`, and
+`default_retryable` on the wire. The **domain umbrella** (listed second) keeps legacy
+`except StorageError:` / `except CredentialError:` catch sites alive. A single exception
+instance satisfies both hierarchies simultaneously.
+
+### Raise by failure shape
+
+Pick the leaf whose `FailureCategory` best describes what happened. Prefer a domain subclass
+when the calling context is clearly within that subsystem:
 
 ```python
+from application_sdk.errors import (
+    DependencyUnavailableError,
+    InvalidInputError,
+    NotFoundError,
+    RateLimitedError,
+)
+from application_sdk.storage.errors import StorageNotFoundError
+
+# Generic categorical leaf — any context
+raise DependencyUnavailableError(
+    message="Temporal frontend unreachable",
+    service="temporal", target="temporal-frontend:7233", cause=exc,
+)
+
+# Domain subclass — storage context; routes as NOT_FOUND, catchable as StorageError
+raise StorageNotFoundError(
+    message="Object not found in bucket",
+    key="artifacts/run-123/output.parquet",
+)
+```
+
+### Catch by shape or by domain
+
+```python
+from application_sdk.errors import NotFoundError, AppError
+from application_sdk.storage.errors import StorageError
+
+# Catch any not-found regardless of domain:
+except NotFoundError as e:
+    ...
+
+# Catch any storage failure regardless of category:
+except StorageError as e:
+    ...
+
+# Catch everything the SDK can raise:
+except AppError as e:
+    fd = e.to_failure_details()
+    logger.error("failure category=%s audience=%s", fd.category, fd.audience, exc_info=True)
+```
+
+### Audience
+
+`Audience` is a closed three-value enum — every leaf must pick one:
+
+| Value | First-responder |
+|---|---|
+| `USER` | Customer self-service (credentials, IAM, source config) |
+| `PLATFORM` | Infra ops — shared deps down: Dapr, Temporal, object store, pod health |
+| `APP_OWNER` | The team that wrote the failing code (connector or SDK): file a bug, add a specific subclass, investigate |
+
+There is no `UNKNOWN` escape hatch. If the locus is unclear, `APP_OWNER` means "the team
+that wrote this code investigates and reclassifies."
+
+### Wire envelope
+
+`AppError.to_failure_details()` builds a Pydantic `FailureDetails` envelope suitable for
+`ApplicationError.details=[…]` in Temporal:
+
+```python
+fd = e.to_failure_details()
+# fd.category      — FailureCategory enum (routing: what happened)
+# fd.audience      — Audience enum (routing: who acts)
+# fd.retryable     — bool (resolved from class default or per-instance override)
+# fd.code          — str (app-owned fine-grained code, e.g. "STORAGE_NOT_FOUND")
+# fd.suggested_action — str | None (imperative hint; voice shifts with audience)
+# fd.evidence      — dict of per-error structured context (dataclass fields)
+# fd.cause_repr    — str | None (repr of wrapped exception; never the live object)
+```
+
+Tenant identity is intentionally absent from `FailureDetails`. Per-tenant attribution is
+the consumer's responsibility (e.g., the Automation Engine attaches tenant from its own
+session at ingest time).
+
+### Legacy error-code namespaces (backward-compat only)
+
+- **`application_sdk.common.error_codes`** — `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` HTTP-style codes. Do not use in new code.
+- **`application_sdk.errors` legacy constants** — `AAF-{COMP}-{NNN}` format (`APP_ERROR`, `HANDLER_ERROR`, etc.). Do not use in new code; retained for v3.x back-compat, removed in v4.0.
+
+### Legacy constant usage (back-compat shim)
+
+```python
+# Still works for existing code — do not use in new code
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, HANDLER_ERROR
 
-# Log structured error codes for monitoring/alerting
 logger.error("Task failed [%s]", APP_ERROR, exc_info=exc)
 
-# Reference error codes in ApplicationError for Temporal retry control
 from application_sdk.execution import ApplicationError
 raise ApplicationError(str(APP_NON_RETRYABLE), non_retryable=True)
 ```
-
-Available error constants: `APP_ERROR`, `APP_NON_RETRYABLE`, `HANDLER_ERROR`, `CONTRACT_VALIDATION`, `PAYLOAD_SAFETY`, `CREDENTIAL_ERROR`, `CREDENTIAL_NOT_FOUND`, `STORAGE_NOT_FOUND`, `SECRET_NOT_FOUND`.
 
 ## SQL Utilities
 
