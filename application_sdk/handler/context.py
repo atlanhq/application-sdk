@@ -7,6 +7,9 @@ concerns), HandlerContext is focused on HTTP request handling.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -48,7 +51,7 @@ class HandlerContext:
     _credentials: list[HandlerCredential] = field(default_factory=list, repr=False)
     """Credentials extracted from request (omitted from repr for security)."""
 
-    _secret_store: "SecretStore | None" = field(default=None, repr=False)
+    _secret_store: SecretStore | None = field(default=None, repr=False)
     """Secret store injected from InfrastructureContext."""
 
     _logger: Any = field(default=None, repr=False)
@@ -127,3 +130,33 @@ class HandlerContext:
         """Elapsed time since request started in milliseconds."""
         delta = datetime.now(UTC) - self.started_at
         return delta.total_seconds() * 1000
+
+
+# ---------------------------------------------------------------------------
+# ContextVar-backed context binding
+# ---------------------------------------------------------------------------
+
+_current_handler_context: ContextVar[HandlerContext | None] = ContextVar(
+    "handler_context", default=None
+)
+
+
+def get_handler_context() -> HandlerContext | None:
+    """Return the HandlerContext for the current asyncio task, or None."""
+    return _current_handler_context.get()
+
+
+@contextmanager
+def bind_handler_context(ctx: HandlerContext) -> Iterator[HandlerContext]:
+    """Bind *ctx* as the active handler context for the duration of the block.
+
+    Uses a ContextVar so concurrent coroutines on a shared Handler instance
+    (FastAPI requests, Temporal SDR activities) cannot overwrite each other's
+    context.  Each asyncio Task gets its own copy of the ContextVar namespace,
+    so token-based reset is both safe and strictly scoped to the current task.
+    """
+    token = _current_handler_context.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _current_handler_context.reset(token)
