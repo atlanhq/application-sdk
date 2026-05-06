@@ -36,20 +36,6 @@ jobs:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
-      - name: Trivy image scan (table)
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          image-ref: ${{ env.TARGET_IMAGE }}
-          scanners: vuln
-          ignore-unfixed: true
-          format: table
-          output: trivy-results.txt
-          severity: CRITICAL,HIGH,MEDIUM,LOW
-          exit-code: '0'
-        env:
-          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
-          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
-
       # ── Snyk scan (all severities) ────────────────────────────────────────
 
       - name: Set up Snyk CLI
@@ -167,15 +153,6 @@ jobs:
               echo "> ⚠️ **${{ steps.parse.outputs.total_actionable }} CRITICAL/HIGH findings — Linear issue created**"
             else
               echo "> ✅ **No CRITICAL/HIGH findings**"
-            fi
-            echo ""
-            echo "### Trivy Full Output"
-            if [ -f trivy-results.txt ]; then
-              echo '```'
-              cat trivy-results.txt
-              echo '```'
-            else
-              echo "_No output_"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
