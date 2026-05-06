@@ -1,12 +1,10 @@
 version: 2
 updates:
-  - package-ecosystem: pip
+  - package-ecosystem: uv
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    exclude-paths:
-      - "requirements.txt"
     groups:
       python-deps:
         patterns:

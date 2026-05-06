@@ -26,7 +26,9 @@
     ```
     {time:YYYY-MM-DD HH:mm:ss} [{level}] trace_id=... correlation_id=... {extra[logger_name]} - {message}
     ```
-    `trace_id` and `correlation_id` are injected by `CorrelationContextInterceptor` / `AtlanLoggerAdapter` — see `application_sdk/observability/logger_adaptor.py`.
+    `trace_id` and `correlation_id` are injected by `LogInterceptor` / `AtlanLoggerAdapter` — see `application_sdk/observability/logger_adaptor.py`.
+
+    **Stream routing**: WARNING and below are written to **stdout**; ERROR and CRITICAL are written to **stderr**. This maps to GCP Cloud Logging severity correctly, but operators tailing `stderr` to collect warnings will not see them — use a log aggregator that captures both streams.
 
 - **Logging Best Practices**
     - Include relevant context in log messages
