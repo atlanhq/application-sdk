@@ -42,7 +42,7 @@ class MCPServer:
         self.server = FastMCP(
             name=f"{application_name} MCP",
             instructions=instructions,
-            on_duplicate_tools="error",
+            on_duplicate="error",
         )
 
     async def register_tools(
@@ -86,8 +86,10 @@ class MCPServer:
                     f"Tool {mcp_metadata.name} is marked as not visible. Skipping tool registration"
                 )
 
-        tools = await self.server.get_tools()
-        self.logger.info(f"Registered {len(tools)} tools: {list(tools.keys())}")
+        tools = await self.server.list_tools()
+        self.logger.info(
+            f"Registered {len(tools)} tools: {[tool.name for tool in tools]}"
+        )
 
     async def get_http_app(self) -> StarletteWithLifespan:
         """
