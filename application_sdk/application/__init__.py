@@ -1,11 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
 from typing_extensions import deprecated
 
-from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
-from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP, ApplicationMode
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.interceptors.models import EventRegistration
@@ -18,8 +16,13 @@ from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
-from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
+
+if TYPE_CHECKING:
+    # Heavy imports only needed in LOCAL/WORKER mode — kept here for type checkers only.
+    # At runtime ActivitiesInterface is never needed at module level (only as a
+    # string annotation). Worker is lazy-imported inside setup_workflow().
+    from application_sdk.activities import ActivitiesInterface  # noqa: F401
 
 logger = get_logger(__name__)
 metrics = get_metrics()
@@ -53,6 +56,10 @@ class BaseApplication:
             client_class (Optional[Type[BaseClient]]): Client class for the application.
             handler_class (Optional[Type[BaseHandler]]): Handler class for the application.
         """
+        from application_sdk.clients.utils import (  # noqa: PLC0415 — lazy: pulls Temporal stack (~678ms) via clients.temporal; defer until first use
+            get_workflow_client,
+        )
+
         self.application_name = name
 
         # setup application server. serves the UI, and handles the various triggers
@@ -182,7 +189,7 @@ class BaseApplication:
     async def setup_workflow(
         self,
         workflow_and_activities_classes: List[
-            Tuple[Type[WorkflowInterface], Type[ActivitiesInterface]]
+            Tuple[Type[WorkflowInterface], Type["ActivitiesInterface"]]
         ],
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
@@ -195,6 +202,10 @@ class BaseApplication:
             passthrough_modules (list): The modules to pass through to the worker.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
+        from application_sdk.worker import (  # noqa: PLC0415 — lazy: Temporal worker stack is heavy (~643ms); only needed in LOCAL/WORKER mode
+            Worker,
+        )
+
         await self.workflow_client.load()
 
         workflow_classes = [

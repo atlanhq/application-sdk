@@ -1,9 +1,6 @@
 import re
 from typing import Any, Dict, Optional
 
-import boto3
-from sqlalchemy.engine.url import URL
-
 from application_sdk.constants import AWS_SESSION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -143,7 +140,7 @@ def get_cluster_identifier(aws_client) -> Optional[str]:
     return None
 
 
-def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
+def create_aws_session(credentials: Dict[str, Any]) -> Any:
     """
     Create a boto3 session with AWS credentials.
 
@@ -153,6 +150,8 @@ def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
     Returns:
         boto3.Session: Configured boto3 session
     """
+    import boto3  # noqa: PLC0415 — lazy: boto3 is heavy (~166ms); only needed for IAM auth
+
     aws_access_key_id = credentials.get("aws_access_key_id") or credentials.get(
         "username"
     )
@@ -192,7 +191,7 @@ def get_cluster_credentials(
 def create_aws_client(
     service: str,
     region: str,
-    session: Optional[boto3.Session] = None,
+    session: Optional[Any] = None,
     temp_credentials: Optional[Dict[str, str]] = None,
     use_default_credentials: bool = False,
 ) -> Any:
@@ -255,6 +254,8 @@ def create_aws_client(
     if credential_sources > 1:
         raise ValueError("Only one credential source should be provided at a time")
 
+    import boto3  # noqa: PLC0415 — lazy: boto3 is heavy (~166ms); only needed for IAM auth
+
     try:
         # Priority 1: Use provided session
         if session is not None:
@@ -293,7 +294,7 @@ def create_engine_url(
     credentials: Dict[str, Any],
     cluster_credentials: Dict[str, str],
     extra: Dict[str, Any],
-) -> URL:
+) -> Any:
     """
     Create SQLAlchemy engine URL for Redshift connection.
 
@@ -304,6 +305,10 @@ def create_engine_url(
     Returns:
         URL: SQLAlchemy engine URL
     """
+    from sqlalchemy.engine.url import (  # noqa: PLC0415 — lazy: sqlalchemy is heavy (~170ms); only needed when building engine URLs
+        URL,
+    )
+
     host = credentials["host"]
     port = credentials.get("port")
     database = extra["database"]
@@ -326,6 +331,8 @@ def get_all_aws_regions() -> list[str]:
     Raises:
         Exception: If unable to retrieve regions from AWS
     """
+    import boto3  # noqa: PLC0415 — lazy: boto3 is heavy (~166ms); only needed for IAM auth
+
     try:
         # Use us-east-1 as the default region for the EC2 client since it's always available
         ec2_client = boto3.client("ec2", region_name="us-east-1")

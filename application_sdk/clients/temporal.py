@@ -140,6 +140,10 @@ class TemporalWorkflowClient(WorkflowClient):
         self._token_refresh_interval: Optional[int] = None
         self._token_refresh_task: Optional[asyncio.Task] = None
 
+        # Set when load() completes. Allows start_workflow() to wait gracefully
+        # when load() was fired as a background task (SERVER mode fast-start).
+        self._client_ready: asyncio.Event = asyncio.Event()
+
         logger = get_logger(__name__)
         workflow.logger = logger
         activity.logger = logger
@@ -278,6 +282,7 @@ class TemporalWorkflowClient(WorkflowClient):
 
         # Create the client
         self.client = await Client.connect(**connection_options)
+        self._client_ready.set()
 
         # Start token refresh loop if auth is enabled
         if self.auth_manager.auth_enabled:
@@ -288,6 +293,24 @@ class TemporalWorkflowClient(WorkflowClient):
             self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
             logger.info(
                 f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
+            )
+
+    async def _wait_for_client(self, timeout: float = 30.0) -> None:
+        """Wait until load() has completed (i.e. Temporal client is connected).
+
+        In SERVER mode, load() is fired as a background task so uvicorn can
+        start serving health probes immediately. Any route handler that needs
+        the Temporal client calls this to block until it's ready rather than
+        failing with ValueError.
+        """
+        if self.client:
+            return
+        try:
+            await asyncio.wait_for(self._client_ready.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise ValueError(
+                f"Temporal client not connected after {timeout}s — "
+                "check Temporal server reachability"
             )
 
     async def close(self) -> None:
@@ -344,8 +367,10 @@ class TemporalWorkflowClient(WorkflowClient):
             logger.info(f"Created workflow config with ID: {workflow_id}")
         try:
             # Pass the full workflow_args to the workflow
-            if not self.client:
-                raise ValueError("Client is not loaded")
+            await self._wait_for_client()
+            assert (
+                self.client is not None
+            )  # narrowed: _wait_for_client raises if still None
 
             correlation_fields = {
                 k: v
@@ -381,8 +406,10 @@ class TemporalWorkflowClient(WorkflowClient):
         Raises:
             ValueError: If the client is not loaded.
         """
-        if not self.client:
-            raise ValueError("Client is not loaded")
+        await self._wait_for_client()
+        assert (
+            self.client is not None
+        )  # narrowed: _wait_for_client raises if still None
 
         try:
             workflow_handle = self.client.get_workflow_handle(
@@ -556,8 +583,10 @@ class TemporalWorkflowClient(WorkflowClient):
             ValueError: If the client is not loaded.
             Exception: If there's an error getting the workflow status.
         """
-        if not self.client:
-            raise ValueError("Client is not loaded")
+        await self._wait_for_client()
+        assert (
+            self.client is not None
+        )  # narrowed: _wait_for_client raises if still None
 
         try:
             workflow_handle = self.client.get_workflow_handle(

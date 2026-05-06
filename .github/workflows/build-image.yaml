@@ -5,11 +5,13 @@ on:
   push:
     branches:
       - main
+      - debug/boot-time   # boot-time optimization branch — SHA-only image, no latest/version tags
     paths:
       - 'Dockerfile'
       - 'pyproject.toml'
       - 'uv.lock'
       - 'entrypoint.sh'
+      - 'application_sdk/**'   # also rebuild when SDK source changes
 
 permissions:
   contents: read
@@ -24,6 +26,8 @@ jobs:
       version: ${{ steps.get_version.outputs.version }}
       lowercase_branch: ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
       repository_name: ${{ steps.get_repo_name.outputs.repository_name }}
+      sha_short: ${{ steps.get_sha.outputs.sha_short }}
+      is_main: ${{ steps.get_branch.outputs.branch == 'main' }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -43,8 +47,12 @@ jobs:
         id: get_version
 
       - name: Lowercase branch name
-        run: echo "lowercase_branch=$(echo '${{ steps.get_branch.outputs.branch }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+        run: echo "lowercase_branch=$(echo '${{ steps.get_branch.outputs.branch }}' | tr '[:upper:]' '[:lower:]' | tr '/' '-')" >> $GITHUB_OUTPUT
         id: get_lowercase_branch
+
+      - name: Short commit SHA
+        id: get_sha
+        run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
   push-to-ghcr:
     runs-on: ubuntu-latest
@@ -90,11 +98,19 @@ jobs:
           file: ./Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:latest
-            ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:${{ needs.prepare.outputs.version }}
-            ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:latest
-            ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:${{ needs.prepare.outputs.version }}
+          # main: push latest + version tags (existing behaviour)
+          # any other branch: SHA-only tag — safe for testing, zero impact on existing apps
+          tags: ${{ needs.prepare.outputs.is_main == 'true' && format(
+            'ghcr.io/atlanhq/app-runtime-base-{0}:latest\nghcr.io/atlanhq/app-runtime-base-{0}:{1}\nghcr.io/atlanhq/{2}-{0}:latest\nghcr.io/atlanhq/{2}-{0}:{1}',
+            needs.prepare.outputs.lowercase_branch,
+            needs.prepare.outputs.version,
+            github.event.repository.name
+          ) || format(
+            'ghcr.io/atlanhq/{0}-{1}:{2}',
+            github.event.repository.name,
+            needs.prepare.outputs.lowercase_branch,
+            needs.prepare.outputs.sha_short
+          ) }}
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}

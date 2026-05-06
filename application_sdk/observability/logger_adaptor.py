@@ -8,10 +8,6 @@ from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 from opentelemetry._logs import LogRecord, SeverityNumber
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 
@@ -397,6 +393,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             otlp_processors = []
 
             if ENABLE_OTLP_LOGS:
+                from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (  # noqa: PLC0415 — lazy: grpc exporter is heavy (~177ms); only needed when ENABLE_OTLP_LOGS=true
+                    OTLPLogExporter,
+                )
+                from opentelemetry.sdk._logs._internal.export import (  # noqa: PLC0415 — lazy: paired with OTLPLogExporter
+                    BatchLogRecordProcessor,
+                )
+
                 otlp_processors.append(
                     BatchLogRecordProcessor(
                         OTLPLogExporter(
@@ -413,6 +416,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 )
 
             if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
+                from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (  # noqa: PLC0415 — lazy: grpc exporter is heavy (~177ms); only needed when ENABLE_OTLP_WORKFLOW_LOGS=true
+                    OTLPLogExporter,
+                )
+                from opentelemetry.sdk._logs._internal.export import (  # noqa: PLC0415 — lazy: paired with OTLPLogExporter
+                    BatchLogRecordProcessor,
+                )
+
                 otlp_processors.append(
                     BatchLogRecordProcessor(
                         OTLPLogExporter(
@@ -429,6 +439,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 )
 
             if otlp_processors:
+                from opentelemetry.sdk._logs import (  # noqa: PLC0415 — lazy: only needed when OTLP logging is active
+                    LoggerProvider,
+                )
+                from opentelemetry.sdk.resources import (  # noqa: PLC0415 — lazy: only needed when OTLP logging is active
+                    Resource,
+                )
+
                 resource_attributes = {}
                 if OTEL_RESOURCE_ATTRIBUTES:
                     resource_attributes = self._parse_otel_resource_attributes(
