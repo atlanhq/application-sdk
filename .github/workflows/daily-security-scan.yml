@@ -68,7 +68,7 @@ jobs:
         run: |
           snyk container test "$TARGET_IMAGE" \
             --severity-threshold=low \
-            --org=partner-images \
+            --org=bu-apps \
             --json-file-output=snyk-image-results.json || true
 
       - name: Set up uv (for Snyk Python dep resolution)
@@ -84,7 +84,7 @@ jobs:
         run: |
           snyk test \
             --severity-threshold=low \
-            --org=partner-images \
+            --org=bu-apps \
             --command=.venv/bin/python3 \
             --json-file-output=snyk-python-results.json || true
           if [ ! -f snyk-python-results.json ]; then
