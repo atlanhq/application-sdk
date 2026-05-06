@@ -409,7 +409,6 @@ class TestRunOutputPrefixes:
         """When input.output_path is provided, use it directly (no workflow context needed)."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from application_sdk.contracts.types import ConnectionRef
         from application_sdk.templates.contracts.sql_metadata import (
             ExtractionInput,
             ExtractionOutput,
@@ -468,7 +467,7 @@ class TestRunOutputPrefixes:
         ):
             import asyncio
 
-            result = asyncio.get_event_loop().run_until_complete(app.run(input_))
+            result = asyncio.run(app.run(input_))
 
         # With output_path set, transformed_data_prefix uses it directly
         assert (
@@ -535,7 +534,7 @@ class TestRunOutputPrefixes:
         ):
             import asyncio
 
-            result = asyncio.get_event_loop().run_until_complete(app.run(input_))
+            result = asyncio.run(app.run(input_))
 
         # Must contain the workflow_id and run_id from workflow.info()
         assert "test-wf-123" in result.transformed_data_prefix
@@ -600,7 +599,7 @@ class TestRunOutputPrefixes:
         ):
             import asyncio
 
-            asyncio.get_event_loop().run_until_complete(app.run(input_))
+            asyncio.run(app.run(input_))
 
         # build_output_path must NOT be called from run() — it would crash in workflow context
         mock_bop.assert_not_called()

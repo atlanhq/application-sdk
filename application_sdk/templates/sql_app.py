@@ -439,7 +439,9 @@ class SqlApp(App):
     # run() — default orchestration
     # =====================================================================
 
-    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+    async def run(  # type: ignore[override]
+        self, input: ExtractionInput
+    ) -> ExtractionOutput:
         """Default extraction orchestration.
 
         1. Resolve credentials
@@ -498,7 +500,6 @@ class SqlApp(App):
         # Always call upload — upload_to_atlan auto-resolves output_path in activity context.
         upload_input = UploadInput(
             output_path=input.output_path,
-            output_prefix=input.output_prefix,
         )
         await self.upload_to_atlan(upload_input)
 
