@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.5.0
-source-sha:    2516c1b973da16f468741820a7f071608aaad71a
-source-date:   2026-05-06T00:14:29+05:30
+source-sha:    07b75e80b58c1f4d7c8fa4628769bfa88671b08e
+source-date:   2026-05-06T09:10:48+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,9 +23,8 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 10 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 20 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
@@ -813,84 +812,6 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Transform raw agent JSON into the format connectors expect.
 - **Defined in:** `application_sdk/common/transforms.py`
 
-## `application_sdk.errors`
-
-Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.)
-
-### Classes
-
-#### `ErrorCode`
-
-- **Import:** `from application_sdk.errors import ErrorCode`
-- **Signature:** `class ErrorCode(component: str, id: int) -> None`
-- **Summary:** Structured error code for monitoring and alerting.
-- **Defined in:** `application_sdk/errors.py`
-
-### Constants and Enums
-
-#### `APP_ERROR`
-
-- **Import:** `from application_sdk.errors import APP_ERROR`
-- **Signature:** `APP_ERROR`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
-
-#### `APP_NON_RETRYABLE`
-
-- **Import:** `from application_sdk.errors import APP_NON_RETRYABLE`
-- **Signature:** `APP_NON_RETRYABLE`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
-
-#### `CONTRACT_VALIDATION`
-
-- **Import:** `from application_sdk.errors import CONTRACT_VALIDATION`
-- **Signature:** `CONTRACT_VALIDATION`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
-
-#### `CREDENTIAL_ERROR`
-
-- **Import:** `from application_sdk.errors import CREDENTIAL_ERROR`
-- **Signature:** `CREDENTIAL_ERROR`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
-
-#### `CREDENTIAL_NOT_FOUND`
-
-- **Import:** `from application_sdk.errors import CREDENTIAL_NOT_FOUND`
-- **Signature:** `CREDENTIAL_NOT_FOUND`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
-
-#### `HANDLER_ERROR`
-
-- **Import:** `from application_sdk.errors import HANDLER_ERROR`
-- **Signature:** `HANDLER_ERROR`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
-
-#### `PAYLOAD_SAFETY`
-
-- **Import:** `from application_sdk.errors import PAYLOAD_SAFETY`
-- **Signature:** `PAYLOAD_SAFETY`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
-
-#### `SECRET_NOT_FOUND`
-
-- **Import:** `from application_sdk.errors import SECRET_NOT_FOUND`
-- **Signature:** `SECRET_NOT_FOUND`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
-
-#### `STORAGE_NOT_FOUND`
-
-- **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
-- **Signature:** `STORAGE_NOT_FOUND`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
-
 ## `application_sdk.execution`
 
 Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client
@@ -1008,6 +929,20 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Import:** `from application_sdk.handler import AuthStatus`
 - **Signature:** `class AuthStatus`
 - **Summary:** Result of an authentication attempt.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `BaseConnectionConfig`
+
+- **Import:** `from application_sdk.handler import BaseConnectionConfig`
+- **Signature:** `class BaseConnectionConfig`
+- **Summary:** Base type for preflight and metadata connection configuration.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `BaseMetadataConfig`
+
+- **Import:** `from application_sdk.handler import BaseMetadataConfig`
+- **Signature:** `class BaseMetadataConfig`
+- **Summary:** Base type for form-level metadata forwarded alongside preflight credentials.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `DefaultHandler`
@@ -2058,7 +1993,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the fetch_metadata handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
-  - `connection_config: dict[str, Any]` `= {}` — Connection configuration.
+  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
   - `object_filter: str` `= ''` — Filter pattern (e.g., 'public.*', 'mydb.myschema.*').
   - `include_fields: bool` `= True` — Whether to include field/column details.
   - `max_objects: int` `= 1000` — Maximum number of objects to return.
@@ -2090,8 +2025,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the preflight_check handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
-  - `connection_config: dict[str, Any]` `= {}` — Connection configuration (host, port, database, etc.).
-  - `metadata: dict[str, Any]` `= {}` — Form-level metadata forwarded by heracles alongside the credential.
+  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
+  - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
   - `timeout_seconds: int` `= 60` — Maximum seconds to wait for all checks.
 - **Defined in:** `application_sdk/handler/contracts.py`
