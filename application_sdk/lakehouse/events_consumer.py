@@ -12,6 +12,67 @@ first use. App developers do not pass catalog or credentials in.
 Writing results back is the app's responsibility — call ``handle_events`` from
 a Temporal activity, then write the returned results via ``LakehouseWriter``
 in whatever shape the app needs.
+
+What this earns its keep doing
+------------------------------
+
+Strip out the RETRY semantics and the consumer is three lines an app could
+inline (``LakehouseReader.fetch_records`` + ``await process_fn(events)`` +
+build the results list). The value-add is the dispatch wrapper around
+``process_fn`` that guarantees the returned ``results`` list always aligns
+1:1 with ``events``:
+
+* Process function raises  → every event in the batch marked RETRY.
+* Process function returns the wrong number of results  → same.
+* No events read           → return ``([], [])`` without invoking process_fn.
+
+If those guarantees aren't valuable for your shape, prefer ``LakehouseReader``
+directly.
+
+Known limits of the callable-injection pattern
+----------------------------------------------
+
+The class deliberately keeps the contract minimal — ``process_fn(events) →
+results``. That's a good fit for stateless per-batch work but reveals
+seams when:
+
+* **Resource lifecycle.** The consumer doesn't run setup/teardown hooks for
+  resources ``process_fn`` needs (DB connections, HTTP clients, model
+  caches). Closures capture them, but lifecycle is then coupled to the call
+  site by indentation. For class-style with lifecycle, pass a bound method::
+
+      class Worker:
+          def __init__(self): self._client = ...
+          async def process(self, events): ...
+          async def close(self): await self._client.aclose()
+
+      worker = Worker()
+      try:
+          consumer = EventsConsumer(worker.process)
+          events, results = await consumer.handle_events(ns, table)
+      finally:
+          await worker.close()
+
+* **Per-batch context.** ``process_fn`` receives only the events list. If
+  it needs ``run_id`` / ``trigger_id`` / ``snapshot_id`` for tagging or
+  observability, capture them in a closure or pull from
+  ``temporalio.workflow.info()``.
+
+* **Stack traces.** When ``process_fn`` raises, the frame chain is
+  ``EventsConsumer.handle_events  →  process_fn``. Errors look like they
+  originate inside the SDK; expect to read one frame deeper for the real
+  failure site.
+
+* **Composition.** Multi-stage per-event work (embed → store → enrich →
+  publish) lives inside one ``process_fn`` body — the consumer doesn't
+  pipeline. If your shape is genuinely multi-stage, build the pipeline in
+  app code and have ``process_fn`` invoke it.
+
+If multiple apps grow into these limits, the planned v2 design is an
+async-iterator pattern (``async for batch in consumer.batches(table):``)
+with explicit per-batch ack — that pattern hands control back to the app,
+makes lifecycle a context-manager concern, and exposes per-batch metadata.
+Not in v1 scope.
 """
 
 from __future__ import annotations
@@ -32,6 +93,10 @@ class EventsConsumer:
 
     Constructs its lakehouse reader from environment credentials lazily on
     first call to :meth:`handle_events` — apps don't pass a catalog in.
+
+    See the module docstring for what this earns its keep doing, the known
+    limits of the callable-injection pattern, and the bound-method escape
+    hatch for class-style usage with resource lifecycle.
     """
 
     def __init__(self, process_fn: ProcessFn) -> None:
