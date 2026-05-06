@@ -99,6 +99,34 @@ def test_to_failure_details_cause_repr() -> None:
     assert "ValueError" in fd.cause_repr
 
 
+def test_cause_repr_redacts_url_credentials() -> None:
+    cause = ValueError("GET https://admin:s3cr3t@host.example.com/path failed")
+    e = AuthError(message="x", cause=cause)
+    fd = e.to_failure_details()
+    assert fd.cause_repr is not None
+    assert "s3cr3t" not in fd.cause_repr
+    assert "admin:s3cr3t" not in fd.cause_repr
+    assert "***@host.example.com" in fd.cause_repr
+
+
+def test_cause_repr_redacts_query_param_secrets() -> None:
+    cause = ValueError("GET https://api.example.com/data?api_key=sk-secret123&limit=10")
+    e = AuthError(message="x", cause=cause)
+    fd = e.to_failure_details()
+    assert fd.cause_repr is not None
+    assert "sk-secret123" not in fd.cause_repr
+    assert "api_key=***" in fd.cause_repr
+    assert "limit=10" in fd.cause_repr
+
+
+def test_cause_repr_truncates_long_messages() -> None:
+    cause = ValueError("x" * 600)
+    e = AuthError(message="x", cause=cause)
+    fd = e.to_failure_details()
+    assert fd.cause_repr is not None
+    assert len(fd.cause_repr) <= len("ValueError: ") + 500 + len("…")
+
+
 def test_failure_details_json_round_trip() -> None:
     e = AuthError(message="bad creds", auth_method="basic")
     fd = e.to_failure_details()

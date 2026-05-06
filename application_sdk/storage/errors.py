@@ -41,6 +41,7 @@ class StorageError(DependencyUnavailableError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
     code: ClassVar[str] = "STORAGE"
 
+    # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
         self,
         message: str,

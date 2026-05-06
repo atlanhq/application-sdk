@@ -30,9 +30,6 @@ class AppTimeoutError(AppError):
     (a source network timeout is USER-fixable; an internal Temporal deadline
     is PLATFORM-routed).  Override ``audience`` on leaf subclasses when the
     locus is known — do not leave it as the default if you can pick.
-
-    Builtin ``TimeoutError`` is available as ``application_sdk.errors.TimeoutError``
-    for code that catches the SDK name without renaming.
     """
 
     operation: str | None = None
@@ -71,12 +68,7 @@ class AuthError(AppError):
 
 @dataclass(kw_only=True)
 class AppPermissionDeniedError(AppError):
-    """Authenticated but not authorised.
-
-    Builtin ``PermissionError`` is available as
-    ``application_sdk.errors.PermissionError`` for code that catches the
-    SDK name without renaming.
-    """
+    """Authenticated but not authorised."""
 
     principal: str | None = None
     resource: str | None = None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -15,6 +16,24 @@ if TYPE_CHECKING:
 _BASE_FIELDS: frozenset[str] = frozenset(
     {"message", "retryable", "cause", "app_name", "run_id", "suggested_action"}
 )
+
+_CAUSE_MAX_LEN = 500
+# Matches userinfo in URLs: https://user:pass@host → https://***@host
+_URL_USERINFO_RE = re.compile(r"(https?://)[^@\s]+@", re.IGNORECASE)
+# Matches secret query params: api_key=value → api_key=***
+_SECRET_PARAM_RE = re.compile(
+    r"(?i)((?:api_key|access_token|auth_token|password|passwd|secret|credential|private_key)=)[^\s&,;#]+",
+)
+
+
+def _sanitize_cause_repr(exc: BaseException) -> str:
+    """Return a length-capped, secret-redacted string for a cause exception."""
+    text = str(exc)
+    text = _URL_USERINFO_RE.sub(r"\1***@", text)
+    text = _SECRET_PARAM_RE.sub(r"\1***", text)
+    if len(text) > _CAUSE_MAX_LEN:
+        text = text[:_CAUSE_MAX_LEN] + "…"
+    return f"{type(exc).__name__}: {text}"
 
 
 @dataclass(kw_only=True)
@@ -85,5 +104,5 @@ class AppError(Exception):
             evidence=evidence,
             app_name=self.app_name,
             run_id=self.run_id,
-            cause_repr=repr(self.cause) if self.cause else None,
+            cause_repr=_sanitize_cause_repr(self.cause) if self.cause else None,
         )

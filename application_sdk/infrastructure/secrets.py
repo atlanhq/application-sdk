@@ -87,6 +87,7 @@ class SecretStoreError(DependencyUnavailableError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
     code: ClassVar[str] = "SECRET_STORE"
 
+    # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
         self,
         message: str,

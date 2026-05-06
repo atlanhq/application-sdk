@@ -34,6 +34,7 @@ class CredentialError(AuthError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_ERROR
     code: ClassVar[str] = "CREDENTIAL"
 
+    # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
         self,
         message: str,
