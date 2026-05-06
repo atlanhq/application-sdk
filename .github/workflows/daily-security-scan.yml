@@ -13,7 +13,7 @@ env:
 
 jobs:
   scan-and-ticket:
-    name: Trivy + Snyk → Linear
+    name: Scan app-runtime-base:3 for vulnerabilities and raise alerts
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
