@@ -277,7 +277,7 @@ jobs:
   e2e-apps:
     name: E2E (Apps)
     needs: [changes, matrix-builder]
-    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test')) && github.event.pull_request.head.repo.fork != true
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test')) && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
