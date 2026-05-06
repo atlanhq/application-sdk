@@ -233,30 +233,70 @@ runs:
       shell: bash
       run: |
         uv run python3 - <<'PYEOF'
-        import json, os
+        import json, os, secrets, xml.etree.ElementTree as ET
         from pathlib import Path
+
+        # Map scenario name → pytest test class. Only used to group links by
+        # suite for multi-class apps (e.g. saperp's ECC + S4); single-class
+        # apps fall through to a flat list.
+        class_by_scenario: dict[str, str] = {}
+        try:
+            tree = ET.parse("results/sdr-test-results.xml")
+            for tc in tree.getroot().iter("testcase"):
+                classname = (tc.get("classname") or "").rsplit(".", 1)[-1]
+                scenario = (tc.get("name") or "").removeprefix("test_")
+                if classname and scenario:
+                    class_by_scenario[scenario] = classname
+        except Exception:
+            pass  # JUnit XML missing → fall through to ungrouped list
+
+        ICONS = {"passed": "✅", "failed": "❌", "skipped": "⏭"}
 
         summary_file = Path("integration-test-summary.json")
         tenant = os.environ.get("CI_TENANT_DOMAIN", "")
-        links = []
+        # Preserve scenario insertion order (== test execution order) within
+        # each class so the output is deterministic.
+        by_class: dict[str, list[str]] = {}
         if summary_file.exists() and tenant:
             data = json.loads(summary_file.read_text())
             for s in data.get("scenarios", []):
-                if s.get("api") != "workflow" or s.get("status") != "passed":
+                if s.get("api") != "workflow":
                     continue
                 assertions = s.get("assertions") or {}
                 wf  = assertions.get("data.workflow_id", {}).get("actual", "")
                 run = assertions.get("data.run_id",      {}).get("actual", "")
-                if wf and run:
-                    url = (
-                        f"https://{tenant}/api/temporal/namespaces/default"
-                        f"/workflows/{wf}/{run}/history"
-                    )
-                    links.append(f"[{s['name']}]({url})")
-        out = " · ".join(links)
+                # No workflow_id means /workflow/start failed before
+                # returning IDs — there's nothing to link to.
+                if not (wf and run):
+                    continue
+                url = (
+                    f"https://{tenant}/api/temporal/namespaces/default"
+                    f"/workflows/{wf}/{run}/history"
+                )
+                icon = ICONS.get(s.get("status", ""), "❓")
+                cls = class_by_scenario.get(s["name"], "")
+                by_class.setdefault(cls, []).append(
+                    f"{icon} [{s['name']}]({url})"
+                )
+
+        # Single suite OR no class info → flat list separated by ` · `.
+        # Multiple suites → bulleted list grouped by class on its own line.
+        if not by_class:
+            out = ""
+        elif len(by_class) == 1:
+            out = " · ".join(next(iter(by_class.values())))
+        else:
+            lines = [""]
+            for cls, items in by_class.items():
+                label = f"**{cls}:**" if cls else "**(unknown suite):**"
+                lines.append(f"  - {label} {' · '.join(items)}")
+            out = "\n".join(lines)
+
+        # Multi-line outputs need the heredoc syntax.
+        delim = "EOF_LINKS_" + secrets.token_hex(8)
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write(f"links={out}\n")
-        print(f"Temporal links: {out or '(none)'}")
+            f.write(f"links<<{delim}\n{out}\n{delim}\n")
+        print(f"Temporal links:\n{out or '(none)'}")
         PYEOF
 
     - name: Write GitHub Step Summary
