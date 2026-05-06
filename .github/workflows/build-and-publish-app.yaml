@@ -65,6 +65,11 @@ on:
         required: false
         type: string
         default: ""
+      platforms:
+        description: "Comma-separated platforms to build, e.g. 'linux/amd64,linux/arm64' (default) or 'linux/arm64' for arm-only builds (faster on dev branches that don't need x86 coverage)."
+        required: false
+        type: string
+        default: "linux/amd64,linux/arm64"
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -103,6 +108,8 @@ jobs:
       ghcr_branch_tag:  ${{ steps.tags.outputs.ghcr_branch_tag }}
       dockerhub_image:  ${{ steps.tags.outputs.dockerhub_image }}
       release_tags:     ${{ steps.tags.outputs.release_tags }}
+      build_matrix:     ${{ steps.matrix.outputs.matrix }}
+      platforms_csv:    ${{ steps.matrix.outputs.platforms_csv }}
 
     steps:
       - name: Checkout
@@ -218,6 +225,38 @@ jobs:
           echo "DockerHub image: ${DOCKERHUB_IMAGE}"
           if [ -n "${RELEASE_TAGS}" ]; then printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"; fi
 
+      - name: Compute build matrix from platforms input
+        id: matrix
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          # Convert comma-separated platforms (e.g. "linux/amd64,linux/arm64")
+          # into a JSON matrix the build job consumes via fromJson(). The merge
+          # step iterates the same csv to build its `imagetools create` arg list,
+          # so single-arch builds produce a single-arch manifest cleanly without
+          # trying to reference an arch image that was never built.
+          ENTRIES=""
+          IFS=',' read -ra PLATS <<< "${PLATFORMS}"
+          for p in "${PLATS[@]}"; do
+            p="$(echo "$p" | xargs)"  # trim whitespace
+            [ -z "$p" ] && continue
+            arch="${p#linux/}"
+            case "$arch" in
+              amd64|arm64) ;;
+              *) echo "::error::Unsupported platform '$p'. Allowed: linux/amd64, linux/arm64."; exit 1 ;;
+            esac
+            ENTRIES="${ENTRIES}{\"platform\":\"${p}\",\"arch\":\"${arch}\"},"
+          done
+          if [ -z "$ENTRIES" ]; then
+            echo "::error::No valid platforms in input '${PLATFORMS}'."
+            exit 1
+          fi
+          ENTRIES="${ENTRIES%,}"
+          MATRIX="{\"include\":[${ENTRIES}]}"
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "platforms_csv=${PLATFORMS}" >> "$GITHUB_OUTPUT"
+          echo "Build matrix: ${MATRIX}"
+
   # ── Job 2: Build — parallel per architecture ──────────────────────────────────
   build:
     name: Build (${{ matrix.arch }})
@@ -226,12 +265,10 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            arch: amd64
-          - platform: linux/arm64
-            arch: arm64
+      # Driven by the ``platforms`` input — see the prepare job's matrix step.
+      # Default: both amd64 and arm64. Single-platform inputs produce a
+      # one-entry matrix and a single-arch manifest in the merge job.
+      matrix: ${{ fromJson(needs.prepare.outputs.build_matrix) }}
 
     steps:
       - name: Checkout
@@ -301,6 +338,7 @@ jobs:
           BRANCH:          ${{ needs.prepare.outputs.branch }}
           IMAGE_TAG:       ${{ needs.prepare.outputs.image_tag }}
           RELEASE_TAGS:    ${{ needs.prepare.outputs.release_tags }}
+          PLATFORMS_CSV:   ${{ needs.prepare.outputs.platforms_csv }}
         run: |
           # Build --tag args: always include immutable + mutable branch tags,
           # plus the version-tag ladder if this is a release build.
@@ -311,10 +349,20 @@ jobs:
             done <<< "${RELEASE_TAGS}"
           fi
 
-          docker buildx imagetools create \
-            "${TAG_ARGS[@]}" \
-            "${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}-amd64" \
-            "${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}-arm64"
+          # Source images: one per platform actually built. For multi-arch
+          # this is amd64 + arm64; for a single-platform input it's just the
+          # one. ``imagetools create`` happily produces a one-arch manifest
+          # when given a single source.
+          SOURCES=()
+          IFS=',' read -ra PLATS <<< "${PLATFORMS_CSV}"
+          for p in "${PLATS[@]}"; do
+            p="$(echo "$p" | xargs)"
+            [ -z "$p" ] && continue
+            arch="${p#linux/}"
+            SOURCES+=("${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}-${arch}")
+          done
+
+          docker buildx imagetools create "${TAG_ARGS[@]}" "${SOURCES[@]}"
 
           echo "Multi-arch manifest pushed:"
           echo "  Immutable: ${GHCR_IMAGE}"
