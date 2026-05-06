@@ -492,10 +492,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 " - {message}\n{exception}"
             )
 
+        # Split sinks by severity so cloud log collectors (GCP Cloud Logging,
+        # AWS CloudWatch Logs Insights, etc.) that infer severity from the file
+        # descriptor classify benign records as INFO instead of ERROR. Records
+        # at WARNING and below go to stdout; ERROR/CRITICAL/exception records
+        # stay on stderr. Matches uvicorn/gunicorn conventions.
+        _ERROR_LEVEL_NO = SEVERITY_MAPPING["ERROR"]
+        self.logger.add(
+            sys.stdout,
+            format=get_log_format,
+            level=SEVERITY_MAPPING[LOG_LEVEL],
+            colorize=colorize,
+            filter=lambda record: record["level"].no < _ERROR_LEVEL_NO,
+        )
         self.logger.add(
             sys.stderr,
             format=get_log_format,
-            level=SEVERITY_MAPPING[LOG_LEVEL],
+            level=max(SEVERITY_MAPPING[LOG_LEVEL], _ERROR_LEVEL_NO),
             colorize=colorize,
         )
 

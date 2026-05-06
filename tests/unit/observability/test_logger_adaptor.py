@@ -688,17 +688,49 @@ def test_exception_keeps_explicit_exc_info(logger_adapter: AtlanLoggerAdapter):
 
 
 def test_warning_with_exc_info_emits_traceback(capsys: pytest.CaptureFixture[str]):
-    """warning(..., exc_info=True) should render traceback in stderr output."""
+    """warning(..., exc_info=True) should render traceback in stdout output."""
     with create_logger_adapter() as logger_adapter:
         try:
             raise ValueError("traceback-check")
         except ValueError:
             logger_adapter.warning("Completing activity as failed", exc_info=True)
 
-    stderr = capsys.readouterr().err
-    assert "Completing activity as failed" in stderr
-    assert "Traceback (most recent call last):" in stderr
-    assert "ValueError: traceback-check" in stderr
+    captured = capsys.readouterr()
+    stdout = captured.out
+    assert "Completing activity as failed" in stdout
+    assert "Traceback (most recent call last):" in stdout
+    assert "ValueError: traceback-check" in stdout
+    assert "Completing activity as failed" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "token,call,expected_stream",
+    [
+        ("info-record", lambda lg: lg.info("info-record"), "out"),
+        ("warn-record", lambda lg: lg.warning("warn-record"), "out"),
+        ("err-record", lambda lg: lg.error("err-record"), "err"),
+        ("crit-record", lambda lg: lg.critical("crit-record"), "err"),
+    ],
+)
+def test_log_records_route_by_severity(
+    token: str,
+    call,
+    expected_stream: str,
+    capsys: pytest.CaptureFixture[str],
+):
+    """Records below ERROR go to stdout; ERROR/CRITICAL go to stderr.
+
+    Cloud log collectors that infer severity from the file descriptor (GCP
+    Cloud Logging is the motivating case) classify stderr lines as ERROR, so
+    benign records must land on stdout.
+    """
+    with create_logger_adapter() as logger_adapter:
+        call(logger_adapter)
+
+    captured = capsys.readouterr()
+    assert token in getattr(captured, expected_stream)
+    other = "err" if expected_stream == "out" else "out"
+    assert token not in getattr(captured, other)
 
 
 def test_log_record_model_extracts_exception_attrs_from_loguru_record():

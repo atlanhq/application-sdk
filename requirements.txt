@@ -300,7 +300,7 @@ sortedcontainers==2.4.0
     # via hypothesis
 starlette==0.50.0
     # via fastapi
-temporalio==1.26.0
+temporalio==1.27.0
     # via atlan-application-sdk
 tenacity==9.1.4
     # via pyatlan
