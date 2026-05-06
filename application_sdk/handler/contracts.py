@@ -26,10 +26,17 @@ from application_sdk.contracts.base import SerializableEnum
 class _DictLikeConfigBase(BaseModel):
     """Shared implementation for the connection / metadata config bases.
 
-    Adds dict-style access (``cfg["k"]``, ``cfg.get("k", default)``,
-    ``"k" in cfg``) so existing callers that consumed the previous
-    ``dict[str, Any]`` field do not need to change.  Lookups try
-    declared field names, then aliases, then ``model_extra``.
+    Provides the dict / Mapping protocol so existing callers that consumed
+    the previous ``dict[str, Any]`` field do not need to change.  Supported::
+
+        cfg["k"]                  cfg.get("k", default)   "k" in cfg
+        cfg.keys()                cfg.values()            cfg.items()
+        len(cfg)                  for k, v in cfg: ...
+
+    ``__getitem__`` lookups try declared field names, then aliases, then
+    ``model_extra``.  Iteration delegates to Pydantic's native
+    :meth:`BaseModel.__iter__`, which yields all declared fields plus
+    extras.
 
     Not intended to be subclassed directly — use
     :class:`BaseConnectionConfig` or :class:`BaseMetadataConfig`.
@@ -63,6 +70,21 @@ class _DictLikeConfigBase(BaseModel):
             return False
         return True
 
+    def keys(self) -> list[str]:
+        """Mirrors ``dict.keys`` over declared fields plus extras."""
+        return [k for k, _ in self]
+
+    def values(self) -> list[Any]:
+        """Mirrors ``dict.values`` over declared fields plus extras."""
+        return [v for _, v in self]
+
+    def items(self) -> list[tuple[str, Any]]:
+        """Mirrors ``dict.items`` over declared fields plus extras."""
+        return [(k, v) for k, v in self]
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
 
 class BaseConnectionConfig(_DictLikeConfigBase):
     """Base type for preflight and metadata connection configuration.
@@ -95,12 +117,16 @@ class BaseConnectionConfig(_DictLikeConfigBase):
     .. note::
 
         **Consumption is dict-compatible.**  In addition to attribute access
-        (``cfg.host``), dict-style patterns from the old ``dict[str, Any]``
-        type continue to work — no caller-side migration needed::
+        (``cfg.host``), the full Mapping protocol from the old
+        ``dict[str, Any]`` type continues to work — no caller-side
+        migration needed::
 
             cfg["host"]               # KeyError if absent
             cfg.get("host", default)  # safe accessor with default
             "host" in cfg             # membership test
+            cfg.keys() / .values() / .items()
+            len(cfg)
+            for k, v in cfg: ...
 
         Lookups try declared field names first, then aliases, then extras.
     """

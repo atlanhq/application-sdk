@@ -335,6 +335,33 @@ class TestBaseConnectionConfig:
         assert 42 not in cfg  # type: ignore[operator]
         assert None not in cfg  # type: ignore[operator]
 
+    def test_mapping_protocol_on_extras(self):
+        """keys/values/items/len work over extras."""
+        cfg = BaseConnectionConfig.model_validate({"host": "db", "port": 5432})
+
+        assert sorted(cfg.keys()) == ["host", "port"]
+        assert sorted(cfg.values(), key=str) == [5432, "db"]
+        assert sorted(cfg.items()) == [("host", "db"), ("port", 5432)]
+        assert len(cfg) == 2
+
+    def test_mapping_protocol_with_declared_and_extras(self):
+        """Iteration covers declared fields and extras together."""
+
+        class MyConnectionConfig(BaseConnectionConfig):
+            page_size: int = Field(default=500, alias="page-size")
+
+        cfg = MyConnectionConfig.model_validate({"page-size": 100, "extra_key": "x"})
+        assert dict(cfg.items()) == {"page_size": 100, "extra_key": "x"}
+        assert len(cfg) == 2
+        assert "page_size" in cfg.keys()
+        assert "extra_key" in cfg.keys()
+
+    def test_for_loop_iteration(self):
+        """``for k, v in cfg`` yields all keys/values."""
+        cfg = BaseConnectionConfig.model_validate({"host": "db", "port": 5432})
+        result = dict(cfg)  # uses __iter__
+        assert result == {"host": "db", "port": 5432}
+
     def test_subclass_can_forbid_extras(self):
         """Apps subclass and override extra='forbid' for strict validation."""
 
