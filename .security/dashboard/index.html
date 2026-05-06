@@ -186,24 +186,33 @@
         <!-- Section 2: Line chart -->
         <div class="card" style="margin-bottom:16px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                <div class="card-title" style="margin:0">Vulnerability Trend</div>
-                <div class="filter-group"><label>Stack by</label><select id="fTrendMetric" onchange="renderTrends()" style="margin-left:6px">
-                    <option value="source" selected>Source (App / Base)</option><option value="severity">Severity (Critical / High)</option><option value="status">Status (New / Allowlisted)</option>
-                </select></div>
+                <div class="card-title" style="margin:0">Vulnerability Trend <span style="color:#b0b3c6;font-weight:500;font-size:10px;text-transform:none;letter-spacing:0;margin-left:8px">end-of-day snapshots · today appears at midnight</span></div>
+                <div style="display:flex;gap:10px;align-items:center">
+                    <div class="filter-group"><label>Window</label><select id="fTrendWindow" onchange="renderTrends()" style="margin-left:6px">
+                        <option value="7" selected>Last 7 days</option><option value="15">Last 15 days</option><option value="30">Last 30 days</option>
+                    </select></div>
+                    <div class="filter-group"><label>Stack by</label><select id="fTrendMetric" onchange="renderTrends()" style="margin-left:6px">
+                        <option value="source" selected>Source (App / Base)</option><option value="severity">Severity (Critical / High)</option><option value="status">Status (New / Allowlisted)</option>
+                    </select></div>
+                </div>
             </div>
             <div id="trendChart" style="min-height:200px;position:relative;"></div>
         </div>
         <!-- Top movers -->
-        <div class="grid-2" style="margin-bottom:16px">
+        <div class="grid-2" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
             <div class="card"><div class="card-title">Biggest Improvements <span id="trendImprovedCount" style="color:#b0b3c6;font-weight:500"></span></div><div id="trendImproved" style="max-height:340px;overflow-y:auto"></div></div>
             <div class="card"><div class="card-title">Needs Attention <span id="trendDegradedCount" style="color:#b0b3c6;font-weight:500"></span></div><div id="trendDegraded" style="max-height:340px;overflow-y:auto"></div></div>
+            <div class="card"><div class="card-title">Newly Onboarded <span id="trendNewRepoCount" style="color:#b0b3c6;font-weight:500"></span></div><div id="trendNewRepo" style="max-height:340px;overflow-y:auto"></div></div>
         </div>
         <!-- Section 3: Per repo table -->
         <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                <div class="card-title" style="margin:0">Per Repo Progress</div>
+                <div class="card-title" style="margin:0">Per Repo Progress <span id="trendTableCount" style="color:#b0b3c6;font-weight:500"></span></div>
                 <div style="display:flex;gap:10px;align-items:center">
                     <div class="filter-group"><label>SDK</label><select id="fTrendSdk" multiple size="1" onchange="renderTrends()" style="margin-left:6px;min-width:140px;height:32px" title="Hold Cmd/Ctrl to select multiple"><option value="all">All</option></select></div>
+                    <div class="filter-group"><label>CVEs</label><select id="fTrendBucket" onchange="renderTrends()" style="margin-left:6px">
+                        <option value="all">All</option><option value="0">Clean (0)</option><option value="1-5">1–5</option><option value="6-20">6–20</option><option value="20+">20+</option>
+                    </select></div>
                     <div class="filter-group"><label>Compare</label><select id="fTrendDays" onchange="renderTrends()" style="margin-left:6px">
                         <option value="1">Yesterday</option><option value="2">2 days ago</option><option value="3">3 days ago</option><option value="7" selected>7 days ago</option><option value="14">14 days ago</option><option value="30">30 days ago</option>
                     </select></div>
@@ -212,7 +221,7 @@
             </div>
             <div style="overflow-x:auto">
                 <table id="trendTable"><thead><tr>
-                    <th>Repo</th><th>SDK</th><th>App CVEs</th><th>Base CVEs</th><th>Total CVEs</th><th id="thCompare">7d ago</th><th>Change</th><th>Status</th>
+                    <th style="width:40px">#</th><th data-ts="repo">Repo</th><th data-ts="sdk">SDK Version</th><th data-ts="app">App CVEs</th><th data-ts="base">Base CVEs</th><th data-ts="now">Total CVEs</th><th data-ts="old" id="thCompare">7d ago</th><th data-ts="delta">Change</th><th>Status</th>
                 </tr></thead><tbody id="trendTableBody"></tbody></table>
             </div>
         </div>
@@ -268,7 +277,7 @@ async function load(){
     try{
         const mr=await fetch('repos.json'+cb());
         if(mr.ok){const files=await mr.json();
-            for(const f of files){try{const rr=await fetch('repos/'+f+cb());const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
+            for(const f of files){try{const rr=await fetch('repos/'+f+cb());const d=await rr.json();if(d.repo){D.repos[d.repo]=d;if(d.scanned_at&&(!D.generated_at||d.scanned_at>D.generated_at))D.generated_at=d.scanned_at;}}catch(e){}}}
         buildVM();renderAll();
     }catch(e){document.getElementById('empty').style.display='block';document.getElementById('empty').textContent='No data yet.';}
 }
@@ -288,7 +297,7 @@ function renderStats(repoFilter){
     let v2=0,v3=0;
     repos.forEach(r=>{const sdk=(D.repos[r].sdk_version||'');if(sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3'))v3++;else if(sdk!=='unknown')v2++;});
     document.getElementById('stats').innerHTML=`
-        <div class="stat s-total" onclick="qf('all')"><div class="stat-glow"></div><div class="stat-icon">&#128202;</div><div class="stat-value" data-count="${vs.length}">0</div><div class="stat-label">Total CVEs</div><div class="stat-bar" style="width:100%;background:linear-gradient(90deg,#6366f1,#a855f7)"></div></div>
+        <div class="stat s-total" onclick="qf('all')"><div class="stat-glow"></div><div class="stat-icon">&#128202;</div><div class="stat-value" data-count="${vs.length}">0</div><div class="stat-label">Unique CVEs</div><div class="stat-bar" style="width:100%;background:linear-gradient(90deg,#6366f1,#a855f7)"></div></div>
         <div class="stat s-crit" onclick="qf('CRITICAL')"><div class="stat-glow"></div><div class="stat-icon">&#9888;&#65039;</div><div class="stat-value" data-count="${c}">0</div><div class="stat-label">Critical</div><div class="stat-bar" style="width:${pct(c,vs.length)}%;background:#ef4444"></div></div>
         <div class="stat s-new" onclick="qf('new')"><div class="stat-glow"></div><div class="stat-icon">&#10060;</div><div class="stat-value" data-count="${nw}">0</div><div class="stat-label">Blocking</div><div class="stat-bar" style="width:${pct(nw,vs.length)}%;background:#ef4444"></div></div>
         <div class="stat s-ok" onclick="qf('allowlisted')"><div class="stat-glow"></div><div class="stat-icon">&#10004;&#65039;</div><div class="stat-value" data-count="${al}">0</div><div class="stat-label">Allowlisted</div><div class="stat-bar" style="width:${pct(al,vs.length)}%;background:#22c55e"></div></div>`;
@@ -336,17 +345,25 @@ function renderSdkVulns(){
     const sevFilter=document.getElementById('fSdkSev').value;
     const stFilter=document.getElementById('fSdkStatus').value;
     const qFilter=document.getElementById('fSdkSearch').value.toLowerCase();
-    const bySdk={};
-    Object.values(VM).filter(v=>v.source_type==='base_image').forEach(v=>{
-        const sdks=[...new Set(v.repos.map(r=>(D.repos[r]||{}).sdk_version||'unknown'))];
-        sdks.forEach(sdk=>{
-            if(!bySdk[sdk])bySdk[sdk]={vulns:[],repos:new Set()};
-            bySdk[sdk].vulns.push(v);
-        });
-    });
+    // Source of truth per SDK = base CVEs from the MOST RECENTLY SCANNED repo on that SDK.
+    // Older scans on the same SDK may show different (often stale) CVE lists because the
+    // base image evolves under rolling tags / between rebuilds. Showing the union would
+    // surface CVEs that newer scans on the same SDK have already cleared. Using the freshest
+    // scan as representative gives an honest "current state of this SDK base" view.
+    const reposBySdk={};
     Object.keys(D.repos).forEach(r=>{
         const sdk=D.repos[r].sdk_version||'unknown';
-        if(bySdk[sdk])bySdk[sdk].repos.add(r);
+        (reposBySdk[sdk]=reposBySdk[sdk]||[]).push(r);
+    });
+    const bySdk={};
+    Object.entries(reposBySdk).forEach(([sdk,repoList])=>{
+        if(sdk==='unknown')return;
+        const sorted=repoList.filter(r=>D.repos[r].scanned_at)
+            .sort((a,b)=>(D.repos[b].scanned_at||'').localeCompare(D.repos[a].scanned_at||''));
+        if(!sorted.length)return;
+        const rep=sorted[0];
+        const baseCves=(D.repos[rep].vulnerabilities||[]).filter(v=>v.source_type==='base_image');
+        bySdk[sdk]={vulns:baseCves,repos:new Set(repoList),representative:rep,scanned_at:D.repos[rep].scanned_at};
     });
     const ord={CRITICAL:0,HIGH:1};
     const sdkVersions=Object.keys(bySdk).sort().filter(s=>sdkFilter==='all'||s===sdkFilter);
@@ -357,7 +374,7 @@ function renderSdkVulns(){
         const seen=new Set();
         let vs=bySdk[sdk].vulns.filter(v=>{if(seen.has(v.id))return false;seen.add(v.id);return true;});
         if(sevFilter!=='all')vs=vs.filter(v=>v.severity===sevFilter);
-        if(stFilter!=='all')vs=vs.filter(v=>Object.values(v.statuses).includes(stFilter));
+        if(stFilter!=='all')vs=vs.filter(v=>(v.status||'new')===stFilter);
         if(qFilter)vs=vs.filter(v=>v.id.toLowerCase().includes(qFilter)||v.package.toLowerCase().includes(qFilter));
         vs.sort((a,b)=>(ord[a.severity]||9)-(ord[b.severity]||9)||a.id.localeCompare(b.id));
         if(!vs.length)return '';
@@ -366,7 +383,7 @@ function renderSdkVulns(){
         const isV3=sdk.startsWith('3')||sdk.includes('v3');
         const sdkBadge=`<span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'};font-size:11px;margin-left:8px">${esc(sdk)}</span>`;
         const rows=vs.map(v=>{
-            const status=Object.values(v.statuses).includes('new')?'new':Object.values(v.statuses).includes('expired')?'expired':'allowlisted';
+            const status=v.status||'new';
             return`<tr><td><span class="badge b-${v.severity.toLowerCase()}">${esc(v.severity)}</span></td>
                 <td><code>${v.id.length>38?esc(v.id.slice(0,38))+'...':esc(v.id)}</code></td>
                 <td><code>${esc(v.package)}</code></td>
@@ -375,7 +392,7 @@ function renderSdkVulns(){
                 <td>${v.fixed?esc(v.fixed):'<span style="color:#b0b3c6">None</span>'}</td></tr>`;
         }).join('');
         return`<div class="card" style="margin-bottom:16px">
-            <div class="card-title" style="display:flex;align-items:center">SDK${sdkBadge}<span style="color:#b0b3c6;font-weight:500;margin-left:auto;font-size:11px">${vs.length} CVE${vs.length===1?'':'s'} · ${repoCount} repo${repoCount===1?'':'s'}</span></div>
+            <div class="card-title" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">SDK${sdkBadge}<span style="color:#b0b3c6;font-weight:500;margin-left:auto;font-size:11px">${vs.length} CVE${vs.length===1?'':'s'} · ${repoCount} repo${repoCount===1?'':'s'}</span><div style="flex-basis:100%;font-size:10px;color:#b0b3c6;font-weight:500;text-transform:none;letter-spacing:0;margin-top:4px">Source: ${esc(bySdk[sdk].representative.split('/').pop())} · scanned ${bySdk[sdk].scanned_at?new Date(bySdk[sdk].scanned_at).toLocaleDateString():'?'}</div></div>
             <div style="overflow-x:auto"><table style="min-width:auto"><thead><tr>
                 <th>Severity</th><th>ID</th><th>Package</th><th>Scanner</th><th>Status</th><th>Fix</th>
             </tr></thead><tbody>${rows}</tbody></table></div>
@@ -510,6 +527,12 @@ function exportVulnsPDF(){
     w.document.write(html);w.document.close();
 }
 document.querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{const c=th.dataset.s;if(sortCol===c)sortDir=sortDir==='asc'?'desc':'asc';else{sortCol=c;sortDir='asc';}renderTable();}));
+// Trend table sort (Per Repo Progress). Click a header to sort by that column; click again to flip direction.
+document.querySelectorAll('#trendTable th[data-ts]').forEach(th=>th.addEventListener('click',()=>{
+    const c=th.dataset.ts;const cur=window._trendSort||{col:'delta',dir:'desc'};
+    window._trendSort=cur.col===c?{col:c,dir:cur.dir==='asc'?'desc':'asc'}:{col:c,dir:'asc'};
+    renderTrends();
+}));
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');if(t.dataset.tab==='trends'){renderTrends();}else if(t.dataset.tab==='sdkvulns'){renderSdkVulns();renderStats();}else{renderStats();}}));
 document.querySelectorAll('.filters-bar select,.filters-bar input').forEach(el=>{el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);});
 // Trend data
@@ -561,7 +584,7 @@ function trendHover(e){
             <span style="color:#fdba74">App deps</span><span style="text-align:right">${fmt(d.app)}</span>
             <span style="color:#fca5a5">Critical</span><span style="text-align:right">${fmt(d.critical)}</span>
             <span style="color:#fdba74">High</span><span style="text-align:right">${fmt(d.high)}</span>
-            <span style="color:#fca5a5">New (blocking)</span><span style="text-align:right">${fmt(d.new)}</span>
+            <span style="color:#fca5a5">Blocking</span><span style="text-align:right">${fmt(d.new)}</span>
             <span style="color:#86efac">Allowlisted</span><span style="text-align:right">${fmt(d.allowlisted)}</span>
         </div>`;
     tip.style.display='block';
@@ -692,57 +715,74 @@ function renderTrends(){
         <div class="stat" style="cursor:help" title="${esc(deltaIsApprox?tipNewApprox:tipNewUnique)}"><div class="stat-icon" style="background:#fef2f2;color:#ef4444">&#10060;</div><div class="stat-value" style="color:#ef4444">${newValue}</div><div class="stat-label">New (${days}d)</div></div>`;
 
     // Section 2: Stacked area chart
-    // For each date, prefer unique CVE counts via the `ids*` arrays in history; if no repo
-    // on that date has `ids`, fall back to per-repo summed counts (legacy, overstates).
+    // For each date, compute "state of the org as of that date": every in-scope repo
+    // contributes its MOST RECENT history entry at-or-before that date. This gives a
+    // stable cumulative trend instead of a noisy "scans that happened on this exact day"
+    // view (which would jump up and down based on scan cadence, not real CVE direction).
     const KEYS=['total','new','app','base_image','critical','high','allowlisted'];
     const ID_KEYS={total:'ids',app:'ids_app',base_image:'ids_base',critical:'ids_critical',high:'ids_high',new:'ids_new',allowlisted:'ids_allowlisted'};
+    // Pre-sort each repo's history ascending so we can find "most recent at-or-before" cheaply
+    const sortedHistory={};
+    repos.forEach(r=>{sortedHistory[r]=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));});
+    // Distinct dates we render on the X axis — the union of all scan dates seen, but
+    // EXCLUDING today. Today's value keeps moving as fresh scans land throughout the day,
+    // so plotting it would create misleading mid-day spikes. We only show fully-completed
+    // days; "today" appears on the chart at midnight tomorrow once the day is locked.
+    const allDatesSet=new Set();
+    repos.forEach(r=>(sortedHistory[r]||[]).forEach(e=>{if(e.date<today)allDatesSet.add(e.date);}));
     const dateMap={};
-    const dateSets={};  // date -> {<key>:Set, hasIds:bool}
-    repos.forEach(r=>{(historyData[r]||[]).forEach(e=>{
-        if(!dateMap[e.date]){const o={};KEYS.forEach(k=>o[k]=0);dateMap[e.date]=o;}
-        if(!dateSets[e.date]){const s={hasIds:false};Object.keys(ID_KEYS).forEach(k=>s[k]=new Set());dateSets[e.date]=s;}
-        Object.entries(ID_KEYS).forEach(([k,jsonKey])=>{
-            if(Array.isArray(e[jsonKey])){
-                if(jsonKey==='ids')dateSets[e.date].hasIds=true;
-                e[jsonKey].forEach(id=>dateSets[e.date][k].add(id));
+    const dateSets={};
+    [...allDatesSet].sort().forEach(d=>{
+        const m={};KEYS.forEach(k=>m[k]=0);dateMap[d]=m;
+        const s={hasIds:false};Object.keys(ID_KEYS).forEach(k=>s[k]=new Set());dateSets[d]=s;
+        repos.forEach(r=>{
+            const h=sortedHistory[r];if(!h||!h.length)return;
+            // Find latest entry at-or-before d (binary-style scan since h is sorted)
+            let latest=null;
+            for(let i=h.length-1;i>=0;i--){if(h[i].date<=d){latest=h[i];break;}}
+            if(!latest)return;
+            // If the matching history entry predates the ids-tracking schema (no `ids` field),
+            // fall back to the repo's CURRENT vulnerability list as the best approximation.
+            // Without this, repos that haven't been rescanned since the schema bump silently
+            // drop out of historical chart points and undercount the trend.
+            if(!Array.isArray(latest.ids)){
+                (D.repos[r].vulnerabilities||[]).forEach(v=>{
+                    dateSets[d].hasIds=true;
+                    dateSets[d].total.add(v.id);
+                    if(v.source_type==='app')dateSets[d].app.add(v.id);
+                    else if(v.source_type==='base_image')dateSets[d].base_image.add(v.id);
+                    if(v.severity==='CRITICAL')dateSets[d].critical.add(v.id);
+                    else if(v.severity==='HIGH')dateSets[d].high.add(v.id);
+                    if((v.status||'new')==='new')dateSets[d].new.add(v.id);
+                    else if(v.status==='allowlisted')dateSets[d].allowlisted.add(v.id);
+                });
+            }else{
+                Object.entries(ID_KEYS).forEach(([k,jsonKey])=>{
+                    if(Array.isArray(latest[jsonKey])){
+                        if(jsonKey==='ids')dateSets[d].hasIds=true;
+                        latest[jsonKey].forEach(id=>dateSets[d][k].add(id));
+                    }
+                });
             }
+            KEYS.forEach(k=>{dateMap[d][k]+=(latest[k]||0);});
         });
-        // Always keep summed values too — used as legacy fallback
-        KEYS.forEach(k=>{dateMap[e.date][k]+=(e[k]||0);});
-    });});
-    // Override summed values with unique-count Set sizes when ids are present for that key
+    });
+    // Override summed totals with unique-set sizes when IDs are present
     Object.keys(dateSets).forEach(d=>{
         if(!dateSets[d].hasIds)return;
         Object.keys(ID_KEYS).forEach(k=>{if(dateSets[d][k].size)dateMap[d][k]=dateSets[d][k].size;});
     });
-    if(!dateMap[today]){
-        dateMap[today]={
-            total:totalToday,new:newToday,
-            app:collectIds(repos,v=>v.source_type==='app').size,
-            base_image:collectIds(repos,v=>v.source_type==='base_image').size,
-            critical:collectIds(repos,v=>v.severity==='CRITICAL').size,
-            high:collectIds(repos,v=>v.severity==='HIGH').size,
-            allowlisted:collectIds(repos,(v,r)=>(v.status||(v.statuses&&v.statuses[r]))==='allowlisted').size
-        };
-    }else{
-        // Today entry exists in history — recompute from current per-repo data so it always reflects "now"
-        dateMap[today].total=totalToday;
-        dateMap[today].new=newToday;
-        dateMap[today].app=collectIds(repos,v=>v.source_type==='app').size;
-        dateMap[today].base_image=collectIds(repos,v=>v.source_type==='base_image').size;
-        dateMap[today].critical=collectIds(repos,v=>v.severity==='CRITICAL').size;
-        dateMap[today].high=collectIds(repos,v=>v.severity==='HIGH').size;
-        dateMap[today].allowlisted=collectIds(repos,(v,r)=>(v.status||(v.statuses&&v.statuses[r]))==='allowlisted').size;
-    }
+    // Note: today is intentionally not in dateMap — chart only renders completed days.
 
     const stackBy=(metric==='source'||metric==='severity'||metric==='status')?metric:'source';
     const stackConfig={
         source:[{key:'base_image',label:'Base image',color:'#6366f1'},{key:'app',label:'App deps',color:'#f97316'}],
         severity:[{key:'critical',label:'Critical',color:'#ef4444'},{key:'high',label:'High',color:'#f97316'}],
-        status:[{key:'new',label:'New (blocking)',color:'#ef4444'},{key:'allowlisted',label:'Allowlisted',color:'#22c55e'}]
+        status:[{key:'new',label:'Blocking',color:'#ef4444'},{key:'allowlisted',label:'Allowlisted',color:'#22c55e'}]
     };
     const layers=stackConfig[stackBy];
-    const dates=Object.keys(dateMap).sort();
+    const windowDays=parseInt(document.getElementById('fTrendWindow')?.value||'7',10);
+    const dates=Object.keys(dateMap).sort().slice(-windowDays);
 
     if(!dates.length){
         document.getElementById('trendChart').innerHTML='<div class="empty" style="padding:40px">Trends will appear after merges accumulate data.</div>';
@@ -806,8 +846,16 @@ function renderTrends(){
             app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
     });
 
-    const improved=repoDeltas.filter(r=>r.improvementDelta<0).sort((a,b)=>a.improvementDelta-b.improvementDelta);
-    const degraded=repoDeltas.filter(r=>r.delta>0).sort((a,b)=>b.delta-a.delta);
+    // A repo whose earliest history entry falls inside the comparison window is "newly
+    // onboarded" — it has no real baseline, so showing it under Needs Attention would
+    // misrepresent it as a regression. Surface those separately instead.
+    const isNewlyOnboarded=r=>{
+        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        return all.length>0 && all[0].date>cutoffStr;
+    };
+    const improved=repoDeltas.filter(r=>r.improvementDelta<0&&!isNewlyOnboarded(r.repo)).sort((a,b)=>a.improvementDelta-b.improvementDelta);
+    const degraded=repoDeltas.filter(r=>r.delta>0&&!isNewlyOnboarded(r.repo)).sort((a,b)=>b.delta-a.delta);
+    const newlyOnboarded=repoDeltas.filter(r=>isNewlyOnboarded(r.repo)&&r.now>0).sort((a,b)=>b.now-a.now);
 
     document.getElementById('trendImprovedCount').textContent=improved.length?`(${improved.length})`:'';
     document.getElementById('trendImproved').innerHTML=improved.length?improved.map(r=>
@@ -819,15 +867,60 @@ function renderTrends(){
         `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta up" style="margin-left:auto">&#9650; +${r.delta} (${r.old} → ${r.now})</span></div>`
     ).join(''):'<div class="empty" style="padding:20px;font-size:12px;color:#22c55e">No regressions — all repos stable or improving.</div>';
 
+    document.getElementById('trendNewRepoCount').textContent=newlyOnboarded.length?`(${newlyOnboarded.length})`:'';
+    document.getElementById('trendNewRepo').innerHTML=newlyOnboarded.length?newlyOnboarded.map(r=>
+        `<div class="trend-change"><span class="repo-tag">${esc(r.repo.split('/').pop())}</span><span class="trend-delta up" style="margin-left:auto">+${r.now} (first scan)</span></div>`
+    ).join(''):'<div class="empty" style="padding:20px;font-size:12px">No new repos onboarded in this window.</div>';
+
     // Section 3: Per repo table
-    const sorted=[...repoDeltas].sort((a,b)=>b.delta-a.delta);
-    document.getElementById('trendTableBody').innerHTML=sorted.map(r=>{
+    // Apply CVE-count bucket filter before sorting
+    const bucket=document.getElementById('fTrendBucket').value;
+    const inBucket=(now)=>{
+        if(bucket==='all')return true;
+        if(bucket==='0')return now===0;
+        if(bucket==='1-5')return now>=1&&now<=5;
+        if(bucket==='6-20')return now>=6&&now<=20;
+        if(bucket==='20+')return now>20;
+        return true;
+    };
+    const filteredRepoDeltas=repoDeltas.filter(r=>inBucket(r.now));
+    // Sort the per-repo table. Default = biggest regression first (delta desc), users can click headers to override.
+    const ts=window._trendSort||{col:'delta',dir:'desc'};
+    const numericCols=new Set(['app','base','now','old','delta']);
+    const sorted=[...filteredRepoDeltas].sort((a,b)=>{
+        const av=a[ts.col],bv=b[ts.col];
+        if(numericCols.has(ts.col))return ts.dir==='asc'?av-bv:bv-av;
+        const sa=(av||'').toString().toLowerCase(),sb=(bv||'').toString().toLowerCase();
+        return ts.dir==='asc'?sa.localeCompare(sb):sb.localeCompare(sa);
+    });
+    // Update header arrows
+    document.querySelectorAll('#trendTable th[data-ts]').forEach(th=>{
+        const isActive=th.dataset.ts===ts.col;
+        const arrow=isActive?(ts.dir==='asc'?' ▲':' ▼'):'';
+        const baseLabels={repo:'Repo',sdk:'SDK Version',app:'App CVEs',base:'Base CVEs',now:'Total CVEs',delta:'Change'};
+        if(th.id==='thCompare')return; // compare label is dynamic, handled separately
+        if(baseLabels[th.dataset.ts]!==undefined)th.innerHTML=baseLabels[th.dataset.ts]+arrow;
+        th.style.cursor='pointer';th.style.userSelect='none';
+        th.style.color=isActive?'#6366f1':'';
+    });
+    // Also update the dynamic 7d-ago header arrow
+    const thOld=document.getElementById('thCompare');
+    if(thOld){
+        const isActive=ts.col==='old';
+        thOld.style.cursor='pointer';thOld.style.userSelect='none';
+        thOld.style.color=isActive?'#6366f1':'';
+        const labels={1:'Yesterday',2:'2d ago',3:'3d ago',7:'7d ago',14:'14d ago',30:'30d ago'};
+        thOld.textContent=(labels[days]||days+'d ago')+(isActive?(ts.dir==='asc'?' ▲':' ▼'):'');
+    }
+    document.getElementById('trendTableCount').textContent=`(${sorted.length} repo${sorted.length===1?'':'s'})`;
+    document.getElementById('trendTableBody').innerHTML=sorted.map((r,i)=>{
         const cls=r.delta>0?'up':r.delta<0?'down':'flat';
         const arrow=r.delta>0?'&#9650;':r.delta<0?'&#9660;':'&#8212;';
         const status=r.now===0?'Clean':r.delta<0?'Improving':r.delta>0?'Degraded':'Stable';
         const statusColor=r.now===0?'#22c55e':r.delta<0?'#22c55e':r.delta>0?'#ef4444':'#8c8fa3';
         const isV3=r.sdk.startsWith('3')||r.sdk.includes('v3')||r.sdk.includes('refactor-v3');
         return`<tr>
+            <td style="color:#b0b3c6;font-weight:600">${i+1}</td>
             <td><span class="repo-tag">${esc(r.repo.split('/').pop())}</span></td>
             <td><span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'}">${esc(r.sdk)}</span></td>
             <td>${r.app}</td>

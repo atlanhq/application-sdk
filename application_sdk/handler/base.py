@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from application_sdk.errors import HANDLER_ERROR, ErrorCode
+from application_sdk.handler.context import get_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
@@ -97,8 +98,6 @@ class Handler(ABC):
                 return SqlMetadataOutput(objects=[])
     """
 
-    _context: HandlerContext | None = None
-
     @property
     def context(self) -> HandlerContext:
         """Current request context.
@@ -106,7 +105,8 @@ class Handler(ABC):
         Raises:
             RuntimeError: If accessed outside of a handler method invocation.
         """
-        if self._context is None:
+        ctx = get_handler_context()
+        if ctx is None:
             from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports handler.context transitively
                 AppContextError,
             )
@@ -115,7 +115,7 @@ class Handler(ABC):
                 "Handler context is not set. "
                 "Access self.context only inside test_auth, preflight_check, or fetch_metadata."
             )
-        return self._context
+        return ctx
 
     @abstractmethod
     async def test_auth(self, input: AuthInput) -> AuthOutput:
