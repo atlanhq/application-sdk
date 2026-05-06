@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior
@@ -31,6 +32,9 @@ from application_sdk.execution.settings import (
     load_interceptor_settings,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+
+if TYPE_CHECKING:
+    from application_sdk.handler.base import Handler
 
 logger = get_logger(__name__)
 
@@ -146,6 +150,8 @@ def create_worker(
     client: Client,
     task_queue: str = "application-sdk",
     *,
+    handler: Handler | None = None,
+    enable_sdr: bool = True,
     passthrough_modules: set[str] | None = None,
     service_name: str | None = None,
     max_concurrent_activities: int | None = None,
@@ -157,12 +163,22 @@ def create_worker(
     The worker registers:
     - One workflow per entry point per App
     - All @task methods as named activities (qualified as ``{app}:{task}``)
+    - Three SDR workflows (``sdr:test_auth`` / ``sdr:preflight_check`` /
+      ``sdr:fetch_metadata``) bound to ``handler`` when one is provided and
+      ``enable_sdr`` is true.
 
     Apps must be imported/registered before creating the worker.
 
     Args:
         client: Temporal client.
         task_queue: Task queue to listen on.
+        handler: Optional Handler instance.  When provided and ``enable_sdr``
+            is true, the three SDR workflows are registered so platform
+            callers can invoke ``test_auth`` / ``preflight_check`` /
+            ``fetch_metadata`` durably as Temporal workflows (in addition to
+            the HTTP endpoints served by ``handler/service.py``).
+        enable_sdr: Opt-out flag for SDR registration.  Ignored when
+            ``handler`` is ``None``.
         passthrough_modules: Additional modules to pass through the sandbox.
         service_name: Service name for observability (traces/metrics).
         max_concurrent_activities: Maximum number of concurrent activity executions.
@@ -185,6 +201,30 @@ def create_worker(
     """
     app_workflows = get_all_app_workflows()
     task_activities = get_all_task_activities()
+
+    if enable_sdr and handler is not None:
+        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR/handler modules when a Handler is provided
+            SDR_WORKFLOWS,
+            build_sdr_activities,
+        )
+
+        sdr_registry = AppRegistry.get_instance()
+        sdr_registered_apps = sdr_registry.list_all()
+        sdr_app_name = (
+            sdr_registered_apps[0].name
+            if sdr_registered_apps
+            else (service_name or task_queue)
+        )
+        app_workflows = [*app_workflows, *SDR_WORKFLOWS]
+        task_activities = [
+            *task_activities,
+            *build_sdr_activities(handler, sdr_app_name),
+        ]
+        logger.info(
+            "SDR workflows registered for handler %s (app=%s)",
+            type(handler).__name__,
+            sdr_app_name,
+        )
 
     interceptor_settings = load_interceptor_settings()
 
