@@ -11,15 +11,19 @@ per-activity eviction loop can re-dispatch the activity on a fresh worker
 without burning the application-error retry budget.
 
 Single-process state: a worker pod runs one Python process, so a module-level
-flag is the right scope.
+flag is the right scope. Backed by ``threading.Event`` because:
+    - ``set()`` and ``is_set()`` are inherently atomic, so there is no need
+      for an explicit lock around the read on the activity hot path.
+    - ``set()`` is callable from a signal handler thread without coordination
+      with the asyncio event loop.
+    - Tests can ``clear()`` between cases via ``reset_worker_shutting_down``.
 """
 
 from __future__ import annotations
 
 import threading
 
-_lock = threading.Lock()
-_shutting_down = False
+_shutdown_event = threading.Event()
 
 
 def is_worker_shutting_down() -> bool:
@@ -28,22 +32,17 @@ def is_worker_shutting_down() -> bool:
     Read by the activity wrapper to attribute ``asyncio.CancelledError`` to
     pod termination rather than ordinary workflow-driven cancellation.
     """
-    with _lock:
-        return _shutting_down
+    return _shutdown_event.is_set()
 
 
 def mark_worker_shutting_down() -> None:
     """Mark the worker as shutting down. Called from the signal handler.
 
-    Idempotent; safe to call from any thread.
+    Idempotent and thread-safe by virtue of ``threading.Event``.
     """
-    global _shutting_down
-    with _lock:
-        _shutting_down = True
+    _shutdown_event.set()
 
 
 def reset_worker_shutting_down() -> None:
     """Reset the flag. Test-only; not part of the public surface."""
-    global _shutting_down
-    with _lock:
-        _shutting_down = False
+    _shutdown_event.clear()

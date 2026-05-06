@@ -82,14 +82,32 @@ AGGRESSIVE_RETRY = RetryPolicy(
 """Aggressive retry policy for transient failures."""
 
 
+def _with_worker_evicted_non_retryable(non_retryable: list[str]) -> list[str]:
+    """Append ``WORKER_EVICTED_TYPE`` to a non-retryable-types list, idempotently.
+
+    The SDK enforces that Temporal never auto-retries activities terminated by
+    worker pod eviction: the workflow-side eviction loop owns that retry
+    decision and re-dispatches the activity as a fresh attempt without burning
+    the application-error retry budget. Both code paths that build a Temporal
+    ``RetryPolicy`` (``_to_temporal_retry_policy`` here and
+    ``activities.get_activity_options``) route through this helper to keep that
+    invariant in one place.
+    """
+    from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports execution.retry transitively
+        WORKER_EVICTED_TYPE,
+    )
+
+    result = list(non_retryable)
+    if WORKER_EVICTED_TYPE not in result:
+        result.append(WORKER_EVICTED_TYPE)
+    return result
+
+
 def _to_temporal_retry_policy(policy: RetryPolicy) -> _TemporalRetryPolicy:
     """Convert a framework :class:`RetryPolicy` to ``temporalio.common.RetryPolicy``.
 
     The SDK always appends ``WorkerEvicted`` to ``non_retryable_error_types``
-    so Temporal does not auto-retry an activity terminated by pod shutdown:
-    the workflow-side eviction loop owns that retry decision and re-dispatches
-    the activity as a fresh attempt without burning the application-error
-    retry budget.
+    via :func:`_with_worker_evicted_non_retryable`.
 
     Internal helper for the execution layer.  Not part of the public API.
     """
@@ -97,18 +115,12 @@ def _to_temporal_retry_policy(policy: RetryPolicy) -> _TemporalRetryPolicy:
         RetryPolicy as _TR,
     )
 
-    from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports execution.retry transitively
-        WORKER_EVICTED_TYPE,
-    )
-
-    non_retryable: list[str] = list(policy.non_retryable_errors)
-    if WORKER_EVICTED_TYPE not in non_retryable:
-        non_retryable.append(WORKER_EVICTED_TYPE)
-
     return _TR(
         maximum_attempts=policy.max_attempts,
         initial_interval=policy.initial_interval,
         maximum_interval=policy.max_interval,
         backoff_coefficient=policy.backoff_coefficient,
-        non_retryable_error_types=non_retryable,
+        non_retryable_error_types=_with_worker_evicted_non_retryable(
+            list(policy.non_retryable_errors)
+        ),
     )
