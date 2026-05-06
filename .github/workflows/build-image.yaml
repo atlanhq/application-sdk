@@ -19,41 +19,71 @@ permissions:
   actions: read
 
 jobs:
+  # ── Job 1: Compute all image metadata ────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      branch: ${{ steps.get_branch.outputs.branch }}
-      version: ${{ steps.get_version.outputs.version }}
-      lowercase_branch: ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
-      repository_name: ${{ steps.get_repo_name.outputs.repository_name }}
-      sha_short: ${{ steps.get_sha.outputs.sha_short }}
-      is_main: ${{ steps.get_branch.outputs.branch == 'main' }}
+      branch:            ${{ steps.get_branch.outputs.branch }}
+      version:           ${{ steps.get_version.outputs.version }}
+      lowercase_branch:  ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
+      repository_name:   ${{ steps.get_repo_name.outputs.repository_name }}
+      sha_short:         ${{ steps.get_sha.outputs.sha_short }}
+      image_tags:        ${{ steps.compute_tags.outputs.image_tags }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
 
       - name: Get branch name
-        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
         id: get_branch
+        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
       - name: Get repository name
-        run: echo "repository_name=`echo "$GITHUB_REPOSITORY" | awk -F / '{print $2}' | sed -e "s/:refs//"`" >> $GITHUB_OUTPUT
         id: get_repo_name
         shell: bash
+        run: echo "repository_name=`echo "$GITHUB_REPOSITORY" | awk -F / '{print $2}' | sed -e "s/:refs//"`" >> $GITHUB_OUTPUT
 
       - name: Get version from pyproject.toml
-        run: echo "version=$(awk -F'"' '/^version = / {print $2}' pyproject.toml)" >> $GITHUB_OUTPUT
         id: get_version
+        run: echo "version=$(awk -F'"' '/^version = / {print $2}' pyproject.toml)" >> $GITHUB_OUTPUT
 
       - name: Lowercase branch name
-        run: echo "lowercase_branch=$(echo '${{ steps.get_branch.outputs.branch }}' | tr '[:upper:]' '[:lower:]' | tr '/' '-')" >> $GITHUB_OUTPUT
         id: get_lowercase_branch
+        run: |
+          echo "lowercase_branch=$(echo '${GITHUB_REF#refs/heads/}' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')" >> $GITHUB_OUTPUT
 
       - name: Short commit SHA
         id: get_sha
         run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
+      - name: Compute image tags
+        id: compute_tags
+        env:
+          BRANCH: ${{ steps.get_branch.outputs.branch }}
+          LC_BRANCH: ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
+          VERSION: ${{ steps.get_version.outputs.version }}
+          REPO: ${{ steps.get_repo_name.outputs.repository_name }}
+          SHA_SHORT: ${{ steps.get_sha.outputs.sha_short }}
+        run: |
+          if [ "$BRANCH" = "main" ]; then
+            # main: full set of tags (existing behaviour)
+            TAGS="ghcr.io/atlanhq/app-runtime-base-${LC_BRANCH}:latest
+          ghcr.io/atlanhq/app-runtime-base-${LC_BRANCH}:${VERSION}
+          ghcr.io/atlanhq/${REPO}-${LC_BRANCH}:latest
+          ghcr.io/atlanhq/${REPO}-${LC_BRANCH}:${VERSION}"
+          else
+            # non-main branches: SHA-only tag — zero impact on existing apps
+            TAGS="ghcr.io/atlanhq/${REPO}-${LC_BRANCH}:${SHA_SHORT}"
+          fi
+
+          echo "image_tags<<TAGS_EOF" >> $GITHUB_OUTPUT
+          echo "$TAGS" >> $GITHUB_OUTPUT
+          echo "TAGS_EOF" >> $GITHUB_OUTPUT
+
+          echo "Computed tags:"
+          echo "$TAGS"
+
+  # ── Job 2: Build and push image ──────────────────────────────────────────────
   push-to-ghcr:
     runs-on: ubuntu-latest
     needs: prepare
@@ -98,19 +128,7 @@ jobs:
           file: ./Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
-          # main: push latest + version tags (existing behaviour)
-          # any other branch: SHA-only tag — safe for testing, zero impact on existing apps
-          tags: ${{ needs.prepare.outputs.is_main == 'true' && format(
-            'ghcr.io/atlanhq/app-runtime-base-{0}:latest\nghcr.io/atlanhq/app-runtime-base-{0}:{1}\nghcr.io/atlanhq/{2}-{0}:latest\nghcr.io/atlanhq/{2}-{0}:{1}',
-            needs.prepare.outputs.lowercase_branch,
-            needs.prepare.outputs.version,
-            github.event.repository.name
-          ) || format(
-            'ghcr.io/atlanhq/{0}-{1}:{2}',
-            github.event.repository.name,
-            needs.prepare.outputs.lowercase_branch,
-            needs.prepare.outputs.sha_short
-          ) }}
+          tags: ${{ needs.prepare.outputs.image_tags }}
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
