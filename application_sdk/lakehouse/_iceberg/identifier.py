@@ -2,7 +2,8 @@
 
 Generic across IRC implementations. ``identifier`` and ``namespace_tuple``
 follow the pyiceberg convention of representing nested namespaces as tuples;
-``ensure_namespace`` is a best-effort create that swallows already-exists.
+``ensure_namespace`` only swallows the specific "already exists" exception
+so permission/network errors aren't silently masked.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import logging
 
 from pyiceberg.catalog import Catalog
+from pyiceberg.exceptions import NamespaceAlreadyExistsError
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +31,13 @@ def namespace_tuple(namespace: str) -> tuple[str, ...]:
 
 
 def ensure_namespace(catalog: Catalog, namespace: str) -> None:
-    """Create the namespace if it doesn't exist; no-op if it already does."""
+    """Create the namespace if it doesn't exist; no-op if it already does.
+
+    Only ``NamespaceAlreadyExistsError`` is swallowed (logged at DEBUG); any
+    other exception (auth, network, catalog config) propagates so callers
+    don't mistake "permission denied" for "namespace exists".
+    """
     try:
         catalog.create_namespace(namespace_tuple(namespace))
-    except Exception as exc:
-        logger.debug("Namespace %s likely exists: %s", namespace, exc)
+    except NamespaceAlreadyExistsError as exc:
+        logger.debug("Namespace %s already exists: %s", namespace, exc)

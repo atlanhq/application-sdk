@@ -47,9 +47,9 @@ class EventsConsumer:
         self,
         events_namespace: str,
         events_table: str,
-        where: str | None = "status = 'unprocessed'",
+        where: str | None = None,
         limit: int | None = None,
-        sort_by: str | None = "received_at",
+        sort_by: str | None = None,
     ) -> tuple[list[dict[str, Any]], list[ProcessingResult]]:
         """Fetch pending events and dispatch them to the process function.
 
@@ -57,6 +57,12 @@ class EventsConsumer:
         ``events[i]``. If the process function raises, every event is
         marked RETRY. If it returns the wrong number of results, every
         event is also marked RETRY.
+
+        ``where`` and ``sort_by`` default to ``None`` — the consumer makes
+        no assumption about the events-table schema. The AE convention is
+        ``where="status = 'unprocessed'"`` and ``sort_by="received_at"``;
+        apps following that convention should pass them explicitly. Apps
+        with a different shape pass their own.
         """
         reader = self._ensure_reader()
         events = reader.fetch_records(

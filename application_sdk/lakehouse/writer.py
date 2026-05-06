@@ -135,8 +135,17 @@ class LakehouseWriter:
         ``mode="overwrite"`` replaces the table contents atomically (Iceberg
         snapshot commit). ``mode="append"`` (default) adds rows to the
         current snapshot.
+
+        Security note: ``source_prefix`` is dereferenced with the app's own
+        cloud credentials (S3, GCS, ADLS — whatever Daft's IO layer
+        resolves). It must come from a trusted source — workflow input,
+        config, or computed by the app — never directly from end-user input.
+        Daft will read across cloud boundaries (``s3://``, ``gs://``,
+        ``abfs://``, ``file://``, …) if asked.
         """
-        from application_sdk.lakehouse._daft import writer as _daft_writer
+        from application_sdk.lakehouse._daft import (  # noqa: PLC0415
+            writer as _daft_writer,
+        )
 
         target_namespace = namespace or self._app_namespace
         self._check_namespace(target_namespace)

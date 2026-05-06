@@ -81,5 +81,36 @@ class TestMakeDuckdbConnection(unittest.TestCase):
                 conn.close()
 
 
+class TestValidationRejectsInjection(unittest.TestCase):
+    """``memory_limit`` and ``temp_dir`` go into SET statements via f-string;
+    untrusted-shaped values must be rejected at the boundary."""
+
+    def test_rejects_memory_limit_with_quote(self):
+        with self.assertRaises(ValueError):
+            make_duckdb_connection(memory_limit="8GB'; DROP TABLE x;--")
+
+    def test_rejects_memory_limit_unparseable(self):
+        with self.assertRaises(ValueError):
+            make_duckdb_connection(memory_limit="huge")
+
+    def test_accepts_memory_limit_decimals_and_units(self):
+        # Should not raise.
+        for value in ("8GB", "512MB", "1.5GiB", "1024KiB"):
+            conn = make_duckdb_connection(memory_limit=value)
+            conn.close()
+
+    def test_rejects_temp_dir_with_quote(self):
+        with self.assertRaises(ValueError):
+            make_duckdb_connection(temp_dir="/tmp/x'; rm -rf /;--")
+
+    def test_rejects_temp_dir_path_traversal(self):
+        with self.assertRaises(ValueError):
+            make_duckdb_connection(temp_dir="/tmp/foo/../../etc")
+
+    def test_rejects_temp_dir_with_newline(self):
+        with self.assertRaises(ValueError):
+            make_duckdb_connection(temp_dir="/tmp/x\ninjected")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -76,6 +76,31 @@ class TestAzureSecretFromPolaris(unittest.TestCase):
             ds.create_azure_secret_from_polaris(MagicMock(), catalog, "x")
         self.assertIn("did not vend Azure SAS", str(ctx.exception))
 
+    def test_rejects_malformed_account_name(self):
+        # An uppercase / too-long / dotted account name from a malformed
+        # Polaris response would be a SQL injection vector.
+        catalog = self._catalog_with_table_config(
+            {"adls.sas-token.BAD-ACCOUNT.dfs.core.windows.net": "sv=ok"}
+        )
+        with self.assertRaises(ValueError) as ctx:
+            ds.create_azure_secret_from_polaris(MagicMock(), catalog, "x")
+        self.assertIn("Invalid Azure account name", str(ctx.exception))
+
+    def test_rejects_sas_with_quote(self):
+        catalog = self._catalog_with_table_config(
+            {"adls.sas-token.acct.dfs.core.windows.net": "sv=2024'; DROP TABLE x;--"}
+        )
+        with self.assertRaises(ValueError) as ctx:
+            ds.create_azure_secret_from_polaris(MagicMock(), catalog, "x")
+        self.assertIn("disallowed characters", str(ctx.exception))
+
+    def test_rejects_sas_with_semicolon(self):
+        catalog = self._catalog_with_table_config(
+            {"adls.sas-token.acct.dfs.core.windows.net": "sv=2024;evil=1"}
+        )
+        with self.assertRaises(ValueError):
+            ds.create_azure_secret_from_polaris(MagicMock(), catalog, "x")
+
 
 if __name__ == "__main__":
     unittest.main()

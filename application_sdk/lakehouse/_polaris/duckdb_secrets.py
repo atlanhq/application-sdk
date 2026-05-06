@@ -37,6 +37,12 @@ logger = logging.getLogger(__name__)
 
 _ADLS_SAS_TOKEN_RE = re.compile(r"^adls\.sas-token\.([^.]+)\.dfs\.core\.windows\.net$")
 
+# Azure storage account names: 3-24 lowercase alphanumeric (Microsoft spec).
+_AZURE_ACCOUNT_NAME_RE = re.compile(r"^[a-z0-9]{3,24}$")
+# SAS tokens are URL-encoded query strings — must not contain quotes or
+# semicolons (which would break out of the SQL string or CONNECTION_STRING).
+_SAS_TOKEN_DISALLOWED_RE = re.compile(r"['\";]")
+
 
 def create_aws_s3_secret(con: duckdb.DuckDBPyConnection) -> None:
     """Create DuckDB S3 ``credential_chain`` secret. Region from ``AWS_REGION``."""
@@ -108,6 +114,21 @@ def create_azure_secret_from_polaris(
         raise ValueError(
             f"Polaris did not vend Azure SAS token for {tables[0]}; "
             f"config keys present: {list(config.keys())}"
+        )
+
+    # Validate before f-string interpolation into CREATE SECRET. The values
+    # come from a Polaris response so the trust level is "infrastructure"
+    # not "user", but defense-in-depth — a malformed config entry here is
+    # otherwise a SQL injection vector.
+    if not _AZURE_ACCOUNT_NAME_RE.match(account_name):
+        raise ValueError(
+            f"Invalid Azure account name from Polaris: {account_name!r} "
+            "(expected 3-24 lowercase alphanumeric)"
+        )
+    if _SAS_TOKEN_DISALLOWED_RE.search(sas_token):
+        raise ValueError(
+            "SAS token from Polaris contains disallowed characters "
+            "(quote/semicolon) — refusing to interpolate into SQL"
         )
 
     logger.info(

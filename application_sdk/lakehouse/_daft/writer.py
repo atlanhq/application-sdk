@@ -56,7 +56,7 @@ def write_bulk(
 
     try:
         table = catalog.load_table(_identifier.identifier(namespace, table_name))
-    except (NoSuchTableError, Exception):
+    except NoSuchTableError:
         if schema is None:
             raise
         table = _ops.ensure_table(catalog, namespace, table_name, schema)

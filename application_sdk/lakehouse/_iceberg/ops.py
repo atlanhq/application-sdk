@@ -61,11 +61,16 @@ def ensure_table(
     table_name: str,
     schema: Schema,
 ) -> Table:
-    """Load the table, creating it (and its namespace) from the SDK schema if missing."""
+    """Load the table, creating it (and its namespace) from the SDK schema if missing.
+
+    Only ``NoSuchTableError`` is treated as "needs creating"; other failures
+    (auth, network, malformed metadata) propagate so they don't get silently
+    masked by a follow-up ``create_table`` that fails for unrelated reasons.
+    """
     identifier = _identifier.identifier(namespace, table_name)
     try:
         return catalog.load_table(identifier)
-    except (NoSuchTableError, Exception):
+    except NoSuchTableError:
         _identifier.ensure_namespace(catalog, namespace)
         iceberg_schema = _mapper.to_iceberg_schema(schema)
         partition_spec = _mapper.to_partition_spec(schema, iceberg_schema)

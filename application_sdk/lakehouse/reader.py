@@ -53,13 +53,22 @@ class LakehouseReader:
             sort_by: Optional column to sort by ascending. Sort happens
                 in-process because Iceberg scans don't guarantee order.
             select: Optional tuple of column names to project.
+
+        When ``sort_by`` is provided, ``limit`` is **not** pushed into the
+        Iceberg scan — the SDK reads the full filtered result, sorts in
+        process, then slices. Pushing ``limit`` to the scan in combination
+        with an in-process sort would return "the first N rows the scanner
+        emitted, sorted" rather than "the N smallest by ``sort_by``".
         """
+        # Push limit to the scan only when no in-process sort is needed; with
+        # sort_by, we must see the full filtered set before slicing.
+        scan_limit = None if sort_by else limit
         records = _ops.scan_records(
             self._catalog,
             namespace,
             table_name,
             where=where,
-            limit=limit,
+            limit=scan_limit,
             select=select,
         )
         if sort_by:

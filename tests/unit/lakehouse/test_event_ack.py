@@ -100,3 +100,50 @@ class TestEventAckWrite(unittest.IsolatedAsyncioTestCase):
         buf = mock_upload.await_args.kwargs["content"]
         arrow_back = pq.read_table(io.BytesIO(buf))
         self.assertEqual(arrow_back.schema.field("error_message").nullable, True)
+
+
+class TestEventAckPathValidation(unittest.IsolatedAsyncioTestCase):
+    """Constructor + write must reject untrusted-shaped path components."""
+
+    def test_reject_app_name_with_slash(self):
+        with self.assertRaises(ValueError):
+            EventAckWriter(app_name="../etc/passwd", workflow_name="w")
+
+    def test_reject_app_name_with_dot(self):
+        # Dots in app/workflow names would mess up the date segment.
+        with self.assertRaises(ValueError):
+            EventAckWriter(app_name="a.b", workflow_name="w")
+
+    def test_reject_workflow_name_with_slash(self):
+        with self.assertRaises(ValueError):
+            EventAckWriter(app_name="a", workflow_name="w/x")
+
+    def test_reject_filename_with_slash(self):
+        with self.assertRaises(ValueError):
+            EventAckWriter(app_name="a", workflow_name="w", filename="../leak.parquet")
+
+    def test_reject_filename_without_extension(self):
+        with self.assertRaises(ValueError):
+            EventAckWriter(app_name="a", workflow_name="w", filename="noext")
+
+    def test_accept_valid_components(self):
+        # Identifiers, hyphens, underscores all accepted.
+        EventAckWriter(
+            app_name="databricks-events",
+            workflow_name="reverse_sync",
+            filename="events_ack.parquet",
+        )
+
+    @patch(
+        "application_sdk.lakehouse.event_ack.upload_file_from_bytes",
+        new_callable=AsyncMock,
+    )
+    async def test_reject_run_id_path_traversal(self, mock_upload):
+        writer = EventAckWriter(app_name="a", workflow_name="w")
+        with self.assertRaises(ValueError):
+            await writer.write(
+                [{"event_id": "e1"}],
+                [ProcessingResult(status="SUCCESS")],
+                workflow_run_id="../../../etc",
+            )
+        mock_upload.assert_not_awaited()

@@ -9,12 +9,18 @@ expects::
 The ack schema is intentionally minimal — one row per event with its
 processing status and any error message — so the AE can mark events as
 acknowledged without re-reading the lakehouse.
+
+All path components (``app_name``, ``workflow_name``, ``workflow_run_id``,
+``filename``) are validated at the boundary against an allowlist regex —
+they're interpolated into an object-store key so unvalidated input would be
+a path-traversal vector.
 """
 
 from __future__ import annotations
 
 import io
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,6 +32,14 @@ from application_sdk.storage.batch import upload_file_from_bytes
 
 logger = logging.getLogger(__name__)
 
+# Allowlist for path components. App / workflow names: identifiers (no dots
+# or slashes). Run IDs: Temporal generates UUID-shaped strings; the regex
+# accepts the broader "identifier-with-hyphens" set. Filename: same set
+# plus a single dot for the extension.
+_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+_RUN_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+_FILENAME_RE = re.compile(r"^[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$")
+
 _ACK_SCHEMA = pa.schema(
     [
         pa.field("event_id", pa.string(), nullable=False),
@@ -33,6 +47,11 @@ _ACK_SCHEMA = pa.schema(
         pa.field("error_message", pa.string(), nullable=True),
     ]
 )
+
+
+def _validate(label: str, value: str, pattern: re.Pattern[str]) -> None:
+    if not pattern.match(value):
+        raise ValueError(f"Invalid {label}: {value!r}")
 
 
 def _ack_path(
@@ -59,6 +78,9 @@ class EventAckWriter:
         workflow_name: str,
         filename: str = "events_ack.parquet",
     ) -> None:
+        _validate("app_name", app_name, _NAME_RE)
+        _validate("workflow_name", workflow_name, _NAME_RE)
+        _validate("filename", filename, _FILENAME_RE)
         self._app_name = app_name
         self._workflow_name = workflow_name
         self._filename = filename
@@ -70,6 +92,7 @@ class EventAckWriter:
         workflow_run_id: str,
     ) -> str:
         """Serialize the ack rows to Parquet and upload them. Returns the path."""
+        _validate("workflow_run_id", workflow_run_id, _RUN_ID_RE)
         ack_path = _ack_path(
             self._app_name, self._workflow_name, workflow_run_id, self._filename
         )

@@ -61,6 +61,23 @@ class TestLakehouseReader(unittest.TestCase):
         self.assertEqual(records[0]["event_id"], "0")
 
     @patch("application_sdk.lakehouse.reader._ops.scan_records")
+    def test_fetch_records_does_not_push_limit_to_scan_when_sorted(self, scan):
+        """When sort_by is set, the SDK must read the full filtered result
+        before slicing — otherwise we'd sort the wrong N rows."""
+        scan.return_value = []
+        reader = LakehouseReader(MagicMock())
+        reader.fetch_records("ns", "t", limit=10, sort_by="received_at")
+        # scan should have been called with limit=None, not limit=10
+        self.assertIsNone(scan.call_args.kwargs["limit"])
+
+    @patch("application_sdk.lakehouse.reader._ops.scan_records")
+    def test_fetch_records_pushes_limit_to_scan_when_unsorted(self, scan):
+        scan.return_value = []
+        reader = LakehouseReader(MagicMock())
+        reader.fetch_records("ns", "t", limit=10)
+        self.assertEqual(scan.call_args.kwargs["limit"], 10)
+
+    @patch("application_sdk.lakehouse.reader._ops.scan_records")
     def test_passes_select(self, scan):
         scan.return_value = []
         reader = LakehouseReader(MagicMock())
