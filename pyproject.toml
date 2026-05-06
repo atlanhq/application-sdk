@@ -97,7 +97,7 @@ tests = [
     "httpx>=0.27.0,<0.29.0",
 ]
 scale_data_generator = [
-    "faker>=37.1.0,<39.1.0",
+    "faker>=37.1.0,<40.16.0",
     "numpy>=1.23.5,<2.5.0",
 ]
 # Removed in v3.1 — use sql extra instead
