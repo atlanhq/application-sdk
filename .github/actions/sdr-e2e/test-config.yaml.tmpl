@@ -1,0 +1,16 @@
+atlan:
+  deployment_name: "ci-${CI_RUN_SUFFIX}-sdr"
+  domain: "${CI_TENANT_DOMAIN}"
+  client_id: "${CI_CLIENT_ID}"
+  client_secret: "${CI_CLIENT_SECRET}"
+
+objectstore:
+  type: bindings.localstorage
+  version: v1
+  metadata:
+    - name: rootPath
+      value: "/app/data"
+
+secretstore:
+  type: secretstores.local.env
+  version: v1
