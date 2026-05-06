@@ -1,0 +1,240 @@
+name: Daily Security Scan — app-runtime-base
+
+on:
+  schedule:
+    - cron: '30 3 * * *' # Daily at 03:30 UTC (09:00 IST)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_IMAGE: registry.atlan.com/public/app-runtime-base:3
+
+jobs:
+  scan-and-ticket:
+    name: Scan app-runtime-base:3 for vulnerabilities and raise alerts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Pull target image
+        run: docker pull "$TARGET_IMAGE"
+
+      # ── Trivy scan (all severities for full picture) ──────────────────────
+
+      - name: Trivy image scan (JSON)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ env.TARGET_IMAGE }}
+          scanners: vuln
+          ignore-unfixed: true
+          format: json
+          output: trivy-results.json
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: '0'
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+      # ── Snyk scan (all severities) ────────────────────────────────────────
+
+      - name: Set up Snyk CLI
+        uses: snyk/actions/setup@b98d498629f1c368650224d6d212bf7dfa89e4bf # 0.4.0
+
+      - name: Run Snyk container scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_API: https://api.us.snyk.io
+        run: |
+          snyk container test "$TARGET_IMAGE" \
+            --severity-threshold=low \
+            --org=partner-images \
+            --json-file-output=snyk-results.json || true
+
+      # ── Parse results ─────────────────────────────────────────────────────
+
+      - name: Parse scan results
+        id: parse
+        run: |
+          count_trivy() { jq "[.Results[]?.Vulnerabilities[]? | select(.Severity == \"$1\")] | length" trivy-results.json 2>/dev/null || echo 0; }
+          count_snyk()  { jq "[.vulnerabilities[]? | select(.severity == \"$1\")] | length" snyk-results.json  2>/dev/null || echo 0; }
+
+          T_CRIT=0; T_HIGH=0; T_MED=0; T_LOW=0
+          S_CRIT=0; S_HIGH=0; S_MED=0; S_LOW=0
+
+          if [ -f trivy-results.json ]; then
+            T_CRIT=$(count_trivy CRITICAL)
+            T_HIGH=$(count_trivy HIGH)
+            T_MED=$(count_trivy  MEDIUM)
+            T_LOW=$(count_trivy  LOW)
+          fi
+
+          if [ -f snyk-results.json ]; then
+            S_CRIT=$(count_snyk critical)
+            S_HIGH=$(count_snyk high)
+            S_MED=$(count_snyk  medium)
+            S_LOW=$(count_snyk  low)
+          fi
+
+          TOTAL_CRIT=$((T_CRIT + S_CRIT))
+          TOTAL_HIGH=$((T_HIGH + S_HIGH))
+          TOTAL_MED=$((T_MED  + S_MED))
+          TOTAL_LOW=$((T_LOW  + S_LOW))
+          TOTAL_ACTIONABLE=$((TOTAL_CRIT + TOTAL_HIGH))
+
+          echo "t_crit=$T_CRIT"   >> "$GITHUB_OUTPUT"
+          echo "t_high=$T_HIGH"   >> "$GITHUB_OUTPUT"
+          echo "t_med=$T_MED"     >> "$GITHUB_OUTPUT"
+          echo "t_low=$T_LOW"     >> "$GITHUB_OUTPUT"
+          echo "s_crit=$S_CRIT"   >> "$GITHUB_OUTPUT"
+          echo "s_high=$S_HIGH"   >> "$GITHUB_OUTPUT"
+          echo "s_med=$S_MED"     >> "$GITHUB_OUTPUT"
+          echo "s_low=$S_LOW"     >> "$GITHUB_OUTPUT"
+          echo "total_crit=$TOTAL_CRIT"           >> "$GITHUB_OUTPUT"
+          echo "total_high=$TOTAL_HIGH"           >> "$GITHUB_OUTPUT"
+          echo "total_med=$TOTAL_MED"             >> "$GITHUB_OUTPUT"
+          echo "total_low=$TOTAL_LOW"             >> "$GITHUB_OUTPUT"
+          echo "total_actionable=$TOTAL_ACTIONABLE" >> "$GITHUB_OUTPUT"
+
+          if [ "$TOTAL_ACTIONABLE" -gt 0 ]; then
+            {
+              echo 'vuln_detail<<VULN_EOF'
+
+              if [ "$((T_CRIT + T_HIGH))" -gt 0 ]; then
+                echo "### Trivy — CRITICAL/HIGH"
+                echo ""
+                echo "| Severity | Package | Installed | Fixed | CVE |"
+                echo "|----------|---------|-----------|-------|-----|"
+                jq -r '.Results[]?.Vulnerabilities[]?
+                  | select(.Severity == "CRITICAL" or .Severity == "HIGH")
+                  | "| \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") | \(.VulnerabilityID) |"' \
+                  trivy-results.json | sort -t'|' -k2,2 | head -50
+                echo ""
+              fi
+
+              if [ "$((S_CRIT + S_HIGH))" -gt 0 ]; then
+                echo "### Snyk — CRITICAL/HIGH"
+                echo ""
+                echo "| Severity | Package | Version | CVE |"
+                echo "|----------|---------|---------|-----|"
+                jq -r '.vulnerabilities[]?
+                  | select(.severity == "critical" or .severity == "high")
+                  | "| \(.severity) | \(.packageName) | \(.version // "N/A") | \(.id) |"' \
+                  snyk-results.json | sort -t'|' -k2,2 | head -50
+                echo ""
+              fi
+
+              echo 'VULN_EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Trivy  — C:$T_CRIT H:$T_HIGH M:$T_MED L:$T_LOW"
+          echo "Snyk   — C:$S_CRIT H:$S_HIGH M:$S_MED L:$S_LOW"
+          echo "Actionable (C+H): $TOTAL_ACTIONABLE"
+
+      # ── Workflow summary ──────────────────────────────────────────────────
+
+      - name: Publish workflow summary
+        if: always()
+        run: |
+          {
+            echo "## Daily Security Scan — \`$TARGET_IMAGE\`"
+            echo ""
+            echo "### Vulnerability Summary"
+            echo ""
+            echo "| Severity | Trivy | Snyk | Total |"
+            echo "|----------|------:|-----:|------:|"
+            echo "| 🔴 Critical | ${{ steps.parse.outputs.t_crit || 0 }} | ${{ steps.parse.outputs.s_crit || 0 }} | **${{ steps.parse.outputs.total_crit || 0 }}** |"
+            echo "| 🟠 High     | ${{ steps.parse.outputs.t_high || 0 }} | ${{ steps.parse.outputs.s_high || 0 }} | **${{ steps.parse.outputs.total_high || 0 }}** |"
+            echo "| 🟡 Medium   | ${{ steps.parse.outputs.t_med  || 0 }} | ${{ steps.parse.outputs.s_med  || 0 }} | **${{ steps.parse.outputs.total_med  || 0 }}** |"
+            echo "| 🔵 Low      | ${{ steps.parse.outputs.t_low  || 0 }} | ${{ steps.parse.outputs.s_low  || 0 }} | **${{ steps.parse.outputs.total_low  || 0 }}** |"
+            echo ""
+            if [ "${{ steps.parse.outputs.total_actionable || 0 }}" -gt 0 ]; then
+              echo "> ⚠️ **${{ steps.parse.outputs.total_actionable }} CRITICAL/HIGH findings — Linear issue created**"
+            else
+              echo "> ✅ **No CRITICAL/HIGH findings**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Create Linear issue (only on CRITICAL/HIGH) ───────────────────────
+
+      - name: Create Linear issue
+        if: steps.parse.outputs.total_actionable != '0'
+        env:
+          LINEAR_API_KEY:      ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_TEAM_ID:      ${{ vars.LINEAR_SECURITY_SCAN_TEAM_ID }}
+          LINEAR_PROJECT_ID:   ${{ vars.LINEAR_SECURITY_SCAN_PROJECT_ID }}
+          LINEAR_MILESTONE_ID: ${{ vars.LINEAR_SECURITY_SCAN_MILESTONE_ID }}
+          LINEAR_ASSIGNEE_ID:  ${{ vars.LINEAR_SECURITY_SCAN_ASSIGNEE_ID }}
+          VULN_DETAIL:         ${{ steps.parse.outputs.vuln_detail }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TOTAL="${{ steps.parse.outputs.total_actionable }}"
+
+          TITLE="[Security] app-runtime-base:3 — ${TOTAL} CRITICAL/HIGH vulnerabilities (${DATE})"
+
+          DESCRIPTION=$(
+            echo "## Daily Security Scan Results"
+            echo ""
+            echo "**Image:** \`${TARGET_IMAGE}\`"
+            echo "**Scan date:** ${DATE}"
+            echo "**Workflow run:** [View logs](${RUN_URL})"
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Vulnerability Summary"
+            echo ""
+            echo "| Severity | Trivy | Snyk | Total |"
+            echo "|----------|------:|-----:|------:|"
+            echo "| 🔴 Critical | ${{ steps.parse.outputs.t_crit }} | ${{ steps.parse.outputs.s_crit }} | **${{ steps.parse.outputs.total_crit }}** |"
+            echo "| 🟠 High     | ${{ steps.parse.outputs.t_high }} | ${{ steps.parse.outputs.s_high }} | **${{ steps.parse.outputs.total_high }}** |"
+            echo "| 🟡 Medium   | ${{ steps.parse.outputs.t_med  }} | ${{ steps.parse.outputs.s_med  }} | **${{ steps.parse.outputs.total_med  }}** |"
+            echo "| 🔵 Low      | ${{ steps.parse.outputs.t_low  }} | ${{ steps.parse.outputs.s_low  }} | **${{ steps.parse.outputs.total_low  }}** |"
+            echo ""
+            printf '%s\n' "${VULN_DETAIL}"
+            echo ""
+            echo "---"
+            echo ""
+            echo "*Automatically created by the daily security scan workflow.*"
+          )
+
+          PAYLOAD=$(jq -n \
+            --arg title       "$TITLE" \
+            --arg description "$DESCRIPTION" \
+            --arg teamId      "$LINEAR_TEAM_ID" \
+            --arg projectId   "$LINEAR_PROJECT_ID" \
+            --arg milestoneId "$LINEAR_MILESTONE_ID" \
+            --arg assigneeId  "$LINEAR_ASSIGNEE_ID" \
+            '{
+              query: "mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier url } } }",
+              variables: {
+                input: {
+                  title:              $title,
+                  description:        $description,
+                  teamId:             $teamId,
+                  projectId:          $projectId,
+                  projectMilestoneId: $milestoneId,
+                  assigneeId:         $assigneeId,
+                  priority:           2
+                }
+              }
+            }')
+
+          RESPONSE=$(curl -sf -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$PAYLOAD" \
+            https://api.linear.app/graphql)
+
+          SUCCESS=$(echo "$RESPONSE" | jq -r '.data.issueCreate.success // false')
+          if [ "$SUCCESS" = "true" ]; then
+            ID=$(echo  "$RESPONSE" | jq -r '.data.issueCreate.issue.identifier')
+            URL=$(echo "$RESPONSE" | jq -r '.data.issueCreate.issue.url')
+            echo "Created: $ID — $URL"
+            echo "### Linear Issue: [$ID]($URL)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Failed to create Linear issue"
+            echo "$RESPONSE" | jq .
+            exit 1
+          fi
