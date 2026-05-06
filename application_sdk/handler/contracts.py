@@ -101,7 +101,6 @@ class BaseConnectionConfig(_DictLikeConfigBase):
             cfg["host"]               # KeyError if absent
             cfg.get("host", default)  # safe accessor with default
             "host" in cfg             # membership test
-            dict(cfg)                 # all keys (declared + extras)
 
         Lookups try declared field names first, then aliases, then extras.
     """
