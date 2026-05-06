@@ -1699,6 +1699,9 @@ def _create_task_activity_wrapper(
         from application_sdk.execution._temporal.activities import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
             TaskContext,
         )
+        from application_sdk.execution._temporal.eviction_retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            execute_activity_with_eviction_retry,
+        )
 
     # Build the Temporal RetryPolicy once (not per invocation)
     if retry_policy is not None:
@@ -1734,11 +1737,6 @@ def _create_task_activity_wrapper(
         # Execute as activity, routed through the SDK eviction-retry loop so
         # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
         # attempts without burning the application-error retry budget.
-        with workflow.unsafe.imports_passed_through():
-            from application_sdk.execution._temporal.eviction_retry import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-                execute_activity_with_eviction_retry,
-            )
-
         result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],

@@ -80,10 +80,8 @@ async def execute_activity_with_eviction_retry(
                 eviction_attempts += 1
                 workflow.logger.info(
                     "activity re-dispatched after worker eviction",
-                    extra={
-                        "eviction_attempts": eviction_attempts,
-                        "max_eviction_retries": max_eviction_retries,
-                    },
+                    eviction_attempts=eviction_attempts,
+                    max_eviction_retries=max_eviction_retries,
                 )
                 continue
             raise
