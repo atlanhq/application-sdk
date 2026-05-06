@@ -152,7 +152,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Nightly Security Scan — \`$TARGET_IMAGE\`"
+            echo "## Daily Security Scan — \`$TARGET_IMAGE\`"
             echo ""
             echo "### Vulnerability Summary"
             echo ""
