@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
+    WORKER_EVICTED_TYPE,
     AlreadyExistsError,
     AppPermissionDeniedError,
     AppTimeoutError,
@@ -41,6 +42,7 @@ from application_sdk.errors.leaves import (
     RateLimitedError,
     ResourceExhaustedError,
     UnimplementedError,
+    WorkerEvictedError,
 )
 from application_sdk.errors.wire import FailureDetails
 
@@ -135,6 +137,8 @@ __all__ = [
     "RateLimitedError",
     "ResourceExhaustedError",
     "UnimplementedError",
+    "WorkerEvictedError",
+    "WORKER_EVICTED_TYPE",
     # Legacy (deprecated — removed in v4.0)
     "ErrorCode",
     "APP_ERROR",
