@@ -182,7 +182,7 @@ env:
 | Field | Value |
 |-------|-------|
 | `app_name` | The app's kebab-case name |
-| `run_id` | Temporal workflow run ID |
+| `workflow_run_id` | Temporal workflow run ID (canonical name; `run_id` is a backwards-compat alias) |
 | `correlation_id` | Platform-level correlation identifier |
 
 These fields appear on every log entry without any manual binding — use `self.logger` directly.
@@ -192,7 +192,7 @@ class MyConnector(App):
     @task
     async def fetch_data(self, input: FetchInput) -> FetchOutput:
         self.logger.info("fetching page=%d", page_num)
-        # Emits: {"level":"INFO","msg":"fetching page=3","app_name":"my-connector","run_id":"...","correlation_id":"..."}
+        # Emits: {"level":"INFO","msg":"fetching page=3","app_name":"my-connector","workflow_run_id":"...","correlation_id":"..."}
 ```
 
 Use **%-style** message bodies (`"fetching page=%d", page_num`) rather than keyword arguments. See [Logging Standards](../standards/logging.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
