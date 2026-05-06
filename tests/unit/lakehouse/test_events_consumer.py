@@ -5,32 +5,25 @@ from application_sdk.lakehouse.events_consumer import EventsConsumer
 from application_sdk.lakehouse.models import ProcessingResult
 
 
-class FakeProcessor:
-    def __init__(self, results=None, raise_in_process=False):
-        self._results = results
-        self._raise = raise_in_process
-        self.setup_called = False
-        self.teardown_called = False
-        self.received: list[list[dict]] = []
+def _make_process_fn(results=None, raise_in_process=False):
+    """Build an async process_fn for tests, recording invocations."""
+    state = {"calls": [], "raise": raise_in_process}
 
-    async def setup(self):
-        self.setup_called = True
-
-    async def teardown(self):
-        self.teardown_called = True
-
-    async def process_batch(self, events):
-        self.received.append(events)
-        if self._raise:
+    async def fn(events):
+        state["calls"].append(events)
+        if state["raise"]:
             raise RuntimeError("boom")
-        if self._results is not None:
-            return self._results
+        if results is not None:
+            return results
         return [ProcessingResult(status="SUCCESS") for _ in events]
 
+    fn.calls = state["calls"]  # type: ignore[attr-defined]
+    return fn
 
-def _consumer_with_events(events):
+
+def _consumer_with_events(events, process_fn=None):
     """Build an EventsConsumer whose internal reader returns ``events``."""
-    consumer = EventsConsumer(FakeProcessor())
+    consumer = EventsConsumer(process_fn or _make_process_fn())
     fake_reader = MagicMock()
     fake_reader.fetch_records = MagicMock(return_value=events)
     consumer._reader = fake_reader
@@ -38,49 +31,43 @@ def _consumer_with_events(events):
 
 
 class TestEventsConsumer(unittest.IsolatedAsyncioTestCase):
-    async def test_no_events_returns_empty_pair(self):
-        consumer = _consumer_with_events([])
+    async def test_no_events_returns_empty_pair_and_skips_process_fn(self):
+        process_fn = _make_process_fn()
+        consumer = _consumer_with_events([], process_fn=process_fn)
         events, results = await consumer.handle_events("automation_engine", "events")
         self.assertEqual(events, [])
         self.assertEqual(results, [])
-        self.assertFalse(consumer._processor.setup_called)
-        self.assertFalse(consumer._processor.teardown_called)
+        self.assertEqual(process_fn.calls, [])
 
-    async def test_dispatches_events_to_processor(self):
+    async def test_dispatches_events_to_process_fn(self):
         events = [{"event_id": "e1"}, {"event_id": "e2"}]
-        consumer = _consumer_with_events(events)
+        process_fn = _make_process_fn()
+        consumer = _consumer_with_events(events, process_fn=process_fn)
         out_events, results = await consumer.handle_events(
             "automation_engine", "events"
         )
         self.assertEqual(out_events, events)
         self.assertEqual([r.status for r in results], ["SUCCESS", "SUCCESS"])
-        self.assertTrue(consumer._processor.setup_called)
-        self.assertTrue(consumer._processor.teardown_called)
+        self.assertEqual(process_fn.calls, [events])
 
-    async def test_processor_exception_marks_all_retry(self):
+    async def test_process_fn_exception_marks_all_retry(self):
         events = [{"event_id": "e1"}, {"event_id": "e2"}]
-        consumer = EventsConsumer(FakeProcessor(raise_in_process=True))
-        fake_reader = MagicMock()
-        fake_reader.fetch_records = MagicMock(return_value=events)
-        consumer._reader = fake_reader
-
+        consumer = _consumer_with_events(
+            events, process_fn=_make_process_fn(raise_in_process=True)
+        )
         _, results = await consumer.handle_events("automation_engine", "events")
         self.assertEqual(len(results), 2)
         self.assertTrue(all(r.status == "RETRY" for r in results))
         self.assertTrue(
             all("batch processing failed" in (r.error_message or "") for r in results)
         )
-        self.assertTrue(consumer._processor.teardown_called)
 
     async def test_result_count_mismatch_marks_all_retry(self):
         events = [{"event_id": "e1"}, {"event_id": "e2"}, {"event_id": "e3"}]
-        consumer = EventsConsumer(
-            FakeProcessor(results=[ProcessingResult(status="SUCCESS")])
+        consumer = _consumer_with_events(
+            events,
+            process_fn=_make_process_fn(results=[ProcessingResult(status="SUCCESS")]),
         )
-        fake_reader = MagicMock()
-        fake_reader.fetch_records = MagicMock(return_value=events)
-        consumer._reader = fake_reader
-
         _, results = await consumer.handle_events("automation_engine", "events")
         self.assertEqual(len(results), 3)
         self.assertTrue(all(r.status == "RETRY" for r in results))
@@ -94,17 +81,35 @@ class TestEventsConsumer(unittest.IsolatedAsyncioTestCase):
         await consumer.handle_events(
             "automation_engine",
             "events",
-            row_filter="status = 'pending'",
+            where="status = 'pending'",
             limit=10,
             sort_by="ingested_at",
         )
         consumer._reader.fetch_records.assert_called_once_with(
             "automation_engine",
             "events",
-            row_filter="status = 'pending'",
+            where="status = 'pending'",
             limit=10,
             sort_by="ingested_at",
         )
+
+    async def test_accepts_bound_method_as_process_fn(self):
+        """Class-style users can still pass instance.method as process_fn."""
+
+        class Worker:
+            def __init__(self):
+                self.received = []
+
+            async def process_batch(self, events):
+                self.received.append(events)
+                return [ProcessingResult(status="SUCCESS") for _ in events]
+
+        w = Worker()
+        events = [{"event_id": "e1"}]
+        consumer = _consumer_with_events(events, process_fn=w.process_batch)
+        _, results = await consumer.handle_events("automation_engine", "events")
+        self.assertEqual([r.status for r in results], ["SUCCESS"])
+        self.assertEqual(w.received, [events])
 
 
 class TestEventsConsumerSelfConstruction(unittest.IsolatedAsyncioTestCase):
@@ -118,7 +123,7 @@ class TestEventsConsumerSelfConstruction(unittest.IsolatedAsyncioTestCase):
             fake_reader.fetch_records = MagicMock(return_value=[])
             from_env.return_value = fake_reader
 
-            consumer = EventsConsumer(FakeProcessor())
+            consumer = EventsConsumer(_make_process_fn())
             self.assertIsNone(consumer._reader)
             from_env.assert_not_called()
 

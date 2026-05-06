@@ -2,10 +2,10 @@
 
 A thin orchestrator for the AE-triggered pattern: a Temporal workflow receives
 a trigger (``{events_table}``), reads pending events from the lakehouse, and
-hands them to a ``BatchProcessor``. No polling — each invocation is one shot.
+hands them to a process function. No polling — each invocation is one shot.
 
 The lakehouse is a blackbox to the consumer's caller: ``EventsConsumer`` takes
-only the processor at construction time and self-constructs its
+only an async ``process_fn`` at construction time and self-constructs its
 ``LakehouseReader`` from the standard ``ICEBERG_*`` environment variables on
 first use. App developers do not pass catalog or credentials in.
 
@@ -17,13 +17,14 @@ in whatever shape the app needs.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from application_sdk.lakehouse.models import ProcessingResult
-from application_sdk.lakehouse.protocols import BatchProcessor
 from application_sdk.lakehouse.reader import LakehouseReader
 
 logger = logging.getLogger(__name__)
+
+ProcessFn = Callable[[list[dict[str, Any]]], Awaitable[list[ProcessingResult]]]
 
 
 class EventsConsumer:
@@ -33,8 +34,8 @@ class EventsConsumer:
     first call to :meth:`handle_events` — apps don't pass a catalog in.
     """
 
-    def __init__(self, processor: BatchProcessor) -> None:
-        self._processor = processor
+    def __init__(self, process_fn: ProcessFn) -> None:
+        self._process_fn = process_fn
         self._reader: LakehouseReader | None = None
 
     def _ensure_reader(self) -> LakehouseReader:
@@ -46,22 +47,22 @@ class EventsConsumer:
         self,
         events_namespace: str,
         events_table: str,
-        row_filter: str | None = "status = 'unprocessed'",
+        where: str | None = "status = 'unprocessed'",
         limit: int | None = None,
         sort_by: str | None = "received_at",
     ) -> tuple[list[dict[str, Any]], list[ProcessingResult]]:
-        """Fetch pending events and dispatch them to the processor.
+        """Fetch pending events and dispatch them to the process function.
 
         Returns ``(events, results)`` where ``results[i]`` corresponds to
-        ``events[i]``. If the processor raises, every event is marked RETRY.
-        If the processor returns the wrong number of results, every event is
-        also marked RETRY.
+        ``events[i]``. If the process function raises, every event is
+        marked RETRY. If it returns the wrong number of results, every
+        event is also marked RETRY.
         """
         reader = self._ensure_reader()
         events = reader.fetch_records(
             events_namespace,
             events_table,
-            row_filter=row_filter,
+            where=where,
             limit=limit,
             sort_by=sort_by,
         )
@@ -76,28 +77,24 @@ class EventsConsumer:
             events_table,
         )
 
-        await self._processor.setup()
         try:
-            try:
-                results = await self._processor.process_batch(events)
-            except Exception:
-                logger.error(
-                    "Unhandled error in process_batch — marking all %d events as RETRY",
-                    len(events),
-                    exc_info=True,
+            results = await self._process_fn(events)
+        except Exception:
+            logger.error(
+                "Unhandled error in process_fn — marking all %d events as RETRY",
+                len(events),
+                exc_info=True,
+            )
+            results = [
+                ProcessingResult(
+                    status="RETRY", error_message="batch processing failed"
                 )
-                results = [
-                    ProcessingResult(
-                        status="RETRY", error_message="batch processing failed"
-                    )
-                    for _ in events
-                ]
-        finally:
-            await self._processor.teardown()
+                for _ in events
+            ]
 
         if len(results) != len(events):
             logger.error(
-                "process_batch returned %d results for %d events — marking all as RETRY",
+                "process_fn returned %d results for %d events — marking all as RETRY",
                 len(results),
                 len(events),
             )

@@ -9,9 +9,9 @@ Public surface — apps should only import from this module:
   pyiceberg / pyarrow types appear on the public boundary.
 
 * :class:`EventsConsumer` — event-trigger wrapper for AE-driven apps. The
-  caller passes only a :class:`BatchProcessor`; the consumer self-constructs
-  its lakehouse reader from environment credentials. The lakehouse is a
-  blackbox to the events consumer's caller.
+  caller passes only an async ``process_fn`` callable; the consumer
+  self-constructs its lakehouse reader from environment credentials. The
+  lakehouse is a blackbox to the events consumer's caller.
 
 * :class:`EventAckWriter` — publishes the AE Parquet ack after a batch.
 
@@ -46,7 +46,7 @@ When to use what
   +-----------------------------+---------------------------------------+
   | Receive an upstream trigger | ``EventsConsumer.handle_events``      |
   | and dispatch unprocessed    |                                       |
-  | events to a BatchProcessor  |                                       |
+  | events to a process_fn      |                                       |
   +-----------------------------+---------------------------------------+
   | Publish a Parquet ack to AE | ``EventAckWriter.write``              |
   | after processing a batch    |                                       |
@@ -91,14 +91,12 @@ Install with: ``pip install atlan-application-sdk[lakehouse]``
 from application_sdk.lakehouse.event_ack import EventAckWriter
 from application_sdk.lakehouse.events_consumer import EventsConsumer
 from application_sdk.lakehouse.models import ProcessingResult
-from application_sdk.lakehouse.protocols import BatchProcessor
 from application_sdk.lakehouse.query import LakehouseQuery
 from application_sdk.lakehouse.reader import LakehouseReader
 from application_sdk.lakehouse.schema import Field, PartitionBy, Schema
 from application_sdk.lakehouse.writer import LakehouseWriter
 
 __all__ = [
-    "BatchProcessor",
     "EventAckWriter",
     "EventsConsumer",
     "Field",
