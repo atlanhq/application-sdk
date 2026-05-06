@@ -1860,38 +1860,50 @@ class TestSecondaryWorkflowLogsExporter:
             AtlanLoggerAdapter("test_dual_export")
             return mock_exporter
 
+    # Sentinel endpoint identifiers — not URLs. The SDK never opens a
+    # network connection in tests (OTLPLogExporter is mocked), so any
+    # opaque string works for distinguishing the two exporter calls.
+    # Using non-URL sentinels also keeps CodeQL's URL-substring rule from
+    # flagging exact-equality assertions as substring sanitization issues.
+    PRIMARY_SENTINEL = "test-primary-endpoint"
+    SECONDARY_SENTINEL = "test-secondary-endpoint"
+
+    @staticmethod
+    def _endpoints_passed_to_exporter(mock_exporter) -> list[str]:
+        return [call.kwargs["endpoint"] for call in mock_exporter.call_args_list]
+
     def test_dual_export_when_both_endpoints_configured(self):
         """Both primary and secondary OTLPLogExporter instances should be
         constructed when ENABLE_OTLP_WORKFLOW_LOGS=true and the workflow-logs
         endpoint is set."""
         mock_exporter = self._build_with_endpoints(
-            primary="https://otel.example.com:4317",
+            primary=self.PRIMARY_SENTINEL,
             secondary_enabled=True,
-            secondary_endpoint="http://workflow-logs-collector.example.svc:4317",
+            secondary_endpoint=self.SECONDARY_SENTINEL,
         )
-        endpoints = {call.kwargs["endpoint"] for call in mock_exporter.call_args_list}
-        assert "https://otel.example.com:4317" in endpoints
-        assert "http://workflow-logs-collector.example.svc:4317" in endpoints
+        endpoints = self._endpoints_passed_to_exporter(mock_exporter)
+        assert endpoints.count(self.PRIMARY_SENTINEL) == 1
+        assert endpoints.count(self.SECONDARY_SENTINEL) == 1
 
     def test_secondary_skipped_when_flag_false(self):
         """Secondary exporter must not be constructed when the flag is off,
         even if the workflow-logs endpoint is set."""
         mock_exporter = self._build_with_endpoints(
-            primary="https://otel.example.com:4317",
+            primary=self.PRIMARY_SENTINEL,
             secondary_enabled=False,
-            secondary_endpoint="http://workflow-logs-collector.example.svc:4317",
+            secondary_endpoint=self.SECONDARY_SENTINEL,
         )
-        endpoints = {call.kwargs["endpoint"] for call in mock_exporter.call_args_list}
-        assert "http://workflow-logs-collector.example.svc:4317" not in endpoints
+        endpoints = self._endpoints_passed_to_exporter(mock_exporter)
+        assert endpoints.count(self.SECONDARY_SENTINEL) == 0
 
     def test_secondary_skipped_when_endpoint_blank(self):
         """Secondary exporter must not be constructed when the endpoint is
         blank, even if the flag is on (defensive: avoids gRPC bootstrap with
         an empty target)."""
         mock_exporter = self._build_with_endpoints(
-            primary="https://otel.example.com:4317",
+            primary=self.PRIMARY_SENTINEL,
             secondary_enabled=True,
             secondary_endpoint="",
         )
-        endpoints = {call.kwargs["endpoint"] for call in mock_exporter.call_args_list}
+        endpoints = self._endpoints_passed_to_exporter(mock_exporter)
         assert "" not in endpoints
