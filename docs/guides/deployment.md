@@ -90,7 +90,7 @@ With `splitDeploymentEnabled: true`, the platform creates two Deployments from t
 Handler Deployment (min 1 replica, max N)
 ├── command: application-sdk --mode handler --app app.connector:PostgresApp
 ├── Port 8000  — HTTP API (UI, Heracles, Automation Engine)
-└── Port 9464  — Temporal Prometheus metrics (optional)
+└── GET :8000/metrics  — unified Prometheus endpoint (SDK + HTTP instrumentation + Temporal Rust-core)
 
 Worker Deployment (KEDA ScaledObject, scales 0 → N)
 ├── command: application-sdk --mode worker --app app.connector:PostgresApp

@@ -220,19 +220,6 @@ cid = ctx.correlation_id if ctx else None  # str (empty when unset) or None when
 
 ---
 
-## Workflow Log Export
-
-For dual-export to both the platform OTLP collector and a tenant-level collector (S3 archival + live streaming):
-
-```bash
-OTEL_WORKFLOW_LOGS_ENDPOINT=http://tenant-collector:4317
-ENABLE_OTLP_WORKFLOW_LOGS=true
-```
-
-When set, workflow log records are sent to both `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_WORKFLOW_LOGS_ENDPOINT`.
-
----
-
 ## Observability Store Sink
 
 By default, logs, metrics, and traces are also written to parquet files in the object store under `artifacts/apps/{app_name}/{deployment_name}/observability/`. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.

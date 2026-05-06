@@ -173,7 +173,7 @@ dev-workstation convenience and unused in production.
 
 ### Env var sweep (no backwards compat)
 
-**Removed:** `ENABLE_APP_VITALS`, `ENABLE_PROMETHEUS_METRICS`,
+**Removed:** `ATLAN_ENABLE_APP_VITALS`, `ENABLE_PROMETHEUS_METRICS`,
 `ATLAN_ENABLE_PROMETHEUS_METRICS` (renamed to
 `ATLAN_ENABLE_TEMPORAL_CORE_METRICS`), `ENABLE_OTLP_METRICS`,
 `ENABLE_OTLP_TRACES` (consolidated to `ATLAN_ENABLE_OTLP_TRACES`),

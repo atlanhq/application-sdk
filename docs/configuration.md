@@ -43,7 +43,7 @@ Injected by the Local Marketplace into the Helm release at deploy time, and expo
 | `ATLAN_TEMPORAL_HOST` | `localhost:7233` | Temporal server address (`host:port`). **v2-compat fallback:** if unset, the SDK constructs the address from `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` (deprecated; remove when all deployments set `ATLAN_TEMPORAL_HOST`). |
 | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace. **v2-compat fallback:** `ATLAN_WORKFLOW_NAMESPACE`. |
 | `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the app name when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. |
-| `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `0.0.0.0:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). See [Monitoring](concepts/monitoring.md). |
+| `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; the FastAPI `/metrics` handler proxies it in-process. See [Monitoring](concepts/monitoring.md). |
 
 ### Worker Versioning
 
@@ -183,6 +183,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS` | `300` | Don't reap groups whose last push is more recent than this. Protects live siblings during rolling deploys. |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS` | `10` | Per-request HTTP timeout for every Pushgateway call. |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS` | `35` | Sleep between final push and DELETE on shutdown so Prometheus has at least one scrape window to read the final batch. |
+| `ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS` | `5.0` | Per-request HTTP timeout (seconds) for the in-process FastAPI `/metrics` proxy fetching Temporal Rust-core series from `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS`. Increase if the loopback fetch times out under heavy load. |
 
 ---
 
@@ -191,10 +192,6 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_ENABLE_OTLP_TRACES` | `false` | Export traces via OTLP. |
-| `ATLAN_TRACES_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
-| `ATLAN_TRACES_FLUSH_INTERVAL_SECONDS` | `5` | Seconds between parquet sink flushes. |
-| `ATLAN_TRACES_RETENTION_DAYS` | `30` | Days to retain parquet trace files. |
-| `ATLAN_TRACES_CLEANUP_ENABLED` | `true` | Enable automatic cleanup of old trace files (enabled by default to prevent disk overflow). |
 
 ---
 
@@ -208,8 +205,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `OTEL_RESOURCE_ATTRIBUTES` | _(empty)_ | Additional OTel resource attributes (key=value pairs). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint. Set to the node IP collector in Kubernetes: `$(K8S_NODE_IP):4317`. |
 | `ENABLE_OTLP_LOGS` | `false` | Export logs via OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
-| `OTEL_WORKFLOW_LOGS_ENDPOINT` | _(empty)_ | Secondary OTLP endpoint for workflow logs (for dual export to a tenant-level collector). |
-| `ENABLE_OTLP_WORKFLOW_LOGS` | `false` | Export workflow logs to `OTEL_WORKFLOW_LOGS_ENDPOINT`. |
+
 | `OTEL_WF_NODE_NAME` | _(empty)_ | Kubernetes node name for workflow telemetry. |
 | `OTEL_EXPORTER_TIMEOUT_SECONDS` | `30` | Timeout for OTLP export operations. |
 | `OTEL_BATCH_DELAY_MS` | `5000` | Delay between batch exports (milliseconds). |

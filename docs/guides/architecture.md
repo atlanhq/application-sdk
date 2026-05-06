@@ -202,7 +202,7 @@ Higher-level: `App` provides `self.upload()` and `self.download()` framework tas
 
 Structured logs and OTel traces flow from every worker and handler pod to the cluster's central OTLP collector. Workers configure `OTEL_EXPORTER_OTLP_ENDPOINT` to the node IP (`$(K8S_NODE_IP):4317`) at deploy time.
 
-`self.logger` is available in both `run()` and `@task` methods. It is automatically bound with `app_name`, `run_id`, and `correlation_id` on every entry. When apps call other apps, the correlation ID propagates automatically, linking distributed traces across services. See [ADR-0003](../adr/0003-per-app-observability.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
+`self.logger` is available in both `run()` and `@task` methods. It is automatically bound with `app_name`, `workflow_run_id`, and `correlation_id` on every entry (`run_id` is kept as a backwards-compat alias). When apps call other apps, the correlation ID propagates automatically, linking distributed traces across services. See [ADR-0003](../adr/0003-per-app-observability.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
 
 Errors carry structured codes in `AAF-{COMPONENT}-{ID}` format.
 
