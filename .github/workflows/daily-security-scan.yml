@@ -74,8 +74,10 @@ jobs:
       - name: Set up uv (for Snyk Python dep resolution)
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
-      - name: Export requirements for Snyk
+      - name: Install Python deps and export requirements for Snyk
         run: |
+          uv sync --no-dev --frozen
+          uv pip install pip
           uv export --format requirements-txt --no-dev --frozen --no-hashes --no-emit-project --output-file=/tmp/snyk-requirements.txt
 
       - name: Run Snyk Python deps scan (pyproject.toml / uv.lock)
@@ -86,6 +88,7 @@ jobs:
           snyk test \
             --file=/tmp/snyk-requirements.txt \
             --package-manager=pip \
+            --command=.venv/bin/python3 \
             --severity-threshold=low \
             --org=bu-apps \
             --json-file-output=snyk-python-results.json || true
