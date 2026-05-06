@@ -90,7 +90,7 @@ With `splitDeploymentEnabled: true`, the platform creates two Deployments from t
 Handler Deployment (min 1 replica, max N)
 ├── command: application-sdk --mode handler --app app.connector:PostgresApp
 ├── Port 8000  — HTTP API (UI, Heracles, Automation Engine)
-└── Port 9464  — Temporal Prometheus metrics (optional)
+└── GET :8000/metrics  — unified Prometheus endpoint (SDK + HTTP instrumentation + Temporal Rust-core)
 
 Worker Deployment (KEDA ScaledObject, scales 0 → N)
 ├── command: application-sdk --mode worker --app app.connector:PostgresApp
@@ -118,8 +118,10 @@ ATLAN_AUTH_TOKEN_URL=https://auth.internal/oauth2/token
 
 # Observability
 OTEL_EXPORTER_OTLP_ENDPOINT=http://$(K8S_NODE_IP):4317
-ATLAN_ENABLE_PROMETHEUS_METRICS=true
-ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS=0.0.0.0:9464
+ATLAN_ENABLE_TEMPORAL_CORE_METRICS=true                    # default; binds Temporal Rust core on loopback
+# ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS=127.0.0.1:9464    # default; loopback-only, FastAPI /metrics proxies it
+# Worker-only pods (split deployment) push to a Pushgateway:
+# ATLAN_PROMETHEUS_PUSHGATEWAY_URL=http://prometheus-pushgateway.monitoring.svc.cluster.local:9091
 
 # Storage
 ENABLE_ATLAN_UPLOAD=true

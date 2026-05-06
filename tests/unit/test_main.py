@@ -821,9 +821,9 @@ class TestMainEntryPoint:
                 "application_sdk.main.run_main",
                 side_effect=DiscoveryError("not found"),
             ),
+            pytest.raises(SystemExit) as exc,
         ):
-            with pytest.raises(SystemExit) as exc:
-                main()
+            main()
         assert exc.value.code == 1
 
     def test_keyboard_interrupt_exits_0(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -836,9 +836,9 @@ class TestMainEntryPoint:
                 "application_sdk.main.run_main",
                 side_effect=KeyboardInterrupt(),
             ),
+            pytest.raises(SystemExit) as exc,
         ):
-            with pytest.raises(SystemExit) as exc:
-                main()
+            main()
         assert exc.value.code == 0
 
     def test_unhandled_exception_flushes_and_exits_1(
@@ -868,9 +868,9 @@ class TestMainEntryPoint:
         with (
             patch("application_sdk.main._install_excepthook"),
             patch("application_sdk.main.run_main"),
+            pytest.raises(SystemExit) as exc,
         ):
-            with pytest.raises(SystemExit) as exc:
-                main()
+            main()
         assert exc.value.code == 0
 
     def test_main_installs_excepthook_first(
@@ -889,9 +889,9 @@ class TestMainEntryPoint:
                 "application_sdk.main.run_main",
                 side_effect=lambda *_: order.append("run"),
             ),
+            pytest.raises(SystemExit),
         ):
-            with pytest.raises(SystemExit):
-                main()
+            main()
         assert order == ["hook", "run"]
 
 
@@ -1312,7 +1312,7 @@ class TestRunDevCombined:
         assert cfg.handler_host == "127.0.0.1"
         assert cfg.handler_port == 9999
         # Dev should not start prometheus by default (port collision)
-        assert cfg.enable_prometheus_metrics is False
+        assert cfg.enable_temporal_core_metrics is False
         # Dev uses ephemeral health port to avoid collision
         assert cfg.health_port == 0
 

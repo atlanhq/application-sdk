@@ -16,7 +16,6 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     ENABLE_OBSERVABILITY_STORE_SINK,
     ENABLE_OTLP_LOGS,
-    ENABLE_OTLP_WORKFLOW_LOGS,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
     LOG_FILE_NAME,
@@ -28,7 +27,6 @@ from application_sdk.constants import (
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_QUEUE_SIZE,
-    OTEL_WORKFLOW_LOGS_ENDPOINT,
     SERVICE_NAME,
 )
 from application_sdk.observability.context import correlation_context, request_context
@@ -48,6 +46,7 @@ from application_sdk.version import __version__ as _SDK_VERSION
 # here are dropped and never reach the exporter.
 _KNOWN_EXTRA_KEYS = frozenset(
     {
+        # ── HTTP request/response ────────────────────────────────────────
         "client_host",
         "duration_ms",
         "method",
@@ -55,82 +54,47 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "request_id",
         "status_code",
         "url",
+        # ── Temporal workflow / activity context ─────────────────────────
+        # Auto-injected by `process()` + `get_workflow_context()` on every log
+        # emitted inside a workflow/activity (see logger_adaptor.process and
+        # observability/utils.get_workflow_context).
+        "in_workflow",
+        "in_activity",
         "workflow_id",
+        "workflow_run_id",
+        # Backwards-compat alias for ``workflow_run_id``.
         "run_id",
-        "workflow_run_id",  # App Vitals uses this alias alongside run_id
         "workflow_type",
         "namespace",
         "task_queue",
         "attempt",
         "activity_id",
         "activity_type",
+        # Parent identity — only emitted on child workflows (workflow.info().parent)
+        "parent_workflow_id",
+        "parent_run_id",
+        # Activity timeout fields — emitted by app authors logging activity
+        # configuration; not auto-injected.
         "schedule_to_close_timeout",
         "start_to_close_timeout",
         "schedule_to_start_timeout",
         "heartbeat_timeout",
+        # ── Outcome / error ──────────────────────────────────────────────
+        "status",
+        "error_type",
+        "error_class",
+        "error_message",
+        "stack_trace",
+        # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",
         "trace_id",
         "span_id",
         "correlation_id",
-        # ── App Vitals ───────────────────────────────────────────────────
-        # Deterministic filter flag — marks every App Vitals log event
-        "app_vitals",
-        # Per-workflow identity (deployment-level fields are on OTel Resource;
-        # tenant_id is redundant with ResourceAttributes['k8s.cluster.name'])
-        # Outcome
-        "status",
-        "error_type",
-        "error_class",
-        "error_message",
-        "error_cause_chain",
-        "stack_trace",
-        "error_fingerprint",
-        # Metric classification
-        "dimension",
-        "source",
-        "metric_name",
-        # Throughput
-        "assets_processed",
-        # Efficiency (per-activity resource deltas)
-        "cpu_seconds",
-        "mem_gb_sec",
-        # Performance timings
-        "schedule_to_start_ms",
-        "timeout_budget_total_ms",
-        "timeout_budget_used_pct",
-        # Retry context
-        "retry_max_attempts",
-        # Payload size
-        "input_payload_bytes",
-        # Activity wall-clock timestamps (ISO 8601)
-        "activity_start_time",
-        "activity_end_time",
-        # Workflow hierarchy
-        "parent_workflow_id",
-        "parent_run_id",
-        "continued_run_id",
-        "cron_schedule",
-        # Workflow-level timeout budget
-        "wf_timeout_budget_total_ms",
-        "wf_timeout_budget_used_pct",
-        "history_length",
-        # Workflow summary — activity duration rollup
-        "sum_activity_duration_ms",
-        # Workflow summary (app_vitals.wf.summary event)
-        "total_activities",
-        "succeeded_activities",
-        "failed_activities",
-        "total_child_workflows",
-        "first_failure_activity_type",
-        "first_failure_error_type",
-        "preflight_passed",
-        "circuit_breaker_tripped",
-        "bottleneck_activity_type",
-        "bottleneck_duration_ms",
         # ── ObjectStore operations ───────────────────────────────────────
         "storage_op",
         "store_path",
+        "outcome",
         "elapsed_ms",
         "size_bytes",
         "throughput_mibps",
@@ -144,6 +108,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "sha256",
         "tier",
         "file_count",
+        "files_skipped",
+        "files_downloaded",
         "chunk_size_bytes",
         "chunks_total",
         "chunks_completed",
@@ -156,20 +122,26 @@ _KNOWN_EXTRA_KEYS = frozenset(
 )
 
 
+_PREFIXES_PASSTHROUGH = (
+    "atlan.",  # SDK convention: atlan.correlation_id and similar dotted keys
+    "exception.",  # OTel semconv: exception.type/message/stacktrace
+    "otel.",  # OTel semconv: otel.status_code
+    "temporal.",  # SDK convention: temporal.workflow.id, etc.
+    "tenant.",
+)
+
+
 def _build_extra_dict(
     record_extra: dict[str, Any], exception: Any = None
 ) -> dict[str, Any]:
     """Build a dict of structured log extra fields from a loguru record's extra dict."""
     extra: dict[str, Any] = {}
     for k, v in record_extra.items():
-        if k != "logger_name" and k in _KNOWN_EXTRA_KEYS:
+        if k == "logger_name":
+            continue
+        if k in _KNOWN_EXTRA_KEYS:
             extra[k] = _normalize_log_extra_value(k, v)
-        elif (
-            k.startswith("atlan-")
-            or k.startswith("exception.")
-            or k.startswith("temporal.")
-            or k.startswith("tenant.")
-        ) and v is not None:
+        elif k.startswith(_PREFIXES_PASSTHROUGH) and v is not None:
             extra[k] = v if isinstance(v, (bool, int, float, str, bytes)) else str(v)
     for key, value in _extract_exception_attributes(exception).items():
         extra[key] = value
@@ -273,15 +245,29 @@ def _has_remote_otlp_endpoint() -> bool:
         return False
 
 
-# Add a Loguru handler for the Python logging system
-class InterceptHandler(logging.Handler):
-    """A custom logging handler that intercepts Python's standard logging and forwards it to Loguru.
+#: Built-in attributes set on every ``logging.LogRecord``. Computed once at
+#: import time from a dummy record so this stays correct across Python
+#: versions (``taskName`` was added in 3.12, future versions may add more).
+#: Anything on a record's ``__dict__`` outside this set came from a
+#: caller-supplied ``extra={...}`` and needs to flow to loguru.
+_LOGRECORD_RESERVED_ATTRS: frozenset[str] = frozenset(
+    logging.LogRecord(
+        name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None
+    ).__dict__
+)
 
-    This handler ensures that all Python standard library logging is properly formatted and
-    forwarded to Loguru's logging system, maintaining consistent logging across the application.
+
+class InterceptHandler(logging.Handler):
+    """Bridge Python's stdlib logging into loguru, preserving ``extra={...}``.
+
+    Without forwarding the extras, callers like ``storage/ops.py`` that use
+    stdlib ``logging.getLogger`` and emit ``logger.log(..., extra={"outcome":
+    "success", ...})`` would have their structured fields silently dropped
+    on the way to the OTLP exporter — ``outcome``, ``elapsed_ms``, etc.
+    would never reach the exporter.
     """
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
         # Get corresponding Loguru level if it exists
         try:
             level = logger.level(record.levelname).name
@@ -299,8 +285,17 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        # Add logger_name to extra to prevent KeyError
-        logger_extras = {"logger_name": record.name}
+        # Forward caller-supplied ``extra={...}``. Python's stdlib spreads
+        # ``extra`` directly into ``record.__dict__``; the delta vs. a blank
+        # LogRecord is exactly what the caller passed.
+        logger_extras: dict[str, object] = {
+            k: v
+            for k, v in record.__dict__.items()
+            if k not in _LOGRECORD_RESERVED_ATTRS
+        }
+        # SDK convention: ``logger_name`` always tracks ``record.name``.
+        # Set last so callers can't shadow it via ``extra``.
+        logger_extras["logger_name"] = record.name
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()
@@ -534,9 +529,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 except Exception:
                     logging.error("Failed to start flush task", exc_info=True)
 
-        # OTLP export: build list of processors, wire up only if any are enabled.
-        #   ENABLE_OTLP_LOGS: primary exporter (host DaemonSet, central ClickHouse)
-        #   ENABLE_OTLP_WORKFLOW_LOGS: secondary exporter (tenant collector, S3/Kafka)
+        # OTLP log export — single exporter to OTEL_EXPORTER_OTLP_ENDPOINT.
         try:
             otlp_processors = []
 
@@ -552,26 +545,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                         max_queue_size=OTEL_QUEUE_SIZE,
                     )
                 )
-                logging.info(
-                    "OTLP primary exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT
-                )
-
-            if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
-                otlp_processors.append(
-                    BatchLogRecordProcessor(
-                        OTLPLogExporter(
-                            endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
-                            timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                        ),
-                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-                        max_export_batch_size=OTEL_BATCH_SIZE,
-                        max_queue_size=OTEL_QUEUE_SIZE,
-                    )
-                )
-                logging.info(
-                    "OTLP workflow logs exporter enabled: %s",
-                    OTEL_WORKFLOW_LOGS_ENDPOINT,
-                )
+                logging.info("OTLP exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT)
 
             if otlp_processors:
                 self.logger_provider = LoggerProvider(

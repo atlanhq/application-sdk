@@ -53,11 +53,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import (
-    DEPLOYMENT_NAME,
-    ENABLE_PROMETHEUS_METRICS,
-    LOCAL_ENVIRONMENT,
-)
+from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -74,6 +70,30 @@ from application_sdk.handler.manifest import AppManifest
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def _record_proxy_failure(reason: str, log_message: str) -> None:
+    """Record a Temporal-core ``/metrics`` proxy failure.
+
+    Increments the ``temporal_core_metrics_proxy_failures_total`` counter
+    so failures are observable from VictoriaMetrics (and not just buried
+    in the WARNING logs), and emits the warning. ``reason`` should be a
+    bounded label value — exception class name or ``http_<status>``."""
+    from application_sdk.observability import (  # noqa: PLC0415 — cold path: only on proxy failure
+        metrics as _metrics_module,
+    )
+
+    counter = _metrics_module.create_counter(
+        "temporal_core_metrics_proxy_failures",
+        description=(
+            "Failures fetching the Temporal Rust-core /metrics endpoint via "
+            "the in-process FastAPI proxy. Each increment is one scrape "
+            "where Temporal-core series were not retrievable."
+        ),
+        unit="1",
+    )
+    counter.add(1, {"reason": reason})
+    logger.warning(log_message, exc_info=True)
 
 
 def _serialize_credential_value(v: Any) -> str:
@@ -472,12 +492,24 @@ def create_app_handler_service(
     else:
         app = FastAPI(title=title, description=description, version=version)
 
-    from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
-        LogMiddleware,
-        MetricsMiddleware,
+    from opentelemetry.instrumentation.fastapi import (  # noqa: PLC0415 — cold path: FastAPI instrumentor wired at app creation
+        FastAPIInstrumentor,
     )
 
-    app.add_middleware(MetricsMiddleware)
+    from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
+        EXCLUDED_LOG_PATHS,
+        LogMiddleware,
+    )
+
+    # Auto-instrument HTTP server with OTel: emits http.server.duration,
+    # http.server.active_requests, etc. with route-templated http.route labels
+    # (no raw-path cardinality blowup). Metrics flow through the global
+    # MeterProvider configured in observability/metrics_adaptor.py and land in
+    # prometheus_client.REGISTRY via the PrometheusMetricReader.
+    FastAPIInstrumentor.instrument_app(
+        app,
+        excluded_urls=",".join(sorted(EXCLUDED_LOG_PATHS)),
+    )
     app.add_middleware(LogMiddleware)
 
     def _create_context(credentials: list[HandlerCredential]) -> HandlerContext:
@@ -1668,20 +1700,58 @@ def create_app_handler_service(
     # Prometheus metrics
     # ------------------------------------------------------------------
 
-    if ENABLE_PROMETHEUS_METRICS:
+    @app.get("/metrics")
+    async def prometheus_metrics() -> Response:
+        """Expose application metrics in Prometheus exposition format.
 
-        @app.get("/metrics")
-        async def prometheus_metrics() -> Response:
-            """Expose application metrics in Prometheus exposition format."""
-            from prometheus_client import (  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
-                REGISTRY,
-                generate_latest,
-            )
+        Merges two sources into a single response:
+        1. The OTel ``PrometheusMetricReader`` registry — covers HTTP metrics
+           from FastAPIInstrumentor, the worker's ``MetricsInterceptor``, and
+           any custom user metrics via ``application_sdk.observability.metrics``.
+        2. The Temporal Runtime's loopback Prometheus endpoint — proxies the
+           Rust-core metrics (gRPC client-call latencies on the server,
+           workflow / activity task latencies, sticky cache, etc.) so
+           operators have a single scrape target per pod.
+        """
+        from prometheus_client import (  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
+            REGISTRY,
+            generate_latest,
+        )
 
-            return Response(
-                content=generate_latest(REGISTRY),
-                media_type="text/plain; version=0.0.4; charset=utf-8",
-            )
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when /metrics is hit
+            TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
+            TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+        )
+
+        body = generate_latest(REGISTRY)
+
+        if TEMPORAL_PROMETHEUS_BIND_ADDRESS:
+            try:
+                import httpx  # noqa: PLC0415 — cold path: only when Temporal Rust-core proxy enabled
+
+                async with httpx.AsyncClient(
+                    timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
+                ) as client:
+                    resp = await client.get(
+                        f"http://{TEMPORAL_PROMETHEUS_BIND_ADDRESS}/metrics"
+                    )
+                    if resp.status_code == 200:
+                        body = body + b"\n" + resp.content
+                    else:
+                        _record_proxy_failure(
+                            f"http_{resp.status_code}",
+                            f"Temporal core metrics proxy returned HTTP {resp.status_code}",
+                        )
+            except Exception as exc:
+                _record_proxy_failure(
+                    type(exc).__name__,
+                    "Temporal core metrics unavailable",
+                )
+
+        return Response(
+            content=body,
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     # ------------------------------------------------------------------
     # UI routes
