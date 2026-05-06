@@ -228,51 +228,112 @@ class TestBaseConnectionConfig:
         round_tripped = BaseConnectionConfig.model_validate(cfg.model_dump())
         assert round_tripped.model_extra == original
 
-    def test_subclass_with_aliased_fields(self):
-        """Migration path: subclass declares typed fields with hyphenated aliases."""
+    def test_subclass_with_real_typed_fields(self):
+        """Migration path: subclass declares typed fields with hyphenated aliases.
+
+        Filters use real ``dict[str, list[str]]`` types — no stringified JSON.
+        """
 
         class MyConnectionConfig(BaseConnectionConfig):
-            include_filter: str = Field(default="{}", alias="include-filter")
-            exclude_filter: str = Field(default="{}", alias="exclude-filter")
+            include_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="include-filter"
+            )
+            exclude_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="exclude-filter"
+            )
             page_size: int = Field(default=500, alias="page-size")
 
         cfg = MyConnectionConfig.model_validate(
             {
-                "include-filter": '{"db": ["public"]}',
-                "exclude-filter": "{}",
+                "include-filter": {"db": ["public", "analytics"]},
+                "exclude-filter": {},
                 "page-size": 1000,
             }
         )
-        assert cfg.include_filter == '{"db": ["public"]}'
-        assert cfg.exclude_filter == "{}"
+        assert cfg.include_filter == {"db": ["public", "analytics"]}
+        assert cfg.exclude_filter == {}
         assert cfg.page_size == 1000
 
     def test_subclass_dict_returns_declared_and_extras(self):
         """dict(subclass_instance) covers both declared fields and inherited extras."""
 
         class MyConnectionConfig(BaseConnectionConfig):
-            include_filter: str = Field(default="{}", alias="include-filter")
+            include_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="include-filter"
+            )
 
         cfg = MyConnectionConfig.model_validate(
-            {"include-filter": "{}", "unexpected": "value"}
+            {"include-filter": {"db": ["s"]}, "unexpected": "value"}
         )
         as_dict = dict(cfg)
-        assert as_dict["include_filter"] == "{}"
+        assert as_dict["include_filter"] == {"db": ["s"]}
         assert as_dict["unexpected"] == "value"
 
     def test_subclass_model_dump_by_alias_preserves_wire_keys(self):
         """model_dump(by_alias=True) emits the original hyphenated wire keys."""
 
         class MyConnectionConfig(BaseConnectionConfig):
-            include_filter: str = Field(default="{}", alias="include-filter")
+            include_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="include-filter"
+            )
             page_size: int = Field(default=500, alias="page-size")
 
-        cfg = MyConnectionConfig(**{"include-filter": '{"a": ["b"]}', "page-size": 100})
+        cfg = MyConnectionConfig(**{"include-filter": {"a": ["b"]}, "page-size": 100})
         dumped = cfg.model_dump(by_alias=True)
         assert dumped == {
-            "include-filter": '{"a": ["b"]}',
+            "include-filter": {"a": ["b"]},
             "page-size": 100,
         }
+
+    def test_dict_style_access_on_extras(self):
+        """cfg["k"], cfg.get(...), and "k" in cfg work for dict-shaped extras."""
+        cfg = BaseConnectionConfig.model_validate({"host": "db", "port": 5432})
+
+        # __getitem__
+        assert cfg["host"] == "db"
+        assert cfg["port"] == 5432
+        with pytest.raises(KeyError):
+            _ = cfg["missing"]
+
+        # get with default
+        assert cfg.get("host") == "db"
+        assert cfg.get("missing") is None
+        assert cfg.get("missing", "fallback") == "fallback"
+
+        # __contains__
+        assert "host" in cfg
+        assert "missing" not in cfg
+
+    def test_dict_style_access_on_declared_fields_and_aliases(self):
+        """Lookups try field name, then alias, then extras."""
+
+        class MyConnectionConfig(BaseConnectionConfig):
+            include_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="include-filter"
+            )
+
+        cfg = MyConnectionConfig.model_validate(
+            {"include-filter": {"db": ["s"]}, "extra_key": "x"}
+        )
+
+        # By Python field name
+        assert cfg["include_filter"] == {"db": ["s"]}
+        # By alias
+        assert cfg["include-filter"] == {"db": ["s"]}
+        # Extra
+        assert cfg["extra_key"] == "x"
+        # Non-existent
+        assert cfg.get("nope", "default") == "default"
+        assert "include_filter" in cfg
+        assert "include-filter" in cfg
+        assert "extra_key" in cfg
+        assert "nope" not in cfg
+
+    def test_contains_rejects_non_string_keys(self):
+        """Non-string keys are not in the model — no TypeError."""
+        cfg = BaseConnectionConfig.model_validate({"host": "db"})
+        assert 42 not in cfg  # type: ignore[operator]
+        assert None not in cfg  # type: ignore[operator]
 
     def test_subclass_can_forbid_extras(self):
         """Apps subclass and override extra='forbid' for strict validation."""
@@ -310,16 +371,35 @@ class TestBaseMetadataConfig:
             "extraction-method": "api",
         }
 
-    def test_subclass_with_aliased_fields(self):
+    def test_subclass_with_real_typed_fields(self):
         class MyMetadataConfig(BaseMetadataConfig):
             extraction_method: str = Field(default="api", alias="extraction-method")
-            include_filter: str = Field(default="{}", alias="include-filter")
+            include_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="include-filter"
+            )
+            enable_tag_sync: bool = Field(default=False, alias="enable-tag-sync")
 
         cfg = MyMetadataConfig.model_validate(
-            {"extraction-method": "core", "include-filter": '{"x": ["y"]}'}
+            {
+                "extraction-method": "core",
+                "include-filter": {"x": ["y"]},
+                "enable-tag-sync": True,
+            }
         )
         assert cfg.extraction_method == "core"
-        assert cfg.include_filter == '{"x": ["y"]}'
+        assert cfg.include_filter == {"x": ["y"]}
+        assert cfg.enable_tag_sync is True
+
+    def test_dict_style_access(self):
+        """Same dict-compat behavior as BaseConnectionConfig."""
+        cfg = BaseMetadataConfig.model_validate(
+            {"extraction-method": "api", "page-size": 500}
+        )
+        assert cfg["extraction-method"] == "api"
+        assert cfg.get("page-size") == 500
+        assert cfg.get("missing", "default") == "default"
+        assert "extraction-method" in cfg
+        assert "missing" not in cfg
 
 
 class TestPreflightInputFieldTypes:

@@ -23,17 +23,63 @@ from pydantic.alias_generators import to_camel
 from application_sdk.contracts.base import SerializableEnum
 
 
-class BaseConnectionConfig(BaseModel):
+class _DictLikeConfigBase(BaseModel):
+    """Shared implementation for the connection / metadata config bases.
+
+    Adds dict-style access (``cfg["k"]``, ``cfg.get("k", default)``,
+    ``"k" in cfg``) so existing callers that consumed the previous
+    ``dict[str, Any]`` field do not need to change.  Lookups try
+    declared field names, then aliases, then ``model_extra``.
+
+    Not intended to be subclassed directly — use
+    :class:`BaseConnectionConfig` or :class:`BaseMetadataConfig`.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    def __getitem__(self, key: str) -> Any:
+        if key in type(self).model_fields:
+            return getattr(self, key)
+        for name, field_info in type(self).model_fields.items():
+            if field_info.alias == key:
+                return getattr(self, name)
+        if self.model_extra and key in self.model_extra:
+            return self.model_extra[key]
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dict-style accessor with default — mirrors ``dict.get``."""
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        try:
+            self[key]
+        except KeyError:
+            return False
+        return True
+
+
+class BaseConnectionConfig(_DictLikeConfigBase):
     """Base type for preflight and metadata connection configuration.
 
     Replaces ``dict[str, Any]`` as the type of ``PreflightInput.connection_config``
     and ``MetadataInput.connection_config``.  ``extra="allow"`` keeps raw-dict
     inputs from breaking on ingress; apps should subclass and declare fields
-    explicitly to get strong typing::
+    with **real types** instead of carrying forward stringified JSON::
 
         class MyAppConnectionConfig(BaseConnectionConfig):
-            include_filter: str = Field(default="{}", alias="include-filter")
-            exclude_filter: str = Field(default="{}", alias="exclude-filter")
+            include_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="include-filter"
+            )
+            exclude_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="exclude-filter"
+            )
+            page_size: int = Field(default=500, alias="page-size")
 
     The subclass can then be used directly in the handler::
 
@@ -48,46 +94,43 @@ class BaseConnectionConfig(BaseModel):
 
     .. note::
 
-        **Consumption pattern changed.**  Wire-format ingress is unchanged
-        (raw dicts validate via ``extra="allow"``), but downstream access no
-        longer works like a dict.  Update callers::
+        **Consumption is dict-compatible.**  In addition to attribute access
+        (``cfg.host``), dict-style patterns from the old ``dict[str, Any]``
+        type continue to work — no caller-side migration needed::
 
-            cfg["host"]               → cfg.host  (declared field)
-                                      → cfg.model_extra["host"]  (extra)
-            cfg.get("host", default)  → getattr(cfg, "host", default)
-                                      → cfg.model_extra.get("host", default)
-            dict(cfg)                 → still works (yields all keys)
+            cfg["host"]               # KeyError if absent
+            cfg.get("host", default)  # safe accessor with default
+            "host" in cfg             # membership test
+            dict(cfg)                 # all keys (declared + extras)
+
+        Lookups try declared field names first, then aliases, then extras.
     """
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-
-class BaseMetadataConfig(BaseModel):
+class BaseMetadataConfig(_DictLikeConfigBase):
     """Base type for form-level metadata forwarded alongside preflight credentials.
 
     Captures the UI form state sent by the frontend (extraction type, filter
     keys, user-entered prefixes, etc.).  Apps subclass this to declare fields
-    explicitly::
+    with **real types**::
 
         class MyAppMetadataConfig(BaseMetadataConfig):
-            include_filter: str = Field(default="{}", alias="include-filter")
-            exclude_filter: str = Field(default="{}", alias="exclude-filter")
+            include_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="include-filter"
+            )
+            exclude_filter: dict[str, list[str]] = Field(
+                default_factory=dict, alias="exclude-filter"
+            )
             extraction_method: str = Field(default="api", alias="extraction-method")
+            enable_tag_sync: bool = Field(default=False, alias="enable-tag-sync")
 
     If the UI is generated from the contract toolkit (app.pkl), the subclass
     fields should mirror the ``uiConfig.tasks[*].inputs`` entries so the
     generated metadata contract stays aligned with the UI contract.
 
-    .. note::
-
-        **Consumption pattern changed.**  Same caveat as
-        :class:`BaseConnectionConfig` — wire-format ingress is unchanged,
-        but downstream callers must replace ``cfg["key"]`` / ``cfg.get(...)``
-        with attribute access or ``cfg.model_extra``.  See
-        :class:`BaseConnectionConfig` for the migration table.
+    Dict-style consumption (``cfg["k"]``, ``cfg.get(...)``, ``"k" in cfg``) is
+    backward-compatible — see :class:`BaseConnectionConfig` for details.
     """
-
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
 class HandlerCredential(BaseModel):
