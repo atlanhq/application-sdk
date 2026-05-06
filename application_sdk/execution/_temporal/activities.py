@@ -210,19 +210,20 @@ def create_activity_from_task(
             return cast("Output", result)
 
         except Exception as e:
-            from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                NonRetryableError,
+            from application_sdk.errors.base import (  # noqa: PLC0415 — circular
+                AppError as _AppError,
             )
 
-            if isinstance(e, NonRetryableError):
-                from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            if isinstance(e, _AppError):
+                from application_sdk.execution.errors import (  # noqa: PLC0415 — circular
                     ApplicationError,
                 )
 
                 raise ApplicationError(
                     str(e),
+                    e.to_failure_details(),
                     type=type(e).__name__,
-                    non_retryable=True,
+                    non_retryable=not e.effective_retryable,
                 ) from e
             raise
 

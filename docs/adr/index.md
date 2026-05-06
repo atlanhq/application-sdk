@@ -16,3 +16,4 @@ ADRs capture the architectural decisions behind the Application SDK — what was
 | [ADR-0010](0010-async-first-blocking-code.md) | Async-First Design and Blocking Code Pitfalls |
 | [ADR-0011](0011-logging-level-guidelines.md) | Logging Level Guidelines |
 | [ADR-0012](0012-observability-consolidation.md) | Observability Consolidation |
+| [ADR-0013](0013-error-hierarchy-and-failure-taxonomy.md) | Error Hierarchy and Failure Taxonomy |
