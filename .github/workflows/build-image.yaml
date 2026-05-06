@@ -49,8 +49,10 @@ jobs:
 
       - name: Lowercase branch name
         id: get_lowercase_branch
+        env:
+          BRANCH: ${{ steps.get_branch.outputs.branch }}
         run: |
-          echo "lowercase_branch=$(echo '${GITHUB_REF#refs/heads/}' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')" >> $GITHUB_OUTPUT
+          echo "lowercase_branch=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')" >> $GITHUB_OUTPUT
 
       - name: Short commit SHA
         id: get_sha
