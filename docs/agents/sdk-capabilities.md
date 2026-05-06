@@ -23,6 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 10 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -811,6 +812,84 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Signature:** `transform_agent_credentials(agent_json: dict[str, Any])`
 - **Summary:** Transform raw agent JSON into the format connectors expect.
 - **Defined in:** `application_sdk/common/transforms.py`
+
+## `application_sdk.errors`
+
+Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.)
+
+### Classes
+
+#### `ErrorCode`
+
+- **Import:** `from application_sdk.errors import ErrorCode`
+- **Signature:** `class ErrorCode(component: str, id: int) -> None`
+- **Summary:** Structured error code for monitoring and alerting.
+- **Defined in:** `application_sdk/errors.py`
+
+### Constants and Enums
+
+#### `APP_ERROR`
+
+- **Import:** `from application_sdk.errors import APP_ERROR`
+- **Signature:** `APP_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `APP_NON_RETRYABLE`
+
+- **Import:** `from application_sdk.errors import APP_NON_RETRYABLE`
+- **Signature:** `APP_NON_RETRYABLE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `CONTRACT_VALIDATION`
+
+- **Import:** `from application_sdk.errors import CONTRACT_VALIDATION`
+- **Signature:** `CONTRACT_VALIDATION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `CREDENTIAL_ERROR`
+
+- **Import:** `from application_sdk.errors import CREDENTIAL_ERROR`
+- **Signature:** `CREDENTIAL_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `CREDENTIAL_NOT_FOUND`
+
+- **Import:** `from application_sdk.errors import CREDENTIAL_NOT_FOUND`
+- **Signature:** `CREDENTIAL_NOT_FOUND`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `HANDLER_ERROR`
+
+- **Import:** `from application_sdk.errors import HANDLER_ERROR`
+- **Signature:** `HANDLER_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `PAYLOAD_SAFETY`
+
+- **Import:** `from application_sdk.errors import PAYLOAD_SAFETY`
+- **Signature:** `PAYLOAD_SAFETY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `SECRET_NOT_FOUND`
+
+- **Import:** `from application_sdk.errors import SECRET_NOT_FOUND`
+- **Signature:** `SECRET_NOT_FOUND`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
+
+#### `STORAGE_NOT_FOUND`
+
+- **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
+- **Signature:** `STORAGE_NOT_FOUND`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors.py`
 
 ## `application_sdk.execution`
 
