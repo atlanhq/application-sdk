@@ -54,7 +54,7 @@ class TestWarnRemovedEnvVars:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ATLAN_ENABLE_APP_VITALS", "true")
-        monkeypatch.setenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "http://x")
+        monkeypatch.setenv("ATLAN_ENABLE_OTLP_METRICS", "http://x")
         monkeypatch.setenv("ATLAN_TRACES_BATCH_SIZE", "100")
         ctx, mock_logger = self._patch_logger()
         with ctx:
@@ -62,22 +62,22 @@ class TestWarnRemovedEnvVars:
 
         msg = self._formatted_message(mock_logger)
         assert "ATLAN_ENABLE_APP_VITALS" in msg
-        assert "OTEL_WORKFLOW_LOGS_ENDPOINT" in msg
+        assert "ATLAN_ENABLE_OTLP_METRICS" in msg
         assert "ATLAN_TRACES_BATCH_SIZE" in msg
 
     def test_warning_lists_vars_alphabetically_for_stable_output(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "http://x")
+        monkeypatch.setenv("ATLAN_ENABLE_OTLP_METRICS", "http://x")
         monkeypatch.setenv("ATLAN_ENABLE_APP_VITALS", "true")
         ctx, mock_logger = self._patch_logger()
         with ctx:
             warn_removed_env_vars()
 
         msg = self._formatted_message(mock_logger)
-        # Sorted: ATLAN_ENABLE_APP_VITALS comes before OTEL_WORKFLOW_LOGS_ENDPOINT.
+        # Sorted: ATLAN_ENABLE_APP_VITALS comes before ATLAN_ENABLE_OTLP_METRICS.
         assert msg.index("ATLAN_ENABLE_APP_VITALS") < msg.index(
-            "OTEL_WORKFLOW_LOGS_ENDPOINT"
+            "ATLAN_ENABLE_OTLP_METRICS"
         )
 
     def test_empty_string_value_does_not_trigger_warning(
