@@ -197,31 +197,30 @@ jobs:
 
           TITLE="[Security] app-runtime-base:3 — ${TOTAL} CRITICAL/HIGH vulnerabilities (${DATE})"
 
-          DESCRIPTION=$(cat <<DESC
-## Nightly Security Scan Results
-
-**Image:** \`registry.atlan.com/public/app-runtime-base:3\`
-**Scan date:** ${DATE}
-**Workflow run:** [View logs](${RUN_URL})
-
----
-
-### Vulnerability Summary
-
-| Severity | Trivy | Snyk | Total |
-|----------|------:|-----:|------:|
-| 🔴 Critical | ${{ steps.parse.outputs.t_crit }} | ${{ steps.parse.outputs.s_crit }} | **${{ steps.parse.outputs.total_crit }}** |
-| 🟠 High     | ${{ steps.parse.outputs.t_high }} | ${{ steps.parse.outputs.s_high }} | **${{ steps.parse.outputs.total_high }}** |
-| 🟡 Medium   | ${{ steps.parse.outputs.t_med  }} | ${{ steps.parse.outputs.s_med  }} | **${{ steps.parse.outputs.total_med  }}** |
-| 🔵 Low      | ${{ steps.parse.outputs.t_low  }} | ${{ steps.parse.outputs.s_low  }} | **${{ steps.parse.outputs.total_low  }}** |
-
-${VULN_DETAIL}
-
----
-
-*Automatically created by the nightly security scan workflow.*
-DESC
-)
+          DESCRIPTION=$(
+            echo "## Daily Security Scan Results"
+            echo ""
+            echo "**Image:** \`${TARGET_IMAGE}\`"
+            echo "**Scan date:** ${DATE}"
+            echo "**Workflow run:** [View logs](${RUN_URL})"
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Vulnerability Summary"
+            echo ""
+            echo "| Severity | Trivy | Snyk | Total |"
+            echo "|----------|------:|-----:|------:|"
+            echo "| 🔴 Critical | ${{ steps.parse.outputs.t_crit }} | ${{ steps.parse.outputs.s_crit }} | **${{ steps.parse.outputs.total_crit }}** |"
+            echo "| 🟠 High     | ${{ steps.parse.outputs.t_high }} | ${{ steps.parse.outputs.s_high }} | **${{ steps.parse.outputs.total_high }}** |"
+            echo "| 🟡 Medium   | ${{ steps.parse.outputs.t_med  }} | ${{ steps.parse.outputs.s_med  }} | **${{ steps.parse.outputs.total_med  }}** |"
+            echo "| 🔵 Low      | ${{ steps.parse.outputs.t_low  }} | ${{ steps.parse.outputs.s_low  }} | **${{ steps.parse.outputs.total_low  }}** |"
+            echo ""
+            printf '%s\n' "${VULN_DETAIL}"
+            echo ""
+            echo "---"
+            echo ""
+            echo "*Automatically created by the daily security scan workflow.*"
+          )
 
           PAYLOAD=$(jq -n \
             --arg title       "$TITLE" \
