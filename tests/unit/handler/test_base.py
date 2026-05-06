@@ -4,7 +4,7 @@ import pytest
 
 from application_sdk.errors import HANDLER_ERROR, ErrorCode
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
-from application_sdk.handler.context import HandlerContext
+from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
@@ -64,15 +64,20 @@ class TestHandlerError:
 class TestHandlerContextProperty:
     def test_context_outside_invocation_raises(self):
         handler = DefaultHandler()
-        with pytest.raises(RuntimeError, match="context is not set"):
+        from application_sdk.app.base import AppContextError
+
+        with pytest.raises(AppContextError, match="context is not set"):
             _ = handler.context
 
     def test_context_set_and_cleared(self):
         handler = DefaultHandler()
         ctx = HandlerContext(app_name="test-app")
-        handler._context = ctx
-        assert handler.context is ctx
-        handler._context = None
+        with bind_handler_context(ctx):
+            assert handler.context is ctx
+        from application_sdk.app.base import AppContextError
+
+        with pytest.raises(AppContextError, match="context is not set"):
+            _ = handler.context
 
     def test_is_abstract(self):
         # Cannot instantiate Handler directly

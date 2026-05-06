@@ -13,7 +13,7 @@ from uuid import UUID
 import httpx
 import pytest
 
-from application_sdk.app.base import App
+from application_sdk.app.base import App, AppContextError
 from application_sdk.app.entrypoint import entrypoint
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
@@ -193,18 +193,20 @@ async def test_handler_context_secret_store_access(context_client_with_secrets):
 
 @pytest.mark.integration
 async def test_handler_context_cleanup_between_requests(context_client):
-    """G6.3: Each request gets an independent request_id; _context is None between requests."""
+    """G6.3: Each request gets an independent request_id; context is cleared between requests."""
     client, handler = context_client
 
     body = {"credentials": []}
     resp1 = await client.post("/workflows/v1/auth", json=body)
     assert resp1.status_code == 200
-    # After the first request, context should be cleared
-    assert handler._context is None
+    # After each request, context should be cleared (ContextVar reset by bind_handler_context).
+    with pytest.raises(AppContextError):
+        _ = handler.context
 
     resp2 = await client.post("/workflows/v1/auth", json=body)
     assert resp2.status_code == 200
-    assert handler._context is None
+    with pytest.raises(AppContextError):
+        _ = handler.context
 
     # Each request got a distinct request_id
     assert len(handler.captured_request_ids) == 2
@@ -565,14 +567,16 @@ async def test_start_strips_inline_credentials(
 
 @pytest.mark.integration
 async def test_prometheus_metrics_endpoint():
-    """G6.13: GET /metrics returns Prometheus exposition format with HTTP metrics."""
-    from unittest import mock
+    """G6.13: GET /metrics returns Prometheus exposition format with HTTP metrics.
 
+    The handler unconditionally exposes /metrics (the previous
+    ENABLE_PROMETHEUS_METRICS toggle was removed in the observability
+    consolidation — every handler-mode pod is now scrapeable directly,
+    no opt-out)."""
     from application_sdk.handler.service import create_app_handler_service
 
     handler = DefaultHandler()
-    with mock.patch("application_sdk.handler.service.ENABLE_PROMETHEUS_METRICS", True):
-        app = create_app_handler_service(handler, app_name="prom-test-app")
+    app = create_app_handler_service(handler, app_name="prom-test-app")
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -585,24 +589,6 @@ async def test_prometheus_metrics_endpoint():
         body = resp.text
         # Should contain standard prometheus_client metrics
         assert "python_info" in body
-
-
-@pytest.mark.integration
-async def test_prometheus_metrics_not_exposed_when_disabled():
-    """G6.14: GET /metrics returns 404 when Prometheus is disabled."""
-    from unittest import mock
-
-    from application_sdk.handler.service import create_app_handler_service
-
-    handler = DefaultHandler()
-    with mock.patch("application_sdk.handler.service.ENABLE_PROMETHEUS_METRICS", False):
-        app = create_app_handler_service(handler, app_name="no-prom-app")
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/metrics")
-        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

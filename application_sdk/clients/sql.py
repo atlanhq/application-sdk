@@ -8,22 +8,14 @@ database operations, supporting batch processing and server-side cursors.
 import asyncio
 import concurrent
 import hashlib
+from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Union, cast
 from urllib.parse import quote_plus
 
-from application_sdk.clients import ClientInterface
+from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
+from application_sdk.clients.sql_typecasters import install_tolerant_text_decoder_hook
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
@@ -59,15 +51,15 @@ class BaseSQLClient(ClientInterface):
 
     connection = None
     engine = None
-    credentials: Dict[str, Any]
-    resolved_credentials: Dict[str, Any]
+    credentials: dict[str, Any]
+    resolved_credentials: dict[str, Any]
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
-    DB_CONFIG: Optional[DatabaseConfig] = None
+    DB_CONFIG: DatabaseConfig | None = None
 
     def __init__(
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
-        credentials: Optional[Dict[str, Any]] = None,
+        credentials: dict[str, Any] | None = None,
         chunk_size: int = 5000,
     ):
         """
@@ -84,7 +76,7 @@ class BaseSQLClient(ClientInterface):
         self.resolved_credentials = {}
         self.chunk_size = chunk_size
 
-    async def load(self, credentials: Dict[str, Any]) -> None:
+    async def load(self, credentials: dict[str, Any]) -> None:
         """Load credentials and prepare engine for lazy connections.
 
         This method now only stores credentials and creates the engine without
@@ -112,6 +104,12 @@ class BaseSQLClient(ClientInterface):
                 pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
 
+            # Install a tolerant UTF-8 text decoder on every new psycopg2/psycopg3
+            # connection so query-history rows containing non-UTF-8 bytes (e.g.
+            # 0x96 from Windows-1252 paste) yield U+FFFD instead of raising
+            # UnicodeDecodeError. Tracking: WARE-970.
+            install_tolerant_text_decoder_hook(self.engine)
+
             # Test connection briefly to validate credentials.
             # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
             # engine.connect() blocks the event loop — critical for Temporal
@@ -134,7 +132,7 @@ class BaseSQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}") from e
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {e!s}") from e
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -259,7 +257,7 @@ class BaseSQLClient(ClientInterface):
         return encoded_token
 
     def add_connection_params(
-        self, connection_string: str, source_connection_params: Dict[str, Any]
+        self, connection_string: str, source_connection_params: dict[str, Any]
     ) -> str:
         """Add additional connection parameters to a SQLAlchemy connection string.
 
@@ -373,7 +371,7 @@ class BaseSQLClient(ClientInterface):
                 )
                 if not cursor or not cursor.cursor:
                     raise ValueError("Cursor is not supported")
-                column_names: List[str] = [
+                column_names: list[str] = [
                     description.name.lower()
                     for description in cursor.cursor.description
                 ]
@@ -392,7 +390,7 @@ class BaseSQLClient(ClientInterface):
         logger.info("Query execution completed")
 
     def _execute_pandas_query(
-        self, conn, query, chunksize: Optional[int]
+        self, conn, query, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Helper function to execute SQL query using pandas.
            The function is responsible for using import_optional_dependency method of the pandas library to import sqlalchemy
@@ -420,7 +418,7 @@ class BaseSQLClient(ClientInterface):
             return pd.read_sql_query(query, dbapi_conn, chunksize=chunksize)
 
     def _read_sql_query(
-        self, session: "Session", query: str, chunksize: Optional[int]
+        self, session: "Session", query: str, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided session.
 
@@ -435,7 +433,7 @@ class BaseSQLClient(ClientInterface):
         return self._execute_pandas_query(conn, query, chunksize=chunksize)
 
     def _execute_query_daft(
-        self, query: str, chunksize: Optional[int]
+        self, query: str, chunksize: int | None
     ) -> Union["daft.DataFrame", Iterator["daft.DataFrame"]]:
         """Execute SQL query using the provided engine and daft.
 
@@ -456,7 +454,7 @@ class BaseSQLClient(ClientInterface):
         return daft.read_sql(query, self.engine.connect, infer_schema_length=chunksize)
 
     def _execute_query(
-        self, query: str, chunksize: Optional[int]
+        self, query: str, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided engine and pandas.
 
@@ -471,7 +469,7 @@ class BaseSQLClient(ClientInterface):
             return self._execute_pandas_query(conn, query, chunksize)
 
     async def _execute_async_read_operation(
-        self, query: str, chunksize: Optional[int]
+        self, query: str, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Helper to execute async read operation with either async session or thread executor."""
         if isinstance(self.engine, str):
@@ -507,7 +505,7 @@ class BaseSQLClient(ClientInterface):
     async def get_batched_results(
         self,
         query: str,
-    ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:  # type: ignore
+    ) -> AsyncIterator["pd.DataFrame"] | Iterator["pd.DataFrame"]:  # type: ignore
         """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
@@ -563,7 +561,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
     connection: "AsyncConnection"
     engine: "AsyncEngine"
 
-    async def load(self, credentials: Dict[str, Any]) -> None:
+    async def load(self, credentials: dict[str, Any]) -> None:
         """Load credentials and prepare async engine for lazy connections.
 
         This method stores credentials and creates an async engine without establishing
@@ -592,6 +590,10 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
 
+            # Same WARE-970 tolerant-decoder hook as the sync client. Async
+            # engines surface DBAPI events on the underlying sync_engine.
+            install_tolerant_text_decoder_hook(self.engine.sync_engine)
+
             # Test connection briefly to validate credentials
             async with self.engine.connect() as _:
                 pass  # Connection test successful
@@ -604,7 +606,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}") from e
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {e!s}") from e
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""

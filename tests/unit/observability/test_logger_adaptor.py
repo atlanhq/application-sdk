@@ -16,7 +16,13 @@ from application_sdk.observability.context import (
 )
 from application_sdk.observability.logger_adaptor import (
     AtlanLoggerAdapter,
+    _build_extra_dict,
+    _extract_exception_attributes,
+    _format_exception_stacktrace,
+    _format_printf_args,
+    _has_remote_otlp_endpoint,
     _make_log_record_dict,
+    _normalize_log_extra_value,
     get_logger,
 )
 from application_sdk.testing.hypothesis.strategies.common.logger import (
@@ -682,17 +688,49 @@ def test_exception_keeps_explicit_exc_info(logger_adapter: AtlanLoggerAdapter):
 
 
 def test_warning_with_exc_info_emits_traceback(capsys: pytest.CaptureFixture[str]):
-    """warning(..., exc_info=True) should render traceback in stderr output."""
+    """warning(..., exc_info=True) should render traceback in stdout output."""
     with create_logger_adapter() as logger_adapter:
         try:
             raise ValueError("traceback-check")
         except ValueError:
             logger_adapter.warning("Completing activity as failed", exc_info=True)
 
-    stderr = capsys.readouterr().err
-    assert "Completing activity as failed" in stderr
-    assert "Traceback (most recent call last):" in stderr
-    assert "ValueError: traceback-check" in stderr
+    captured = capsys.readouterr()
+    stdout = captured.out
+    assert "Completing activity as failed" in stdout
+    assert "Traceback (most recent call last):" in stdout
+    assert "ValueError: traceback-check" in stdout
+    assert "Completing activity as failed" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "token,call,expected_stream",
+    [
+        ("info-record", lambda lg: lg.info("info-record"), "out"),
+        ("warn-record", lambda lg: lg.warning("warn-record"), "out"),
+        ("err-record", lambda lg: lg.error("err-record"), "err"),
+        ("crit-record", lambda lg: lg.critical("crit-record"), "err"),
+    ],
+)
+def test_log_records_route_by_severity(
+    token: str,
+    call,
+    expected_stream: str,
+    capsys: pytest.CaptureFixture[str],
+):
+    """Records below ERROR go to stdout; ERROR/CRITICAL go to stderr.
+
+    Cloud log collectors that infer severity from the file descriptor (GCP
+    Cloud Logging is the motivating case) classify stderr lines as ERROR, so
+    benign records must land on stdout.
+    """
+    with create_logger_adapter() as logger_adapter:
+        call(logger_adapter)
+
+    captured = capsys.readouterr()
+    assert token in getattr(captured, expected_stream)
+    other = "err" if expected_stream == "out" else "out"
+    assert token not in getattr(captured, other)
 
 
 def test_log_record_model_extracts_exception_attrs_from_loguru_record():
@@ -1109,16 +1147,6 @@ class TestPython314EventLoopCompat:
 # ───────────────────────────────────────────────────────────────────────────
 
 
-from application_sdk.observability.logger_adaptor import (  # noqa: E402
-    _build_extra_dict,
-    _extract_exception_attributes,
-    _format_exception_stacktrace,
-    _format_printf_args,
-    _has_remote_otlp_endpoint,
-    _normalize_log_extra_value,
-)
-
-
 class TestHasRemoteOtlpEndpoint:
     """`_has_remote_otlp_endpoint` decides between local-noop and remote-export.
 
@@ -1275,8 +1303,8 @@ class TestBuildExtraDict:
         assert "logger_name" not in out
 
     def test_atlan_prefix_kept(self):
-        out = _build_extra_dict({"atlan-tenant": "acme"})
-        assert out["atlan-tenant"] == "acme"
+        out = _build_extra_dict({"atlan.tenant": "acme"})
+        assert out["atlan.tenant"] == "acme"
 
     def test_temporal_prefix_kept(self):
         out = _build_extra_dict({"temporal.activity.type": "fetch"})
@@ -1287,16 +1315,40 @@ class TestBuildExtraDict:
         assert out["tenant.id"] == "acme-1"
 
     def test_atlan_prefix_with_none_value_dropped(self):
-        out = _build_extra_dict({"atlan-tenant": None})
-        assert "atlan-tenant" not in out
+        out = _build_extra_dict({"atlan.tenant": None})
+        assert "atlan.tenant" not in out
 
     def test_non_primitive_prefixed_value_coerced_to_string(self):
-        out = _build_extra_dict({"atlan-payload": {"k": "v"}})
-        assert isinstance(out["atlan-payload"], str)
+        out = _build_extra_dict({"atlan.payload": {"k": "v"}})
+        assert isinstance(out["atlan.payload"], str)
+
+    def test_atlan_dash_prefix_dropped(self):
+        # The legacy "atlan-" dash form is no longer recognized — nothing
+        # in the codebase emits it as a logger extra key.
+        out = _build_extra_dict({"atlan-tenant": "acme"})
+        assert "atlan-tenant" not in out
 
     def test_attempt_normalized_via_known_key_path(self):
         out = _build_extra_dict({"attempt": 7})
         assert out["attempt"] == "7"
+
+    def test_atlan_dot_prefix_kept(self):
+        # The LogInterceptor emits atlan.correlation_id; any future
+        # atlan.* attribute must also pass through the gate.
+        out = _build_extra_dict(
+            {
+                "atlan.correlation_id": "corr-1",
+                "atlan.foo": "bar",
+            }
+        )
+        assert out["atlan.correlation_id"] == "corr-1"
+        assert out["atlan.foo"] == "bar"
+
+    def test_otel_prefix_kept(self):
+        # otel.status_code is the OTel semconv way to mark a record as failed;
+        # without it, the loguru-bridged log doesn't carry the status into CH.
+        out = _build_extra_dict({"otel.status_code": "ERROR"})
+        assert out["otel.status_code"] == "ERROR"
 
 
 class TestCreateLogRecord:
@@ -1424,13 +1476,15 @@ class TestLoggingMethodsForwardToLoguru:
         self, logger_adapter: AtlanLoggerAdapter
     ):
         # Make `process` blow up; debug() must not propagate.
-        with mock.patch.object(
-            logger_adapter, "process", side_effect=RuntimeError("explode")
+        with (
+            mock.patch.object(
+                logger_adapter, "process", side_effect=RuntimeError("explode")
+            ),
+            mock.patch.object(logger_adapter, "_sync_flush") as fl,
         ):
-            with mock.patch.object(logger_adapter, "_sync_flush") as fl:
-                # Should not raise
-                logger_adapter.debug("x")
-                fl.assert_called_once()
+            # Should not raise
+            logger_adapter.debug("x")
+            fl.assert_called_once()
 
 
 class TestProcessV3CorrelationBridge:
@@ -1547,3 +1601,208 @@ def test_reset_for_testing_also_resets_flush_task_started():
     AtlanLoggerAdapter._flush_task_started = True
     AtlanLoggerAdapter._reset_for_testing()
     assert AtlanLoggerAdapter._flush_task_started is False
+
+
+# ---------------------------------------------------------------------------
+# _KNOWN_EXTRA_KEYS allowlist — pin the file_ref.* and obstore observability
+# vocabulary so a future contributor can't silently drop a field that the
+# downstream OTLP/ClickHouse pipeline expects.
+# ---------------------------------------------------------------------------
+
+
+class TestKnownExtraKeysAllowlist:
+    """Guard against accidental removal of allowlisted attribute keys."""
+
+    def test_file_ref_transfer_keys_in_allowlist(self) -> None:
+        from application_sdk.observability.logger_adaptor import _KNOWN_EXTRA_KEYS
+
+        # Each of these is emitted as a kwarg on a file_ref.* event in
+        # storage/reference.py or storage/file_ref_sync.py.  Dropping any of
+        # them silently zeroes out the OTLP attribute payload for that field.
+        required = {
+            "storage_path",
+            "local_path",
+            "file_size_bytes",
+            "bytes_uploaded",
+            "bytes_downloaded",
+            "bytes_transferred_before_failure",
+            "sha256",
+            "tier",
+            "file_count",
+            "files_skipped",
+            "files_downloaded",
+            "chunk_size_bytes",
+            "chunks_total",
+            "chunks_completed",
+            "is_cache_hit",
+            "reused_local_path",
+            "dedup_key",
+            "chunk_offset",
+            "chunk_length",
+        }
+        missing = required - _KNOWN_EXTRA_KEYS
+        assert not missing, f"_KNOWN_EXTRA_KEYS missing required keys: {missing}"
+
+    def test_storage_op_outcome_keys_in_allowlist(self) -> None:
+        """``storage/ops.py:_log_storage_event`` emits these via stdlib
+        ``logger.log(..., extra={...})``. They reach OTLP via the
+        ``InterceptHandler`` stdlib→loguru bridge — which then filters
+        through ``_KNOWN_EXTRA_KEYS``. Dropping any of them silently zeroes
+        out the per-attempt observability payload."""
+        from application_sdk.observability.logger_adaptor import _KNOWN_EXTRA_KEYS
+
+        required = {
+            "storage_op",
+            "store_path",
+            "outcome",
+            "elapsed_ms",
+            "size_bytes",
+            "throughput_mibps",
+            "error_class",
+        }
+        missing = required - _KNOWN_EXTRA_KEYS
+        assert not missing, f"_KNOWN_EXTRA_KEYS missing required keys: {missing}"
+
+    def test_kwarg_outside_allowlist_is_dropped(self) -> None:
+        from application_sdk.observability.logger_adaptor import _build_extra_dict
+
+        result = _build_extra_dict(
+            {"storage_path": "s3://x", "definitely_not_in_allowlist": "drop me"}
+        )
+        assert "storage_path" in result
+        assert "definitely_not_in_allowlist" not in result
+
+
+# ---------------------------------------------------------------------------
+# InterceptHandler — stdlib → loguru bridge
+# ---------------------------------------------------------------------------
+
+
+class TestInterceptHandlerStdlibBridge:
+    """``storage/ops.py`` and ``observability/pushgateway.py`` use stdlib
+    ``logging.getLogger(...)`` and emit ``extra={...}``. The bridge must
+    forward those structured fields to loguru so they reach OTLP — without
+    them, every ObjectStore success / failure log loses its dimensions."""
+
+    def test_reserved_attrs_set_includes_modern_python_fields(self) -> None:
+        """Sanity check: the auto-derived reserved set covers all the
+        well-known stdlib LogRecord fields, so the bridge doesn't accidentally
+        forward them as if they were caller extras."""
+        from application_sdk.observability.logger_adaptor import (
+            _LOGRECORD_RESERVED_ATTRS,
+        )
+
+        # A representative subset that's been stable across Python 3.x.
+        for built_in in (
+            "name",
+            "msg",
+            "args",
+            "levelname",
+            "levelno",
+            "pathname",
+            "filename",
+            "module",
+            "exc_info",
+            "lineno",
+            "funcName",
+            "created",
+            "msecs",
+            "thread",
+            "threadName",
+            "process",
+            "processName",
+        ):
+            assert (
+                built_in in _LOGRECORD_RESERVED_ATTRS
+            ), f"{built_in} should be a reserved LogRecord attribute"
+
+    def test_caller_extras_forwarded_to_loguru_bind(self) -> None:
+        """A stdlib ``logger.log(..., extra={"outcome": "success"})`` call
+        must end up binding ``outcome`` on the loguru record, not silently
+        dropping it."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=42,
+            msg="storage event",
+            args=(),
+            exc_info=None,
+        )
+        # Stdlib logging spreads ``extra={...}`` directly onto the record.
+        record.outcome = "success"
+        record.storage_op = "upload"
+        record.elapsed_ms = 12.3
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            handler.emit(record)
+
+        bind_call = mock_log.opt.return_value.bind
+        bind_call.assert_called_once()
+        bind_kwargs = bind_call.call_args.kwargs
+        assert bind_kwargs["outcome"] == "success"
+        assert bind_kwargs["storage_op"] == "upload"
+        assert bind_kwargs["elapsed_ms"] == 12.3
+        assert bind_kwargs["logger_name"] == "test_logger"
+
+    def test_logger_name_is_not_overridden_by_caller_extra(self) -> None:
+        """SDK convention: ``logger_name`` must always be ``record.name``;
+        a stdlib caller passing ``extra={"logger_name": "other"}`` must not
+        shadow it."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name="real_logger",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=42,
+            msg="x",
+            args=(),
+            exc_info=None,
+        )
+        record.logger_name = "shadow_attempt"
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            handler.emit(record)
+
+        bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
+        assert bind_kwargs["logger_name"] == "real_logger"
+
+    def test_record_with_no_extras_only_forwards_logger_name(self) -> None:
+        """A vanilla stdlib log call (no ``extra=``) shouldn't accidentally
+        forward built-in record attributes as caller fields."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name="vanilla",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="plain",
+            args=(),
+            exc_info=None,
+        )
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            handler.emit(record)
+
+        bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
+        # Only the SDK-injected key, no spurious built-in record fields.
+        assert bind_kwargs == {"logger_name": "vanilla"}

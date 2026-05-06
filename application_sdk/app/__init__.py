@@ -29,21 +29,23 @@ from application_sdk.app.task import TaskMetadata, task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.credentials.atlan_client import AtlanClientMixin
 from application_sdk.execution.retry import RetryPolicy
+from application_sdk.server.mcp.decorators import mcp_tool
 
 __all__ = [
     "App",
     "AppContext",
-    "AtlanClientMixin",
     "AppError",
     "AppRegistry",
+    "AtlanClientMixin",
     "EntryPointMetadata",
     "Input",
     "NonRetryableError",
     "Output",
-    "RetryableError",
     "RetryPolicy",
+    "RetryableError",
     "TaskMetadata",
     "TaskRegistry",
     "entrypoint",
+    "mcp_tool",
     "task",
 ]

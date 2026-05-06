@@ -24,13 +24,13 @@ Performs a complete v2 → v3 upgrade of an application-sdk connector.
 1. Parse `$ARGUMENTS` to get the target path. If no argument is given, stop and ask the user for one.
 2. Confirm the target path exists. If it does not, stop and report the error.
 3. Confirm you are running from within the application-sdk repo by checking that `tools/migrate_v3/rewrite_imports.py` exists. If it does not, stop and tell the user to run this skill from the application-sdk repo root.
-4. **Check the connector's SDK dependency.** Read the connector's `pyproject.toml` and look for `atlan-application-sdk`. v3.0.0 is published on PyPI, so the dependency should be:
+4. **Check the connector's SDK dependency.** Read the connector's `pyproject.toml` and look for `atlan-application-sdk`. The minimum supported v3 version for upgrades is **3.3.0** — earlier 3.x releases are missing `CredentialRef.resolve()`, `self.upload()`-via-`FileReference` plumbing, and the typed credential routing the rest of this skill assumes. The dependency must be:
    ```toml
-   atlan-application-sdk>=3.0.0,<4.0.0
+   atlan-application-sdk>=3.3.0,<4.0.0
    ```
-   - If it points to a v2 release (e.g. `atlan-application-sdk>=2.x`), update the pin to `>=3.0.0,<4.0.0` and run `uv sync`.
-   - If the `pyproject.toml` still contains a `[tool.uv.sources]` git override pointing at `main` or `refactor-v3` (a pattern used during v3 development), **remove it** — it's no longer needed now that v3.0.0 is on PyPI, and leaving it in pins the connector to an unstable ref.
-   - If it already depends on `atlan-application-sdk>=3.0.0` from PyPI with no git override, proceed.
+   - If it points to a v2 release (e.g. `atlan-application-sdk>=2.x`) or an early v3 (`>=3.0.0`/`>=3.1.0`/`>=3.2.0`), bump the pin to `>=3.3.0,<4.0.0` and run `uv sync`. Refresh `uv.lock` in the same commit.
+   - If the `pyproject.toml` still contains a `[tool.uv.sources]` git override pointing at `main` or `refactor-v3` (a pattern used during v3 development), **remove it** — it's no longer needed now that v3.3.0 is on PyPI, and leaving it in pins the connector to an unstable ref.
+   - If it already depends on `atlan-application-sdk>=3.3.0` from PyPI with no git override, proceed.
 
 4b. **Check temporalio version.** The v3 SDK requires `temporalio` with `VersioningBehavior`. Run in the connector repo root (where `pyproject.toml` is):
    ```bash
@@ -123,10 +123,10 @@ Examine the source files in the target path (exclude test files from this analys
 After identifying the connector type, determine the transformation strategy:
 
 **SQL connectors** (SqlMetadataExtractor, SqlQueryExtractor, IncrementalSqlMetadataExtractor):
-- Ask the user which approach they prefer:
-  1. **Keep existing transformer** — preserve `QueryBasedTransformer`/`AtlasTransformer` usage inside `transform_data()`. Less migration effort, leverages existing YAML query files.
-  2. **Asset-mapper approach** — replace the transformer with pure Python mapper functions that take typed records and return pyatlan Asset instances directly. More upfront work but eliminates Daft DataFrame and YAML query file dependencies.
-- If the user has no preference, keep the existing transformer to minimize migration risk.
+- **Default to the asset-mapper + `FileReference` + `self.upload()` pipeline.** This is the v3-native shape that lets each `@task` stream rows into a typed file output and hand the path downstream — same as `atlan-openapi-app`. The fetch tasks return `FileReference`-typed outputs, the publish step calls `self.upload(UploadInput(local_path=..., storage_path=...))`, and there is no shared `output_path` / scan-the-directory upload step. Inform the user:
+  > "v3 SQL connectors use the same asset-mapper + FileReference pipeline as REST connectors: each fetch task writes a typed file and returns a `FileReference`; `self.upload()` carries it to object store. This replaces the v2 `output_path` directory + `upload_to_atlan()` scan pattern. Shall I proceed with this approach?"
+- Only fall back to the legacy transformer (`QueryBasedTransformer` / `AtlasTransformer` inside `transform_data()`) if the user explicitly asks to minimize migration risk and accepts the cleanup follow-up. Note this in the manual-follow-up list — it preserves YAML query files and Daft DataFrames that the team is removing.
+- **Do NOT** keep the v2 "build one shared `output_path`, write all fetch outputs there, scan-and-upload at the end" pattern. Each task returns its own `FileReference`; uploads happen via `self.upload()`. This was a top review finding on the MSSQL v3 PR.
 
 **Multi-workflow connectors** (more than one `WorkflowInterface` subclass detected):
 - Consolidate into a **single `App` subclass** with one `@entrypoint`-decorated method per v2 workflow. All entry points share `@task` methods, the handler, and `AppContext`.
@@ -174,11 +174,12 @@ Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the co
 - Forbidden: `async def test_auth(self, *args, **kwargs):`
 - The checker will FAIL if `*args`/`**kwargs` appear in a Handler subclass method.
 
-**Constraint — `allow_unbounded_fields=True` must be used sparingly:**
+**Constraint — `allow_unbounded_fields=True` must not appear in connector contracts:**
 
-- Needed on top-level `run()` input models that receive arbitrary dicts from AE/Heracles (e.g. `connection: dict[str, Any]`, `metadata: dict[str, Any]`).
+- The `connection` field should use `ConnectionRef` from `application_sdk.contracts.types` — the SDK provides this typed model for the well-known connection shape from AE/Heracles.
+- `metadata: dict[str, Any]` is a contracting failure — the connector must know the shape of its inputs; type them explicitly.
 - Must NOT be used on inter-task Input/Output contracts — use `Annotated[list[T], MaxItems(N)]` or `FileReference` instead.
-- The checker will WARN if `allow_unbounded_fields=True` appears on task-level contracts.
+- The checker will WARN on any `allow_unbounded_fields=True`; reviewers will reject it.
 
 Apply changes in this order:
 
@@ -263,6 +264,45 @@ uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
 
 All FAIL checks should pass at this point. If any remain, address them before moving to Phase 3.
 
+**Positive-idiom checks (manual — the migration checker does not enforce these).** Each one corresponds to a review finding that blocked the MSSQL v3 PR. Each must come up clean before Phase 3 — if any returns matches, refactor per the "v3 Task Idioms" section below.
+
+```bash
+# 1) No imports from private SDK modules (any segment starting with `_`).
+#    Catches both top-level (application_sdk._x) and nested (application_sdk.foo._y).
+grep -rEn "from application_sdk[A-Za-z0-9_.]*\._[A-Za-z0-9_]" <target-path>/app/ \
+  && echo "FAIL: private SDK import" || echo "OK: no private SDK imports"
+
+# 2) No asyncio.to_thread inside @task code (use self.run_in_thread)
+grep -rn "asyncio\.to_thread\b" <target-path>/app/ \
+  && echo "FAIL: replace with self.run_in_thread" || echo "OK"
+
+# 3) No os.environ reads in app/ — entry points (main.py / run_dev.py) live OUTSIDE
+#    the app/ dir or under a clearly-marked boundary. If your repo puts them under
+#    app/, exclude those paths explicitly.
+grep -rEn "os\.environ\.get\b|os\.environ\[|os\.getenv\b" <target-path>/app/ \
+  && echo "FAIL: move config to Input contract or AppConfig" || echo "OK"
+
+# 4) No full-result materialization (cursor.fetchall / pd.read_sql_query)
+grep -rEn "\.fetchall\b|pd\.read_sql_query\b|read_sql_query\b" <target-path>/app/ \
+  && echo "FAIL: stream via fetchmany() instead" || echo "OK"
+
+# 5) No raw context.get_secret(<guid>) for credentials — use CredentialRef.resolve(input).
+#    (Legitimate non-credential secret lookups are rare; if you have one, document it.)
+grep -rn "context\.get_secret\b" <target-path>/app/ \
+  && echo "FAIL: use CredentialRef.resolve(input) for credentials" || echo "OK"
+
+# 6) No hand-rolled obstore / ParquetFileWriter / JsonFileWriter usage
+grep -rEn "ParquetFileWriter\b|JsonFileWriter\b|obstore\." <target-path>/app/ \
+  && echo "FAIL: use FileReference + self.upload()" || echo "OK"
+
+# 7) allow_unbounded_fields should not appear — use ConnectionRef for connection fields,
+#    typed fields for metadata. Reviewers will reject dict[str, Any] escapes.
+grep -rn "allow_unbounded_fields=True" <target-path>/app/ \
+  && echo "WARN: avoid allow_unbounded_fields; use ConnectionRef / typed fields instead" || echo "OK"
+```
+
+These are guardrails, not blockers — a connector with a legitimate reason for any of these patterns may still ship, but it must be called out in the Phase 5 summary's manual-follow-up list with the reason. Default stance: refactor. Note: check #3 will hit any `os.environ` read inside `app/`; if the connector's entry point lives under `app/main.py` or `app/run_dev.py`, exclude those paths from the grep before treating a hit as a FAIL.
+
 ---
 
 ## Phase 3 — Validation loop
@@ -327,7 +367,7 @@ After tests pass and e2e tests are generated, the app needs a PKL contract that 
    ls <target-path>/contract/app.pkl 2>/dev/null && echo "EXISTS" || echo "MISSING"
    ```
 
-2. **If `contract/app.pkl` exists:** Ask the user whether they want to update it for v3 compatibility (e.g. bump toolkit version, regenerate artifacts). If yes, invoke `/contract` with the update action.
+2. **If `contract/app.pkl` exists:** Check `contract/PklProject` for the `atlan-app-contract-toolkit` version. If it is **older than 0.9.0**, bump it before regenerating — earlier versions emit the legacy `metadata`-wrapped extract args (`{ "metadata": { "include_filter": ... } }`) that AE no longer prefers. Toolkit 0.9.0+ emits flat snake_case args (`include_filter`, `exclude_filter`, `temp_table_regex`, `preflight_check`, `extraction_method`) at the top level. Refresh `PklProject.deps.json` after the bump. Then invoke `/contract` with the update action to regenerate `manifest.json`.
 
 3. **If no contract exists:** Inform the user that v3 apps should have a PKL contract and ask whether to generate one:
    > "This connector has no PKL contract (`contract/app.pkl`). v3 apps use contracts to generate workflow config, credential config, AE manifest, and typed Input classes — the SDK auto-serves these at `/workflows/v1/configmap/*` and `/manifest`. Want me to generate one using the `/contract` skill?"
@@ -790,6 +830,149 @@ Once the user confirms the SDK PR is merged:
 
 ---
 
+## v3 Task Idioms — required patterns
+
+These are the **positive** rules — what idiomatic v3 task code looks like. The migration checker only catches absence of v2 leftovers; it does not catch presence of these idioms. Treat every item here as a hard rule. Each one was a recurring review finding on the MSSQL v3 PR (atlan-mssql-app#89); the fixes that closed those threads landed in atlan-mssql-app#93.
+
+### Client caching in `app_state` — one client per worker
+
+A `@task` MUST NOT build a fresh client (engine, pool, auth round-trip) on every call. The first task that needs a client builds it, stores it on `self.app_state`, and every later task in the same worker reuses it. A final `dispose_client` `@task` closes it in the run's `finally` block.
+
+```python
+class MyApp(App):  # SQL connectors: replace App with SqlMetadataExtractor
+    async def _get_client(self, input: MyInput) -> MyClient:
+        cached = self.get_app_state("client")
+        if cached is not None:
+            return cached
+        cred_ref = CredentialRef.resolve(input)
+        client = MyClient.from_credential_ref(cred_ref)
+        await client.connect()
+        self.set_app_state("client", client)
+        return client
+
+    @task
+    async def dispose_client(self) -> None:
+        cached = self.get_app_state("client")
+        if cached is not None:
+            await cached.close()
+            self.set_app_state("client", None)
+
+    async def run(self, input: MyInput) -> MyOutput:
+        try:
+            ...   # your fetch tasks here
+        finally:
+            await self.dispose_client()
+```
+
+> **SQL connectors:** use `SqlMetadataExtractor` as the base class (it provides `run()` and SQL-specific task scaffolding). The client-caching pattern above is identical regardless of base class.
+
+`get_app_state` / `set_app_state` are only callable inside `@task` methods — see the corresponding gotcha. Putting the cached object on `app_state` (not a module-level global) is what makes the cache worker-local rather than process-global, which matters when the worker pool runs multiple connectors.
+
+The handler runs in the HTTP service process and the extractor runs in the Temporal worker — they do **not** share in-memory state. So the handler's `test_auth` client and the workflow's cached client are separate objects; do not try to thread one into the other.
+
+### Use `self.run_in_thread()` for blocking work
+
+If a step has no async-native API (e.g. `pyodbc`, `pymssql`, sync SQLAlchemy, `requests`, anything that calls a C library that blocks the event loop), wrap it in `self.run_in_thread()`. It is the SDK's heartbeat-pumping executor — `asyncio.to_thread` is **not** equivalent. Using `asyncio.to_thread` from inside a `@task` risks heartbeat failures and event-loop deadlocks; the activity will fail Temporal heartbeat checks under load.
+
+For example, in a SQL connector:
+```python
+rows = await self.run_in_thread(_stream_query_into_writer, cursor, query, output_file)
+```
+
+If you find yourself reaching for threads in a hot loop, reconsider — fully-async APIs are always preferable. Threads are a last resort.
+
+### `self.upload()` + `FileReference` — never hand-roll uploads
+
+Each fetch task writes to a local file and returns a typed `FileReference` on its output. For example, in a SQL connector:
+
+```python
+@task
+async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
+    output_file = self._local_output_path(input, "tables.parquet")
+    await self.run_in_thread(_stream_query_into_writer, cursor, TABLES_SQL, output_file)
+    return FetchTablesOutput(
+        tables_file=FileReference(local_path=str(output_file), tier=StorageTier.RETAINED),
+    )
+```
+
+The task names, input/output contracts, and write helper differ per connector type; the `FileReference` shape is the same for all. Downstream tasks accept `FileReference` on their typed input and read via `input.tables_file.local_path`. As the final app step prior to handing off to the Publish (or other) system app, explicitly call `self.upload()` on the final output:
+
+```python
+await self.upload(UploadInput(local_path=output_file_path, storage_path=storage_path))
+```
+
+Note that this is NOT necessary inside each task — task-to-task uploading/downloading of files within the same app is handled _automatically_ purely by virtue of a `FileReference` being included in the Output of a task (automatically uploaded, if not already in the object store) or the Input of a task (automatically downloaded, if not already present in the worker).
+
+**Selective materialization with `Lazy()`:** If a task declares a `FileReference` input field it doesn't always need (e.g. a heavy artifact only read under certain conditions), mark it `Lazy` to skip the automatic pre-download:
+
+```python
+from typing import Annotated
+from application_sdk.contracts.types import FileReference, Lazy
+
+class MyInput(Input):
+    manifest: FileReference | None = None                            # eager (always downloaded)
+    heavy_artifact: Annotated[FileReference | None, Lazy()] = None  # lazy (skipped)
+```
+
+Call `await fetch(ref)` from `application_sdk.storage.reference` inside the task to download on demand. The SHA-256 sidecar fast-path means a second call is cheap if the file is already on disk. Use `Lazy()` on any field the activity may not read — it prevents unnecessary downloads and reduces timeout risk for lightweight activities on large inputs.
+
+**Dedup is automatic:** if the same `storage_path` appears on multiple input fields (fan-out pattern), the SDK downloads it once and reuses the local path. No manual dedup needed.
+
+Reasons every connector must use this shape:
+
+- `self.upload()` is an SDK `@task` with a dedicated retry policy and activity-level recording. A worker swap mid-run will not re-upload; a hand-rolled `obstore.put` will.
+- The "shared `output_path` directory" + `upload_to_atlan()` scan-the-directory pattern from v2 is gone. Each task owns its file.
+- AE downstream nodes (`qi`, `lineage-app`, `publish`) JSONPath against `FileReference` outputs, not directory prefixes.
+
+**Forbidden:** `obstore.*` calls in app code, custom `JsonFileWriter` / `ParquetFileWriter` instantiation, calling `application_sdk.execution._temporal.activity_utils.get_object_store_prefix` (or anything else from a `_`-prefixed SDK module).
+
+Reference: `atlan-openapi-app/app/connector.py`. SQL connectors use the same pipeline — there is no SQL-vs-REST split.
+
+### No private SDK imports
+
+Anything under a `_`-prefixed package or module is private and may be removed without warning. The MSSQL v3 PR was flagged for importing `application_sdk.execution._temporal.activity_utils.get_object_store_prefix`. The right fix is to expose `FileReference` outputs (above), not to import the private helper.
+
+A grep check that should pass on a clean upgrade (catches both top-level `application_sdk._x` and nested `application_sdk.foo._y`):
+```bash
+grep -rEn "from application_sdk[A-Za-z0-9_.]*\._[A-Za-z0-9_]" <target-path>/app/ && echo FAIL || echo OK
+```
+If this returns matches, refactor before merging — there is always a public API for what you need.
+
+### Single source of configuration
+
+Configuration must come from **either** the contract `Input` model **or** `AppConfig`. Never both. Never `os.environ.get()` reads in app code.
+
+- Run-time switches (`enabled`, filter regexes, batch sizes) → fields on the contract `Input` model. Document them in `app.pkl`.
+- Local-dev / process-level settings (port, task queue) → `AppConfig` (read from `parse_args()` + env, but only at the entry point). Do not duplicate these reads in `main.py` / `run_dev.py`.
+- Stale debug toggles (`ATLAN_ENABLE_<X>`, `<X>_FORCE_<Y>`) → delete. If a kill switch is genuinely needed, model it as a typed field on the contract.
+
+Reviewers on the MSSQL v3 PR rejected mixed configuration ("two paths to drive the app") as a top-level design smell. The fix is to remove the env-var reads, not to document them.
+
+### Avoid `allow_unbounded_fields` everywhere
+
+`allow_unbounded_fields=True` does not belong in connector contracts. The tempting examples are not valid use cases:
+
+- **`connection: dict[str, Any]`** — the SDK provides `ConnectionRef` in `application_sdk.contracts.types`, a typed model covering the well-known AE/Heracles connection shape (<10 attributes). Use it.
+- **`metadata: dict[str, Any]`** — a `dict[str, Any]` field is a contracting failure. The connector must know the shape of its inputs; if it doesn't, the contract is incompletely defined. If it does, the field can and should be typed.
+
+If you encounter a base class that already declares `allow_unbounded_fields=True`, do not re-declare it in the subclass — but also do not rely on it as justification for adding new `dict[str, Any]` fields. Add typed fields only.
+
+Inter-task contracts must never use `allow_unbounded_fields=True` — use typed fields, `Annotated[list[T], MaxItems(N)]`, or `FileReference`. The checker WARNs on any occurrence; reviewers will REJECT it.
+
+### Toolkit version pin (for `/contract`)
+
+When invoking `/contract` in Phase 4c, ensure `contract/PklProject` pins `atlan-app-contract-toolkit` to **`0.9.0` or later**. Earlier versions emit the legacy `metadata`-wrapped extract args (`{ "metadata": { "include_filter": ..., "exclude_filter": ... } }`), which AE no longer prefers and which forces the connector to add normalization logic. Toolkit 0.9.0 emits flat snake_case args at the top level (`include_filter`, `exclude_filter`, `temp_table_regex`, `preflight_check`, `extraction_method`).
+
+If the existing `PklProject` is older, bump it and refresh `PklProject.deps.json` before regenerating `manifest.json`.
+
+### SDK auto-serves configmaps — do not implement
+
+The SDK service registers `/workflows/v1/configmap/{config_map_id}` and `/workflows/v1/configmaps` automatically (`application_sdk/handler/service.py`). It auto-loads JSON files from `app/generated/` (the default value of `CONTRACT_GENERATED_DIR`).
+
+Connectors do **not** need a `get_configmap` static method on the handler, do not need to wire the route in `main.py`, do not need a custom static-file handler. If you find such code in a v2 connector, **delete it** during the upgrade. The MSSQL v3 PR shipped with this exact dead code; reviewers asked for its removal.
+
+---
+
 ## Known Gotchas — learned from real upgrades
 
 These are issues discovered during production migrations that are not covered by the automated checker or upgrade tooling. Read these before starting.
@@ -870,39 +1053,63 @@ The `name` field on `PreflightCheck` is converted to camelCase and used as the k
 
 Your handler just returns `PreflightOutput` with `PreflightCheck` items as before; the service layer handles the format conversion.
 
-### Handler credentials — v2 nested dict vs v3 list format
+### Handler credentials — keep typed end-to-end, no dict roundtrip
 
-v3 handler endpoints receive credentials as `list[HandlerCredential]` (`[{key, value}]` pairs). Heracles and existing frontends send v2 nested dicts (`{host, username, password, extra: {workspace}}`). The SDK normalizes v2 format to v3 automatically in `service.py`, but your handler's `_build_client` helper must reconstruct the nested dict from `input.credentials`:
+v3 handler endpoints receive credentials as `list[HandlerCredential]` (`[{key, value}]` pairs). Heracles and existing frontends still send v2 nested dicts (`{host, username, password, extra: {workspace}}`); the SDK normalizes both shapes in `service.py`.
+
+**Do NOT** convert these to `dict[str, Any]` and pass the dict downstream. The connector should define a `Credential` subclass for its connector and flow that typed object end-to-end — through the handler, into the client, into every `@task` that needs auth. Reviewers on the MSSQL v3 PR (#89) flagged the typed→dict→typed roundtrip as the single most repeated anti-pattern: it loses static type information, defeats payload-safety, and forces every consumer to re-validate the same shape.
 
 ```python
-async def _build_client(credentials: list[HandlerCredential]) -> MyClient:
-    cred_dict = {}
-    extra = {}
-    for cred in credentials:
-        if cred.key.startswith("extra."):
-            extra[cred.key[len("extra."):]] = cred.value
-        else:
-            cred_dict[cred.key] = cred.value
-    if extra:
-        cred_dict["extra"] = extra
-    client = MyClient()
-    await client.load(credentials=cred_dict)
-    return client
+# `Credential` (in application_sdk.credentials) is a runtime-checkable Protocol.
+# Subclass one of the concrete BaseModel-based built-ins (BasicCredential,
+# ApiKeyCredential, BearerTokenCredential, OAuthClientCredential, CertificateCredential)
+# and add connector-specific fields, OR define your own pydantic BaseModel that
+# satisfies the Protocol (i.e. provides `credential_type` and `async validate()`).
+from application_sdk.credentials import BasicCredential
+
+class MyCredential(BasicCredential):
+    workspace: str = ""
+
+# Single parser — accepts list[HandlerCredential] or v2 nested dict; returns typed.
+def parse_my_credentials(raw: list[HandlerCredential] | dict[str, Any]) -> MyCredential: ...
+
+class MyHandler(Handler):
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        cred = parse_my_credentials(input.credentials)
+        client = await self._build_client(cred)
+        ...
+
+    async def _build_client(self, cred: MyCredential) -> MyClient:
+        # `load_with_credential` is a connector-defined factory on YOUR client class;
+        # the SDK does not require a specific name. The point is a single typed entry
+        # point — not a `dict[str, Any]` round-trip.
+        client = MyClient()
+        await client.load_with_credential(cred)
+        return client
 ```
 
-### Payload safety and `allow_unbounded_fields`
+**Single source of `_build_client`.** Define it **once** — either as a static method on the client class or as a module-level helper imported by both handler and extractor. Do NOT duplicate the build logic across `app/handler.py` and `app/extractor.py`; reviewers flag this because `test_auth` / `preflight` may pass through one path while the workflow's client build fails on the other.
 
-v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields will raise `PayloadSafetyError` at import time. For top-level input models that receive arbitrary config from AE/Heracles (connection dicts, metadata dicts), use:
+For the workflow side, see "Client caching in `app_state`" below — the typed `MyCredential` is what the cached client is built from, **once per worker**.
+
+### Payload safety — avoid `dict[str, Any]`
+
+v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields will raise `PayloadSafetyError` at import time. The correct fix is to use proper types, not to add `allow_unbounded_fields=True`:
+
+- **`connection`** → use `ConnectionRef` from `application_sdk.contracts.types`
+- **`metadata`** → define typed fields for the attributes your connector actually uses
+- **`credentials`** → use a typed `Credential` subclass (see "Credential resolution" above)
 
 ```python
-class MyExtractionInput(Input, allow_unbounded_fields=True):
+from application_sdk.contracts.types import ConnectionRef
+
+class MyExtractionInput(Input):
     credential_guid: str = ""
-    credentials: dict[str, Any] = {}
-    connection: dict[str, Any] = {}
-    metadata: dict[str, Any] = {}
+    credentials: MyCredential = Field(default_factory=MyCredential)
+    connection: ConnectionRef = Field(default_factory=ConnectionRef)
 ```
 
-For inter-task contracts, prefer typed fields with `MaxItems` or `FileReference`.
+For inter-task contracts, use typed fields with `MaxItems` or `FileReference`.
 
 ### Dockerfile must use v3 base image and pattern
 
@@ -939,7 +1146,7 @@ Key rules:
 - Base image: `registry.atlan.com/public/app-runtime-base:3` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
 - `COPY app/ app/` — only app code, NOT the entire repo
 - `ATLAN_APP_MODULE` — always a single `module:ClassName` entry; use `@entrypoint` methods to expose multiple workflows (comma-separated multi-app is not supported)
-- No `CMD` — the base image handles mode via `APPLICATION_MODE` env var set by Helm
+- No `CMD` — the base image handles mode via `ATLAN_APP_MODE` env var set by Helm (`APPLICATION_MODE` is the v2-compat fallback; use `ATLAN_APP_MODE` for v3)
 - No `entrypoint.sh`, `supervisord.conf`, `otel-config.yaml` — v3 base image handles all of these
 
 ### output_path and output_prefix must be computed
@@ -1053,17 +1260,49 @@ Use `self.context` (returns `AppContext`) inside `@task` methods. It has `get_se
 output_path = str(Path(tempfile.gettempdir()) / "my-app" / self.run_id)
 ```
 
-### Write to local disk, not ParquetFileWriter/JsonFileWriter
+### Stream rows to disk — never materialize the full result set
 
-`ParquetFileWriter` and `JsonFileWriter` internally call `ObjectStore` → `DaprClient()` → Dapr health check (60s timeout). This fails locally and adds unnecessary coupling. Write directly to local disk:
+> **SQL connectors only.** This section describes cursor-based streaming for SQL connectors. REST/API connectors use the same per-batch write loop but replace `cursor.fetchmany()` with paginated API calls.
+
+`ParquetFileWriter` and `JsonFileWriter` internally call `ObjectStore` → `DaprClient()` → Dapr health check (60s timeout). This fails locally and adds unnecessary coupling. Write directly to local disk — but **stream**, do not materialize.
+
+Reviewers on the MSSQL v3 PR (#89) flagged `pd.read_sql_query(...)` followed by `df.to_parquet(...)` as the second-most-cited anti-pattern in SQL connectors: it pulls every row into memory before writing a byte. Memory grows linearly with metadata size for no functional reason. The correct shape for a SQL connector is a single cursor + bounded chunks:
+
 ```python
-# Parquet
-pandas_df.to_parquet(str(output_file))
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-# JSONL
-with output_file.open("wb") as f:
-    f.write(json.dumps(entity).encode() + b"\n")
+def _stream_query_into_writer(cursor, query: str, output_file: Path, chunk_size: int = 10_000) -> int:
+    cursor.execute(query)
+    columns = [c[0] for c in cursor.description]
+    writer: pq.ParquetWriter | None = None
+    total = 0
+    while True:
+        rows = cursor.fetchmany(chunk_size)
+        if not rows:
+            break
+        df = pd.DataFrame(rows, columns=columns)
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        if writer is None:
+            writer = pq.ParquetWriter(str(output_file), table.schema)
+        writer.write_table(table)
+        total += len(rows)
+    if writer is not None:
+        writer.close()
+    return total
 ```
+
+JSONL is naturally streamable — write per-record:
+```python
+with output_file.open("wb") as f:
+    for record in iterate_records():
+        f.write(json.dumps(record).encode() + b"\n")
+```
+
+**SQL connector rule of thumb:** if your fetch task calls `pd.read_sql_query` or `cursor.fetchall()`, it is wrong. Use `fetchmany(chunk_size)` in a loop, or the SDK's streaming helpers.
+
+All blocking DB calls inside the loop must be wrapped in `self.run_in_thread()` — see "Use `self.run_in_thread()` for blocking work" below.
 
 ### workflows extra is required
 
@@ -1084,13 +1323,32 @@ credential_stores = {"default": MockSecretStore(secrets)}
 await run_dev_combined(MyApp, credential_stores=credential_stores)
 ```
 
-### Credential resolution via CredentialRef
+### Credential resolution — `CredentialRef.resolve(input)`, not raw `get_secret`
 
-v3 uses `CredentialRef` (from `application_sdk.credentials`) as a portable credential handle. Always resolve credentials from the secret store inside `@task` methods via `self.context.get_secret()`. The old `credential_guid: str` field is a v2 pattern — the v3 equivalent is a `CredentialRef`-typed field on the Input model, or look up by the raw GUID if migrating incrementally:
+v3 uses `CredentialRef` (from `application_sdk.credentials`) as a portable credential handle. The idiomatic resolve path is:
+
 ```python
-creds_json = await self.context.get_secret(credential_guid)
-creds = json.loads(creds_json) if isinstance(creds_json, str) else creds_json
+from application_sdk.credentials.ref import CredentialRef
+
+cred_ref = CredentialRef.resolve(input)         # typed; routes direct + agent (SDR) flows
+# `from_credential_ref` is a connector-defined factory; the SDK does not ship a
+# canonical name. Pair the resolved `cred_ref` with whichever typed entry point
+# your client class exposes — the point is to keep the ref typed end-to-end.
+client = MyClient.from_credential_ref(cred_ref)
 ```
+
+`CredentialRef.resolve(input)` is the strongly-typed routing helper added in SDK PR #1550 (3.3.0+). It handles both `extraction_method == "direct"` (with `credential_guid`) and `extraction_method == "agent"` (with `agent_json`) internally — so the connector does not branch on extraction method.
+
+**Do NOT** open-code the GUID-only path (`self.context.get_secret(credential_guid)` + `json.loads`). That was the v2/early-v3 fallback and reviewers on the MSSQL v3 PR (#89) flagged it as the wrong shape: it skips agent/SDR routing, throws away typing, and forces every consumer to re-parse JSON.
+
+**Edge case — `connection.attributes.defaultCredentialGuid`.** UI-created native AE workflows sometimes carry the credential ID on the `connection` payload rather than the `extraction_method`. Until `CredentialRef.resolve` covers this path natively, catch its `ValueError` and resolve from the connection in a small named helper:
+```python
+try:
+    cred_ref = CredentialRef.resolve(input)
+except ValueError as exc:
+    cred_ref = _resolve_from_connection_default(input, exc)
+```
+Keep that helper short and scoped to this fallback only — no other branching.
 
 ### QueryBasedTransformer needs workflow_id and workflow_run_id
 

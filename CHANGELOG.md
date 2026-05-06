@@ -1,5 +1,47 @@
 # Changelog
 
+## v3.6.0 (May 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.5.0...v3.6.0
+
+### Features
+
+- handler - expose form metadata in PreflightInput (#1643) (by @chaitanyaatlan in [ef538ac](https://github.com/atlanhq/application-sdk/commit/ef538ac))
+- fix documentation drift against v3 SDK (BLDX-1203) (#1632) (by @cmgrote in [49fc15f](https://github.com/atlanhq/application-sdk/commit/49fc15f))
+- FileReference reliability, concurrency, observability, and ergonomics [BLDX-1155] (#1636) (by @vaibhavatlan in [f16e58d](https://github.com/atlanhq/application-sdk/commit/f16e58d))
+- trend-table sort, SDK Vulns source-of-truth, header timestamp fix (#1657) (by @mananjain99 in [1fc0bc0](https://github.com/atlanhq/application-sdk/commit/1fc0bc0))
+- DISTR-370 add objectstore:// branch in resolve_credential_file for **Non-sensitive files** (#1638) (by @Lalit3716-atlan in [b85bafc](https://github.com/atlanhq/application-sdk/commit/b85bafc))
+- expose handler ops as SDR workflows (#1561) (by @Garavitey in [95193b4](https://github.com/atlanhq/application-sdk/commit/95193b4))
+- introduce typed Pydantic bases, deprecate dict[str, Any] inputs [BLDX-1224] (#1662) (by @vaibhavatlan in [2fcb486](https://github.com/atlanhq/application-sdk/commit/2fcb486))
+- consolidate to FastAPI instrumentor + 3 worker interceptors [ARUN-539] (#1573) (by @firecast in [2ccf34e](https://github.com/atlanhq/application-sdk/commit/2ccf34e))
+- add SDR e2e composite action + pytest base class (#1669) (by @Lalit3716-atlan in [8af18f3](https://github.com/atlanhq/application-sdk/commit/8af18f3))
+- typed AppError hierarchy with Audience routing, categorical leaves, and back-compat aliases [BLDX-1195] (#1656) (by @cmgrote in [a2cc8b7](https://github.com/atlanhq/application-sdk/commit/a2cc8b7))
+
+### Bug Fixes
+
+- sql - tolerant UTF-8 typecaster on psycopg cursors (#1642) (by @sachi-atlan in [bfa8e46](https://github.com/atlanhq/application-sdk/commit/bfa8e46))
+- guard capability-manifest grep pipeline against pipefail (#1654) (by @cmgrote in [a609957](https://github.com/atlanhq/application-sdk/commit/a609957))
+- decode OID 0 as tolerant UTF-8 for PgBouncer transaction pooling (#1652) (by @mothership-ai[bot] in [aa1079a](https://github.com/atlanhq/application-sdk/commit/aa1079a))
+- split logger sinks by severity (#1666) (by @Garavitey in [8e59567](https://github.com/atlanhq/application-sdk/commit/8e59567))
+
+
+## v3.5.0 (May 01, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.4.0...v3.5.0
+
+### Features
+
+- sql - make pool pre-ping configurable (#1591) (by @fyzanshaik-atlan in [fee1a05](https://github.com/atlanhq/application-sdk/commit/fee1a05))
+- tighten upgrade-v3 idioms from atlan-mssql-app#89 review (#1630) (by @AtMrun in [f0561a3](https://github.com/atlanhq/application-sdk/commit/f0561a3))
+- add capability-manifest skill and initial SDK capability manifest (#1637) (by @cmgrote in [85d1c73](https://github.com/atlanhq/application-sdk/commit/85d1c73))
+
+### Bug Fixes
+
+- stream CloudStore file transfers to eliminate OOM risk [BLDX-1198] (#1624) (by @cmgrote in [22dfb08](https://github.com/atlanhq/application-sdk/commit/22dfb08))
+- drain delay before worker shutdown to prevent phantom task slot deadlock (#1174) (by @tczhao in [189b9ac](https://github.com/atlanhq/application-sdk/commit/189b9ac))
+- address CVEs via temporalio bump and uv lock upgrade [BLDX-1212] (#1640) (by @vaibhavatlan in [6de53dc](https://github.com/atlanhq/application-sdk/commit/6de53dc))
+
+
 ## v3.4.0 (April 29, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.3.0...v3.4.0

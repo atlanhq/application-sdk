@@ -22,6 +22,44 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.context import correlation_context
 
+#: Resource attribute keys we inline as labels onto every metric series.
+#: Kept deliberately minimal — every additional inline key multiplies the
+#: per-series label set across the entire fleet of pods.
+#:
+#: Why ``app.name`` only:
+#:   - ``app.name`` is the connector identity; filtering by app is the most
+#:     common operator query, and the alternative (``target_info`` join) is
+#:     awkward to type for ad-hoc PromQL.
+#:   - ``app.version`` / ``app.release_id`` / ``app.sdk_version`` /
+#:     ``app.release_channel`` change across deploys or channel promotions
+#:     and would multiply indexdb cardinality across the retention window.
+#:
+#: All non-inlined Resource attributes still travel via the OTel exporter's
+#: ``target_info`` gauge (one row per pod with the full Resource), so
+#: PromQL joins continue to work::
+#:
+#:     sum by (app_release_id) (
+#:       rate(http_server_request_duration_seconds_count[5m])
+#:         * on(instance) group_left(app_release_id) target_info
+#:     )
+METRIC_ENRICHMENT_KEYS: tuple[str, ...] = ("app.name",)
+
+
+def get_metric_enrichment_labels() -> dict[str, str]:
+    """Return ``METRIC_ENRICHMENT_KEYS`` resolved against the process resource,
+    with dots transliterated to underscores for Prometheus label compatibility.
+
+    Used by both the OTel Prometheus reader (server scrape, worker push) and
+    the Temporal Rust core's ``TelemetryConfig.global_tags`` to keep the
+    enrichment surface consistent across the two metric pipelines.
+    """
+    resource = build_otel_resource()
+    return {
+        k.replace(".", "_"): str(v)
+        for k, v in resource.attributes.items()
+        if k in METRIC_ENRICHMENT_KEYS
+    }
+
 
 def get_observability_dir() -> str:
     """Build the observability path using deployment name.
@@ -35,6 +73,25 @@ def get_observability_dir() -> str:
             application_name=APPLICATION_NAME, deployment_name=DEPLOYMENT_NAME
         ),
     )
+
+
+def get_metric_labels() -> dict[str, str]:
+    """Return low-cardinality labels for Prometheus metrics.
+
+    Only workflow_type, activity_type, and app_name are included.
+    High-cardinality identifiers (workflow_id, run_id, activity_id, task_queue,
+    namespace, attempt) are intentionally excluded to prevent time-series explosion.
+    """
+    from application_sdk.observability.context import (  # noqa: PLC0415 — circular: observability.context imports observability.utils transitively
+        get_execution_context,
+    )
+
+    ctx = get_execution_context()
+    return {
+        "app_name": APPLICATION_NAME,
+        "workflow_type": ctx.workflow_type,
+        "activity_type": ctx.activity_type,
+    }
 
 
 def get_workflow_context() -> dict[str, str]:
@@ -65,6 +122,12 @@ def get_workflow_context() -> dict[str, str]:
         "activity_id": ctx.activity_id,
         "activity_type": ctx.activity_type,
     }
+    # Parent identity is only populated on child workflows; omit when empty
+    # so we don't pollute the extra dict on top-level workflows / activities.
+    if ctx.parent_workflow_id:
+        context["parent_workflow_id"] = ctx.parent_workflow_id
+    if ctx.parent_run_id:
+        context["parent_run_id"] = ctx.parent_run_id
 
     # Merge correlation context (atlan- prefixed headers for distributed tracing)
     corr_ctx = correlation_context.get()
@@ -100,15 +163,15 @@ def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
         resource_attributes["service.name"] = SERVICE_NAME
     if "service.version" not in resource_attributes:
         resource_attributes["service.version"] = SERVICE_VERSION
+    if APPLICATION_NAME:
+        resource_attributes["app.name"] = APPLICATION_NAME
     if OTEL_WF_NODE_NAME:
         resource_attributes["k8s.workflow.node.name"] = OTEL_WF_NODE_NAME
     # Deployment-level attributes — constant per pod, don't duplicate in log attrs.
     # tenant.id is intentionally omitted: k8s.cluster.name (injected by the
     # central OTel collector's resource processor) identifies the tenant at
     # the deployment level.
-    # NOTE: app.name is intentionally NOT a resource attribute — a deployment
-    # can host multiple apps; app_name stays in log attrs per-event.
-    # app.build_id is also omitted — app.version carries the same signal.
+    # app.build_id is omitted — app.version carries the same signal.
     if APPLICATION_VERSION:
         resource_attributes["app.version"] = APPLICATION_VERSION
     if RELEASE_ID:

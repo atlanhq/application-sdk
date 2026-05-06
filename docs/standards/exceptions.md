@@ -8,13 +8,13 @@
 
 ### **Exception Propagation**
 - **Rule**: Always re-raise exceptions after logging unless in non-critical operations
-- **Anti-pattern**: `except Exception as e: logger.error(f"Error: {e}")` - This swallows exceptions
-- **Correct pattern**: `except Exception as e: logger.error(f"Error: {e}"); raise`
+- **Anti-pattern**: `except Exception as e: logger.error(f"Error: {e}")` — swallows exception, f-string style, missing `exc_info=True`
+- **Correct pattern**: `except Exception as e: logger.error("Error: %s", e, exc_info=True); raise`
 
 ### **Specific Exception Types**
 - **Use specific exception types** instead of generic `Exception`
-- **Examples**: `ValueError`, `ConnectionError`, `TimeoutError`, `FileNotFoundError`
-- **Create custom exceptions** in `application_sdk/common/error_codes.py` for domain-specific errors
+- **Examples**: `ValueError`, `ConnectionError`, `FileNotFoundError`; for SDK-domain errors use the categorical leaf classes (see below)
+- **Create custom exceptions** using the categorical hierarchy in `application_sdk/errors/` — pick the leaf that matches the failure (e.g. `DependencyUnavailableError`, `InvalidInputError`, `AuthError`). The legacy `application_sdk/common/error_codes.py` `AAF-{COMP}-{ID:03d}` format is retained for backward compatibility only — do not use it in new code.
 - **Anti-pattern**: `except Exception:` - Too broad, masks real issues
 
 ## Exception Handling Patterns
@@ -25,14 +25,14 @@ try:
     result = some_operation()
     return result
 except ValueError as e:
-    logger.error(f"Invalid input: {e}")
-    raise  # Re-raise to propagate the error
+    logger.error("Invalid input: %s", e, exc_info=True)
+    raise
 except ConnectionError as e:
-    logger.error(f"Connection failed: {e}")
-    raise  # Re-raise to propagate the error
+    logger.error("Connection failed: %s", e, exc_info=True)
+    raise
 except Exception as e:
-    logger.error(f"Unexpected error: {e}")
-    raise  # Re-raise to propagate the error
+    logger.error("Unexpected error: %s", e, exc_info=True)
+    raise
 ```
 
 ### **DON'T: Swallowing exceptions**
@@ -76,15 +76,15 @@ except Exception:
 try:
     operation()
 except Exception as e:
-    logger.error(f"Error: {e}")  # REJECT: Swallows exception
+    logger.error(f"Error: {e}")  # REJECT: swallows exception, f-string style, missing exc_info=True
 ```
 
 ### **Overly Broad Exception Handling**
 ```python
 try:
     operation()
-except Exception as e:  # REJECT: Too broad
-    logger.error(f"Error: {e}")
+except Exception as e:  # REJECT: too broad — use specific types when possible
+    logger.error(f"Error: {e}")  # REJECT: f-string style, missing exc_info=True
     raise
 ```
 
@@ -93,7 +93,7 @@ except Exception as e:  # REJECT: Too broad
 try:
     operation()
 except Exception as e:
-    logger.error(f"Error: {e}")  # REJECT: No context about what failed
+    logger.error(f"Error: {e}")  # REJECT: f-string style, missing exc_info=True, no operation context
     raise
 ```
 
@@ -105,13 +105,13 @@ try:
     result = database_connection.execute_query(query)
     return result
 except ConnectionError as e:
-    logger.error(f"Database connection failed for query {query[:50]}...: {e}")
+    logger.error("Database connection failed for query %s: %s", query[:50], e, exc_info=True)
     raise
 except ValueError as e:
-    logger.error(f"Invalid query parameters: {e}")
+    logger.error("Invalid query parameters: %s", e, exc_info=True)
     raise
 except Exception as e:
-    logger.error(f"Unexpected error during database operation: {e}")
+    logger.error("Unexpected error during database operation: %s", e, exc_info=True)
     raise
 ```
 
@@ -122,14 +122,14 @@ try:
     file_handle = open(filename, 'r')
     return file_handle.read()
 except FileNotFoundError as e:
-    logger.error(f"File not found: {filename}")
+    logger.error("File not found: %s", filename, exc_info=True)
     raise
 finally:
     if file_handle:
         try:
             file_handle.close()
         except Exception as e:
-            logger.warning(f"Failed to close file {filename}: {e}")
+            logger.warning("Failed to close file %s: %s", filename, e, exc_info=True)
             # Don't re-raise cleanup errors
 ```
 
@@ -138,7 +138,7 @@ finally:
 try:
     metrics.record_metric("operation_success", 1)
 except Exception as e:
-    logger.warning(f"Failed to record metric: {e}")
+    logger.warning("Failed to record metric: %s", e, exc_info=True)
     # Don't re-raise for non-critical operations
 ```
 
@@ -148,9 +148,9 @@ The following patterns are acceptable and used in the codebase:
 
 ### **VALID: Signal Handlers and Cleanup Operations**
 ```python
-# From observability.py - signal handler cleanup
+# Illustrative — cleanup/flush errors that must not crash the process
 except Exception as e:
-    logging.error(f"Error during signal handler flush: {e}")
+    logger.warning("Error during signal handler flush: %s", e, exc_info=True)
     # Don't re-raise - cleanup failures shouldn't crash the application
 ```
 
@@ -160,34 +160,34 @@ except Exception as e:
 try:
     traces.record_trace(...)
 except Exception as trace_error:
-    logger.error(f"Failed to record trace: {str(trace_error)}")
+    logger.warning("Failed to record trace: %s", trace_error, exc_info=True)
     # Don't re-raise - observability failures shouldn't break business logic
 
 # From interceptors/events.py - event publishing
 except Exception as publish_error:
-    logger.warning(f"Failed to publish workflow end event: {publish_error}")
+    logger.warning("Failed to publish workflow end event: %s", publish_error, exc_info=True)
     # Don't re-raise - event publishing is non-critical
 ```
 
 ### **VALID: Cleanup in Finally Blocks**
 ```python
-# From interceptors/cleanup.py - workflow cleanup
+# Illustrative — cleanup inside finally so workflow end is non-fatal
 finally:
     try:
         await workflow.execute_activity(cleanup, ...)
     except Exception as e:
-        logger.warning(f"Failed to cleanup artifacts: {e}")
+        logger.warning("Failed to cleanup artifacts: %s", e, exc_info=True)
         # Don't re-raise - cleanup failures shouldn't fail the workflow
 ```
 
 ## Module-Specific Guidelines
 
-### **Handlers (`application_sdk/handlers/`)**
+### **Handlers (`application_sdk/handler/`)**
 - **Critical**: Always re-raise exceptions after logging
 - **Include operation context** in error messages
 - **Use specific exception types** for different error scenarios
 
-### **I/O Module (`application_sdk/io/`)**
+### **Storage (`application_sdk/storage/`) and Outputs (`application_sdk/outputs/`)**
 - **Critical**: Re-raise exceptions for data reading/writing operations
 - **Include file/connection context** in error messages
 - **Handle specific I/O exceptions** appropriately
@@ -203,10 +203,10 @@ finally:
 - **Include workflow context** in error messages
 - **Handle Temporal-specific exceptions** appropriately
 
-### **Server (`application_sdk/server/`)**
-- **Critical**: Re-raise exceptions to return proper HTTP error responses
+### **Server middleware (`application_sdk/server/`)**
+- **Non-critical for middleware**: Middleware, MCP plumbing, and FastAPI utilities — swallow or log non-fatal errors; let the framework handle unhandled ones
 - **Include request context** in error messages
-- **Handle HTTP-specific exceptions** appropriately
+- **Note**: HTTP request-handler error handling belongs in `application_sdk/handler/` (see "Handlers" section above)
 
 ## Review Checklist
 
@@ -217,12 +217,42 @@ When reviewing code, check for:
 3. **Error Context**: Do error messages include sufficient context for debugging?
 4. **Resource Cleanup**: Are resources properly cleaned up in finally blocks?
 5. **Non-Critical Operations**: Are non-critical operations (logging, metrics) handled appropriately?
-6. **Custom Exceptions**: Are domain-specific exceptions defined in `error_codes.py`?
+6. **Custom Exceptions**: Are domain-specific exceptions using the categorical leaf classes from `application_sdk/errors`?
 7. **Exception Documentation**: Are exceptions documented in function docstrings?
 
 ## Implementation Notes
 
-- **Custom Exceptions**: Define domain-specific exceptions in `application_sdk/common/error_codes.py`
+- **Custom Exceptions**: Use the categorical leaf classes from `application_sdk/errors` for new code. Pick the leaf whose `FailureCategory` matches the failure:
+  ```python
+  from application_sdk.errors import (
+      AuthError, DependencyUnavailableError, InvalidInputError,
+      NotFoundError, AlreadyExistsError, PreconditionError,
+      RateLimitedError, AppTimeoutError, ResourceExhaustedError,
+      DataIntegrityError, InternalError, UnimplementedError,
+      AppPermissionDeniedError, CancelledError,
+  )
+
+  # DependencyUnavailableError — retryable=True, audience=PLATFORM
+  raise DependencyUnavailableError(
+      message="S3 bucket unreachable",
+      service="s3", target="my-bucket", cause=exc,
+  )
+
+  # InvalidInputError — retryable=False, audience=USER
+  raise InvalidInputError(
+      message="page_size must be between 1 and 1000",
+      field="page_size", constraint="1 ≤ x ≤ 1000",
+  )
+  ```
+  The legacy `application_sdk/common/error_codes.py` `AAF-{COMP}-{ID:03d}` format is retained for backward compatibility only — do not use it in new code.
+
+- **Audience routing**: Each leaf sets a default `audience` (`USER | PLATFORM | APP_OWNER`) that downstream consumers (AE, SLA dashboards) use to route the failure. Override it on a custom subclass when the default doesn't fit. The enum is closed three-valued — there is no `UNKNOWN` escape hatch; if the locus is unclear, the answer is `APP_OWNER` (the team that wrote the code investigates and reclassifies).
 - **Logging**: Use `AtlanLoggerAdapter` for all logging with proper context
 - **Context**: Always include relevant context in error messages (query, filename, operation, etc.)
 - **Documentation**: Document all exceptions that functions can raise in docstrings
+- **Temporal task boundaries**: When a task needs Temporal to classify the failure (e.g. mark non-retryable or tag with a failure type), use `ApplicationError` from `application_sdk.execution` instead of `AppError`:
+  ```python
+  from application_sdk.execution import ApplicationError
+  raise ApplicationError("invalid schema", type="ValidationError", non_retryable=True)
+  ```
+  Use the categorical `AppError` leaf classes for framework-level errors that Temporal does not need to classify.
