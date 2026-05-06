@@ -32,10 +32,10 @@ from collections.abc import Iterable, Mapping
 # NOTE: ``_CustomCollector`` and ``self._collector`` / ``self._collector._callback``
 # (used in ``EnrichedPrometheusMetricReader.__init__`` below) are **private APIs**
 # of ``opentelemetry-exporter-prometheus``. The package is intentionally pinned
-# tightly in pyproject.toml (``opentelemetry-exporter-prometheus==0.60b1``); any
-# version bump must re-verify these symbols still exist and behave the same.
-# Upstream issue tracking would be the cleanest fix — until then, the pin is
-# the contract.
+# tightly in pyproject.toml; any version bump must re-verify these symbols still
+# exist and behave the same.  Verified intact through 0.62b1.
+# ``tests/unit/observability/test_prometheus_enrichment.py`` instantiates the
+# reader for real (no mocks) and will fail fast if the symbols disappear.
 from opentelemetry.exporter.prometheus import PrometheusMetricReader, _CustomCollector
 from prometheus_client.core import REGISTRY as _PROM_REGISTRY
 from prometheus_client.core import Metric as _PrometheusMetric
