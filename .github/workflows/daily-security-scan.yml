@@ -13,7 +13,7 @@ env:
 
 jobs:
   scan-and-ticket:
-    name: Scan app-runtime-base:3
+    name: Scan SDK for vulnerabilities
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
