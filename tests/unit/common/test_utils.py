@@ -976,10 +976,14 @@ class TestResolveCredentialFile:
 
     async def test_base64_binary_file_written_correctly(self, tmp_path):
         """Valid base64 binary content is decoded and written to disk."""
-        original_bytes = b"\x05\x02\x00\x00\x00\x01\x00\x0a\x00HIVE"  # fake keytab header
+        original_bytes = (
+            b"\x05\x02\x00\x00\x00\x01\x00\x0a\x00HIVE"  # fake keytab header
+        )
         b64_value = base64.b64encode(original_bytes).decode()
 
-        result = await resolve_credential_file(b64_value, "keytab.keytab", str(tmp_path))
+        result = await resolve_credential_file(
+            b64_value, "keytab.keytab", str(tmp_path)
+        )
 
         assert result == str(tmp_path / "keytab.keytab")
         assert os.path.exists(result)
@@ -1020,6 +1024,103 @@ class TestResolveCredentialFile:
         """A string that is neither JSON nor valid base64 returns None without raising."""
         result = await resolve_credential_file(
             "this is definitely not base64 !!!###", "keytab.keytab", str(tmp_path)
+        )
+        assert result is None
+
+    # ------------------------------------------------------------------
+    # Customer object store path (objectstore:// prefix)
+    # ------------------------------------------------------------------
+
+    @patch(
+        "application_sdk.common.utils.ObjectStore.download_file",
+        new_callable=AsyncMock,
+    )
+    async def test_objectstore_prefix_downloads_via_deployment_binding(
+        self, mock_download, tmp_path
+    ):
+        """objectstore:// prefix routes to ObjectStore.download_file with DEPLOYMENT binding."""
+        from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
+
+        # Pre-populate the destination so the post-download read works
+        async def _fake_download(source, destination, store_name):
+            with open(destination, "wb") as f:
+                f.write(b"\x05\x02\x00\x00")
+
+        mock_download.side_effect = _fake_download
+
+        result = await resolve_credential_file(
+            "objectstore://kerberos/hiveadmin.keytab",
+            "keytab.keytab",
+            str(tmp_path),
+        )
+
+        mock_download.assert_awaited_once_with(
+            source="kerberos/hiveadmin.keytab",
+            destination=os.path.join(str(tmp_path), "keytab.keytab"),
+            store_name=DEPLOYMENT_OBJECT_STORE_NAME,
+        )
+        assert result == os.path.join(str(tmp_path), "keytab.keytab")
+
+    @patch(
+        "application_sdk.common.utils.ObjectStore.download_file",
+        new_callable=AsyncMock,
+    )
+    async def test_objectstore_prefix_strips_whitespace(self, mock_download, tmp_path):
+        """Leading/trailing whitespace is stripped before prefix detection."""
+
+        async def _fake_download(source, destination, store_name):
+            with open(destination, "wb") as f:
+                f.write(b"x")
+
+        mock_download.side_effect = _fake_download
+
+        result = await resolve_credential_file(
+            "  objectstore://foo/bar.keytab  ",
+            "keytab.keytab",
+            str(tmp_path),
+        )
+
+        called_kwargs = mock_download.await_args.kwargs
+        assert called_kwargs["source"] == "foo/bar.keytab"
+        assert result == os.path.join(str(tmp_path), "keytab.keytab")
+
+    async def test_objectstore_prefix_rejects_empty_key(self, tmp_path):
+        """objectstore:// with no key after the prefix returns None."""
+        result = await resolve_credential_file(
+            "objectstore://", "keytab.keytab", str(tmp_path)
+        )
+        assert result is None
+
+    async def test_objectstore_prefix_rejects_absolute_path(self, tmp_path):
+        """Absolute paths after the prefix are rejected."""
+        result = await resolve_credential_file(
+            "objectstore:///etc/passwd", "keytab.keytab", str(tmp_path)
+        )
+        assert result is None
+
+    async def test_objectstore_prefix_rejects_path_traversal(self, tmp_path):
+        """Path traversal segments (..) are rejected."""
+        result = await resolve_credential_file(
+            "objectstore://kerberos/../secrets/keytab",
+            "keytab.keytab",
+            str(tmp_path),
+        )
+        assert result is None
+
+    @patch(
+        "application_sdk.common.utils.ObjectStore.download_file",
+        new_callable=AsyncMock,
+    )
+    async def test_objectstore_download_failure_returns_none(
+        self, mock_download, tmp_path
+    ):
+        """Download failures are logged and return None — never raise."""
+        mock_download.side_effect = RuntimeError("network down")
+
+        result = await resolve_credential_file(
+            "objectstore://kerberos/hiveadmin.keytab",
+            "keytab.keytab",
+            str(tmp_path),
         )
         assert result is None
 
