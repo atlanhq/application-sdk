@@ -90,6 +90,30 @@ class LakehouseQuery:
             temp_dir: DuckDB spill directory. Default ``/tmp/duckdb_tmp``.
             preserve_insertion_order: DuckDB ``preserve_insertion_order``.
                 Default ``False`` (cheaper sorts/aggregations).
+
+        Example::
+
+            from application_sdk.lakehouse import LakehouseQuery
+
+            q = LakehouseQuery.from_env()
+
+            rows = q.sql(
+                '''
+                SELECT a.asset_type, COUNT(*) AS failures
+                FROM events e
+                JOIN assets a ON e.asset_id = a.guid
+                WHERE e.outcome_status = 'FAILED'
+                  AND e.ingested_at > now() - INTERVAL 1 HOUR
+                GROUP BY a.asset_type
+                ORDER BY failures DESC
+                ''',
+                tables={
+                    "events": ("automation_engine", "outcomes"),
+                    "assets": ("gold", "relational_asset_details"),
+                },
+                where={"events": "outcome_status = 'FAILED'"},
+            )
+            # → list[dict] with keys: asset_type, failures
         """
         return _engine.run_sql(
             self._catalog,

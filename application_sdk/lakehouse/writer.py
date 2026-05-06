@@ -78,6 +78,35 @@ class LakehouseWriter:
 
         ``namespace`` defaults to the writer's bound ``app_namespace``. Passing
         a different namespace is allowed but logged as a warning.
+
+        Example::
+
+            from datetime import UTC, datetime
+            from application_sdk.lakehouse import (
+                LakehouseWriter, Schema, Field, PartitionBy,
+            )
+
+            writer = LakehouseWriter.from_env(app_namespace="apps.databricks")
+
+            audit_schema = Schema(
+                fields=[
+                    Field("event_id", "string", nullable=False),
+                    Field("status", "string", nullable=False),
+                    Field("logged_at", "timestamp", nullable=False),
+                ],
+                partition_by=PartitionBy("logged_at", transform="day"),
+            )
+
+            now = datetime.now(UTC).replace(tzinfo=None)
+            rows = writer.append(
+                "audit",
+                [
+                    {"event_id": "e1", "status": "SUCCESS", "logged_at": now},
+                    {"event_id": "e2", "status": "FAILED", "logged_at": now},
+                ],
+                schema=audit_schema,
+            )
+            # rows == 2; table auto-created on first call
         """
         if not records:
             return 0
@@ -102,6 +131,12 @@ class LakehouseWriter:
 
         Useful for migration steps that want to provision the table up-front
         without writing any rows.
+
+        Example::
+
+            writer = LakehouseWriter.from_env(app_namespace="apps.databricks")
+            writer.ensure_table("audit", audit_schema)
+            # Table + namespace created if missing; nothing happens if present.
         """
         target_namespace = namespace or self._app_namespace
         self._check_namespace(target_namespace)
@@ -142,6 +177,18 @@ class LakehouseWriter:
         config, or computed by the app — never directly from end-user input.
         Daft will read across cloud boundaries (``s3://``, ``gs://``,
         ``abfs://``, ``file://``, …) if asked.
+
+        Example::
+
+            # 1. Stage Parquet files however your app likes — DuckDB COPY,
+            #    daft.write_parquet, pyarrow.parquet.write_table, etc.
+            # 2. Commit them as one atomic Iceberg snapshot:
+            rows = writer.append_bulk(
+                "windowed_metrics",
+                "s3://my-bucket/staging/run-001/",
+                schema=metrics_schema,
+                mode="overwrite",   # replace table contents atomically
+            )
         """
         from application_sdk.lakehouse._daft import (  # noqa: PLC0415
             writer as _daft_writer,

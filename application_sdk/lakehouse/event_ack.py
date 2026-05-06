@@ -91,7 +91,24 @@ class EventAckWriter:
         results: list[ProcessingResult],
         workflow_run_id: str,
     ) -> str:
-        """Serialize the ack rows to Parquet and upload them. Returns the path."""
+        """Serialize the ack rows to Parquet and upload them. Returns the path.
+
+        ``events`` and ``results`` must align 1:1 (the consumer guarantees this);
+        a mismatch raises ``ValueError`` before any I/O.
+
+        Example::
+
+            from application_sdk.lakehouse import EventAckWriter
+
+            ack = EventAckWriter(
+                app_name="databricks",
+                workflow_name="reverse-sync-description",
+            )
+
+            path = await ack.write(events, results, workflow_run_id="run-abc-123")
+            # path = "artifacts/databricks/reverse-sync-description/2026/05/06/"
+            #        "run-abc-123/events_ack.parquet"
+        """
         _validate("workflow_run_id", workflow_run_id, _RUN_ID_RE)
         ack_path = _ack_path(
             self._app_name, self._workflow_name, workflow_run_id, self._filename

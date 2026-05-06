@@ -59,6 +59,27 @@ class LakehouseReader:
         process, then slices. Pushing ``limit`` to the scan in combination
         with an in-process sort would return "the first N rows the scanner
         emitted, sorted" rather than "the N smallest by ``sort_by``".
+
+        Example::
+
+            from application_sdk.lakehouse import LakehouseReader
+
+            reader = LakehouseReader.from_env()
+
+            # Filtered + sorted + limited read of pending events
+            events = reader.fetch_records(
+                "automation_engine", "reverse_sync_description",
+                where="status = 'unprocessed'",
+                sort_by="received_at",
+                limit=5000,
+            )
+            # → list[dict] with keys: event_id, payload, received_at, ...
+
+            # Project a subset of columns
+            ids = reader.fetch_records(
+                "automation_engine", "reverse_sync_description",
+                select=("event_id", "received_at"),
+            )
         """
         # Push limit to the scan only when no in-process sort is needed; with
         # sort_by, we must see the full filtered set before slicing.
@@ -78,5 +99,15 @@ class LakehouseReader:
         return records
 
     def current_snapshot_id(self, namespace: str, table_name: str) -> int | None:
-        """Return the table's current snapshot id, or None if the table is empty."""
+        """Return the table's current snapshot id, or None if the table is empty.
+
+        Useful for recording exactly which version of the data a workflow
+        processed (e.g., for incremental cursors or audit trails).
+
+        Example::
+
+            snap = reader.current_snapshot_id("automation_engine", "events")
+            if snap and snap == last_processed_snap:
+                return  # nothing new
+        """
         return _ops.current_snapshot_id(self._catalog, namespace, table_name)

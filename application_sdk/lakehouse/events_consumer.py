@@ -128,6 +128,37 @@ class EventsConsumer:
         ``where="status = 'unprocessed'"`` and ``sort_by="received_at"``;
         apps following that convention should pass them explicitly. Apps
         with a different shape pass their own.
+
+        Example::
+
+            from application_sdk.lakehouse import (
+                EventsConsumer, ProcessingResult,
+            )
+
+            async def process(events: list[dict]) -> list[ProcessingResult]:
+                out = []
+                for evt in events:
+                    try:
+                        await my_business_logic(evt)
+                        out.append(ProcessingResult(status="SUCCESS"))
+                    except TransientError as exc:
+                        out.append(ProcessingResult(
+                            status="RETRY", error_message=str(exc)
+                        ))
+                    except Exception as exc:
+                        out.append(ProcessingResult(
+                            status="FAILED", error_message=str(exc)
+                        ))
+                return out
+
+            consumer = EventsConsumer(process)
+            events, results = await consumer.handle_events(
+                "automation_engine", "reverse_sync_description",
+                where="status = 'unprocessed'",
+                sort_by="received_at",
+            )
+            # events: list[dict]   (the unprocessed events read from the table)
+            # results: list[ProcessingResult]  (aligned 1:1 with events)
         """
         reader = self._ensure_reader()
         events = reader.fetch_records(
