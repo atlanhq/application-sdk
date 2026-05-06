@@ -39,6 +39,13 @@ def _is_worker_evicted(err: ActivityError) -> bool:
     across the activity/workflow boundary — the Python class itself is lost.
     The activity wrapper raises ``ApplicationError(type=WORKER_EVICTED_TYPE)``,
     which arrives here as ``ActivityError(cause=ApplicationError(type=...))``.
+
+    Implementation note: ``temporalio.exceptions.TemporalError.cause`` is
+    currently a ``@property`` that returns ``self.__cause__``. We rely on
+    that contract — if a future temporalio release changes the storage
+    (e.g. caches into ``_cause``) without updating the property, this
+    detection would silently regress. Pinned via the test fixture in
+    ``tests/unit/execution/test_eviction.py`` which mirrors the same shape.
     """
     cause = err.cause
     return isinstance(cause, ApplicationError) and cause.type == WORKER_EVICTED_TYPE
@@ -78,10 +85,19 @@ async def execute_activity_with_eviction_retry(
         except ActivityError as err:
             if _is_worker_evicted(err) and eviction_attempts < max_eviction_retries:
                 eviction_attempts += 1
+                # ``workflow.logger`` is a ``logging.LoggerAdapter`` whose
+                # underlying ``Logger._log`` only accepts the stdlib reserved
+                # kwargs (``exc_info``, ``extra``, ``stack_info``, ``stacklevel``).
+                # Flat custom kwargs raise ``TypeError`` at call time, so the
+                # eviction-retry path itself would crash on the first eviction
+                # if we did not nest under ``extra``. ``AtlanLoggerAdapter``
+                # also reads ``extra`` correctly, so this works in both modes.
                 workflow.logger.info(
                     "activity re-dispatched after worker eviction",
-                    eviction_attempts=eviction_attempts,
-                    max_eviction_retries=max_eviction_retries,
+                    extra={
+                        "eviction_attempts": eviction_attempts,
+                        "max_eviction_retries": max_eviction_retries,
+                    },
                 )
                 continue
             raise

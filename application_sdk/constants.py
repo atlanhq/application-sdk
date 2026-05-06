@@ -282,12 +282,23 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 #: graceful_shutdown_timeout.
 SHUTDOWN_DRAIN_DELAY_SECONDS = int(os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5))
 
+
 #: Maximum re-dispatches per activity caused by worker pod eviction (SIGTERM
 #: during activity execution: KEDA scale-down, VPA eviction, spot reclaim,
 #: node drain, rolling deploy). These re-dispatches do not consume the
 #: activity's Temporal RetryPolicy ``max_attempts`` budget, so this cap bounds
 #: the worst case (e.g. a flaky liveness probe masquerading as eviction).
-WORKER_EVICTION_MAX_RETRIES = int(os.getenv("ATLAN_WORKER_EVICTION_MAX_RETRIES", 3))
+#: Validated to a non-negative integer; malformed values fall back to 3.
+def _load_worker_eviction_max_retries() -> int:
+    raw = os.getenv("ATLAN_WORKER_EVICTION_MAX_RETRIES", "3")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 3
+    return max(0, value)
+
+
+WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
 
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
