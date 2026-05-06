@@ -64,6 +64,7 @@ from application_sdk.constants import (
     WORKFLOW_OUTPUT_PATH_TEMPLATE,
 )
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
+from application_sdk.credentials.ref import CredentialRef
 from application_sdk.execution import build_output_path
 from application_sdk.execution._temporal.activity_utils import get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
@@ -557,25 +558,22 @@ class SqlApp(App):
 
         client = self.sql_client_class()
 
-        # Resolve credentials
+        # Route through CredentialRef.resolve() so direct (credential_guid) and
+        # SDR (agent_spec) modes both flow through one path. The earlier branch
+        # only resolved when credential_guid was set, which left SDR runs with
+        # creds={} and a downstream "username is required" failure.
         creds: dict[str, Any] = {}
-        if input.credential_ref and input.credential_ref.credential_guid:
+        try:
+            ref = CredentialRef.resolve(input)
+        except (ValueError, TypeError):
+            ref = None
+
+        if ref is not None:
             infra = get_infrastructure()
             secret_store = infra.secret_store if infra else None
             if secret_store:
                 resolver = CredentialResolver(secret_store)
-                creds = await resolver.resolve_raw(input.credential_ref) or {}
-        elif input.credential_guid:
-            infra = get_infrastructure()
-            secret_store = infra.secret_store if infra else None
-            if secret_store:
-                resolver = CredentialResolver(secret_store)
-                creds = (
-                    await resolver.resolve_raw(
-                        legacy_credential_ref(input.credential_guid)
-                    )
-                    or {}
-                )
+                creds = await resolver.resolve_raw(ref) or {}
 
         await client.load(credentials=creds)
         return client
