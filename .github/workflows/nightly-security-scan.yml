@@ -1,8 +1,8 @@
-name: Nightly Security Scan — app-runtime-base
+name: Daily Security Scan — app-runtime-base
 
 on:
   schedule:
-    - cron: '0 19 * * *' # Daily at 19:00 UTC (00:30 IST)
+    - cron: '30 3 * * *' # Daily at 03:30 UTC (09:00 IST)
   workflow_dispatch:
 
 permissions:
