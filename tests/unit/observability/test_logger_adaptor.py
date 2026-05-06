@@ -1806,3 +1806,92 @@ class TestInterceptHandlerStdlibBridge:
         bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
         # Only the SDK-injected key, no spurious built-in record fields.
         assert bind_kwargs == {"logger_name": "vanilla"}
+
+
+class TestSecondaryWorkflowLogsExporter:
+    """The secondary OTLP log exporter sits behind ENABLE_OTLP_WORKFLOW_LOGS +
+    OTEL_WORKFLOW_LOGS_ENDPOINT and fans logs out to a second collector
+    (production wires this to an OTel collector that archives to S3).
+    """
+
+    def _build_with_endpoints(
+        self,
+        *,
+        primary: str,
+        secondary_enabled: bool,
+        secondary_endpoint: str,
+    ):
+        """Construct an adapter with the given primary/secondary endpoints
+        and return the OTLPLogExporter mock so callers can inspect calls."""
+        AtlanLoggerAdapter._reset_for_testing()
+        env = {
+            "LOG_LEVEL": "INFO",
+            "ENABLE_OTLP_LOGS": "true",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": primary,
+            "ENABLE_OTLP_WORKFLOW_LOGS": "true" if secondary_enabled else "false",
+            "OTEL_WORKFLOW_LOGS_ENDPOINT": secondary_endpoint,
+        }
+        with (
+            mock.patch.dict("os.environ", env),
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.ENABLE_OTLP_LOGS",
+                True,
+            ),
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.OTEL_EXPORTER_OTLP_ENDPOINT",
+                primary,
+            ),
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.ENABLE_OTLP_WORKFLOW_LOGS",
+                secondary_enabled,
+            ),
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.OTEL_WORKFLOW_LOGS_ENDPOINT",
+                secondary_endpoint,
+            ),
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.OTLPLogExporter"
+            ) as mock_exporter,
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.BatchLogRecordProcessor"
+            ),
+            mock.patch("application_sdk.observability.logger_adaptor.LoggerProvider"),
+        ):
+            AtlanLoggerAdapter("test_dual_export")
+            return mock_exporter
+
+    def test_dual_export_when_both_endpoints_configured(self):
+        """Both primary and secondary OTLPLogExporter instances should be
+        constructed when ENABLE_OTLP_WORKFLOW_LOGS=true and the workflow-logs
+        endpoint is set."""
+        mock_exporter = self._build_with_endpoints(
+            primary="https://otel.example.com:4317",
+            secondary_enabled=True,
+            secondary_endpoint="http://workflow-logs-collector.example.svc:4317",
+        )
+        endpoints = {call.kwargs["endpoint"] for call in mock_exporter.call_args_list}
+        assert "https://otel.example.com:4317" in endpoints
+        assert "http://workflow-logs-collector.example.svc:4317" in endpoints
+
+    def test_secondary_skipped_when_flag_false(self):
+        """Secondary exporter must not be constructed when the flag is off,
+        even if the workflow-logs endpoint is set."""
+        mock_exporter = self._build_with_endpoints(
+            primary="https://otel.example.com:4317",
+            secondary_enabled=False,
+            secondary_endpoint="http://workflow-logs-collector.example.svc:4317",
+        )
+        endpoints = {call.kwargs["endpoint"] for call in mock_exporter.call_args_list}
+        assert "http://workflow-logs-collector.example.svc:4317" not in endpoints
+
+    def test_secondary_skipped_when_endpoint_blank(self):
+        """Secondary exporter must not be constructed when the endpoint is
+        blank, even if the flag is on (defensive: avoids gRPC bootstrap with
+        an empty target)."""
+        mock_exporter = self._build_with_endpoints(
+            primary="https://otel.example.com:4317",
+            secondary_enabled=True,
+            secondary_endpoint="",
+        )
+        endpoints = {call.kwargs["endpoint"] for call in mock_exporter.call_args_list}
+        assert "" not in endpoints
