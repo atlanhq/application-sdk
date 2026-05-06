@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.6.1 (May 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.6.0...v3.6.1
+
+### Bug Fixes
+
+- restore secondary OTLP log exporter for S3 archival [ARUN-539] (#1684) (by @louisnow in [fa1a100](https://github.com/atlanhq/application-sdk/commit/fa1a100))
+
+
 ## v3.6.0 (May 06, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.5.0...v3.6.0
