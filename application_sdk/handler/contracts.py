@@ -101,7 +101,6 @@ class BaseConnectionConfig(_DictLikeConfigBase):
             exclude_filter: dict[str, list[str]] = Field(
                 default_factory=dict, alias="exclude-filter"
             )
-            page_size: int = Field(default=500, alias="page-size")
 
     The subclass can then be used directly in the handler::
 
@@ -146,8 +145,6 @@ class BaseMetadataConfig(_DictLikeConfigBase):
             exclude_filter: dict[str, list[str]] = Field(
                 default_factory=dict, alias="exclude-filter"
             )
-            extraction_method: str = Field(default="api", alias="extraction-method")
-            enable_tag_sync: bool = Field(default=False, alias="enable-tag-sync")
 
     If the UI is generated from the contract toolkit (app.pkl), the subclass
     fields should mirror the ``uiConfig.tasks[*].inputs`` entries so the
