@@ -774,6 +774,20 @@ def create_app_handler_service(
     async def fetch_metadata(request: Request) -> JSONResponse:
         body = _normalize_credentials(await request.json())
         metadata_input = MetadataInput.model_validate(body)
+        # Heracles forwards the widget-specific filter key as
+        # ``metadataTemplateKey`` (and a ``type`` mirror added by its app
+        # client) but the v3 SDK's MetadataInput uses ``object_filter``.
+        # Bridge the gap so per-entrypoint hooks that branch on
+        # ``input.object_filter`` (e.g. asset-export-advanced's tags vs
+        # connectors vs typenames widgets) actually see the widget key.
+        if not metadata_input.object_filter:
+            for k in ("metadataTemplateKey", "type"):
+                v = body.get(k)
+                if isinstance(v, str) and v:
+                    metadata_input = metadata_input.model_copy(
+                        update={"object_filter": v}
+                    )
+                    break
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in metadata_input.credentials

@@ -4007,6 +4007,65 @@ class TestPerEntrypointHandlerHook:
         # _TestHandler returns empty SqlMetadataOutput
         assert response.json()["data"] == []
 
+    def test_metadata_input_object_filter_from_metadata_template_key(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Heracles forwards the widget filter key as ``metadataTemplateKey``
+        (and a ``type`` mirror) but the v3 SDK contract uses ``object_filter``.
+        Verify the bridge: per-entrypoint hooks read the widget key from
+        ``input.object_filter``."""
+        captured: dict[str, str] = {}
+
+        async def fetch_metadata(input: MetadataInput, ctx) -> ApiMetadataOutput:
+            captured["object_filter"] = input.object_filter
+            return ApiMetadataOutput(objects=[])
+
+        self._install_fake_handler(
+            monkeypatch, "csa-meta-bridge", fetch_metadata=fetch_metadata
+        )
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-meta-bridge"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={
+                "connector": "test-bundle-csa-meta-bridge",
+                "credentials": [],
+                "metadataTemplateKey": "tags",
+            },
+        )
+        assert response.status_code == 200
+        assert captured["object_filter"] == "tags"
+
+    def test_metadata_input_object_filter_explicit_wins_over_template_key(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """If the body sets ``object_filter`` explicitly, the bridge does not
+        overwrite it with ``metadataTemplateKey``."""
+        captured: dict[str, str] = {}
+
+        async def fetch_metadata(input: MetadataInput, ctx) -> ApiMetadataOutput:
+            captured["object_filter"] = input.object_filter
+            return ApiMetadataOutput(objects=[])
+
+        self._install_fake_handler(
+            monkeypatch, "csa-meta-bridge-2", fetch_metadata=fetch_metadata
+        )
+        self._set_contract_dir(monkeypatch, tmp_path, ["csa-meta-bridge-2"])
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={
+                "connector": "test-bundle-csa-meta-bridge-2",
+                "credentials": [],
+                "object_filter": "public.*",
+                "metadataTemplateKey": "tags",
+            },
+        )
+        assert response.status_code == 200
+        assert captured["object_filter"] == "public.*"
+
     # ------------------------------------------------------------------
     # Errors
     # ------------------------------------------------------------------
