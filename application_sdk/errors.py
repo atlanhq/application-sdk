@@ -79,6 +79,7 @@ HANDLER_ERROR = ErrorCode("HDL", 1)
 EXECUTION_ERROR = ErrorCode("EXE", 1)
 EXECUTION_WORKER_ERROR = ErrorCode("EXE", 2)
 EXECUTION_ACTIVITY_ERROR = ErrorCode("EXE", 3)
+EXECUTION_WORKER_EVICTED = ErrorCode("EXE", 4)
 
 # INF - Infrastructure errors
 STATE_STORE_ERROR = ErrorCode("INF", 1)

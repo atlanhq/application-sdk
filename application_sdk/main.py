@@ -610,10 +610,23 @@ def _install_graceful_signal_handlers(
 ) -> None:
     """Register SIGINT/SIGTERM handlers, with a fallback for platforms that
     don't support loop.add_signal_handler() (e.g. Windows).
+
+    Wraps the caller's handler so the process-wide worker-shutdown flag is
+    set before any caller-specific shutdown logic runs. The activity wrapper
+    reads that flag to attribute mid-activity ``asyncio.CancelledError`` to
+    pod termination instead of ordinary cancellation.
     """
+    from application_sdk.execution.shutdown import (  # noqa: PLC0415 — keep main.py import surface narrow
+        mark_worker_shutting_down,
+    )
+
+    def _wrapped_handler() -> None:
+        mark_worker_shutting_down()
+        handler()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, handler)
+            loop.add_signal_handler(sig, _wrapped_handler)
         except (NotImplementedError, OSError):
             logger.warning(
                 "loop.add_signal_handler() not supported on this platform "

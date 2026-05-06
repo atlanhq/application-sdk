@@ -50,6 +50,7 @@ from application_sdk.errors import (
     APP_CONTEXT_ERROR,
     APP_ERROR,
     APP_NON_RETRYABLE,
+    EXECUTION_WORKER_EVICTED,
     ErrorCode,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -262,6 +263,32 @@ class RetryableError(AppError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
+
+
+# Wire identifier for ``WorkerEvictedError``. Carried as ``ApplicationError.type``
+# so workflow code can recognise the failure across the activity/workflow
+# boundary without depending on the exception class itself (Temporal serialises
+# only the type string, not the Python class).
+WORKER_EVICTED_TYPE = "WorkerEvicted"
+
+
+class WorkerEvictedError(AppError):
+    """Activity terminated because the worker pod is shutting down.
+
+    Raised by the activity wrapper when ``asyncio.CancelledError`` arrives
+    while the SDK's worker shutdown flag is set — i.e. the pod received SIGTERM
+    (KEDA scale-down, VPA eviction, spot reclaim, node drain, rolling deploy).
+
+    The activity-level Temporal RetryPolicy treats this error type as
+    non-retryable so the failure surfaces directly to workflow code, where the
+    SDK's per-activity eviction loop re-dispatches the activity without burning
+    the application-error retry budget.
+
+    This is platform-attributed, not an app failure: the activity never had a
+    chance to fail for an application reason.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = EXECUTION_WORKER_EVICTED
 
 
 # =============================================================================
@@ -1704,8 +1731,15 @@ def _create_task_activity_wrapper(
         # Extract summary from input for Temporal UI display
         summary = input_data.summary() if hasattr(input_data, "summary") else None
 
-        # Execute as activity - pass result_type for proper deserialization
-        result: Output = await workflow.execute_activity(
+        # Execute as activity, routed through the SDK eviction-retry loop so
+        # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
+        # attempts without burning the application-error retry budget.
+        with workflow.unsafe.imports_passed_through():
+            from application_sdk.execution._temporal.eviction_retry import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+                execute_activity_with_eviction_retry,
+            )
+
+        result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
             start_to_close_timeout=timedelta(seconds=timeout_seconds),
@@ -1722,13 +1756,16 @@ def _create_task_activity_wrapper(
 
 # Keep FileReference accessible via base module for convenience
 __all__ = [
+    "WORKER_EVICTED_TYPE",
     "App",
     "AppError",
     "AppStateAccessor",
     "FileReference",
     "NonRetryableError",
     "PersistentStateAccessor",
+    "RetryableError",
     "TaskStateAccessor",
+    "WorkerEvictedError",
     "_app_state",
     "_app_state_lock",
     "_apply_app_registration",

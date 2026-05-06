@@ -34,7 +34,7 @@ class RetryPolicy:
     non_retryable_errors: tuple[str, ...] = ()
     """Exception class names that should not be retried."""
 
-    def with_max_attempts(self, max_attempts: int) -> "RetryPolicy":
+    def with_max_attempts(self, max_attempts: int) -> RetryPolicy:
         """Create a new policy with different max attempts."""
         return RetryPolicy(
             max_attempts=max_attempts,
@@ -44,7 +44,7 @@ class RetryPolicy:
             non_retryable_errors=self.non_retryable_errors,
         )
 
-    def with_initial_interval(self, interval: timedelta) -> "RetryPolicy":
+    def with_initial_interval(self, interval: timedelta) -> RetryPolicy:
         """Create a new policy with different initial interval."""
         return RetryPolicy(
             max_attempts=self.max_attempts,
@@ -54,7 +54,7 @@ class RetryPolicy:
             non_retryable_errors=self.non_retryable_errors,
         )
 
-    def with_non_retryable(self, *error_types: type[Exception]) -> "RetryPolicy":
+    def with_non_retryable(self, *error_types: type[Exception]) -> RetryPolicy:
         """Create a new policy with additional non-retryable errors."""
         error_names = tuple(e.__name__ for e in error_types)
         return RetryPolicy(
@@ -85,18 +85,30 @@ AGGRESSIVE_RETRY = RetryPolicy(
 def _to_temporal_retry_policy(policy: RetryPolicy) -> _TemporalRetryPolicy:
     """Convert a framework :class:`RetryPolicy` to ``temporalio.common.RetryPolicy``.
 
+    The SDK always appends ``WorkerEvicted`` to ``non_retryable_error_types``
+    so Temporal does not auto-retry an activity terminated by pod shutdown:
+    the workflow-side eviction loop owns that retry decision and re-dispatches
+    the activity as a fresh attempt without burning the application-error
+    retry budget.
+
     Internal helper for the execution layer.  Not part of the public API.
     """
     from temporalio.common import (  # noqa: PLC0415 — cold path: only when constructing temporal retry policy
         RetryPolicy as _TR,
     )
 
+    from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports execution.retry transitively
+        WORKER_EVICTED_TYPE,
+    )
+
+    non_retryable: list[str] = list(policy.non_retryable_errors)
+    if WORKER_EVICTED_TYPE not in non_retryable:
+        non_retryable.append(WORKER_EVICTED_TYPE)
+
     return _TR(
         maximum_attempts=policy.max_attempts,
         initial_interval=policy.initial_interval,
         maximum_interval=policy.max_interval,
         backoff_coefficient=policy.backoff_coefficient,
-        non_retryable_error_types=list(policy.non_retryable_errors)
-        if policy.non_retryable_errors
-        else None,
+        non_retryable_error_types=non_retryable,
     )

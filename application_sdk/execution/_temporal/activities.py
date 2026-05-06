@@ -209,6 +209,30 @@ def create_activity_from_task(
 
             return cast("Output", result)
 
+        except asyncio.CancelledError as e:
+            # In Python 3.8+, ``asyncio.CancelledError`` extends ``BaseException``,
+            # so it bypasses the ``except Exception`` block below. We must catch
+            # it explicitly to attribute pod-termination cancels to a typed
+            # ``WorkerEvictedError`` and let other cancels propagate as today.
+            from application_sdk.execution.shutdown import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                is_worker_shutting_down,
+            )
+
+            if is_worker_shutting_down():
+                from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                    WORKER_EVICTED_TYPE,
+                )
+                from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                    ApplicationError,
+                )
+
+                raise ApplicationError(
+                    "Activity terminated because the worker pod is shutting down",
+                    type=WORKER_EVICTED_TYPE,
+                    non_retryable=True,
+                ) from e
+            raise
+
         except Exception as e:
             from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                 NonRetryableError,
@@ -284,14 +308,21 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
         RetryPolicy as TemporalRetryPolicy,
     )
 
+    from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        WORKER_EVICTED_TYPE,
+    )
+
     if task_metadata.retry_policy is not None:
         rp = task_metadata.retry_policy
+        non_retryable = list(rp.non_retryable_errors)
+        if WORKER_EVICTED_TYPE not in non_retryable:
+            non_retryable.append(WORKER_EVICTED_TYPE)
         retry_policy = TemporalRetryPolicy(
             maximum_attempts=rp.max_attempts,
             initial_interval=rp.initial_interval,
             maximum_interval=rp.max_interval,
             backoff_coefficient=rp.backoff_coefficient,
-            non_retryable_error_types=list(rp.non_retryable_errors),
+            non_retryable_error_types=non_retryable,
         )
     else:
         retry_policy = TemporalRetryPolicy(
@@ -299,6 +330,7 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
             maximum_interval=timedelta(
                 seconds=task_metadata.retry_max_interval_seconds
             ),
+            non_retryable_error_types=[WORKER_EVICTED_TYPE],
         )
 
     return {
