@@ -63,7 +63,7 @@ jobs:
 
       - name: Run Snyk container scan
         env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           SNYK_API: https://api.us.snyk.io
         run: |
           snyk container test "$TARGET_IMAGE" \
@@ -79,7 +79,7 @@ jobs:
 
       - name: Run Snyk Python deps scan (pyproject.toml / uv.lock)
         env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           SNYK_API: https://api.us.snyk.io
         run: |
           snyk test \
