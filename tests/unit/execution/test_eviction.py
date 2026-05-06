@@ -114,7 +114,6 @@ class TestActivityCancelledAttribution:
         )
         return create_activity_from_task(boom_task)
 
-    @pytest.mark.asyncio
     async def test_cancel_with_shutdown_flag_raises_worker_evicted(self) -> None:
         activity_fn = self._build_cancel_activity()
         ctx = TaskContext(
@@ -143,7 +142,6 @@ class TestActivityCancelledAttribution:
         assert exc_info.value.type == WORKER_EVICTED_TYPE
         assert exc_info.value.non_retryable is True
 
-    @pytest.mark.asyncio
     async def test_cancel_without_shutdown_flag_propagates(self) -> None:
         activity_fn = self._build_cancel_activity()
         ctx = TaskContext(
@@ -220,14 +218,12 @@ class TestEvictionRetryHelper:
         )
         return exec_mock, exec_patch, logger_patch
 
-    @pytest.mark.asyncio
     async def test_returns_result_on_first_success(self) -> None:
         exec_mock, exec_patch, logger_patch = self._patch_workflow("ok")
         with exec_patch, logger_patch:
             result = await execute_activity_with_eviction_retry("act-name")
         assert result == "ok"
 
-    @pytest.mark.asyncio
     async def test_eviction_retries_then_succeeds(self) -> None:
         evict = _make_activity_error_with_app_error_cause()
         exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, evict, "ok"])
@@ -238,7 +234,6 @@ class TestEvictionRetryHelper:
         assert result == "ok"
         assert exec_mock.await_count == 3
 
-    @pytest.mark.asyncio
     async def test_eviction_cap_raises_after_max(self) -> None:
         evict = _make_activity_error_with_app_error_cause()
         # 4 evictions, cap = 3 → 4th eviction propagates
@@ -252,7 +247,6 @@ class TestEvictionRetryHelper:
         assert _is_worker_evicted(exc_info.value)
         assert exec_mock.await_count == 4
 
-    @pytest.mark.asyncio
     async def test_non_eviction_failure_propagates_unchanged(self) -> None:
         non_evict = _make_activity_error_with_app_error_cause(
             app_error_type="ValueError"
