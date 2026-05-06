@@ -105,7 +105,7 @@ jobs:
         id: parse
         run: |
           count_trivy_file() { jq "[.Results[]?.Vulnerabilities[]? | select(.Severity == \"$2\")] | length" "$1" 2>/dev/null || echo 0; }
-          count_snyk_file()  { jq "[.vulnerabilities[]? | select(.severity == \"$2\")] | length" "$1"  2>/dev/null || echo 0; }
+          count_snyk_file()  { jq "[.vulnerabilities[]? | select(.severity == \"$2\") | select((.type // \"vuln\") != \"license\")] | length" "$1" 2>/dev/null || echo 0; }
 
           TI_CRIT=0; TI_HIGH=0; TI_MED=0; TI_LOW=0
           TF_CRIT=0; TF_HIGH=0; TF_MED=0; TF_LOW=0
