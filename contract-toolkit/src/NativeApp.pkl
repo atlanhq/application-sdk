@@ -914,7 +914,8 @@ class PublishNode extends DAGNode {
 }
 
 /// Pre-built Query Intelligence node.
-/// Provide SQL field mapping and, optionally, cloud storage settings.
+/// Provide SQL field mapping; cloud bucket/backend is resolved from the QI app's
+/// pod environment, not per-workflow args.
 ///
 /// Defaults are biased toward AE-native orchestration:
 /// - `appName = "automation-engine"` (matches working Athena usage)
@@ -961,24 +962,6 @@ class QueryIntelligenceNode extends DAGNode {
   /// Parsing strategy used by QI.
   parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
 
-  /// Cloud backend name (for example `aws`). Set together with `storageBucket`.
-  lakeProvider: String?
-
-  /// Cloud storage bucket used for input/output prefixes.
-  storageBucket: String?
-
-  /// Deprecated compatibility file-exclude glob passed to QI artifact discovery.
-  excludeFilePattern: String?
-
-  /// Deprecated compatibility file-include glob passed to QI artifact discovery.
-  includeFilePattern: String?
-
-  /// Optional parquet time-window lower bound (exclusive), epoch millis.
-  startTime: Int?
-
-  /// Optional parquet time-window upper bound (inclusive), epoch millis.
-  endTime: Int?
-
   /// Optional vendor-specific filter flag.
   extraFilter: String?
 
@@ -990,9 +973,6 @@ class QueryIntelligenceNode extends DAGNode {
 
   /// Optional passthrough columns list.
   columnsToPreserve: String?
-
-  /// Optional parser timeout config, in `"<ms1>,<ms2>"` format.
-  processingTimeLimitMs: String?
 
   /// Optional related-assets output prefix.
   relatedAssetsOutputPrefix: String?
@@ -1012,8 +992,6 @@ class QueryIntelligenceNode extends DAGNode {
   hidden _qiArgsCheck: Any =
     if (vendorName == null && vendorKey == null)
       throw("QueryIntelligenceNode requires either vendorName or vendorKey.")
-    else if ((lakeProvider == null) != (storageBucket == null))
-      throw("QueryIntelligenceNode expects lakeProvider and storageBucket to be set together.")
     else null
 
   displayName = "Parse SQL Queries"
@@ -1032,17 +1010,10 @@ class QueryIntelligenceNode extends DAGNode {
     ["parsing_mode"] = parsingMode
     when (vendorName != null) { ["vendor_name"] = vendorName }
     when (vendorKey != null) { ["vendor_key"] = vendorKey }
-    when (lakeProvider != null) { ["lake_provider"] = lakeProvider }
-    when (storageBucket != null) { ["storage_bucket"] = storageBucket }
-    when (excludeFilePattern != null) { ["exclude_file_pattern"] = excludeFilePattern }
-    when (includeFilePattern != null) { ["include_file_pattern"] = includeFilePattern }
-    when (startTime != null) { ["start_time"] = startTime }
-    when (endTime != null) { ["end_time"] = endTime }
     when (extraFilter != null) { ["extra_filter"] = extraFilter }
     when (indirectLineage != null) { ["indirect_lineage"] = indirectLineage }
     when (ignoreOrphans != null) { ["ignore_orphans"] = ignoreOrphans }
     when (columnsToPreserve != null) { ["columns_to_preserve"] = columnsToPreserve }
-    when (processingTimeLimitMs != null) { ["processing_time_limit_ms"] = processingTimeLimitMs }
     when (relatedAssetsOutputPrefix != null) { ["related_assets_output_prefix"] = relatedAssetsOutputPrefix }
     when (parserArtifactsKey != null) { ["parser_artifacts_key"] = parserArtifactsKey }
     when (connectionCacheKey != null) { ["connection_cache_key"] = connectionCacheKey }

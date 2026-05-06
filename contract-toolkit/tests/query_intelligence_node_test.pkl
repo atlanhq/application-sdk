@@ -1,0 +1,35 @@
+// Tests for the built-in QueryIntelligenceNode manifest contract.
+
+amends "pkl:test"
+
+import "../src/NativeApp.pkl" as NativeApp
+
+local defaultQueryIntelligenceNode = new NativeApp.QueryIntelligenceNode {
+  vendorName = "athena"
+  sqlKey = "QUERY_TEXT"
+}
+
+facts {
+  ["QueryIntelligenceNode emits mandatory QI args"] {
+    defaultQueryIntelligenceNode.args["connection_qualified_name"] == "$.extract.outputs.connection_qualified_name"
+    defaultQueryIntelligenceNode.args["input_prefix"] == "$.extract.outputs.qi_input_prefix"
+    defaultQueryIntelligenceNode.args["output_prefix"] == "$.extract.outputs.qi_output_prefix"
+    defaultQueryIntelligenceNode.args["sql_key"] == "QUERY_TEXT"
+    defaultQueryIntelligenceNode.args["catalog_key"] == "DATABASE_NAME"
+    defaultQueryIntelligenceNode.args["schema_key"] == "SCHEMA_NAME"
+    defaultQueryIntelligenceNode.args["timestamp_key"] == "START_TIME"
+    defaultQueryIntelligenceNode.args["mine_output_type"] == "parquet"
+    defaultQueryIntelligenceNode.args["parsing_mode"] == "fallback"
+    defaultQueryIntelligenceNode.args["vendor_name"] == "athena"
+  }
+
+  ["QueryIntelligenceNode omits deployment-owned and deprecated args"] {
+    !defaultQueryIntelligenceNode.args.containsKey("lake_provider")
+    !defaultQueryIntelligenceNode.args.containsKey("storage_bucket")
+    !defaultQueryIntelligenceNode.args.containsKey("exclude_file_pattern")
+    !defaultQueryIntelligenceNode.args.containsKey("include_file_pattern")
+    !defaultQueryIntelligenceNode.args.containsKey("start_time")
+    !defaultQueryIntelligenceNode.args.containsKey("end_time")
+    !defaultQueryIntelligenceNode.args.containsKey("processing_time_limit_ms")
+  }
+}

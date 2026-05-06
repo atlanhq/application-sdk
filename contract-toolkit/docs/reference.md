@@ -1212,17 +1212,10 @@ class QueryIntelligenceNode extends DAGNode {
   timestampKey: String = "START_TIME"
   mineOutputType: "parquet"|"json" = "parquet"
   parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
-  lakeProvider: String?
-  storageBucket: String?
-  excludeFilePattern: String?
-  includeFilePattern: String?
-  startTime: Int?
-  endTime: Int?
   extraFilter: String?
   indirectLineage: Boolean?
   ignoreOrphans: Boolean?
   columnsToPreserve: String?
-  processingTimeLimitMs: String?
   relatedAssetsOutputPrefix: String?
   parserArtifactsKey: String?
   connectionCacheKey: String?
@@ -1233,15 +1226,9 @@ class QueryIntelligenceNode extends DAGNode {
 
 Validation enforced at `pkl eval` time:
 - `vendorName` or `vendorKey` must be set
-- `lakeProvider` and `storageBucket` must be set together
 
-Compatibility fields:
-- `excludeFilePattern`
-- `includeFilePattern`
-
-These map to QI's deprecated `exclude_file_pattern` / `include_file_pattern`
-artifact-discovery filters. They are retained for existing templates but should
-be avoided for new connectors.
+Cloud bucket and backend are resolved from the QI app's pod environment, not
+per-workflow args. Configure storage at the QI app deployment, not on this node.
 
 Typical crawler-style example:
 
@@ -1255,8 +1242,6 @@ extraNodes {
     timestampKey = ""
     mineOutputType = "json"
     parsingMode = "competitive"
-    lakeProvider = "aws"
-    storageBucket = "$.extract.outputs.storage_bucket"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
   }
@@ -1371,8 +1356,6 @@ extraNodes {
     sqlKey = "QUERY_TEXT"
     inputPrefix = "$.extract.outputs.query_history_prefix"
     outputPrefix = "$.extract.outputs.qi_output_prefix"
-    lakeProvider = "aws"
-    storageBucket = "$.extract.outputs.storage_bucket"
   }
   ["publish"] = new PublishNode {
     args {
@@ -1479,8 +1462,6 @@ extraNodes {
     timestampKey = ""
     mineOutputType = "json"
     parsingMode = "competitive"
-    lakeProvider = "aws"
-    storageBucket = "$.extract.outputs.storage_bucket"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
   }

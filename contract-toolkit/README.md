@@ -622,8 +622,6 @@ new QueryIntelligenceNode {
   timestampKey = ""
   mineOutputType = "json"
   parsingMode = "competitive"
-  lakeProvider = "aws"
-  storageBucket = "$.extract.outputs.storage_bucket"
   inputPrefix = "$.extract.outputs.transformed_data_prefix"
   outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
 }
@@ -644,10 +642,9 @@ Usually overridden:
 - `catalogKey`
 - `schemaKey`
 
-Set `lakeProvider` and `storageBucket` together for cloud-backed QI runs.
-`excludeFilePattern` and `includeFilePattern` are exposed only for compatibility
-with existing QI templates; they are deprecated in the QI app contract and
-should be avoided for new connectors.
+Cloud bucket and backend are resolved from the QI app's pod environment, so
+`lakeProvider` / `storageBucket` are not exposed on this node. Set storage at
+the QI app deployment, not in the contract.
 
 ### `PopularityNode` — Pre-built Popularity App Node
 
