@@ -9,6 +9,7 @@ When modifying SDK code, update corresponding conceptual documentation under `do
 *   `application_sdk/handler/**` -> `docs/concepts/handlers.md`
 *   `application_sdk/server/**` -> `docs/concepts/server.md`
 *   `application_sdk/clients/**` -> `docs/concepts/clients.md`
+*   `application_sdk/errors/**` -> `docs/concepts/common.md` (Error Handling section) and `docs/standards/exceptions.md`
 *   `application_sdk/common/**` or `application_sdk/constants.py` -> `docs/concepts/common.md`
 *   `application_sdk/transformers/**` -> `docs/concepts/common.md`
 *   `application_sdk/infrastructure/**` -> `docs/concepts/apps.md` (infrastructure abstraction section)

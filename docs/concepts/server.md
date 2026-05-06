@@ -68,7 +68,7 @@ All routes registered by `create_app_handler_service()`:
 | `/events/v1/drop` | POST | Return a Dapr `DROP` status, instructing the sidecar to drop the received event without retry or dead-lettering |
 | `/health`, `/server/health` | GET | Liveness probe |
 | `/ready`, `/server/ready` | GET | Readiness probe |
-| `/metrics` | GET | Prometheus metrics (enabled when `ATLAN_ENABLE_PROMETHEUS_METRICS=true`) |
+| `/metrics` | GET | Prometheus metrics (always exposed; merges SDK custom metrics + HTTP server instrumentation + Temporal Rust-core families proxied from `127.0.0.1:9464` + `prometheus_client` defaults) |
 | `/` | GET | API root / service info |
 
 ## MCP Server Integration

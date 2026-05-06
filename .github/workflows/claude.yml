@@ -406,7 +406,11 @@ jobs:
       - name: Resolve conflicts (Tier 3 — Claude session)
         id: resolve
         if: steps.conflicts.outputs.needs_resolution == 'true'
-        uses: anthropics/claude-code-action@v1
+        # Pinned to v1.0.112 to avoid the v1.0.113 regression where
+        # `claude install` exits 0 without placing the binary at
+        # ~/.local/bin/claude on Ubuntu 24.04 runners.
+        # Tracking: https://github.com/anthropics/claude-code-action/issues/1290
+        uses: anthropics/claude-code-action@08d635357c8fff73d997923c055449a03e92e0b6  # v1.0.112
         with:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           show_full_output: true
@@ -515,7 +519,11 @@ jobs:
       # using trusted identifiers (PR number, repo, head SHA) only.
       - name: SDK Review (Session A — Review)
         id: review
-        uses: anthropics/claude-code-action@v1
+        # Pinned to v1.0.112 to avoid the v1.0.113 regression where
+        # `claude install` exits 0 without placing the binary at
+        # ~/.local/bin/claude on Ubuntu 24.04 runners.
+        # Tracking: https://github.com/anthropics/claude-code-action/issues/1290
+        uses: anthropics/claude-code-action@08d635357c8fff73d997923c055449a03e92e0b6  # v1.0.112
         with:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           show_full_output: true
@@ -841,7 +849,11 @@ jobs:
         if: |
           steps.pr.outputs.mode == 'auto-fix' &&
           steps.verdict.outputs.verdict == 'NEEDS_FIXES'
-        uses: anthropics/claude-code-action@v1
+        # Pinned to v1.0.112 to avoid the v1.0.113 regression where
+        # `claude install` exits 0 without placing the binary at
+        # ~/.local/bin/claude on Ubuntu 24.04 runners.
+        # Tracking: https://github.com/anthropics/claude-code-action/issues/1290
+        uses: anthropics/claude-code-action@08d635357c8fff73d997923c055449a03e92e0b6  # v1.0.112
         with:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           show_full_output: true
@@ -1129,7 +1141,11 @@ jobs:
           steps.pr.outputs.mode == 'auto-fix' &&
           steps.verdict.outputs.verdict == 'READY_TO_MERGE' &&
           steps.finalize.outputs.ci_failed == 'true'
-        uses: anthropics/claude-code-action@v1
+        # Pinned to v1.0.112 to avoid the v1.0.113 regression where
+        # `claude install` exits 0 without placing the binary at
+        # ~/.local/bin/claude on Ubuntu 24.04 runners.
+        # Tracking: https://github.com/anthropics/claude-code-action/issues/1290
+        uses: anthropics/claude-code-action@08d635357c8fff73d997923c055449a03e92e0b6  # v1.0.112
         with:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           show_full_output: true

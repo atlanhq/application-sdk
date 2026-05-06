@@ -18,10 +18,11 @@ from unittest import mock
 
 import pytest
 
-from application_sdk.app.base import WORKER_EVICTED_TYPE, App
+from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
 from application_sdk.execution import shutdown as shutdown_module
 from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
@@ -312,5 +313,3 @@ class TestRetryPolicyWiresWorkerEvicted:
         opts = get_activity_options(meta)
         types = opts["retry_policy"].non_retryable_error_types or []
         assert WORKER_EVICTED_TYPE in types
-
-

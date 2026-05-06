@@ -1,14 +1,17 @@
 """State store abstraction."""
 
+import warnings
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import STATE_STORE_ERROR, ErrorCode
+from application_sdk.errors.leaves import DependencyUnavailableError
 
 
-class StateStoreError(Exception):
-    """Raised when state store operations fail."""
+class StateStoreError(DependencyUnavailableError):
+    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STATE_STORE_ERROR
+    code: ClassVar[str] = "STATE_STORE"
 
     def __init__(
         self,
@@ -19,11 +22,15 @@ class StateStoreError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
+        warnings.warn(
+            "StateStoreError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.key = key
         self.operation = operation
-        self.cause = cause
         self._error_code = error_code
 
     @property

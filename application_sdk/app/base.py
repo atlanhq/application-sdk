@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import threading
+import warnings
 from abc import ABC
 from collections.abc import Callable
 from dataclasses import replace
@@ -50,9 +51,10 @@ from application_sdk.errors import (
     APP_CONTEXT_ERROR,
     APP_ERROR,
     APP_NON_RETRYABLE,
-    EXECUTION_WORKER_EVICTED,
     ErrorCode,
 )
+from application_sdk.errors.base import AppError as _NewAppError
+from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 
@@ -142,10 +144,15 @@ def _safe_log(level: str, message: str, **attrs: Any) -> None:
 # =============================================================================
 
 
-class AppError(Exception):
-    """Base exception for App-related errors."""
+class AppError(_NewAppError):
+    """Deprecated: use ``application_sdk.errors.AppError`` directly — removed in v4.0.
+
+    Back-compat shim. Accepts a positional ``message`` argument and the legacy
+    ``error_code`` keyword to avoid breaking existing raise sites.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
+    code: ClassVar[str] = "APP"
 
     def __init__(
         self,
@@ -156,19 +163,22 @@ class AppError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.app_name = app_name
-        self.run_id = run_id
-        self.cause = cause
-        self._error_code = error_code
+        warnings.warn(
+            "application_sdk.app.AppError is deprecated; "
+            "use application_sdk.errors.AppError — will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._legacy_error_code = error_code
 
     @property
     def error_code(self) -> ErrorCode:
-        """Structured error code for monitoring and alerting."""
         return (
-            self._error_code
-            if self._error_code is not None
+            self._legacy_error_code
+            if self._legacy_error_code is not None
             else self.DEFAULT_ERROR_CODE
         )
 
@@ -183,7 +193,7 @@ class AppError(Exception):
         return " | ".join(parts)
 
 
-class AppContextError(RuntimeError):
+class AppContextError(_InternalError):
     """Raised when App or task context is accessed outside of valid execution scope.
 
     This is a programming error — it indicates that context-dependent methods
@@ -192,26 +202,26 @@ class AppContextError(RuntimeError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_CONTEXT_ERROR
+    code: ClassVar[str] = "APP_CONTEXT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
-        super().__init__(message)
-        self._error_code = error_code
+        _InternalError.__init__(self, message=message)
+        self._legacy_error_code = error_code
 
     @property
     def error_code(self) -> ErrorCode:
-        """Structured error code for monitoring and alerting."""
         return (
-            self._error_code
-            if self._error_code is not None
+            self._legacy_error_code
+            if self._legacy_error_code is not None
             else self.DEFAULT_ERROR_CODE
         )
 
     def __str__(self) -> str:
-        return f"[{self.error_code.code}] {super().__str__()}"
+        return f"[{self.error_code.code}] {self.message}"
 
 
 class NonRetryableError(AppError):
-    """Error that should not be retried.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
 
     Use this for failures that are deterministic and will never succeed on retry:
     - Authentication failures (invalid credentials)
@@ -231,10 +241,11 @@ class NonRetryableError(AppError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_NON_RETRYABLE
+    default_retryable: ClassVar[bool] = False
 
 
 class RetryableError(AppError):
-    """Error that may be retried at the workflow level.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
 
     Extend this when raising an error directly from an ``@entrypoint`` method
     that signals a *transient* failure — one where retrying the entire workflow
@@ -263,32 +274,7 @@ class RetryableError(AppError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
-
-
-# Wire identifier for ``WorkerEvictedError``. Carried as ``ApplicationError.type``
-# so workflow code can recognise the failure across the activity/workflow
-# boundary without depending on the exception class itself (Temporal serialises
-# only the type string, not the Python class).
-WORKER_EVICTED_TYPE = "WorkerEvicted"
-
-
-class WorkerEvictedError(AppError):
-    """Activity terminated because the worker pod is shutting down.
-
-    Raised by the activity wrapper when ``asyncio.CancelledError`` arrives
-    while the SDK's worker shutdown flag is set — i.e. the pod received SIGTERM
-    (KEDA scale-down, VPA eviction, spot reclaim, node drain, rolling deploy).
-
-    The activity-level Temporal RetryPolicy treats this error type as
-    non-retryable so the failure surfaces directly to workflow code, where the
-    SDK's per-activity eviction loop re-dispatches the activity without burning
-    the application-error retry budget.
-
-    This is platform-attributed, not an app failure: the activity never had a
-    chance to fail for an application reason.
-    """
-
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = EXECUTION_WORKER_EVICTED
+    default_retryable: ClassVar[bool] = True
 
 
 # =============================================================================
@@ -1560,6 +1546,13 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
             if isinstance(e, FailureError):
                 raise
+            if isinstance(e, _NewAppError):
+                raise ApplicationError(
+                    str(e),
+                    e.to_failure_details(),
+                    type=type(e).__name__,
+                    non_retryable=not e.effective_retryable,
+                ) from e
             raise ApplicationError(
                 str(e),
                 type=type(e).__name__,
@@ -1754,7 +1747,6 @@ def _create_task_activity_wrapper(
 
 # Keep FileReference accessible via base module for convenience
 __all__ = [
-    "WORKER_EVICTED_TYPE",
     "App",
     "AppError",
     "AppStateAccessor",
@@ -1763,7 +1755,6 @@ __all__ = [
     "PersistentStateAccessor",
     "RetryableError",
     "TaskStateAccessor",
-    "WorkerEvictedError",
     "_app_state",
     "_app_state_lock",
     "_apply_app_registration",

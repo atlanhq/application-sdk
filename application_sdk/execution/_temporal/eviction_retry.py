@@ -28,8 +28,8 @@ from typing import Any
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, ApplicationError
 
-from application_sdk.app.base import WORKER_EVICTED_TYPE
 from application_sdk.constants import WORKER_EVICTION_MAX_RETRIES
+from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
 
 
 def _is_worker_evicted(err: ActivityError) -> bool:

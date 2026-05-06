@@ -6,15 +6,15 @@ multiple observability modules to avoid circular imports.
 
 import dataclasses
 from contextvars import ContextVar
-from typing import Any, Dict
+from typing import Any
 
 # Context variable for request-scoped data (e.g., request_id from HTTP middleware)
-request_context: ContextVar[Dict[str, Any] | None] = ContextVar(
+request_context: ContextVar[dict[str, Any] | None] = ContextVar(
     "request_context", default=None
 )
 
 # Context variable for correlation context (atlan- prefixed headers for distributed tracing)
-correlation_context: ContextVar[Dict[str, Any] | None] = ContextVar(
+correlation_context: ContextVar[dict[str, Any] | None] = ContextVar(
     "correlation_context", default=None
 )
 
@@ -40,6 +40,11 @@ class ExecutionContext:
     attempt: int = 0
     activity_id: str = ""
     activity_type: str = ""
+    # Set on child workflows from ``workflow.info().parent``. Empty on
+    # top-level workflows and on activities (Temporal's activity.Info does
+    # not carry parent info directly).
+    parent_workflow_id: str = ""
+    parent_run_id: str = ""
 
 
 _execution_ctx: ContextVar[ExecutionContext] = ContextVar(

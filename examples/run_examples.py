@@ -27,6 +27,12 @@ from typing import Any
 # Repo root is one level above examples/
 _REPO_ROOT = Path(__file__).parent.parent
 
+# Windows console defaults to cp1252; reconfigure stdout/stderr to UTF-8 so
+# child process output containing box-drawing chars doesn't raise UnicodeEncodeError.
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 PORT = 8000
 BASE_URL = f"http://127.0.0.1:{PORT}"
 HEALTH_TIMEOUT = 60

@@ -73,7 +73,7 @@ Pass the parent's OTLP endpoint in workflow context; child apps route logs to th
 
 ## Implementation
 
-- `self.logger` in both `run()` and `@task` automatically includes `app_name`, `run_id`, and `correlation_id` on every entry
+- `self.logger` in both `run()` and `@task` automatically includes `app_name`, `workflow_run_id`, and `correlation_id` on every entry (`run_id` is kept as a backwards-compat alias)
 - `correlation_id` propagates from parent to child via the `_correlation_id` field on input Pydantic models
 - OpenTelemetry trace context propagates automatically through Temporal interceptors
 - The Helm chart sets `OTEL_RESOURCE_ATTRIBUTES` with `k8s.cluster.name`, `k8s.pod.name`, `k8s.node.name`, `k8s.namespace.name`, `k8s.workflow.name`, and `k8s.workflow.package.version` on each pod

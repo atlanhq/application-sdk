@@ -97,7 +97,7 @@ def _to_temporal_retry_policy(policy: RetryPolicy) -> _TemporalRetryPolicy:
         RetryPolicy as _TR,
     )
 
-    from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports execution.retry transitively
+    from application_sdk.errors.leaves import (  # noqa: PLC0415 — keep retry.py free of eager imports of error hierarchy
         WORKER_EVICTED_TYPE,
     )
 

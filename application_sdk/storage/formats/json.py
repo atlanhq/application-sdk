@@ -1,5 +1,6 @@
 import os
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, Union
 
 import orjson
 
@@ -62,8 +63,8 @@ class JsonFileReader(Reader):
     def __init__(
         self,
         path: str,
-        file_names: Optional[List[str]] = None,
-        chunk_size: Optional[int] = 100000,
+        file_names: list[str] | None = None,
+        chunk_size: int | None = 100000,
         dataframe_type: DataframeType = DataframeType.pandas,
         cleanup_on_close: bool = True,
     ):
@@ -122,10 +123,7 @@ class JsonFileReader(Reader):
 
     def read_batches(
         self,
-    ) -> Union[
-        AsyncIterator["pd.DataFrame"],
-        AsyncIterator["daft.DataFrame"],
-    ]:
+    ) -> AsyncIterator["pd.DataFrame"] | AsyncIterator["daft.DataFrame"]:
         """Read the data from the JSON files and return as batched DataFrames.
 
         Returns:
@@ -194,7 +192,7 @@ class JsonFileReader(Reader):
 
     async def _get_batched_daft_dataframe(
         self,
-    ) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
+    ) -> AsyncIterator["daft.DataFrame"]:
         """Read the data from the JSON files and return as a batched daft dataframe."""
         try:
             import daft  # noqa: PLC0415 — optional dep: daft
@@ -213,7 +211,7 @@ class JsonFileReader(Reader):
         except Exception as e:
             raise rewrap(e, "Error reading batched data from JSON using daft") from e
 
-    async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+    async def _get_daft_dataframe(self) -> "daft.DataFrame":
         """Read the data from the JSON files and return as a single daft dataframe."""
         try:
             import daft  # noqa: PLC0415 — optional dep: daft
@@ -258,17 +256,17 @@ class JsonFileWriter(Writer):
     def __init__(
         self,
         path: str,
-        typename: Optional[str] = None,
-        chunk_start: Optional[int] = None,
-        buffer_size: Optional[int] = 5000,
-        chunk_size: Optional[int] = 50000,  # to limit the memory usage on upload
-        total_record_count: Optional[int] = 0,
-        chunk_count: Optional[int] = 0,
-        start_marker: Optional[str] = None,
-        end_marker: Optional[str] = None,
-        retain_local_copy: Optional[bool] = False,
+        typename: str | None = None,
+        chunk_start: int | None = None,
+        buffer_size: int | None = 5000,
+        chunk_size: int | None = 50000,  # to limit the memory usage on upload
+        total_record_count: int | None = 0,
+        chunk_count: int | None = 0,
+        start_marker: str | None = None,
+        end_marker: str | None = None,
+        retain_local_copy: bool | None = False,
         dataframe_type: DataframeType = DataframeType.pandas,
-        **kwargs: Dict[str, Any],
+        **kwargs: dict[str, Any],
     ):
         """Initialize the JSON output handler.
 
@@ -298,7 +296,7 @@ class JsonFileWriter(Writer):
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
         self.chunk_size = chunk_size or 50000  # to limit the memory usage on upload
-        self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
+        self.buffer: list[pd.DataFrame | daft.DataFrame] = []
         self.current_buffer_size = 0
         self.current_buffer_size_bytes = 0  # Track estimated buffer size in bytes
         self.max_file_size_bytes = int(
@@ -328,10 +326,10 @@ class JsonFileWriter(Writer):
     async def _write_daft_dataframe(
         self,
         dataframe: "daft.DataFrame",
-        preserve_fields: Optional[List[str]] = None,
-        null_to_empty_dict_fields: Optional[List[str]] = None,
+        preserve_fields: list[str] | None = None,
+        null_to_empty_dict_fields: list[str] | None = None,
         **kwargs,
-    ):  # noqa: F821
+    ):
         """Write a daft DataFrame to JSON files.
 
         This method converts the daft DataFrame to pandas and writes it to JSON files.
@@ -427,12 +425,12 @@ class JsonFileWriter(Writer):
                 name="json_write_errors",
                 value=1,
                 metric_type=MetricType.COUNTER,
-                labels={"type": "daft", "error": str(e)},
+                labels={"type": "daft", "error_type": type(e).__name__},
                 description="Number of errors while writing to JSON files",
             )
             raise
 
-    async def _flush_daft_buffer(self, buffer: List[str], chunk_part: int):
+    async def _flush_daft_buffer(self, buffer: list[str], chunk_part: int):
         """Flush the current buffer to a JSON file.
 
         This method combines all DataFrames in the buffer, writes them to a JSON file,

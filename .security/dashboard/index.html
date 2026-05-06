@@ -846,12 +846,15 @@ function renderTrends(){
             app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
     });
 
-    // A repo whose earliest history entry falls inside the comparison window is "newly
-    // onboarded" — it has no real baseline, so showing it under Needs Attention would
-    // misrepresent it as a regression. Surface those separately instead.
+    // "Newly onboarded" = a repo whose ONLY history entry is today's scan. This is a
+    // tight heuristic to avoid false positives: the S3 history file has been reset before,
+    // so "earliest history entry inside the comparison window" would catch any old repo
+    // whose pre-reset history was wiped. A truly new repo will have exactly one scan
+    // (today's), while a history-reset repo will have at least one older entry by now.
     const isNewlyOnboarded=r=>{
-        const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
-        return all.length>0 && all[0].date>cutoffStr;
+        const all=historyData[r]||[];
+        const dates=new Set(all.map(e=>e.date));
+        return dates.size===1 && all[0].date===today;
     };
     const improved=repoDeltas.filter(r=>r.improvementDelta<0&&!isNewlyOnboarded(r.repo)).sort((a,b)=>a.improvementDelta-b.improvementDelta);
     const degraded=repoDeltas.filter(r=>r.delta>0&&!isNewlyOnboarded(r.repo)).sort((a,b)=>b.delta-a.delta);

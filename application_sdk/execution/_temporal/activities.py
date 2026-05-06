@@ -219,7 +219,7 @@ def create_activity_from_task(
             )
 
             if is_worker_shutting_down():
-                from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
                     WORKER_EVICTED_TYPE,
                 )
                 from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
@@ -234,19 +234,20 @@ def create_activity_from_task(
             raise
 
         except Exception as e:
-            from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                NonRetryableError,
+            from application_sdk.errors.base import (  # noqa: PLC0415 — circular
+                AppError as _AppError,
             )
 
-            if isinstance(e, NonRetryableError):
-                from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            if isinstance(e, _AppError):
+                from application_sdk.execution.errors import (  # noqa: PLC0415 — circular
                     ApplicationError,
                 )
 
                 raise ApplicationError(
                     str(e),
+                    e.to_failure_details(),
                     type=type(e).__name__,
-                    non_retryable=True,
+                    non_retryable=not e.effective_retryable,
                 ) from e
             raise
 
@@ -308,7 +309,7 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
         RetryPolicy as TemporalRetryPolicy,
     )
 
-    from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+    from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
         WORKER_EVICTED_TYPE,
     )
 
