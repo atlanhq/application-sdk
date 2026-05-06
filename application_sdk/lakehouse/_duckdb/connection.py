@@ -1,16 +1,16 @@
 """Internal: DuckDB connection factory.
 
-Mirrors the conventions established by ``atlan-popularity-app``'s
-``app/processing/io.py:make_duckdb_connection`` so that all SDK apps that
-use DuckDB have identical operational characteristics:
+Defaults mirror ``atlan-popularity-app``'s ``make_duckdb_connection`` so all
+SDK apps using DuckDB have identical operational characteristics out of the
+box:
 
-  * single-threaded (predictable memory; activities run on shared workers)
-  * ``memory_limit`` capped at 8 GB (same upper bound popularity uses)
-  * ``preserve_insertion_order=false`` for cheaper sorts/aggregations
-  * dedicated ``temp_directory`` so spill files don't collide
+  * ``threads=1`` — predictable memory on shared workers
+  * ``memory_limit='8GB'`` — same upper bound popularity uses
+  * ``preserve_insertion_order=False`` — cheaper sorts/aggregations
+  * ``temp_dir='/tmp/duckdb_tmp'`` — dedicated spill directory
 
-If we ever need to make these tunable, do it here — apps should not be
-configuring DuckDB themselves.
+All four are tunable per-call. Public callers (``LakehouseQuery.sql``)
+forward overrides through.
 """
 
 from __future__ import annotations
@@ -19,17 +19,31 @@ import os
 
 import duckdb
 
-_DEFAULT_TEMP_DIR = "/tmp/duckdb_tmp"
+DEFAULT_THREADS = 1
+DEFAULT_MEMORY_LIMIT = "8GB"
+DEFAULT_TEMP_DIR = "/tmp/duckdb_tmp"
+DEFAULT_PRESERVE_INSERTION_ORDER = False
 
 
 def make_duckdb_connection(
-    temp_dir: str = _DEFAULT_TEMP_DIR,
+    *,
+    threads: int = DEFAULT_THREADS,
+    memory_limit: str = DEFAULT_MEMORY_LIMIT,
+    temp_dir: str = DEFAULT_TEMP_DIR,
+    preserve_insertion_order: bool = DEFAULT_PRESERVE_INSERTION_ORDER,
 ) -> duckdb.DuckDBPyConnection:
-    """Create a DuckDB in-memory connection configured to popularity-app's tunables."""
+    """Create a DuckDB in-memory connection with the given tunables.
+
+    All defaults match popularity-app's ``make_duckdb_connection``. Apps
+    that need different settings (more threads for parallel scans, larger
+    memory limit, alternate spill dir) override the corresponding param.
+    """
     os.makedirs(temp_dir, exist_ok=True)
     conn = duckdb.connect()
-    conn.execute("SET threads TO 1")
-    conn.execute("SET memory_limit = '8GB'")
+    conn.execute(f"SET threads TO {int(threads)}")
+    conn.execute(f"SET memory_limit = '{memory_limit}'")
     conn.execute(f"SET temp_directory = '{temp_dir}'")
-    conn.execute("SET preserve_insertion_order = false")
+    conn.execute(
+        f"SET preserve_insertion_order = {str(bool(preserve_insertion_order)).lower()}"
+    )
     return conn

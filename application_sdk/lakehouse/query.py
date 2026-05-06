@@ -28,6 +28,10 @@ Example::
         },
     )
 
+DuckDB tunables (``threads``, ``memory_limit``, ``temp_dir``,
+``preserve_insertion_order``) default to popularity-app's settings and can
+be overridden per-call.
+
 This sits alongside :class:`LakehouseReader` / :class:`LakehouseWriter` and
 is the recommended path when an app needs joins, aggregations, or window
 functions across lakehouse tables.
@@ -38,6 +42,12 @@ from __future__ import annotations
 from typing import Any
 
 from application_sdk.lakehouse._duckdb import query_engine as _engine
+from application_sdk.lakehouse._duckdb.connection import (
+    DEFAULT_MEMORY_LIMIT,
+    DEFAULT_PRESERVE_INSERTION_ORDER,
+    DEFAULT_TEMP_DIR,
+    DEFAULT_THREADS,
+)
 from application_sdk.lakehouse._polaris import catalog as _catalog
 
 
@@ -58,7 +68,10 @@ class LakehouseQuery:
         *,
         tables: dict[str, tuple[str, str]],
         where: dict[str, str] | None = None,
-        temp_dir: str | None = None,
+        threads: int = DEFAULT_THREADS,
+        memory_limit: str = DEFAULT_MEMORY_LIMIT,
+        temp_dir: str = DEFAULT_TEMP_DIR,
+        preserve_insertion_order: bool = DEFAULT_PRESERVE_INSERTION_ORDER,
     ) -> list[dict[str, Any]]:
         """Execute ``query`` against named lakehouse tables. Returns rows as dicts.
 
@@ -71,13 +84,20 @@ class LakehouseQuery:
             where: Optional per-view Iceberg row-filter applied at scan time
                 (e.g. ``{"events": "status = 'unprocessed'"}``). Cheaper than
                 filtering inside the SQL when partition pruning helps.
-            temp_dir: Override the DuckDB spill directory. Defaults to
-                ``/tmp/duckdb_tmp`` (matches ``atlan-popularity-app``).
+            threads: DuckDB ``threads`` setting. Default ``1`` (popularity-app
+                convention; bump for parallel scans on dedicated workers).
+            memory_limit: DuckDB ``memory_limit``. Default ``'8GB'``.
+            temp_dir: DuckDB spill directory. Default ``/tmp/duckdb_tmp``.
+            preserve_insertion_order: DuckDB ``preserve_insertion_order``.
+                Default ``False`` (cheaper sorts/aggregations).
         """
         return _engine.run_sql(
             self._catalog,
             query,
             tables,
             where=where,
+            threads=threads,
+            memory_limit=memory_limit,
             temp_dir=temp_dir,
+            preserve_insertion_order=preserve_insertion_order,
         )

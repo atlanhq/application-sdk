@@ -15,8 +15,8 @@ class TestMakeDuckdbConnection(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_settings_match_popularity_app(self):
-        """Connection settings mirror popularity-app's make_duckdb_connection."""
+    def test_default_settings_match_popularity_app(self):
+        """Default settings mirror popularity-app's make_duckdb_connection."""
         conn = make_duckdb_connection()
         try:
             threads = conn.execute("SELECT current_setting('threads')").fetchone()[0]
@@ -34,21 +34,48 @@ class TestMakeDuckdbConnection(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_temp_dir_created(self):
+    def test_threads_param(self):
+        conn = make_duckdb_connection(threads=4)
+        try:
+            threads = conn.execute("SELECT current_setting('threads')").fetchone()[0]
+            self.assertEqual(int(threads), 4)
+        finally:
+            conn.close()
+
+    def test_memory_limit_param(self):
+        conn = make_duckdb_connection(memory_limit="2GB")
+        try:
+            mem = conn.execute("SELECT current_setting('memory_limit')").fetchone()[0]
+            # 2 GB is normalised by DuckDB; just assert it's smaller than the default.
+            self.assertIn("GiB", mem)
+            # Compare numerically — '1.8 GiB' < '7.4 GiB'.
+            value = float(mem.split()[0])
+            self.assertLess(value, 5.0)
+        finally:
+            conn.close()
+
+    def test_preserve_insertion_order_param(self):
+        conn = make_duckdb_connection(preserve_insertion_order=True)
+        try:
+            value = conn.execute(
+                "SELECT current_setting('preserve_insertion_order')"
+            ).fetchone()[0]
+            self.assertEqual(str(value).lower(), "true")
+        finally:
+            conn.close()
+
+    def test_temp_dir_param(self):
+        import os
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
             target = f"{tmp}/duckdb_spill"
             conn = make_duckdb_connection(temp_dir=target)
             try:
-                import os
-
                 self.assertTrue(os.path.isdir(target))
                 td = conn.execute(
                     "SELECT current_setting('temp_directory')"
                 ).fetchone()[0]
-                # Some DuckDB versions normalise the path; just check the dir
-                # we passed is the directory the engine resolved to.
                 self.assertEqual(td, target)
             finally:
                 conn.close()

@@ -17,7 +17,13 @@ from typing import Any
 import pyarrow as pa
 from pyiceberg.catalog import Catalog
 
-from application_sdk.lakehouse._duckdb.connection import make_duckdb_connection
+from application_sdk.lakehouse._duckdb.connection import (
+    DEFAULT_MEMORY_LIMIT,
+    DEFAULT_PRESERVE_INSERTION_ORDER,
+    DEFAULT_TEMP_DIR,
+    DEFAULT_THREADS,
+    make_duckdb_connection,
+)
 from application_sdk.lakehouse._iceberg import identifier as _identifier
 
 
@@ -37,7 +43,10 @@ def run_sql(
     tables: dict[str, tuple[str, str]],
     *,
     where: dict[str, str] | None = None,
-    temp_dir: str | None = None,
+    threads: int = DEFAULT_THREADS,
+    memory_limit: str = DEFAULT_MEMORY_LIMIT,
+    temp_dir: str = DEFAULT_TEMP_DIR,
+    preserve_insertion_order: bool = DEFAULT_PRESERVE_INSERTION_ORDER,
 ) -> list[dict[str, Any]]:
     """Execute ``query`` against ``tables`` registered as DuckDB views.
 
@@ -47,7 +56,12 @@ def run_sql(
     per-view filter into the Iceberg scan (cheaper than relying on DuckDB
     to filter after materialization).
     """
-    conn = make_duckdb_connection(temp_dir or "/tmp/duckdb_tmp")
+    conn = make_duckdb_connection(
+        threads=threads,
+        memory_limit=memory_limit,
+        temp_dir=temp_dir,
+        preserve_insertion_order=preserve_insertion_order,
+    )
     try:
         for view_name, (namespace, table_name) in tables.items():
             view_filter = (where or {}).get(view_name)
