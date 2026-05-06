@@ -276,10 +276,14 @@ class Table(assets.Table):
 
             assert obj.get("table_catalog") is not None, "Table catalog cannot be None"
 
-            # Determine the type of table based on metadata
-            is_partition = bool(obj.get("is_partition", False))
+            # Determine the type of table based on metadata.
+            # Source metadata layers use either bool (True/False) or the
+            # canonical string ("YES"/"NO") for these flags; treat both
+            # truthy forms as positive and reject every other string. This
+            # avoids the prior bug where bool("NO") was True. [BLDX-1168]
+            is_partition = obj.get("is_partition") in (True, "YES")
             table_type_value = obj.get("table_type", "TABLE")
-            is_dynamic = obj.get("is_dynamic") == "YES"
+            is_dynamic = obj.get("is_dynamic") in (True, "YES")
 
             if is_partition:
                 table_type = assets.TablePartition
@@ -903,9 +907,15 @@ class Function(assets.Function):
             function_attributes["function_definition"] = obj.get(
                 "function_definition", None
             )
-            function_attributes["function_arguments"] = list(
-                obj.get("argument_signature", "()")[1:-1].split(",")
-            )
+            argument_signature = obj.get("argument_signature", "()")
+            if not (
+                argument_signature.startswith("(") and argument_signature.endswith(")")
+            ):
+                raise ValueError(
+                    f"Malformed argument_signature: {argument_signature!r}"
+                )
+            inner = argument_signature[1:-1]
+            function_attributes["function_arguments"] = list(inner.split(","))
             function_attributes["function_is_secure"] = (
                 obj.get("is_secure", None) == "YES"
             )
@@ -1207,5 +1217,5 @@ class TagAttachment(assets.TagAttachment):
                 "custom_attributes": tag_attachment_custom_attributes,
                 "entity_class": TagAttachment,
             }
-        except Exception as e:
+        except AssertionError as e:
             raise ValueError(f"Error creating TagAttachment Entity: {str(e)}") from e

@@ -1,15 +1,18 @@
 """I/O bindings abstraction."""
 
+import warnings
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol
 
 from application_sdk.errors import BINDING_ERROR, ErrorCode
+from application_sdk.errors.leaves import DependencyUnavailableError
 
 
-class BindingError(Exception):
-    """Raised when binding operations fail."""
+class BindingError(DependencyUnavailableError):
+    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = BINDING_ERROR
+    code: ClassVar[str] = "BINDING"
 
     def __init__(
         self,
@@ -20,11 +23,15 @@ class BindingError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
+        warnings.warn(
+            "BindingError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.binding_name = binding_name
         self.operation = operation
-        self.cause = cause
         self._error_code = error_code
 
     @property

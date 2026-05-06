@@ -31,13 +31,14 @@ class ExecutionSettings:
 
 @dataclass(frozen=True)
 class InterceptorSettings:
-    """Settings for Temporal interceptors."""
+    """Settings for product-feature Temporal interceptors.
+
+    The three observability interceptors (Log / Metrics / Trace) are
+    unconditional and not configurable here.
+    """
 
     enable_event_interceptor: bool = True
     """Enable lifecycle event publishing interceptor."""
-
-    enable_correlation_interceptor: bool = True
-    """Enable correlation context propagation interceptor."""
 
     enable_output_interceptor: bool = True
     """Enable structured output collection interceptor (metrics/artifacts)."""
@@ -87,9 +88,6 @@ def load_interceptor_settings() -> InterceptorSettings:
 
     return InterceptorSettings(
         enable_event_interceptor=_bool("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR"),
-        enable_correlation_interceptor=_bool(
-            "APPLICATION_SDK_ENABLE_CORRELATION_INTERCEPTOR"
-        ),
         enable_output_interceptor=_bool("APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR"),
         enable_cleanup_interceptor=_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"),
     )

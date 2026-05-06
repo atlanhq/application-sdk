@@ -59,6 +59,7 @@ Evolution:
 import hashlib
 import posixpath
 import re
+import warnings
 from enum import StrEnum
 from typing import (
     Annotated,
@@ -76,8 +77,9 @@ import orjson
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
-from application_sdk.contracts.types import MaxItems  # noqa: TC001
+from application_sdk.contracts.types import MaxItems
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
+from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
@@ -490,10 +492,11 @@ class Record(BaseModel):
 # =============================================================================
 
 
-class ContractValidationError(Exception):
-    """Raised when a contract validation fails."""
+class ContractValidationError(_InvalidInputError):
+    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CONTRACT_VALIDATION
+    code: ClassVar[str] = "CONTRACT_VALIDATION"
 
     def __init__(
         self,
@@ -505,8 +508,13 @@ class ContractValidationError(Exception):
         actual_type: str | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
+        warnings.warn(
+            "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        _InvalidInputError.__init__(self, message=message)
         self.contract_type = contract_type
         self.field_name = field_name
         self.expected_type = expected_type
@@ -515,7 +523,6 @@ class ContractValidationError(Exception):
 
     @property
     def error_code(self) -> ErrorCode:
-        """Structured error code for monitoring and alerting."""
         return (
             self._error_code
             if self._error_code is not None
@@ -556,6 +563,7 @@ class PayloadSafetyError(ContractValidationError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PAYLOAD_SAFETY
+    code: ClassVar[str] = "PAYLOAD_SAFETY"
 
     def __init__(
         self, cls_name: str, field_name: str, field_type: type, reason: str
@@ -569,9 +577,16 @@ class PayloadSafetyError(ContractValidationError):
             f"  - Use Annotated[dict[K,V], MaxItems(N)] for bounded dicts\n"
             f"  - Use allow_unbounded_fields=True class keyword to opt out (use with caution)"
         )
-        super().__init__(message, contract_type=cls_name, field_name=field_name)
+        # Skip ContractValidationError's __init__ to avoid double DeprecationWarning;
+        # call the new leaf directly.
+        _InvalidInputError.__init__(self, message=message)
+        self.contract_type = cls_name
+        self.field_name = field_name
+        self.expected_type: str | None = None
+        self.actual_type: str | None = None
         self.field_type = field_type
         self.reason = reason
+        self._error_code = PAYLOAD_SAFETY
 
 
 # =============================================================================
@@ -845,8 +860,6 @@ class InputContract(Protocol):
     they can be validated and serialized.
     """
 
-    pass
-
 
 @runtime_checkable
 class OutputContract(Protocol):
@@ -855,8 +868,6 @@ class OutputContract(Protocol):
     All App outputs should be BaseModel subclasses. This protocol ensures
     they can be validated and serialized.
     """
-
-    pass
 
 
 def validate_is_contract(cls: type, context: str = "contract") -> None:

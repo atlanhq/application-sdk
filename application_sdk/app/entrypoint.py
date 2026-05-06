@@ -37,24 +37,39 @@ Usage::
 """
 
 import inspect
+import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, TypeVar, get_type_hints
+from typing import Any, ClassVar, TypeVar, get_type_hints
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import CONTRACT_VALIDATION, ErrorCode
+from application_sdk.errors.leaves import InvalidInputError
 
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-class EntryPointContractError(Exception):
-    """Raised when an entry point's contract is invalid."""
+class EntryPointContractError(InvalidInputError):
+    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+
+    code: ClassVar[str] = "ENTRYPOINT_CONTRACT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
-        super().__init__(message)
-        self.error_code = error_code or CONTRACT_VALIDATION
+        warnings.warn(
+            "EntryPointContractError is deprecated; use application_sdk.errors.InvalidInputError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        InvalidInputError.__init__(self, message=message)
+        self._legacy_error_code = error_code or CONTRACT_VALIDATION
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
 
     def __str__(self) -> str:
-        return f"[{self.error_code}] {super().__str__()}"
+        return f"[{self._legacy_error_code}] {self.message}"
 
 
 @dataclass

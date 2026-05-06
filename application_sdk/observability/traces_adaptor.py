@@ -16,21 +16,31 @@ from application_sdk.constants import (
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     SERVICE_NAME,
-    TRACES_BATCH_SIZE,
-    TRACES_CLEANUP_ENABLED,
-    TRACES_FILE_NAME,
-    TRACES_FLUSH_INTERVAL_SECONDS,
-    TRACES_RETENTION_DAYS,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import TraceRecord
-from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.observability import (
+    TRACES_FILE_NAME,
+    AtlanObservability,
+)
 from application_sdk.observability.utils import (
     build_otel_resource,
     get_observability_dir,
 )
 
+# Local traces-parquet sink tuning. Hardcoded — production does not yet
+# support traces; the local sink is dormant until the trace pipeline lands.
+_TRACES_BATCH_SIZE = 100
+_TRACES_FLUSH_INTERVAL_SECONDS = 5
+_TRACES_RETENTION_DAYS = 30
+_TRACES_CLEANUP_ENABLED = True
+
 __all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces"]
+
+# SDK logger for module-level diagnostics (init failures, etc.). Uses the SDK
+# logger rather than the root `logging` module so messages are routed through
+# the configured handlers.
+_module_logger = get_logger(__name__)
 
 
 class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
@@ -63,10 +73,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         - Starts periodic flush task for trace buffering
         """
         super().__init__(
-            batch_size=TRACES_BATCH_SIZE,
-            flush_interval=TRACES_FLUSH_INTERVAL_SECONDS,
-            retention_days=TRACES_RETENTION_DAYS,
-            cleanup_enabled=TRACES_CLEANUP_ENABLED,
+            batch_size=_TRACES_BATCH_SIZE,
+            flush_interval=_TRACES_FLUSH_INTERVAL_SECONDS,
+            retention_days=_TRACES_RETENTION_DAYS,
+            cleanup_enabled=_TRACES_CLEANUP_ENABLED,
             data_dir=get_observability_dir(),
             file_name=TRACES_FILE_NAME,
         )
@@ -87,7 +97,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                     ).start()
                 AtlanTracesAdapter._flush_task_started = True
             except Exception:
-                logging.error("Failed to start traces flush task", exc_info=True)
+                # BLDX-1189: switched from root `logging.error` to the SDK
+                # logger here. Six other `logging.*` call sites in this file
+                # still use the root logger; tracked for a follow-up sweep.
+                _module_logger.error("Failed to start traces flush task", exc_info=True)
 
     def _setup_otel_traces(self):
         """Set up OpenTelemetry traces exporter and configuration.
@@ -101,6 +114,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
 
         Falls back to console-only tracing if setup fails.
         """
+        # Pre-assign so attributes always exist if setup fails before they are
+        # bound. Downstream callers must check for None.
+        self.tracer_provider = None
+        self.tracer = None
         try:
             # Create resource
             resource = build_otel_resource()
@@ -165,6 +182,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         - Initializes tracer provider
         - Creates tracer for the service
         """
+        # Pre-assign so attributes always exist if setup fails before they are
+        # bound. Downstream callers must check for None.
+        self.tracer_provider = None
+        self.tracer = None
         try:
             # Create resource with basic attributes
             resource = build_otel_resource()
@@ -298,6 +319,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         Raises:
             Exception: If sending fails, logs error and continues
         """
+        if self.tracer is None:
+            # Setup failed and left the adapter without a tracer; skip silently
+            # rather than AttributeError on every emit.
+            return
         try:
             # Convert string kind to SpanKind enum
             span_kind = self._str_to_span_kind(trace_record.kind)

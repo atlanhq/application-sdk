@@ -38,8 +38,7 @@ The MCP server is automatically mounted at the root endpoint (`/mcp`) and can be
 Use the `@mcp_tool` decorator to expose tasks as tools:
 
 ```python
-from application_sdk.server.mcp.decorators import mcp_tool
-from application_sdk.app import App, Input, Output, task
+from application_sdk.app import App, Input, Output, mcp_tool, task
 
 class FetchInput(Input):
     query: str
@@ -122,16 +121,26 @@ For any MCP-compatible client, use the streamable HTTP transport:
 
 ### Custom Tool Names and Descriptions
 
-Customize how your tools appear to AI assistants:
+Customize how your tools appear to AI assistants. `@mcp_tool` can appear in either position relative to `@task`
+— both decorators only attach metadata to the function without wrapping it, so order does not affect behaviour.
+Only `@task`-decorated methods are discovered by the MCP server:
 
 ```python
-@mcp_tool(
-    name="data_fetcher",
-    description="Retrieve and process data from external APIs with advanced filtering"
-)
-async def fetch_data(self, query: str, filters: dict = None) -> dict:
-    # Implementation
-    pass
+class FetchInput(Input):
+    query: str
+    filters: dict[str, str] = {}
+
+class FetchOutput(Output):
+    result: str
+
+class MyApp(App):
+    @task
+    @mcp_tool(
+        name="data_fetcher",
+        description="Retrieve and process data from external APIs with advanced filtering"
+    )
+    async def fetch_data(self, input: FetchInput) -> FetchOutput:
+        return FetchOutput(result=f"Data for {input.query}")
 ```
 
 ### Conditional Tool Exposure
@@ -139,13 +148,21 @@ async def fetch_data(self, query: str, filters: dict = None) -> dict:
 Control when tools are available:
 
 ```python
-@mcp_tool(
-    description="Admin-only data export function",
-    visible=False  # Disable this tool
-)
-async def export_sensitive_data(self, format: str) -> dict:
-    # This tool won't be exposed to AI assistants
-    pass
+class ExportInput(Input):
+    format: str
+
+class ExportOutput(Output):
+    path: str
+
+class MyApp(App):
+    @task
+    @mcp_tool(
+        description="Admin-only data export function",
+        visible=False  # Disable this tool
+    )
+    async def export_sensitive_data(self, input: ExportInput) -> ExportOutput:
+        # This tool won't be exposed to AI assistants
+        return ExportOutput(path="/exports/data")
 ```
 
 ## Development and Debugging
@@ -181,15 +198,20 @@ ENABLE_MCP=true
 ### Error Handling
 
 ```python
+class ProcessInput(Input):
+    data_id: str
+
+class ProcessOutput(Output):
+    message: str
+
+@task
 @mcp_tool(description="Safe data processing with error handling")
-async def process_data(self, data_id: str) -> str:
+async def process_data(self, input: ProcessInput) -> ProcessOutput:
     try:
-        # Process data
-        result = await process_data_safely(data_id)
-        return f"Processed successfully: {result}"
+        result = await process_data_safely(input.data_id)
+        return ProcessOutput(message=f"Processed successfully: {result}")
     except Exception as e:
-        # Return user-friendly error messages
-        return f"Processing failed: {str(e)}"
+        return ProcessOutput(message=f"Processing failed: {e}")
 ```
 
 ### Performance Considerations
@@ -205,7 +227,7 @@ async def process_data(self, data_id: str) -> str:
 **MCP server not starting**:
 
 - Ensure `atlan-application-sdk[mcp]` is installed
-- Check that `enable_mcp=True` is set
+- Check that the `ENABLE_MCP` environment variable is set to `true`
 - Verify no port conflicts on 8000
 
 **Tools not appearing in AI client**:

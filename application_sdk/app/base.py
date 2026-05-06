@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import threading
+import warnings
 from abc import ABC
 from collections.abc import Callable
 from dataclasses import replace
@@ -52,6 +53,8 @@ from application_sdk.errors import (
     APP_NON_RETRYABLE,
     ErrorCode,
 )
+from application_sdk.errors.base import AppError as _NewAppError
+from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 
@@ -141,10 +144,15 @@ def _safe_log(level: str, message: str, **attrs: Any) -> None:
 # =============================================================================
 
 
-class AppError(Exception):
-    """Base exception for App-related errors."""
+class AppError(_NewAppError):
+    """Deprecated: use ``application_sdk.errors.AppError`` directly — removed in v4.0.
+
+    Back-compat shim. Accepts a positional ``message`` argument and the legacy
+    ``error_code`` keyword to avoid breaking existing raise sites.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
+    code: ClassVar[str] = "APP"
 
     def __init__(
         self,
@@ -155,19 +163,22 @@ class AppError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.app_name = app_name
-        self.run_id = run_id
-        self.cause = cause
-        self._error_code = error_code
+        warnings.warn(
+            "application_sdk.app.AppError is deprecated; "
+            "use application_sdk.errors.AppError — will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._legacy_error_code = error_code
 
     @property
     def error_code(self) -> ErrorCode:
-        """Structured error code for monitoring and alerting."""
         return (
-            self._error_code
-            if self._error_code is not None
+            self._legacy_error_code
+            if self._legacy_error_code is not None
             else self.DEFAULT_ERROR_CODE
         )
 
@@ -182,7 +193,7 @@ class AppError(Exception):
         return " | ".join(parts)
 
 
-class AppContextError(RuntimeError):
+class AppContextError(_InternalError):
     """Raised when App or task context is accessed outside of valid execution scope.
 
     This is a programming error — it indicates that context-dependent methods
@@ -191,26 +202,26 @@ class AppContextError(RuntimeError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_CONTEXT_ERROR
+    code: ClassVar[str] = "APP_CONTEXT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
-        super().__init__(message)
-        self._error_code = error_code
+        _InternalError.__init__(self, message=message)
+        self._legacy_error_code = error_code
 
     @property
     def error_code(self) -> ErrorCode:
-        """Structured error code for monitoring and alerting."""
         return (
-            self._error_code
-            if self._error_code is not None
+            self._legacy_error_code
+            if self._legacy_error_code is not None
             else self.DEFAULT_ERROR_CODE
         )
 
     def __str__(self) -> str:
-        return f"[{self.error_code.code}] {super().__str__()}"
+        return f"[{self.error_code.code}] {self.message}"
 
 
 class NonRetryableError(AppError):
-    """Error that should not be retried.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
 
     Use this for failures that are deterministic and will never succeed on retry:
     - Authentication failures (invalid credentials)
@@ -230,10 +241,11 @@ class NonRetryableError(AppError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_NON_RETRYABLE
+    default_retryable: ClassVar[bool] = False
 
 
 class RetryableError(AppError):
-    """Error that may be retried at the workflow level.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
 
     Extend this when raising an error directly from an ``@entrypoint`` method
     that signals a *transient* failure — one where retrying the entire workflow
@@ -262,6 +274,7 @@ class RetryableError(AppError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
+    default_retryable: ClassVar[bool] = True
 
 
 # =============================================================================
@@ -285,9 +298,12 @@ def _get_execution_id_from_task() -> str:
         RuntimeError: If called outside a @task method.
     """
     try:
-        return activity.info().workflow_id or ""
+        wid = activity.info().workflow_id
     except Exception as e:
         raise AppContextError("Cannot access app state outside of task context") from e
+    if not wid:
+        raise AppContextError("activity workflow_id is empty")
+    return wid
 
 
 class TaskStateAccessor:
@@ -564,9 +580,15 @@ class App(ABC):
         try:
             hints = get_type_hints(cls.run)
         except Exception:
-            # Unresolvable annotations (e.g. forward refs) — skip silently.
-            _task_logger.debug(
-                "Skipping run() annotation validation for %s: could not resolve type hints",
+            # Annotations are present but cannot be resolved (e.g. renamed
+            # forward refs, missing imports). Keep the registry tolerant —
+            # don't raise — but make the failure visible so the App doesn't
+            # silently disappear from the registry.
+            _task_logger.warning(
+                "Skipping run() annotation validation for %s: get_type_hints "
+                "failed to resolve annotations (likely an unresolved forward "
+                "reference or missing import). Skipping registration of run() "
+                "type validation; the App will still be registered.",
                 cls.__name__,
                 exc_info=True,
             )
@@ -631,7 +653,7 @@ class App(ABC):
         """Get the current execution context.
 
         Raises:
-            RuntimeError: If accessed outside of run() execution.
+            AppContextError: If accessed outside of run() execution.
         """
         if self._context is None:
             raise AppContextError(
@@ -647,7 +669,7 @@ class App(ABC):
         Only available inside @task methods.
 
         Raises:
-            RuntimeError: If accessed outside of @task method execution.
+            AppContextError: If accessed outside of @task method execution.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -680,7 +702,7 @@ class App(ABC):
         return self.context.is_cancelled()
 
     # =========================================================================
-    # Task-only methods (raise RuntimeError if called outside @task methods)
+    # Task-only methods (raise AppContextError if called outside @task methods)
     # =========================================================================
 
     def heartbeat(self, *details: Any) -> None:
@@ -692,7 +714,7 @@ class App(ABC):
             *details: Serializable progress details.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -710,7 +732,7 @@ class App(ABC):
             Tuple of details from last heartbeat, or empty tuple if none.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -729,7 +751,7 @@ class App(ABC):
             or None if no heartbeat was recorded.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -753,7 +775,7 @@ class App(ABC):
             Result of ``func(*args, **kwargs)``.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -830,7 +852,7 @@ class App(ABC):
             The stored value, or None if not set.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         execution_id = self._get_current_execution_id()
         with _app_state_lock:
@@ -846,7 +868,7 @@ class App(ABC):
             value: Value to store (any Python object).
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         execution_id = self._get_current_execution_id()
         with _app_state_lock:
@@ -877,18 +899,6 @@ class App(ABC):
         """
         raise NotImplementedError(
             f"{type(self).__name__} must implement run() or define @entrypoint methods."
-        )
-
-    async def call(self, *args, **kwargs):
-        raise NotImplementedError(
-            "Inter-app call() is deactivated pending BLDX-878. "
-            "Use Automation Engine DAG orchestration for multi-app coordination."
-        )
-
-    async def call_by_name(self, *args, **kwargs):
-        raise NotImplementedError(
-            "Inter-app call_by_name() is deactivated pending BLDX-878. "
-            "Use Automation Engine DAG orchestration for multi-app coordination."
         )
 
     def continue_with(self, input: Input) -> Never:
@@ -1536,6 +1546,13 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
             if isinstance(e, FailureError):
                 raise
+            if isinstance(e, _NewAppError):
+                raise ApplicationError(
+                    str(e),
+                    e.to_failure_details(),
+                    type=type(e).__name__,
+                    non_retryable=not e.effective_retryable,
+                ) from e
             raise ApplicationError(
                 str(e),
                 type=type(e).__name__,
@@ -1675,6 +1692,9 @@ def _create_task_activity_wrapper(
         from application_sdk.execution._temporal.activities import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
             TaskContext,
         )
+        from application_sdk.execution._temporal.eviction_retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            execute_activity_with_eviction_retry,
+        )
 
     # Build the Temporal RetryPolicy once (not per invocation)
     if retry_policy is not None:
@@ -1707,8 +1727,10 @@ def _create_task_activity_wrapper(
         # Extract summary from input for Temporal UI display
         summary = input_data.summary() if hasattr(input_data, "summary") else None
 
-        # Execute as activity - pass result_type for proper deserialization
-        result: Output = await workflow.execute_activity(
+        # Execute as activity, routed through the SDK eviction-retry loop so
+        # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
+        # attempts without burning the application-error retry budget.
+        result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
             start_to_close_timeout=timedelta(seconds=timeout_seconds),
@@ -1731,6 +1753,7 @@ __all__ = [
     "FileReference",
     "NonRetryableError",
     "PersistentStateAccessor",
+    "RetryableError",
     "TaskStateAccessor",
     "_app_state",
     "_app_state_lock",
