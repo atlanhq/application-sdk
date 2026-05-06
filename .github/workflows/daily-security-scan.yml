@@ -71,6 +71,12 @@ jobs:
             --org=partner-images \
             --json-file-output=snyk-image-results.json || true
 
+      - name: Set up uv (for Snyk Python dep resolution)
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Install Python deps for Snyk resolution
+        run: uv sync --no-dev --frozen
+
       - name: Run Snyk Python deps scan (pyproject.toml / uv.lock)
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -79,7 +85,14 @@ jobs:
           snyk test \
             --severity-threshold=low \
             --org=partner-images \
+            --command=.venv/bin/python3 \
             --json-file-output=snyk-python-results.json || true
+          if [ ! -f snyk-python-results.json ]; then
+            echo "::warning::Snyk Python scan produced no output — check SNYK_TOKEN and org access"
+          elif jq -e '.error' snyk-python-results.json >/dev/null 2>&1; then
+            ERR=$(jq -r '.error' snyk-python-results.json)
+            echo "::warning::Snyk Python deps scan failed: $ERR — python counts will be 0"
+          fi
 
       # ── Parse results ─────────────────────────────────────────────────────
 
