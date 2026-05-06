@@ -252,12 +252,24 @@ runs:
 
         ICONS = {"passed": "✅", "failed": "❌", "skipped": "⏭"}
 
-        summary_file = Path("integration-test-summary.json")
+        # Multi-class apps land per-class summaries via the SDR base class;
+        # single-class apps still write only the shared file. Read all that
+        # exist so neither case loses data.
+        per_class = sorted(Path(".").glob("integration-test-summary-*.json"))
+        if per_class:
+            summary_files = per_class
+        elif Path("integration-test-summary.json").exists():
+            summary_files = [Path("integration-test-summary.json")]
+        else:
+            summary_files = []
+
         tenant = os.environ.get("CI_TENANT_DOMAIN", "")
         # Preserve scenario insertion order (== test execution order) within
         # each class so the output is deterministic.
         by_class: dict[str, list[str]] = {}
-        if summary_file.exists() and tenant:
+        for summary_file in summary_files:
+            if not tenant:
+                break
             data = json.loads(summary_file.read_text())
             for s in data.get("scenarios", []):
                 if s.get("api") != "workflow":
@@ -409,32 +421,77 @@ runs:
       shell: bash
       run: docker compose ${{ steps.compose_files.outputs.files }} down -v
 
+    # Delete any prior SDR comment (matched by sticky marker) and post a
+    # fresh one. Using github-script + a sticky HTML-comment marker instead
+    # of mshick/add-pr-comment's edit-in-place behaviour: re-runs land as
+    # new comments at the bottom of the conversation rather than silently
+    # mutating an old one, which makes "what's the latest run" obvious.
     - name: Post PR comment
       if: always() && github.event_name == 'pull_request'
-      uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2.8.2
+      uses: actions/github-script@v7
+      env:
+        APP_NAME: ${{ inputs.app-name }}
+        OUTCOME: ${{ steps.tests.outcome }}
+        SUMMARY: ${{ steps.tests.outputs.summary }}
+        WF_LINKS: ${{ steps.wf_links.outputs.links }}
       with:
-        message-id: sdr_integration_tests_${{ inputs.app-name }}_results
-        message: |
-          ## SDR Integration Tests — ${{ inputs.app-name }}
+        github-token: ${{ github.token }}
+        script: |
+          const appName = process.env.APP_NAME;
+          const outcome = process.env.OUTCOME;
+          const summary = process.env.SUMMARY || 'No summary';
+          const wfLinks = process.env.WF_LINKS || '';
 
-          **Status:** ${{ steps.tests.outcome == 'success' && 'Passed ✅' || 'Failed ❌' }}
-          **Summary:** `${{ steps.tests.outputs.summary || 'No summary' }}`
-          **Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          ${{ steps.wf_links.outputs.links != '' && format('**Temporal workflows:** {0}', steps.wf_links.outputs.links) || '' }}
+          const sticky = `<!-- sdr-integration-tests:${appName} -->`;
+          const status = outcome === 'success' ? 'Passed ✅' : 'Failed ❌';
+          const runLink = `[${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+          const linksLine = wfLinks ? `\n**Temporal workflows:** ${wfLinks}\n` : '';
 
-          ### What this validates
-          - **Credential resolution from secret store** — workflow `username`/`password` resolved via the Dapr `local.file` secret store using `extraction_method=agent` + `agent_json` → `AgentCredentialSpec`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.
-          - **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly
-          - **Preflight** — connectivity, schema/table checks; bad credentials fail correctly
-          - **Workflow** — full extraction run on the test instance, polled to `COMPLETED` on the tenant's Temporal cluster
+          const body = [
+            sticky,
+            `## SDR Integration Tests — ${appName}`,
+            ``,
+            `**Status:** ${status}`,
+            `**Summary:** \`${summary}\``,
+            `**Run:** ${runLink}`,
+            linksLine,
+            `### What this validates`,
+            `- **Credential resolution from secret store** — workflow \`username\`/\`password\` resolved via the Dapr \`local.file\` secret store using \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.`,
+            `- **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly`,
+            `- **Preflight** — connectivity, schema/table checks; bad credentials fail correctly`,
+            `- **Workflow** — full extraction run on the test instance, polled to \`COMPLETED\` on the tenant's Temporal cluster`,
+            ``,
+            `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, Temporal worker on CI tenant.`,
+            ``,
+            `<details><summary>Re-run</summary>`,
+            ``,
+            `Remove and re-add the \`sdr-e2e-test\` label, or re-run from the Actions tab.`,
+            `</details>`,
+          ].join('\n');
 
-          > Stack: atlan-configurator generated compose, Dapr sidecar embedded, Temporal worker on CI tenant.
+          // Find prior comments tagged with our sticky marker and delete them.
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            per_page: 100,
+          });
+          for (const c of comments) {
+            if (c.body && c.body.includes(sticky)) {
+              await github.rest.issues.deleteComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: c.id,
+              });
+            }
+          }
 
-          <details>
-          <summary>Re-run</summary>
-
-          Remove and re-add the `sdr-e2e-test` label, or re-run from the Actions tab.
-          </details>
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body,
+          });
       continue-on-error: true
 
     - name: Set commit status

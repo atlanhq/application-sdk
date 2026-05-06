@@ -48,6 +48,8 @@ Example:
 
 from __future__ import annotations
 
+import os
+import shutil
 from typing import Any, ClassVar, Dict, Optional
 
 from application_sdk.testing.integration import (
@@ -100,5 +102,43 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
             and result.success
             and result.response
         ):
-            self._ensure_workflow_completed(scenario, result.response)
+            try:
+                self._ensure_workflow_completed(scenario, result.response)
+            except Exception as exc:
+                # The parent's try/except/finally already appended `result`
+                # to cls._results with success=True. Mutate the same object
+                # so the on-disk summary reflects the actual outcome —
+                # otherwise the post-run report shows ✅ on a scenario that
+                # pytest reported as FAILED.
+                result.success = False
+                result.error = exc
+                raise
         return result
+
+    @classmethod
+    def _write_summary(cls) -> Optional[str]:
+        """Multi-class-safe variant of :meth:`BaseIntegrationTest._write_summary`.
+
+        The parent writes the run summary to a fixed path
+        (``./integration-test-summary.json`` by default). For multi-class
+        test files (e.g. saperp's ``TestSAPERPSdrECC`` + ``TestSAPERPSdrS4``)
+        each class's ``teardown_class`` overwrites the previous one, so the
+        on-disk file ends up containing only the last class's scenarios.
+
+        We let the parent write the shared file as-is, then copy the result
+        to a per-class file (``integration-test-summary-<ClassName>.json``).
+        Downstream consumers (e.g. the Temporal-link extractor in the SDR
+        composite action) glob the per-class files when present.
+        """
+        written = super()._write_summary()
+        if not written:
+            return None
+        base, ext = os.path.splitext(written)
+        per_class_path = f"{base}-{cls.__name__}{ext}"
+        try:
+            shutil.copyfile(written, per_class_path)
+        except OSError:
+            # Best-effort: the shared file was already written; per-class
+            # copy failure shouldn't fail the test session.
+            pass
+        return written
