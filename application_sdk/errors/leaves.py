@@ -165,6 +165,36 @@ class DependencyUnavailableError(AppError):
     audience: ClassVar[Audience] = Audience.PLATFORM
 
 
+# Wire identifier for ``WorkerEvictedError``. Carried as the ``type`` field on
+# ``ApplicationError`` so workflow code can recognise the failure across the
+# activity/workflow boundary without depending on the Python exception class
+# (Temporal serialises only the type string, not the class itself).
+WORKER_EVICTED_TYPE = "WorkerEvicted"
+
+
+@dataclass(kw_only=True)
+class WorkerEvictedError(DependencyUnavailableError):
+    """Activity terminated because the worker pod is shutting down.
+
+    Raised by the SDK's activity wrapper when ``asyncio.CancelledError``
+    arrives while the process-wide worker-shutdown flag is set — i.e. the
+    pod received SIGTERM (KEDA scale-down, VPA eviction, spot reclaim,
+    node drain, rolling deploy).
+
+    The activity-level Temporal RetryPolicy treats the wire type
+    ``WorkerEvicted`` as non-retryable so the failure surfaces directly to
+    workflow code, where the SDK's per-activity eviction loop re-dispatches
+    the activity without burning the application-error retry budget.
+
+    Categorised as :class:`DependencyUnavailableError` because the worker pod
+    is itself a platform dependency that became temporarily unavailable; the
+    activity never had a chance to fail for an application reason.
+    """
+
+    code: ClassVar[str] = "WORKER_EVICTED"
+    audience: ClassVar[Audience] = Audience.PLATFORM
+
+
 @dataclass(kw_only=True)
 class ResourceExhaustedError(AppError):
     resource: str | None = None
