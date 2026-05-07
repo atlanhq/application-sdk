@@ -235,7 +235,7 @@ Requires the `[lakehouse-sql]` extra.
 
 ## `events_read` — AE-triggered ingestion
 
-For apps that consume events via `event-ingestion-app → AE event-consumer-node → source app workflow`. `events_read` takes an async `handler` callable, fetches pending events, dispatches them, and returns `(events, results)` — guaranteed 1:1 aligned (RETRY-on-exception, RETRY-on-count-mismatch, no-events-skip).
+For apps that consume events via `event-ingestion-app → AE event-consumer-node → source app workflow`. `events_read` takes an async `handler` callable, fetches pending events in batches, dispatches each batch, and returns `(events, results)` — concatenated across all batches and guaranteed 1:1 aligned (RETRY-on-exception, RETRY-on-count-mismatch, no-events-skip).
 
 ```python
 from application_sdk.lakehouse import events_read, EventResult
@@ -258,10 +258,23 @@ events, results = await events_read(
     handler=handler,
     where="status = 'unprocessed'",
     sort_by="received_at",
+    batch_size=1000,
+    max_events=5000,
 )
-# events: list[dict]  — the unprocessed events read from the table
+# events: list[dict]  — concatenated across batches (up to max_events)
 # results: list[EventResult]  — aligned 1:1 with events
 ```
+
+### Batching
+
+| `batch_size` | `max_events` | Behaviour |
+|---|---|---|
+| `None` | `None` | Single fetch, returns everything available. |
+| `N` | `None` | Loop in batches of N until exhausted (CAUTION: unbounded — only safe if the table is known to be finite within the activity timeout). |
+| `None` | `M` | Single fetch capped at M. |
+| `N` | `M` | Loop in batches of N, total capped at M. **Recommended** for AE-triggered apps — bounds workflow run time and keeps each handler call within heartbeat / memory limits. |
+
+The handler is called once per batch. If a handler call raises (or returns the wrong number of results), that batch's events are marked RETRY and the loop aborts — earlier batches' results are returned as-is.
 
 `events_read` builds its `LakehouseReader` from env credentials each call. No catalog or credentials passed in.
 
@@ -312,6 +325,8 @@ class MyActivities:
             handler=_handler,
             where="status = 'unprocessed'",
             sort_by="received_at",
+            batch_size=1000,
+            max_events=5000,
         )
         if not events:
             return ""
