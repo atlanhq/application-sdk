@@ -553,21 +553,23 @@ class SqlApp(App):
         return input.output_path
 
     async def _init_sql_client(self, input: ExtractionTaskInput) -> BaseSQLClient:
-        """Initialize and return a SQL client from credentials."""
+        """Initialize and return a SQL client from credentials.
+
+        ``ExtractionTaskInput`` only carries ``credential_ref`` / ``credential_guid``
+        (no ``agent_json`` / ``extraction_method``). The SDR/direct routing
+        decision happens upstream in ``_resolve_credential_ref(ExtractionInput)``
+        which populates ``credential_ref`` on the task input via
+        ``build_task_input``. So here we just consume that ref.
+        """
         if self.sql_client_class is None:
             raise ValueError("sql_client_class must be set on the SqlApp subclass")
 
         client = self.sql_client_class()
-
-        # Route through CredentialRef.resolve() so direct (credential_guid) and
-        # SDR (agent_spec) modes both flow through one path. The earlier branch
-        # only resolved when credential_guid was set, which left SDR runs with
-        # creds={} and a downstream "username is required" failure.
         creds: dict[str, Any] = {}
-        try:
-            ref = CredentialRef.resolve(input)
-        except (ValueError, TypeError):
-            ref = None
+
+        ref: CredentialRef | None = input.credential_ref
+        if ref is None and input.credential_guid:
+            ref = legacy_credential_ref(input.credential_guid)
 
         if ref is not None:
             infra = get_infrastructure()
@@ -612,13 +614,24 @@ class SqlApp(App):
         return sql
 
     def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
-        """Resolve credential ref from extraction input."""
+        """Resolve credential ref from extraction input.
 
+        Handles both direct (credential_guid) and SDR (agent_json) modes
+        via :meth:`CredentialRef.resolve`, falling back to
+        ``legacy_credential_ref`` for older inputs.
+        """
         if hasattr(input, "credential_ref") and input.credential_ref:
             return input.credential_ref
-        if input.credential_guid:
-            return legacy_credential_ref(input.credential_guid)
-        return None
+        # CredentialRef.resolve handles both direct (credential_guid) and
+        # SDR (agent_json) modes — works on ExtractionInput which has the
+        # full set of routing fields. Per-task ExtractionTaskInput doesn't
+        # expose extraction_method/agent_json and isn't routed through here.
+        try:
+            return CredentialRef.resolve(input)
+        except (ValueError, TypeError):
+            if input.credential_guid:
+                return legacy_credential_ref(input.credential_guid)
+            return None
 
     @staticmethod
     def _sanitize_value(v: Any) -> Any:
