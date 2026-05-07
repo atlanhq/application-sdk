@@ -292,25 +292,35 @@ class TestParquetWriterDataIntegrity:
         Uploads are no longer inline — ParquetFileWriter now leaves files on
         disk and callers use persist_file_reference() to push them to the store.
         These tests verify the local-disk contract only.
+
+        The base-class _upload_file is patched as a no-op so that
+        close()/_write_statistics() does not fail when no object store is
+        configured in the test environment.
         """
+        from unittest.mock import AsyncMock, patch
+
         from application_sdk.storage.formats.parquet import ParquetFileWriter
 
-        writer = ParquetFileWriter(
-            path=temp_dir,
-            typename="test_entity",
-            buffer_size=self.BUFFER_SIZE,
-            use_consolidation=False,
-        )
+        with patch(
+            "application_sdk.storage.formats._upload_file",
+            new_callable=AsyncMock,
+        ):
+            writer = ParquetFileWriter(
+                path=temp_dir,
+                typename="test_entity",
+                buffer_size=self.BUFFER_SIZE,
+                use_consolidation=False,
+            )
 
-        rows_per_write = row_count // num_writes
-        total = 0
-        for batch_idx in range(num_writes):
-            start = batch_idx * rows_per_write
-            df = pd.DataFrame({"id": list(range(start, start + rows_per_write))})
-            await writer.write(df)
-            total += rows_per_write
+            rows_per_write = row_count // num_writes
+            total = 0
+            for batch_idx in range(num_writes):
+                start = batch_idx * rows_per_write
+                df = pd.DataFrame({"id": list(range(start, start + rows_per_write))})
+                await writer.write(df)
+                total += rows_per_write
 
-        await writer.close()
+            await writer.close()
 
         # Disk: read back all parquet files
         parquet_files = glob.glob(
