@@ -307,5 +307,12 @@
     "reason": "Connector transitive — lxml pulled in by redshift-connector (aws/amazon-redshift-python-driver). Fix is in lxml>=6.1.0, but redshift-connector 2.1.10 pins lxml<6.0.0 in its package metadata. Bumping lxml in connector apps forces a downgrade of redshift-connector to 2.1.7. Allowlisting until upstream relaxes the cap; tracking via aws/amazon-redshift-python-driver. Connector code uses lxml only for SOAP/XML parsing of trusted Redshift IAM responses, not untrusted input.",
     "expires": "2026-05-28",
     "added_by": "anuj-atlan"
+  },
+  "CVE-2026-42583": {
+    "package": "unknown",
+    "severity": "HIGH",
+    "reason": "Base image — scanner reported the CVE without package attribution or installed version, and no upstream fix is available. Allowlisting to unblock publishes; re-evaluate at expiry once package attribution is clarified or an upstream fix lands.",
+    "expires": "2026-06-06",
+    "added_by": "vishalkatlan"
   }
 }
