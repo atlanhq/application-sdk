@@ -580,12 +580,17 @@ def _build_dev_config(
     not duplicated. Precedence per connection field:
     ``explicit kwarg → env var(s) → AppConfig default``.
 
-    Three dev-specific overrides are applied after construction:
+    Two fields are fixed in the synthetic namespace before construction:
 
     * ``log_level`` is always ``"DEBUG"``.
     * ``health_port`` is always ``0`` (OS-assigned ephemeral port).
-    * ``handler_host`` defaults to ``"127.0.0.1"`` when neither kwarg nor env
-      var is set — production defaults to ``"0.0.0.0"``.
+
+    Two further overrides are applied to the config after construction,
+    because their dev defaults differ from the production defaults in
+    :meth:`AppConfig.from_args_and_env`:
+
+    * ``handler_host`` defaults to ``"127.0.0.1"`` when neither kwarg nor
+      env var is set — production defaults to ``"0.0.0.0"``.
     * ``enable_temporal_core_metrics`` defaults to ``False`` to avoid the
       port-9464 collision on hot reload; honoured when
       ``ATLAN_ENABLE_TEMPORAL_CORE_METRICS`` is explicitly set.
