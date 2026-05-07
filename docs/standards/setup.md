@@ -1,23 +1,24 @@
 # Setup Overview
 
-The Atlan Python Application SDK requires the following components regardless of operating system:
+The Atlan Application SDK requires the following tools:
 
-1. Python 3.11.10
-2. uv 0.7.3
-3. Temporal CLI
-4. DAPR CLI 1.17.1
-5. Project dependencies
+| Tool | Minimum version |
+|---|---|
+| Python | 3.11+ |
+| uv | latest |
+| Temporal CLI | latest |
+| Dapr CLI | 1.14+ |
 
 ## OS-Specific Setup Guides
 
-Please follow the appropriate guide for your operating system:
+Follow the guide for your operating system:
 
 - [Mac](../setup/MAC.md)
 - [Linux](../setup/LINUX.md)
 - [Windows](../setup/WINDOWS.md)
 
-Once the development environment is setup follow the [Getting Started](../guides/getting-started.md) guide to setup project dependencies and run an example.
+Once your environment is ready, follow [Getting Started](../guides/getting-started.md) to build and run your first app.
 
 ## Need Help?
 
-If you encounter any issues during setup, please reach out to us at connect@atlan.com.
+If you encounter issues during setup, reach out at connect@atlan.com.

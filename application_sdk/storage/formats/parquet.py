@@ -1,15 +1,7 @@
 import inspect
 import os
-from typing import (
-    TYPE_CHECKING,
-    AsyncGenerator,
-    AsyncIterator,
-    Generator,
-    List,
-    Optional,
-    Union,
-    cast,
-)
+from collections.abc import AsyncGenerator, AsyncIterator, Generator
+from typing import TYPE_CHECKING, Union, cast
 
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
@@ -71,9 +63,9 @@ class ParquetFileReader(Reader):
     def __init__(
         self,
         path: str,
-        chunk_size: Optional[int] = 100000,
-        buffer_size: Optional[int] = 5000,
-        file_names: Optional[List[str]] = None,
+        chunk_size: int | None = 100000,
+        buffer_size: int | None = 5000,
+        file_names: list[str] | None = None,
         dataframe_type: DataframeType = DataframeType.pandas,
         cleanup_on_close: bool = True,
     ):
@@ -101,14 +93,16 @@ class ParquetFileReader(Reader):
                 f"Either provide a directory path with file_names, or specify the exact file path without file_names."
             )
 
+        # Initialise the Reader base class so `_is_closed` and
+        # `_downloaded_files` are per-instance state (not shared via the old
+        # class-level mutable defaults). Required after BLDX-1167.
+        super().__init__()
         self.path = path
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
         self.file_names = file_names
         self.dataframe_type = dataframe_type
         self.cleanup_on_close = cleanup_on_close
-        self._is_closed = False
-        self._downloaded_files: List[str] = []
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """Read the data from the parquet files and return as a single DataFrame.
@@ -131,10 +125,7 @@ class ParquetFileReader(Reader):
 
     def read_batches(
         self,
-    ) -> Union[
-        AsyncIterator["pd.DataFrame"],
-        AsyncIterator["daft.DataFrame"],
-    ]:
+    ) -> AsyncIterator["pd.DataFrame"] | AsyncIterator["daft.DataFrame"]:
         """Read the data from the parquet files and return as batched DataFrames.
 
         Returns:
@@ -264,7 +255,7 @@ class ParquetFileReader(Reader):
         except Exception as e:
             raise rewrap(e, "Error reading data from parquet file(s) in batches") from e
 
-    async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+    async def _get_daft_dataframe(self) -> "daft.DataFrame":
         """Read data from parquet file(s) and return as daft DataFrame.
 
         Returns:
@@ -430,17 +421,17 @@ class ParquetFileWriter(Writer):
     def __init__(
         self,
         path: str,
-        typename: Optional[str] = None,
-        chunk_size: Optional[int] = 100000,
-        buffer_size: Optional[int] = 5000,
-        total_record_count: Optional[int] = 0,
-        chunk_count: Optional[int] = 0,
-        chunk_part: Optional[int] = 0,
-        chunk_start: Optional[int] = None,
-        start_marker: Optional[str] = None,
-        end_marker: Optional[str] = None,
-        retain_local_copy: Optional[bool] = False,
-        use_consolidation: Optional[bool] = False,
+        typename: str | None = None,
+        chunk_size: int | None = 100000,
+        buffer_size: int | None = 5000,
+        total_record_count: int | None = 0,
+        chunk_count: int | None = 0,
+        chunk_part: int | None = 0,
+        chunk_start: int | None = None,
+        start_marker: str | None = None,
+        end_marker: str | None = None,
+        retain_local_copy: bool | None = False,
+        use_consolidation: bool | None = False,
         dataframe_type: DataframeType = DataframeType.pandas,
         replace_prefix: bool = False,
     ):
@@ -471,7 +462,7 @@ class ParquetFileWriter(Writer):
         self.typename = typename
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
-        self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
+        self.buffer: list[pd.DataFrame | daft.DataFrame] = []
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.current_buffer_size = 0
@@ -501,8 +492,8 @@ class ParquetFileWriter(Writer):
         )  # Use chunk_size as threshold
         self.current_folder_records = 0  # Track records in current temp folder
         self.temp_folder_index = 0  # Current temp folder index
-        self.temp_folders_created: List[int] = []  # Track temp folders for cleanup
-        self.current_temp_folder_path: Optional[str] = None  # Current temp folder path
+        self.temp_folders_created: list[int] = []  # Track temp folders for cleanup
+        self.current_temp_folder_path: str | None = None  # Current temp folder path
 
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
@@ -546,9 +537,8 @@ class ParquetFileWriter(Writer):
 
     async def _write_batched_dataframe(
         self,
-        batched_dataframe: Union[
-            AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]
-        ],
+        batched_dataframe: AsyncGenerator["pd.DataFrame", None]
+        | Generator["pd.DataFrame", None, None],
     ):
         """Write a batched pandas DataFrame to Parquet files with consolidation support.
 
@@ -600,9 +590,9 @@ class ParquetFileWriter(Writer):
 
     async def _write_daft_dataframe(
         self,
-        dataframe: "daft.DataFrame",  # noqa: F821
-        partition_cols: Optional[List] = None,
-        write_mode: Union[WriteMode, str] = WriteMode.APPEND.value,
+        dataframe: "daft.DataFrame",
+        partition_cols: list | None = None,
+        write_mode: WriteMode | str = WriteMode.APPEND.value,
         morsel_size: int = 100_000,
         **kwargs,
     ):
@@ -698,7 +688,7 @@ class ParquetFileWriter(Writer):
                     "mode": write_mode.value
                     if isinstance(write_mode, WriteMode)
                     else write_mode,
-                    "error": str(e),
+                    "error_type": type(e).__name__,
                 },
                 description="Number of errors while writing to Parquet files",
             )
@@ -740,10 +730,9 @@ class ParquetFileWriter(Writer):
             # Check if we need to consolidate current folder before adding this chunk
             if (
                 self.current_folder_records + len(chunk)
-            ) > self.consolidation_threshold:
-                if self.current_folder_records > 0:
-                    await self._consolidate_current_folder()
-                    self._start_new_temp_folder()
+            ) > self.consolidation_threshold and self.current_folder_records > 0:
+                await self._consolidate_current_folder()
+                self._start_new_temp_folder()
 
             # Ensure we have a temp folder ready
             if self.current_temp_folder_path is None:

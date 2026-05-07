@@ -18,23 +18,23 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from typing import Any
+import warnings
+from typing import Any, ClassVar
 
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.errors import DISCOVERY_ERROR, ErrorCode
+from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.handler.base import Handler
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
-class DiscoveryError(Exception):
-    """Error during app or handler discovery.
+class DiscoveryError(InvalidInputError):
+    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
-    Raised when a module cannot be imported, a class is not found,
-    or the class doesn't meet the required criteria.
-    """
+    code: ClassVar[str] = "DISCOVERY"
 
     def __init__(
         self,
@@ -44,14 +44,22 @@ class DiscoveryError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
+        warnings.warn(
+            "DiscoveryError is deprecated; use application_sdk.errors.InvalidInputError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        InvalidInputError.__init__(self, message=message, cause=cause)
         self.module_path = module_path
-        self.cause = cause
-        self.error_code = error_code or DISCOVERY_ERROR
+        self._legacy_error_code = error_code or DISCOVERY_ERROR
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
 
     def __str__(self) -> str:
-        parts = [f"[{self.error_code}] {self.message}"]
+        parts = [f"[{self._legacy_error_code}] {self.message}"]
         if self.module_path:
             parts.append(f"module_path={self.module_path}")
         if self.cause:

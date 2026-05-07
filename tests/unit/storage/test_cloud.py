@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from obstore.store import LocalStore
+from obstore.store import LocalStore, MemoryStore
 
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
@@ -280,3 +280,157 @@ class TestCloudStoreOps:
         store = self._make_store(tmp_path)
         with pytest.raises(StorageError):
             await store.upload(tmp_path / "does-not-exist.txt", "key.txt")
+
+    async def test_list_excludes_zero_byte_directory_markers(self):
+        # MemoryStore is a flat key-value store, so "data/run" and
+        # "data/run/file.json" can coexist — matching what GCS returns after
+        # obstore strips the trailing slash from the "data/run/" marker.
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("data/run/file.json", b"{}")
+        await store.upload_bytes("data/run", b"")  # GCS directory marker
+
+        keys = await store.list(prefix="data")
+        assert "data/run/file.json" in keys
+        assert "data/run" not in keys
+        assert len(keys) == 1
+
+    async def test_large_file_download_streaming(self, tmp_path):
+        """download(key=) streams a multi-chunk payload without buffering the whole object."""
+        store = self._make_store(tmp_path)
+        content = b"x" * (12 * 1024 * 1024)  # 12 MiB — exceeds default 10 MiB chunk
+        await store.upload_bytes("large.bin", content)
+
+        out = tmp_path / "out"
+        files = await store.download(key="large.bin", output_dir=out)
+
+        assert len(files) == 1
+        assert files[0].read_bytes() == content
+
+
+# ---------------------------------------------------------------------------
+# Log-format regression: "Downloaded", "Uploaded", "Listing" must include the
+# storage path / size in the message *body* so an SRE running ``kubectl logs``
+# can grep without first having to query OTLP attributes.  An earlier revision
+# of this PR used structured-only kwargs (e.g. ``info("Downloaded",
+# storage_path=key)``) which left the body as just ``"Downloaded"``.
+# ---------------------------------------------------------------------------
+
+
+class TestCloudStoreLogMessageFormat:
+    """Pin the message-body content for the four cloud.py log sites.
+
+    cloud.py routes through ``get_logger()`` which uses loguru sinks — pytest's
+    ``caplog`` only captures stdlib logging, so we patch ``_log()`` and inspect
+    the call args directly.  We're verifying message-body shape, not delivery.
+    """
+
+    def _make_store(self, tmp_path: Path) -> CloudStore:
+        store_root = tmp_path / "bucket"
+        store_root.mkdir()
+        return CloudStore(LocalStore(prefix=str(store_root)), provider="local")
+
+    @staticmethod
+    def _info_calls(spy):
+        """Return the positional message-format strings passed to ``info()``."""
+        return [
+            call.args[0] for call in spy.return_value.info.call_args_list if call.args
+        ]
+
+    @staticmethod
+    def _info_call_args(spy):
+        """Return the (msg, *positional_args) tuples for each info() call."""
+        return [
+            tuple(call.args)
+            for call in spy.return_value.info.call_args_list
+            if call.args
+        ]
+
+    async def test_upload_log_message_inlines_key_and_size(self, tmp_path) -> None:
+        from unittest.mock import patch
+
+        store = self._make_store(tmp_path)
+        local = tmp_path / "payload.bin"
+        local.write_bytes(b"hello world")
+        with patch("application_sdk.storage.cloud._log") as spy:
+            await store.upload(local, "artifacts/payload.bin")
+        # %-style: ("Uploaded key=%s bytes=%d", key, size)
+        triples = [args for args in self._info_call_args(spy) if "Uploaded" in args[0]]
+        assert any(
+            "key=%s" in args[0]
+            and "bytes=%d" in args[0]
+            and args[1:] == ("artifacts/payload.bin", 11)
+            for args in triples
+        ), f"Uploaded line did not inline key+size, got: {triples}"
+
+    async def test_download_single_log_message_inlines_key_and_local_path(
+        self, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        store = self._make_store(tmp_path)
+        await store.upload_bytes("artifacts/x.bin", b"data")
+        out = tmp_path / "out"
+        with patch("application_sdk.storage.cloud._log") as spy:
+            await store.download(key="artifacts/x.bin", output_dir=out)
+        triples = [
+            args for args in self._info_call_args(spy) if "Downloaded" in args[0]
+        ]
+        assert any(
+            "key=%s" in args[0]
+            and "local_path=%s" in args[0]
+            and args[1] == "artifacts/x.bin"
+            for args in triples
+        ), f"Downloaded line did not inline key+local_path, got: {triples}"
+
+    async def test_download_prefix_log_messages_inline_prefix_and_count(
+        self, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        store = self._make_store(tmp_path)
+        await store.upload_bytes("dir/a.bin", b"a")
+        await store.upload_bytes("dir/b.bin", b"bb")
+        out = tmp_path / "out"
+        with patch("application_sdk.storage.cloud._log") as spy:
+            await store.download(prefix="dir", output_dir=out)
+        formats = self._info_calls(spy)
+        assert any(
+            "Listing objects under prefix=%s" in fmt for fmt in formats
+        ), f"Listing line did not use %-style prefix, got: {formats}"
+        assert any(
+            "Downloaded %d files from prefix=%s" in fmt for fmt in formats
+        ), f"Downloaded-N line did not use %-style, got: {formats}"
+
+    async def test_large_file_upload_streaming(self, tmp_path):
+        """upload() streams a multi-chunk local file without reading it all into memory."""
+        store = self._make_store(tmp_path)
+        content = b"y" * (12 * 1024 * 1024)  # 12 MiB
+        src = tmp_path / "large.bin"
+        src.write_bytes(content)
+
+        size = await store.upload(src, "large.bin")
+
+        assert size == len(content)
+        stored = await store.get_bytes("large.bin")
+        assert stored == content
+
+    async def test_streaming_prefix_download_multi_file(self, tmp_path):
+        """download(prefix=) streams all matching files and preserves path-traversal guard."""
+        store = self._make_store(tmp_path)
+        files_in = {
+            "batch/a.json": b'{"a":1}',
+            "batch/sub/b.json": b'{"b":2}',
+            "batch/c.txt": b"c",
+        }
+        for key, data in files_in.items():
+            await store.upload_bytes(key, data)
+
+        out = tmp_path / "out"
+        downloaded = await store.download(prefix="batch", output_dir=out)
+
+        assert len(downloaded) == 3
+        for path in downloaded:
+            assert path.resolve().is_relative_to(out.resolve())
+        contents = {p.read_bytes() for p in downloaded}
+        assert contents == set(files_in.values())

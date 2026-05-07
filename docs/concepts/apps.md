@@ -103,7 +103,7 @@ Extracts metadata (databases, schemas, tables, columns, procedures) from SQL sou
 
 ```python
 from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts.sql_metadata import (
+from application_sdk.templates.contracts import (
     FetchDatabasesInput, FetchDatabasesOutput,
     ExtractionInput, ExtractionOutput,
 )
@@ -124,7 +124,7 @@ Extracts query history/logs from SQL sources:
 
 ```python
 from application_sdk.templates import SqlQueryExtractor
-from application_sdk.templates.contracts.sql_query import (
+from application_sdk.templates.contracts import (
     QueryBatchInput, QueryBatchOutput,
     QueryFetchInput, QueryFetchOutput,
 )
@@ -144,16 +144,17 @@ class MyQueryExtractor(SqlQueryExtractor):
 
 ### IncrementalSqlMetadataExtractor
 
-Runs a 4-phase incremental extraction:
+Runs a 5-phase incremental extraction:
 
-1. Write an incremental marker (current timestamp)
-2. Fetch the current full state into a local DuckDB file
-3. Diff against the previous state and emit only changed rows
-4. Finalize by persisting the new state to object storage
+1. **Prerequisites** — fetch the prior run marker and the previous state snapshot.
+2. **Base extraction** — extract databases, schemas (in parallel), then tables.
+3. **Incremental columns** — batch preparation followed by parallel column discovery.
+4. **Write state** — create and upload the new current-state snapshot.
+5. **Update marker** — persist the new run marker after the state write succeeds.
 
 ```python
 from application_sdk.templates import IncrementalSqlMetadataExtractor
-from application_sdk.templates.contracts.incremental_sql import (
+from application_sdk.templates.contracts import (
     FetchColumnsIncrementalInput, FetchColumnsOutput,
 )
 from application_sdk.app import task
@@ -167,7 +168,7 @@ class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
 
 ### BaseMetadataExtractor
 
-For non-SQL sources (REST APIs, file systems). Provides the same task structure but without SQL-specific defaults.
+Base class for all metadata-extraction Apps. Provides upload, cleanup, and lifecycle plumbing without committing to a SQL-specific task layout. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
 
 ## Lifecycle Hooks
 
@@ -188,28 +189,32 @@ class MyConnector(App):
 
 Two cleanup tasks are available on every `App`:
 
-- `cleanup_files()` -- removes local temporary files whose paths are tracked via `FileReference` objects from task outputs.
-- `cleanup_storage()` -- removes object store artifacts uploaded with `StorageTier.TRANSIENT`. Files with `StorageTier.RETAINED` or `StorageTier.PERSISTENT` are left untouched.
+- `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **then** convention-based temp directories (using `input.extra_paths` if provided, otherwise `ATLAN_CLEANUP_BASE_PATHS`, otherwise the default temp path).
+- `cleanup_storage()` — removes object store artifacts by tier:
+  - `StorageTier.TRANSIENT` refs are always removed.
+  - `StorageTier.PERSISTENT` refs are always left untouched.
+  - `StorageTier.RETAINED` refs under the run-scoped prefix are removed **only** when `input.include_prefix_cleanup=True` is set (opt-in); otherwise they are left untouched.
 
-Both can also be called mid-run to reclaim space after large intermediate steps.
+Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — the cleanup contract is tied to workflow completion, not mid-run state.
 
 ## Passthrough Modules
 
-If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as class parameters:
+If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as a class-level attribute:
 
 ```python
-class MyConnector(App, passthrough_modules=["my_connector", "third_party_lib"]):
+class MyConnector(App):
+    passthrough_modules = {"my_connector", "third_party_lib"}
     ...
 ```
 
-In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the class definition.
+The type is `ClassVar[set[str] | None]` — use a set literal, not a list. In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`.
 
 ## Customizing SQL Queries
 
 For SQL template apps, override SQL query class attributes or load from files:
 
 ```python
-from application_sdk.common.utils import read_sql_files
+from application_sdk.common.sql_filters import read_sql_files
 
 SQL_QUERIES = read_sql_files("/path/to/queries")
 
@@ -225,8 +230,12 @@ Test `@task` methods directly without Temporal or Dapr:
 ```python
 import pytest
 from application_sdk.testing import MockSecretStore, MockStateStore
-from application_sdk.infrastructure import InfrastructureContext, set_infrastructure
-from application_sdk.testing.fixtures import clean_app_registry  # noqa: F401
+from application_sdk.infrastructure import (
+    InfrastructureContext,
+    clear_infrastructure,
+    set_infrastructure,
+)
+from application_sdk.testing import clean_app_registry  # noqa: F401
 
 @pytest.fixture
 def infra():
@@ -235,7 +244,8 @@ def infra():
         state_store=MockStateStore(),
     )
     set_infrastructure(ctx)
-    return ctx
+    yield ctx
+    clear_infrastructure()
 
 async def test_fetch(infra):
     connector = MyConnector()
@@ -249,5 +259,114 @@ Use the `clean_app_registry` fixture to prevent `App` subclass registrations fro
 
 ```python
 # conftest.py
-from application_sdk.testing.fixtures import clean_app_registry  # noqa: F401
+from application_sdk.testing import clean_app_registry  # noqa: F401
 ```
+
+For testing credential resolution, use `MockCredentialStore`:
+
+```python
+from application_sdk.testing import MockCredentialStore
+
+store = MockCredentialStore()
+ref = store.add_api_key("my-service", api_key="secret123")
+# Or: store.add_basic("db", username="user", password="pass")
+# Or: store.add_bearer_token("svc", token="tok")
+
+ctx = InfrastructureContext(secret_store=store.secret_store)
+set_infrastructure(ctx)
+```
+
+For testing tasks that emit heartbeats, use `MockHeartbeatController`:
+
+```python
+from application_sdk.testing import MockHeartbeatController
+
+controller = MockHeartbeatController()
+# Pass to AppContext or inject via fixture; inspect calls after the task runs:
+calls = controller.get_heartbeat_calls()
+```
+
+---
+
+## App State
+
+`app_state` is in-memory state scoped to the current workflow execution. Use it to pass values between tasks without encoding them in task contracts.
+
+```python
+class MyConnector(App):
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+        await self.fetch_databases(FetchDbInput(connection_id=input.connection_id))
+        return await self.transform_data(TransformInput(...))
+
+    @task
+    async def fetch_databases(self, input: FetchDbInput) -> FetchDbOutput:
+        out = await self._do_fetch(input)
+        # Store inside a @task — app_state requires an active activity context:
+        self.app_state.set("db_list", out.databases)
+        return out
+
+    @task
+    async def transform_data(self, input: TransformInput) -> TransformOutput:
+        dbs = self.app_state.get("db_list")
+        ...
+```
+
+---
+
+## Continuing with New Input
+
+`continue_with()` restarts the current App with new input while preserving correlation context. It truncates the Temporal workflow history and starts a new run — useful for long-running Apps that accumulate too much history.
+
+```python
+class IncrementalExtractor(App):
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+        out = await self.fetch_batch(FetchInput(cursor=input.cursor))
+        if out.has_more:
+            # Restart with the next cursor — never accumulates unbounded history
+            self.continue_with(ExtractionInput(cursor=out.next_cursor))
+        return ExtractionOutput(total=out.count)
+```
+
+`continue_with()` does not return — it raises a framework signal internally.
+
+---
+
+## Retry Policies
+
+Pass a `RetryPolicy` to `@task` via `retry_policy` to override the default (3 attempts, exponential backoff: initial 1s, coefficient 2.0, capped at 5 minutes):
+
+```python
+from application_sdk.app import App, RetryPolicy, task
+
+class MyConnector(App):
+    @task(retry_policy=RetryPolicy(max_attempts=1))
+    async def send_webhook(self, input: WebhookInput) -> WebhookOutput: ...
+
+    @task(retry_policy=RetryPolicy(max_attempts=10, backoff_coefficient=1.5))
+    async def fetch_flaky_api(self, input: FetchInput) -> FetchOutput: ...
+```
+
+`RetryPolicy` is a frozen dataclass with fluent builder methods:
+
+```python
+policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
+```
+
+---
+
+## Atlan Client Mixin
+
+Mix in `AtlanClientMixin` when your App needs to call the Atlan API. It provides `get_or_create_async_atlan_client()`, which caches the `AsyncAtlanClient` per execution.
+
+```python
+from application_sdk.credentials import AtlanClientMixin
+
+class MyConnector(AtlanClientMixin, App):
+    @task
+    async def update_lineage(self, input: LineageInput) -> LineageOutput:
+        client = await self.get_or_create_async_atlan_client(input.credential)
+        await client.asset.upsert(...)
+        return LineageOutput(updated=True)
+```
+
+Import path: `application_sdk.credentials.AtlanClientMixin`.

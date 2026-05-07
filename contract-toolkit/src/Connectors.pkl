@@ -1,0 +1,600 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2024 Atlan Pte. Ltd. */
+
+/// Module for rendering the outputs for a custom package's configuration in Atlan.
+@ModuleInfo { minPklVersion = "0.25.1" }
+module com.atlan.app.contract.Connectors
+
+hidden const SNOWFLAKE: Type = new {
+  value = "snowflake"
+  category = "warehouse"
+}
+hidden const TABLEAU: Type = new {
+  value = "tableau"
+  category = "bi"
+}
+hidden const REDSHIFT: Type = new {
+  value = "redshift"
+  category = "warehouse"
+}
+hidden const POSTGRES: Type = new {
+  value = "postgres"
+  category = "database"
+}
+hidden const ATHENA: Type = new {
+  value = "athena"
+  category = "queryengine"
+}
+hidden const DATABRICKS: Type = new {
+  value = "databricks"
+  category = "lake"
+}
+hidden const POWERBI: Type = new {
+  value = "powerbi"
+  category = "bi"
+}
+hidden const BIGQUERY: Type = new {
+  value = "bigquery"
+  category = "warehouse"
+}
+hidden const LOOKER: Type = new {
+  value = "looker"
+  category = "bi"
+}
+hidden const METABASE: Type = new {
+  value = "metabase"
+  category = "bi"
+}
+hidden const SALESFORCE: Type = new {
+  value = "salesforce"
+  category = "SaaS"
+}
+hidden const MYSQL: Type = new {
+  value = "mysql"
+  category = "warehouse"
+}
+hidden const MSSQL: Type = new {
+  value = "mssql"
+  category = "warehouse"
+}
+hidden const S3: Type = new {
+  value = "s3"
+  category = "ObjectStore"
+}
+hidden const PRESTO: Type = new {
+  value = "presto"
+  category = "database"
+}
+hidden const TRINO: Type = new {
+  value = "trino"
+  category = "database"
+}
+hidden const DATASTUDIO: Type = new {
+  value = "datastudio"
+  category = "bi"
+}
+hidden const GLUE: Type = new {
+  value = "glue"
+  category = "lake"
+}
+hidden const ORACLE: Type = new {
+  value = "oracle"
+  category = "warehouse"
+}
+hidden const NETSUITE: Type = new {
+  value = "netsuite"
+  category = "warehouse"
+}
+hidden const MODE: Type = new {
+  value = "mode"
+  category = "bi"
+}
+hidden const DBT: Type = new {
+  value = "dbt"
+  category = "elt"
+}
+hidden const FIVETRAN: Type = new {
+  value = "fivetran"
+  category = "elt"
+}
+hidden const VERTICA: Type = new {
+  value = "vertica"
+  category = "warehouse"
+}
+hidden const PRESET: Type = new {
+  value = "preset"
+  category = "bi"
+}
+hidden const API: Type = new {
+  value = "api"
+  category = "API"
+}
+hidden const DYNAMODB: Type = new {
+  value = "dynamodb"
+  category = "warehouse"
+}
+hidden const GCS: Type = new {
+  value = "gcs"
+  category = "ObjectStore"
+}
+hidden const HIVE: Type = new {
+  value = "hive"
+  category = "warehouse"
+}
+hidden const SAPHANA: Type = new {
+  value = "sap-hana"
+  category = "warehouse"
+}
+hidden const ADLS: Type = new {
+  value = "adls"
+  category = "ObjectStore"
+}
+hidden const SIGMA: Type = new {
+  value = "sigma"
+  category = "bi"
+}
+hidden const SYNAPSE: Type = new {
+  value = "synapse"
+  category = "warehouse"
+}
+hidden const AIRFLOW: Type = new {
+  value = "airflow"
+  category = "elt"
+}
+hidden const OPENLINEAGE: Type = new {
+  value = "openlineage"
+  category = "elt"
+}
+hidden const DATAFLOW: Type = new {
+  value = "dataflow"
+  category = "elt"
+}
+hidden const QLIKSENSE: Type = new {
+  value = "qlik-sense"
+  category = "bi"
+}
+hidden const KAFKA: Type = new {
+  value = "kafka"
+  category = "eventbus"
+}
+hidden const QUICKSIGHT: Type = new {
+  value = "quicksight"
+  category = "bi"
+}
+hidden const SAP_IQ: Type = new {
+  value = "sap-iq"
+  category = "warehouse"
+}
+hidden const HEX: Type = new {
+  value = "hex"
+  category = "elt"
+}
+hidden const TERADATA: Type = new {
+  value = "teradata"
+  category = "warehouse"
+}
+hidden const YUGABYTEDB: Type = new {
+  value = "yugabytedb"
+  category = "database"
+}
+hidden const IBM_INFORMIX: Type = new {
+  value = "ibm-informix"
+  category = "database"
+}
+hidden const SAP_SQL: Type = new {
+  value = "sap-sql"
+  category = "database"
+}
+hidden const ORACLE_TIMESTEN: Type = new {
+  value = "oracle-timesten"
+  category = "database"
+}
+hidden const PERCONA_SERVER: Type = new {
+  value = "percona-server"
+  category = "database"
+}
+hidden const AURORA: Type = new {
+  value = "aurora"
+  category = "database"
+}
+hidden const SAP_MAXDB: Type = new {
+  value = "sap-maxdb"
+  category = "database"
+}
+hidden const SQLITE: Type = new {
+  value = "sqlite"
+  category = "database"
+}
+hidden const ROCKSET: Type = new {
+  value = "rockset"
+  category = "warehouse"
+}
+hidden const MONGODB: Type = new {
+  value = "mongodb"
+  category = "database"
+}
+hidden const GREENPLUM: Type = new {
+  value = "greenplum"
+  category = "warehouse"
+}
+hidden const MONETDB: Type = new {
+  value = "monetdb"
+  category = "warehouse"
+}
+hidden const ALLOYDB: Type = new {
+  value = "alloydb"
+  category = "database"
+}
+hidden const COCKROACHDB: Type = new {
+  value = "cockroachdb"
+  category = "database"
+}
+hidden const AZURE_COSMOS_DB: Type = new {
+  value = "azure-cosmos-db"
+  category = "database"
+}
+hidden const AZURE_ANALYSIS_SERVICES: Type = new {
+  value = "azure-analysis-services"
+  category = "warehouse"
+}
+hidden const SINGLESTORE: Type = new {
+  value = "singlestore"
+  category = "warehouse"
+}
+hidden const FIREBIRD: Type = new {
+  value = "firebird"
+  category = "database"
+}
+hidden const THOUGHTSPOT: Type = new {
+  value = "thoughtspot"
+  category = "bi"
+}
+hidden const CLICKHOUSE: Type = new {
+  value = "clickhouse"
+  category = "warehouse"
+}
+hidden const MULESOFT: Type = new {
+  value = "mulesoft"
+  category = "API"
+}
+hidden const CLARI: Type = new {
+  value = "clari"
+  category = "SaaS"
+}
+hidden const MARKETO: Type = new {
+  value = "marketo"
+  category = "SaaS"
+}
+hidden const AZURE_DATA_LAKE: Type = new {
+  value = "azure-data-lake"
+  category = "lake"
+}
+hidden const DELTA_LAKE: Type = new {
+  value = "delta-lake"
+  category = "lake"
+}
+hidden const MINISQL: Type = new {
+  value = "minisql"
+  category = "database"
+}
+hidden const ICEBERG: Type = new {
+  value = "iceberg"
+  category = "warehouse"
+}
+hidden const IMPALA: Type = new {
+  value = "impala"
+  category = "warehouse"
+}
+hidden const SPARK_SQL: Type = new {
+  value = "spark-sql"
+  category = "lake"
+}
+hidden const MARIADB: Type = new {
+  value = "mariadb"
+  category = "database"
+}
+hidden const FIREBOLT: Type = new {
+  value = "firebolt"
+  category = "warehouse"
+}
+hidden const CLOUDERA_DATA_WAREHOUSE: Type = new {
+  value = "cloudera-data-warehouse"
+  category = "warehouse"
+}
+hidden const STARBURST_GALAXY: Type = new {
+  value = "starburst-galaxy"
+  category = "warehouse"
+}
+hidden const REDIS: Type = new {
+  value = "redis"
+  category = "database"
+}
+hidden const GRAPHQL: Type = new {
+  value = "graphql"
+  category = "database"
+}
+hidden const ALTERYX: Type = new {
+  value = "alteryx"
+  category = "bi"
+}
+hidden const REDASH: Type = new {
+  value = "redash"
+  category = "bi"
+}
+hidden const SISENSE: Type = new {
+  value = "sisense"
+  category = "bi"
+}
+hidden const MONTE_CARLO: Type = new {
+  value = "monte-carlo"
+  category = "data-quality"
+}
+hidden const SODA: Type = new {
+  value = "soda"
+  category = "data-quality"
+}
+hidden const MATILLION: Type = new {
+  value = "matillion"
+  category = "elt"
+}
+hidden const AIVEN_KAFKA: Type = new {
+  value = "aiven-kafka"
+  category = "eventbus"
+}
+hidden const APACHE_KAFKA: Type = new {
+  value = "apache-kafka"
+  category = "eventbus"
+}
+hidden const AZURE_EVENT_HUB: Type = new {
+  value = "azure-event-hub"
+  category = "eventbus"
+}
+hidden const CONFLUENT_KAFKA: Type = new {
+  value = "confluent-kafka"
+  category = "eventbus"
+}
+hidden const REDPANDA_KAFKA: Type = new {
+  value = "redpanda-kafka"
+  category = "eventbus"
+}
+hidden const AMAZON_MSK: Type = new {
+  value = "amazon-msk"
+  category = "eventbus"
+}
+hidden const CONFLUENT_SCHEMA_REGISTRY: Type = new {
+  value = "confluent-schema-registry"
+  category = "schema-registry"
+}
+hidden const GAINSIGHT: Type = new {
+  value = "gainsight"
+  category = "database"
+}
+hidden const AIRFLOW_ASTRONOMER: Type = new {
+  value = "airflow-astronomer"
+  category = "elt"
+}
+hidden const AIRFLOW_MWAA: Type = new {
+  value = "airflow-mwaa"
+  category = "elt"
+}
+hidden const AIRFLOW_CLOUD_COMPOSER: Type = new {
+  value = "airflow-cloud-composer"
+  category = "elt"
+}
+hidden const SPARK: Type = new {
+  value = "spark"
+  category = "elt"
+}
+hidden const MPARTICLE: Type = new {
+  value = "mparticle"
+  category = "database"
+}
+hidden const ESSBASE: Type = new {
+  value = "essbase"
+  category = "database"
+}
+hidden const GENERIC: Type = new {
+  value = "genericdb"
+  category = "database"
+}
+hidden const FILE: Type = new {
+  value = "file"
+  category = "ObjectStore"
+}
+hidden const MICROSTRATEGY: Type = new {
+  value = "microstrategy"
+  category = "bi"
+}
+hidden const AWS_SITE_WISE: Type = new {
+  value = "aws-sitewise"
+  category = "database"
+}
+hidden const AWS_GREENGRASS: Type = new {
+  value = "aws-greengrass"
+  category = "database"
+}
+hidden const COGNITE: Type = new {
+  value = "cognite"
+  category = "SaaS"
+}
+hidden const SYNDIGO: Type = new {
+  value = "syndigo"
+  category = "SaaS"
+}
+hidden const NETEZZA: Type = new {
+  value = "netezza"
+  category = "warehouse"
+}
+hidden const AZURE_SERVICE_BUS: Type = new {
+  value = "azureservicebus"
+  category = "eventbus"
+}
+hidden const SUPERSET: Type = new {
+  value = "superset"
+  category = "bi"
+}
+hidden const PREFECT: Type = new {
+  value = "prefect"
+  category = "elt"
+}
+hidden const AZURE_DATA_FACTORY: Type = new {
+  value = "azure-data-factory"
+  category = "elt"
+}
+hidden const MODEL: Type = new {
+  value = "model"
+  category = "database"
+}
+hidden const IICS: Type = new {
+  value = "iics"
+  category = "elt"
+}
+hidden const ABINITIO: Type = new {
+  value = "abinitio"
+  category = "elt"
+}
+hidden const SAP_S4_HANA: Type = new {
+  value = "sap-s4-hana"
+  category = "warehouse"
+}
+hidden const SAP_ECC: Type = new {
+  value = "sap-ecc"
+  category = "warehouse"
+}
+hidden const ANOMALO: Type = new {
+  value = "anomalo"
+  category = "data-quality"
+}
+hidden const INRIVER: Type = new {
+  value = "inriver"
+  category = "database"
+}
+hidden const IBM_DB2: Type = new {
+  value = "ibmdb2"
+  category = "database"
+}
+hidden const AZURE_ACTIVE_DIRECTORY: Type = new {
+  value = "azure-active-directory"
+  category = "SaaS"
+}
+hidden const ADOBE_EXPERIENCE_MANAGER: Type = new {
+  value = "adobe-experience-manager"
+  category = "SaaS"
+}
+hidden const ADOBE_TARGET: Type = new {
+  value = "adobe-target"
+  category = "SaaS"
+}
+hidden const APACHE_PULSAR: Type = new {
+  value = "apache-pulsar"
+  category = "eventbus"
+}
+hidden const TREASURE_DATA: Type = new {
+  value = "treasure-data"
+  category = "SaaS"
+}
+hidden const SAP_GIGYA: Type = new {
+  value = "sap-gigya"
+  category = "SaaS"
+}
+hidden const SAP_HYBRIS: Type = new {
+  value = "sap-hybris"
+  category = "SaaS"
+}
+hidden const BIGID: Type = new {
+  value = "bigid"
+  category = "SaaS"
+}
+hidden const AWS_LAMBDA: Type = new {
+  value = "aws-lambda"
+  category = "elt"
+}
+hidden const AWS_ECS: Type = new {
+  value = "aws-ecs"
+  category = "elt"
+}
+hidden const AWS_BATCH: Type = new {
+  value = "aws-batch"
+  category = "elt"
+}
+hidden const AWS_SAGEMAKER: Type = new {
+  value = "aws-sagemaker"
+  category = "elt"
+}
+hidden const SHARE_POINT: Type = new {
+  value = "share-point"
+  category = "SaaS"
+}
+hidden const RDS: Type = new {
+  value = "rds"
+  category = "warehouse"
+}
+hidden const SHARED_DRIVE: Type = new {
+  value = "shared-drive"
+  category = "ObjectStore"
+}
+hidden const UNKNOWN_CUSTOM: Type = new {
+  value = "(custom)"
+  category = "API"
+}
+hidden const APP: Type = new {
+  value = "app"
+  category = "app"
+}
+hidden const ANAPLAN: Type = new {
+  value = "anaplan"
+  category = "bi"
+}
+hidden const CUSTOM: Type = new {
+  value = "custom"
+  category = "custom"
+}
+hidden const DATAVERSE: Type = new {
+  value = "dataverse"
+  category = "SaaS"
+}
+hidden const COSMOS: Type = new {
+  value = "cosmos"
+  category = "database"
+}
+hidden const DOMO: Type = new {
+  value = "domo"
+  category = "bi"
+}
+hidden const COGNOS: Type = new {
+  value = "cognos"
+  category = "bi"
+}
+hidden const CRATEDB: Type = new {
+  value = "cratedb"
+  category = "database"
+}
+hidden const KX: Type = new {
+  value = "kx"
+  category = "database"
+}
+hidden const DOCUMENTDB: Type = new {
+  value = "documentdb"
+  category = "database"
+}
+
+class Type {
+  value: String
+  category: AtlanConnectionCategory
+}
+
+typealias AtlanConnectionCategory =
+  "warehouse"|
+  "bi"|
+  "custom"|
+  "ObjectStore"|
+  "SaaS"|
+  "lake"|
+  "queryengine"|
+  "elt"|
+  "database"|
+  "API"|
+  "eventbus"|
+  "data-quality"|
+  "schema-registry"|
+  "app"

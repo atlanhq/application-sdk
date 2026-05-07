@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
 
-import application_sdk.constants as constants
+from application_sdk import constants
 from application_sdk.storage.batch import download_prefix, list_keys
-from application_sdk.storage.errors import StorageNotFoundError
+from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
     _get_bytes,
     _put,
     delete,
     download_file,
+    download_file_chunked,
+    exists,
+    get_file_size,
     normalize_key,
     put_json,
     upload_file,
@@ -189,6 +192,35 @@ class TestUploadFile:
         sha256 = await upload_file("check.bin", f, store)
         assert sha256 == expected
 
+    async def test_upload_file_compute_hash_false_returns_none(
+        self, store, tmp_path
+    ) -> None:
+        """``compute_hash=False`` skips the digest and returns None.
+
+        Regression guard: PR #1624 introduced ``compute_hash`` so external
+        stores (CloudStore) can avoid the integrity sidecar.  Removing the
+        parameter would silently start computing hashes for every external
+        upload — this test pins the contract.
+        """
+        f = tmp_path / "no_hash.bin"
+        f.write_bytes(b"do not hash me")
+
+        result = await upload_file("no_hash.bin", f, store, compute_hash=False)
+        assert result is None
+
+    async def test_upload_file_compute_hash_default_returns_digest(
+        self, store, tmp_path
+    ) -> None:
+        """The default ``compute_hash=True`` continues to return a hex digest."""
+        import hashlib
+
+        content = b"default behaviour"
+        f = tmp_path / "default.bin"
+        f.write_bytes(content)
+
+        result = await upload_file("default.bin", f, store)
+        assert result == hashlib.sha256(content).hexdigest()
+
     async def test_upload_file_normalize_false(self, store, tmp_path) -> None:
         f = tmp_path / "x.bin"
         f.write_bytes(b"exact")
@@ -351,3 +383,413 @@ class TestPutJson:
             await put_json(key, value, store)
             raw = await _get_bytes(key, store)
             assert raw == orjson.dumps(value), f"serialisation mismatch for key={key!r}"
+
+
+# ---------------------------------------------------------------------------
+# Typed not-found detection (BLDX-1155 #5: typed obstore exceptions)
+# ---------------------------------------------------------------------------
+
+
+class TestIsNotFound:
+    """The not-found helper must recognise both built-in and typed exceptions."""
+
+    def test_recognises_filenotfounderror(self) -> None:
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(FileNotFoundError("/no/such")) is True
+
+    def test_recognises_obstore_typed_notfounderror(self) -> None:
+        """obstore.exceptions.NotFoundError must be classified as not-found."""
+        from application_sdk.storage.ops import _is_not_found
+
+        try:
+            from obstore.exceptions import NotFoundError as ObstoreNotFoundError
+        except ImportError:  # pragma: no cover — older obstore
+            pytest.skip("obstore.exceptions.NotFoundError not available")
+
+        assert _is_not_found(ObstoreNotFoundError("missing key")) is True
+
+    def test_does_not_match_unrelated_messages(self) -> None:
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(RuntimeError("internal failure")) is False
+        assert _is_not_found(PermissionError("denied")) is False
+
+    def test_substring_fallback_still_works(self) -> None:
+        """Generic obstore errors carrying 404 strings remain identifiable."""
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(RuntimeError("got HTTP 404 from S3")) is True
+        assert _is_not_found(RuntimeError("key not found in bucket")) is True
+
+
+# ---------------------------------------------------------------------------
+# Structured transfer logs (BLDX-1155 #6: surface what's actually happening)
+# ---------------------------------------------------------------------------
+
+
+class TestTransferLogging:
+    """upload_file / download_file must emit structured per-attempt log events.
+
+    A prior RCA was wrong-footed by the absence of these fields: we said
+    "single attempt" when ~5–6 attempts had actually happened in the Rust
+    layer. Even though we cannot count Rust retries directly, we *can*
+    expose what the SDK observed: bytes, elapsed, throughput, outcome, error
+    class. That alone closes the worst gap.
+    """
+
+    async def test_upload_emits_success_log_with_metrics(
+        self, store, tmp_path, caplog
+    ) -> None:
+        f = tmp_path / "p.bin"
+        f.write_bytes(b"x" * (256 * 1024))
+        with caplog.at_level("INFO", logger="application_sdk.storage.ops"):
+            await upload_file("metrics/up.bin", f, store)
+
+        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
+        outcome_events = [r for r in events if r.__dict__.get("outcome") == "success"]
+        assert outcome_events, (
+            "expected at least one structured 'success' upload event; "
+            f"got events: {[r.message for r in events]}"
+        )
+        evt = outcome_events[-1]
+        assert evt.__dict__.get("storage_op") == "upload"
+        assert evt.__dict__.get("size_bytes") == 256 * 1024
+        assert evt.__dict__.get("elapsed_ms") is not None
+        assert evt.__dict__.get("store_path") == "metrics/up.bin"
+
+    async def test_download_emits_failure_log_with_error_class(
+        self, store, tmp_path, caplog
+    ) -> None:
+        with caplog.at_level("WARNING", logger="application_sdk.storage.ops"):
+            with pytest.raises(StorageNotFoundError):
+                await download_file("no/such/key.bin", tmp_path / "out.bin", store)
+
+        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
+        failure_events = [r for r in events if r.__dict__.get("outcome") == "failure"]
+        assert failure_events, (
+            "expected at least one structured 'failure' download event; "
+            f"got events: {[r.message for r in events]}"
+        )
+        evt = failure_events[-1]
+        assert evt.__dict__.get("storage_op") == "download"
+        assert evt.__dict__.get("error_class") is not None
+        # Not-found should be classified explicitly.
+        assert evt.__dict__.get("error_class") in {
+            "StorageNotFoundError",
+            "FileNotFoundError",
+        } or "NotFound" in evt.__dict__.get("error_class", "")
+
+
+# ---------------------------------------------------------------------------
+# delete / exists / upload / download — error handling and behaviour
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_wraps_non_404_failure() -> None:
+    store = MagicMock()
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.delete_async",
+            new=AsyncMock(side_effect=RuntimeError("permission denied")),
+        ),
+        pytest.raises(StorageError),
+    ):
+        await delete("k", store, normalize=False)
+
+
+async def test_delete_returns_false_on_404() -> None:
+    store = MagicMock()
+    with patch(
+        "application_sdk.storage.ops.obstore.delete_async",
+        new=AsyncMock(side_effect=RuntimeError("404")),
+    ):
+        assert await delete("k", store, normalize=False) is False
+
+
+async def test_exists_returns_false_on_404() -> None:
+    store = MagicMock()
+    with patch(
+        "application_sdk.storage.ops.obstore.head_async",
+        new=AsyncMock(side_effect=RuntimeError("not found")),
+    ):
+        assert await exists("k", store, normalize=False) is False
+
+
+async def test_exists_wraps_non_404_failure() -> None:
+    store = MagicMock()
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.head_async",
+            new=AsyncMock(side_effect=RuntimeError("server error")),
+        ),
+        pytest.raises(StorageError),
+    ):
+        await exists("k", store, normalize=False)
+
+
+async def test_exists_returns_true_on_success() -> None:
+    store = MagicMock()
+    with patch(
+        "application_sdk.storage.ops.obstore.head_async",
+        new=AsyncMock(return_value=MagicMock()),
+    ):
+        assert await exists("k", store, normalize=False) is True
+
+
+async def test_upload_file_wraps_failure_as_storage_error(tmp_path) -> None:
+    """The writer raises mid-upload; ops must wrap it as StorageError."""
+    f = tmp_path / "x.bin"
+    f.write_bytes(b"data")
+
+    class _BoomCM:
+        async def __aenter__(self) -> None:
+            raise RuntimeError("network")
+
+        async def __aexit__(self, *exc) -> None:  # pragma: no cover - not reached
+            return None
+
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            return_value=_BoomCM(),
+        ),
+        pytest.raises(StorageError) as excinfo,
+    ):
+        await upload_file("k", f, MagicMock(), normalize=False)
+    assert excinfo.value.key == "k"
+
+
+async def test_download_file_translates_404_to_not_found(tmp_path) -> None:
+    """Download must translate a 404 from obstore into StorageNotFoundError."""
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(side_effect=RuntimeError("Key not found")),
+        ),
+        pytest.raises(StorageNotFoundError),
+    ):
+        await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
+
+
+async def test_download_file_wraps_non_404_get_failure(tmp_path) -> None:
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(side_effect=RuntimeError("permission denied")),
+        ),
+        pytest.raises(StorageError) as excinfo,
+    ):
+        await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
+    assert not isinstance(excinfo.value, StorageNotFoundError)
+
+
+# ---------------------------------------------------------------------------
+# get_file_size (BLDX-1155: new public function)
+# ---------------------------------------------------------------------------
+
+
+class TestGetFileSize:
+    async def test_returns_size_for_existing_key(self, store, tmp_path) -> None:
+        content = b"hello world"
+        await _put("size/file.bin", content, store, normalize=False)
+        size = await get_file_size("size/file.bin", store, normalize=False)
+        assert size == len(content)
+
+    async def test_returns_none_for_missing_key(self, store) -> None:
+        size = await get_file_size("no/such/key.bin", store, normalize=False)
+        assert size is None
+
+    async def test_non_404_error_raises_storage_error(self) -> None:
+        store = MagicMock()
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.head_async",
+                new=AsyncMock(side_effect=RuntimeError("permission denied")),
+            ),
+            pytest.raises(StorageError),
+        ):
+            await get_file_size("k", store, normalize=False)
+
+
+# ---------------------------------------------------------------------------
+# download_file_chunked (BLDX-1155: new public function)
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadFileChunked:
+    async def test_small_file_falls_through_to_download_file(
+        self, store, tmp_path
+    ) -> None:
+        """File <= chunk_size_bytes delegates to the single-stream download_file."""
+        content = b"small"
+        await _put("chunked/small.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        import application_sdk.storage.ops as ops_mod
+
+        with patch.object(
+            ops_mod, "download_file", wraps=ops_mod.download_file
+        ) as mock_dl:
+            result = await download_file_chunked(
+                "chunked/small.bin",
+                dest,
+                store,
+                chunk_size_bytes=1024,
+                normalize=False,
+            )
+
+        mock_dl.assert_awaited_once()
+        assert dest.read_bytes() == content
+        assert result is not None
+        assert len(result) == 64
+
+    async def test_multi_chunk_produces_correct_content(self, store, tmp_path) -> None:
+        """File split into multiple chunks is reassembled byte-for-byte correctly."""
+        import hashlib
+
+        content = b"ABCDEFGHIJ"  # 10 bytes → 4 chunks at chunk_size=3 (3,3,3,1)
+        await _put("chunked/multi.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        sha = await download_file_chunked(
+            "chunked/multi.bin",
+            dest,
+            store,
+            chunk_size_bytes=3,
+            max_concurrent_chunks=2,
+            normalize=False,
+        )
+
+        assert dest.read_bytes() == content
+        assert sha == hashlib.sha256(content).hexdigest()
+
+    async def test_not_found_raises_storage_not_found_error(
+        self, store, tmp_path
+    ) -> None:
+        with pytest.raises(StorageNotFoundError):
+            await download_file_chunked(
+                "no/such/key.bin",
+                tmp_path / "out.bin",
+                store,
+                normalize=False,
+            )
+
+    async def test_compute_hash_false_returns_none(self, store, tmp_path) -> None:
+        content = b"no hash needed"
+        await _put("chunked/nohash.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        result = await download_file_chunked(
+            "chunked/nohash.bin",
+            dest,
+            store,
+            chunk_size_bytes=3,
+            compute_hash=False,
+            normalize=False,
+        )
+
+        assert result is None
+        assert dest.read_bytes() == content
+
+    async def test_compute_hash_true_returns_sha256(self, store, tmp_path) -> None:
+        import hashlib
+
+        content = b"hash me chunked"
+        await _put("chunked/hash.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        result = await download_file_chunked(
+            "chunked/hash.bin",
+            dest,
+            store,
+            chunk_size_bytes=3,
+            compute_hash=True,
+            normalize=False,
+        )
+
+        assert result == hashlib.sha256(content).hexdigest()
+
+    async def test_partial_file_cleaned_up_on_error(self, store, tmp_path) -> None:
+        """If a chunk fails mid-download, the partial output file is deleted."""
+        content = b"ABCDEFGHIJ"
+        await _put("chunked/boom.bin", content, store, normalize=False)
+        dest = tmp_path / "out.bin"
+
+        import application_sdk.storage.ops as ops_mod
+
+        real_get_range = ops_mod.obstore.get_range_async
+        call_count = 0
+
+        async def flaky_get_range(st, key, *, start, length):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError("transient chunk failure")
+            return await real_get_range(st, key, start=start, length=length)
+
+        with (
+            patch.object(
+                ops_mod.obstore, "get_range_async", side_effect=flaky_get_range
+            ),
+            pytest.raises((StorageError, RuntimeError)),
+        ):
+            await download_file_chunked(
+                "chunked/boom.bin",
+                dest,
+                store,
+                chunk_size_bytes=3,
+                normalize=False,
+            )
+
+        assert not dest.exists(), "partial file must be cleaned up after chunk failure"
+
+
+async def test_download_file_wraps_stream_failure(tmp_path) -> None:
+    """If streaming raises mid-download, the failure must be wrapped."""
+
+    class _BoomStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise RuntimeError("disk full")
+
+    result_obj = MagicMock()
+    result_obj.stream.return_value = _BoomStream()
+
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(return_value=result_obj),
+        ),
+        pytest.raises(StorageError),
+    ):
+        await download_file("k", tmp_path / "out.bin", MagicMock(), normalize=False)
+
+
+async def test_upload_file_does_not_delete_when_retain_local_copy_true(
+    tmp_path,
+) -> None:
+    """Retain flag honoured even when path is inside staging."""
+    f = tmp_path / "kept.bin"
+    f.write_bytes(b"data")
+
+    class _DummyCM:
+        async def __aenter__(self):
+            self.writer = AsyncMock()
+            self.writer.write = AsyncMock()
+            return self.writer
+
+        async def __aexit__(self, *exc):
+            return None
+
+    with patch(
+        "application_sdk.storage.ops.obstore.open_writer_async",
+        return_value=_DummyCM(),
+    ):
+        digest = await upload_file(
+            "k", f, MagicMock(), retain_local_copy=True, normalize=False
+        )
+    assert isinstance(digest, str)
+    assert f.exists()

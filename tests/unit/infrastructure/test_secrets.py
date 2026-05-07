@@ -232,9 +232,18 @@ class TestSecretStoreError:
         assert "AAF-INF-005" in str(err)
         assert "MY_SECRET" in str(err)
 
-    def test_secret_not_found_is_subclass_of_secret_store_error(self) -> None:
-        """Test that SecretNotFoundError is a subclass of SecretStoreError."""
-        assert issubclass(SecretNotFoundError, SecretStoreError)
+    def test_secret_not_found_is_app_error(self) -> None:
+        """SecretNotFoundError and SecretStoreError are independent AppError leaves."""
+        from application_sdk.errors.base import AppError
+        from application_sdk.errors.leaves import (
+            DependencyUnavailableError,
+            NotFoundError,
+        )
+
+        assert issubclass(SecretNotFoundError, NotFoundError)
+        assert issubclass(SecretStoreError, DependencyUnavailableError)
+        assert issubclass(SecretNotFoundError, AppError)
+        assert issubclass(SecretStoreError, AppError)
 
     def test_secret_store_error_with_cause(self) -> None:
         """Test that cause is included in string representation."""

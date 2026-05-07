@@ -1,11 +1,19 @@
 # ADR-0007: Apps as the Unit of Inter-App Coordination
 
-> **⚠️ Status: Under Review — [BLDX-878](https://linear.app/atlan-epd/issue/BLDX-878/clarify-inter-app-calls-in-sdk-v3)**
+> **🚫 Status: Superseded**
 >
-> Inter-app `call()` / `call_by_name()` is **deactivated** in the SDK pending resolution of the duplication with Automation-Engine DAG orchestration. The content below captures the original decision and may be revised.
+> Direct inter-app calls (`call()` / `call_by_name()`) are **permanently removed** from the SDK. The original decision to support child-workflow invocation is superseded by a strategic direction change: orchestration will move to event-driven, event-triggered coordination. In this future model apps will not be responsible for defining orchestration themselves — triggering and sequencing will be the platform's concern, not the App's. The content below is retained for historical context only.
 
 ## Status
-**Under Review** — see BLDX-878
+**Superseded**
+
+## Resolution
+
+Direct inter-app calls are permanently removed. Apps must not coordinate other apps — neither via `call_by_name()` nor any equivalent SDK primitive.
+
+The Automation Engine DAG pattern (encoding orchestration in `manifest.json`) is the current supported mechanism for multi-phase connectors, and is itself transitional. The strategic direction is to move orchestration entirely out of apps and into an event-driven platform layer: apps will be triggered by events and will emit events on completion; sequencing will be handled externally. This removes the need for apps to reason about other apps at all.
+
+See [Multi-App Coordination](../guides/multi-app-coordination.md) for the currently supported patterns.
 
 ## Context
 
@@ -23,7 +31,11 @@ We chose **workflow-to-workflow coordination**: Apps call other Apps as Temporal
 
 ### Option 1: Child Workflow Coordination (Chosen)
 
+> _Historical context — see Resolution above._
+
 Apps invoke other Apps as child workflows via `app/client.py`:
+
+> **⚠️ Historical — do not copy.** `call_by_name()` was permanently removed. Use [Automation Engine DAG orchestration](../guides/multi-app-coordination.md) instead.
 
 ```python
 class Orchestrator(App):
@@ -31,27 +43,27 @@ class Orchestrator(App):
         # Import only the contracts — not the child's implementation
         from data_processor.contracts import ProcessorInput, ProcessorOutput
 
-        result = await self.context.call_by_name(
-            "data-processor",
-            ProcessorInput(records=data),
-            output_type=ProcessorOutput,
-            task_queue="data-processor-queue",
-        )
-        return OrchestratorOutput(count=result.processed_count)
+        # REMOVED: result = await self.context.call_by_name(
+        # REMOVED:     "data-processor",
+        # REMOVED:     ProcessorInput(records=data),
+        # REMOVED:     output_type=ProcessorOutput,
+        # REMOVED:     task_queue="data-processor-queue",
+        # REMOVED: )
+        # REMOVED: return OrchestratorOutput(count=result.processed_count)
 ```
 
-**Pros:**
+**Pros (historical):**
 - **Independent lifecycle**: Child workflows can retry and timeout independently
 - **Observability**: Each App appears as a distinct workflow in Temporal UI with its own history
 - **Durability**: Child workflow state persists even if parent fails temporarily
-- **Loose coupling**: `call_by_name()` requires no code import — just the app name string and its contracts
+- **Loose coupling**: `call_by_name()` required no code import — just the app name string and its contracts (now removed)
 - **Correlation**: Parent-child relationship tracked via `_parent_run_id` for distributed tracing
 - **Version isolation**: Can run different versions of the same App simultaneously
 - **Polyglot future**: Child workflows can be written in different languages since Temporal is language-agnostic
 
-**Cons:**
+**Cons (historical):**
 - **Overhead**: Child workflows have more overhead than activities
-- **Type checking**: `call_by_name()` is string-based — mitigated by importing only contract models (not the child's implementation class)
+- **Type checking**: `call_by_name()` was string-based — mitigated by importing only contract models (not the child's implementation class)
 
 ### Option 2: Activity-Based Coordination (Not Chosen)
 
@@ -75,29 +87,37 @@ Require Apps to directly import each other's App classes.
 
 ## Rationale
 
+> _Historical context — see Resolution above._
+
 1. **Apps as units of execution**: The unit of execution of an app translates to a Temporal workflow. Child workflows preserve this — each App is a complete, observable workflow.
 2. **Continue-as-new support**: Long-running Apps can use continue-as-new to reset history without breaking callers. This only works with child workflows, not activities.
 3. **Independent observability**: Each App appears in Temporal UI as a distinct workflow. You can see parent→child relationships and debug independently.
-4. **Loose coupling via `call_by_name()`**: Apps in different packages/repositories can coordinate without code imports. The parent defines local contract copies; the child evolves independently.
+4. **Loose coupling via `call_by_name()` (removed)**: Apps in different packages/repositories could coordinate without code imports. The parent defines local contract copies; the child evolves independently.
 5. **Tasks are private**: `@task` methods are implementation details. External callers invoke the App (workflow), not individual activities. This enforces encapsulation.
 
 ## Consequences
 
-**Positive:**
+> _Historical context — see Resolution above._
+
+**Positive (historical):**
 - Clear boundary: App = Workflow, Task = Activity (internal)
 - Independent lifecycles, retries, and observability per App
-- Loose coupling possible via `call_by_name()` with local contracts
+- Loose coupling was possible via `call_by_name()` with local contracts (now removed)
 - Full distributed tracing via correlation IDs
 - Polyglot-ready: child workflows can be any Temporal-supported language
 
-**Negative:**
+**Negative (historical):**
 - Child workflow overhead higher than activities
 - Must handle child workflow failure modes
-- `call_by_name()` is string-based — import child's contract models to preserve type safety
+- `call_by_name()` was string-based — import child's contract models to preserve type safety
 
 ## Implementation
 
-Child workflow invocation lives in `application_sdk/app/client.py`. The `App` exposes it through `self.context` inside `run()`. Import only the target app's contract models — not the app class itself — to maintain type safety while keeping deployments independent:
+> _Historical context — see Resolution above._
+
+Child workflow invocation was implemented in `application_sdk/app/client.py`. The `App` exposed it through `self.context` inside `run()`. Import only the target app's contract models — not the app class itself — to maintain type safety while keeping deployments independent:
+
+> **⚠️ Historical — do not copy.** `call_by_name()` was permanently removed. Use [Automation Engine DAG orchestration](../guides/multi-app-coordination.md) instead.
 
 ```python
 # Import ONLY the contracts from the target app's package
@@ -105,11 +125,12 @@ from loader.contracts import LoaderInput, LoaderOutput
 
 class MyApp(App):
     async def run(self, input: MyInput) -> MyOutput:
-        result = await self.context.call_by_name(
-            "atlan-loader",
-            LoaderInput(records=input.records),
-            output_type=LoaderOutput,
-            task_queue="atlan-loader-queue",
-        )
-        return MyOutput(loaded=result.count)
+        # REMOVED: result = await self.context.call_by_name(
+        # REMOVED:     "atlan-loader",
+        # REMOVED:     LoaderInput(records=input.records),
+        # REMOVED:     output_type=LoaderOutput,
+        # REMOVED:     task_queue="atlan-loader-queue",
+        # REMOVED: )
+        # REMOVED: return MyOutput(loaded=result.count)
+        pass
 ```

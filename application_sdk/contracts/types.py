@@ -157,6 +157,26 @@ class MaxItems:
     """Maximum number of items allowed in the collection."""
 
 
+class Lazy:
+    """Marker: this FileReference field is NOT auto-materialized before the activity runs.
+
+    Use with ``Annotated`` on any ``FileReference | None`` field whose data is
+    too large to download unconditionally, or that the activity may not always
+    need:
+
+        class MyInput(Input):
+            heavy_artifact: Annotated[FileReference | None, Lazy()] = None
+            light_manifest: FileReference | None = None  # eager (default)
+
+    Lazy fields are left as durable ``FileReference`` objects in the activity
+    input.  Call ``await fetch(ref, store)`` from ``storage.reference`` inside
+    the activity to download on demand — the sidecar fast-path means repeated
+    calls are cheap if the file is already on disk.
+    """
+
+    __slots__ = ()
+
+
 BoundedList = Annotated[list[T], MaxItems]
 """Bounded list type. Use: Annotated[list[T], MaxItems(N)]"""
 
@@ -188,6 +208,14 @@ class FileReference(BaseModel, frozen=True):
             run-scoped prefix for post-run investigation, or
             ``StorageTier.PERSISTENT`` to keep it indefinitely under
             ``persistent-artifacts/``.
+        auto_materialize: When ``True`` (default), the activity interceptor
+            will transparently upload (persist) ephemeral refs after a task
+            completes and download (materialize) durable refs before the
+            next task runs.  Set to ``False`` to opt out — the app then
+            owns the upload/download lifecycle.  Useful when an app needs
+            custom retry/timeout/streaming behavior the interceptor cannot
+            provide (e.g. multi-GB files, lazy-streaming reads, or
+            deferred materialization).
     """
 
     local_path: str | None = None
@@ -195,25 +223,39 @@ class FileReference(BaseModel, frozen=True):
     is_durable: bool = False
     file_count: int = 1
     tier: StorageTier = StorageTier.TRANSIENT
+    auto_materialize: bool = True
 
     @staticmethod
     def from_local(
         path: str | Path,
-    ) -> "FileReference":
+    ) -> FileReference:
         """Create an ephemeral FileReference from a local filesystem path.
+
+        For a directory, ``file_count`` is computed as the number of regular
+        files under the tree (recursively); for a single file it is ``1``.
+        Non-existent paths fall back to the default ``file_count=1`` so this
+        helper is safe to call before the file has been written.
 
         Args:
             path: Local file or directory path.
 
         Returns:
             An ephemeral ``FileReference`` (``is_durable=False``) with
-            ``local_path`` set.  ``file_count`` is always 1; use
-            :func:`~application_sdk.storage.transfer.upload` if you need
-            accurate file counts for directories.
+            ``local_path`` set.
         """
         p = Path(path) if not isinstance(path, Path) else path
+        # Best-effort file_count computation. We swallow OSError so the
+        # constructor is still usable from inside Temporal sandbox where
+        # filesystem inspection may not be desirable.
+        file_count = 1
+        try:
+            if p.is_dir():
+                file_count = sum(1 for child in p.rglob("*") if child.is_file())
+        except OSError:
+            file_count = 1
         return FileReference(
             local_path=str(p),
+            file_count=file_count,
         )
 
 
@@ -229,7 +271,7 @@ class GitReference(BaseModel, frozen=True):
     path: str = ""
     tag: str = ""
     commit: str = ""
-    credential: "CredentialRef | None" = None
+    credential: CredentialRef | None = None
 
 
 class ConnectionAttributes(BaseModel, frozen=True):
@@ -306,7 +348,7 @@ class ConnectionRef(BaseModel, frozen=True):
     )
 
     @staticmethod
-    def from_connection(conn: Any) -> "ConnectionRef":
+    def from_connection(conn: Any) -> ConnectionRef:
         """Convert a pyatlan_v9 Connection (msgspec.Struct) to ConnectionRef.
 
         The pyatlan_v9 struct is flat (all attributes at top level with camelCase

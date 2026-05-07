@@ -1,0 +1,308 @@
+{
+  "icon": "https://assets.atlan.com/assets/ph-shapes-light.svg",
+  "helpdeskLink": "https://docs.atlan.com/apps/packages/references/all-apps",
+  "logo": "https://assets.atlan.com/assets/ph-shapes-light.svg",
+  "connector": "Object Store",
+  "defaultConnectorType": "rest",
+  "config": {
+    "properties": {
+      "auth-type": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Cloud object store",
+          "hidden": false,
+          "help": "",
+          "grid": 8
+        },
+        "default": "s3",
+        "enum": [
+          "s3",
+          "gcs",
+          "adls"
+        ],
+        "enumNames": [
+          "S3",
+          "GCS",
+          "ADLS"
+        ]
+      },
+      "s3": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "nested",
+          "label": "",
+          "hidden": true,
+          "help": "",
+          "grid": 8,
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": false,
+            "ui": {
+              "widget": "input",
+              "label": "AWS access key",
+              "hidden": false,
+              "help": "Enter your AWS access key.",
+              "placeholder": "",
+              "grid": 4
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": false,
+            "ui": {
+              "widget": "password",
+              "label": "AWS secret key",
+              "hidden": false,
+              "help": "Enter your AWS secret key.",
+              "grid": 4
+            }
+          },
+          "extra": {
+            "type": "object",
+            "required": false,
+            "ui": {
+              "widget": "nested",
+              "label": "S3 details",
+              "hidden": false,
+              "help": "",
+              "grid": 8,
+              "nestedValue": false
+            },
+            "properties": {
+              "aws_role_arn": {
+                "type": "string",
+                "required": false,
+                "ui": {
+                  "widget": "input",
+                  "label": "AWS Role ARN",
+                  "hidden": false,
+                  "help": "ARN of the AWS role to assume",
+                  "placeholder": "arn:aws:iam::123456789012:role/roleName",
+                  "grid": 8,
+                  "rules": [
+                    {
+                      "pattern": "^arn:aws:iam::\\d{12}:role/.+",
+                      "message": "Please enter a valid role ARN",
+                      "trigger": "blur"
+                    }
+                  ]
+                }
+              },
+              "region": {
+                "type": "string",
+                "required": false,
+                "ui": {
+                  "widget": "input",
+                  "label": "Region",
+                  "hidden": false,
+                  "help": "Enter your AWS region.",
+                  "placeholder": "us-west-1",
+                  "grid": 4
+                }
+              },
+              "s3_bucket": {
+                "type": "string",
+                "required": false,
+                "ui": {
+                  "widget": "input",
+                  "label": "Bucket",
+                  "hidden": false,
+                  "help": "Enter the bucket from which to retrieve the object store object(s).",
+                  "placeholder": "bucket-name",
+                  "grid": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "gcs": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "nested",
+          "label": "",
+          "hidden": true,
+          "help": "",
+          "grid": 8,
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": false,
+            "ui": {
+              "widget": "input",
+              "label": "Project ID",
+              "hidden": false,
+              "help": "Enter the ID of the GCP project.",
+              "placeholder": "",
+              "grid": 4
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": false,
+            "ui": {
+              "widget": "password",
+              "label": "Service account JSON",
+              "hidden": false,
+              "help": "Enter the JSON for your service account credentials.",
+              "grid": 8
+            }
+          },
+          "extra": {
+            "type": "object",
+            "required": false,
+            "ui": {
+              "widget": "nested",
+              "label": "GCS details",
+              "hidden": false,
+              "help": "",
+              "grid": 8,
+              "nestedValue": false
+            },
+            "properties": {
+              "gcs_bucket": {
+                "type": "string",
+                "required": false,
+                "ui": {
+                  "widget": "input",
+                  "label": "Bucket",
+                  "hidden": false,
+                  "help": "Enter the bucket from which to retrieve the object store object(s).",
+                  "placeholder": "bucket-name",
+                  "grid": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "adls": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "nested",
+          "label": "",
+          "hidden": true,
+          "help": "",
+          "grid": 8,
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": false,
+            "ui": {
+              "widget": "input",
+              "label": "Azure client ID",
+              "hidden": false,
+              "help": "Enter the unique application (client) ID assigned to your app by Azure AD when the app was registered.",
+              "placeholder": "",
+              "grid": 4
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": false,
+            "ui": {
+              "widget": "password",
+              "label": "Azure client secret",
+              "hidden": false,
+              "help": "Enter your client secret.",
+              "grid": 4
+            }
+          },
+          "extra": {
+            "type": "object",
+            "required": false,
+            "ui": {
+              "widget": "nested",
+              "label": "ADLS details",
+              "hidden": false,
+              "help": "",
+              "grid": 8,
+              "nestedValue": false
+            },
+            "properties": {
+              "azure_tenant_id": {
+                "type": "string",
+                "required": false,
+                "ui": {
+                  "widget": "password",
+                  "label": "Azure tenant ID",
+                  "hidden": false,
+                  "help": "Enter the unique identifier of the Azure Active Directory instance.",
+                  "grid": 4
+                }
+              },
+              "storage_account_name": {
+                "type": "string",
+                "required": false,
+                "ui": {
+                  "widget": "input",
+                  "label": "Storage account name",
+                  "hidden": false,
+                  "help": "Enter the name of your storage account.",
+                  "placeholder": "",
+                  "grid": 4
+                }
+              },
+              "adls_container": {
+                "type": "string",
+                "required": false,
+                "ui": {
+                  "widget": "input",
+                  "label": "Container",
+                  "hidden": false,
+                  "help": "Enter the container from which to retrieve the object store object(s).",
+                  "placeholder": "container-name",
+                  "grid": 4
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "auth-type": {
+            "const": "s3"
+          }
+        },
+        "required": [
+          "s3"
+        ]
+      },
+      {
+        "properties": {
+          "auth-type": {
+            "const": "gcs"
+          }
+        },
+        "required": [
+          "gcs"
+        ]
+      },
+      {
+        "properties": {
+          "auth-type": {
+            "const": "adls"
+          }
+        },
+        "required": [
+          "adls"
+        ]
+      }
+    ]
+  }
+}
