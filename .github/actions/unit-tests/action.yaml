@@ -82,7 +82,8 @@ runs:
 
     - name: Comment Coverage Report URL on PR
       uses: mshick/add-pr-comment@v2
-      if: ${{ github.event_name == 'pull_request' }}
+      if: ${{ github.event_name == 'pull_request' && steps.aws-creds.outcome == 'success' }}
+      continue-on-error: true
       with:
         message-id: "coverage"
         message: |
