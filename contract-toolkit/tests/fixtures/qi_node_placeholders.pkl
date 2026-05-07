@@ -1,0 +1,84 @@
+/// Minimal example demonstrating the built-in `QueryIntelligenceNode`.
+///
+/// This keeps `hasPublishStep = false` so the example focuses on the QI node
+/// contract itself rather than requiring a downstream publish-shaped workflow.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "qi-node"
+displayName = "QI Node Example"
+connector = Connectors.ATHENA
+workflowType = "QiNodeWorkflow"
+icon = "https://assets.atlan.com/assets/athena.svg"
+credentialConnectorType = "jdbc"
+hasPublishStep = false
+
+credentialCommonFields {
+  new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+}
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-qi-node"
+          placeholderText = "Credential Guid"
+        }
+      }
+    }
+    // Demonstrates wiring QueryIntelligenceNode.ignoreOrphans /
+    // indirectLineage from workflow form fields. The input keys
+    // (`ignore-orphans`, `indirect-lineage`) match the placeholders
+    // used below verbatim — Heracles substitutes only exact workflow
+    // parameter names, so dotted paths like
+    // `{{control_config.indirect_lineage}}` would silently strip.
+    ["Query Intelligence"] {
+      inputs {
+        ["ignore-orphans"] = new Config.BooleanInput {
+          title = "Ignore orphan columns"
+          helpText = "Drop orphan columns instead of linking them to the first table."
+          width = 4
+        }
+        ["indirect-lineage"] = new Config.BooleanInput {
+          title = "Indirect lineage"
+          helpText = "Enable indirect lineage parsing in the QI app."
+          width = 4
+        }
+      }
+    }
+  }
+}
+
+extraNodes {
+  ["qi"] = new QueryIntelligenceNode {
+    vendorName = "athena"
+    sqlKey = "attributes.definition"
+    catalogKey = "attributes.databaseName"
+    schemaKey = "attributes.schemaName"
+    timestampKey = ""
+    mineOutputType = "json"
+    parsingMode = "competitive"
+    inputPrefix = "$.extract.outputs.transformed_data_prefix"
+    outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
+    // HYP-793 `Boolean|String` pattern: wire the value from the
+    // workflow form fields above. Heracles substitutes the exact
+    // placeholder before the workflow starts, then QI's Pydantic
+    // boundary coerces the resolved string to bool.
+    ignoreOrphans = "{{ignore-orphans}}"
+    indirectLineage = "{{indirect-lineage}}"
+  }
+}

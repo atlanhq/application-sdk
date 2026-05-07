@@ -1,0 +1,96 @@
+/// Minimal example demonstrating DAG dependencies.
+///
+/// With 2+ entries in `dependsOn`, the renderer emits AE's fan-in shape:
+///
+///     "depends_on": {
+///       "and_conditions": [
+///         {"node_id": "left",  "tag": "success"},
+///         {"node_id": "right", "tag": "success"}
+///       ]
+///     }
+///
+/// `tag: "success"` gates `join` on BOTH parents reaching SUCCESS.
+///
+/// For tags, OR conditions, or nested conditions, use the explicit
+/// `dependsOnCondition` API instead of overloading `dependsOn`.
+///
+/// See also: `trino/app.pkl` for the single-parent `dependsOn` pattern.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "fanin"
+displayName = "Fan-in Example"
+connector = Connectors.TRINO
+workflowType = "FaninWorkflow"
+icon = "https://assets.atlan.com/assets/trino.svg"
+credentialConnectorType = "jdbc"
+
+credentialCommonFields {
+  new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+}
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-fanin"
+          placeholderText = "Credential Guid"
+        }
+      }
+    }
+  }
+}
+
+extraNodes {
+  // Single-parent example (existing pattern).
+  ["left"] = new DAGNode {
+    displayName = "Left Branch"
+    workflowType = "LeftWorkflow"
+    args {}
+    dependsOn { "extract" }
+  }
+  ["right"] = new DAGNode {
+    displayName = "Right Branch"
+    workflowType = "RightWorkflow"
+    args {}
+    dependsOn { "extract" }
+  }
+  // Multi-parent fan-in — just list all parents in dependsOn.
+  ["join"] = new DAGNode {
+    displayName = "Join After Both"
+    workflowType = "JoinWorkflow"
+    args {}
+    dependsOn { "left"; "right" }
+  }
+  ["recover"] = new DAGNode {
+    displayName = "Recover If Either Branch Fails"
+    workflowType = "RecoverWorkflow"
+    args {}
+    dependsOnCondition = new DependencyCondition {
+      orConditions {
+        new DependencyCondition {
+          nodeId = "left"
+          tag = "failure"
+        }
+        new DependencyCondition {
+          nodeId = "right"
+          tag = "failure"
+        }
+      }
+    }
+  }
+}

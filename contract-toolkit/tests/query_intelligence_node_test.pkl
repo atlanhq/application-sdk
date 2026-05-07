@@ -1,0 +1,89 @@
+// Tests for the built-in QueryIntelligenceNode manifest contract.
+
+amends "pkl:test"
+
+import "fixtures/qi_node_placeholders.pkl" as qiNodeFixture
+import "../src/NativeApp.pkl" as NativeApp
+
+local qiNodeManifestJson: String = qiNodeFixture.output.files["manifest.json"].text
+local defaultQueryIntelligenceNode = new NativeApp.QueryIntelligenceNode {
+  vendorName = "athena"
+  sqlKey = "QUERY_TEXT"
+}
+
+// Boolean-literal form — typed Boolean still accepted (back-compat).
+local boolLiteralNode = new NativeApp.QueryIntelligenceNode {
+  vendorName = "athena"
+  sqlKey = "QUERY_TEXT"
+  ignoreOrphans = true
+  indirectLineage = false
+}
+
+// Template-string form — wires the values from a workflow form field.
+// Heracles substitutes the placeholder before the workflow start;
+// QI's Pydantic side coerces the resolved string to bool. Heracles
+// resolves only exact workflow parameter names, so the placeholder
+// must match a parameter key (no dotted paths). Per HYP-793, this is
+// the same `Boolean|String` pattern as `PublishNode.executorEnabled`.
+local templatedNode = new NativeApp.QueryIntelligenceNode {
+  vendorName = "athena"
+  sqlKey = "QUERY_TEXT"
+  ignoreOrphans = "{{ignore-orphans}}"
+  indirectLineage = "{{indirect-lineage}}"
+}
+
+facts {
+  ["QueryIntelligenceNode emits mandatory QI args"] {
+    defaultQueryIntelligenceNode.args["connection_qualified_name"] == "$.extract.outputs.connection_qualified_name"
+    defaultQueryIntelligenceNode.args["input_prefix"] == "$.extract.outputs.qi_input_prefix"
+    defaultQueryIntelligenceNode.args["output_prefix"] == "$.extract.outputs.qi_output_prefix"
+    defaultQueryIntelligenceNode.args["sql_key"] == "QUERY_TEXT"
+    defaultQueryIntelligenceNode.args["catalog_key"] == "DATABASE_NAME"
+    defaultQueryIntelligenceNode.args["schema_key"] == "SCHEMA_NAME"
+    defaultQueryIntelligenceNode.args["timestamp_key"] == "START_TIME"
+    defaultQueryIntelligenceNode.args["mine_output_type"] == "parquet"
+    defaultQueryIntelligenceNode.args["parsing_mode"] == "fallback"
+    defaultQueryIntelligenceNode.args["vendor_name"] == "athena"
+  }
+
+  ["QueryIntelligenceNode omits deployment-owned and deprecated args"] {
+    !defaultQueryIntelligenceNode.args.containsKey("lake_provider")
+    !defaultQueryIntelligenceNode.args.containsKey("storage_bucket")
+    !defaultQueryIntelligenceNode.args.containsKey("exclude_file_pattern")
+    !defaultQueryIntelligenceNode.args.containsKey("include_file_pattern")
+    !defaultQueryIntelligenceNode.args.containsKey("start_time")
+    !defaultQueryIntelligenceNode.args.containsKey("end_time")
+    !defaultQueryIntelligenceNode.args.containsKey("processing_time_limit_ms")
+  }
+
+  ["Generated QI manifest omits deployment-owned and deprecated args"] {
+    !qiNodeManifestJson.contains("\"lake_provider\"")
+    !qiNodeManifestJson.contains("\"storage_bucket\"")
+    !qiNodeManifestJson.contains("\"exclude_file_pattern\"")
+    !qiNodeManifestJson.contains("\"include_file_pattern\"")
+    !qiNodeManifestJson.contains("\"start_time\"")
+    !qiNodeManifestJson.contains("\"end_time\"")
+    !qiNodeManifestJson.contains("\"processing_time_limit_ms\"")
+  }
+
+  // Default (omit) — back-compat: ignore_orphans / indirect_lineage are
+  // not emitted when null, so QI's Pydantic defaults apply.
+  ["QueryIntelligenceNode omits orphan/lineage args when unset"] {
+    !defaultQueryIntelligenceNode.args.containsKey("ignore_orphans")
+    !defaultQueryIntelligenceNode.args.containsKey("indirect_lineage")
+  }
+
+  // Boolean literal — typed bool still works.
+  ["QueryIntelligenceNode emits Boolean ignoreOrphans/indirectLineage as-is"] {
+    boolLiteralNode.args["ignore_orphans"] == true
+    boolLiteralNode.args["indirect_lineage"] == false
+  }
+
+  // Templated string (HYP-793 pattern) — accepted by the typed field
+  // and rendered verbatim into args. The placeholder survives untouched
+  // so Heracles can substitute it from a workflow form parameter.
+  ["QueryIntelligenceNode accepts template strings for ignoreOrphans/indirectLineage"] {
+    templatedNode.args["ignore_orphans"] == "{{ignore-orphans}}"
+    templatedNode.args["indirect_lineage"] == "{{indirect-lineage}}"
+  }
+}

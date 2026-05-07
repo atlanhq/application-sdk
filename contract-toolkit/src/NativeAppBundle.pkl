@@ -1,0 +1,289 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2024 Atlan Pte. Ltd. */
+
+/// Bundle module for native apps that expose multiple marketplace entrypoints
+/// from one deployed app service.
+///
+/// A bundle renders the current flat `atlan.yaml` shape consumed by GMP/local
+/// marketplace and can re-export generated files from per-entrypoint
+/// `NativeApp.pkl` contracts into `{entrypoint}/...` folders.
+///
+/// The important split is:
+/// - `name` is the deployment/runtime identity (`teradata`)
+/// - `entrypoints[*].name` is the SDK entrypoint and generated folder (`crawler`)
+/// - the imported entrypoint contract owns workflow config, manifest, and input
+@ModuleInfo { minPklVersion = "0.25.1" }
+open module com.atlan.app.contract.NativeAppBundle
+
+// ---------------------------------------------------------------------------
+// App metadata rendered into atlan.yaml
+// ---------------------------------------------------------------------------
+
+/// Deployment/runtime app name. This is the value local-marketplace uses to
+/// derive Helm release, namespace (`{name}-app`), service, and app_service_url.
+name: String
+
+/// Global Marketplace UUID.
+appId: String
+
+/// User-facing display name.
+displayName: String = name.capitalize()
+
+/// Owning organization. Omitted when null to match current atlan.yaml variants.
+creatorOrg: String?
+
+/// Marketplace app type (`connector`, `miner`, `utility`, `system`, ...).
+type: String = "connector"
+
+/// Optional top-level execution mode. Existing app yaml files are mixed:
+/// some set this top-level, others set `deploy.execution_mode`.
+executionMode: String?
+
+/// App icon URL.
+iconUrl: String?
+
+/// Marketplace visibility.
+visibility: String = "public"
+
+/// Argo package names used for legacy/stitching lookup.
+argoPackageNames: Listing<String> = new Listing {}
+
+/// Marketplace build tag.
+buildTag: String = "v1"
+
+/// Whether images are published for self-deployed runtime.
+selfDeployedRuntime: Boolean = false
+
+/// Extra top-level metadata fields for current/future marketplace keys.
+metadata: Mapping<String, Any> = new Mapping {}
+
+/// Deep overrides applied to the rendered `atlan.yaml` after typed fields and
+/// `metadata`. Use this when a marketplace key exists but the toolkit does not
+/// yet expose a first-class property, or when a generated nested field needs to
+/// be overridden exactly.
+atlanYamlOverrides: Mapping<String, Any> = new Mapping {}
+
+// ---------------------------------------------------------------------------
+// Entrypoints
+// ---------------------------------------------------------------------------
+
+/// One marketplace card / SDK entrypoint under the deployed app.
+open class Entrypoint {
+  /// SDK entrypoint key and generated folder name (`crawler`, `miner`).
+  name: String
+
+  /// Optional marketplace/card id. Current local-marketplace derives this as
+  /// `{bundle.name}-{entrypoint.name}`; set only when a consumer expects it.
+  id: String?
+
+  /// User-facing card title.
+  displayName: String = name.capitalize()
+
+  /// Card description.
+  description: String?
+
+  /// Card icon. Defaults to the bundle's icon when rendered if unset.
+  iconUrl: String?
+
+  /// Card type (`connector`, `miner`, ...).
+  type: String = "connector"
+
+  /// Connector/source slug (`teradata`, `trino`, ...).
+  source: String?
+
+  /// Source category (`database`, `bi`, ...).
+  sourceCategory: String?
+
+  /// Marketplace categories.
+  categories: Listing<String> = new Listing {}
+
+  /// Documentation URL.
+  docsUrl: String?
+
+  /// Extra per-entrypoint metadata fields for marketplace compatibility.
+  metadata: Mapping<String, Any> = new Mapping {}
+
+  /// Optional imported `NativeApp.pkl` contract for this entrypoint.
+  /// When set and `emitGeneratedArtifacts` is true, all files from
+  /// `contract.output.files` are re-exported. Credential configmaps are
+  /// hoisted to the bundle root and deduped by filename; all other files are
+  /// written under `{name}/`.
+  contract: Typed?
+}
+
+/// Entrypoints to emit into atlan.yaml and optionally re-export artifacts for.
+entrypoints: Listing<Entrypoint> = new Listing {}
+
+/// Emit `atlan.yaml`. Set false when a bundle is only being used to re-export
+/// generated entrypoint artifacts.
+emitAtlanYaml: Boolean = true
+
+/// Emit the `entrypoints:` block into atlan.yaml. Keep configurable because
+/// older marketplace paths have had entrypoint passthrough inconsistencies.
+emitEntrypoints: Boolean = true
+
+/// Re-export `entrypoint.contract.output.files` into `{entrypoint.name}/...`.
+/// This lets one root bundle eval produce the same layout the SDK expects:
+/// `generated/crawler/manifest.json`, `generated/miner/manifest.json`, etc.
+emitGeneratedArtifacts: Boolean = true
+
+/// Extra files to add at the bundle root.
+///
+/// Use this for explicit opt-in shared artifacts such as a customized
+/// `AgentConfig.pkl` output:
+/// `["atlan-connectors-agent.json"] = agentConfig.configFile`.
+additionalOutputFiles: Mapping<String, FileOutput> = new Mapping {}
+
+// ---------------------------------------------------------------------------
+// Deploy config
+// ---------------------------------------------------------------------------
+
+/// Current marketplace deployment config. This is intentionally a mapping:
+/// local-marketplace passes unknown deploy keys through to Helm values, so the
+/// toolkit should not need a release for every new deployment knob.
+deploy: Mapping<String, Any> = new Mapping {}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+local function asMapping(value: Any): Mapping<String, Any>? =
+  if (value is Mapping<String, Any>)
+    value as Mapping<String, Any>
+  else if (value is Dynamic)
+    new Mapping {
+      for (key, member in (value as Dynamic).toMap()) {
+        [key] = member
+      }
+    }
+  else null
+
+local function deepMerge(base: Any, patch: Any): Any =
+  let (baseMap = asMapping(base))
+  let (patchMap = asMapping(patch))
+  if (baseMap != null && patchMap != null)
+    deepMergeMapping(baseMap!!, patchMap!!)
+  else patch
+
+local function deepMergeMapping(base: Mapping<String, Any>, patch: Mapping<String, Any>): Mapping<String, Any> =
+  new Mapping {
+    for (key, value in base) {
+      [key] = if (patch.containsKey(key)) deepMerge(value, patch[key]) else value
+    }
+    for (key, value in patch) {
+      when (!base.containsKey(key)) {
+        [key] = value
+      }
+    }
+  }
+
+local function renderEntrypoint(e: Entrypoint): Mapping<String, Any> = new Mapping {
+  when (e.id != null) { ["id"] = e.id }
+  ["name"] = e.name
+  ["display_name"] = e.displayName
+  when (e.description != null) { ["description"] = e.description }
+  when (e.iconUrl != null || iconUrl != null) { ["icon_url"] = e.iconUrl ?? iconUrl }
+  ["type"] = e.type
+  when (e.source != null) { ["source"] = e.source }
+  when (e.sourceCategory != null) { ["source_category"] = e.sourceCategory }
+  when (!e.categories.isEmpty) { ["categories"] = e.categories }
+  when (e.docsUrl != null) { ["docs_url"] = e.docsUrl }
+  ...e.metadata
+}
+
+local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
+  ["name"] = name
+  ["app_id"] = appId
+  ["display_name"] = displayName
+  when (creatorOrg != null) { ["creator_org"] = creatorOrg }
+  ["type"] = type
+  when (executionMode != null) { ["execution_mode"] = executionMode }
+  when (iconUrl != null) { ["icon_url"] = iconUrl }
+  ["visibility"] = visibility
+  when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
+  ["build_tag"] = buildTag
+  ["self_deployed_runtime"] = selfDeployedRuntime
+  when (emitEntrypoints && !entrypoints.isEmpty) {
+    ["entrypoints"] = new Listing {
+      for (entrypoint in entrypoints) {
+        renderEntrypoint(entrypoint)
+      }
+    }
+  }
+  when (!deploy.isEmpty) { ["deploy"] = deploy }
+}
+
+local atlanYamlData: Mapping<String, Any> =
+  deepMergeMapping(deepMergeMapping(generatedAtlanYamlData, metadata), atlanYamlOverrides)
+
+local atlanYamlOutput: FileOutput = new FileOutput {
+  value = atlanYamlData
+  renderer = new YamlRenderer {}
+}
+
+class ContractFile {
+  name: String
+  output: FileOutput
+}
+
+local function isCredentialFile(entrypoint: Entrypoint, fileName: String): Boolean =
+  entrypoint.contract != null &&
+  entrypoint.contract!!.hasCredentialConfig &&
+  fileName == "\(entrypoint.contract!!.connectorConfigName).json"
+
+local credentialFiles: Listing<ContractFile> = new Listing {
+  for (entrypoint in entrypoints) {
+    when (entrypoint.contract != null) {
+      for (fileName, fileOutput in entrypoint.contract!!.output.files) {
+        when (isCredentialFile(entrypoint, fileName)) {
+          new ContractFile {
+            name = fileName
+            output = fileOutput
+          }
+        }
+      }
+    }
+  }
+}
+
+local credentialFileGroups: Map<String, List<ContractFile>> =
+  credentialFiles.toList().groupBy((file) -> file.name)
+
+local credentialConflictNames: List<String> =
+  credentialFileGroups.keys.toList().filter((fileName) ->
+    let (files = credentialFileGroups[fileName])
+    !files.every((file) -> file.output.text == files.first.output.text)
+  )
+
+hidden _credentialConflictCheck: Any =
+  if (!credentialConflictNames.isEmpty)
+    throw("NativeAppBundle found credential config filename(s) generated with different content: \(credentialConflictNames.join(", ")). "
+      + "Use unique connectorConfigName values for different credentials, or share one identical config definition.")
+  else null
+
+output =
+  let (_ = _credentialConflictCheck)
+  new ModuleOutput {
+  files = new Mapping {
+    when (emitAtlanYaml) {
+      ["atlan.yaml"] = atlanYamlOutput
+    }
+    for (fileName, files in credentialFileGroups) {
+      [fileName] = files.first.output
+    }
+    for (fileName, fileOutput in additionalOutputFiles) {
+      [fileName] = fileOutput
+    }
+    when (emitGeneratedArtifacts) {
+      for (entrypoint in entrypoints) {
+        when (entrypoint.contract != null) {
+          for (fileName, fileOutput in entrypoint.contract!!.output.files) {
+            when (!isCredentialFile(entrypoint, fileName)) {
+              ["\(entrypoint.name)/\(fileName)"] = fileOutput
+            }
+          }
+        }
+      }
+    }
+  }
+}

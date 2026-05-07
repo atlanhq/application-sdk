@@ -1,0 +1,164 @@
+// Tests for the built-in PopularityNode manifest contract.
+
+amends "pkl:test"
+
+import "fixtures/popularity_default.pkl" as popularityApp
+import "fixtures/popularity_dynamic_overrides.pkl" as dynamicPopularityApp
+import "../src/NativeApp.pkl" as NativeApp
+
+local workflowJson: String = popularityApp.output.files["popularity-node.json"].text
+local manifestJson: String = popularityApp.output.files["manifest.json"].text
+local inputPy: String = popularityApp.output.files["_input.py"].text
+local dynamicWorkflowJson: String = dynamicPopularityApp.output.files["popularity-dynamic-overrides.json"].text
+local dynamicManifestJson: String = dynamicPopularityApp.output.files["manifest.json"].text
+local dynamicInputPy: String = dynamicPopularityApp.output.files["_input.py"].text
+local defaultPopularityNode = new NativeApp.PopularityNode {
+  tenantId = "tenant"
+  parsedDataPrefix = "parsed"
+  minedDataPrefix = "mined"
+  connectionCachePath = "cache.db"
+  outputPrefix = "output"
+}
+local explicitStoragePopularityNode = new NativeApp.PopularityNode {
+  tenantId = "tenant"
+  parsedDataPrefix = "parsed"
+  minedDataPrefix = "mined"
+  connectionCachePath = "cache.db"
+  outputPrefix = "output"
+  lakeProvider = "aws"
+}
+local templatedPopularityNode = new NativeApp.PopularityNode {
+  tenantId = "tenant"
+  parsedDataPrefix = "parsed"
+  minedDataPrefix = "mined"
+  connectionCachePath = "cache.db"
+  outputPrefix = "output"
+  windowDays = "{{popularity-window-days}}"
+  topNQueries = "{{popularity-top-n-queries}}"
+  topNUsers = "{{popularity-top-n-users}}"
+  parsedDataFilterHasError = "{{popularity-filter-errors}}"
+  relationshipsOutputAttribution = "{{popularity-output-attribution}}"
+  dryRun = "{{popularity-dry-run}}"
+}
+local extraArgsPopularityNode = new NativeApp.PopularityNode {
+  tenantId = "tenant"
+  parsedDataPrefix = "parsed"
+  minedDataPrefix = "mined"
+  connectionCachePath = "cache.db"
+  outputPrefix = "output"
+  extraArgs {
+    ["new_popularity_arg"] = "future-value"
+  }
+}
+
+facts {
+  ["Workflow config defines the connection field used by PublishNode"] {
+    workflowJson.contains("\"connection\"")
+    workflowJson.contains("\"Connection Name\"")
+    manifestJson.contains("\"connection_entity\": \"{{connection}}\"")
+  }
+  ["Default popularity fixture does not expose pass-through scalar controls"] {
+    !workflowJson.contains("\"popularity-window-days\"")
+    !workflowJson.contains("\"popularity-top-n-queries\"")
+    !workflowJson.contains("\"popularity-top-n-users\"")
+    !workflowJson.contains("\"popularity-filter-errors\"")
+    !workflowJson.contains("\"popularity-output-attribution\"")
+    !workflowJson.contains("\"popularity-dry-run\"")
+  }
+  ["Popularity node targets the popularity app workflow"] {
+    manifestJson.contains("\"workflow_type\": \"PopularityWorkflow\"")
+    manifestJson.contains("\"app_name\": \"popularity\"")
+    manifestJson.contains("\"task_queue\": \"atlan-popularity-{deployment_name}\"")
+  }
+  ["Popularity node emits mandatory inline args"] {
+    manifestJson.contains("\"connection_qualified_name\": \"$.extract.outputs.connection_qualified_name\"")
+    manifestJson.contains("\"tenant_id\": \"$.extract.outputs.tenant_id\"")
+    manifestJson.contains("\"parsed_data_prefix\": \"$.extract.outputs.qi_output_prefix\"")
+    manifestJson.contains("\"mined_data_prefix\": \"$.extract.outputs.query_history_prefix\"")
+    manifestJson.contains("\"connection_cache_path\": \"$.extract.outputs.connection_cache_path\"")
+    manifestJson.contains("\"output_prefix\": \"$.extract.outputs.popularity_output_prefix\"")
+  }
+  ["Popularity node omits defaulted scalar app args"] {
+    !defaultPopularityNode.args.containsKey("window_days")
+    !defaultPopularityNode.args.containsKey("top_n_queries")
+    !defaultPopularityNode.args.containsKey("top_n_users")
+    !defaultPopularityNode.args.containsKey("dry_run")
+    !defaultPopularityNode.args.containsKey("parsed_data_filter_has_error")
+    !defaultPopularityNode.args.containsKey("relationships_output_attribution")
+  }
+  ["Popularity node accepts templated scalar args"] {
+    templatedPopularityNode.args["window_days"] == "{{popularity-window-days}}"
+    templatedPopularityNode.args["top_n_queries"] == "{{popularity-top-n-queries}}"
+    templatedPopularityNode.args["top_n_users"] == "{{popularity-top-n-users}}"
+    templatedPopularityNode.args["parsed_data_filter_has_error"] == "{{popularity-filter-errors}}"
+    templatedPopularityNode.args["relationships_output_attribution"] == "{{popularity-output-attribution}}"
+    templatedPopularityNode.args["dry_run"] == "{{popularity-dry-run}}"
+  }
+  ["Default popularity fixture omits scalar args owned by the app default"] {
+    !manifestJson.contains("\"window_days\"")
+    !manifestJson.contains("\"top_n_queries\"")
+    !manifestJson.contains("\"top_n_users\"")
+    !manifestJson.contains("\"dry_run\"")
+    !manifestJson.contains("\"parsed_data_filter_has_error\"")
+    !manifestJson.contains("\"relationships_output_attribution\"")
+  }
+  ["Default popularity fixture omits scalar pass-through SDK inputs"] {
+    !inputPy.contains("popularity_window_days:")
+    !inputPy.contains("popularity_top_n_queries:")
+    !inputPy.contains("popularity_top_n_users:")
+    !inputPy.contains("popularity_filter_errors:")
+    !inputPy.contains("popularity_output_attribution:")
+    !inputPy.contains("popularity_dry_run:")
+  }
+  ["Dynamic override fixture exposes typed scalar controls"] {
+    dynamicWorkflowJson.contains("\"popularity-window-days\"")
+    dynamicWorkflowJson.contains("\"inputNumber\"")
+    dynamicWorkflowJson.contains("\"popularity-top-n-queries\"")
+    dynamicWorkflowJson.contains("\"popularity-top-n-users\"")
+    dynamicWorkflowJson.contains("\"popularity-filter-errors\"")
+    dynamicWorkflowJson.contains("\"popularity-output-attribution\"")
+    dynamicWorkflowJson.contains("\"popularity-dry-run\"")
+  }
+  ["Dynamic override fixture validates and wires form placeholders into node args"] {
+    dynamicManifestJson.contains("\"window_days\": \"{{popularity-window-days}}\"")
+    dynamicManifestJson.contains("\"top_n_queries\": \"{{popularity-top-n-queries}}\"")
+    dynamicManifestJson.contains("\"top_n_users\": \"{{popularity-top-n-users}}\"")
+    dynamicManifestJson.contains("\"parsed_data_filter_has_error\": \"{{popularity-filter-errors}}\"")
+    dynamicManifestJson.contains("\"relationships_output_attribution\": \"{{popularity-output-attribution}}\"")
+    dynamicManifestJson.contains("\"dry_run\": \"{{popularity-dry-run}}\"")
+  }
+  ["Dynamic override fixture generates typed SDK inputs for scalar controls"] {
+    dynamicInputPy.contains("popularity_window_days: int = 60")
+    dynamicInputPy.contains("popularity_top_n_queries: int = 8")
+    dynamicInputPy.contains("popularity_top_n_users: int = 12")
+    dynamicInputPy.contains("popularity_filter_errors: bool = False")
+    dynamicInputPy.contains("popularity_output_attribution: bool = False")
+    dynamicInputPy.contains("popularity_dry_run: bool = False")
+  }
+  ["Popularity node omits storage override by default"] {
+    !defaultPopularityNode.args.containsKey("lake_provider")
+  }
+  ["Popularity node can explicitly override storage args"] {
+    explicitStoragePopularityNode.args["lake_provider"] == "aws"
+  }
+  ["Popularity node keeps extraArgs for unmodeled app fields"] {
+    extraArgsPopularityNode.args["new_popularity_arg"] == "future-value"
+  }
+  ["Popularity node waits for QI and asset publish success"] {
+    manifestJson.contains("\"and_conditions\"")
+    manifestJson.contains("\"node_id\": \"qi\"")
+    manifestJson.contains("\"node_id\": \"publish\"")
+    manifestJson.contains("\"tag\": \"success\"")
+  }
+  ["Publish node is configured to build the connection cache"] {
+    manifestJson.contains("\"connection_cache_enabled\": true")
+    manifestJson.contains("\"connection_cache_via_app_enabled\": true")
+  }
+  ["Mine column mapping renders popularity app snake_case keys"] {
+    manifestJson.contains("\"mine_column_mapping\"")
+    manifestJson.contains("\"query_id\": \"QUERY_ID\"")
+    manifestJson.contains("\"query_tags_sql\": \"QUERY_TAGS_SQL\"")
+    manifestJson.contains("\"has_native_inputs\": \"HAS_NATIVE_INPUTS\"")
+    manifestJson.contains("\"native_inputs_payload\": \"NATIVE_INPUTS_PAYLOAD\"")
+  }
+}
