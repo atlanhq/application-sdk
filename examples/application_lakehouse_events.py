@@ -1,4 +1,4 @@
-"""AE-triggered lakehouse ingestion example using events_read + events_ack.
+"""AE-triggered lakehouse event-processing example using events_read + events_ack.
 
 Demonstrates the recommended shape for an app that consumes events from
 Atlan's Automation Engine via the SDK's lakehouse module:
@@ -52,7 +52,7 @@ from application_sdk.lakehouse import EventResult, events_ack, events_read
 from application_sdk.main import AppConfig, run_combined_mode
 
 _APP_NAME = "lakehouse-events-example"
-_WORKFLOW_NAME = "ingestion"
+_WORKFLOW_NAME = "process-events"
 _BATCH_SIZE = 1000
 _MAX_EVENTS = 5000
 
@@ -62,7 +62,7 @@ _MAX_EVENTS = 5000
 # ---------------------------------------------------------------------------
 
 
-class IngestionInput(Input):
+class ProcessEventsInput(Input):
     """Payload AE's event-consumer-node passes when triggering this workflow."""
 
     iceberg_table_name: str = ""
@@ -75,7 +75,7 @@ class IngestionInput(Input):
     event_cleanup_ack_source: str = ""
 
 
-class IngestionOutput(Output):
+class ProcessEventsOutput(Output):
     processed: int = 0
     success: int = 0
     failed: int = 0
@@ -88,14 +88,14 @@ class IngestionOutput(Output):
 
 
 class LakehouseEventApp(App):
-    """Minimal AE-triggered ingestion app using the SDK lakehouse module."""
+    """Minimal AE-triggered event-processing app using the SDK lakehouse module."""
 
     name = _APP_NAME
     version = "0.1.0"
-    description = "Example: AE-triggered ingestion via events_read + events_ack."
+    description = "Example: AE-triggered event processing via events_read + events_ack."
 
     @task(timeout_seconds=1800, heartbeat_timeout_seconds=60)
-    async def handle_events(self, input: IngestionInput) -> IngestionOutput:
+    async def handle_events(self, input: ProcessEventsInput) -> ProcessEventsOutput:
         """Read pending events in batches and publish the AE ack.
 
         ``events_read`` loops internally — fetching ``_BATCH_SIZE`` events
@@ -119,7 +119,7 @@ class LakehouseEventApp(App):
             max_events=_MAX_EVENTS,
         )
         if not events:
-            return IngestionOutput()
+            return ProcessEventsOutput()
 
         ack_path = await events_ack(
             events,
@@ -131,19 +131,19 @@ class LakehouseEventApp(App):
 
         success = sum(1 for r in results if r.status == "SUCCESS")
         failed = sum(1 for r in results if r.status == "FAILED")
-        return IngestionOutput(
+        return ProcessEventsOutput(
             processed=len(events),
             success=success,
             failed=failed,
             ack_path=ack_path,
         )
 
-    async def run(self, input: IngestionInput) -> IngestionOutput:  # type: ignore[override]
+    async def run(self, input: ProcessEventsInput) -> ProcessEventsOutput:  # type: ignore[override]
         if not input.iceberg_table_name:
             workflow.logger.error(
                 "No iceberg_table_name in trigger payload — clean exit"
             )
-            return IngestionOutput()
+            return ProcessEventsOutput()
         return await self.handle_events(input)
 
 
