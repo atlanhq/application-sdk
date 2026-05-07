@@ -18,7 +18,6 @@ import json
 import os
 import shutil
 import tempfile
-from typing import Dict, List, Set
 from unittest.mock import AsyncMock, patch
 
 import pandas as pd
@@ -37,9 +36,9 @@ class TestWriterDataIntegrity:
         yield temp_path
         shutil.rmtree(temp_path, ignore_errors=True)
 
-    def extract_ids_from_store(self, store: Dict[str, List[str]]) -> Set[int]:
+    def extract_ids_from_store(self, store: dict[str, list[str]]) -> set[int]:
         """Extract all record IDs from mock object store."""
-        ids: Set[int] = set()
+        ids: set[int] = set()
         for path, content in store.items():
             if "statistics" in path:
                 continue
@@ -54,7 +53,7 @@ class TestWriterDataIntegrity:
     @pytest.mark.asyncio
     async def test_pandas_writer_no_data_loss(self, temp_dir: str):
         """Verify pandas writer preserves all records across multiple write() calls."""
-        object_store: Dict[str, List[str]] = {}
+        object_store: dict[str, list[str]] = {}
 
         async def mock_upload(key, local_path, **kwargs):
             if os.path.exists(local_path):
@@ -108,7 +107,7 @@ class TestWriterDataIntegrity:
         from application_sdk.common.types import DataframeType
         from application_sdk.storage.formats.json import JsonFileWriter
 
-        object_store: Dict[str, List[str]] = {}
+        object_store: dict[str, list[str]] = {}
 
         async def mock_upload(key, local_path, **kwargs):
             if os.path.exists(local_path):
@@ -223,7 +222,7 @@ class TestWriterDataIntegrity:
         from application_sdk.common.types import DataframeType
         from application_sdk.storage.formats.json import JsonFileWriter
 
-        uploaded_files: List[str] = []
+        uploaded_files: list[str] = []
 
         async def mock_upload(
             source, destination=None, retain_local_copy=False, **kwargs
@@ -289,37 +288,30 @@ class TestParquetWriterDataIntegrity:
     async def _run_write_scenario(
         self, temp_dir: str, row_count: int, num_writes: int = 1
     ) -> dict:
-        """Run a write scenario and return disk + upload results."""
+        """Run a write scenario and return disk results.
+
+        Uploads are no longer inline — ParquetFileWriter now leaves files on
+        disk and callers use persist_file_reference() to push them to the store.
+        These tests verify the local-disk contract only.
+        """
         from application_sdk.storage.formats.parquet import ParquetFileWriter
 
-        upload_calls: List[tuple] = []
+        writer = ParquetFileWriter(
+            path=temp_dir,
+            typename="test_entity",
+            buffer_size=self.BUFFER_SIZE,
+            use_consolidation=False,
+        )
 
-        async def mock_upload(source: str, destination: str = "", **kwargs):
-            if os.path.exists(source):
-                with open(source, "rb") as f:
-                    upload_calls.append((source, f.read()))
+        rows_per_write = row_count // num_writes
+        total = 0
+        for batch_idx in range(num_writes):
+            start = batch_idx * rows_per_write
+            df = pd.DataFrame({"id": list(range(start, start + rows_per_write))})
+            await writer.write(df)
+            total += rows_per_write
 
-        with patch(
-            "application_sdk.storage.formats._upload_file",
-            new_callable=AsyncMock,
-            side_effect=mock_upload,
-        ):
-            writer = ParquetFileWriter(
-                path=temp_dir,
-                typename="test_entity",
-                buffer_size=self.BUFFER_SIZE,
-                use_consolidation=False,
-            )
-
-            rows_per_write = row_count // num_writes
-            total = 0
-            for batch_idx in range(num_writes):
-                start = batch_idx * rows_per_write
-                df = pd.DataFrame({"id": list(range(start, start + rows_per_write))})
-                await writer.write(df)
-                total += rows_per_write
-
-            await writer.close()
+        await writer.close()
 
         # Disk: read back all parquet files
         parquet_files = glob.glob(
@@ -333,38 +325,19 @@ class TestParquetWriterDataIntegrity:
         else:
             disk_df = pd.DataFrame()
 
-        # Upload: reconstruct rows from captured upload content
-        upload_rows = 0
-        upload_ids: Set[int] = set()
-        for source, content in upload_calls:
-            if not source.endswith(".parquet") or "statistics" in source:
-                continue
-            tmp = os.path.join(temp_dir, "_up_" + os.path.basename(source))
-            with open(tmp, "wb") as f:
-                f.write(content)
-            chunk_df = pd.read_parquet(tmp)
-            upload_rows += len(chunk_df)
-            upload_ids.update(chunk_df["id"].tolist())
-
         return {
             "disk_rows": len(disk_df),
             "disk_ids": set(disk_df["id"].tolist()) if len(disk_df) > 0 else set(),
-            "upload_rows": upload_rows,
-            "upload_ids": upload_ids,
             "expected": total,
         }
 
     def _assert_no_data_loss(self, r: dict, expected: int) -> None:
-        """Assert zero data loss on both disk and object store."""
+        """Assert zero data loss on disk."""
         expected_ids = set(range(expected))
         assert (
             r["disk_rows"] == expected
         ), f"Disk data loss: {r['disk_rows']}/{expected} rows"
         assert r["disk_ids"] == expected_ids, "Disk: missing IDs detected"
-        assert (
-            r["upload_rows"] == expected
-        ), f"Upload data loss: {r['upload_rows']}/{expected} rows"
-        assert r["upload_ids"] == expected_ids, "Upload: missing IDs detected"
 
     # --- Single write() scenarios ---
 
