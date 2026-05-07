@@ -547,10 +547,8 @@ def _derive_task_queue(app_module: str) -> str:
 def _env_int(key: str, default: int = 0) -> int:
     """Read an int env var, returning ``default`` when unset, empty, or unparsable.
 
-    Used uniformly by both :meth:`AppConfig.from_args_and_env` (CLI path)
-    and :func:`_resolve_dev_config` (dev/CI path) so a malformed value like
-    ``ATLAN_HANDLER_PORT="not-a-number"`` falls through to the next key
-    instead of crashing startup.
+    A malformed value like ``ATLAN_HANDLER_PORT="not-a-number"`` falls through
+    to the next key instead of crashing startup.
     """
     val = os.environ.get(key)
     if not val:
@@ -567,64 +565,58 @@ def _env_int(key: str, default: int = 0) -> int:
         return default
 
 
-@dataclass(frozen=True)
-class _DevConfig:
-    """Resolved connection settings for :func:`run_dev_combined`."""
-
-    host: str
-    port: int
-    temporal_host: str
-    temporal_namespace: str
-    task_queue: str
-
-
-def _resolve_dev_config(
+def _build_dev_config(
+    app_module: str,
     *,
-    app_name: str,
     host: str | None = None,
     port: int | None = None,
     temporal_host: str | None = None,
     temporal_namespace: str | None = None,
     task_queue: str | None = None,
-) -> _DevConfig:
-    """Resolve ``run_dev_combined`` connection kwargs to concrete values.
+) -> AppConfig:
+    """Build an :class:`AppConfig` for the dev-combined path.
 
-    Precedence per field: ``explicit kwarg → env var(s) → built-in default``.
-    Env keys mirror those :meth:`AppConfig.from_args_and_env` reads, so the
-    CLI path and the dev path stay in sync — connectors that ship with a
-    minimal ``python main.py`` get CI-stack overrides for free, without
-    per-call ``os.environ.get`` boilerplate.
+    Routes through :meth:`AppConfig.from_args_and_env` so env-var reading is
+    not duplicated. Precedence per connection field:
+    ``explicit kwarg → env var(s) → AppConfig default``.
 
-    Notes on ``None`` vs falsy:
+    Three dev-specific overrides are applied after construction:
 
-    * ``port`` uses ``is None`` so an explicit ``port=0`` (let the OS
-      pick an ephemeral port — handy in tests) is honored.
-    * String fields use ``or`` chains since empty strings aren't valid
-      hosts / queue names anyway and treating them as "missing" matches
-      the existing :meth:`AppConfig.from_args_and_env` behavior.
+    * ``log_level`` is always ``"DEBUG"``.
+    * ``health_port`` is always ``0`` (OS-assigned ephemeral port).
+    * ``handler_host`` defaults to ``"127.0.0.1"`` when neither kwarg nor env
+      var is set — production defaults to ``"0.0.0.0"``.
+    * ``enable_temporal_core_metrics`` defaults to ``False`` to avoid the
+      port-9464 collision on hot reload; honoured when
+      ``ATLAN_ENABLE_TEMPORAL_CORE_METRICS`` is explicitly set.
     """
-    resolved_port = (
-        port
-        if port is not None
-        else _env_int("ATLAN_HANDLER_PORT") or _env_int("ATLAN_APP_HTTP_PORT") or 8000
+    args = argparse.Namespace(
+        mode="combined",
+        app=app_module,
+        handler=os.environ.get("ATLAN_HANDLER_MODULE"),
+        handler_host=host,
+        handler_port=port,
+        temporal_host=temporal_host,
+        temporal_namespace=temporal_namespace,
+        task_queue=task_queue,
+        log_level="DEBUG",
+        health_port=0,
+        service_name=None,
     )
-    return _DevConfig(
-        host=host
+    config = AppConfig.from_args_and_env(args)
+    # Dev default: loopback only. Production defaults to 0.0.0.0 for external
+    # access; dev prefers loopback unless the caller or env var says otherwise.
+    if not (
+        host
         or os.environ.get("ATLAN_HANDLER_HOST")
         or os.environ.get("ATLAN_APP_HTTP_HOST")
-        or "127.0.0.1",
-        port=resolved_port,
-        temporal_host=temporal_host
-        or os.environ.get("ATLAN_TEMPORAL_HOST")
-        or "localhost:7233",
-        temporal_namespace=temporal_namespace
-        or os.environ.get("ATLAN_TEMPORAL_NAMESPACE")
-        or os.environ.get("ATLAN_WORKFLOW_NAMESPACE")
-        or "default",
-        task_queue=task_queue
-        or os.environ.get("ATLAN_TASK_QUEUE")
-        or f"{app_name}-queue",
-    )
+    ):
+        config.handler_host = "127.0.0.1"
+    # Dev default: disable Temporal Rust-core Prometheus binding to avoid port
+    # 9464 collision on hot reload. Honour explicit env override.
+    if not os.environ.get("ATLAN_ENABLE_TEMPORAL_CORE_METRICS"):
+        config.enable_temporal_core_metrics = False
+    return config
 
 
 async def _flush_observability() -> None:
@@ -1199,12 +1191,12 @@ async def run_dev_combined(
     scripts; production containers use ``run_combined_mode()`` via CLI flags.
 
     All five connection-shaped kwargs (``host``, ``port``, ``temporal_host``,
-    ``temporal_namespace``, ``task_queue``) follow the same precedence:
-    explicit kwarg → env var → built-in default. The env-var keys mirror
-    those read by :meth:`AppConfig.from_args_and_env` so the CLI path and the
-    ``run_dev_combined`` path stay in sync — no per-connector
-    ``os.environ.get(...)`` boilerplate at the call site is needed to wire
-    up CI-stack overrides like ``ATLAN_HANDLER_PORT`` or ``ATLAN_TASK_QUEUE``.
+    ``temporal_namespace``, ``task_queue``) follow the same precedence as the
+    CLI path — ``explicit kwarg → env var → AppConfig default`` — because
+    they are resolved by :func:`_build_dev_config` which routes through
+    :meth:`AppConfig.from_args_and_env`. CI-stack overrides like
+    ``ATLAN_HANDLER_PORT`` or ``ATLAN_TASK_QUEUE`` work without any per-connector
+    ``os.environ.get(...)`` boilerplate at the call site.
 
     Args:
         app_class: The App class to serve (must already be imported).
@@ -1256,40 +1248,15 @@ async def run_dev_combined(
     os.environ.setdefault("DAPR_HTTP_PORT", "3500")
     os.environ.setdefault("DAPR_GRPC_PORT", "50001")
 
-    app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
     app_module = f"{app_class.__module__}:{app_class.__name__}"
 
-    dev = _resolve_dev_config(
-        app_name=app_name,
+    config = _build_dev_config(
+        app_module,
         host=host,
         port=port,
         temporal_host=temporal_host,
         temporal_namespace=temporal_namespace,
         task_queue=task_queue,
-    )
-
-    config = AppConfig(
-        mode="combined",
-        app_module=app_module,
-        handler_module=os.environ.get("ATLAN_HANDLER_MODULE") or None,
-        temporal_host=dev.temporal_host,
-        temporal_namespace=dev.temporal_namespace,
-        task_queue=dev.task_queue,
-        handler_host=dev.host,
-        handler_port=dev.port,
-        log_level="DEBUG",
-        service_name=_derive_service_name(app_module),
-        # Dev-friendly: disable Temporal Rust-core Prometheus binding to
-        # avoid port 9464 collision on hot reload, and use ephemeral health
-        # port to avoid 8081 collision.
-        enable_temporal_core_metrics=os.environ.get(
-            "ATLAN_ENABLE_TEMPORAL_CORE_METRICS", ""
-        ).lower()
-        in ("true", "1"),
-        health_port=0,
-        frontend_assets_path=os.environ.get(
-            "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
-        ),
     )
 
     # Create infrastructure early so run_combined_mode uses it directly.
@@ -1308,7 +1275,7 @@ async def run_dev_combined(
 
         async def _provision_and_start() -> None:
             """Wait for handler, provision creds, start workflow — mimics prod."""
-            base = f"http://{host}:{port}"
+            base = f"http://{config.handler_host}:{config.handler_port}"
             async with httpx.AsyncClient() as client:
                 # Wait for the handler to be ready
                 for _ in range(30):
@@ -1357,7 +1324,9 @@ async def run_dev_combined(
         # Schedule provisioning + start as a background task — runs after the server starts
         asyncio.create_task(_provision_and_start())
     else:
-        print(f"\nDev server running at http://{host}:{port}")
+        print(
+            f"\nDev server running at http://{config.handler_host}:{config.handler_port}"
+        )
         print(
             "  POST /workflows/v1/dev/local-vault                            - Provision credentials"
         )
@@ -1369,10 +1338,14 @@ async def run_dev_combined(
         if example_input is not None:
             print("\nExample:")
             example_json = _json.dumps(example_input, indent=2)
-            print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
+            print(
+                f"  curl -X POST http://{config.handler_host}:{config.handler_port}/workflows/v1/start \\"
+            )
             print('    -H "Content-Type: application/json" \\')
             print(f"    -d '{example_json}'")
-        print(f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n")
+        print(
+            f"\n  curl http://{config.handler_host}:{config.handler_port}/workflows/v1/result/{{workflow_id}}\n"
+        )
 
     await run_combined_mode(config)
 

@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from application_sdk.main import AppConfig, _env_int, _resolve_dev_config
+from application_sdk.main import AppConfig, _build_dev_config, _env_int
 
 
 def _minimal_args(**overrides: str) -> argparse.Namespace:
@@ -434,16 +434,20 @@ class TestRunDevCombinedDaprDefaults:
         assert os.environ["DAPR_HTTP_PORT"] == "3500"
 
 
-class TestRunDevCombinedEnvFallbacks:
-    """run_dev_combined() resolves connection-shaped kwargs with env fallbacks.
+# app_module used across _build_dev_config tests; "MyApp" → service "my-app" → queue "my-app-queue"
+_APP_MODULE = "myapp.apps:MyApp"
 
-    Tests target the module-level :func:`_resolve_dev_config` helper that
-    ``run_dev_combined`` calls — same code, no test-vs-prod-drift window.
+
+class TestRunDevCombinedEnvFallbacks:
+    """_build_dev_config() resolves connection kwargs via AppConfig.from_args_and_env.
+
+    Tests target :func:`_build_dev_config` directly — same code path that
+    ``run_dev_combined`` calls, no test-vs-prod-drift window.
     """
 
     @pytest.fixture
     def clean_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Clear every env var the resolver consults so each test starts blank."""
+        """Clear every env var consulted by _build_dev_config / from_args_and_env."""
         for k in (
             "ATLAN_HANDLER_HOST",
             "ATLAN_APP_HTTP_HOST",
@@ -453,18 +457,23 @@ class TestRunDevCombinedEnvFallbacks:
             "ATLAN_TEMPORAL_NAMESPACE",
             "ATLAN_WORKFLOW_NAMESPACE",
             "ATLAN_TASK_QUEUE",
+            "ATLAN_APPLICATION_NAME",
+            "ATLAN_DEPLOYMENT_NAME",
+            "ATLAN_HANDLER_MODULE",
+            "ATLAN_ENABLE_TEMPORAL_CORE_METRICS",
+            "ATLAN_LOG_LEVEL",
         ):
             monkeypatch.delenv(k, raising=False)
 
     # ── kwarg → env → default precedence per field ────────────────────────
 
     def test_no_kwargs_no_env_uses_defaults(self, clean_env: None) -> None:
-        cfg = _resolve_dev_config(app_name="saphana-metadata-extractor")
-        assert cfg.host == "127.0.0.1"
-        assert cfg.port == 8000
+        cfg = _build_dev_config(_APP_MODULE)
+        assert cfg.handler_host == "127.0.0.1"
+        assert cfg.handler_port == 8000
         assert cfg.temporal_host == "localhost:7233"
         assert cfg.temporal_namespace == "default"
-        assert cfg.task_queue == "saphana-metadata-extractor-queue"
+        assert cfg.task_queue == "my-app-queue"
 
     def test_env_overrides_default(
         self, clean_env: None, monkeypatch: pytest.MonkeyPatch
@@ -474,9 +483,9 @@ class TestRunDevCombinedEnvFallbacks:
         monkeypatch.setenv("ATLAN_TEMPORAL_HOST", "temporal:7234")
         monkeypatch.setenv("ATLAN_TEMPORAL_NAMESPACE", "ci")
         monkeypatch.setenv("ATLAN_TASK_QUEUE", "atlan-saphana-ci")
-        cfg = _resolve_dev_config(app_name="myapp")
-        assert cfg.host == "0.0.0.0"
-        assert cfg.port == 3001
+        cfg = _build_dev_config(_APP_MODULE)
+        assert cfg.handler_host == "0.0.0.0"
+        assert cfg.handler_port == 3001
         assert cfg.temporal_host == "temporal:7234"
         assert cfg.temporal_namespace == "ci"
         assert cfg.task_queue == "atlan-saphana-ci"
@@ -486,8 +495,8 @@ class TestRunDevCombinedEnvFallbacks:
     ) -> None:
         monkeypatch.setenv("ATLAN_HANDLER_PORT", "3001")
         monkeypatch.setenv("ATLAN_TASK_QUEUE", "from-env")
-        cfg = _resolve_dev_config(app_name="myapp", port=4242, task_queue="from-kwarg")
-        assert cfg.port == 4242
+        cfg = _build_dev_config(_APP_MODULE, port=4242, task_queue="from-kwarg")
+        assert cfg.handler_port == 4242
         assert cfg.task_queue == "from-kwarg"
 
     # ── per-field env-key precedence (handler-port / -host) ────────────────
@@ -497,27 +506,27 @@ class TestRunDevCombinedEnvFallbacks:
     ) -> None:
         monkeypatch.setenv("ATLAN_HANDLER_PORT", "3001")
         monkeypatch.setenv("ATLAN_APP_HTTP_PORT", "3002")
-        assert _resolve_dev_config(app_name="myapp").port == 3001
+        assert _build_dev_config(_APP_MODULE).handler_port == 3001
 
     def test_app_http_port_used_when_handler_port_unset(
         self, clean_env: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ATLAN_APP_HTTP_PORT", "3002")
-        assert _resolve_dev_config(app_name="myapp").port == 3002
+        assert _build_dev_config(_APP_MODULE).handler_port == 3002
 
     def test_invalid_handler_port_falls_through(
         self, clean_env: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ATLAN_HANDLER_PORT", "not-a-number")
         monkeypatch.setenv("ATLAN_APP_HTTP_PORT", "3002")
-        assert _resolve_dev_config(app_name="myapp").port == 3002
+        assert _build_dev_config(_APP_MODULE).handler_port == 3002
 
     def test_handler_host_preferred_over_app_http_host(
         self, clean_env: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ATLAN_HANDLER_HOST", "0.0.0.0")
         monkeypatch.setenv("ATLAN_APP_HTTP_HOST", "1.2.3.4")
-        assert _resolve_dev_config(app_name="myapp").host == "0.0.0.0"
+        assert _build_dev_config(_APP_MODULE).handler_host == "0.0.0.0"
 
     # ── temporal namespace v2 fallback ────────────────────────────────────
 
@@ -525,14 +534,15 @@ class TestRunDevCombinedEnvFallbacks:
         self, clean_env: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ATLAN_WORKFLOW_NAMESPACE", "ci")
-        assert _resolve_dev_config(app_name="myapp").temporal_namespace == "ci"
+        assert _build_dev_config(_APP_MODULE).temporal_namespace == "ci"
 
-    # ── task-queue derivation uses passed-in app_name ─────────────────────
+    # ── task-queue derivation from app_module class name ──────────────────
 
-    def test_task_queue_default_uses_app_name(self, clean_env: None) -> None:
-        assert _resolve_dev_config(app_name="mssql").task_queue == "mssql-queue"
+    def test_task_queue_default_derived_from_app_module(self, clean_env: None) -> None:
+        # "Mssql" → _pascal_to_kebab → "mssql" → "mssql-queue"
+        assert _build_dev_config("myapp.apps:Mssql").task_queue == "mssql-queue"
 
-    # ── edge cases requested in code review ───────────────────────────────
+    # ── edge cases ────────────────────────────────────────────────────────
 
     def test_explicit_port_zero_respected(
         self, clean_env: None, monkeypatch: pytest.MonkeyPatch
@@ -540,23 +550,41 @@ class TestRunDevCombinedEnvFallbacks:
         """``port=0`` (let the OS pick an ephemeral port) must NOT fall through
         to the env / default chain — common pattern in tests."""
         monkeypatch.setenv("ATLAN_HANDLER_PORT", "9999")
-        assert _resolve_dev_config(app_name="myapp", port=0).port == 0
+        assert _build_dev_config(_APP_MODULE, port=0).handler_port == 0
 
     def test_empty_string_host_falls_through_to_env_then_default(
         self, clean_env: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An empty host string isn't a valid bind address; treat as missing
-        and fall through to env / default. Matches AppConfig.from_args_and_env."""
+        """An empty host string is treated as missing — falls through to env
+        then the loopback default. Matches AppConfig.from_args_and_env."""
         monkeypatch.setenv("ATLAN_HANDLER_HOST", "0.0.0.0")
-        assert _resolve_dev_config(app_name="myapp", host="").host == "0.0.0.0"
-        # And without env, falls through to the built-in default
+        assert _build_dev_config(_APP_MODULE, host="").handler_host == "0.0.0.0"
         monkeypatch.delenv("ATLAN_HANDLER_HOST", raising=False)
-        assert _resolve_dev_config(app_name="myapp", host="").host == "127.0.0.1"
+        assert _build_dev_config(_APP_MODULE, host="").handler_host == "127.0.0.1"
+
+    # ── dev-specific overrides ────────────────────────────────────────────
+
+    def test_log_level_always_debug(
+        self, clean_env: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_LOG_LEVEL", "WARNING")
+        assert _build_dev_config(_APP_MODULE).log_level == "DEBUG"
+
+    def test_health_port_always_ephemeral(self, clean_env: None) -> None:
+        assert _build_dev_config(_APP_MODULE).health_port == 0
+
+    def test_temporal_core_metrics_disabled_by_default(self, clean_env: None) -> None:
+        assert _build_dev_config(_APP_MODULE).enable_temporal_core_metrics is False
+
+    def test_temporal_core_metrics_honoured_when_env_set(
+        self, clean_env: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_ENABLE_TEMPORAL_CORE_METRICS", "true")
+        assert _build_dev_config(_APP_MODULE).enable_temporal_core_metrics is True
 
 
 class TestEnvIntHelper:
-    """Module-level ``_env_int`` is shared by AppConfig.from_args_and_env and
-    _resolve_dev_config — both env-int parses must agree on bad input."""
+    """Module-level ``_env_int`` used by AppConfig.from_args_and_env."""
 
     def test_unset_returns_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("FOO", raising=False)
@@ -570,9 +598,7 @@ class TestEnvIntHelper:
         monkeypatch.setenv("FOO", "1234")
         assert _env_int("FOO", 0) == 1234
 
-    def test_invalid_returns_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_invalid_returns_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Non-integer values do NOT raise — they log a warning and fall
         through, so a typo'd ``ATLAN_HANDLER_PORT=foo`` doesn't crash startup."""
         monkeypatch.setenv("FOO", "not-a-number")
