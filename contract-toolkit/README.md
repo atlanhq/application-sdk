@@ -646,6 +646,13 @@ Cloud bucket and backend are resolved from the QI app's pod environment, so
 `lakeProvider` / `storageBucket` are not exposed on this node. Set storage at
 the QI app deployment, not in the contract.
 
+`ignoreOrphans` and `indirectLineage` are `Boolean|String?` (HYP-793 pattern).
+Use a Boolean literal for a static value, or an exact workflow placeholder
+such as `"{{ignore-orphans}}"` to wire the value from a form field. Heracles
+substitutes exact workflow parameter names only; dotted placeholders such as
+`"{{control_config.indirect_lineage}}"` are not resolved and are stripped
+before the workflow starts. Omit the fields to keep the QI app defaults.
+
 ### `PopularityNode` — Pre-built Popularity App Node
 
 ```pkl
@@ -685,6 +692,51 @@ Optional popularity knobs:
 - `mineColumnMapping = new PopularityMineColumnMapping { ... }` for non-Snowflake miner schemas
 - `extraArgs`
 
+The Popularity app owns the runtime defaults for `windowDays`, `topNQueries`,
+`topNUsers`, `dryRun`, `parsedDataFilterHasError`, and
+`relationshipsOutputAttribution` (`30`, `5`, `10`, `false`, `false`, and
+`false`). The toolkit omits these args by default; set them only when the
+connector intentionally needs a fixed non-default value or exposes a workflow
+setup control for the value. Use literals for fixed non-defaults, for example
+`windowDays = 60`.
+
+When a connector exposes Popularity scalar controls, set exact workflow
+placeholders such as `"{{popularity-window-days}}"`. The renderer validates
+these placeholders against `uiConfig.properties`: numeric properties must
+reference an existing `Config.NumericInput`; Boolean properties must reference
+an existing `Config.BooleanInput` or `Config.Switcher`. Malformed placeholders,
+missing fields, or mismatched widget types fail PKL generation instead of
+silently relying on Heracles placeholder stripping.
+
+```pkl
+uiConfig {
+  tasks {
+    ["Popularity"] {
+      inputs {
+        ["popularity-window-days"] = new Config.NumericInput {
+          title = "Window Days"
+          default = 60
+          validationRules {
+            new Dynamic { type = "number"; required = false; min = 1; message = "Window days must be at least 1." }
+          }
+        }
+      }
+    }
+  }
+}
+
+extraNodes {
+  ["popularity"] = new PopularityNode {
+    // required prefixes omitted for brevity
+    windowDays = "{{popularity-window-days}}"
+  }
+}
+```
+
+`extraArgs` is only for new Popularity app args that the toolkit does not model
+yet. It cannot set first-class arg keys such as `window_days`; use the typed
+`PopularityNode` property instead.
+
 By default the node omits `lake_provider` so the Popularity app can use its own
 trigger defaults and deployment environment. Set `lakeProvider` only as an
 explicit storage override.
@@ -701,8 +753,7 @@ amend that publish node's args:
 }
 ```
 
-This is an advanced DAG shape; add a connector-specific example or test when an
-app needs to wire popularity end to end.
+See [`examples/popularity/`](examples/popularity/) for the full DAG shape.
 
 ### `LineageNode` — Pre-built Lineage App Node
 

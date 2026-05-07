@@ -1,0 +1,118 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Popularity Node Example Metadata",
+      "app_name": "{app_name}",
+      "inputs": {
+        "workflow_type": "snowflake-popularity-example-workflow",
+        "app_name": "{app_name}",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-popularity-node-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "credential_guid": "{{credential-guid}}",
+          "connection": "{{connection}}"
+        }
+      }
+    },
+    "qi": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Parse SQL Queries",
+      "app_name": "automation-engine",
+      "inputs": {
+        "workflow_type": "QueryIntelligenceWorkflow",
+        "app_name": "automation-engine",
+        "task_queue": "atlan-query-intelligence-{deployment_name}",
+        "args": {
+          "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+          "input_prefix": "$.extract.outputs.query_history_prefix",
+          "output_prefix": "$.extract.outputs.qi_output_prefix",
+          "sql_key": "QUERY_TEXT",
+          "catalog_key": "DATABASE_NAME",
+          "schema_key": "SCHEMA_NAME",
+          "timestamp_key": "START_TIME",
+          "mine_output_type": "parquet",
+          "parsing_mode": "fallback",
+          "vendor_name": "snowflake"
+        }
+      },
+      "depends_on": {
+        "node_id": "extract"
+      }
+    },
+    "publish": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Publish to Atlas",
+      "app_name": "publish",
+      "inputs": {
+        "workflow_type": "PublishWorkflow",
+        "app_name": "publish",
+        "task_queue": "atlan-publish-{deployment_name}",
+        "args": {
+          "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+          "transformed_data_prefix": "$.extract.outputs.transformed_data_prefix",
+          "publish_state_prefix": "$.extract.outputs.publish_state_prefix",
+          "current_state_prefix": "$.extract.outputs.current_state_prefix",
+          "connection_creation_enabled": true,
+          "executor_enabled": true,
+          "connection_entity": "{{connection}}",
+          "connection_cache_enabled": true,
+          "connection_cache_via_app_enabled": true,
+          "current_state_via_app_enabled": true
+        }
+      },
+      "depends_on": {
+        "node_id": "extract"
+      }
+    },
+    "popularity": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Compute Popularity",
+      "app_name": "popularity",
+      "inputs": {
+        "workflow_type": "PopularityWorkflow",
+        "app_name": "popularity",
+        "task_queue": "atlan-popularity-{deployment_name}",
+        "args": {
+          "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+          "tenant_id": "$.extract.outputs.tenant_id",
+          "parsed_data_prefix": "$.extract.outputs.qi_output_prefix",
+          "mined_data_prefix": "$.extract.outputs.query_history_prefix",
+          "connection_cache_path": "$.extract.outputs.connection_cache_path",
+          "output_prefix": "$.extract.outputs.popularity_output_prefix",
+          "access_history_data_prefix": "$.extract.outputs.access_history_prefix",
+          "mine_column_mapping": {
+            "query_id": "QUERY_ID",
+            "user_name": "USER_NAME",
+            "warehouse_name": "WAREHOUSE_NAME",
+            "role_name": "ROLE_NAME",
+            "total_elapsed_time": "TOTAL_ELAPSED_TIME",
+            "credits_cloud_services": "CREDITS_USED_CLOUD_SERVICES",
+            "credits_compute": "CREDITS_USED_COMPUTE",
+            "query_type": "QUERY_TYPE",
+            "start_time": "START_TIME",
+            "query_tag": "QUERY_TAG",
+            "query_tags_sql": "QUERY_TAGS_SQL",
+            "has_native_inputs": "HAS_NATIVE_INPUTS",
+            "native_inputs_payload": "NATIVE_INPUTS_PAYLOAD"
+          }
+        }
+      },
+      "depends_on": {
+        "and_conditions": [
+          {
+            "node_id": "qi",
+            "tag": "success"
+          },
+          {
+            "node_id": "publish",
+            "tag": "success"
+          }
+        ]
+      }
+    }
+  }
+}

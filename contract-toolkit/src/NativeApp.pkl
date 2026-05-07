@@ -966,10 +966,28 @@ class QueryIntelligenceNode extends DAGNode {
   extraFilter: String?
 
   /// Optional indirect lineage flag.
-  indirectLineage: Boolean?
+  ///
+  /// Use a Boolean literal or an exact template placeholder string such as
+  /// `"{{indirect-lineage}}"` when the value must be wired from a workflow
+  /// form field. Heracles substitutes exact workflow parameter names only;
+  /// it does not resolve dotted paths such as
+  /// `"{{control_config.indirect_lineage}}"` — unresolved placeholders are
+  /// stripped from the DAG inputs before the workflow starts. The QI app
+  /// coerces the resolved string to bool via Pydantic before passing the
+  /// `--indirect-lineage` flag to the parser.
+  /// `null` (default) omits the arg so the QI Pydantic default applies.
+  indirectLineage: Boolean|String? = null
 
   /// Optional orphan-column handling flag.
-  ignoreOrphans: Boolean?
+  ///
+  /// Use a Boolean literal or an exact template placeholder string such as
+  /// `"{{ignore-orphans}}"`. Heracles substitutes exact workflow parameter
+  /// names only; dotted paths are not resolved. Truthy → `--ignore-orphans`
+  /// (orphan columns dropped); falsy → `--link-orphans` (orphan columns
+  /// linked to the first table, the default). The QI app coerces the
+  /// resolved string to bool via Pydantic before invoking the parser.
+  /// `null` (default) omits the arg so the QI Pydantic default applies.
+  ignoreOrphans: Boolean|String? = null
 
   /// Optional passthrough columns list.
   columnsToPreserve: String?
@@ -1116,13 +1134,23 @@ class PopularityNode extends DAGNode {
   accessHistoryDataPrefix: String?
 
   /// Window size, in days, for the rolling popularity metrics.
-  windowDays: Int(this >= 1) = 30
+  /// Use a positive integer for static configuration. Omit this property to use
+  /// the Popularity app default (`30`). Set a workflow placeholder only when the
+  /// connector intentionally exposes a non-default setup control. The referenced
+  /// form field must exist and use `Config.NumericInput`.
+  windowDays: (Int(this >= 1)|String)?
 
   /// Maximum representative queries retained per asset.
-  topNQueries: Int(this >= 1) = 5
+  /// Use a positive integer for static configuration. Omit this property to use
+  /// the Popularity app default (`5`). Placeholder overrides must reference an
+  /// existing `Config.NumericInput`.
+  topNQueries: (Int(this >= 1)|String)?
 
   /// Maximum users retained per asset.
-  topNUsers: Int(this >= 1) = 10
+  /// Use a positive integer for static configuration. Omit this property to use
+  /// the Popularity app default (`10`). Placeholder overrides must reference an
+  /// existing `Config.NumericInput`.
+  topNUsers: (Int(this >= 1)|String)?
 
   /// Optional storage backend override for parsed/mined/access-history/cache/output
   /// paths. Omit to let the Popularity app use its own trigger defaults and
@@ -1140,20 +1168,30 @@ class PopularityNode extends DAGNode {
   excludeFilter: Mapping<String, Listing<String>>?
 
   /// Drop parsed-data rows marked as errors before metric computation.
-  parsedDataFilterHasError: Boolean?
+  /// Use a Boolean literal for static configuration. Omit this property to use
+  /// the Popularity app default (`false`). Placeholder overrides must reference
+  /// an existing Boolean workflow widget.
+  parsedDataFilterHasError: (Boolean|String)?
 
   /// Emit relationship output attribution details.
-  relationshipsOutputAttribution: Boolean?
+  /// Use a Boolean literal for static configuration. Omit this property to use
+  /// the Popularity app default (`false`). Placeholder overrides must reference
+  /// an existing Boolean workflow widget.
+  relationshipsOutputAttribution: (Boolean|String)?
 
   /// Query types ignored by the popularity app. Omit to use app defaults; set
   /// an empty listing to disable the default ignore list.
   queryTypesToIgnore: Listing<String>?
 
   /// Compare with legacy output and skip export/publish stages.
-  dryRun: Boolean = false
+  /// Use a Boolean literal for static configuration. Omit this property to use
+  /// the Popularity app default (`false`). Placeholder overrides must reference
+  /// an existing Boolean workflow widget.
+  dryRun: (Boolean|String)?
 
   /// Escape hatch for new Popularity app config fields before this toolkit grows
-  /// first-class properties for them.
+  /// first-class properties for them. Do not use this for args already modeled
+  /// by `PopularityNode`; set the typed property instead.
   extraArgs: Mapping<String, Any> = new Mapping {}
 
   hidden _popularityDependencyCheck: Any =
@@ -1177,9 +1215,9 @@ class PopularityNode extends DAGNode {
     when (accessHistoryDataPrefix != null) {
       ["access_history_data_prefix"] = accessHistoryDataPrefix
     }
-    ["window_days"] = windowDays
-    ["top_n_queries"] = topNQueries
-    ["top_n_users"] = topNUsers
+    when (windowDays != null) { ["window_days"] = windowDays }
+    when (topNQueries != null) { ["top_n_queries"] = topNQueries }
+    when (topNUsers != null) { ["top_n_users"] = topNUsers }
     when (lakeProvider != null) { ["lake_provider"] = lakeProvider }
     when (mineColumnMapping != null) {
       ["mine_column_mapping"] = renderPopularityMineColumnMapping(mineColumnMapping!!)
@@ -1195,7 +1233,7 @@ class PopularityNode extends DAGNode {
     when (queryTypesToIgnore != null) {
       ["query_types_to_ignore"] = queryTypesToIgnore
     }
-    ["dry_run"] = dryRun
+    when (dryRun != null) { ["dry_run"] = dryRun }
     ...extraArgs
   }
 
@@ -2293,6 +2331,7 @@ local function renderNode(node: DAGNode): Mapping<String, Any> =
   let (_depCheck = node._dependencyConfigCheck)
   let (_qiCheck = if (node is QueryIntelligenceNode) (node as QueryIntelligenceNode)._qiArgsCheck else null)
   let (_popularityCheck = if (node is PopularityNode) (node as PopularityNode)._popularityDependencyCheck else null)
+  let (_popularityFormRefCheck = if (node is PopularityNode) validatePopularityFormRefs(node as PopularityNode) else null)
   let (_ehCheck = if (node.errorHandling != null) node.errorHandling._timeoutOrderingCheck else null)
   new Mapping {
   ["activity_name"] = "execute_workflow"
@@ -2326,6 +2365,84 @@ local function renderNode(node: DAGNode): Mapping<String, Any> =
     ["error_handling"] = renderErrorHandling(node.errorHandling)
   }
 }
+
+local exactWorkflowParamRegex = Regex("^\\{\\{[A-Za-z0-9][A-Za-z0-9_-]*\\}\\}$")
+
+local popularityFirstClassArgKeys: Mapping<String, Boolean> = new Mapping {
+  ["connection_qualified_name"] = true
+  ["tenant_id"] = true
+  ["parsed_data_prefix"] = true
+  ["mined_data_prefix"] = true
+  ["connection_cache_path"] = true
+  ["output_prefix"] = true
+  ["access_history_data_prefix"] = true
+  ["window_days"] = true
+  ["top_n_queries"] = true
+  ["top_n_users"] = true
+  ["lake_provider"] = true
+  ["mine_column_mapping"] = true
+  ["include_filter"] = true
+  ["exclude_filter"] = true
+  ["parsed_data_filter_has_error"] = true
+  ["relationships_output_attribution"] = true
+  ["query_types_to_ignore"] = true
+  ["dry_run"] = true
+}
+
+local function workflowParamName(value: String): String =
+  value.substring(2, value.length - 2)
+
+local function validatePopularityExtraArgs(node: PopularityNode): Any =
+  let (conflictingKeys = node.extraArgs.keys.toList()
+    .filter((key) -> popularityFirstClassArgKeys.containsKey(key)))
+  if (!conflictingKeys.isEmpty)
+    throw("PopularityNode.extraArgs cannot set first-class arg(s): \(conflictingKeys.join(", ")). "
+          + "Use the typed PopularityNode property instead; extraArgs is only for fields not modeled by the toolkit.")
+  else null
+
+local function validatePopularityNumericRef(value: Any, propertyName: String): Any =
+  if (value is String)
+    let (placeholder = value as String)
+    if (!placeholder.matches(exactWorkflowParamRegex))
+      throw("PopularityNode.\(propertyName) string value must be an exact workflow parameter placeholder such as "
+            + "`\"{{popularity-window-days}}\"`.")
+    else
+      let (fieldName = workflowParamName(placeholder))
+      if (!uiConfig.properties.containsKey(fieldName))
+        throw("PopularityNode.\(propertyName) references workflow field `\(fieldName)`, but uiConfig does not define that field.")
+      else
+        let (field = uiConfig.properties[fieldName])
+        if (!(field is Config.NumericInput))
+          throw("PopularityNode.\(propertyName) references workflow field `\(fieldName)`, but that field must be Config.NumericInput.")
+        else null
+  else null
+
+local function validatePopularityBooleanRef(value: Any, propertyName: String): Any =
+  if (value is String)
+    let (placeholder = value as String)
+    if (!placeholder.matches(exactWorkflowParamRegex))
+      throw("PopularityNode.\(propertyName) string value must be an exact workflow parameter placeholder such as "
+            + "`\"{{popularity-dry-run}}\"`.")
+    else
+      let (fieldName = workflowParamName(placeholder))
+      if (!uiConfig.properties.containsKey(fieldName))
+        throw("PopularityNode.\(propertyName) references workflow field `\(fieldName)`, but uiConfig does not define that field.")
+      else
+        let (field = uiConfig.properties[fieldName])
+        if (!(field is Config.BooleanInput) && !(field is Config.Switcher))
+          throw("PopularityNode.\(propertyName) references workflow field `\(fieldName)`, but that field must be Config.BooleanInput or Config.Switcher.")
+        else null
+  else null
+
+local function validatePopularityFormRefs(node: PopularityNode): Any =
+  let (_extraArgs = validatePopularityExtraArgs(node))
+  let (_windowDays = validatePopularityNumericRef(node.windowDays, "windowDays"))
+  let (_topNQueries = validatePopularityNumericRef(node.topNQueries, "topNQueries"))
+  let (_topNUsers = validatePopularityNumericRef(node.topNUsers, "topNUsers"))
+  let (_parsedDataFilterHasError = validatePopularityBooleanRef(node.parsedDataFilterHasError, "parsedDataFilterHasError"))
+  let (_relationshipsOutputAttribution = validatePopularityBooleanRef(node.relationshipsOutputAttribution, "relationshipsOutputAttribution"))
+  let (_dryRun = validatePopularityBooleanRef(node.dryRun, "dryRun"))
+  null
 
 local function renderErrorHandling(errorHandling: ErrorHandlingConfig): Mapping<String, Any> = new Mapping {
   when (errorHandling.initialInterval != null) {

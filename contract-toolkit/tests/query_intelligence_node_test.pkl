@@ -2,11 +2,34 @@
 
 amends "pkl:test"
 
+import "../examples/qi-node/app.pkl" as qiNodeApp
 import "../src/NativeApp.pkl" as NativeApp
 
+local qiNodeManifestJson: String = qiNodeApp.output.files["manifest.json"].text
 local defaultQueryIntelligenceNode = new NativeApp.QueryIntelligenceNode {
   vendorName = "athena"
   sqlKey = "QUERY_TEXT"
+}
+
+// Boolean-literal form — typed Boolean still accepted (back-compat).
+local boolLiteralNode = new NativeApp.QueryIntelligenceNode {
+  vendorName = "athena"
+  sqlKey = "QUERY_TEXT"
+  ignoreOrphans = true
+  indirectLineage = false
+}
+
+// Template-string form — wires the values from a workflow form field.
+// Heracles substitutes the placeholder before the workflow start;
+// QI's Pydantic side coerces the resolved string to bool. Heracles
+// resolves only exact workflow parameter names, so the placeholder
+// must match a parameter key (no dotted paths). Per HYP-793, this is
+// the same `Boolean|String` pattern as `PublishNode.executorEnabled`.
+local templatedNode = new NativeApp.QueryIntelligenceNode {
+  vendorName = "athena"
+  sqlKey = "QUERY_TEXT"
+  ignoreOrphans = "{{ignore-orphans}}"
+  indirectLineage = "{{indirect-lineage}}"
 }
 
 facts {
@@ -31,5 +54,36 @@ facts {
     !defaultQueryIntelligenceNode.args.containsKey("start_time")
     !defaultQueryIntelligenceNode.args.containsKey("end_time")
     !defaultQueryIntelligenceNode.args.containsKey("processing_time_limit_ms")
+  }
+
+  ["Generated QI manifest omits deployment-owned and deprecated args"] {
+    !qiNodeManifestJson.contains("\"lake_provider\"")
+    !qiNodeManifestJson.contains("\"storage_bucket\"")
+    !qiNodeManifestJson.contains("\"exclude_file_pattern\"")
+    !qiNodeManifestJson.contains("\"include_file_pattern\"")
+    !qiNodeManifestJson.contains("\"start_time\"")
+    !qiNodeManifestJson.contains("\"end_time\"")
+    !qiNodeManifestJson.contains("\"processing_time_limit_ms\"")
+  }
+
+  // Default (omit) — back-compat: ignore_orphans / indirect_lineage are
+  // not emitted when null, so QI's Pydantic defaults apply.
+  ["QueryIntelligenceNode omits orphan/lineage args when unset"] {
+    !defaultQueryIntelligenceNode.args.containsKey("ignore_orphans")
+    !defaultQueryIntelligenceNode.args.containsKey("indirect_lineage")
+  }
+
+  // Boolean literal — typed bool still works.
+  ["QueryIntelligenceNode emits Boolean ignoreOrphans/indirectLineage as-is"] {
+    boolLiteralNode.args["ignore_orphans"] == true
+    boolLiteralNode.args["indirect_lineage"] == false
+  }
+
+  // Templated string (HYP-793 pattern) — accepted by the typed field
+  // and rendered verbatim into args. The placeholder survives untouched
+  // so Heracles can substitute it from a workflow form parameter.
+  ["QueryIntelligenceNode accepts template strings for ignoreOrphans/indirectLineage"] {
+    templatedNode.args["ignore_orphans"] == "{{ignore-orphans}}"
+    templatedNode.args["indirect_lineage"] == "{{indirect-lineage}}"
   }
 }

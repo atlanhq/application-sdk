@@ -1,0 +1,66 @@
+{
+  "id": "qi-node",
+  "name": "QI Node Example",
+  "logo": "https://assets.atlan.com/assets/athena.svg",
+  "config": {
+    "properties": {
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Credential Guid",
+          "grid": 8,
+          "credentialType": "atlan-connectors-qi-node",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "ignore-orphans": {
+        "type": "boolean",
+        "required": false,
+        "ui": {
+          "widget": "boolean",
+          "label": "Ignore orphan columns",
+          "hidden": false,
+          "help": "Drop orphan columns instead of linking them to the first table.",
+          "grid": 4
+        },
+        "default": false
+      },
+      "indirect-lineage": {
+        "type": "boolean",
+        "required": false,
+        "ui": {
+          "widget": "boolean",
+          "label": "Indirect lineage",
+          "hidden": false,
+          "help": "Enable indirect lineage parsing in the QI app.",
+          "grid": 4
+        },
+        "default": false
+      }
+    },
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Query Intelligence",
+        "description": "",
+        "id": "query_intelligence",
+        "properties": [
+          "ignore-orphans",
+          "indirect-lineage"
+        ]
+      }
+    ]
+  }
+}

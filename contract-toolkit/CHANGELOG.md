@@ -6,6 +6,24 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` produces either a patch, minor, or major release —
 see the version-bump logic in `.github/workflows/release.yml`.
 
+## [0.9.5] - 2026-05-07
+
+### Features
+
+- Widen QueryIntelligenceNode ignoreOrphans/indirectLineage to Boolean|String? (#60) ([#60](https://github.com/atlanhq/app-contract-toolkit/pull/60))
+
+## [0.9.4] - 2026-05-06
+
+### Breaking changes
+
+- Remove QueryIntelligenceNode per-workflow QI args (#59) ([#59](https://github.com/atlanhq/app-contract-toolkit/pull/59))
+
+## [0.9.3] - 2026-05-04
+
+### Bug fixes
+
+- Omit popularity lake provider by default (#58) ([#58](https://github.com/atlanhq/app-contract-toolkit/pull/58))
+
 ## [0.9.2] - 2026-05-01
 
 ### Bug fixes

@@ -1,0 +1,53 @@
+{
+  "id": "popularity-node",
+  "name": "Popularity Node Example",
+  "logo": "https://assets.atlan.com/assets/snowflake.svg",
+  "config": {
+    "properties": {
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Credential Guid",
+          "grid": 8,
+          "credentialType": "atlan-connectors-popularity-node",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      }
+    ]
+  }
+}

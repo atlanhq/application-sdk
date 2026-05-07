@@ -1213,8 +1213,8 @@ class QueryIntelligenceNode extends DAGNode {
   mineOutputType: "parquet"|"json" = "parquet"
   parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
   extraFilter: String?
-  indirectLineage: Boolean?
-  ignoreOrphans: Boolean?
+  indirectLineage: Boolean|String? = null
+  ignoreOrphans: Boolean|String? = null
   columnsToPreserve: String?
   relatedAssetsOutputPrefix: String?
   parserArtifactsKey: String?
@@ -1247,6 +1247,31 @@ extraNodes {
   }
 }
 ```
+
+`indirectLineage` and `ignoreOrphans` are `Boolean|String?` (HYP-793 pattern).
+Use a Boolean literal for static values, or an exact template placeholder
+string when the value must be wired from a workflow form field:
+
+```pkl
+extraNodes {
+  ["qi"] = new QueryIntelligenceNode {
+    vendorName = "snowflake"
+    sqlKey = "QUERY_TEXT"
+    ignoreOrphans = true                          // static
+    indirectLineage = "{{indirect-lineage}}"      // templated form field
+  }
+}
+```
+
+Heracles substitutes exact workflow parameter names only. Dotted placeholders
+such as `"{{control_config.indirect_lineage}}"` are not resolved — they are
+stripped from the DAG inputs before the workflow starts, so QI silently runs
+with its default. The placeholder must match a workflow form input key.
+
+The QI app coerces resolved string values (`"true"`, `"false"`, `"1"`, `"0"`,
+`"yes"`/`"no"`, `"on"`/`"off"`, case-insensitive) to bool via Pydantic. Empty
+strings and unrecognised values fail Pydantic validation at workflow start —
+omit the field instead of emitting `""` to mean "use default".
 
 ### PopularityMineColumnMapping
 
@@ -1284,8 +1309,8 @@ Pre-built Popularity app workflow node. Defaults:
 - `appName = "popularity"`
 - `taskQueue = "atlan-popularity-{deployment_name}"`
 - waits for `queryIntelligenceNode = "qi"` and `assetPublishNode = "publish"` to succeed
-- `windowDays = 30`, `topNQueries = 5`, `topNUsers = 10`, `dryRun = false`
 - omits `lake_provider` unless `lakeProvider` is explicitly set
+- omits `window_days`, `top_n_queries`, `top_n_users`, `dry_run`, `parsed_data_filter_has_error`, and `relationships_output_attribution` unless explicitly set
 
 Required:
 - `tenantId`
@@ -1302,6 +1327,51 @@ By default the node omits `lake_provider` so the Popularity app can use its own
 trigger defaults and deployment environment. Set `lakeProvider` only as an
 explicit storage override.
 
+The Popularity app owns the runtime defaults for `windowDays`, `topNQueries`,
+`topNUsers`, `dryRun`, `parsedDataFilterHasError`, and
+`relationshipsOutputAttribution` (`30`, `5`, `10`, `false`, `false`, and
+`false`). The toolkit omits these args by default; set them only when the
+connector intentionally needs a fixed non-default value or exposes a workflow
+setup control for the value. Use literals for fixed non-defaults, for example
+`windowDays = 60`.
+
+When a connector exposes Popularity scalar controls, set exact workflow
+placeholders such as `"{{popularity-window-days}}"`. The renderer validates
+these placeholders against `uiConfig.properties`: numeric properties must
+reference an existing `Config.NumericInput`; Boolean properties must reference
+an existing `Config.BooleanInput` or `Config.Switcher`. Malformed placeholders,
+missing fields, or mismatched widget types fail PKL generation instead of
+silently relying on Heracles placeholder stripping.
+
+```pkl
+uiConfig {
+  tasks {
+    ["Popularity"] {
+      inputs {
+        ["popularity-window-days"] = new Config.NumericInput {
+          title = "Window Days"
+          default = 60
+          validationRules {
+            new Dynamic { type = "number"; required = false; min = 1; message = "Window days must be at least 1." }
+          }
+        }
+      }
+    }
+  }
+}
+
+extraNodes {
+  ["popularity"] = new PopularityNode {
+    // required prefixes omitted for brevity
+    windowDays = "{{popularity-window-days}}"
+  }
+}
+```
+
+`extraArgs` is only for new Popularity app args that the toolkit does not model
+yet. It cannot set first-class arg keys such as `window_days`; use the typed
+`PopularityNode` property instead.
+
 ```pkl
 class PopularityNode extends DAGNode {
   queryIntelligenceNode: String? = "qi"
@@ -1315,17 +1385,17 @@ class PopularityNode extends DAGNode {
   connectionCachePath: String
   outputPrefix: String
   accessHistoryDataPrefix: String?
-  windowDays: Int = 30
-  topNQueries: Int = 5
-  topNUsers: Int = 10
+  windowDays: (Int(this >= 1)|String)?
+  topNQueries: (Int(this >= 1)|String)?
+  topNUsers: (Int(this >= 1)|String)?
   lakeProvider: ("local"|"aws"|"gcp"|"azure")? = null
   mineColumnMapping: PopularityMineColumnMapping?
   includeFilter: Mapping<String, Listing<String>>?
   excludeFilter: Mapping<String, Listing<String>>?
-  parsedDataFilterHasError: Boolean?
-  relationshipsOutputAttribution: Boolean?
+  parsedDataFilterHasError: (Boolean|String)?
+  relationshipsOutputAttribution: (Boolean|String)?
   queryTypesToIgnore: Listing<String>?
-  dryRun: Boolean = false
+  dryRun: (Boolean|String)?
   extraArgs: Mapping<String, Any> = new Mapping {}
 }
 ```
@@ -1339,11 +1409,7 @@ Rendered args:
   "parsed_data_prefix": "$.extract.outputs.qi_output_prefix",
   "mined_data_prefix": "$.extract.outputs.query_history_prefix",
   "connection_cache_path": "$.extract.outputs.connection_cache_path",
-  "output_prefix": "$.extract.outputs.popularity_output_prefix",
-  "window_days": 30,
-  "top_n_queries": 5,
-  "top_n_users": 10,
-  "dry_run": false
+  "output_prefix": "$.extract.outputs.popularity_output_prefix"
 }
 ```
 
