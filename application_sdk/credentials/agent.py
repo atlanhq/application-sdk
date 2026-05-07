@@ -222,7 +222,14 @@ async def _fetch_per_key_bundle(
             secret = await secret_store.get_optional(value)
         except Exception:
             # Single-key mode probes every non-literal value; a transient
-            # failure on a non-secret field must not fail resolution.
+            # failure on a non-secret field (host, port) must not fail
+            # resolution. Logged at debug so genuine store-side outages
+            # are still observable when verbose logging is on.
+            logger.debug(
+                "single-key probe failed for ref-key %r (treated as non-secret)",
+                value,
+                exc_info=True,
+            )
             return
         if secret in (None, ""):
             return

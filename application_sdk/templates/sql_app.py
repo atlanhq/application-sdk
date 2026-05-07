@@ -65,8 +65,7 @@ from application_sdk.constants import (
 )
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
-from application_sdk.execution import build_output_path
-from application_sdk.execution._temporal.activity_utils import get_object_store_prefix
+from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.transfer import upload as transfer_upload
@@ -96,7 +95,6 @@ from application_sdk.templates.contracts.sql_metadata import (
 
 if TYPE_CHECKING:
     from application_sdk.clients.sql import BaseSQLClient
-    from application_sdk.credentials.ref import CredentialRef
 
 logger = get_logger(__name__)
 
@@ -434,6 +432,14 @@ class SqlApp(App):
     def map_column(self, record: dict[str, Any], connection_qn: str) -> Any:
         """Map a raw column record to a pyatlan_v9 Asset. Override in subclass."""
         raise NotImplementedError("Override map_column() in your SqlApp subclass")
+
+    def map_procedure(self, record: dict[str, Any], connection_qn: str) -> Any:
+        """Map a raw procedure record to a pyatlan_v9 Asset. Override in
+        subclass if your connector emits procedures via the
+        ``transform_procedures()`` task. Without an override the task
+        raises ``NotImplementedError`` rather than ``AttributeError``.
+        """
+        raise NotImplementedError("Override map_procedure() in your SqlApp subclass")
 
     # =====================================================================
     # run() — default orchestration
