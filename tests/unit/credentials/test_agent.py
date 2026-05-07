@@ -14,7 +14,12 @@ import json
 from typing import Any
 
 from application_sdk.common.transforms import expand_dotted_keys
-from application_sdk.credentials.agent import _substitute, resolve_agent_json
+from application_sdk.credentials.agent import (
+    _fetch_per_key_bundle,
+    _substitute,
+    resolve_agent_credential,
+    resolve_agent_json,
+)
 from application_sdk.credentials.errors import (
     CredentialError,
     CredentialNotFoundError,
@@ -406,6 +411,255 @@ class TestResolveAgentJsonErrorPaths:
         )
         with pytest.raises(CredentialParseError, match="must be a JSON object"):
             await resolve_agent_json(agent_json, store)
+
+
+# ---------------------------------------------------------------------------
+# resolve_agent_credential — single-key (per-field secret lookup) mode
+# ---------------------------------------------------------------------------
+
+
+class TestSingleKeyMode:
+    """``key-type: single-key`` — per-field lookups against the secret store.
+
+    Each non-literal string field value is treated as its own secret store
+    entry, so apps backed by ``secretstores.local.env`` can use one env
+    var per credential field instead of bundling everything into a single
+    JSON-encoded env var.
+    """
+
+    async def test_resolves_each_ref_key_independently(self) -> None:
+        """Each ref-key is fetched as its own secret store entry."""
+        store = _store_with(
+            ATLAN_USER="real_user",
+            ATLAN_PASS="real_pw",
+        )
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "host": "h.example.com",
+                "port": 5432,
+                "basic.username": "ATLAN_USER",
+                "basic.password": "ATLAN_PASS",
+            }
+        )
+
+        resolved = await resolve_agent_json(agent_json, store)
+
+        assert resolved["username"] == "real_user"
+        assert resolved["password"] == "real_pw"
+        # Literal fields untouched.
+        assert resolved["host"] == "h.example.com"
+        assert resolved["port"] == 5432
+        assert resolved["authType"] == "basic"
+        assert resolved["credentialSource"] == "agent"
+
+    async def test_takes_precedence_over_secret_path_when_both_set(self) -> None:
+        """If both ``key-type: single-key`` and ``secret-path`` are set,
+        single-key wins — no bundle fetch happens, even if the path would
+        have resolved.
+        """
+        store = _store_with(
+            ATLAN_USER="real_user",
+            # Bundle that would have won under multi-key — but single-key
+            # mode skips bundle fetch entirely.
+            **{"some/bundle": _bundle(ATLAN_USER="bundle_overridden_user")},
+        )
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "secret-path": "some/bundle",
+                "auth-type": "basic",
+                "basic.username": "ATLAN_USER",
+            }
+        )
+
+        resolved = await resolve_agent_json(agent_json, store)
+
+        # Per-key resolution used the env-var-style entry, not the bundle.
+        assert resolved["username"] == "real_user"
+
+    async def test_missing_secret_falls_back_to_ref_key(self) -> None:
+        """v2 parity: a ref-key not present in the store is left as-is.
+        Downstream client connect surfaces a meaningful error.
+        """
+        store = _store_with(ATLAN_USER="real_user")  # ATLAN_PASS missing
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.username": "ATLAN_USER",
+                "basic.password": "ATLAN_PASS",
+            }
+        )
+
+        resolved = await resolve_agent_json(agent_json, store)
+
+        assert resolved["username"] == "real_user"
+        assert resolved["password"] == "ATLAN_PASS"  # ref-key preserved
+
+    async def test_silently_skips_lookup_errors_on_non_secret_fields(self) -> None:
+        """Non-secret string fields (e.g. ``host``-like values inadvertently
+        included via custom subclass) raise on lookup — that must not fail
+        resolution.
+        """
+
+        class ProbeStore:
+            calls: list[str] = []
+
+            async def get_optional(self, name: str) -> str | None:
+                self.calls.append(name)
+                if name == "BOOM":
+                    raise RuntimeError("transient store glitch")
+                if name == "ATLAN_USER":
+                    return "real_user"
+                return None
+
+        store = ProbeStore()
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.username": "ATLAN_USER",
+                "basic.password": "BOOM",
+            }
+        )
+
+        resolved = await resolve_agent_json(agent_json, store)  # type: ignore[arg-type]
+        assert resolved["username"] == "real_user"
+        # Lookup error on BOOM was swallowed; placeholder retained.
+        assert resolved["password"] == "BOOM"
+
+    async def test_walks_nested_extra_dict_one_level(self) -> None:
+        """v2-style nested ``extra: {k: ref}`` is also probed."""
+        store = _store_with(DB_NAME="real_db")
+        spec = AgentCredentialSpec.model_validate(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "extra": {"database": "DB_NAME", "compiled_url": "literal-url"},
+            }
+        )
+
+        resolved = await resolve_agent_credential(spec, store)
+
+        assert resolved["extra"]["database"] == "real_db"
+        assert resolved["extra"]["compiled_url"] == "literal-url"
+
+    async def test_literal_keys_never_probed(self) -> None:
+        """``host``, ``port``, ``aws-region``, etc. must never be sent to
+        the secret store — they are literal config, not refs.
+        """
+
+        class TrackingStore:
+            calls: list[str] = []
+
+            async def get_optional(self, name: str) -> str | None:
+                self.calls.append(name)
+                return None
+
+        store = TrackingStore()
+        spec = AgentCredentialSpec.model_validate(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "host": "h.example.com",
+                "port": 5432,
+                "aws-region": "ap-south-1",
+                "basic.username": "ATLAN_USER",
+            }
+        )
+
+        await resolve_agent_credential(spec, store)  # type: ignore[arg-type]
+
+        # Only the non-literal ref was probed.
+        assert store.calls == ["ATLAN_USER"]
+
+    async def test_missing_key_type_uses_legacy_paths_unchanged(self) -> None:
+        """Backward-compat sanity: without ``key-type: single-key``, the
+        existing bundle path runs as before.
+        """
+        store = _store_with(p=_bundle(username="real_user"))
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "secret-path": "p",
+                "auth-type": "basic",
+                "basic.username": "username",
+            }
+        )
+
+        resolved = await resolve_agent_json(agent_json, store)
+
+        # Resolved via bundle, not per-key — `username` is the bundle key.
+        assert resolved["username"] == "real_user"
+
+    async def test_empty_spec_no_lookups(self) -> None:
+        """Empty agent spec with single-key set issues no store lookups
+        and degrades to literal fallthrough cleanly.
+        """
+
+        class TrackingStore:
+            calls: list[str] = []
+
+            async def get_optional(self, name: str) -> str | None:
+                self.calls.append(name)
+                return None
+
+        store = TrackingStore()
+        spec = AgentCredentialSpec.model_validate(
+            {"agent-name": "t", "key-type": "single-key"}
+        )
+
+        await resolve_agent_credential(spec, store)  # type: ignore[arg-type]
+        assert store.calls == []
+
+
+class TestFetchPerKeyBundle:
+    """Direct unit tests for ``_fetch_per_key_bundle`` in isolation."""
+
+    async def test_dedupes_repeated_ref_keys(self) -> None:
+        """If the same ref-key is referenced by multiple fields, only one
+        store lookup is issued.
+        """
+
+        class CountingStore:
+            calls: list[str] = []
+
+            async def get_optional(self, name: str) -> str | None:
+                self.calls.append(name)
+                return "value-of-" + name
+
+        store = CountingStore()
+        raw = {
+            "username": "SHARED_KEY",
+            "password": "SHARED_KEY",
+            "auth-type": "basic",
+        }
+
+        bundle = await _fetch_per_key_bundle(store, raw)  # type: ignore[arg-type]
+
+        assert store.calls == ["SHARED_KEY"]
+        assert bundle == {"SHARED_KEY": "value-of-SHARED_KEY"}
+
+    async def test_skips_empty_string_values(self) -> None:
+        store = _store_with()
+        raw: dict[str, Any] = {"username": "", "password": "PWD"}
+        bundle = await _fetch_per_key_bundle(store, raw)
+        # Empty value never probed, missing PWD silently skipped.
+        assert bundle == {}
+
+    async def test_returns_only_resolved_keys(self) -> None:
+        store = _store_with(USER="u", PASS="p")
+        raw = {"username": "USER", "password": "PASS", "missing": "ABSENT"}
+        bundle = await _fetch_per_key_bundle(store, raw)
+        assert bundle == {"USER": "u", "PASS": "p"}
 
 
 # ---------------------------------------------------------------------------
