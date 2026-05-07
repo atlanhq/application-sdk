@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.6.1
-source-sha:    94c8e90cc4ecea7b3fd56e4265c5a3fe47a45002
-source-date:   2026-05-06T23:22:36+05:30
+source-sha:    0aaf700b56bb68699c64de3163235317a5cbea7b
+source-date:   2026-05-07T23:46:50+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -31,7 +31,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 4 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
 ## Subpackage Details
@@ -1971,6 +1971,13 @@ SQL metadata extractor templates and their contracts
 - **Summary:** Base class for incremental SQL metadata extraction apps.
 - **Defined in:** `application_sdk/templates/incremental_sql_metadata_extractor.py`
 
+#### `SqlApp`
+
+- **Import:** `from application_sdk.templates import SqlApp`
+- **Signature:** `class SqlApp`
+- **Summary:** Consolidated SQL metadata extraction App.
+- **Defined in:** `application_sdk/templates/sql_app.py`
+
 #### `SqlMetadataExtractor`
 
 - **Import:** `from application_sdk.templates import SqlMetadataExtractor`
@@ -2508,6 +2515,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `processes_extracted: int` `= 0`
   - `records_uploaded: int` `= 0`
   - `error: str` `= ''`
+  - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `ExtractionTaskInput`
