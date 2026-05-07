@@ -7,8 +7,13 @@ from typing import Literal
 
 
 @dataclass(frozen=True)
-class ProcessingResult:
-    """Result of processing a single event."""
+class EventResult:
+    """Per-event verdict returned by an events handler.
+
+    The handler returns one ``EventResult`` per input event; ``events_ack``
+    serialises these into the Parquet ack file the automation engine reads
+    to mark events as processed / retried / failed.
+    """
 
     status: Literal["SUCCESS", "RETRY", "FAILED"]
     error_message: str | None = None

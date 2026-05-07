@@ -27,7 +27,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from application_sdk.lakehouse.models import ProcessingResult
+from application_sdk.lakehouse.models import EventResult
 from application_sdk.storage.batch import upload_file_from_bytes
 
 logger = logging.getLogger(__name__)
@@ -69,64 +69,10 @@ def _ack_path(
     )
 
 
-class EventAckWriter:
-    """Writes a Parquet ack file for a processed event batch."""
-
-    def __init__(
-        self,
-        app_name: str,
-        workflow_name: str,
-        filename: str = "events_ack.parquet",
-    ) -> None:
-        _validate("app_name", app_name, _NAME_RE)
-        _validate("workflow_name", workflow_name, _NAME_RE)
-        _validate("filename", filename, _FILENAME_RE)
-        self._app_name = app_name
-        self._workflow_name = workflow_name
-        self._filename = filename
-
-    async def write(
-        self,
-        events: list[dict[str, Any]],
-        results: list[ProcessingResult],
-        workflow_run_id: str,
-    ) -> str:
-        """Serialize the ack rows to Parquet and upload them. Returns the path.
-
-        ``events`` and ``results`` must align 1:1 (the consumer guarantees this);
-        a mismatch raises ``ValueError`` before any I/O.
-
-        Example::
-
-            from application_sdk.lakehouse import EventAckWriter
-
-            ack = EventAckWriter(
-                app_name="databricks",
-                workflow_name="reverse-sync-description",
-            )
-
-            path = await ack.write(events, results, workflow_run_id="run-abc-123")
-            # path = "artifacts/databricks/reverse-sync-description/2026/05/06/"
-            #        "run-abc-123/events_ack.parquet"
-        """
-        _validate("workflow_run_id", workflow_run_id, _RUN_ID_RE)
-        ack_path = _ack_path(
-            self._app_name, self._workflow_name, workflow_run_id, self._filename
-        )
-        arrow = _build_ack_arrow(events, results)
-
-        buf = io.BytesIO()
-        pq.write_table(arrow, buf)
-        await upload_file_from_bytes(key=ack_path, content=buf.getvalue())
-        logger.info("Wrote event ack: %d rows → %s", arrow.num_rows, ack_path)
-        return ack_path
-
-
 def _build_ack_arrow(
     events: list[dict[str, Any]],
-    results: list[ProcessingResult],
+    results: list[EventResult],
 ) -> pa.Table:
-    """Internal: build the ack arrow table from parallel events / results lists."""
     if len(events) != len(results):
         raise ValueError(
             f"events ({len(events)}) and results ({len(results)}) must align"
@@ -139,3 +85,50 @@ def _build_ack_arrow(
         },
         schema=_ACK_SCHEMA,
     )
+
+
+async def events_ack(
+    events: list[dict[str, Any]],
+    results: list[EventResult],
+    *,
+    app_name: str,
+    workflow_name: str,
+    workflow_run_id: str,
+    filename: str = "events_ack.parquet",
+) -> str:
+    """Write the AE-expected Parquet ack and return the path.
+
+    ``events`` and ``results`` must align 1:1 (``events_read`` guarantees
+    this); a mismatch raises ``ValueError`` before any I/O.
+
+    All four string inputs are validated against an allowlist regex —
+    they're interpolated into an object-store key, so unvalidated input
+    would be a path-traversal vector.
+
+    Example::
+
+        from application_sdk.lakehouse import events_ack
+
+        path = await events_ack(
+            events,
+            results,
+            app_name="databricks",
+            workflow_name="reverse-sync-description",
+            workflow_run_id="run-abc-123",
+        )
+        # path = "artifacts/databricks/reverse-sync-description/2026/05/06/"
+        #        "run-abc-123/events_ack.parquet"
+    """
+    _validate("app_name", app_name, _NAME_RE)
+    _validate("workflow_name", workflow_name, _NAME_RE)
+    _validate("workflow_run_id", workflow_run_id, _RUN_ID_RE)
+    _validate("filename", filename, _FILENAME_RE)
+
+    ack_path = _ack_path(app_name, workflow_name, workflow_run_id, filename)
+    arrow = _build_ack_arrow(events, results)
+
+    buf = io.BytesIO()
+    pq.write_table(arrow, buf)
+    await upload_file_from_bytes(key=ack_path, content=buf.getvalue())
+    logger.info("Wrote event ack: %d rows → %s", arrow.num_rows, ack_path)
+    return ack_path

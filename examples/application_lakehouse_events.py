@@ -1,4 +1,4 @@
-"""AE-triggered lakehouse ingestion example using EventsConsumer + EventAckWriter.
+"""AE-triggered lakehouse ingestion example using events_read + events_ack.
 
 Demonstrates the recommended shape for an app that consumes events from
 Atlan's Automation Engine via the SDK's lakehouse module:
@@ -7,18 +7,18 @@ Atlan's Automation Engine via the SDK's lakehouse module:
 
 When AE detects unprocessed rows in its events Iceberg table
 (``automation_engine.<events_table>``), it triggers this workflow with the
-table name. The workflow uses ``EventsConsumer`` to read pending events,
-dispatches them to a ``process_fn``, and publishes the AE-expected
-Parquet ack via ``EventAckWriter``.
+table name. The workflow uses ``events_read`` to read pending events,
+dispatches them to a ``handler``, and publishes the AE-expected
+Parquet ack via ``events_ack``.
 
 Key components:
 
 - ``LakehouseEventApp``        — v3 SDK App subclass with two ``@task``
                                 methods (``handle_events`` + ``write_ack``)
-- ``EventsConsumer``           — fetches events from the lakehouse and
-                                dispatches to ``process_fn``; guarantees
+- ``events_read``              — fetches events from the lakehouse and
+                                dispatches to ``handler``; guarantees
                                 ``results`` aligns 1:1 with ``events``
-- ``EventAckWriter``           — publishes the Parquet ack at the
+- ``events_ack``               — publishes the Parquet ack at the
                                 AE-consumed path layout
 
 Required env vars (Polaris-vended, marketplace-injected in production):
@@ -57,7 +57,7 @@ from temporalio import workflow
 
 from application_sdk.app import App, task
 from application_sdk.contracts.base import Input, Output
-from application_sdk.lakehouse import EventAckWriter, EventsConsumer, ProcessingResult
+from application_sdk.lakehouse import EventResult, events_ack, events_read
 from application_sdk.main import AppConfig, run_combined_mode
 
 _APP_NAME = "lakehouse-events-example"
@@ -101,7 +101,7 @@ class HandleEventsInput(Input):
 
 class HandleEventsOutput(Output, allow_unbounded_fields=True):
     events: list[Any] = []
-    results: list[Any] = []  # serialised ProcessingResult dicts
+    results: list[Any] = []  # serialised EventResult dicts
 
 
 class WriteAckInput(Input, allow_unbounded_fields=True):
@@ -124,30 +124,30 @@ class LakehouseEventApp(App):
 
     name = _APP_NAME
     version = "0.1.0"
-    description = "Example: AE-triggered ingestion via EventsConsumer + EventAckWriter."
+    description = "Example: AE-triggered ingestion via events_read + events_ack."
 
     @task(timeout_seconds=600, heartbeat_timeout_seconds=60)
     async def handle_events(self, input: HandleEventsInput) -> HandleEventsOutput:
-        """Read pending events and dispatch each to ``_process``.
+        """Read pending events and dispatch each to ``_handler``.
 
-        ``EventsConsumer`` guarantees the returned ``results`` list aligns
+        ``events_read`` guarantees the returned ``results`` list aligns
         1:1 with ``events`` — RETRY-on-exception, RETRY-on-count-mismatch,
         no-events-skip semantics are handled by the SDK.
         """
 
-        async def _process(events: list[dict[str, Any]]) -> list[ProcessingResult]:
+        async def _handler(events: list[dict[str, Any]]) -> list[EventResult]:
             # Replace this with your real per-event business logic.
-            return [ProcessingResult(status="SUCCESS") for _ in events]
+            return [EventResult(status="SUCCESS") for _ in events]
 
-        consumer = EventsConsumer(_process)
-        events, results = await consumer.handle_events(
-            input.events_namespace,
-            input.events_table,
+        events, results = await events_read(
+            namespace=input.events_namespace,
+            table=input.events_table,
+            handler=_handler,
             where="status = 'unprocessed'",
             sort_by="received_at",
         )
 
-        # Serialise ProcessingResult so the Temporal payload stays JSON-safe.
+        # Serialise EventResult so the Temporal payload stays JSON-safe.
         result_dicts = [
             {"status": r.status, "error_message": r.error_message} for r in results
         ]
@@ -159,15 +159,20 @@ class LakehouseEventApp(App):
         if not input.events:
             return WriteAckOutput()
 
-        ack = EventAckWriter(app_name=_APP_NAME, workflow_name=_WORKFLOW_NAME)
         results = [
-            ProcessingResult(
+            EventResult(
                 status=r["status"],  # type: ignore[arg-type]
                 error_message=r.get("error_message"),
             )
             for r in input.results
         ]
-        path = await ack.write(input.events, results, input.workflow_run_id)
+        path = await events_ack(
+            input.events,
+            results,
+            app_name=_APP_NAME,
+            workflow_name=_WORKFLOW_NAME,
+            workflow_run_id=input.workflow_run_id,
+        )
         return WriteAckOutput(ack_path=path)
 
     async def run(self, input: IngestionInput) -> IngestionOutput:  # type: ignore[override]

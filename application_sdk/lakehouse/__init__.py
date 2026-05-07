@@ -9,12 +9,12 @@ Public surface — apps should only import from this module:
   pyiceberg / pyarrow / daft types appear on the public boundary —
   records as dicts, source paths as strings.
 
-* :class:`EventsConsumer` — event-trigger wrapper for AE-driven apps. The
-  caller passes only an async ``process_fn`` callable; the consumer
+* :func:`events_read` — event-trigger wrapper for AE-driven apps. The
+  caller passes only an async ``handler`` callable; ``events_read``
   self-constructs its lakehouse reader from environment credentials. The
-  lakehouse is a blackbox to the events consumer's caller.
+  lakehouse is a blackbox to the events caller.
 
-* :class:`EventAckWriter` — publishes the AE Parquet ack after a batch.
+* :func:`events_ack` — publishes the AE Parquet ack after a batch.
 
 * :class:`LakehouseQuery` — runs arbitrary SQL across one or more lakehouse
   tables (joins, aggregations, window functions) via DuckDB. Tables are
@@ -45,11 +45,11 @@ When to use what
   | window functions across     | over Arrow-staged views)              | sql]``         |
   | multiple tables             |                                       |                |
   +-----------------------------+---------------------------------------+----------------+
-  | Receive an upstream trigger | ``EventsConsumer.handle_events``      | ``[lakehouse]``|
+  | Receive an upstream trigger | ``events_read``                       | ``[lakehouse]``|
   | and dispatch unprocessed    |                                       |                |
-  | events to a process_fn      |                                       |                |
+  | events to a handler         |                                       |                |
   +-----------------------------+---------------------------------------+----------------+
-  | Publish a Parquet ack to AE | ``EventAckWriter.write``              | ``[lakehouse]``|
+  | Publish a Parquet ack to AE | ``events_ack``                        | ``[lakehouse]``|
   | after processing a batch    |                                       |                |
   +-----------------------------+---------------------------------------+----------------+
 
@@ -57,7 +57,7 @@ Install extras
 --------------
 
 * ``pip install atlan-application-sdk[lakehouse]`` — core: PyIceberg + PyArrow.
-  Covers Reader, Writer.append, EventsConsumer, EventAckWriter, schemas.
+  Covers Reader, Writer.append, events_read, events_ack, schemas.
 * ``pip install atlan-application-sdk[lakehouse-sql]`` — adds DuckDB.
   Required for :class:`LakehouseQuery`.
 * ``pip install atlan-application-sdk[lakehouse-bulk]`` — adds Daft.
@@ -103,22 +103,22 @@ Apps must not import from these underscore-prefixed packages.
 
 """
 
-from application_sdk.lakehouse.event_ack import EventAckWriter
-from application_sdk.lakehouse.events_consumer import EventsConsumer
-from application_sdk.lakehouse.models import ProcessingResult
+from application_sdk.lakehouse.events_ack import events_ack
+from application_sdk.lakehouse.events_read import events_read
+from application_sdk.lakehouse.models import EventResult
 from application_sdk.lakehouse.query import LakehouseQuery
 from application_sdk.lakehouse.reader import LakehouseReader
 from application_sdk.lakehouse.schema import Field, PartitionBy, Schema
 from application_sdk.lakehouse.writer import LakehouseWriter
 
 __all__ = [
-    "EventAckWriter",
-    "EventsConsumer",
+    "EventResult",
     "Field",
     "LakehouseQuery",
     "LakehouseReader",
     "LakehouseWriter",
     "PartitionBy",
-    "ProcessingResult",
     "Schema",
+    "events_ack",
+    "events_read",
 ]

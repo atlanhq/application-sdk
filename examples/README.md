@@ -12,7 +12,7 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 | [application_hello_world.py](./application_hello_world.py) | Minimal "Hello World" workflow using the Atlan SDK and Temporal. |
 | [application_fastapi.py](./application_fastapi.py) | Example of exposing workflow operations via a FastAPI server. |
 | [application_custom_fastapi.py](./application_custom_fastapi.py) | FastAPI server with custom routes and workflow integration. |
-| [application_lakehouse_events.py](./application_lakehouse_events.py) | AE-triggered ingestion using `application_sdk.lakehouse.EventsConsumer` + `EventAckWriter`. Reads pending events from the lakehouse, dispatches to a `process_fn`, publishes the AE Parquet ack. Requires the `[lakehouse]` install extra. |
+| [application_lakehouse_events.py](./application_lakehouse_events.py) | AE-triggered ingestion using `application_sdk.lakehouse.events_read` + `events_ack`. Reads pending events from the lakehouse, dispatches to a `handler`, publishes the AE Parquet ack. Requires the `[lakehouse]` install extra. |
 
 ---
 

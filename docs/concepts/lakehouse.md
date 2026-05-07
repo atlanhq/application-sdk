@@ -12,8 +12,8 @@ The Application SDK provides a typed, vendor-agnostic interface for talking to t
 | Append / overwrite large staged Parquet | `LakehouseWriter.append_bulk` | `[lakehouse-bulk]` |
 | Read filtered records from a single table | `LakehouseReader.fetch_records` | `[lakehouse]` |
 | Joins / aggregations / window functions across tables | `LakehouseQuery.sql` | `[lakehouse-sql]` |
-| Receive an upstream trigger and dispatch events | `EventsConsumer.handle_events` | `[lakehouse]` |
-| Publish the AE Parquet ack after a batch | `EventAckWriter.write` | `[lakehouse]` |
+| Receive an upstream trigger and dispatch events | `events_read` | `[lakehouse]` |
+| Publish the AE Parquet ack after a batch | `events_ack` | `[lakehouse]` |
 
 Install:
 
@@ -233,87 +233,96 @@ Requires the `[lakehouse-sql]` extra.
 
 ---
 
-## `EventsConsumer` — AE-triggered ingestion
+## `events_read` — AE-triggered ingestion
 
-For apps that consume events via `event-ingestion-app → AE event-consumer-node → source app workflow`. The consumer takes an async `process_fn` callable, fetches pending events, dispatches them, and returns `(events, results)` — guaranteed 1:1 aligned (RETRY-on-exception, RETRY-on-count-mismatch, no-events-skip).
+For apps that consume events via `event-ingestion-app → AE event-consumer-node → source app workflow`. `events_read` takes an async `handler` callable, fetches pending events, dispatches them, and returns `(events, results)` — guaranteed 1:1 aligned (RETRY-on-exception, RETRY-on-count-mismatch, no-events-skip).
 
 ```python
-from application_sdk.lakehouse import EventsConsumer, ProcessingResult
+from application_sdk.lakehouse import events_read, EventResult
 
-async def process(events: list[dict]) -> list[ProcessingResult]:
+async def handler(events: list[dict]) -> list[EventResult]:
     out = []
     for evt in events:
         try:
             await call_my_business_logic(evt)
-            out.append(ProcessingResult(status="SUCCESS"))
+            out.append(EventResult(status="SUCCESS"))
         except TransientError as exc:
-            out.append(ProcessingResult(status="RETRY", error_message=str(exc)))
+            out.append(EventResult(status="RETRY", error_message=str(exc)))
         except Exception as exc:
-            out.append(ProcessingResult(status="FAILED", error_message=str(exc)))
+            out.append(EventResult(status="FAILED", error_message=str(exc)))
     return out
 
-consumer = EventsConsumer(process)
-events, results = await consumer.handle_events(
-    "automation_engine", "reverse_sync_description",
+events, results = await events_read(
+    namespace="automation_engine",
+    table="reverse_sync_description",
+    handler=handler,
+    where="status = 'unprocessed'",
+    sort_by="received_at",
 )
 # events: list[dict]  — the unprocessed events read from the table
-# results: list[ProcessingResult]  — aligned 1:1 with events
+# results: list[EventResult]  — aligned 1:1 with events
 ```
 
-The consumer self-constructs its `LakehouseReader` from env credentials lazily on first call. No catalog or credentials passed in.
+`events_read` builds its `LakehouseReader` from env credentials each call. No catalog or credentials passed in.
 
 See the module docstring for the full list of known limits of the callable-injection pattern and the planned v2 direction (async-iterator + explicit ack).
 
 ---
 
-## `EventAckWriter` — publish the AE Parquet ack
+## `events_ack` — publish the AE Parquet ack
 
 After processing a batch, AE expects a Parquet ack at a specific path layout so it can mark events as acknowledged without re-reading the lakehouse.
 
 ```python
-from application_sdk.lakehouse import EventAckWriter
+from application_sdk.lakehouse import events_ack
 
-ack = EventAckWriter(
+path = await events_ack(
+    events,
+    results,
     app_name="databricks",
     workflow_name="reverse-sync-description",
+    workflow_run_id="run-abc-123",
     # filename="events_ack.parquet"   # default
 )
-
-path = await ack.write(events, results, workflow_run_id="run-abc-123")
 # path = "artifacts/databricks/reverse-sync-description/2026/05/06/run-abc-123/events_ack.parquet"
 ```
 
-The schema is fixed: three columns (`event_id` string non-null, `status` string non-null, `error_message` string nullable). All path components are validated against an allowlist regex at construction / call time — path-traversal is rejected.
+The schema is fixed: three columns (`event_id` string non-null, `status` string non-null, `error_message` string nullable). All path components (`app_name`, `workflow_name`, `workflow_run_id`, `filename`) are validated against an allowlist regex on each call — path-traversal is rejected.
 
 ---
 
 ## End-to-end: AE-triggered ingestion activity
 
-Complete pattern combining `EventsConsumer` + `EventAckWriter` inside a Temporal activity:
+Complete pattern combining `events_read` + `events_ack` inside a Temporal activity:
 
 ```python
 from temporalio import activity
-from application_sdk.lakehouse import EventsConsumer, EventAckWriter, ProcessingResult
+from application_sdk.lakehouse import events_read, events_ack, EventResult
 
 
 class MyActivities:
     @activity.defn(name="process_events")
     async def process_events(self, events_table: str, run_id: str) -> str:
-        async def _process(events: list[dict]) -> list[ProcessingResult]:
-            return [
-                ProcessingResult(status="SUCCESS")
-                for _ in events
-            ]
+        async def _handler(events: list[dict]) -> list[EventResult]:
+            return [EventResult(status="SUCCESS") for _ in events]
 
-        consumer = EventsConsumer(_process)
-        events, results = await consumer.handle_events(
-            "automation_engine", events_table,
+        events, results = await events_read(
+            namespace="automation_engine",
+            table=events_table,
+            handler=_handler,
+            where="status = 'unprocessed'",
+            sort_by="received_at",
         )
         if not events:
             return ""
 
-        ack = EventAckWriter(app_name="myapp", workflow_name="ingestion")
-        return await ack.write(events, results, workflow_run_id=run_id)
+        return await events_ack(
+            events,
+            results,
+            app_name="myapp",
+            workflow_name="ingestion",
+            workflow_run_id=run_id,
+        )
 ```
 
 The workflow that wraps this activity receives `{"iceberg_table_name": ...}` from AE's event-consumer-node, passes it through, and writes the ack path back to the workflow output. AE picks up the ack file from the standard layout.
@@ -361,4 +370,4 @@ PyIceberg / pyarrow / Polaris / DuckDB / Daft specifics live in:
 * `application_sdk.lakehouse._duckdb` — DuckDB connection factory (configurable tunables) + Arrow-staged query engine
 * `application_sdk.lakehouse._daft` — Daft DataFrame → Iceberg writer
 
-Apps must not import from these underscore-prefixed packages. They're internal — vendor implementation may change without notice. Public API (`LakehouseReader`, `LakehouseWriter`, `LakehouseQuery`, `EventsConsumer`, `EventAckWriter`, `Schema` / `Field` / `PartitionBy`, `ProcessingResult`) is the only supported entry point.
+Apps must not import from these underscore-prefixed packages. They're internal — vendor implementation may change without notice. Public API (`LakehouseReader`, `LakehouseWriter`, `LakehouseQuery`, `events_read`, `events_ack`, `Schema` / `Field` / `PartitionBy`, `EventResult`) is the only supported entry point.

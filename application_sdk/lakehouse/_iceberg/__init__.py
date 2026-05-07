@@ -5,7 +5,7 @@ Generic across IRC (Iceberg REST Catalog) implementations — this is where
 isolated in the sibling :mod:`application_sdk.lakehouse._polaris` package.
 
 Apps must not import from this package; the public surface
-(``LakehouseReader`` / ``LakehouseWriter`` / ``EventsConsumer`` /
-``EventAckWriter`` / ``Schema`` / ``Field`` / ``PartitionBy``) is the only
+(``LakehouseReader`` / ``LakehouseWriter`` / ``events_read`` /
+``events_ack`` / ``Schema`` / ``Field`` / ``PartitionBy``) is the only
 supported entry point.
 """
