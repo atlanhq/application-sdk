@@ -266,15 +266,14 @@ class TestWriterDataIntegrity:
 
 
 class TestParquetWriterDataIntegrity:
-    """Verify ParquetFileWriter preserves all data on disk AND in object store.
+    """Verify ParquetFileWriter preserves all data on disk.
 
     Parquet's pq.write_table() overwrites the target file (unlike JSON which
     appends). The _flush_buffer override in ParquetFileWriter ensures each
-    sub-chunk gets a unique filename and is uploaded immediately. See HYP-773.
+    sub-chunk gets a unique filename via chunk_part advancement. See HYP-773.
 
-    All tests use buffer_size=50 and verify:
-    - Disk: all rows readable from local parquet files
-    - Upload: all rows sent to object store via _upload_file
+    Upload is deferred to the caller via persist_file_reference(); these tests
+    verify only the local-disk contract. All tests use buffer_size=50.
     """
 
     BUFFER_SIZE = 50

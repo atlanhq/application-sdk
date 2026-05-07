@@ -204,45 +204,23 @@ class TestParquetFileWriterWriteDataframe:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test successful DataFrame writing."""
-        with (
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-            patch("pyarrow.parquet.write_table") as mock_write_table,
-        ):
-            mock_upload.return_value = AsyncMock()
-
+        with patch("pyarrow.parquet.write_table") as mock_write_table:
             parquet_output = ParquetFileWriter(
                 path=os.path.join(base_output_path, "test"),
                 use_consolidation=False,
             )
 
-            # Mock os.path.exists after initialization to return True for upload check
-            with patch("os.path.exists", return_value=True):
-                await parquet_output.write(sample_dataframe)
+            await parquet_output.write(sample_dataframe)
 
             assert parquet_output.chunk_count == 1
-
-            # Check that pyarrow write_table was called
             mock_write_table.assert_called()
-
-            # With small dataframes and consolidation disabled, upload may not be called
-            # The important thing is that the dataframe was processed and written
-            # We can verify this by checking the chunk count
 
     @pytest.mark.asyncio
     async def test_write_with_custom_path_gen(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test DataFrame writing with custom path generation."""
-        with (
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-            patch("pyarrow.parquet.write_table") as mock_write_table,
-        ):
-            mock_upload.return_value = AsyncMock()
-
+        with patch("pyarrow.parquet.write_table") as mock_write_table:
             parquet_output = ParquetFileWriter(
                 path=base_output_path,
                 start_marker="test_start",
@@ -251,10 +229,7 @@ class TestParquetFileWriterWriteDataframe:
 
             await parquet_output.write(sample_dataframe)
 
-            # Check that pyarrow write_table was called
             mock_write_table.assert_called()
-
-            # The current implementation uses chunk-based naming even with markers
             call_args = mock_write_table.call_args
             file_path = call_args[0][1]  # Second positional arg is the file path
             assert "chunk-" in str(file_path) and ".parquet" in str(file_path)
@@ -581,16 +556,9 @@ class TestParquetFileWriterMetrics:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test that metrics are recorded for pandas DataFrame writes."""
-        with (
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-            patch("application_sdk.storage.formats._upload_file"),
-            patch(
-                "application_sdk.storage.formats.parquet.get_metrics"
-            ) as mock_get_metrics,
-        ):
-            mock_upload.return_value = AsyncMock()
+        with patch(
+            "application_sdk.storage.formats.parquet.get_metrics"
+        ) as mock_get_metrics:
             mock_metrics = MagicMock()
             mock_get_metrics.return_value = mock_metrics
 
@@ -598,10 +566,7 @@ class TestParquetFileWriterMetrics:
 
             await parquet_output.write(sample_dataframe)
 
-            # Check that record metrics were called
-            assert (
-                mock_metrics.record_metric.call_count >= 2
-            )  # At least records and chunks metrics
+            assert mock_metrics.record_metric.call_count >= 2
 
     @pytest.mark.asyncio
     async def test_daft_write_metrics(self, base_output_path: str):
@@ -784,12 +749,8 @@ class TestParquetFileWriterConsolidation:
         with (
             patch("daft.read_parquet") as mock_read,
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
         ):
             # Setup mocks
-            mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -878,15 +839,7 @@ class TestParquetFileWriterConsolidation:
         with (
             patch("daft.read_parquet") as mock_read,
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-            patch(
-                "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
-            ),
         ):
-            # Setup mocks
-            mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -1060,15 +1013,7 @@ class TestParquetFileWriterConsolidation:
         with (
             patch("daft.read_parquet") as mock_read,
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-            patch(
-                "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
-            ),
         ):
-            # Setup mocks
-            mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -1191,12 +1136,7 @@ class TestParquetFileWriterConsolidation:
         with (
             patch("daft.read_parquet") as mock_read,
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
         ):
-            # Setup mocks
-            mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
