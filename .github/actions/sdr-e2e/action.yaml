@@ -184,6 +184,43 @@ runs:
         # are simple paths, no whitespace issues).
         echo "files=${FILES[*]}" >> "$GITHUB_OUTPUT"
 
+    # GH-runner docker bridges have no global IPv6 routing, but
+    # temporalio's bundled Rust gRPC resolver returns AAAA records and
+    # tries them first. With temporalio 1.27.x, the IPv6 → IPv4 fallback
+    # doesn't fit inside the container-health timeout and the worker
+    # never finishes connecting. Resolve the Temporal + auth hostnames
+    # to IPv4 on the runner (which has working IPv4) and inject them
+    # into /etc/hosts via compose extra_hosts so the resolver only ever
+    # sees A records.
+    #
+    # Hostnames are derived from CI_TENANT_DOMAIN
+    # (convention: <tenant>.atlan.com → <tenant>-temporal.atlan.com).
+    - name: Resolve Temporal + auth hostnames to IPv4
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -z "${CI_TENANT_DOMAIN:-}" ]; then
+          echo "::error::CI_TENANT_DOMAIN is not set; the caller workflow must export it as a job-level env var."
+          exit 1
+        fi
+        AUTH_HOST="$CI_TENANT_DOMAIN"
+        TEMPORAL_HOST="${CI_TENANT_DOMAIN%.atlan.com}-temporal.atlan.com"
+        AUTH_IPV4=$(dig +short A "$AUTH_HOST" | head -1)
+        TEMPORAL_IPV4=$(dig +short A "$TEMPORAL_HOST" | head -1)
+        if [ -z "$AUTH_IPV4" ] || [ -z "$TEMPORAL_IPV4" ]; then
+          echo "::error::Failed to resolve TEMPORAL_HOST=$TEMPORAL_HOST or AUTH_HOST=$AUTH_HOST"
+          exit 1
+        fi
+        echo "Resolved $AUTH_HOST -> $AUTH_IPV4"
+        echo "Resolved $TEMPORAL_HOST -> $TEMPORAL_IPV4"
+        # Export for compose extra_hosts substitution.
+        {
+          echo "AUTH_HOST=$AUTH_HOST"
+          echo "AUTH_IPV4=$AUTH_IPV4"
+          echo "TEMPORAL_HOST=$TEMPORAL_HOST"
+          echo "TEMPORAL_IPV4=$TEMPORAL_IPV4"
+        } >> "$GITHUB_ENV"
+
     - name: Start SDR container
       shell: bash
       run: docker compose ${{ steps.compose_files.outputs.files }} up -d

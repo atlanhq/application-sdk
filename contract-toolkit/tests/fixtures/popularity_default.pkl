@@ -1,0 +1,90 @@
+/// Minimal example demonstrating the built-in `PopularityNode`.
+///
+/// The source workflow is expected to mine query history, publish assets, and
+/// expose the exact object-store prefixes consumed below. Popularity depends on
+/// the QI node for parsed SQL and on the publish node for the SQLite connection
+/// cache, but the paths are explicit because both child workflows currently
+/// return no output paths.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "popularity-node"
+displayName = "Popularity Node Example"
+connector = Connectors.SNOWFLAKE
+workflowType = "SnowflakePopularityExampleWorkflow"
+icon = "https://assets.atlan.com/assets/snowflake.svg"
+credentialConnectorType = "jdbc"
+hasPublishInputFields = false
+
+credentialCommonFields {
+  new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+}
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-popularity-node"
+          placeholderText = "Credential Guid"
+        }
+      }
+    }
+    ["Connection"] {
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}
+
+extraNodes {
+  ["qi"] = new QueryIntelligenceNode {
+    vendorName = "snowflake"
+    sqlKey = "QUERY_TEXT"
+    catalogKey = "DATABASE_NAME"
+    schemaKey = "SCHEMA_NAME"
+    timestampKey = "START_TIME"
+    mineOutputType = "parquet"
+    parsingMode = "fallback"
+    inputPrefix = "$.extract.outputs.query_history_prefix"
+    outputPrefix = "$.extract.outputs.qi_output_prefix"
+  }
+  ["publish"] = new PublishNode {
+    args {
+      ["connection_cache_enabled"] = true
+      ["connection_cache_via_app_enabled"] = true
+      ["current_state_via_app_enabled"] = true
+    }
+  }
+  ["popularity"] = new PopularityNode {
+    tenantId = "$.extract.outputs.tenant_id"
+    parsedDataPrefix = "$.extract.outputs.qi_output_prefix"
+    minedDataPrefix = "$.extract.outputs.query_history_prefix"
+    connectionCachePath = "$.extract.outputs.connection_cache_path"
+    outputPrefix = "$.extract.outputs.popularity_output_prefix"
+    accessHistoryDataPrefix = "$.extract.outputs.access_history_prefix"
+    mineColumnMapping = new PopularityMineColumnMapping {
+      queryTag = "QUERY_TAG"
+      queryTagsSql = "QUERY_TAGS_SQL"
+      hasNativeInputs = "HAS_NATIVE_INPUTS"
+      nativeInputsPayload = "NATIVE_INPUTS_PAYLOAD"
+    }
+  }
+}

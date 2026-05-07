@@ -23,6 +23,14 @@ services:
     # Ensure CWD is /app so that Path("./components") in create_store_from_binding
     # resolves to /app/components (the bind-mounted Dapr components directory).
     working_dir: /app
+    # Pin Temporal + auth hostnames to IPv4 so the bundled Rust gRPC
+    # resolver in temporalio 1.27.x doesn't try AAAA records the
+    # GH-runner docker bridge can't reach. The composite action's
+    # "Resolve Temporal + auth hostnames to IPv4" step exports
+    # TEMPORAL_HOST/IPV4 + AUTH_HOST/IPV4 for the substitution below.
+    extra_hosts:
+      - "${TEMPORAL_HOST}:${TEMPORAL_IPV4}"
+      - "${AUTH_HOST}:${AUTH_IPV4}"
     # Mount CI-generated secrets file for the local.file Dapr secret store.
     volumes:
       - ${GITHUB_WORKSPACE}/.github/e2e/secrets:/app/secrets:ro
