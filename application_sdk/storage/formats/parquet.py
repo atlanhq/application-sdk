@@ -807,11 +807,6 @@ class ParquetFileWriter(Writer):
                         )
                         SafeFileOps.rename(file_path, consolidated_file_path)
 
-                        # Upload consolidated file to object store
-                        await _upload_file(
-                            consolidated_file_path, consolidated_file_path
-                        )
-
                 # Clean up temp consolidated dir
                 SafeFileOps.rmtree(temp_consolidated_dir, ignore_errors=True)
 
@@ -873,7 +868,7 @@ class ParquetFileWriter(Writer):
             logger.warning("Error cleaning up temp folders", exc_info=True)
 
     async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
-        """Flush a buffer chunk to a Parquet file, upload it, and advance chunk_part.
+        """Flush a buffer chunk to a Parquet file and advance chunk_part.
 
         Overrides base Writer._flush_buffer because Parquet files cannot be
         appended to (unlike JSON where _write_chunk uses open("a")).
@@ -881,20 +876,10 @@ class ParquetFileWriter(Writer):
         override _write_dataframe's buffer loop writes every sub-chunk to the
         same filename, silently losing all data except the last sub-chunk.
 
-        Each parquet sub-chunk file is complete after write (no appending), so
-        we upload it to the object store immediately. The base class post-loop
-        upload only handles the last file and would miss intermediate sub-chunks.
-        See HYP-773.
+        Upload is deferred to the caller via FileReference / persist_file_reference
+        rather than happening inline here. See HYP-773, BLDX-1136.
         """
         await super()._flush_buffer(chunk, chunk_part)
-        # Upload the completed parquet file to object store.
-        output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
-        if os.path.exists(output_file_name):
-            try:
-                await self._upload_file(output_file_name)
-            except RuntimeError:
-                # No object store configured (local dev) — file stays on disk.
-                logger.debug("No object store configured, skipping upload")
         # Advance part so the next sub-chunk gets a unique filename.
         self.chunk_part += 1
 

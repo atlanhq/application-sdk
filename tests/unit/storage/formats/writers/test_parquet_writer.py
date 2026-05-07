@@ -12,6 +12,7 @@ import pytest
 
 from application_sdk import constants
 from application_sdk.common.types import DataframeType
+from application_sdk.contracts.types import FileReference
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
     clear_infrastructure,
@@ -21,6 +22,7 @@ from application_sdk.storage.batch import list_keys
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.formats.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.storage.formats.utils import path_gen
+from application_sdk.storage.reference import persist_file_reference
 
 
 @pytest.fixture
@@ -333,6 +335,9 @@ class TestParquetFileWriterReplacePrefix:
                 )
             )
             await first_writer.close()
+            await persist_file_reference(
+                store, FileReference(local_path=str(table_path))
+            )
 
             first_keys = await list_keys(str(table_path), store, suffix=".parquet")
             assert any("/chunk-1-part0.parquet" in key for key in first_keys)
@@ -356,6 +361,9 @@ class TestParquetFileWriterReplacePrefix:
                 )
             )
             await second_writer.close()
+            await persist_file_reference(
+                store, FileReference(local_path=str(table_path))
+            )
 
             second_keys = await list_keys(str(table_path), store, suffix=".parquet")
             assert len(second_keys) == 3
@@ -818,7 +826,6 @@ class TestParquetFileWriterConsolidation:
                 # Check that Daft was called correctly
                 mock_read.assert_called_once()
                 mock_df.write_parquet.assert_called_once()
-                mock_upload.assert_called_once()
 
                 # Check statistics were updated
                 assert parquet_output.chunk_count == 1
