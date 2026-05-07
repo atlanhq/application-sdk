@@ -32,9 +32,10 @@ app/generated/
 For the complete authoring reference, examples, and validation commands, see
 `contract-toolkit/README.md` and `contract-toolkit/docs/reference.md`.
 
-For public app-author examples, start with `contract-toolkit/examples/clickhouse`
-for a SQL datasource derived from legacy templates, `contract-toolkit/examples/openapi`
+For public app-author examples, start with `contract-toolkit/examples/openapi`
 for URL/cloud import modes plus an extra credential configmap,
 `contract-toolkit/examples/postgres` for a basic SQL datasource, and
 `contract-toolkit/examples/trino` for multi-catalog SQL-tree filtering. The
 generic capability examples are `connection-ref`, `fanin`, and `publish-controls`.
+App-specific wiring examples should live with sample apps or the owning app
+repository; test-only scenarios live under `contract-toolkit/tests/fixtures`.

@@ -2,10 +2,10 @@
 
 amends "pkl:test"
 
-import "../examples/qi-node/app.pkl" as qiNodeApp
+import "fixtures/qi_node_placeholders.pkl" as qiNodeFixture
 import "../src/NativeApp.pkl" as NativeApp
 
-local qiNodeManifestJson: String = qiNodeApp.output.files["manifest.json"].text
+local qiNodeManifestJson: String = qiNodeFixture.output.files["manifest.json"].text
 local defaultQueryIntelligenceNode = new NativeApp.QueryIntelligenceNode {
   vendorName = "athena"
   sqlKey = "QUERY_TEXT"

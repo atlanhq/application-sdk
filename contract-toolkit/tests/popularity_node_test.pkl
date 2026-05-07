@@ -2,7 +2,7 @@
 
 amends "pkl:test"
 
-import "../examples/popularity/app.pkl" as popularityApp
+import "fixtures/popularity_default.pkl" as popularityApp
 import "fixtures/popularity_dynamic_overrides.pkl" as dynamicPopularityApp
 import "../src/NativeApp.pkl" as NativeApp
 
@@ -57,7 +57,7 @@ facts {
     workflowJson.contains("\"Connection Name\"")
     manifestJson.contains("\"connection_entity\": \"{{connection}}\"")
   }
-  ["Default popularity example does not expose pass-through scalar controls"] {
+  ["Default popularity fixture does not expose pass-through scalar controls"] {
     !workflowJson.contains("\"popularity-window-days\"")
     !workflowJson.contains("\"popularity-top-n-queries\"")
     !workflowJson.contains("\"popularity-top-n-users\"")
@@ -94,7 +94,7 @@ facts {
     templatedPopularityNode.args["relationships_output_attribution"] == "{{popularity-output-attribution}}"
     templatedPopularityNode.args["dry_run"] == "{{popularity-dry-run}}"
   }
-  ["Default popularity example omits scalar args owned by the app default"] {
+  ["Default popularity fixture omits scalar args owned by the app default"] {
     !manifestJson.contains("\"window_days\"")
     !manifestJson.contains("\"top_n_queries\"")
     !manifestJson.contains("\"top_n_users\"")
@@ -102,7 +102,7 @@ facts {
     !manifestJson.contains("\"parsed_data_filter_has_error\"")
     !manifestJson.contains("\"relationships_output_attribution\"")
   }
-  ["Default popularity example omits scalar pass-through SDK inputs"] {
+  ["Default popularity fixture omits scalar pass-through SDK inputs"] {
     !inputPy.contains("popularity_window_days:")
     !inputPy.contains("popularity_top_n_queries:")
     !inputPy.contains("popularity_top_n_users:")

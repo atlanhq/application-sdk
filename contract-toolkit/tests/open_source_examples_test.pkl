@@ -1,6 +1,5 @@
 amends "pkl:test"
 
-import "../examples/clickhouse/app.pkl" as clickhouseApp
 import "../examples/connection-ref/app.pkl" as connectionRefApp
 import "../examples/fanin/app.pkl" as faninApp
 import "../examples/openapi/app.pkl" as openapiApp
@@ -8,10 +7,6 @@ import "../examples/postgres/app.pkl" as postgresApp
 import "../examples/publish-controls/app.pkl" as publishControlsApp
 import "../examples/trino/app.pkl" as trinoApp
 
-local clickhouseWorkflowJson: String = clickhouseApp.output.files["clickhouse.json"].text
-local clickhouseCredentialJson: String = clickhouseApp.output.files["atlan-connectors-clickhouse.json"].text
-local clickhouseManifestJson: String = clickhouseApp.output.files["manifest.json"].text
-local clickhouseInputPy: String = clickhouseApp.output.files["_input.py"].text
 local connectionRefWorkflowJson: String = connectionRefApp.output.files["connection-ref.json"].text
 local connectionRefManifestJson: String = connectionRefApp.output.files["manifest.json"].text
 local faninManifestJson: String = faninApp.output.files["manifest.json"].text
@@ -51,30 +46,6 @@ facts {
   ["OpenAPI manifest uses the native openapi workflow type"] {
     openapiManifestJson.contains("\"workflow_type\": \"openapi\"")
     openapiManifestJson.contains("\"cloud_source\": \"{{cloud_source}}\"")
-  }
-
-  ["ClickHouse emits SQL tree filters and preflight checks"] {
-    clickhouseWorkflowJson.contains("\"widget\": \"sqltree\"")
-    clickhouseWorkflowJson.contains("system.databases")
-    clickhouseWorkflowJson.contains("\"schemaExcludePattern\"")
-    clickhouseWorkflowJson.contains("\"widget\": \"sage\"")
-    clickhouseWorkflowJson.contains("\"connectionTest\"")
-    clickhouseWorkflowJson.contains("\"systemTablesAccess\"")
-    clickhouseWorkflowJson.contains("\"columnMetadataAccess\"")
-  }
-
-  ["ClickHouse emits a native credential config"] {
-    clickhouseCredentialJson.contains("\"connector\": \"clickhouse\"")
-    clickhouseCredentialJson.contains("\"defaultConnectorType\": \"jdbc\"")
-    clickhouseCredentialJson.contains("\"label\": \"Host Name\"")
-    clickhouseCredentialJson.contains("\"widget\": \"password\"")
-  }
-
-  ["ClickHouse preserves the older runtime workflow type override"] {
-    clickhouseManifestJson.contains("\"workflow_type\": \"SQLMetadataExtractionWorkflow\"")
-    clickhouseManifestJson.contains("\"include_filter\": \"{{include-filter}}\"")
-    !clickhouseInputPy.contains("include_filter")
-    clickhouseInputPy.contains("preflight_check")
   }
 
   ["Trino remains the generic SQL connector example"] {

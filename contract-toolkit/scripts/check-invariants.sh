@@ -27,7 +27,7 @@ done
 # --------------------------------------------------------------------------
 echo ":: Checking _input.py syntax..."
 for f in $(find examples -name '_input.py'); do
-  if ! python3 -c "import ast; ast.parse(open('$f').read())" 2>/dev/null; then
+  if ! python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" 2>/dev/null; then
     echo "FAIL: $f is not valid Python"
     fail=1
   fi

@@ -167,7 +167,8 @@ jobs:
             contract-toolkit/docs/reference.md
           do
             if ! git diff --name-only "$base" "$head" | grep -q "^${doc}$"; then
-              missing="${missing}\n- \`${doc}\`"
+              missing="${missing}
+          - \`${doc}\`"
             fi
           done
 
@@ -178,7 +179,7 @@ jobs:
 
           body="$(cat <<EOF
           **Docs reminder:** \`contract-toolkit/src/\` changed, but these docs were not updated:
-          $(printf '%b' "$missing")
+          $missing
 
           Per toolkit convention, public PKL changes should update:
           - \`contract-toolkit/README.md\`

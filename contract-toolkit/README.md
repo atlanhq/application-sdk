@@ -88,25 +88,24 @@ The SDK auto-serves these from `ATLAN_CONTRACT_GENERATED_DIR`, defaulting to `ap
 
 ## Curated Examples
 
-The `examples/` directory contains executable contracts. The most useful
-open-source examples for app authors are:
+The `examples/` directory contains a small curated set of executable contracts
+that teach stable toolkit patterns. App-specific wiring examples should live
+with sample apps or the owning app repository; test-only scenarios belong under
+`tests/fixtures/`.
 
-- [`examples/clickhouse/`](examples/clickhouse/) — SQL datasource contract
-  deduced from legacy workflow and credential templates, including SQL-tree
-  filters and preflight checks.
+- [`examples/connection-ref/`](examples/connection-ref/) — generic
+  `ConnectionRefInput` usage.
+- [`examples/fanin/`](examples/fanin/) — custom DAG fan-in and dependency
+  conditions.
 - [`examples/openapi/`](examples/openapi/) — OpenAPI spec loader contract with
   URL/cloud import modes and an extra object-store credential configmap emitted
   through `additionalOutputFiles`.
 - [`examples/postgres/`](examples/postgres/) — basic open-source SQL datasource
   contract with JDBC credentials and SQL-tree filtering.
-- [`examples/trino/`](examples/trino/) — multi-catalog SQL connector with
-  reusable credential config and SQL-tree filtering.
-- [`examples/connection-ref/`](examples/connection-ref/) — generic
-  `ConnectionRefInput` usage.
-- [`examples/fanin/`](examples/fanin/) — custom DAG fan-in and dependency
-  conditions.
 - [`examples/publish-controls/`](examples/publish-controls/) — explicit
   publish toggles and publish executor templating.
+- [`examples/trino/`](examples/trino/) — multi-catalog SQL connector with
+  reusable credential config and SQL-tree filtering.
 
 ## What Gets Generated
 
@@ -753,7 +752,9 @@ amend that publish node's args:
 }
 ```
 
-See [`examples/popularity/`](examples/popularity/) for the full DAG shape.
+The SDK repository keeps richer popularity wiring scenarios under
+`tests/fixtures/` so automated coverage does not turn app-specific contracts
+into public examples.
 
 ### `LineageNode` — Pre-built Lineage App Node
 

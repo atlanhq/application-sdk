@@ -8,3 +8,4 @@
 - `examples/` contains runnable sample applications.
 
 For which docs to update when code changes, see `docs/agents/docs-updates.md`.
+For the generated public SDK surface inventory, see `docs/agents/sdk-capabilities.md`.
