@@ -39,19 +39,7 @@ seams when:
 * **Resource lifecycle.** The consumer doesn't run setup/teardown hooks for
   resources ``process_fn`` needs (DB connections, HTTP clients, model
   caches). Closures capture them, but lifecycle is then coupled to the call
-  site by indentation. For class-style with lifecycle, pass a bound method::
-
-      class Worker:
-          def __init__(self): self._client = ...
-          async def process(self, events): ...
-          async def close(self): await self._client.aclose()
-
-      worker = Worker()
-      try:
-          consumer = EventsConsumer(worker.process)
-          events, results = await consumer.handle_events(ns, table)
-      finally:
-          await worker.close()
+  site by indentation.
 
 * **Per-batch context.** ``process_fn`` receives only the events list. If
   it needs ``run_id`` / ``trigger_id`` / ``snapshot_id`` for tagging or
@@ -94,9 +82,8 @@ class EventsConsumer:
     Constructs its lakehouse reader from environment credentials lazily on
     first call to :meth:`handle_events` — apps don't pass a catalog in.
 
-    See the module docstring for what this earns its keep doing, the known
-    limits of the callable-injection pattern, and the bound-method escape
-    hatch for class-style usage with resource lifecycle.
+    See the module docstring for what this earns its keep doing and the
+    known limits of the callable-injection pattern.
     """
 
     def __init__(self, process_fn: ProcessFn) -> None:

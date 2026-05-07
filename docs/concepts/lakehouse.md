@@ -262,31 +262,6 @@ events, results = await consumer.handle_events(
 
 The consumer self-constructs its `LakehouseReader` from env credentials lazily on first call. No catalog or credentials passed in.
 
-### Class-style escape hatch (resource lifecycle)
-
-When `process_fn` needs setup/teardown (DB connections, HTTP clients, etc.), pass a bound method on a class you manage:
-
-```python
-class Worker:
-    def __init__(self):
-        self._client = httpx.AsyncClient(timeout=10.0)
-
-    async def process(self, events: list[dict]) -> list[ProcessingResult]:
-        # ... use self._client
-        return [...]
-
-    async def close(self) -> None:
-        await self._client.aclose()
-
-
-worker = Worker()
-try:
-    consumer = EventsConsumer(worker.process)
-    events, results = await consumer.handle_events(ns, table)
-finally:
-    await worker.close()
-```
-
 See the module docstring for the full list of known limits of the callable-injection pattern and the planned v2 direction (async-iterator + explicit ack).
 
 ---
