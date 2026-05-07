@@ -42,7 +42,6 @@ pkl eval -m examples/trino/generated examples/trino/app.pkl
 
 ## Current Examples
 
-- `clickhouse`: open-source SQL datasource from legacy templates.
 - `openapi`: OpenAPI loader with extra object-store credential output.
 - `postgres`: basic open-source SQL datasource.
 - `trino`: multi-catalog SQL tree.

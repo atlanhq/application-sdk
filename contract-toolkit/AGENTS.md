@@ -54,7 +54,6 @@ scripts/
 |-- check-invariants.sh
 `-- test-sdk-import.py
 examples/
-|-- clickhouse/            # Open-source SQL datasource from legacy templates
 |-- connection-ref/        # ConnectionRefInput typed output
 |-- fanin/                 # DependencyCondition and fan-in
 |-- openapi/               # OpenAPI loader with extra object-store credential
