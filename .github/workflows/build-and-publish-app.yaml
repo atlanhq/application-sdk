@@ -285,14 +285,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
-      - name: Log in to Docker Hub
-        if: needs.prepare.outputs.enable_sdr == 'true'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: docker.io
-          username: atlanhq
-          password: ${{ secrets.DOCKER_HUB_PAT_RW }}
-
       - name: Create and push multi-arch manifest
         env:
           GHCR_BASE:       ${{ needs.prepare.outputs.ghcr_base }}
@@ -324,17 +316,6 @@ jobs:
             while IFS= read -r tag; do [ -n "$tag" ] && echo "    ${tag}"; done <<< "${RELEASE_TAGS}"
           fi
 
-      - name: Push to Docker Hub (re-tag, no rebuild)
-        if: needs.prepare.outputs.enable_sdr == 'true'
-        env:
-          GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
-          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
-        run: |
-          docker buildx imagetools create \
-            --tag "${DOCKERHUB_IMAGE}" \
-            "${GHCR_IMAGE}"
-          echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
-
       - name: Summary
         run: |
           echo "### Build complete" >> $GITHUB_STEP_SUMMARY
@@ -361,29 +342,39 @@ jobs:
       fail_on_findings: false
     secrets: inherit
 
-  # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
-  app-deployment-dispatcher:
-    name: Dispatch App Deployment
+  # ── Job 5: Push immutable tag to Docker Hub (SDR apps, security-gated) ──────
+  # Runs after the security scan completes — ensures the image has been scanned
+  # before it lands on Docker Hub. Pushes only the immutable <branch>-<sha7> tag.
+  # The mutable <branch>-latest tag is pushed by build-and-push-sdr.yml, which is
+  # triggered by Global Marketplace after a channel=all release is approved.
+  push-to-dockerhub:
+    name: Push to Docker Hub
     needs: [prepare, merge, security-scan]
-    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true'
+    if: needs.prepare.outputs.enable_sdr == 'true' && needs.security-scan.result == 'success'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        repo: ['atlanhq/atlan-apps-deployment']
+    timeout-minutes: 10
     steps:
-      - name: Repository Dispatch
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3.0.0
-        with:
-          token: ${{ secrets.ORG_PAT_GITHUB }}
-          repository: ${{ matrix.repo }}
-          event-type: dispatch_app_builder_workflow
-          client-payload: |-
-            {
-                "app_name": "${{ needs.prepare.outputs.app_name }}",
-                "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
-            }
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-  # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: docker.io
+          username: atlanhq
+          password: ${{ secrets.DOCKER_HUB_PAT_RW }}
+
+      - name: Push immutable tag to Docker Hub (re-tag from GHCR, no rebuild)
+        env:
+          GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${DOCKERHUB_IMAGE}" \
+            "${GHCR_IMAGE}"
+          echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+
+  # ── Job 6: Publish to Global Marketplace ────────────────────────────────────
   publish:
     name: Publish to Marketplace
     needs: [prepare, merge, security-scan]
