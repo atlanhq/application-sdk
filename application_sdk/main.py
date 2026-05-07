@@ -611,11 +611,35 @@ def _install_graceful_signal_handlers(
 ) -> None:
     """Register SIGINT/SIGTERM handlers, with a fallback for platforms that
     don't support loop.add_signal_handler() (e.g. Windows).
+
+    Wraps the caller's handler so the process-wide worker-shutdown flag is
+    set before any caller-specific shutdown logic runs. The activity wrapper
+    reads that flag to attribute mid-activity ``asyncio.CancelledError`` to
+    pod termination instead of ordinary cancellation.
     """
+    from application_sdk.execution.shutdown import (  # noqa: PLC0415 — keep main.py import surface narrow
+        mark_worker_shutting_down,
+    )
+
+    def _wrapped_handler() -> None:
+        mark_worker_shutting_down()
+        handler()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, handler)
+            loop.add_signal_handler(sig, _wrapped_handler)
         except (NotImplementedError, OSError):
+            # Platforms that don't support ``loop.add_signal_handler`` (e.g.
+            # Windows) still need the worker-shutdown flag set so the
+            # eviction-retry path attributes mid-activity ``CancelledError``
+            # correctly. Drop in a plain ``signal.signal`` fallback that, at
+            # minimum, flips the flag — graceful-shutdown event integration
+            # is still unavailable in this branch but eviction detection
+            # continues to work.
+            try:
+                signal.signal(sig, lambda *_: mark_worker_shutting_down())
+            except (ValueError, OSError):
+                pass  # not on the main thread or signal is reserved
             logger.warning(
                 "loop.add_signal_handler() not supported on this platform "
                 "(signal=%s); graceful shutdown via signals is unavailable",
