@@ -405,7 +405,7 @@ class TestRunOutputPrefixes:
         app._app_name = "test-app"
         return app
 
-    def test_uses_input_output_path_when_set(self):
+    async def test_uses_input_output_path_when_set(self):
         """When input.output_path is provided, use it directly (no workflow context needed)."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -465,9 +465,7 @@ class TestRunOutputPrefixes:
             ),
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
         ):
-            import asyncio
-
-            result = asyncio.run(app.run(input_))
+            result = await app.run(input_)
 
         # With output_path set, transformed_data_prefix uses it directly
         assert (
@@ -475,7 +473,7 @@ class TestRunOutputPrefixes:
             in result.transformed_data_prefix
         )
 
-    def test_uses_workflow_info_when_output_path_empty(self):
+    async def test_uses_workflow_info_when_output_path_empty(self):
         """When input.output_path is empty, derive path from workflow.info()."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -532,16 +530,14 @@ class TestRunOutputPrefixes:
             ),
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
         ):
-            import asyncio
-
-            result = asyncio.run(app.run(input_))
+            result = await app.run(input_)
 
         # Must contain the workflow_id and run_id from workflow.info()
         assert "test-wf-123" in result.transformed_data_prefix
         assert "test-run-456" in result.transformed_data_prefix
         assert result.transformed_data_prefix.endswith("/transformed")
 
-    def test_build_output_path_not_called_in_run(self):
+    async def test_build_output_path_not_called_in_run(self):
         """build_output_path() (activity-only) must NOT be called from run()."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -597,9 +593,7 @@ class TestRunOutputPrefixes:
             ),
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
         ):
-            import asyncio
-
-            asyncio.run(app.run(input_))
+            await app.run(input_)
 
         # build_output_path must NOT be called from run() — it would crash in workflow context
         mock_bop.assert_not_called()
