@@ -23,38 +23,53 @@ jobs:
       - name: Pull target image
         run: docker pull "$TARGET_IMAGE"
 
+      # Install latest Trivy CLI directly. The pinned aquasecurity/trivy-action
+      # v0.36.0 ships an older Trivy that emits
+      #   WARN [applier] Some OS packages were skipped due to mismatched PURL
+      #   namespace pkg_count=159 detected_os="chainguard"
+      # and silently reports 0 OS findings on Chainguard/Wolfi images.
+      - name: Install Trivy CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            https://api.github.com/repos/aquasecurity/trivy/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+          curl -sL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            -o /tmp/trivy.tar.gz
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo mv /tmp/trivy /usr/local/bin/trivy
+          trivy --version
+
       # ── Trivy image scan ──────────────────────────────────────────────────
 
       - name: Trivy image scan (JSON)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ env.TARGET_IMAGE }}
-          scanners: vuln
-          ignore-unfixed: true
-          format: json
-          output: trivy-image-results.json
-          severity: CRITICAL,HIGH,MEDIUM,LOW
-          exit-code: '0'
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        run: |
+          trivy image \
+            --scanners vuln \
+            --ignore-unfixed \
+            --severity CRITICAL,HIGH,MEDIUM,LOW \
+            --format json \
+            --output trivy-image-results.json \
+            "$TARGET_IMAGE"
 
       # ── Trivy filesystem scan (uv.lock / pyproject.toml) ─────────────────
 
       - name: Trivy filesystem scan (uv.lock / pyproject.toml)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln
-          ignore-unfixed: true
-          format: json
-          output: trivy-fs-results.json
-          severity: CRITICAL,HIGH,MEDIUM,LOW
-          exit-code: '0'
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        run: |
+          trivy fs \
+            --scanners vuln \
+            --ignore-unfixed \
+            --severity CRITICAL,HIGH,MEDIUM,LOW \
+            --format json \
+            --output trivy-fs-results.json \
+            .
 
       # ── Snyk scans ────────────────────────────────────────────────────────
 
@@ -62,14 +77,21 @@ jobs:
         uses: snyk/actions/setup@b98d498629f1c368650224d6d212bf7dfa89e4bf # 0.4.0
 
       - name: Run Snyk container scan
+        id: snyk_image
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           SNYK_API: https://api.us.snyk.io
         run: |
+          # Capture stdout so we can sanity-check the parser against Snyk's own
+          # "found N issues" line (the prior parser silently reported 0 even
+          # when Snyk found 12).
           snyk container test "$TARGET_IMAGE" \
             --severity-threshold=low \
             --org=bu-apps \
-            --json-file-output=snyk-image-results.json || true
+            --json-file-output=snyk-image-results.json \
+            2>&1 | tee /tmp/snyk-image-stdout.txt || true
+          ISSUES=$(grep -oE 'found [0-9]+ issues?' /tmp/snyk-image-stdout.txt | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          echo "stdout_issues=${ISSUES}" >> "$GITHUB_OUTPUT"
 
       - name: Set up uv (for Snyk Python dep resolution)
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -81,6 +103,7 @@ jobs:
           uv export --format requirements-txt --no-dev --frozen --no-hashes --no-emit-project --output-file=/tmp/snyk-requirements.txt
 
       - name: Run Snyk Python deps scan (pyproject.toml / uv.lock)
+        id: snyk_python
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           SNYK_API: https://api.us.snyk.io
@@ -91,21 +114,44 @@ jobs:
             --command=.venv/bin/python3 \
             --severity-threshold=low \
             --org=bu-apps \
-            --json-file-output=snyk-python-results.json || true
+            --json-file-output=snyk-python-results.json \
+            2>&1 | tee /tmp/snyk-python-stdout.txt || true
           if [ ! -f snyk-python-results.json ]; then
             echo "::warning::Snyk Python scan produced no output — check SNYK_TOKEN and org access"
           elif jq -e '.error' snyk-python-results.json >/dev/null 2>&1; then
             ERR=$(jq -r '.error' snyk-python-results.json)
             echo "::warning::Snyk Python deps scan failed: $ERR — python counts will be 0"
           fi
+          ISSUES=$(grep -oE 'found [0-9]+ issues?' /tmp/snyk-python-stdout.txt 2>/dev/null | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          echo "stdout_issues=${ISSUES}" >> "$GITHUB_OUTPUT"
 
       # ── Parse results ─────────────────────────────────────────────────────
 
       - name: Parse scan results
         id: parse
         run: |
-          count_trivy_file() { jq "[.Results[]?.Vulnerabilities[]? | select(.Severity == \"$2\")] | length" "$1" 2>/dev/null || echo 0; }
-          count_snyk_file()  { jq "[.vulnerabilities[]? | select(.severity == \"$2\") | select((.type // \"vuln\") != \"license\")] | length" "$1" 2>/dev/null || echo 0; }
+          # Trivy: same shape across versions (.Results[].Vulnerabilities[]).
+          count_trivy_file() {
+            jq --arg sev "$2" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $sev)] | length' "$1" 2>/dev/null || echo 0
+          }
+          # Snyk JSON has three shapes depending on what was scanned:
+          #   1. Single-target test → top-level object with .vulnerabilities[]
+          #   2. Multi-target scan  → root JSON array, each elem has .vulnerabilities[]
+          #   3. Container scan with apps → object with nested .applications[].vulnerabilities[]
+          # The previous parser only handled (1) and silently returned 0 for (2)/(3),
+          # which is why a scan that found 12 issues reported 0/0/0/0.
+          count_snyk_file() {
+            jq --arg sev "$2" '
+              [
+                (if type == "array" then .[] else . end)
+                | (.vulnerabilities[]?, .applications[]?.vulnerabilities[]?)
+                | select(.severity == $sev)
+                | select((.type // "vuln") != "license")
+              ]
+              | unique_by(.id)
+              | length
+            ' "$1" 2>/dev/null || echo 0
+          }
 
           TI_CRIT=0; TI_HIGH=0; TI_MED=0; TI_LOW=0
           TF_CRIT=0; TF_HIGH=0; TF_MED=0; TF_LOW=0
@@ -133,11 +179,28 @@ jobs:
             SI_LOW=$(count_snyk_file  snyk-image-results.json low)
           fi
 
+          # Sanity check: if Snyk's stdout reported issues but the parser
+          # extracted zero across every severity, the JSON shape changed and
+          # this workflow is silently lying. Fail loud instead.
+          SNYK_IMG_TOTAL=$((SI_CRIT + SI_HIGH + SI_MED + SI_LOW))
+          SNYK_IMG_STDOUT="${{ steps.snyk_image.outputs.stdout_issues }}"
+          if [ "${SNYK_IMG_STDOUT:-0}" -gt 0 ] && [ "$SNYK_IMG_TOTAL" -eq 0 ]; then
+            echo "::error::Snyk container reported ${SNYK_IMG_STDOUT} issues but parser counted 0 — Snyk JSON schema likely changed; fix count_snyk_file() in this workflow."
+            exit 1
+          fi
+
           if [ -f snyk-python-results.json ]; then
             SP_CRIT=$(count_snyk_file snyk-python-results.json critical)
             SP_HIGH=$(count_snyk_file snyk-python-results.json high)
             SP_MED=$(count_snyk_file  snyk-python-results.json medium)
             SP_LOW=$(count_snyk_file  snyk-python-results.json low)
+          fi
+
+          SNYK_PY_TOTAL=$((SP_CRIT + SP_HIGH + SP_MED + SP_LOW))
+          SNYK_PY_STDOUT="${{ steps.snyk_python.outputs.stdout_issues }}"
+          if [ "${SNYK_PY_STDOUT:-0}" -gt 0 ] && [ "$SNYK_PY_TOTAL" -eq 0 ]; then
+            echo "::error::Snyk Python deps reported ${SNYK_PY_STDOUT} issues but parser counted 0 — Snyk JSON schema likely changed; fix count_snyk_file() in this workflow."
+            exit 1
           fi
 
           TOTAL_CRIT=$((TI_CRIT + TF_CRIT + SI_CRIT + SP_CRIT))
