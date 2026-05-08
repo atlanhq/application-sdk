@@ -16,8 +16,8 @@ Compared to a naive "create one ticket per run":
   with the same label so the next run dedups against it. The full
   marker (every finding seen today) is included.
 
-The new issue is created in the team's "Todo" state (not Triage). The
-``Todo`` state is resolved at runtime from the team's workflow.
+The new issue is created in the team's "Backlog" state (not Triage).
+The ``Backlog`` state is resolved at runtime from the team's workflow.
 
 The label name defaults to ``vulnerabilities`` and must already exist
 in Linear (team-scoped or workspace-level). The script fails loud if
@@ -237,8 +237,10 @@ def fetch_open_labelled_issues(label_id: str) -> list[dict]:
     return issues
 
 
-def resolve_todo_state_id(team_id: str) -> str | None:
-    """Find the team's "Todo" workflow state, falling back to first unstarted."""
+def resolve_backlog_state_id(team_id: str) -> str | None:
+    """Find the team's "Backlog" workflow state, falling back to the
+    first state of type ``backlog``.
+    """
     data = gql(
         """
         query TeamStates($teamId: String!) {
@@ -251,10 +253,10 @@ def resolve_todo_state_id(team_id: str) -> str | None:
     )
     states = ((data.get("team") or {}).get("states") or {}).get("nodes") or []
     for s in states:
-        if (s.get("name") or "").strip().lower() == "todo":
+        if (s.get("name") or "").strip().lower() == "backlog":
             return s["id"]
     for s in states:
-        if s.get("type") == "unstarted":
+        if s.get("type") == "backlog":
             return s["id"]
     return None
 
@@ -395,9 +397,9 @@ def main() -> int:
         f"> ⚠️ {len(new_findings)} new CRITICAL/HIGH finding(s) — creating Linear issue."
     )
 
-    todo_state_id = resolve_todo_state_id(team_id)
-    if not todo_state_id:
-        print("warning: could not resolve Todo state — issue will use team default")
+    backlog_state_id = resolve_backlog_state_id(team_id)
+    if not backlog_state_id:
+        print("warning: could not resolve Backlog state — issue will use team default")
 
     target_image = os.environ.get("TARGET_IMAGE", "(unknown)")
     scan_date = os.environ.get("SCAN_DATE", "")
@@ -426,8 +428,8 @@ def main() -> int:
         val = os.environ.get(env_key)
         if val:
             issue_input[payload_key] = val
-    if todo_state_id:
-        issue_input["stateId"] = todo_state_id
+    if backlog_state_id:
+        issue_input["stateId"] = backlog_state_id
 
     data = gql(
         """

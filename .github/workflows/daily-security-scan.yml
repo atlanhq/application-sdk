@@ -360,8 +360,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ── Create Linear issue (CRITICAL/HIGH only, deduped against open
-      #    issues in the same project so we don't refile the same vulns
-      #    every day). New issues are created in the team's "Todo" state.
+      #    issues carrying the "vulnerabilities" label so we don't refile
+      #    the same vulns every day). New issues land in the team's
+      #    "Backlog" state.
       - name: Create Linear issue (deduped)
         if: steps.parse.outputs.total_actionable != '0'
         env:
