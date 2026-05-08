@@ -467,7 +467,9 @@ class TestMetadataEndpoint:
             {"TABLE_CATALOG": "DEFAULT", "TABLE_SCHEMA": "FINANCE"},
             {"TABLE_CATALOG": "DEFAULT", "TABLE_SCHEMA": "SALES"},
         ]
-        assert body["message"] == "Fetched 2 objects"
+        assert (
+            "message" not in body
+        )  # omitted on success — fixes frontend filter dropdowns
 
     def test_metadata_api_returns_tree_nodes(self) -> None:
         """ApiMetadataOutput → [{value, title, node_type, children}] for apitree widget."""
@@ -483,7 +485,9 @@ class TestMetadataEndpoint:
             {"value": "tag-1", "title": "Tag One", "node_type": "tag", "children": []},
             {"value": "tag-2", "title": "Tag Two", "node_type": "tag", "children": []},
         ]
-        assert body["message"] == "Fetched 2 objects"
+        assert (
+            "message" not in body
+        )  # omitted on success — fixes frontend filter dropdowns
 
     def test_metadata_api_nested_children(self) -> None:
         """ApiMetadataOutput with nested children serializes the full tree."""
@@ -840,7 +844,7 @@ class TestWrapResponse:
     def test_basic_structure(self) -> None:
         result = _wrap_response({"key": "value"})
         assert result["success"] is True
-        assert result["message"] == ""
+        assert "message" not in result  # omitted when empty (frontend dropdowns)
         assert result["data"] == {"key": "value"}
 
     def test_custom_message(self) -> None:

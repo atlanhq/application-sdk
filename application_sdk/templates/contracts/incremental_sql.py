@@ -87,7 +87,7 @@ class IncrementalRunContext:
 # =============================================================================
 
 
-class IncrementalExtractionInput(ExtractionInput, allow_unbounded_fields=True):
+class IncrementalExtractionInput(ExtractionInput):
     """Top-level input for an incremental SQL metadata extraction run.
 
     Extends :class:`ExtractionInput` with incremental-specific configuration.
@@ -142,7 +142,7 @@ class IncrementalExtractionOutput(ExtractionOutput):
 # =============================================================================
 
 
-class IncrementalTaskInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class IncrementalTaskInput(ExtractionTaskInput):
     """Base task input with incremental runtime state.
 
     Extends :class:`ExtractionTaskInput` with the incremental fields that
@@ -167,7 +167,7 @@ class IncrementalTaskInput(ExtractionTaskInput, allow_unbounded_fields=True):
 # =============================================================================
 
 
-class FetchTablesIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class FetchTablesIncrementalInput(IncrementalTaskInput):
     """Input for the incremental fetch_tables task.
 
     Carries all fields from :class:`IncrementalTaskInput`. The marker and
@@ -177,7 +177,7 @@ class FetchTablesIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=T
     """
 
 
-class FetchColumnsIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class FetchColumnsIncrementalInput(IncrementalTaskInput):
     """Input for the incremental fetch_columns task.
 
     When both ``marker_timestamp`` is non-empty and ``current_state_available``
@@ -191,7 +191,7 @@ class FetchColumnsIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=
 # =============================================================================
 
 
-class FetchIncrementalMarkerInput(Input, allow_unbounded_fields=True):
+class FetchIncrementalMarkerInput(Input):
     """Input for the fetch_incremental_marker task."""
 
     connection_qualified_name: str = ""
@@ -225,7 +225,7 @@ class FetchIncrementalMarkerOutput(Output):
 # =============================================================================
 
 
-class ReadCurrentStateInput(Input, allow_unbounded_fields=True):
+class ReadCurrentStateInput(Input):
     """Input for the read_current_state task."""
 
     connection_qualified_name: str = ""
@@ -253,7 +253,7 @@ class ReadCurrentStateOutput(Output):
 # =============================================================================
 
 
-class PrepareColumnQueriesInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class PrepareColumnQueriesInput(IncrementalTaskInput):
     """Input for the prepare_column_extraction_queries task."""
 
     connection_qualified_name: str = ""
@@ -284,7 +284,7 @@ class PrepareColumnQueriesOutput(Output):
 # =============================================================================
 
 
-class ExecuteColumnBatchInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class ExecuteColumnBatchInput(IncrementalTaskInput):
     """Input for executing a single incremental column batch."""
 
     batch_index: int = 0
@@ -312,7 +312,7 @@ class ExecuteColumnBatchOutput(Output):
 # =============================================================================
 
 
-class WriteCurrentStateInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class WriteCurrentStateInput(IncrementalTaskInput):
     """Input for the write_current_state task."""
 
     workflow_run_id: str = ""
@@ -343,7 +343,7 @@ class WriteCurrentStateOutput(Output):
 # =============================================================================
 
 
-class UpdateMarkerInput(Input, allow_unbounded_fields=True):
+class UpdateMarkerInput(Input):
     """Input for the update_incremental_marker task."""
 
     connection_qualified_name: str = ""
