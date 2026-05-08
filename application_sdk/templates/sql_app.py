@@ -50,8 +50,9 @@ import asyncio
 import json
 import math
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
 
 from temporalio import workflow as _temporal_workflow
 
@@ -94,11 +95,18 @@ from application_sdk.templates.contracts.sql_metadata import (
 )
 
 if TYPE_CHECKING:
+    from pyatlan_v9.model.assets import Asset
+
     from application_sdk.clients.sql import BaseSQLClient
 
 logger = get_logger(__name__)
 
 _ET = TypeVar("_ET", bound=ExtractionTaskInput)
+
+#: Mapper-function signature: takes a raw record dict + connection
+#: qualified name, returns a pyatlan_v9 Asset (preferred) or a plain dict
+#: (legacy / connector-specific shapes the v3 publisher accepts).
+_MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
 
 
 class SqlApp(App):
@@ -110,6 +118,14 @@ class SqlApp(App):
     - ``map_table()``, ``map_column()``, etc.: Asset mapper functions
 
     The base ``run()`` orchestrates: fetch → transform (parallel) → upload.
+
+    **Parallel-fetch assumption:** the default ``run()`` issues all four
+    fetch tasks (databases, schemas, tables, columns) concurrently via
+    ``asyncio.gather()``. Each SQL template must therefore be fully
+    self-contained — no cross-entity parameterisation. Connectors that
+    need to iterate tables per-schema, paginate by database, or otherwise
+    sequence fetches must override ``run()`` and call the ``@task``
+    methods directly in the order they need.
     """
 
     _app_registered: ClassVar[bool] = True  # abstract template, not concrete
@@ -382,11 +398,20 @@ class SqlApp(App):
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
     async def transform_data(self, input: TransformInput) -> TransformOutput:
-        """Legacy single transform — override for custom logic, or use
-        per-entity transforms (transform_tables, transform_columns, etc.)."""
+        """Single-shot transform stub for connectors that override ``run()``
+        and want one consolidated transform pass instead of the per-entity
+        pipeline.
+
+        Not part of the default ``run()`` orchestration — that path always
+        uses the per-entity ``transform_databases/schemas/tables/columns``
+        tasks and expects the corresponding ``map_*`` mappers to be
+        overridden. Override ``transform_data()`` only when you've also
+        overridden ``run()`` to call it directly.
+        """
         raise NotImplementedError(
-            "Override transform_data() or use per-entity transforms "
-            "(transform_tables, transform_columns, etc.)"
+            "transform_data() has no default implementation. Override it "
+            "(and run()) for a custom one-shot transform pipeline; otherwise "
+            "the default run() uses the per-entity transforms instead."
         )
 
     # ── Upload ──────────────────────────────────────────────────────────
@@ -417,23 +442,33 @@ class SqlApp(App):
     # Asset mapper stubs — connectors override these
     # =====================================================================
 
-    def map_database(self, record: dict[str, Any], connection_qn: str) -> Any:
+    def map_database(
+        self, record: dict[str, Any], connection_qn: str
+    ) -> Asset | dict[str, Any]:
         """Map a raw database record to a pyatlan_v9 Asset. Override in subclass."""
         raise NotImplementedError("Override map_database() in your SqlApp subclass")
 
-    def map_schema(self, record: dict[str, Any], connection_qn: str) -> Any:
+    def map_schema(
+        self, record: dict[str, Any], connection_qn: str
+    ) -> Asset | dict[str, Any]:
         """Map a raw schema record to a pyatlan_v9 Asset. Override in subclass."""
         raise NotImplementedError("Override map_schema() in your SqlApp subclass")
 
-    def map_table(self, record: dict[str, Any], connection_qn: str) -> Any:
+    def map_table(
+        self, record: dict[str, Any], connection_qn: str
+    ) -> Asset | dict[str, Any]:
         """Map a raw table record to a pyatlan_v9 Asset. Override in subclass."""
         raise NotImplementedError("Override map_table() in your SqlApp subclass")
 
-    def map_column(self, record: dict[str, Any], connection_qn: str) -> Any:
+    def map_column(
+        self, record: dict[str, Any], connection_qn: str
+    ) -> Asset | dict[str, Any]:
         """Map a raw column record to a pyatlan_v9 Asset. Override in subclass."""
         raise NotImplementedError("Override map_column() in your SqlApp subclass")
 
-    def map_procedure(self, record: dict[str, Any], connection_qn: str) -> Any:
+    def map_procedure(
+        self, record: dict[str, Any], connection_qn: str
+    ) -> Asset | dict[str, Any]:
         """Map a raw procedure record to a pyatlan_v9 Asset. Override in
         subclass if your connector emits procedures via the
         ``transform_procedures()`` task. Without an override the task
@@ -490,17 +525,12 @@ class SqlApp(App):
             TransformInput, input, cred_ref=cred_ref
         )
 
-        try:
-            await asyncio.gather(
-                self.transform_databases(transform_input),
-                self.transform_schemas(transform_input),
-                self.transform_tables(transform_input),
-                self.transform_columns(transform_input),
-            )
-        except NotImplementedError:
-            # Fall back to single transform_data() for backward compat
-            logger.info("Per-entity transforms not implemented, using transform_data()")
-            await self.transform_data(transform_input)
+        await asyncio.gather(
+            self.transform_databases(transform_input),
+            self.transform_schemas(transform_input),
+            self.transform_tables(transform_input),
+            self.transform_columns(transform_input),
+        )
 
         # ── Upload ──────────────────────────────────────────────────────
         # Always call upload — upload_to_atlan auto-resolves output_path in activity context.
@@ -662,7 +692,7 @@ class SqlApp(App):
     async def _transform_entity(
         self,
         entity_type: str,
-        mapper_fn: Any,
+        mapper_fn: _MapperFn,
         input: TransformInput,
     ) -> TransformOutput:
         """Generic per-entity transform: read raw parquet → mapper → JSONL."""

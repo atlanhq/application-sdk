@@ -19,7 +19,8 @@ per batch → aggregate). Override ``run()`` to customise parallelism or error h
 
 from __future__ import annotations
 
-from typing import ClassVar
+import warnings
+from typing import Any, ClassVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
@@ -41,6 +42,10 @@ logger = get_logger(__name__)
 class SqlQueryExtractor(BaseMetadataExtractor):
     """Abstract base class for SQL query extraction apps.
 
+    .. deprecated::
+        Will be removed in v4.0.0. Use
+        :class:`application_sdk.templates.SqlApp` instead.
+
     Inherits ``client_class``, ``handler_class``, and ``transformer_class``
     from ``BaseMetadataExtractor``.
 
@@ -52,6 +57,20 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
     # Prevent auto-registration of the abstract base template.
     _app_registered: ClassVar[bool] = True
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if cls.__module__.startswith("application_sdk."):
+            return
+        if SqlQueryExtractor not in cls.__bases__:
+            return
+        warnings.warn(
+            f"{cls.__name__} subclasses SqlQueryExtractor which is deprecated. "
+            "Use application_sdk.templates.SqlApp instead. "
+            "Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:

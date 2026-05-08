@@ -221,17 +221,26 @@ async def _fetch_per_key_bundle(
         try:
             secret = await secret_store.get_optional(value)
         except Exception:
-            # Single-key mode probes every non-literal value; a transient
-            # failure on a non-secret field (host, port) must not fail
-            # resolution. Logged at debug so genuine store-side outages
-            # are still observable when verbose logging is on.
-            logger.debug(
-                "single-key probe failed for ref-key %r (treated as non-secret)",
+            # Store-side error — distinct from "key not in store" (silent
+            # below). A transient outage here on a real secret field
+            # would otherwise auth-fail with the ref-key as the literal
+            # username, so surface at WARNING with stack trace.
+            logger.warning(
+                "single-key probe failed for ref-key %r — store error, "
+                "treating as non-secret. If this was a real credential "
+                "key, the auth attempt will fail with the ref-key as the "
+                "literal value.",
                 value,
                 exc_info=True,
             )
             return
         if secret in (None, ""):
+            # Key not in store — expected for non-secret fields probed
+            # in single-key mode (host, port, region literals).
+            logger.debug(
+                "single-key probe: %r not found in store (non-secret field)",
+                value,
+            )
             return
         bundle[value] = secret
 
