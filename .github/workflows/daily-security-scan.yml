@@ -353,15 +353,16 @@ jobs:
             echo "| 🔵 Low      | ${{ steps.parse.outputs.ti_low  || 0 }} | ${{ steps.parse.outputs.tf_low  || 0 }} | ${{ steps.parse.outputs.si_low  || 0 }} | ${{ steps.parse.outputs.sp_low  || 0 }} | **${{ steps.parse.outputs.total_low  || 0 }}** |"
             echo ""
             if [ "${{ steps.parse.outputs.total_actionable || 0 }}" -gt 0 ]; then
-              echo "> ⚠️ **${{ steps.parse.outputs.total_actionable }} CRITICAL/HIGH findings — Linear issue created**"
+              echo "> ⚠️ **${{ steps.parse.outputs.total_actionable }} CRITICAL/HIGH findings — see Linear ticket step below**"
             else
               echo "> ✅ **No CRITICAL/HIGH findings**"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # ── Create Linear issue (only on CRITICAL/HIGH) ───────────────────────
-
-      - name: Create Linear issue
+      # ── Create Linear issue (CRITICAL/HIGH only, deduped against open
+      #    issues in the same project so we don't refile the same vulns
+      #    every day). New issues are created in the team's "Todo" state.
+      - name: Create Linear issue (deduped)
         if: steps.parse.outputs.total_actionable != '0'
         env:
           LINEAR_API_KEY:      ${{ secrets.LINEAR_API_KEY }}
@@ -369,76 +370,7 @@ jobs:
           LINEAR_PROJECT_ID:   ${{ vars.LINEAR_SECURITY_SCAN_PROJECT_ID }}
           LINEAR_MILESTONE_ID: ${{ vars.LINEAR_SECURITY_SCAN_MILESTONE_ID }}
           LINEAR_ASSIGNEE_ID:  ${{ vars.LINEAR_SECURITY_SCAN_ASSIGNEE_ID }}
-          VULN_DETAIL:         ${{ steps.parse.outputs.vuln_detail }}
+          RUN_URL:             ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          DATE=$(date -u +%Y-%m-%d)
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          TOTAL="${{ steps.parse.outputs.total_actionable }}"
-
-          TITLE="[Security] app-runtime-base:3 + SDK Python deps — ${TOTAL} CRITICAL/HIGH vulnerabilities (${DATE})"
-
-          DESCRIPTION=$(
-            echo "## Daily Security Scan Results"
-            echo ""
-            echo "**Image:** \`${TARGET_IMAGE}\`"
-            echo "**Python deps:** \`pyproject.toml\` / \`uv.lock\` (application-sdk)"
-            echo "**Scan date:** ${DATE}"
-            echo "**Workflow run:** [View logs](${RUN_URL})"
-            echo ""
-            echo "---"
-            echo ""
-            echo "### Vulnerability Summary"
-            echo ""
-            echo "| Severity | Trivy (Image) | Trivy (Python) | Snyk (Image) | Snyk (Python) | Total |"
-            echo "|----------|:-------------:|:--------------:|:------------:|:-------------:|------:|"
-            echo "| 🔴 Critical | ${{ steps.parse.outputs.ti_crit }} | ${{ steps.parse.outputs.tf_crit }} | ${{ steps.parse.outputs.si_crit }} | ${{ steps.parse.outputs.sp_crit }} | **${{ steps.parse.outputs.total_crit }}** |"
-            echo "| 🟠 High     | ${{ steps.parse.outputs.ti_high }} | ${{ steps.parse.outputs.tf_high }} | ${{ steps.parse.outputs.si_high }} | ${{ steps.parse.outputs.sp_high }} | **${{ steps.parse.outputs.total_high }}** |"
-            echo "| 🟡 Medium   | ${{ steps.parse.outputs.ti_med  }} | ${{ steps.parse.outputs.tf_med  }} | ${{ steps.parse.outputs.si_med  }} | ${{ steps.parse.outputs.sp_med  }} | **${{ steps.parse.outputs.total_med  }}** |"
-            echo "| 🔵 Low      | ${{ steps.parse.outputs.ti_low  }} | ${{ steps.parse.outputs.tf_low  }} | ${{ steps.parse.outputs.si_low  }} | ${{ steps.parse.outputs.sp_low  }} | **${{ steps.parse.outputs.total_low  }}** |"
-            echo ""
-            printf '%s\n' "${VULN_DETAIL}"
-            echo ""
-            echo "---"
-            echo ""
-            echo "*Automatically created by the daily security scan workflow.*"
-          )
-
-          PAYLOAD=$(jq -n \
-            --arg title       "$TITLE" \
-            --arg description "$DESCRIPTION" \
-            --arg teamId      "$LINEAR_TEAM_ID" \
-            --arg projectId   "$LINEAR_PROJECT_ID" \
-            --arg milestoneId "$LINEAR_MILESTONE_ID" \
-            --arg assigneeId  "$LINEAR_ASSIGNEE_ID" \
-            '{
-              query: "mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier url } } }",
-              variables: {
-                input: {
-                  title:              $title,
-                  description:        $description,
-                  teamId:             $teamId,
-                  projectId:          $projectId,
-                  projectMilestoneId: $milestoneId,
-                  assigneeId:         $assigneeId,
-                  priority:           2
-                }
-              }
-            }')
-
-          RESPONSE=$(curl -sf -X POST \
-            -H "Content-Type: application/json" \
-            -H "Authorization: $LINEAR_API_KEY" \
-            -d "$PAYLOAD" \
-            https://api.linear.app/graphql)
-
-          SUCCESS=$(echo "$RESPONSE" | jq -r '.data.issueCreate.success // false')
-          if [ "$SUCCESS" = "true" ]; then
-            ID=$(echo  "$RESPONSE" | jq -r '.data.issueCreate.issue.identifier')
-            URL=$(echo "$RESPONSE" | jq -r '.data.issueCreate.issue.url')
-            echo "Created: $ID — $URL"
-            echo "### Linear Issue: [$ID]($URL)" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::Failed to create Linear issue"
-            echo "$RESPONSE" | jq .
-            exit 1
-          fi
+          export SCAN_DATE=$(date -u +%Y-%m-%d)
+          python3 .github/scripts/security_scan_create_linear.py
