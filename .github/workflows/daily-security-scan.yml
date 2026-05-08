@@ -120,6 +120,22 @@ jobs:
 
       # ── Parse results ─────────────────────────────────────────────────────
 
+      # Always upload raw scan output, even if Parse fails — lets us inspect
+      # the actual JSON schema offline when count_snyk_file() trips its
+      # sanity check.
+      - name: Upload raw scan results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: security-scan-raw-results
+          path: |
+            trivy-image-results.json
+            trivy-fs-results.json
+            snyk-image-results.json
+            snyk-python-results.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Parse scan results
         id: parse
         run: |
@@ -127,23 +143,38 @@ jobs:
           count_trivy_file() {
             jq --arg sev "$2" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $sev)] | length' "$1" 2>/dev/null || echo 0
           }
-          # Snyk JSON has three shapes depending on what was scanned:
-          #   1. Single-target test → top-level object with .vulnerabilities[]
-          #   2. Multi-target scan  → root JSON array, each elem has .vulnerabilities[]
-          #   3. Container scan with apps → object with nested .applications[].vulnerabilities[]
-          # The previous parser only handled (1) and silently returned 0 for (2)/(3),
-          # which is why a scan that found 12 issues reported 0/0/0/0.
+          # Snyk JSON nests vulnerabilities under several shapes (top-level
+          # object, root array, .applications[], .docker[], .projects[], etc.)
+          # and the schema shifts across CLI versions and scan targets. Walk
+          # the tree with `..` and pick up every `vulnerabilities` array we
+          # find, then dedupe by id so we don't double-count when the same
+          # vuln is reported under multiple paths.
           count_snyk_file() {
             jq --arg sev "$2" '
               [
-                (if type == "array" then .[] else . end)
-                | (.vulnerabilities[]?, .applications[]?.vulnerabilities[]?)
+                .. | .vulnerabilities? | arrays | .[]
                 | select(.severity == $sev)
                 | select((.type // "vuln") != "license")
               ]
               | unique_by(.id)
               | length
             ' "$1" 2>/dev/null || echo 0
+          }
+
+          # Diagnostic dump used when the sanity check below trips. Prints the
+          # top-level shape, every path that contains a `vulnerabilities`
+          # array, and every distinct severity value present — enough to
+          # patch count_snyk_file() without needing to download the artifact.
+          dump_snyk_schema() {
+            local file="$1"
+            echo "::group::Snyk schema dump — $file"
+            echo "type: $(jq -r 'type' "$file")"
+            jq -r 'if type=="array" then "array length: \(length)\nfirst element keys: \(.[0]|keys?|tostring // "n/a")" else "object keys: \(keys|tostring)" end' "$file" || true
+            echo "paths to .vulnerabilities arrays:"
+            jq -r '[paths(type=="array") | select(.[-1]=="vulnerabilities") | join(".")] | unique[]' "$file" 2>/dev/null || true
+            echo "distinct severity values:"
+            jq -r '[.. | objects | select(has("severity")) | .severity] | unique | tostring' "$file" 2>/dev/null || true
+            echo "::endgroup::"
           }
 
           TI_CRIT=0; TI_HIGH=0; TI_MED=0; TI_LOW=0
@@ -178,6 +209,7 @@ jobs:
           SNYK_IMG_TOTAL=$((SI_CRIT + SI_HIGH + SI_MED + SI_LOW))
           SNYK_IMG_STDOUT="${{ steps.snyk_image.outputs.stdout_issues }}"
           if [ "${SNYK_IMG_STDOUT:-0}" -gt 0 ] && [ "$SNYK_IMG_TOTAL" -eq 0 ]; then
+            [ -f snyk-image-results.json ] && dump_snyk_schema snyk-image-results.json
             echo "::error::Snyk container reported ${SNYK_IMG_STDOUT} issues but parser counted 0 — Snyk JSON schema likely changed; fix count_snyk_file() in this workflow."
             exit 1
           fi
@@ -192,6 +224,7 @@ jobs:
           SNYK_PY_TOTAL=$((SP_CRIT + SP_HIGH + SP_MED + SP_LOW))
           SNYK_PY_STDOUT="${{ steps.snyk_python.outputs.stdout_issues }}"
           if [ "${SNYK_PY_STDOUT:-0}" -gt 0 ] && [ "$SNYK_PY_TOTAL" -eq 0 ]; then
+            [ -f snyk-python-results.json ] && dump_snyk_schema snyk-python-results.json
             echo "::error::Snyk Python deps reported ${SNYK_PY_STDOUT} issues but parser counted 0 — Snyk JSON schema likely changed; fix count_snyk_file() in this workflow."
             exit 1
           fi
