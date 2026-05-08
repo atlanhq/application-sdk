@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-04-29",
+  "_updated": "2026-05-08",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -307,5 +307,12 @@
     "reason": "Connector transitive — lxml pulled in by redshift-connector (aws/amazon-redshift-python-driver). Fix is in lxml>=6.1.0, but redshift-connector 2.1.10 pins lxml<6.0.0 in its package metadata. Bumping lxml in connector apps forces a downgrade of redshift-connector to 2.1.7. Allowlisting until upstream relaxes the cap; tracking via aws/amazon-redshift-python-driver. Connector code uses lxml only for SOAP/XML parsing of trusted Redshift IAM responses, not untrusted input.",
     "expires": "2026-05-28",
     "added_by": "anuj-atlan"
+  },
+  "SNYK-GOLANG-GOLANGORGXNETHTTP2-16535157": {
+    "package": "golang.org/x/net/http2",
+    "severity": "HIGH",
+    "reason": "Base image — daprd 1.17.6 (Wolfi dapr-daprd-1.17, already on latest -r2 revision). HTTP/2 infinite loop pinned upstream in dapr/dapr go.mod across v1.17.6, v1.18.0-rc.2, and master. Fix is in golang.org/x/net 0.53.0; awaiting upstream Dapr bump and subsequent Wolfi rebuild.",
+    "expires": "2026-06-07",
+    "added_by": "fyzanshaik-atlan"
   }
 }

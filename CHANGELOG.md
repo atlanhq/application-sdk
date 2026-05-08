@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.7.0 (May 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.6.1...v3.7.0
+
+### Features
+
+- free retry on worker eviction without burning Temporal attempts (#1681) (by @anuj-atlan in [3504c55](https://github.com/atlanhq/application-sdk/commit/3504c55))
+
+### Bug Fixes
+
+- run_dev_combined() honors env-var fallbacks for connection-shaped kwargs (#1614) (by @AtMrun in [2e8bb6b](https://github.com/atlanhq/application-sdk/commit/2e8bb6b))
+
+
 ## v3.6.1 (May 06, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.6.0...v3.6.1
