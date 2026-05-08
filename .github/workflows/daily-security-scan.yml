@@ -70,21 +70,15 @@ jobs:
         uses: snyk/actions/setup@b98d498629f1c368650224d6d212bf7dfa89e4bf # 0.4.0
 
       - name: Run Snyk container scan
-        id: snyk_image
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           SNYK_API: https://api.us.snyk.io
         run: |
-          # Capture stdout so we can sanity-check the parser against Snyk's own
-          # "found N issues" line (the prior parser silently reported 0 even
-          # when Snyk found 12).
           snyk container test "$TARGET_IMAGE" \
             --severity-threshold=low \
             --org=bu-apps \
             --json-file-output=snyk-image-results.json \
-            2>&1 | tee /tmp/snyk-image-stdout.txt || true
-          ISSUES=$(grep -oE 'found [0-9]+ issues?' /tmp/snyk-image-stdout.txt | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
-          echo "stdout_issues=${ISSUES}" >> "$GITHUB_OUTPUT"
+            || true
 
       - name: Set up uv (for Snyk Python dep resolution)
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -96,7 +90,6 @@ jobs:
           uv export --format requirements-txt --no-dev --frozen --no-hashes --no-emit-project --output-file=/tmp/snyk-requirements.txt
 
       - name: Run Snyk Python deps scan (pyproject.toml / uv.lock)
-        id: snyk_python
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           SNYK_API: https://api.us.snyk.io
@@ -108,15 +101,13 @@ jobs:
             --severity-threshold=low \
             --org=bu-apps \
             --json-file-output=snyk-python-results.json \
-            2>&1 | tee /tmp/snyk-python-stdout.txt || true
+            || true
           if [ ! -f snyk-python-results.json ]; then
             echo "::warning::Snyk Python scan produced no output — check SNYK_TOKEN and org access"
           elif jq -e '.error' snyk-python-results.json >/dev/null 2>&1; then
             ERR=$(jq -r '.error' snyk-python-results.json)
             echo "::warning::Snyk Python deps scan failed: $ERR — python counts will be 0"
           fi
-          ISSUES=$(grep -oE 'found [0-9]+ issues?' /tmp/snyk-python-stdout.txt 2>/dev/null | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
-          echo "stdout_issues=${ISSUES}" >> "$GITHUB_OUTPUT"
 
       # ── Parse results ─────────────────────────────────────────────────────
 
@@ -154,6 +145,21 @@ jobs:
               [
                 .. | .vulnerabilities? | arrays | .[]
                 | select(.severity == $sev)
+                | select((.type // "vuln") != "license")
+              ]
+              | unique_by(.id)
+              | length
+            ' "$1" 2>/dev/null || echo 0
+          }
+          # Total non-license vuln count (any severity) using the same walk.
+          # Used by the sanity check below to derive an expected count from
+          # the JSON itself — Snyk's stdout "found N issues" includes
+          # license findings, which we intentionally exclude, so it can't
+          # be compared 1:1 with the bucketed counts.
+          count_snyk_file_nonlicense_total() {
+            jq '
+              [
+                .. | .vulnerabilities? | arrays | .[]
                 | select((.type // "vuln") != "license")
               ]
               | unique_by(.id)
@@ -203,14 +209,21 @@ jobs:
             SI_LOW=$(count_snyk_file  snyk-image-results.json low)
           fi
 
-          # Sanity check: if Snyk's stdout reported issues but the parser
-          # extracted zero across every severity, the JSON shape changed and
-          # this workflow is silently lying. Fail loud instead.
+          # Sanity check: if the JSON contains non-license vulnerabilities
+          # but the per-severity buckets all came back zero, the severity
+          # field shape changed (new value, casing flip, moved location)
+          # and this workflow is silently undercounting. Fail loud.
+          # We compare against a count derived from the same JSON+filter
+          # the parser uses — Snyk's stdout "found N issues" includes
+          # license findings, so it can't be compared 1:1.
           SNYK_IMG_TOTAL=$((SI_CRIT + SI_HIGH + SI_MED + SI_LOW))
-          SNYK_IMG_STDOUT="${{ steps.snyk_image.outputs.stdout_issues }}"
-          if [ "${SNYK_IMG_STDOUT:-0}" -gt 0 ] && [ "$SNYK_IMG_TOTAL" -eq 0 ]; then
+          SNYK_IMG_EXPECTED=0
+          if [ -f snyk-image-results.json ]; then
+            SNYK_IMG_EXPECTED=$(count_snyk_file_nonlicense_total snyk-image-results.json)
+          fi
+          if [ "${SNYK_IMG_EXPECTED:-0}" -gt 0 ] && [ "$SNYK_IMG_TOTAL" -eq 0 ]; then
             [ -f snyk-image-results.json ] && dump_snyk_schema snyk-image-results.json
-            echo "::error::Snyk container reported ${SNYK_IMG_STDOUT} issues but parser counted 0 — Snyk JSON schema likely changed; fix count_snyk_file() in this workflow."
+            echo "::error::Snyk container JSON has ${SNYK_IMG_EXPECTED} non-license vuln(s) but per-severity parser counted 0 — Snyk JSON severity shape likely changed; fix count_snyk_file() in this workflow."
             exit 1
           fi
 
@@ -222,10 +235,13 @@ jobs:
           fi
 
           SNYK_PY_TOTAL=$((SP_CRIT + SP_HIGH + SP_MED + SP_LOW))
-          SNYK_PY_STDOUT="${{ steps.snyk_python.outputs.stdout_issues }}"
-          if [ "${SNYK_PY_STDOUT:-0}" -gt 0 ] && [ "$SNYK_PY_TOTAL" -eq 0 ]; then
+          SNYK_PY_EXPECTED=0
+          if [ -f snyk-python-results.json ]; then
+            SNYK_PY_EXPECTED=$(count_snyk_file_nonlicense_total snyk-python-results.json)
+          fi
+          if [ "${SNYK_PY_EXPECTED:-0}" -gt 0 ] && [ "$SNYK_PY_TOTAL" -eq 0 ]; then
             [ -f snyk-python-results.json ] && dump_snyk_schema snyk-python-results.json
-            echo "::error::Snyk Python deps reported ${SNYK_PY_STDOUT} issues but parser counted 0 — Snyk JSON schema likely changed; fix count_snyk_file() in this workflow."
+            echo "::error::Snyk Python deps JSON has ${SNYK_PY_EXPECTED} non-license vuln(s) but per-severity parser counted 0 — Snyk JSON severity shape likely changed; fix count_snyk_file() in this workflow."
             exit 1
           fi
 
