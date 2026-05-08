@@ -48,7 +48,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -107,6 +106,11 @@ _ET = TypeVar("_ET", bound=ExtractionTaskInput)
 #: qualified name, returns a pyatlan_v9 Asset (preferred) or a plain dict
 #: (legacy / connector-specific shapes the v3 publisher accepts).
 _MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
+
+#: Rows per batch in ``_transform_entity``'s pyarrow-backed iterator.
+#: Caps memory at ``_TRANSFORM_BATCH_SIZE * row_size`` regardless of how
+#: large the underlying parquet file is.
+_TRANSFORM_BATCH_SIZE: int = 10_000
 
 
 class SqlApp(App):
@@ -669,34 +673,21 @@ class SqlApp(App):
                 return legacy_credential_ref(input.credential_guid)
             return None
 
-    @staticmethod
-    def _sanitize_value(v: Any) -> Any:
-        """Sanitize a single value for JSON serialization."""
-        if isinstance(v, float):
-            if math.isnan(v) or math.isinf(v):
-                return None
-        # pandas NaT / NaN types
-        if hasattr(v, "__class__") and v.__class__.__name__ in ("NaTType", "NAType"):
-            return None
-        return v
-
-    @classmethod
-    def _sanitize_nan(cls, obj: Any) -> Any:
-        """Recursively replace NaN, Inf, NaT with None for valid JSON."""
-        if isinstance(obj, dict):
-            return {k: cls._sanitize_nan(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [cls._sanitize_nan(v) for v in obj]
-        return cls._sanitize_value(obj)
-
     async def _transform_entity(
         self,
         entity_type: str,
         mapper_fn: _MapperFn,
         input: TransformInput,
     ) -> TransformOutput:
-        """Generic per-entity transform: read raw parquet → mapper → JSONL."""
-        import pandas as pd  # noqa: PLC0415
+        """Generic per-entity transform: read raw parquet → mapper → JSONL.
+
+        Uses ``pyarrow.parquet.ParquetFile.iter_batches`` for memory-bounded
+        iteration (each batch is ``_TRANSFORM_BATCH_SIZE`` rows). pyarrow's
+        ``to_pylist()`` yields native Python types (``None`` for NULL, real
+        ``datetime`` for timestamps), so no pandas-style NaN/Inf/NaT
+        sanitisation is needed before JSON serialisation.
+        """
+        import pyarrow.parquet as pq  # noqa: PLC0415
 
         output_path = self._resolve_output_path(input)
         raw_dir = Path(output_path) / "raw" / entity_type if output_path else None
@@ -723,29 +714,25 @@ class SqlApp(App):
         count = 0
         with open(output_file, "wb") as f:
             for pf in parquet_files:
-                df = pd.read_parquet(str(pf))
-                for _, row in df.iterrows():
-                    record = row.to_dict()
-                    asset = mapper_fn(record, connection_qn)
-                    # Inject connectionName if the mapper returned a dict
-                    if isinstance(asset, dict) and connection_name:
-                        asset.setdefault("attributes", {}).setdefault(
-                            "connectionName", connection_name
-                        )
-                    # Write as JSONL — sanitize NaN/Inf before serialization.
-                    # pandas converts SQL NULLs to NaN which is invalid JSON.
-                    if isinstance(asset, dict):
-                        asset = self._sanitize_nan(asset)
-                    if hasattr(asset, "to_nested_dict"):
-                        entity_bytes = json.dumps(asset.to_nested_dict()).encode()
-                    elif hasattr(asset, "model_dump"):
-                        entity_bytes = json.dumps(asset.model_dump()).encode()
-                    elif isinstance(asset, dict):
-                        entity_bytes = json.dumps(asset).encode()
-                    else:
-                        entity_bytes = json.dumps(record).encode()
-                    f.write(entity_bytes + b"\n")
-                    count += 1
+                pf_handle = pq.ParquetFile(str(pf))
+                for batch in pf_handle.iter_batches(batch_size=_TRANSFORM_BATCH_SIZE):
+                    for record in batch.to_pylist():
+                        asset = mapper_fn(record, connection_qn)
+                        # Inject connectionName if the mapper returned a dict
+                        if isinstance(asset, dict) and connection_name:
+                            asset.setdefault("attributes", {}).setdefault(
+                                "connectionName", connection_name
+                            )
+                        if hasattr(asset, "to_nested_dict"):
+                            entity_bytes = json.dumps(asset.to_nested_dict()).encode()
+                        elif hasattr(asset, "model_dump"):
+                            entity_bytes = json.dumps(asset.model_dump()).encode()
+                        elif isinstance(asset, dict):
+                            entity_bytes = json.dumps(asset).encode()
+                        else:
+                            entity_bytes = json.dumps(record).encode()
+                        f.write(entity_bytes + b"\n")
+                        count += 1
 
         logger.info("Transformed %s: %d records", entity_type, count)
         return TransformOutput(total_record_count=count)
