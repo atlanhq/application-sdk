@@ -360,29 +360,29 @@ If the connector has no v2-style e2e tests, skip this step.
 
 ### Phase 4c — Contract generation
 
-After tests pass and e2e tests are generated, the app needs a PKL contract that generates workflow config, credential config, AE manifest, and typed Input class. Use the **`/contract` skill** (located in this repo at `.claude/skills/contract/SKILL.md`) to create or migrate the contract.
+After tests pass and e2e tests are generated, the app needs a PKL contract that generates workflow config, credential config, runtime manifest, and typed Input class. Use the **`/make-contract` skill** (located in this repo at `.claude/skills/make-contract/SKILL.md`) to create or migrate the contract.
 
 1. Check if the connector already has a `contract/` directory with `app.pkl`:
    ```bash
    ls <target-path>/contract/app.pkl 2>/dev/null && echo "EXISTS" || echo "MISSING"
    ```
 
-2. **If `contract/app.pkl` exists:** Check `contract/PklProject` for the `atlan-app-contract-toolkit` version. If it is **older than 0.9.0**, bump it before regenerating — earlier versions emit the legacy `metadata`-wrapped extract args (`{ "metadata": { "include_filter": ... } }`) that AE no longer prefers. Toolkit 0.9.0+ emits flat snake_case args (`include_filter`, `exclude_filter`, `temp_table_regex`, `preflight_check`, `extraction_method`) at the top level. Refresh `PklProject.deps.json` after the bump. Then invoke `/contract` with the update action to regenerate `manifest.json`.
+2. **If `contract/app.pkl` exists:** Check `contract/PklProject` for the `app-contract-toolkit` version. If it is older than the SDK-hosted toolkit version required by the app, update it with `atlan app contract update-toolkit -p <target-path>` before regenerating. Refresh `PklProject.deps.json` after the update. Then invoke `/make-contract` with the update action to regenerate `manifest.json`.
 
 3. **If no contract exists:** Inform the user that v3 apps should have a PKL contract and ask whether to generate one:
-   > "This connector has no PKL contract (`contract/app.pkl`). v3 apps use contracts to generate workflow config, credential config, AE manifest, and typed Input classes — the SDK auto-serves these at `/workflows/v1/configmap/*` and `/manifest`. Want me to generate one using the `/contract` skill?"
+   > "This connector has no PKL contract (`contract/app.pkl`). v3 apps use contracts to generate workflow config, credential config, runtime manifest, and typed Input classes that the SDK serves. Want me to generate one using the `/make-contract` skill?"
 
-4. If the user confirms, invoke the `/contract` skill. It will:
+4. If the user confirms, invoke the `/make-contract` skill. It will:
    - Create `contract/PklProject`, `contract/app.pkl`
-   - Generate `contract/generated/{name}.json`, `contract/generated/atlan-connectors-{name}.json`, `contract/generated/manifest.json`, and `contract/generated/_input.py`
-   - Add the `poe generate` task to `pyproject.toml`
+   - Generate `app/generated/{name}.json`, `app/generated/atlan-connectors-{name}.json`, `app/generated/manifest.json`, and `app/generated/_input.py`
+   - Use the Atlan CLI contract commands for validation and generation
 
 5. After contract generation, verify the generated files exist and the handler serves them:
    ```bash
-   ls <target-path>/contract/generated/*.json
+   ls <target-path>/app/generated/*.json
    ```
 
-6. If the user declines, add "Contract generation skipped — run `/contract` to set up PKL contract" to the manual follow-up list.
+6. If the user declines, add "Contract generation skipped — run `/make-contract` to set up PKL contract" to the manual follow-up list.
 
 ---
 
@@ -952,16 +952,16 @@ Reviewers on the MSSQL v3 PR rejected mixed configuration ("two paths to drive t
 
 `allow_unbounded_fields=True` does not belong in connector contracts. The tempting examples are not valid use cases:
 
-- **`connection: dict[str, Any]`** — the SDK provides `ConnectionRef` in `application_sdk.contracts.types`, a typed model covering the well-known AE/Heracles connection shape (<10 attributes). Use it.
+- **`connection: dict[str, Any]`** — the SDK provides `ConnectionRef` in `application_sdk.contracts.types`, a typed model covering the well-known connection reference shape. Use it.
 - **`metadata: dict[str, Any]`** — a `dict[str, Any]` field is a contracting failure. The connector must know the shape of its inputs; if it doesn't, the contract is incompletely defined. If it does, the field can and should be typed.
 
 If you encounter a base class that already declares `allow_unbounded_fields=True`, do not re-declare it in the subclass — but also do not rely on it as justification for adding new `dict[str, Any]` fields. Add typed fields only.
 
 Inter-task contracts must never use `allow_unbounded_fields=True` — use typed fields, `Annotated[list[T], MaxItems(N)]`, or `FileReference`. The checker WARNs on any occurrence; reviewers will REJECT it.
 
-### Toolkit version pin (for `/contract`)
+### Toolkit version pin (for `/make-contract`)
 
-When invoking `/contract` in Phase 4c, ensure `contract/PklProject` pins `atlan-app-contract-toolkit` to **`0.9.0` or later**. Earlier versions emit the legacy `metadata`-wrapped extract args (`{ "metadata": { "include_filter": ..., "exclude_filter": ... } }`), which AE no longer prefers and which forces the connector to add normalization logic. Toolkit 0.9.0 emits flat snake_case args at the top level (`include_filter`, `exclude_filter`, `temp_table_regex`, `preflight_check`, `extraction_method`).
+When invoking `/make-contract` in Phase 4c, update `contract/PklProject` with `atlan app contract update-toolkit -p <target-path>` unless the app intentionally pins a specific toolkit version. Older toolkit versions can emit legacy metadata-wrapped extract args (`{ "metadata": { "include_filter": ..., "exclude_filter": ... } }`) that force the connector to add normalization logic. Current toolkit versions emit flat snake_case args at the top level (`include_filter`, `exclude_filter`, `temp_table_regex`, `preflight_check`, `extraction_method`) by default.
 
 If the existing `PklProject` is older, bump it and refresh `PklProject.deps.json` before regenerating `manifest.json`.
 
