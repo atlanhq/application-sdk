@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.6.1
-source-sha:    0aaf700b56bb68699c64de3163235317a5cbea7b
-source-date:   2026-05-07T23:46:50+05:30
+source-sha:    b35c589d6a1cb049b71fdcbd26c79eaa5693948e
+source-date:   2026-05-08T15:12:19+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2727,7 +2727,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryBatchInput`
 - **Summary:** Input for the get_query_batches task.
 - **Fields:**
-  - `workflow_args: dict[str, Any]` `= Field(default_factory=dict)`
+  - `workflow_args: Annotated[dict[str, str | int | float | bool | None], MaxItems(100)]` `= Field(default_factory=dict)`
 - **Defined in:** `application_sdk/templates/contracts/sql_query.py`
 
 #### `QueryBatchOutput`
@@ -2774,7 +2774,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryFetchInput`
 - **Summary:** Input for the fetch_queries task.
 - **Fields:**
-  - `workflow_args: dict[str, Any]` `= Field(default_factory=dict)`
+  - `workflow_args: Annotated[dict[str, str | int | float | bool | None], MaxItems(100)]` `= Field(default_factory=dict)`
   - `batch_number: int` `= 0`
   - `batch_size: int` `= 100000`
 - **Defined in:** `application_sdk/templates/contracts/sql_query.py`
