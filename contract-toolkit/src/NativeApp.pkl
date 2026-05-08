@@ -1043,8 +1043,33 @@ class QueryIntelligenceNode extends DAGNode {
 
 /// Source-specific column mapping for `PopularityNode`.
 ///
-/// Defaults match the popularity app's built-in Snowflake-compatible mapping.
+/// Defaults match the popularity app's built-in Snowflake-compatible mapping
+/// (`MineColumnMapping` in atlan-popularity-app/app/models/popularity_args.py).
 /// Override only the columns that differ for the miner feeding the app.
+///
+/// Per-source guidance (excerpts from popularity-app's own field docstrings —
+/// keep these in sync with that repo):
+///
+/// - `queryHash` / `queryText`:
+///     - Snowflake: native `QUERY_HASH` / `QUERY_TEXT` on QUERY_HISTORY.
+///     - BigQuery:  `md5(CLEANED_QUERY)` / `CLEANED_QUERY`.
+///     - Redshift / Databricks: similarly compute md5 on the cleaned-text column.
+///   Required even on sources where they're not consumed downstream — the
+///   canonical `v_mined` projection in the popularity build chain references
+///   both unconditionally.
+/// - `sourceQueryTypeQi`: the SQL expression to project as `SOURCE_QUERY_TYPE`
+///   on the parsed parquet view (`v_qi`). Snowflake / BigQuery parsed_data
+///   carry this column natively; Databricks parsed_data does NOT, so set
+///   `"NULL::VARCHAR"` for that source. Also set `"NULL::VARCHAR"` for any
+///   source whose Query Intelligence step is configured with a
+///   `columnsToPreserve` that omits `SOURCE_QUERY_TYPE`.
+/// - `parsedDataKeepFilter`: SQL predicate applied at v_qi build time to keep
+///   only popularity-relevant parsed rows. Default is QI's OUTPUT_FLAGS
+///   bitmask (Gudusoft + sqlglot detection). Sources still pre-dating
+///   OUTPUT_FLAGS can override to `"COALESCE(HAS_ERROR, FALSE) = FALSE"`.
+/// - `caseInsensitiveMatch`: case-folding for asset matching. Default `true`
+///   matches the miner YAMLs in marketplace-packages
+///   (Snowflake / BigQuery / Redshift / Databricks).
 class PopularityMineColumnMapping {
   queryId: String = "QUERY_ID"
   userName: String = "USER_NAME"
@@ -1055,8 +1080,13 @@ class PopularityMineColumnMapping {
   creditsCompute: String = "CREDITS_USED_COMPUTE"
   queryType: String = "QUERY_TYPE"
   startTime: String = "START_TIME"
+  queryHash: String = "QUERY_HASH"
+  queryText: String = "QUERY_TEXT"
   queryTag: String = "NULL"
   queryTagsSql: String = "NULL"
+  sourceQueryTypeQi: String = "SOURCE_QUERY_TYPE"
+  parsedDataKeepFilter: String = "(OUTPUT_FLAGS & (33554432 | 67108864)) != 0"
+  caseInsensitiveMatch: Boolean = true
   hasNativeInputs: String?
   nativeInputsPayload: String?
 }
@@ -1073,8 +1103,13 @@ const local function renderPopularityMineColumnMapping(
   ["credits_compute"] = mapping.creditsCompute
   ["query_type"] = mapping.queryType
   ["start_time"] = mapping.startTime
+  ["query_hash"] = mapping.queryHash
+  ["query_text"] = mapping.queryText
   ["query_tag"] = mapping.queryTag
   ["query_tags_sql"] = mapping.queryTagsSql
+  ["source_query_type_qi"] = mapping.sourceQueryTypeQi
+  ["parsed_data_keep_filter"] = mapping.parsedDataKeepFilter
+  ["case_insensitive_match"] = mapping.caseInsensitiveMatch
   when (mapping.hasNativeInputs != null) {
     ["has_native_inputs"] = mapping.hasNativeInputs
   }
