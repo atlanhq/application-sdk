@@ -4,21 +4,14 @@ from __future__ import annotations
 
 import json
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import pandas as pd
 import pytest
 
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
-    FetchColumnsInput,
-    FetchDatabasesInput,
-    FetchProceduresInput,
-    FetchSchemasInput,
-    FetchTablesInput,
-    FetchViewsInput,
-    TransformInput,
+    ExtractionTaskInput,
 )
 from application_sdk.templates.sql_app import SqlApp
 
@@ -28,11 +21,15 @@ from application_sdk.templates.sql_app import SqlApp
 
 
 class FakeSQLClient:
-    """Mock SQL client for testing."""
+    """Mock SQL client that yields rows via ``run_query`` (the streaming API
+    SqlApp's extract_* tasks consume).
+    """
 
-    def __init__(self, results: pd.DataFrame | None = None):
+    def __init__(self, rows: list[dict[str, Any]] | None = None):
         self.loaded = False
-        self._results = results if results is not None else pd.DataFrame()
+        self._rows = rows or []
+        self.last_query: str | None = None
+        self.last_batch_size: int | None = None
 
     async def load(self, credentials=None):
         self.loaded = True
@@ -40,13 +37,17 @@ class FakeSQLClient:
     async def close(self):
         pass
 
-    async def get_results(self, sql: str) -> pd.DataFrame:
-        return self._results
+    async def run_query(self, query: str, batch_size: int = 100000):
+        """Async generator — yields a single batch with all rows."""
+        self.last_query = query
+        self.last_batch_size = batch_size
+        if self._rows:
+            yield self._rows
 
 
-def _mock_init_client(results: pd.DataFrame) -> AsyncMock:
-    """Create an AsyncMock that returns a FakeSQLClient with given results."""
-    return AsyncMock(return_value=FakeSQLClient(results=results))
+def _mock_init_client(rows: list[dict[str, Any]]) -> AsyncMock:
+    """Create an AsyncMock that returns a FakeSQLClient yielding *rows*."""
+    return AsyncMock(return_value=FakeSQLClient(rows=rows))
 
 
 class TestSqlApp(SqlApp):
@@ -94,8 +95,8 @@ def app():
     return TestSqlApp()
 
 
-def _make_task_input(cls, output_path="/tmp/test", **kwargs):
-    """Helper to create task inputs for testing."""
+def _make_task_input(output_path="/tmp/test", **kwargs):
+    """Helper to create ExtractionTaskInput for testing."""
     defaults = {
         "workflow_id": "test-wf",
         "output_path": output_path,
@@ -105,7 +106,7 @@ def _make_task_input(cls, output_path="/tmp/test", **kwargs):
         "temp_table_regex": "",
     }
     defaults.update(kwargs)
-    return cls(**defaults)
+    return ExtractionTaskInput(**defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +117,7 @@ def _make_task_input(cls, output_path="/tmp/test", **kwargs):
 class TestBuildTaskInput:
     """BLDX-1138: build_task_input as public API."""
 
-    def test_builds_fetch_databases_input(self):
+    def test_builds_extraction_task_input(self):
         src = ExtractionInput(
             workflow_id="wf-1",
             output_path="/out",
@@ -125,7 +126,7 @@ class TestBuildTaskInput:
             include_filter="^prod$",
             temp_table_regex="^tmp_",
         )
-        result = SqlApp.build_task_input(FetchDatabasesInput, src)
+        result = SqlApp.build_task_input(ExtractionTaskInput, src)
         assert result.workflow_id == "wf-1"
         assert result.output_path == "/out"
         assert result.exclude_filter == "^temp$"
@@ -134,153 +135,118 @@ class TestBuildTaskInput:
     def test_builds_with_credential_ref(self):
         src = ExtractionInput(workflow_id="wf-2")
         cred_ref = CredentialRef(credential_guid="test-guid")
-        result = SqlApp.build_task_input(FetchSchemasInput, src, cred_ref=cred_ref)
+        result = SqlApp.build_task_input(ExtractionTaskInput, src, cred_ref=cred_ref)
         assert result.credential_ref.credential_guid == "test-guid"
 
-    def test_builds_different_input_types(self):
-        src = ExtractionInput(workflow_id="wf-3")
-        for cls in [
-            FetchDatabasesInput,
-            FetchSchemasInput,
-            FetchTablesInput,
-            FetchColumnsInput,
-        ]:
-            result = SqlApp.build_task_input(cls, src)
-            assert result.workflow_id == "wf-3"
-
 
 # ---------------------------------------------------------------------------
-# fetch_* tasks
+# extract_* tasks — SQL stream → mapper → JSONL (no parquet round-trip)
 # ---------------------------------------------------------------------------
 
 
-class TestFetchTasks:
-    """Test SQL metadata fetch tasks."""
+class TestExtractTasks:
+    """Each extract_* task streams SQL rows directly to mapped JSONL."""
 
-    async def test_fetch_databases_returns_count(self, app, tmp_path):
-        df = pd.DataFrame({"database_name": ["db1", "db2"]})
-        input_ = _make_task_input(FetchDatabasesInput, output_path=str(tmp_path))
+    async def test_extract_databases_writes_jsonl(self, app, tmp_path):
+        rows = [{"database_name": "db1"}, {"database_name": "db2"}]
+        input_ = _make_task_input(output_path=str(tmp_path))
 
-        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
-            result = await app.fetch_databases(input_)
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
+            result = await app.extract_databases(input_)
 
         assert result.total_record_count == 2
-        assert result.chunk_count == 1
+        assert result.typename == "database"
 
-    async def test_fetch_databases_empty_sql_returns_zero(self, app):
+        output_file = tmp_path / "transformed" / "database" / "entities.json"
+        assert output_file.exists()
+        lines = output_file.read_text().strip().split("\n")
+        assert len(lines) == 2
+        first = json.loads(lines[0])
+        assert first["typeName"] == "Database"
+        assert first["qualifiedName"].endswith("/db1")
+
+    async def test_extract_no_sql_returns_zero(self, app):
         app.fetch_database_sql = ""
-        input_ = _make_task_input(FetchDatabasesInput)
-        result = await app.fetch_databases(input_)
+        input_ = _make_task_input()
+        result = await app.extract_databases(input_)
         assert result.total_record_count == 0
-        assert result.chunk_count == 0
+        assert result.typename == "database"
 
-    async def test_fetch_schemas_writes_parquet(self, app, tmp_path):
-        df = pd.DataFrame({"schema_name": ["public", "private"]})
-        input_ = _make_task_input(FetchSchemasInput, output_path=str(tmp_path))
+    async def test_extract_schemas(self, app, tmp_path):
+        rows = [{"schema_name": "public"}, {"schema_name": "private"}]
+        input_ = _make_task_input(output_path=str(tmp_path))
 
-        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
-            result = await app.fetch_schemas(input_)
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
+            result = await app.extract_schemas(input_)
 
         assert result.total_record_count == 2
-        parquet_dir = tmp_path / "raw" / "schema"
-        assert parquet_dir.exists()
-        assert len(list(parquet_dir.glob("*.parquet"))) == 1
+        out = (tmp_path / "transformed" / "schema" / "entities.json").read_text()
+        assert "Schema" in out
+        assert "public" in out
 
-    async def test_fetch_tables_returns_count(self, app, tmp_path):
-        df = pd.DataFrame({"table_name": ["users", "orders", "products"]})
-        input_ = _make_task_input(FetchTablesInput, output_path=str(tmp_path))
+    async def test_extract_tables(self, app, tmp_path):
+        rows = [{"table_name": n} for n in ("users", "orders", "products")]
+        input_ = _make_task_input(output_path=str(tmp_path))
 
-        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
-            result = await app.fetch_tables(input_)
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
+            result = await app.extract_tables(input_)
 
         assert result.total_record_count == 3
+        lines = (
+            (tmp_path / "transformed" / "table" / "entities.json")
+            .read_text()
+            .strip()
+            .split("\n")
+        )
+        assert len(lines) == 3
+        for line in lines:
+            assert json.loads(line)["typeName"] == "Table"
 
-    async def test_fetch_columns_returns_count(self, app, tmp_path):
-        df = pd.DataFrame({"column_name": ["id", "name", "email", "created_at"]})
-        input_ = _make_task_input(FetchColumnsInput, output_path=str(tmp_path))
+    async def test_extract_columns(self, app, tmp_path):
+        rows = [{"column_name": n} for n in ("id", "name", "email", "created_at")]
+        input_ = _make_task_input(output_path=str(tmp_path))
 
-        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
-            result = await app.fetch_columns(input_)
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
+            result = await app.extract_columns(input_)
 
         assert result.total_record_count == 4
 
+    async def test_extract_views_falls_back_to_map_table(self, app, tmp_path):
+        """Views go through map_table — Atlan models View as a Table specialisation."""
+        app.fetch_view_sql = "SELECT view_name as table_name FROM views"
+        rows = [{"table_name": "v1"}, {"table_name": "v2"}]
+        input_ = _make_task_input(output_path=str(tmp_path))
 
-# ---------------------------------------------------------------------------
-# fetch_views / fetch_procedures stubs (BLDX-1139)
-# ---------------------------------------------------------------------------
-
-
-class TestFetchViewsAndProcedures:
-    """BLDX-1139: fetch_views and fetch_procedures stubs."""
-
-    async def test_fetch_views_returns_zero_when_no_sql(self, app):
-        input_ = _make_task_input(FetchViewsInput)
-        result = await app.fetch_views(input_)
-        assert result.total_record_count == 0
-
-    async def test_fetch_views_with_sql_returns_count(self, app, tmp_path):
-        app.fetch_view_sql = "SELECT view_name FROM views"
-        df = pd.DataFrame({"view_name": ["v1", "v2"]})
-        input_ = _make_task_input(FetchViewsInput, output_path=str(tmp_path))
-
-        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(df)):
-            result = await app.fetch_views(input_)
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
+            result = await app.extract_views(input_)
 
         assert result.total_record_count == 2
+        assert result.typename == "view"
+        out = (tmp_path / "transformed" / "view" / "entities.json").read_text()
+        assert "Table" in out  # mapper produces Table for views
 
-    async def test_fetch_procedures_returns_zero_when_no_sql(self, app):
-        input_ = _make_task_input(FetchProceduresInput)
-        result = await app.fetch_procedures(input_)
+    async def test_extract_views_no_sql_returns_zero(self, app):
+        input_ = _make_task_input()
+        result = await app.extract_views(input_)
         assert result.total_record_count == 0
 
-
-# ---------------------------------------------------------------------------
-# Per-entity transforms (BLDX-1140)
-# ---------------------------------------------------------------------------
-
-
-class TestPerEntityTransforms:
-    """BLDX-1140: per-entity transform tasks using asset mapper."""
-
-    async def test_transform_tables_uses_mapper(self, app, tmp_path):
-        # Write raw parquet
-        raw_dir = tmp_path / "raw" / "table"
-        raw_dir.mkdir(parents=True)
-        df = pd.DataFrame({"table_name": ["users", "orders"]})
-        df.to_parquet(str(raw_dir / "chunk-0-part0.parquet"))
-
-        input_ = _make_task_input(TransformInput, output_path=str(tmp_path))
-        result = await app.transform_tables(input_)
-
-        assert result.total_record_count == 2
-        output_file = tmp_path / "transformed" / "table" / "entities.json"
-        assert output_file.exists()
-
-        lines = output_file.read_text().strip().split("\n")
-        assert len(lines) == 2
-        entity = json.loads(lines[0])
-        assert entity["typeName"] == "Table"
-
-    async def test_transform_columns_uses_mapper(self, app, tmp_path):
-        raw_dir = tmp_path / "raw" / "column"
-        raw_dir.mkdir(parents=True)
-        df = pd.DataFrame({"column_name": ["id", "name", "email"]})
-        df.to_parquet(str(raw_dir / "chunk-0-part0.parquet"))
-
-        input_ = _make_task_input(TransformInput, output_path=str(tmp_path))
-        result = await app.transform_columns(input_)
-
-        assert result.total_record_count == 3
-
-    async def test_transform_returns_zero_when_no_raw_data(self, app, tmp_path):
-        input_ = _make_task_input(TransformInput, output_path=str(tmp_path))
-        result = await app.transform_tables(input_)
+    async def test_extract_procedures_no_sql_returns_zero(self, app):
+        input_ = _make_task_input()
+        result = await app.extract_procedures(input_)
         assert result.total_record_count == 0
 
-    async def test_transform_data_raises_not_implemented(self, app):
-        input_ = _make_task_input(TransformInput)
-        with pytest.raises(NotImplementedError):
-            await app.transform_data(input_)
+    async def test_extract_uses_batch_size_constant(self, app, tmp_path):
+        """Verifies _EXTRACT_BATCH_SIZE is passed to client.run_query."""
+        from application_sdk.templates.sql_app import _EXTRACT_BATCH_SIZE
+
+        rows = [{"database_name": "db1"}]
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        client = FakeSQLClient(rows=rows)
+        with patch.object(app, "_init_sql_client", AsyncMock(return_value=client)):
+            await app.extract_databases(input_)
+
+        assert client.last_batch_size == _EXTRACT_BATCH_SIZE
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +277,11 @@ class TestAssetMapperStubs:
         with pytest.raises(NotImplementedError):
             base.map_column({}, "conn/qn")
 
+    def test_base_map_procedure_raises(self):
+        base = SqlApp()
+        with pytest.raises(NotImplementedError):
+            base.map_procedure({}, "conn/qn")
+
     def test_subclass_mappers_work(self, app):
         result = app.map_table({"table_name": "users"}, "default/mysql/1234")
         assert result["typeName"] == "Table"
@@ -328,7 +299,6 @@ class TestPrepareSql:
     def test_substitutes_include_exclude_regex(self, app):
         sql = "SELECT * FROM t WHERE schema ~ '{normalized_include_regex}' AND schema !~ '{normalized_exclude_regex}'"
         input_ = _make_task_input(
-            FetchTablesInput,
             include_filter="^prod$",
             exclude_filter="^temp$",
         )
@@ -338,31 +308,27 @@ class TestPrepareSql:
 
     def test_default_include_is_wildcard(self, app):
         sql = "WHERE schema ~ '{normalized_include_regex}'"
-        input_ = _make_task_input(FetchTablesInput)
+        input_ = _make_task_input()
         result = app._prepare_sql(sql, input_)
         assert ".*" in result
 
     def test_default_exclude_is_nothing(self, app):
         sql = "WHERE schema !~ '{normalized_exclude_regex}'"
-        input_ = _make_task_input(FetchTablesInput)
+        input_ = _make_task_input()
         result = app._prepare_sql(sql, input_)
         assert "^$" in result
 
     def test_temp_table_regex_substitution(self, app):
         app.extract_temp_table_regex_table_sql = "AND t.name !~ '{exclude_table_regex}'"
         sql = "SELECT * FROM t {temp_table_regex_sql}"
-        input_ = _make_task_input(FetchTablesInput, temp_table_regex="^tmp_")
+        input_ = _make_task_input(temp_table_regex="^tmp_")
         result = app._prepare_sql(sql, input_)
         assert "AND t.name !~ '^tmp_'" in result
 
     def test_dict_filter_normalized_to_regex(self, app):
         sql = "WHERE schema ~ '{normalized_include_regex}'"
-        input_ = _make_task_input(
-            FetchTablesInput,
-            include_filter={"^prod$": ["^public$"]},
-        )
+        input_ = _make_task_input(include_filter={"^prod$": ["^public$"]})
         result = app._prepare_sql(sql, input_)
-        # normalize_filters should produce a regex string
         assert "{normalized_include_regex}" not in result
 
 
@@ -405,69 +371,51 @@ class TestRunOutputPrefixes:
         app._app_name = "test-app"
         return app
 
-    async def test_uses_input_output_path_when_set(self):
-        """When input.output_path is provided, use it directly (no workflow context needed)."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from application_sdk.templates.contracts.sql_metadata import (
-            ExtractionInput,
-            ExtractionOutput,
-        )
-
-        app = self._make_minimal_app()
-        mock_result = ExtractionOutput(
-            databases_extracted=1,
-            schemas_extracted=1,
-            tables_extracted=2,
-            columns_extracted=10,
-            connection_qualified_name="default/mysql/123",
-        )
-
-        input_ = ExtractionInput(
-            output_path="./local/tmp/artifacts/apps/test/workflows/wf-1/run-1"
-        )
-
-        with (
+    def _patch_extract_tasks(self):
+        """Return list of patches that mock all extract_* + upload_to_atlan."""
+        return [
             patch.object(
                 SqlApp,
-                "fetch_databases",
+                "extract_databases",
                 new=AsyncMock(return_value=MagicMock(total_record_count=1)),
             ),
             patch.object(
                 SqlApp,
-                "fetch_schemas",
+                "extract_schemas",
                 new=AsyncMock(return_value=MagicMock(total_record_count=1)),
             ),
             patch.object(
                 SqlApp,
-                "fetch_tables",
+                "extract_tables",
                 new=AsyncMock(return_value=MagicMock(total_record_count=2)),
             ),
             patch.object(
                 SqlApp,
-                "fetch_columns",
+                "extract_columns",
                 new=AsyncMock(return_value=MagicMock(total_record_count=10)),
-            ),
-            patch.object(
-                SqlApp, "transform_databases", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "transform_schemas", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "transform_tables", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "transform_columns", new=AsyncMock(return_value=MagicMock())
             ),
             patch.object(
                 SqlApp, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
             ),
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
-        ):
-            result = await app.run(input_)
+        ]
 
-        # With output_path set, transformed_data_prefix uses it directly
+    async def test_uses_input_output_path_when_set(self):
+        """When input.output_path is provided, use it directly (no workflow context needed)."""
+        app = self._make_minimal_app()
+        input_ = ExtractionInput(
+            output_path="./local/tmp/artifacts/apps/test/workflows/wf-1/run-1"
+        )
+
+        patches = self._patch_extract_tasks()
+        for p in patches:
+            p.start()
+        try:
+            result = await app.run(input_)
+        finally:
+            for p in patches:
+                p.stop()
+
         assert (
             "artifacts/apps/test/workflows/wf-1/run-1/transformed"
             in result.transformed_data_prefix
@@ -475,125 +423,61 @@ class TestRunOutputPrefixes:
 
     async def test_uses_workflow_info_when_output_path_empty(self):
         """When input.output_path is empty, derive path from workflow.info()."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
-
         app = self._make_minimal_app()
 
-        # Simulate workflow.info() returning a known workflow_id/run_id
         mock_wf_info = MagicMock()
         mock_wf_info.workflow_id = "test-wf-123"
         mock_wf_info.run_id = "test-run-456"
 
         input_ = ExtractionInput(output_path="")  # empty — should use workflow context
 
-        with (
+        patches = [
             patch(
                 "application_sdk.templates.sql_app._temporal_workflow.info",
                 return_value=mock_wf_info,
             ),
-            patch.object(
-                SqlApp,
-                "fetch_databases",
-                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
-            ),
-            patch.object(
-                SqlApp,
-                "fetch_schemas",
-                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
-            ),
-            patch.object(
-                SqlApp,
-                "fetch_tables",
-                new=AsyncMock(return_value=MagicMock(total_record_count=2)),
-            ),
-            patch.object(
-                SqlApp,
-                "fetch_columns",
-                new=AsyncMock(return_value=MagicMock(total_record_count=10)),
-            ),
-            patch.object(
-                SqlApp, "transform_databases", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "transform_schemas", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "transform_tables", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "transform_columns", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
-        ):
+            *self._patch_extract_tasks(),
+        ]
+        for p in patches:
+            p.start()
+        try:
             result = await app.run(input_)
+        finally:
+            for p in patches:
+                p.stop()
 
-        # Must contain the workflow_id and run_id from workflow.info()
         assert "test-wf-123" in result.transformed_data_prefix
         assert "test-run-456" in result.transformed_data_prefix
         assert result.transformed_data_prefix.endswith("/transformed")
 
     async def test_build_output_path_not_called_in_run(self):
         """build_output_path() (activity-only) must NOT be called from run()."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
-
         app = self._make_minimal_app()
+
         mock_wf_info = MagicMock()
         mock_wf_info.workflow_id = "wf-x"
         mock_wf_info.run_id = "run-x"
 
         input_ = ExtractionInput(output_path="")
 
-        with (
-            patch(
-                "application_sdk.templates.sql_app._temporal_workflow.info",
-                return_value=mock_wf_info,
-            ),
-            patch("application_sdk.templates.sql_app.build_output_path") as mock_bop,
-            patch.object(
-                SqlApp,
-                "fetch_databases",
-                new=AsyncMock(return_value=MagicMock(total_record_count=0)),
-            ),
-            patch.object(
-                SqlApp,
-                "fetch_schemas",
-                new=AsyncMock(return_value=MagicMock(total_record_count=0)),
-            ),
-            patch.object(
-                SqlApp,
-                "fetch_tables",
-                new=AsyncMock(return_value=MagicMock(total_record_count=0)),
-            ),
-            patch.object(
-                SqlApp,
-                "fetch_columns",
-                new=AsyncMock(return_value=MagicMock(total_record_count=0)),
-            ),
-            patch.object(
-                SqlApp, "transform_databases", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "transform_schemas", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "transform_tables", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "transform_columns", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(
-                SqlApp, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
-            ),
-            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
-        ):
+        mock_bop_patch = patch("application_sdk.templates.sql_app.build_output_path")
+        wf_info_patch = patch(
+            "application_sdk.templates.sql_app._temporal_workflow.info",
+            return_value=mock_wf_info,
+        )
+
+        mock_bop = mock_bop_patch.start()
+        wf_info_patch.start()
+        extract_patches = self._patch_extract_tasks()
+        for p in extract_patches:
+            p.start()
+        try:
             await app.run(input_)
+        finally:
+            for p in extract_patches:
+                p.stop()
+            wf_info_patch.stop()
+            mock_bop_patch.stop()
 
         # build_output_path must NOT be called from run() — it would crash in workflow context
         mock_bop.assert_not_called()

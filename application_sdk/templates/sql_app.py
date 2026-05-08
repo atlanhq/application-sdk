@@ -3,14 +3,16 @@
 Replaces ``SqlMetadataExtractor``, ``SqlQueryExtractor``, and
 ``BaseMetadataExtractor`` with a single App class that provides:
 
-* Standard ``@task`` methods for SQL metadata extraction
-  (databases, schemas, tables, columns, views, procedures)
-* Per-entity transform tasks using **pyatlan_v9 asset mapper**
-  (replaces YAML transformer)
-* ``upload_to_atlan`` for output migration
-* ``build_task_input()`` as public API for ``run()`` overrides (BLDX-1138)
-* ``fetch_views()`` and ``fetch_procedures()`` stubs (BLDX-1139)
-* Parallel per-entity transforms via ``asyncio.gather()`` (BLDX-1140)
+* ``extract_*`` ``@task`` methods that **stream SQL rows directly through
+  the connector's ``map_*`` mapper into JSONL** — one pass, no parquet
+  intermediate, no pandas/pyarrow round-trip.
+* Per-entity asset mappers (``map_database`` / ``map_schema`` / ``map_table``
+  / ``map_column`` / ``map_procedure``) — replaces the YAML transformer.
+* ``upload_to_atlan`` for output migration to the upstream object store.
+* ``build_task_input()`` as public API for ``run()`` overrides (BLDX-1138).
+* ``extract_views()`` and ``extract_procedures()`` for the optional flows
+  (BLDX-1139).
+* Parallel extraction via ``asyncio.gather()`` (BLDX-1140).
 
 Usage::
 
@@ -77,19 +79,6 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
     ExtractionTaskInput,
-    FetchColumnsInput,
-    FetchColumnsOutput,
-    FetchDatabasesInput,
-    FetchDatabasesOutput,
-    FetchProceduresInput,
-    FetchProceduresOutput,
-    FetchSchemasInput,
-    FetchSchemasOutput,
-    FetchTablesInput,
-    FetchTablesOutput,
-    FetchViewsInput,
-    FetchViewsOutput,
-    TransformInput,
     TransformOutput,
 )
 
@@ -107,10 +96,10 @@ _ET = TypeVar("_ET", bound=ExtractionTaskInput)
 #: (legacy / connector-specific shapes the v3 publisher accepts).
 _MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
 
-#: Rows per batch in ``_transform_entity``'s pyarrow-backed iterator.
-#: Caps memory at ``_TRANSFORM_BATCH_SIZE * row_size`` regardless of how
-#: large the underlying parquet file is.
-_TRANSFORM_BATCH_SIZE: int = 10_000
+#: SQL row batch size used by ``_extract_entity`` when streaming results
+#: through ``client.run_query()``. Caps the in-flight set at
+#: ``_EXTRACT_BATCH_SIZE * row_size`` regardless of total result size.
+_EXTRACT_BATCH_SIZE: int = 10_000
 
 
 class SqlApp(App):
@@ -121,15 +110,18 @@ class SqlApp(App):
     - ``fetch_database_sql``, ``fetch_schema_sql``, etc.: SQL templates
     - ``map_table()``, ``map_column()``, etc.: Asset mapper functions
 
-    The base ``run()`` orchestrates: fetch → transform (parallel) → upload.
+    The base ``run()`` orchestrates: extract (parallel) → upload. Each
+    ``extract_*`` activity streams its SQL result set through the matching
+    ``map_*`` function, writing transformed Atlan assets straight to JSONL
+    (one pass, no parquet intermediate).
 
-    **Parallel-fetch assumption:** the default ``run()`` issues all four
-    fetch tasks (databases, schemas, tables, columns) concurrently via
+    **Parallel-extract assumption:** the default ``run()`` issues all four
+    extract tasks (databases, schemas, tables, columns) concurrently via
     ``asyncio.gather()``. Each SQL template must therefore be fully
     self-contained — no cross-entity parameterisation. Connectors that
     need to iterate tables per-schema, paginate by database, or otherwise
-    sequence fetches must override ``run()`` and call the ``@task``
-    methods directly in the order they need.
+    sequence fetches must override ``run()`` and call the ``extract_*``
+    activities directly in the order they need.
     """
 
     _app_registered: ClassVar[bool] = True  # abstract template, not concrete
@@ -171,7 +163,7 @@ class SqlApp(App):
         inputs for individual ``@task`` methods.
 
         Args:
-            input_cls: The task input class (e.g. ``FetchDatabasesInput``).
+            input_cls: The task input class (e.g. ``ExtractionTaskInput``).
             src: The top-level ``ExtractionInput`` from the workflow.
             cred_ref: Optional credential reference for secret resolution.
 
@@ -192,230 +184,96 @@ class SqlApp(App):
         )
 
     # =====================================================================
-    # @task: Metadata extraction
+    # @task: Metadata extraction — SQL stream → mapper → JSONL
     # =====================================================================
+    #
+    # Each ``extract_*`` task fetches one entity type via SQL (streaming
+    # batches through ``client.run_query``), runs each row through the
+    # connector's ``map_*`` function, and writes the resulting Atlan asset
+    # to JSONL. No parquet intermediate, no pandas/pyarrow round-trip —
+    # SQL row → pyatlan_v9 Asset → ``transformed/{entity}/entities.json``
+    # in a single pass. See ``_extract_entity`` for the shared pipeline.
 
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
-        """Fetch database/catalog names via SQL."""
-        if not self.fetch_database_sql:
-            logger.warning("fetch_database_sql not set — returning empty")
-            return FetchDatabasesOutput(chunk_count=0, total_record_count=0)
-
-        client = await self._init_sql_client(input)
-        try:
-            sql = self._prepare_sql(self.fetch_database_sql.strip(), input)
-            result = await client.get_results(sql)
-            count = len(result) if result is not None else 0
-            logger.info("Fetched %d databases", count)
-            # Write to output
-            output_path = self._resolve_output_path(input)
-            if count > 0 and output_path:
-                output_dir = Path(output_path) / "raw" / "database"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
-            return FetchDatabasesOutput(
-                chunk_count=1 if count > 0 else 0, total_record_count=count
-            )
-        finally:
-            await client.close()
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def fetch_schemas(self, input: FetchSchemasInput) -> FetchSchemasOutput:
-        """Fetch schema names via SQL."""
-        if not self.fetch_schema_sql:
-            logger.warning("fetch_schema_sql not set — returning empty")
-            return FetchSchemasOutput(chunk_count=0, total_record_count=0)
-
-        client = await self._init_sql_client(input)
-        try:
-            sql = self._prepare_sql(self.fetch_schema_sql.strip(), input)
-            result = await client.get_results(sql)
-            count = len(result) if result is not None else 0
-            logger.info("Fetched %d schemas", count)
-            output_path = self._resolve_output_path(input)
-            if count > 0 and output_path:
-                output_dir = Path(output_path) / "raw" / "schema"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
-            return FetchSchemasOutput(
-                chunk_count=1 if count > 0 else 0, total_record_count=count
-            )
-        finally:
-            await client.close()
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
-        """Fetch table metadata via SQL."""
-        if not self.fetch_table_sql:
-            logger.warning("fetch_table_sql not set — returning empty")
-            return FetchTablesOutput(chunk_count=0, total_record_count=0)
-
-        client = await self._init_sql_client(input)
-        try:
-            sql = self._prepare_sql(self.fetch_table_sql.strip(), input)
-            result = await client.get_results(sql)
-            count = len(result) if result is not None else 0
-            logger.info("Fetched %d tables", count)
-            output_path = self._resolve_output_path(input)
-            if count > 0 and output_path:
-                output_dir = Path(output_path) / "raw" / "table"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
-            return FetchTablesOutput(
-                chunk_count=1 if count > 0 else 0, total_record_count=count
-            )
-        finally:
-            await client.close()
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def fetch_columns(self, input: FetchColumnsInput) -> FetchColumnsOutput:
-        """Fetch column metadata via SQL."""
-        if not self.fetch_column_sql:
-            logger.warning("fetch_column_sql not set — returning empty")
-            return FetchColumnsOutput(chunk_count=0, total_record_count=0)
-
-        client = await self._init_sql_client(input)
-        try:
-            sql = self._prepare_sql(self.fetch_column_sql.strip(), input)
-            result = await client.get_results(sql)
-            count = len(result) if result is not None else 0
-            logger.info("Fetched %d columns", count)
-            output_path = self._resolve_output_path(input)
-            if count > 0 and output_path:
-                output_dir = Path(output_path) / "raw" / "column"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
-            return FetchColumnsOutput(
-                chunk_count=1 if count > 0 else 0, total_record_count=count
-            )
-        finally:
-            await client.close()
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def fetch_views(self, input: FetchViewsInput) -> FetchViewsOutput:
-        """Fetch view metadata via SQL. Override in subclass if needed (BLDX-1139)."""
-        if not self.fetch_view_sql:
-            return FetchViewsOutput(chunk_count=0, total_record_count=0)
-
-        client = await self._init_sql_client(input)
-        try:
-            sql = self._prepare_sql(self.fetch_view_sql.strip(), input)
-            result = await client.get_results(sql)
-            count = len(result) if result is not None else 0
-            logger.info("Fetched %d views", count)
-            output_path = self._resolve_output_path(input)
-            if count > 0 and output_path:
-                output_dir = Path(output_path) / "raw" / "view"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
-            return FetchViewsOutput(
-                chunk_count=1 if count > 0 else 0, total_record_count=count
-            )
-        finally:
-            await client.close()
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def fetch_procedures(
-        self, input: FetchProceduresInput
-    ) -> FetchProceduresOutput:
-        """Fetch stored procedure metadata. Override in subclass if needed."""
-        if not self.fetch_procedure_sql:
-            return FetchProceduresOutput(chunk_count=0, total_record_count=0)
-
-        client = await self._init_sql_client(input)
-        try:
-            sql = self._prepare_sql(self.fetch_procedure_sql.strip(), input)
-            result = await client.get_results(sql)
-            count = len(result) if result is not None else 0
-            logger.info("Fetched %d procedures", count)
-            output_path = self._resolve_output_path(input)
-            if count > 0 and output_path:
-                output_dir = Path(output_path) / "raw" / "extras-procedure"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                result.to_parquet(str(output_dir / "chunk-0-part0.parquet"))
-            return FetchProceduresOutput(
-                chunk_count=1 if count > 0 else 0, total_record_count=count
-            )
-        finally:
-            await client.close()
-
-    # =====================================================================
-    # @task: Per-entity transforms (BLDX-1140) — asset mapper pattern
-    # =====================================================================
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def transform_databases(self, input: TransformInput) -> TransformOutput:
-        """Transform raw database records to Atlan assets using map_database()."""
-        return await self._transform_entity("database", self.map_database, input)
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def transform_schemas(self, input: TransformInput) -> TransformOutput:
-        """Transform raw schema records to Atlan assets using map_schema()."""
-        return await self._transform_entity("schema", self.map_schema, input)
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def transform_tables(self, input: TransformInput) -> TransformOutput:
-        """Transform raw table records to Atlan assets using map_table()."""
-        return await self._transform_entity("table", self.map_table, input)
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def transform_columns(self, input: TransformInput) -> TransformOutput:
-        """Transform raw column records to Atlan assets using map_column()."""
-        return await self._transform_entity("column", self.map_column, input)
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def transform_procedures(self, input: TransformInput) -> TransformOutput:
-        """Transform raw procedure records to Atlan Procedure assets using map_procedure().
-
-        Writes to the ``extras-procedure`` entity type so the publish-app can
-        parse the SQL ``definition`` field and derive lineage (Process / ColumnProcess
-        entities) automatically — matching the legacy Argo crawler output.
-        """
-        return await self._transform_entity(
-            "extras-procedure", self.map_procedure, input
+    async def extract_databases(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Stream database/catalog records via SQL → ``map_database`` → JSONL."""
+        return await self._extract_entity(
+            entity_type="database",
+            sql_template=self.fetch_database_sql,
+            mapper_fn=self.map_database,
+            input=input,
         )
 
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def transform_data(self, input: TransformInput) -> TransformOutput:
-        """Single-shot transform stub for connectors that override ``run()``
-        and want one consolidated transform pass instead of the per-entity
-        pipeline.
+    async def extract_schemas(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Stream schema records via SQL → ``map_schema`` → JSONL."""
+        return await self._extract_entity(
+            entity_type="schema",
+            sql_template=self.fetch_schema_sql,
+            mapper_fn=self.map_schema,
+            input=input,
+        )
 
-        Not part of the default ``run()`` orchestration — that path always
-        uses the per-entity ``transform_databases/schemas/tables/columns``
-        tasks and expects the corresponding ``map_*`` mappers to be
-        overridden. Override ``transform_data()`` only when you've also
-        overridden ``run()`` to call it directly.
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def extract_tables(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Stream table records via SQL → ``map_table`` → JSONL."""
+        return await self._extract_entity(
+            entity_type="table",
+            sql_template=self.fetch_table_sql,
+            mapper_fn=self.map_table,
+            input=input,
+        )
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def extract_columns(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Stream column records via SQL → ``map_column`` → JSONL."""
+        return await self._extract_entity(
+            entity_type="column",
+            sql_template=self.fetch_column_sql,
+            mapper_fn=self.map_column,
+            input=input,
+        )
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def extract_views(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Stream view records via SQL → ``map_table`` → JSONL.
+
+        Views go through ``map_table`` because Atlan's data model treats
+        them as a Table specialisation (View typeName) — connectors
+        differentiate via the ``table_kind`` field on the record.
         """
-        raise NotImplementedError(
-            "transform_data() has no default implementation. Override it "
-            "(and run()) for a custom one-shot transform pipeline; otherwise "
-            "the default run() uses the per-entity transforms instead."
+        return await self._extract_entity(
+            entity_type="view",
+            sql_template=self.fetch_view_sql,
+            mapper_fn=self.map_table,
+            input=input,
+        )
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def extract_procedures(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Stream procedure records via SQL → ``map_procedure`` → JSONL.
+
+        Writes to ``extras-procedure`` so the publish-app can parse the
+        SQL ``definition`` field and derive lineage (Process /
+        ColumnProcess entities) — matching the legacy Argo crawler output.
+        """
+        return await self._extract_entity(
+            entity_type="extras-procedure",
+            sql_template=self.fetch_procedure_sql,
+            mapper_fn=self.map_procedure,
+            input=input,
         )
 
     # ── Upload ──────────────────────────────────────────────────────────
@@ -490,50 +348,34 @@ class SqlApp(App):
         """Default extraction orchestration.
 
         1. Resolve credentials
-        2. Fetch metadata in parallel (databases, schemas, tables, columns)
-        3. Transform per-entity in parallel using asset mappers
-        4. Upload to Atlan
+        2. Extract metadata in parallel (databases, schemas, tables, columns)
+           — each task streams SQL rows directly through its ``map_*``
+           function into JSONL. No parquet intermediate.
+        3. Upload to Atlan
 
         Override for custom orchestration (e.g. sequential fetches, multi-DB).
         Use ``build_task_input()`` to construct typed inputs.
         """
         cred_ref = self._resolve_credential_ref(input)
 
-        # ── Fetch metadata in parallel ──────────────────────────────────
-        db_input = self.build_task_input(FetchDatabasesInput, input, cred_ref=cred_ref)
-        schema_input = self.build_task_input(
-            FetchSchemasInput, input, cred_ref=cred_ref
-        )
-        table_input = self.build_task_input(FetchTablesInput, input, cred_ref=cred_ref)
-        column_input = self.build_task_input(
-            FetchColumnsInput, input, cred_ref=cred_ref
+        # ── Extract metadata in parallel ────────────────────────────────
+        task_input = self.build_task_input(
+            ExtractionTaskInput, input, cred_ref=cred_ref
         )
 
         db_result, schema_result, table_result, column_result = await asyncio.gather(
-            self.fetch_databases(db_input),
-            self.fetch_schemas(schema_input),
-            self.fetch_tables(table_input),
-            self.fetch_columns(column_input),
+            self.extract_databases(task_input),
+            self.extract_schemas(task_input),
+            self.extract_tables(task_input),
+            self.extract_columns(task_input),
         )
 
         logger.info(
-            "Metadata fetch complete: databases=%d, schemas=%d, tables=%d, columns=%d",
+            "Metadata extraction complete: databases=%d, schemas=%d, tables=%d, columns=%d",
             db_result.total_record_count,
             schema_result.total_record_count,
             table_result.total_record_count,
             column_result.total_record_count,
-        )
-
-        # ── Transform per-entity in parallel ────────────────────────────
-        transform_input = self.build_task_input(
-            TransformInput, input, cred_ref=cred_ref
-        )
-
-        await asyncio.gather(
-            self.transform_databases(transform_input),
-            self.transform_schemas(transform_input),
-            self.transform_tables(transform_input),
-            self.transform_columns(transform_input),
         )
 
         # ── Upload ──────────────────────────────────────────────────────
@@ -673,31 +515,37 @@ class SqlApp(App):
                 return legacy_credential_ref(input.credential_guid)
             return None
 
-    async def _transform_entity(
+    async def _extract_entity(
         self,
+        *,
         entity_type: str,
+        sql_template: str,
         mapper_fn: _MapperFn,
-        input: TransformInput,
+        input: ExtractionTaskInput,
     ) -> TransformOutput:
-        """Generic per-entity transform: read raw parquet → mapper → JSONL.
+        """Stream SQL rows directly through ``mapper_fn`` into JSONL.
 
-        Uses ``pyarrow.parquet.ParquetFile.iter_batches`` for memory-bounded
-        iteration (each batch is ``_TRANSFORM_BATCH_SIZE`` rows). pyarrow's
-        ``to_pylist()`` yields native Python types (``None`` for NULL, real
-        ``datetime`` for timestamps), so no pandas-style NaN/Inf/NaT
-        sanitisation is needed before JSON serialisation.
+        Single-pass pipeline:
+
+        1. Open SQL client, render the template with the input filters.
+        2. Stream rows in batches of ``_EXTRACT_BATCH_SIZE`` via the
+           server-side cursor that ``client.run_query`` exposes — each
+           batch is a ``list[dict[str, Any]]`` keyed by lower-cased column
+           names. Memory stays bounded regardless of total result size.
+        3. For each row, run the connector's ``map_*`` mapper and write
+           the resulting Atlan asset to ``transformed/{entity_type}/entities.json``
+           as one JSON object per line.
+
+        No parquet intermediate, no pandas/pyarrow round-trip, no separate
+        transform task — this is the full extraction for one entity type.
         """
-        import pyarrow.parquet as pq  # noqa: PLC0415
+        if not sql_template:
+            logger.warning("No SQL configured for %s — skipping", entity_type)
+            return TransformOutput(typename=entity_type, total_record_count=0)
 
         output_path = self._resolve_output_path(input)
-        raw_dir = Path(output_path) / "raw" / entity_type if output_path else None
-        if raw_dir is None or not raw_dir.exists():
-            return TransformOutput(total_record_count=0)
-
-        # Read all parquet files in the raw directory
-        parquet_files = list(raw_dir.glob("*.parquet"))
-        if not parquet_files:
-            return TransformOutput(total_record_count=0)
+        if not output_path:
+            return TransformOutput(typename=entity_type, total_record_count=0)
 
         connection_qn = ""
         connection_name = ""
@@ -711,12 +559,15 @@ class SqlApp(App):
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.json"
 
+        client = await self._init_sql_client(input)
         count = 0
-        with open(output_file, "wb") as f:
-            for pf in parquet_files:
-                pf_handle = pq.ParquetFile(str(pf))
-                for batch in pf_handle.iter_batches(batch_size=_TRANSFORM_BATCH_SIZE):
-                    for record in batch.to_pylist():
+        try:
+            sql = self._prepare_sql(sql_template.strip(), input)
+            with open(output_file, "wb") as f:
+                async for batch in client.run_query(
+                    sql, batch_size=_EXTRACT_BATCH_SIZE
+                ):
+                    for record in batch:
                         asset = mapper_fn(record, connection_qn)
                         # Inject connectionName if the mapper returned a dict
                         if isinstance(asset, dict) and connection_name:
@@ -733,6 +584,8 @@ class SqlApp(App):
                             entity_bytes = json.dumps(record).encode()
                         f.write(entity_bytes + b"\n")
                         count += 1
+        finally:
+            await client.close()
 
-        logger.info("Transformed %s: %d records", entity_type, count)
-        return TransformOutput(total_record_count=count)
+        logger.info("Extracted %s: %d records", entity_type, count)
+        return TransformOutput(typename=entity_type, total_record_count=count)
