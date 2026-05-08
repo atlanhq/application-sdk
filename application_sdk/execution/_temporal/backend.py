@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -289,8 +290,8 @@ async def create_temporal_client(
     tls_client_cert_path: str = "",
     tls_client_private_key_path: str = "",
     tls_domain: str = "",
-    connect_max_attempts: int = 5,
-    connect_retry_delay_seconds: float = 2.0,
+    connect_max_attempts: int = 10,
+    connect_retry_delay_seconds: float = 0.5,
     enable_prometheus: bool = True,
     prometheus_bind_address: str = "",
 ) -> Client:
@@ -374,8 +375,12 @@ async def create_temporal_client(
         prometheus_bind_address=prometheus_bind_address,
     )
 
+    # Full-jitter exponential backoff (per AWS Architecture blog) — keeps the
+    # capped exponential growth but draws each sleep from U(0, cap_at_attempt)
+    # to spread concurrent reconnects across the window and avoid thundering
+    # herd on Temporal frontend recovery.
     last_exc: Exception | None = None
-    delay = connect_retry_delay_seconds
+    backoff_cap = 5.0
     for attempt in range(1, connect_max_attempts + 1):
         try:
             client = await Client.connect(**kwargs)
@@ -384,15 +389,21 @@ async def create_temporal_client(
         except Exception as exc:
             last_exc = exc
             if attempt < connect_max_attempts:
+                cap_at_attempt = min(
+                    connect_retry_delay_seconds * (2 ** (attempt - 1)),
+                    backoff_cap,
+                )
+                jittered = random.uniform(0, cap_at_attempt)
                 logger.warning(
-                    "Temporal connection attempt %d/%d failed, retrying in %.1fs",
+                    "Temporal connection attempt %d/%d failed, retrying in %.2fs "
+                    "(jittered, cap=%.1fs)",
                     attempt,
                     connect_max_attempts,
-                    delay,
+                    jittered,
+                    cap_at_attempt,
                     exc_info=True,
                 )
-                await asyncio.sleep(delay)
-                delay *= 2
+                await asyncio.sleep(jittered)
             else:
                 logger.error(
                     "Temporal connection failed after %d attempts",

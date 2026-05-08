@@ -195,8 +195,15 @@ def _wrap_response(
     message: str = "",
     success: bool = True,
 ) -> dict[str, Any]:
-    """Wrap response data in the standard envelope: {success, message, data}."""
-    return {"success": success, "message": message, "data": data}
+    """Wrap response data in the standard envelope: {success, message, data}.
+
+    ``message`` is omitted from the response when empty to match the legacy
+    /credentials/query format expected by the frontend filter widgets.
+    """
+    result: dict[str, Any] = {"success": success, "data": data}
+    if message:
+        result["message"] = message
+    return result
 
 
 async def _get_workflow_result(
@@ -679,9 +686,9 @@ def create_app_handler_service(
                     type(result).__name__,
                     count,
                 )
-                return JSONResponse(
-                    content=_wrap_response(data, message=f"Fetched {count} objects")
-                )
+                # message omitted: a non-empty message field caused the
+                # frontend filter widgets to render empty dropdowns
+                return JSONResponse(content=_wrap_response(data))
             except HandlerError as e:
                 logger.error(
                     "Metadata fetch failed for app %s (request %s): %s",

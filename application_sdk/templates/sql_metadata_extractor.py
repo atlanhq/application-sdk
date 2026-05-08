@@ -28,6 +28,7 @@ Alternatively, override the method entirely without calling super():
 from __future__ import annotations
 
 import asyncio
+import warnings
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
@@ -90,6 +91,10 @@ def _task_input(
 class SqlMetadataExtractor(BaseMetadataExtractor):
     """Base class for SQL metadata extraction apps.
 
+    .. deprecated::
+        Will be removed in v4.0.0. Use
+        :class:`application_sdk.templates.SqlApp` instead.
+
     The ``run()`` method orchestrates the full extraction:
     fetch (databases, schemas, tables, columns) → transform → upload via
     :meth:`App.upload`.  Override ``run()`` to change the orchestration.
@@ -104,6 +109,23 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     class attributes on your subclass, then call ``super()`` from each
     ``@task`` override to use the default SQL execution provided here.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Skip intra-SDK chains and only warn for the *direct* base — so a
+        # connector subclassing IncrementalSqlMetadataExtractor doesn't
+        # also see this hook fire via the MRO.
+        if cls.__module__.startswith("application_sdk."):
+            return
+        if SqlMetadataExtractor not in cls.__bases__:
+            return
+        warnings.warn(
+            f"{cls.__name__} subclasses SqlMetadataExtractor which is deprecated. "
+            "Use application_sdk.templates.SqlApp instead. "
+            "Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     # Prevent auto-registration: SqlMetadataExtractor is a base template, not a
     # concrete app. Concrete subclasses (e.g. CloudSqlApp) register themselves.

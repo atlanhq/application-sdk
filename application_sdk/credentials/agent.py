@@ -106,13 +106,27 @@ async def resolve_agent_credential(
         CredentialError: For any other secret-store failure.
 
     Note:
-        When ``secret_path`` is empty, bundle fetch is skipped and the
-        raw spec values are used directly (dotted-key expansion and
-        auth-section flattening still apply).
+        Resolution mode is selected by the spec:
+
+        * ``key-type: single-key`` — each ref-key is fetched as a
+          separate secret store entry (one entry per credential field).
+          Useful for ``secretstores.local.env``-backed deployments
+          where each env var holds one credential value, avoiding the
+          all-in-one-JSON-bundle workaround. Non-secret fields
+          (host/port) silently fall through unchanged.
+        * ``secret-path`` set (and ``key-type`` not single-key): the
+          bundle is fetched once from ``secret_path`` and ref-keys are
+          substituted from it (the original v2 multi-key behavior).
+        * Both empty: raw spec values are used as-is (no store
+          lookup). Intended for dev/testing where ``agent_json``
+          carries literal credentials inline.
     """
     raw = spec.to_raw_dict()
 
-    if spec.secret_path:
+    if spec.key_type == "single-key":
+        bundle = await _fetch_per_key_bundle(secret_store, raw)
+        resolved_flat = _substitute(raw, bundle)
+    elif spec.secret_path:
         bundle = await _fetch_bundle(secret_store, spec.secret_path)
         resolved_flat = _substitute(raw, bundle)
     else:
@@ -178,6 +192,70 @@ async def _fetch_bundle(
             f"got {type(bundle).__name__}",
             credential_name=secret_path,
         )
+    return bundle
+
+
+async def _fetch_per_key_bundle(
+    secret_store: "SecretStore", raw: dict[str, Any]
+) -> dict[str, Any]:
+    """Build a synthetic bundle by per-key lookups against the secret store.
+
+    For ``key-type: single-key`` agent specs, each non-literal string field
+    value is treated as its own secret store key. The returned bundle maps
+    each successfully fetched ref-key to its real value, so that the
+    existing :func:`_substitute` step can finish substitution unchanged.
+
+    Missing keys are silently skipped — single-key mode probes every
+    non-literal field value, so a non-secret field (like ``host`` carrying
+    a hostname) won't fail the resolution. Unmatched ref-keys then take
+    the v2-parity fallthrough in :func:`_substitute` (left as-is, surfaced
+    by downstream connect errors).
+    """
+    bundle: dict[str, Any] = {}
+    seen: set[str] = set()
+
+    async def _try_fetch(value: str) -> None:
+        if not value or value in seen:
+            return
+        seen.add(value)
+        try:
+            secret = await secret_store.get_optional(value)
+        except Exception:
+            # Store-side error — distinct from "key not in store" (silent
+            # below). A transient outage here on a real secret field
+            # would otherwise auth-fail with the ref-key as the literal
+            # username, so surface at WARNING with stack trace.
+            logger.warning(
+                "single-key probe failed for ref-key %r — store error, "
+                "treating as non-secret. If this was a real credential "
+                "key, the auth attempt will fail with the ref-key as the "
+                "literal value.",
+                value,
+                exc_info=True,
+            )
+            return
+        if secret in (None, ""):
+            # Key not in store — expected for non-secret fields probed
+            # in single-key mode (host, port, region literals).
+            logger.debug(
+                "single-key probe: %r not found in store (non-secret field)",
+                value,
+            )
+            return
+        bundle[value] = secret
+
+    for key, value in raw.items():
+        if key in _LITERAL_KEYS:
+            continue
+        if isinstance(value, str):
+            await _try_fetch(value)
+
+    extra = raw.get("extra")
+    if isinstance(extra, dict):
+        for value in extra.values():
+            if isinstance(value, str):
+                await _try_fetch(value)
+
     return bundle
 
 
