@@ -140,14 +140,14 @@ class TestBuildTaskInput:
 
 
 # ---------------------------------------------------------------------------
-# extract_* tasks — SQL stream → mapper → JSONL (no parquet round-trip)
+# extract_* tasks — SQL stream → raw JSONL (no parquet)
 # ---------------------------------------------------------------------------
 
 
 class TestExtractTasks:
-    """Each extract_* task streams SQL rows directly to mapped JSONL."""
+    """Each extract_* task streams SQL rows verbatim to raw/<entity>/records.json."""
 
-    async def test_extract_databases_writes_jsonl(self, app, tmp_path):
+    async def test_extract_databases_writes_raw_jsonl(self, app, tmp_path):
         rows = [{"database_name": "db1"}, {"database_name": "db2"}]
         input_ = _make_task_input(output_path=str(tmp_path))
 
@@ -157,13 +157,12 @@ class TestExtractTasks:
         assert result.total_record_count == 2
         assert result.typename == "database"
 
-        output_file = tmp_path / "transformed" / "database" / "entities.json"
-        assert output_file.exists()
-        lines = output_file.read_text().strip().split("\n")
+        raw_file = tmp_path / "raw" / "database" / "records.json"
+        assert raw_file.exists()
+        lines = raw_file.read_text().strip().split("\n")
         assert len(lines) == 2
-        first = json.loads(lines[0])
-        assert first["typeName"] == "Database"
-        assert first["qualifiedName"].endswith("/db1")
+        # Raw JSONL contains the verbatim SQL row dicts — no asset wrapping
+        assert json.loads(lines[0]) == {"database_name": "db1"}
 
     async def test_extract_no_sql_returns_zero(self, app):
         app.fetch_database_sql = ""
@@ -172,7 +171,7 @@ class TestExtractTasks:
         assert result.total_record_count == 0
         assert result.typename == "database"
 
-    async def test_extract_schemas(self, app, tmp_path):
+    async def test_extract_schemas_writes_raw_jsonl(self, app, tmp_path):
         rows = [{"schema_name": "public"}, {"schema_name": "private"}]
         input_ = _make_task_input(output_path=str(tmp_path))
 
@@ -180,50 +179,10 @@ class TestExtractTasks:
             result = await app.extract_schemas(input_)
 
         assert result.total_record_count == 2
-        out = (tmp_path / "transformed" / "schema" / "entities.json").read_text()
-        assert "Schema" in out
+        out = (tmp_path / "raw" / "schema" / "records.json").read_text()
         assert "public" in out
-
-    async def test_extract_tables(self, app, tmp_path):
-        rows = [{"table_name": n} for n in ("users", "orders", "products")]
-        input_ = _make_task_input(output_path=str(tmp_path))
-
-        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
-            result = await app.extract_tables(input_)
-
-        assert result.total_record_count == 3
-        lines = (
-            (tmp_path / "transformed" / "table" / "entities.json")
-            .read_text()
-            .strip()
-            .split("\n")
-        )
-        assert len(lines) == 3
-        for line in lines:
-            assert json.loads(line)["typeName"] == "Table"
-
-    async def test_extract_columns(self, app, tmp_path):
-        rows = [{"column_name": n} for n in ("id", "name", "email", "created_at")]
-        input_ = _make_task_input(output_path=str(tmp_path))
-
-        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
-            result = await app.extract_columns(input_)
-
-        assert result.total_record_count == 4
-
-    async def test_extract_views_falls_back_to_map_table(self, app, tmp_path):
-        """Views go through map_table — Atlan models View as a Table specialisation."""
-        app.fetch_view_sql = "SELECT view_name as table_name FROM views"
-        rows = [{"table_name": "v1"}, {"table_name": "v2"}]
-        input_ = _make_task_input(output_path=str(tmp_path))
-
-        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
-            result = await app.extract_views(input_)
-
-        assert result.total_record_count == 2
-        assert result.typename == "view"
-        out = (tmp_path / "transformed" / "view" / "entities.json").read_text()
-        assert "Table" in out  # mapper produces Table for views
+        # No mapper output at the extract stage
+        assert "Schema" not in out
 
     async def test_extract_views_no_sql_returns_zero(self, app):
         input_ = _make_task_input()
@@ -247,6 +206,79 @@ class TestExtractTasks:
             await app.extract_databases(input_)
 
         assert client.last_batch_size == _EXTRACT_BATCH_SIZE
+
+
+# ---------------------------------------------------------------------------
+# transform_* tasks — raw JSONL → mapper → transformed JSONL
+# ---------------------------------------------------------------------------
+
+
+def _seed_raw(tmp_path, entity_type: str, records: list[dict]) -> None:
+    """Helper: write raw/<entity>/records.json so transform_* has input."""
+    raw_dir = tmp_path / "raw" / entity_type
+    raw_dir.mkdir(parents=True)
+    raw_file = raw_dir / "records.json"
+    raw_file.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+
+class TestTransformTasks:
+    """Each transform_* reads raw/<entity>/records.json and writes mapped JSONL."""
+
+    async def test_transform_databases_uses_mapper(self, app, tmp_path):
+        _seed_raw(tmp_path, "database", [{"database_name": "db1"}])
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        result = await app.transform_databases(input_)
+
+        assert result.total_record_count == 1
+        assert result.typename == "database"
+        out = (tmp_path / "transformed" / "database" / "entities.json").read_text()
+        entity = json.loads(out.strip())
+        assert entity["typeName"] == "Database"
+        assert entity["qualifiedName"].endswith("/db1")
+
+    async def test_transform_tables_handles_multiple_rows(self, app, tmp_path):
+        _seed_raw(
+            tmp_path,
+            "table",
+            [{"table_name": n} for n in ("users", "orders", "products")],
+        )
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        result = await app.transform_tables(input_)
+
+        assert result.total_record_count == 3
+        lines = (
+            (tmp_path / "transformed" / "table" / "entities.json")
+            .read_text()
+            .strip()
+            .split("\n")
+        )
+        assert len(lines) == 3
+        for line in lines:
+            assert json.loads(line)["typeName"] == "Table"
+
+    async def test_transform_views_uses_map_table(self, app, tmp_path):
+        """Views go through map_table — Atlan models View as a Table specialisation."""
+        _seed_raw(tmp_path, "view", [{"table_name": "v1"}, {"table_name": "v2"}])
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        result = await app.transform_views(input_)
+
+        assert result.total_record_count == 2
+        out = (tmp_path / "transformed" / "view" / "entities.json").read_text()
+        assert json.loads(out.split("\n")[0])["typeName"] == "Table"
+
+    async def test_transform_no_raw_file_returns_zero(self, app, tmp_path):
+        """When extract didn't run (no raw file), transform is a no-op."""
+        input_ = _make_task_input(output_path=str(tmp_path))
+        result = await app.transform_tables(input_)
+        assert result.total_record_count == 0
+
+    async def test_transform_procedures_no_raw_file(self, app, tmp_path):
+        input_ = _make_task_input(output_path=str(tmp_path))
+        result = await app.transform_procedures(input_)
+        assert result.total_record_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +404,7 @@ class TestRunOutputPrefixes:
         return app
 
     def _patch_extract_tasks(self):
-        """Return list of patches that mock all extract_* + upload_to_atlan."""
+        """Return list of patches that mock all extract_* + transform_* + upload_to_atlan."""
         return [
             patch.object(
                 SqlApp,
@@ -392,6 +424,26 @@ class TestRunOutputPrefixes:
             patch.object(
                 SqlApp,
                 "extract_columns",
+                new=AsyncMock(return_value=MagicMock(total_record_count=10)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_databases",
+                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_schemas",
+                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_tables",
+                new=AsyncMock(return_value=MagicMock(total_record_count=2)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_columns",
                 new=AsyncMock(return_value=MagicMock(total_record_count=10)),
             ),
             patch.object(

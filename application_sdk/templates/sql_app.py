@@ -3,16 +3,22 @@
 Replaces ``SqlMetadataExtractor``, ``SqlQueryExtractor``, and
 ``BaseMetadataExtractor`` with a single App class that provides:
 
-* ``extract_*`` ``@task`` methods that **stream SQL rows directly through
-  the connector's ``map_*`` mapper into JSONL** — one pass, no parquet
-  intermediate, no pandas/pyarrow round-trip.
-* Per-entity asset mappers (``map_database`` / ``map_schema`` / ``map_table``
-  / ``map_column`` / ``map_procedure``) — replaces the YAML transformer.
+* ``extract_*`` ``@task`` methods that **stream SQL rows verbatim into
+  raw JSONL** under ``raw/<entity>/records.json`` — one pass, no parquet
+  intermediate, no pandas/pyarrow.
+* ``transform_*`` ``@task`` methods that read the raw JSONL and run each
+  record through the connector's ``map_*`` function, writing the result
+  to ``transformed/<entity>/entities.json``. The activity boundary keeps
+  transform retry-able without re-running the SQL extraction.
+* Per-entity asset mappers (``map_database`` / ``map_schema`` /
+  ``map_table`` / ``map_column`` / ``map_procedure``) — direct
+  pyatlan_v9 ``Asset`` construction, no YAML transformer.
 * ``upload_to_atlan`` for output migration to the upstream object store.
 * ``build_task_input()`` as public API for ``run()`` overrides (BLDX-1138).
-* ``extract_views()`` and ``extract_procedures()`` for the optional flows
-  (BLDX-1139).
-* Parallel extraction via ``asyncio.gather()`` (BLDX-1140).
+* ``extract_views()`` / ``extract_procedures()`` /
+  ``transform_views()`` / ``transform_procedures()`` for the optional
+  flows (BLDX-1139).
+* Parallel extract + transform via ``asyncio.gather()`` (BLDX-1140).
 
 Usage::
 
@@ -49,12 +55,13 @@ Usage::
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
 
+import orjson
 from temporalio import workflow as _temporal_workflow
 
 from application_sdk.app.base import App
@@ -102,6 +109,22 @@ _MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
 _EXTRACT_BATCH_SIZE: int = 10_000
 
 
+def _orjson_default(obj: Any) -> Any:
+    """Fallback serialiser for orjson — covers types it doesn't handle natively.
+
+    orjson natively serialises ``str``, ``int``, ``float``, ``bool``, ``None``,
+    ``list``, ``dict``, ``datetime``, ``date``, ``time``, ``UUID`` and
+    ``dataclass`` instances. SQL drivers commonly return ``Decimal`` for
+    numeric columns and occasionally ``bytes`` for blob columns; both fall
+    back to a JSON-safe representation here.
+    """
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, (bytes, bytearray)):
+        return obj.decode("utf-8", errors="replace")
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON-serializable")
+
+
 class SqlApp(App):
     """Consolidated SQL metadata extraction App.
 
@@ -110,10 +133,11 @@ class SqlApp(App):
     - ``fetch_database_sql``, ``fetch_schema_sql``, etc.: SQL templates
     - ``map_table()``, ``map_column()``, etc.: Asset mapper functions
 
-    The base ``run()`` orchestrates: extract (parallel) → upload. Each
-    ``extract_*`` activity streams its SQL result set through the matching
-    ``map_*`` function, writing transformed Atlan assets straight to JSONL
-    (one pass, no parquet intermediate).
+    The base ``run()`` orchestrates: extract (parallel) → transform
+    (parallel) → upload. ``extract_*`` activities stream SQL rows into
+    ``raw/<entity>/records.json``; ``transform_*`` activities read that
+    raw JSONL and run records through the matching ``map_*`` function,
+    writing Atlan assets to ``transformed/<entity>/entities.json``.
 
     **Parallel-extract assumption:** the default ``run()`` issues all four
     extract tasks (databases, schemas, tables, columns) concurrently via
@@ -121,7 +145,7 @@ class SqlApp(App):
     self-contained — no cross-entity parameterisation. Connectors that
     need to iterate tables per-schema, paginate by database, or otherwise
     sequence fetches must override ``run()`` and call the ``extract_*``
-    activities directly in the order they need.
+    / ``transform_*`` activities directly in the order they need.
     """
 
     _app_registered: ClassVar[bool] = True  # abstract template, not concrete
@@ -184,25 +208,25 @@ class SqlApp(App):
         )
 
     # =====================================================================
-    # @task: Metadata extraction — SQL stream → mapper → JSONL
+    # @task: Metadata extraction — SQL stream → raw JSONL
     # =====================================================================
     #
-    # Each ``extract_*`` task fetches one entity type via SQL (streaming
-    # batches through ``client.run_query``), runs each row through the
-    # connector's ``map_*`` function, and writes the resulting Atlan asset
-    # to JSONL. No parquet intermediate, no pandas/pyarrow round-trip —
-    # SQL row → pyatlan_v9 Asset → ``transformed/{entity}/entities.json``
-    # in a single pass. See ``_extract_entity`` for the shared pipeline.
+    # Each ``extract_*`` task streams its SQL result through
+    # ``client.run_query`` (server-side cursor, ``_EXTRACT_BATCH_SIZE`` rows
+    # per batch) and writes rows verbatim to ``raw/<entity>/records.json``
+    # — one JSON object per line, no mapping. Mapping happens in
+    # ``transform_*`` so the activity boundary is a durable retry point
+    # and so future change-detection can compare raw streams between runs
+    # before paying mapper cost.
 
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
     async def extract_databases(self, input: ExtractionTaskInput) -> TransformOutput:
-        """Stream database/catalog records via SQL → ``map_database`` → JSONL."""
+        """Stream database/catalog rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="database",
             sql_template=self.fetch_database_sql,
-            mapper_fn=self.map_database,
             input=input,
         )
 
@@ -210,11 +234,10 @@ class SqlApp(App):
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
     async def extract_schemas(self, input: ExtractionTaskInput) -> TransformOutput:
-        """Stream schema records via SQL → ``map_schema`` → JSONL."""
+        """Stream schema rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="schema",
             sql_template=self.fetch_schema_sql,
-            mapper_fn=self.map_schema,
             input=input,
         )
 
@@ -222,11 +245,10 @@ class SqlApp(App):
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
     async def extract_tables(self, input: ExtractionTaskInput) -> TransformOutput:
-        """Stream table records via SQL → ``map_table`` → JSONL."""
+        """Stream table rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="table",
             sql_template=self.fetch_table_sql,
-            mapper_fn=self.map_table,
             input=input,
         )
 
@@ -234,11 +256,10 @@ class SqlApp(App):
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
     async def extract_columns(self, input: ExtractionTaskInput) -> TransformOutput:
-        """Stream column records via SQL → ``map_column`` → JSONL."""
+        """Stream column rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="column",
             sql_template=self.fetch_column_sql,
-            mapper_fn=self.map_column,
             input=input,
         )
 
@@ -246,16 +267,10 @@ class SqlApp(App):
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
     async def extract_views(self, input: ExtractionTaskInput) -> TransformOutput:
-        """Stream view records via SQL → ``map_table`` → JSONL.
-
-        Views go through ``map_table`` because Atlan's data model treats
-        them as a Table specialisation (View typeName) — connectors
-        differentiate via the ``table_kind`` field on the record.
-        """
+        """Stream view rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="view",
             sql_template=self.fetch_view_sql,
-            mapper_fn=self.map_table,
             input=input,
         )
 
@@ -263,15 +278,96 @@ class SqlApp(App):
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
     async def extract_procedures(self, input: ExtractionTaskInput) -> TransformOutput:
-        """Stream procedure records via SQL → ``map_procedure`` → JSONL.
+        """Stream stored-procedure rows from SQL into raw JSONL.
 
-        Writes to ``extras-procedure`` so the publish-app can parse the
-        SQL ``definition`` field and derive lineage (Process /
-        ColumnProcess entities) — matching the legacy Argo crawler output.
+        Writes to the ``extras-procedure`` entity type so the publish-app
+        can parse the SQL ``definition`` field and derive lineage
+        (Process / ColumnProcess entities) — matches the legacy Argo
+        crawler output layout.
         """
         return await self._extract_entity(
             entity_type="extras-procedure",
             sql_template=self.fetch_procedure_sql,
+            input=input,
+        )
+
+    # =====================================================================
+    # @task: Per-entity transform — raw JSONL → mapper → transformed JSONL
+    # =====================================================================
+    #
+    # Each ``transform_*`` task reads ``raw/<entity>/records.json`` line by
+    # line, runs the dict through the connector's ``map_*`` function, and
+    # writes the resulting Atlan asset to ``transformed/<entity>/entities.json``.
+    # Activity boundary keeps transform retry-able without re-running the
+    # SQL extraction.
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def transform_databases(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Map raw database records to Atlan assets via ``map_database``."""
+        return await self._transform_entity(
+            entity_type="database",
+            mapper_fn=self.map_database,
+            input=input,
+        )
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def transform_schemas(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Map raw schema records to Atlan assets via ``map_schema``."""
+        return await self._transform_entity(
+            entity_type="schema",
+            mapper_fn=self.map_schema,
+            input=input,
+        )
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def transform_tables(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Map raw table records to Atlan assets via ``map_table``."""
+        return await self._transform_entity(
+            entity_type="table",
+            mapper_fn=self.map_table,
+            input=input,
+        )
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def transform_columns(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Map raw column records to Atlan assets via ``map_column``."""
+        return await self._transform_entity(
+            entity_type="column",
+            mapper_fn=self.map_column,
+            input=input,
+        )
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def transform_views(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Map raw view records to Atlan assets via ``map_table``.
+
+        Views go through ``map_table`` because Atlan models View as a
+        Table specialisation (typeName ``View``) — connectors differentiate
+        via the ``table_kind`` field on the record.
+        """
+        return await self._transform_entity(
+            entity_type="view",
+            mapper_fn=self.map_table,
+            input=input,
+        )
+
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def transform_procedures(self, input: ExtractionTaskInput) -> TransformOutput:
+        """Map raw procedure records to Atlan assets via ``map_procedure``."""
+        return await self._transform_entity(
+            entity_type="extras-procedure",
             mapper_fn=self.map_procedure,
             input=input,
         )
@@ -348,21 +444,24 @@ class SqlApp(App):
         """Default extraction orchestration.
 
         1. Resolve credentials
-        2. Extract metadata in parallel (databases, schemas, tables, columns)
-           — each task streams SQL rows directly through its ``map_*``
-           function into JSONL. No parquet intermediate.
-        3. Upload to Atlan
+        2. Extract metadata in parallel (databases, schemas, tables,
+           columns) — each task streams SQL rows into raw JSONL under
+           ``raw/<entity>/records.json``.
+        3. Transform per-entity in parallel — each task reads the raw
+           JSONL and runs records through the matching ``map_*`` function
+           into ``transformed/<entity>/entities.json``.
+        4. Upload to Atlan.
 
         Override for custom orchestration (e.g. sequential fetches, multi-DB).
         Use ``build_task_input()`` to construct typed inputs.
         """
         cred_ref = self._resolve_credential_ref(input)
 
-        # ── Extract metadata in parallel ────────────────────────────────
         task_input = self.build_task_input(
             ExtractionTaskInput, input, cred_ref=cred_ref
         )
 
+        # ── Phase 1: Extract — SQL rows → raw JSONL ─────────────────────
         db_result, schema_result, table_result, column_result = await asyncio.gather(
             self.extract_databases(task_input),
             self.extract_schemas(task_input),
@@ -371,14 +470,22 @@ class SqlApp(App):
         )
 
         logger.info(
-            "Metadata extraction complete: databases=%d, schemas=%d, tables=%d, columns=%d",
+            "Extraction complete: databases=%d, schemas=%d, tables=%d, columns=%d",
             db_result.total_record_count,
             schema_result.total_record_count,
             table_result.total_record_count,
             column_result.total_record_count,
         )
 
-        # ── Upload ──────────────────────────────────────────────────────
+        # ── Phase 2: Transform — raw JSONL → mapper → transformed JSONL ──
+        await asyncio.gather(
+            self.transform_databases(task_input),
+            self.transform_schemas(task_input),
+            self.transform_tables(task_input),
+            self.transform_columns(task_input),
+        )
+
+        # ── Phase 3: Upload ─────────────────────────────────────────────
         # Always call upload — upload_to_atlan auto-resolves output_path in activity context.
         upload_input = UploadInput(
             output_path=input.output_path,
@@ -520,24 +627,19 @@ class SqlApp(App):
         *,
         entity_type: str,
         sql_template: str,
-        mapper_fn: _MapperFn,
         input: ExtractionTaskInput,
     ) -> TransformOutput:
-        """Stream SQL rows directly through ``mapper_fn`` into JSONL.
-
-        Single-pass pipeline:
+        """Stream SQL rows verbatim into ``raw/<entity>/records.json`` JSONL.
 
         1. Open SQL client, render the template with the input filters.
         2. Stream rows in batches of ``_EXTRACT_BATCH_SIZE`` via the
            server-side cursor that ``client.run_query`` exposes — each
            batch is a ``list[dict[str, Any]]`` keyed by lower-cased column
            names. Memory stays bounded regardless of total result size.
-        3. For each row, run the connector's ``map_*`` mapper and write
-           the resulting Atlan asset to ``transformed/{entity_type}/entities.json``
-           as one JSON object per line.
-
-        No parquet intermediate, no pandas/pyarrow round-trip, no separate
-        transform task — this is the full extraction for one entity type.
+        3. Write each row to JSONL. Mapping is deliberately *not* done
+           here — it runs in the matching ``transform_*`` activity so the
+           activity boundary stays a durable retry point and so future
+           change-detection can compare raw streams between runs.
         """
         if not sql_template:
             logger.warning("No SQL configured for %s — skipping", entity_type)
@@ -545,6 +647,50 @@ class SqlApp(App):
 
         output_path = self._resolve_output_path(input)
         if not output_path:
+            return TransformOutput(typename=entity_type, total_record_count=0)
+
+        output_dir = Path(output_path) / "raw" / entity_type
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / "records.json"
+
+        client = await self._init_sql_client(input)
+        count = 0
+        try:
+            sql = self._prepare_sql(sql_template.strip(), input)
+            with open(output_file, "wb") as f:
+                async for batch in client.run_query(
+                    sql, batch_size=_EXTRACT_BATCH_SIZE
+                ):
+                    for record in batch:
+                        f.write(orjson.dumps(record, default=_orjson_default))
+                        f.write(b"\n")
+                        count += 1
+        finally:
+            await client.close()
+
+        logger.info("Extracted %s: %d raw records", entity_type, count)
+        return TransformOutput(typename=entity_type, total_record_count=count)
+
+    async def _transform_entity(
+        self,
+        *,
+        entity_type: str,
+        mapper_fn: _MapperFn,
+        input: ExtractionTaskInput,
+    ) -> TransformOutput:
+        """Read raw JSONL → mapper → transformed JSONL.
+
+        Reads ``raw/<entity>/records.json`` line by line, runs each
+        record through ``mapper_fn``, and writes the resulting Atlan
+        asset to ``transformed/<entity>/entities.json``. If the raw file
+        is missing or empty (extract returned 0 rows), this is a no-op.
+        """
+        output_path = self._resolve_output_path(input)
+        if not output_path:
+            return TransformOutput(typename=entity_type, total_record_count=0)
+
+        raw_file = Path(output_path) / "raw" / entity_type / "records.json"
+        if not raw_file.exists() or raw_file.stat().st_size == 0:
             return TransformOutput(typename=entity_type, total_record_count=0)
 
         connection_qn = ""
@@ -559,33 +705,30 @@ class SqlApp(App):
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.json"
 
-        client = await self._init_sql_client(input)
         count = 0
-        try:
-            sql = self._prepare_sql(sql_template.strip(), input)
-            with open(output_file, "wb") as f:
-                async for batch in client.run_query(
-                    sql, batch_size=_EXTRACT_BATCH_SIZE
-                ):
-                    for record in batch:
-                        asset = mapper_fn(record, connection_qn)
-                        # Inject connectionName if the mapper returned a dict
-                        if isinstance(asset, dict) and connection_name:
-                            asset.setdefault("attributes", {}).setdefault(
-                                "connectionName", connection_name
-                            )
-                        if hasattr(asset, "to_nested_dict"):
-                            entity_bytes = json.dumps(asset.to_nested_dict()).encode()
-                        elif hasattr(asset, "model_dump"):
-                            entity_bytes = json.dumps(asset.model_dump()).encode()
-                        elif isinstance(asset, dict):
-                            entity_bytes = json.dumps(asset).encode()
-                        else:
-                            entity_bytes = json.dumps(record).encode()
-                        f.write(entity_bytes + b"\n")
-                        count += 1
-        finally:
-            await client.close()
+        with open(raw_file, "rb") as r, open(output_file, "wb") as w:
+            for line in r:
+                line = line.strip()
+                if not line:
+                    continue
+                record = orjson.loads(line)
+                asset = mapper_fn(record, connection_qn)
+                # Inject connectionName if the mapper returned a dict
+                if isinstance(asset, dict) and connection_name:
+                    asset.setdefault("attributes", {}).setdefault(
+                        "connectionName", connection_name
+                    )
+                if hasattr(asset, "to_nested_dict"):
+                    payload = asset.to_nested_dict()
+                elif hasattr(asset, "model_dump"):
+                    payload = asset.model_dump()
+                elif isinstance(asset, dict):
+                    payload = asset
+                else:
+                    payload = record
+                w.write(orjson.dumps(payload, default=_orjson_default))
+                w.write(b"\n")
+                count += 1
 
-        logger.info("Extracted %s: %d records", entity_type, count)
+        logger.info("Transformed %s: %d records", entity_type, count)
         return TransformOutput(typename=entity_type, total_record_count=count)
