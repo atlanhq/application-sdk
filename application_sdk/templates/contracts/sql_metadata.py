@@ -6,9 +6,9 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-import json
 from typing import Annotated, Any
 
+import orjson
 from pydantic import Field, field_validator, model_validator
 
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
@@ -18,7 +18,12 @@ from application_sdk.credentials.spec import AgentCredentialSpec
 
 # Type alias for SQL filter maps: database-regex → list of schema-regexes.
 # Example: {"^prod$": ["^analytics$", "^reporting$"]}
-FilterMap = dict[str, list[str]]
+# Bounded: 100 databases × 1000 schemas-per-database — well above any
+# realistic source while still keeping payload-size guarantees.
+FilterMap = Annotated[
+    dict[str, Annotated[list[str], MaxItems(1000)]],
+    MaxItems(100),
+]
 
 # Disallow single quotes in temp_table_regex to prevent SQL injection when
 # values are substituted into SQL templates via _prepare_sql (str.replace).
@@ -59,7 +64,7 @@ def _validate_filter_no_sql_injection(v: FilterMap | str) -> FilterMap | str:
     return v
 
 
-class ExtractionInput(Input, allow_unbounded_fields=True):
+class ExtractionInput(Input):
     """Top-level input for a SQL metadata extraction run."""
 
     workflow_id: str = ""
@@ -104,8 +109,8 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
         raw_conn = data.get("connection")
         if isinstance(raw_conn, str) and raw_conn.strip().startswith("{"):
             try:
-                data = {**data, "connection": json.loads(raw_conn)}
-            except (json.JSONDecodeError, ValueError):
+                data = {**data, "connection": orjson.loads(raw_conn)}
+            except (orjson.JSONDecodeError, ValueError):
                 pass
 
         field_names = set(cls.model_fields)
@@ -206,7 +211,7 @@ class ExtractionOutput(Output, PublishInputMixin):
     from this field instead of re-calling workflow.info()."""
 
 
-class ExtractionTaskInput(Input, allow_unbounded_fields=True):
+class ExtractionTaskInput(Input):
     """Fields shared by all per-task inputs derived from ExtractionInput.
 
     Rather than passing a workflow_args dict[str, Any] blob, each task receives
@@ -236,7 +241,7 @@ class ExtractionTaskInput(Input, allow_unbounded_fields=True):
         return _validate_filter_no_sql_injection(v)
 
 
-class FetchDatabasesInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchDatabasesInput(ExtractionTaskInput):
     """Input for fetching databases from the source."""
 
 
@@ -248,7 +253,7 @@ class FetchDatabasesOutput(Output):
     total_record_count: int = 0
 
 
-class FetchSchemasInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchSchemasInput(ExtractionTaskInput):
     """Input for fetching schemas from the source."""
 
 
@@ -260,7 +265,7 @@ class FetchSchemasOutput(Output):
     total_record_count: int = 0
 
 
-class FetchTablesInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchTablesInput(ExtractionTaskInput):
     """Input for fetching tables from the source."""
 
 
@@ -272,7 +277,7 @@ class FetchTablesOutput(Output):
     total_record_count: int = 0
 
 
-class FetchColumnsInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchColumnsInput(ExtractionTaskInput):
     """Input for fetching columns from the source."""
 
 
@@ -283,7 +288,7 @@ class FetchColumnsOutput(Output):
     total_record_count: int = 0
 
 
-class FetchProceduresInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchProceduresInput(ExtractionTaskInput):
     """Input for fetching stored procedures from the source."""
 
 
@@ -294,7 +299,7 @@ class FetchProceduresOutput(Output):
     total_record_count: int = 0
 
 
-class FetchViewsInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchViewsInput(ExtractionTaskInput):
     """Input for fetching views from the source."""
 
 
@@ -305,7 +310,7 @@ class FetchViewsOutput(Output):
     total_record_count: int = 0
 
 
-class TransformInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class TransformInput(ExtractionTaskInput):
     """Input for the transform_data task."""
 
     typename: str = ""
