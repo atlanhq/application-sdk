@@ -911,6 +911,35 @@ def test_create_log_record_does_not_parse_exception_from_message(
     assert "exception.stacktrace" not in otel_record.attributes
 
 
+def test_create_log_record_skips_none_extra_values(
+    logger_adapter: AtlanLoggerAdapter,
+):
+    """None extras must be dropped, not stringified to "None"."""
+    record = {
+        "timestamp": 1739971200.0,
+        "level": "INFO",
+        "message": "request handled",
+        "file": "server.py",
+        "line": 1,
+        "function": "handle",
+        "extra": {
+            "request_id": "abc-123",
+            "correlation_id": None,
+            "workflow_id": None,
+            "run_id": None,
+            "duration_ms": 12,
+            "status_code": None,
+        },
+    }
+
+    otel_record = logger_adapter._create_log_record(record)
+
+    assert otel_record.attributes["request_id"] == "abc-123"
+    assert otel_record.attributes["duration_ms"] == 12
+    for key in ("correlation_id", "workflow_id", "run_id", "status_code"):
+        assert key not in otel_record.attributes
+
+
 class TestTemporalAttributePassthrough:
     """Tests for temporal.* and tenant.* attribute passthrough to OTEL."""
 
