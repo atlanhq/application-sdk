@@ -11,14 +11,14 @@
     "package": "google.golang.org/grpc",
     "severity": "CRITICAL",
     "reason": "Base image — Dapr runtime dependency",
-    "expires": "2026-05-08",
+    "expires": "2026-05-24",
     "added_by": "mananjain99"
   },
   "CVE-2026-33186": {
     "package": "google.golang.org/grpc",
     "severity": "CRITICAL",
     "reason": "Base image — Dapr runtime dependency",
-    "expires": "2026-05-08",
+    "expires": "2026-05-24",
     "added_by": "mananjain99"
   },
   "SNYK-GOLANG-GITHUBCOMGOJOSEGOJOSEV4-15875221": {
@@ -179,7 +179,7 @@
     "package": "github.com/jackc/pgx/v5",
     "severity": "CRITICAL",
     "reason": "Base image — Dapr Go dependency, fix available in 5.9.0",
-    "expires": "2026-05-08",
+    "expires": "2026-05-24",
     "added_by": "mananjain99"
   },
   "CVE-2026-27140": {
@@ -228,7 +228,7 @@
     "package": "zlib1g (Debian bookworm-slim)",
     "severity": "CRITICAL",
     "reason": "MiniZip heap overflow in zlib contrib. The zlib1g binary package ships only libz.so.1 and does NOT contain the vulnerable zipOpenNewFileInZip4_64 code — that lives in the separate minizip/libminizip1 packages, which are not installed in connector images (verified via Debian package file-list). No fix available upstream: zlib maintainers consider MiniZip contrib, Debian has tracked this without a patch for 18+ months. Blocks atlan-mssql-app releases.",
-    "expires": "2026-05-08",
+    "expires": "2026-05-24",
     "added_by": "Divyanshu-Patel"
   },
   "CVE-2026-6100": {
