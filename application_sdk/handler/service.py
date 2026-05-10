@@ -44,9 +44,8 @@ from uuid import uuid4
 
 import orjson
 import temporalio.service
-from fastapi import FastAPI, File, Form, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi import Path as PathParam
-from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
@@ -54,6 +53,8 @@ from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+from application_sdk.errors.base import AppError
+from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -554,7 +555,12 @@ def create_app_handler_service(
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
         body = _normalize_credentials(await request.json())
-        auth_input = AuthInput.model_validate(body)
+        try:
+            auth_input = AuthInput.model_validate(body)
+        except Exception as exc:
+            raise InvalidInputError(
+                message="Invalid auth request body", cause=exc
+            ) from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
@@ -591,6 +597,15 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                logger.error(
+                    "Auth test failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except Exception as e:
                 logger.error(
                     "Auth test failed unexpectedly for app %s (request %s): %s",
@@ -610,7 +625,12 @@ def create_app_handler_service(
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
         body = _normalize_credentials(await request.json())
-        preflight_input = PreflightInput.model_validate(body)
+        try:
+            preflight_input = PreflightInput.model_validate(body)
+        except Exception as exc:
+            raise InvalidInputError(
+                message="Invalid preflight request body", cause=exc
+            ) from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in preflight_input.credentials
@@ -659,6 +679,15 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                logger.error(
+                    "Preflight check failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except Exception as e:
                 logger.error(
                     "Preflight check failed unexpectedly for app %s (request %s): %s",
@@ -678,7 +707,12 @@ def create_app_handler_service(
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
         body = _normalize_credentials(await request.json())
-        metadata_input = MetadataInput.model_validate(body)
+        try:
+            metadata_input = MetadataInput.model_validate(body)
+        except Exception as exc:
+            raise InvalidInputError(
+                message="Invalid metadata request body", cause=exc
+            ) from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in metadata_input.credentials
@@ -709,6 +743,15 @@ def create_app_handler_service(
                 # frontend filter widgets to render empty dropdowns
                 return JSONResponse(content=_wrap_response(data))
             except HandlerError as e:
+                logger.error(
+                    "Metadata fetch failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
                 logger.error(
                     "Metadata fetch failed for app %s (request %s): %s",
                     app_name,

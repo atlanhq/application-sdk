@@ -71,6 +71,11 @@ class AppError(Exception):
         return self.default_retryable if self.retryable is None else self.retryable
 
     @property
+    def http_status(self) -> int:
+        """HTTP status code derived from this error's failure category."""
+        return self.category.http_status
+
+    @property
     def qualified_code(self) -> str:
         """``CATEGORY.CODE`` string for log lines and human-readable surfaces."""
         return f"{self.category.name}.{self.code}"

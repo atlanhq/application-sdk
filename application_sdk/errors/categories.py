@@ -70,6 +70,32 @@ class FailureCategory(Enum):
     """Operation not supported or capability not yet built.  Use instead of INTERNAL
     for known feature gaps so on-call is not paged for expected absence."""
 
+    @property
+    def http_status(self) -> int:
+        """RFC-standard HTTP status code for this failure category.
+
+        Used by the handler service to map AppError subclasses to HTTP responses
+        so callers receive semantically correct status codes without parsing message
+        strings.
+        """
+        _MAP: dict[FailureCategory, int] = {
+            FailureCategory.CANCELLED: 499,
+            FailureCategory.TIMEOUT: 504,
+            FailureCategory.RATE_LIMITED: 429,
+            FailureCategory.AUTH: 401,
+            FailureCategory.PERMISSION: 403,
+            FailureCategory.NOT_FOUND: 404,
+            FailureCategory.ALREADY_EXISTS: 409,
+            FailureCategory.INVALID_INPUT: 422,
+            FailureCategory.PRECONDITION: 409,
+            FailureCategory.DEPENDENCY_UNAVAILABLE: 503,
+            FailureCategory.RESOURCE_EXHAUSTED: 503,
+            FailureCategory.DATA_INTEGRITY: 500,
+            FailureCategory.INTERNAL: 500,
+            FailureCategory.UNIMPLEMENTED: 501,
+        }
+        return _MAP[self]
+
 
 class Audience(Enum):
     """Who needs to take action to resolve this failure.
