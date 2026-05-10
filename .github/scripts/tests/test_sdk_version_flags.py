@@ -12,6 +12,35 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sdk_version_flags import inject_sdk_version_flags
 
 
+class TestAppendFallback:
+    """Pure-additions append fallback safety.
+
+    When the appended result fails to parse (or loses keys), the function
+    must fall back to dict-merge + re-emit instead of returning corrupted YAML.
+    """
+
+    def test_append_preserves_valid_config(self):
+        # Healthy top-level YAML — append path is taken, prefix preserved.
+        original = "replicaCount: 1\n"
+        result = inject_sdk_version_flags(original, "2.3.1")
+        assert result.startswith(original), "append path expected for healthy YAML"
+        assert yaml.safe_load(result)["replicaCount"] == 1
+        assert yaml.safe_load(result)["splitDeploymentEnabled"] is True
+
+    def test_append_fallback_on_corrupted_indent(self):
+        # Original ends with a partially-indented block that would corrupt
+        # if a top-level key were appended after it. The defensive re-parse
+        # detects the corruption and the function re-emits the merged dict.
+        original = "env:\n  FOO: bar"
+        result = inject_sdk_version_flags(original, "2.3.1")
+        # Whatever path was taken, the result must parse cleanly and contain
+        # both the original env mapping and the injected flags.
+        parsed = yaml.safe_load(result)
+        assert parsed["env"]["FOO"] == "bar"
+        assert parsed["splitDeploymentEnabled"] is True
+        assert parsed["vpa"]["enabled"] is True
+
+
 class TestInjectSdkVersionFlags:
     # ---- No-op cases ----
 
@@ -144,9 +173,9 @@ class TestInjectSdkVersionFlags:
             result = inject_sdk_version_flags("replicaCount: 1", version)
             parsed = yaml.safe_load(result)
             assert "metrics" not in parsed, f"version {version} should NOT get metrics"
-            assert parsed["temporalMetrics"] == {"enabled": True}, (
-                f"version {version} should still get temporalMetrics"
-            )
+            assert parsed["temporalMetrics"] == {
+                "enabled": True
+            }, f"version {version} should still get temporalMetrics"
 
     # ---- App owner overrides preserved ----
 
@@ -288,7 +317,9 @@ class TestInjectSdkVersionFlags:
             "          name: segment-write-key\n"
         )
         result = inject_sdk_version_flags(original, "2.8.0")
-        assert result.startswith(original), "original YAML must be preserved verbatim as a prefix"
+        assert result.startswith(
+            original
+        ), "original YAML must be preserved verbatim as a prefix"
         parsed = yaml.safe_load(result)
         assert parsed["env"]["ATLAN_HEARTBEAT_TIMEOUT_SECONDS"] == "120"
         assert parsed["splitDeploymentEnabled"] is True

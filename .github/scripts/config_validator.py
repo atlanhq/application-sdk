@@ -193,20 +193,22 @@ def _check_split_requires_twc(cfg: dict) -> list[Violation]:
     ]
 
 
-def _check_vpa(cfg: dict) -> list[Violation]:
-    """Run all VPA rules off a single parse pass.
+def _parse_vpa(
+    cfg: dict,
+) -> tuple[dict[tuple[str, str], int | None], list[Violation]]:
+    """Parse vpa.minAllowed and vpa.maxAllowed quantities once.
 
-    Combines maxAllowed ceiling and minAllowed<=maxAllowed checks so each
-    field is parsed once. A separate rule per function would re-invoke
-    _safe_parse_* on the same field and emit duplicate `invalid_quantity`
-    violations on malformed input.
+    Returns (parsed, errs) where parsed maps (resource, kind) -> int | None
+    and errs is the list of any invalid_quantity violations encountered.
+    Shared between _check_vpa (uses both kinds) and _resolve_effective_vpa_max
+    (only needs maxAllowed) so each field is parsed exactly once per
+    validate_config call.
     """
     vpa = cfg.get("vpa") or {}
     mn = vpa.get("minAllowed") or {}
     mx = vpa.get("maxAllowed") or {}
-    errs: list[Violation] = []
-
     parsed: dict[tuple[str, str], int | None] = {}
+    errs: list[Violation] = []
     for kind, src in (("minAllowed", mn), ("maxAllowed", mx)):
         for resource, parser in (
             ("cpu", _safe_parse_cpu),
@@ -216,6 +218,21 @@ def _check_vpa(cfg: dict) -> list[Violation]:
                 parsed[(resource, kind)] = parser(
                     src[resource], f"vpa.{kind}.{resource}", errs
                 )
+    return parsed, errs
+
+
+def _check_vpa(cfg: dict, parsed: dict[tuple[str, str], int | None]) -> list[Violation]:
+    """Run VPA rules over the pre-parsed quantity cache from _parse_vpa.
+
+    Receives parsed values from the caller so each field is parsed once
+    across the whole validation pass. Without this, _check_vpa and
+    _resolve_effective_vpa_max would each re-parse vpa.maxAllowed.{cpu,memory}
+    and emit duplicate invalid_quantity violations on malformed input.
+    """
+    vpa = cfg.get("vpa") or {}
+    mn = vpa.get("minAllowed") or {}
+    mx = vpa.get("maxAllowed") or {}
+    errs: list[Violation] = []
 
     cpu_max = parsed.get(("cpu", "maxAllowed"))
     if cpu_max is not None and cpu_max > MAX_VPA_CPU_MILLI:
@@ -259,27 +276,30 @@ def _check_vpa(cfg: dict) -> list[Violation]:
     return errs
 
 
-def _resolve_effective_vpa_max(cfg: dict) -> tuple[int | None, int | None]:
+def _resolve_effective_vpa_max(
+    cfg: dict, parsed: dict[tuple[str, str], int | None]
+) -> tuple[int | None, int | None]:
     """Compute effective vpa.maxAllowed for cpu/memory when vpa.enabled.
 
     Returns (cpu_milli, memory_bytes) or (None, None) when vpa is disabled.
     Falls back to chart defaults when vpa.maxAllowed is not declared in
-    atlan.yaml. Parse failures yield None for that resource — invalid_quantity
-    violations are already emitted by _check_vpa.
+    atlan.yaml. Reuses the parsed cache from _parse_vpa so values are not
+    re-parsed (and invalid_quantity violations are not duplicated).
     """
     vpa = cfg.get("vpa") or {}
     if vpa.get("enabled") is not True:
         return None, None
     max_allowed = vpa.get("maxAllowed") or {}
-    discard: list[Violation] = []  # parse errs already emitted by _check_vpa
-    cpu_milli: int | None = DEFAULT_VPA_MAX_CPU_MILLI
-    if "cpu" in max_allowed:
-        cpu_milli = _safe_parse_cpu(max_allowed["cpu"], "vpa.maxAllowed.cpu", discard)
-    mem_bytes: int | None = DEFAULT_VPA_MAX_MEMORY_BYTES
-    if "memory" in max_allowed:
-        mem_bytes = _safe_parse_memory(
-            max_allowed["memory"], "vpa.maxAllowed.memory", discard
-        )
+    cpu_milli: int | None = (
+        parsed.get(("cpu", "maxAllowed"))
+        if "cpu" in max_allowed
+        else DEFAULT_VPA_MAX_CPU_MILLI
+    )
+    mem_bytes: int | None = (
+        parsed.get(("memory", "maxAllowed"))
+        if "memory" in max_allowed
+        else DEFAULT_VPA_MAX_MEMORY_BYTES
+    )
     return cpu_milli, mem_bytes
 
 
@@ -397,8 +417,10 @@ def _check_resource_block(
     return errs
 
 
-def _check_resources(cfg: dict) -> list[Violation]:
-    vpa_cpu, vpa_mem = _resolve_effective_vpa_max(cfg)
+def _check_resources(
+    cfg: dict, vpa_parsed: dict[tuple[str, str], int | None]
+) -> list[Violation]:
+    vpa_cpu, vpa_mem = _resolve_effective_vpa_max(cfg, vpa_parsed)
     errs = _check_resource_block(cfg, "resources", vpa_cpu, vpa_mem)
     if cfg.get("splitDeploymentEnabled") is True:
         for k in ("serverResources", "workerResources"):
@@ -473,9 +495,15 @@ def validate_config(config_yaml: Any) -> None:
         return
 
     errs: list[Violation] = []
+    # Parse vpa.{minAllowed,maxAllowed} once and share with both consumers
+    # (_check_vpa and _resolve_effective_vpa_max via _check_resources). This
+    # prevents duplicate invalid_quantity violations on malformed inputs and
+    # halves the parsing cost.
+    vpa_parsed, vpa_parse_errs = _parse_vpa(cfg)
+    errs += vpa_parse_errs
     errs += _check_split_requires_twc(cfg)
-    errs += _check_vpa(cfg)
-    errs += _check_resources(cfg)
+    errs += _check_vpa(cfg, vpa_parsed)
+    errs += _check_resources(cfg, vpa_parsed)
     errs += _check_keda(cfg)
 
     if errs:

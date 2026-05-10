@@ -139,4 +139,28 @@ def inject_sdk_version_flags(config_yaml: str, sdk_version: str | None) -> str:
     base = config_yaml or ""
     if base and not base.endswith("\n"):
         base += "\n"
-    return base + addendum
+    appended = base + addendum
+
+    # Defensive: a raw append assumes the base ends at top-level indentation.
+    # An app owner's YAML that ends mid-list, mid-mapping, or with a trailing
+    # block scalar would break parse on append. Re-parse the appended result;
+    # if it fails or produces a different top-level structure than the source
+    # config, fall back to dict-merge + re-emit. The cosmetic diff is preferred
+    # to a corrupted config.
+    try:
+        appended_parsed = yaml.safe_load(appended)
+        if isinstance(appended_parsed, dict):
+            expected_keys = set(config) | set(additions)
+            if set(appended_parsed) >= expected_keys:
+                return appended
+    except yaml.YAMLError:
+        pass
+
+    logger.info(
+        "Pure-additions append corrupted YAML structure for sdk_version=%s, "
+        "falling back to dict-merge + re-emit",
+        sdk_version,
+    )
+    merged = dict(config)
+    merged.update(additions)
+    return yaml.dump(merged, default_flow_style=False, sort_keys=False)

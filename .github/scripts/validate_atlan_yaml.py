@@ -21,6 +21,8 @@ import os
 import sys
 from pathlib import Path
 
+from packaging.version import InvalidVersion, Version
+
 # Allow imports of sibling modules without packaging.
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -35,6 +37,21 @@ def main() -> int:
     if not cfg.strip():
         print("No deploy config in atlan.yaml — skipping validation")
         return 0
+
+    # Fail loudly if SDK_VERSION is set but unparseable. Otherwise injection
+    # would silently skip and validation would run against un-enriched config,
+    # which can produce inconsistent results vs what the chart actually applies.
+    if sdk is not None:
+        try:
+            Version(sdk)
+        except InvalidVersion:
+            print(
+                f"::error file=atlan.yaml::SDK_VERSION '{sdk}' is not a valid "
+                "PEP 440 version. SDK flag injection cannot run; validation "
+                "would produce inconsistent results vs chart defaults."
+            )
+            print(f"  - SDK_VERSION: {sdk!r} cannot be parsed")
+            return 1
 
     # SDK flag injection runs before validation so version-gated defaults
     # (e.g. temporalWorkerDeployment at SDK >= 2.7.4) participate. Without
