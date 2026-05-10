@@ -39,22 +39,31 @@ from typing import Any
 import yaml
 
 # Hardcoded infra ceilings. Change requires a PR + platform team review.
-MAX_VPA_CPU_MILLI: int = 7_000               # 7 cores
-MAX_VPA_MEMORY_BYTES: int = 27 * 1024 ** 3   # 27 Gi (binary)
+MAX_VPA_CPU_MILLI: int = 7_000  # 7 cores
+MAX_VPA_MEMORY_BYTES: int = 27 * 1024**3  # 27 Gi (binary)
 
 # Defaults for vpa.maxAllowed when vpa.enabled=true but maxAllowed not declared
 # in atlan.yaml. Mirror the chart-shipped defaults so validator's effective
 # ceiling matches what VPA actually enforces in cluster.
-DEFAULT_VPA_MAX_CPU_MILLI: int = 2_000               # 2 cores
-DEFAULT_VPA_MAX_MEMORY_BYTES: int = 18 * 1024 ** 3   # 18 Gi (binary)
+DEFAULT_VPA_MAX_CPU_MILLI: int = 2_000  # 2 cores
+DEFAULT_VPA_MAX_MEMORY_BYTES: int = 18 * 1024**3  # 18 Gi (binary)
 
 # Memory suffix multipliers. Binary (Ki/Mi/Gi/...) are powers of 1024;
 # decimal (k/K/M/G/...) are powers of 1000. They are NOT interchangeable.
 _MEM_SUFFIXES = {
-    "Ki": 1024, "Mi": 1024 ** 2, "Gi": 1024 ** 3,
-    "Ti": 1024 ** 4, "Pi": 1024 ** 5, "Ei": 1024 ** 6,
-    "k": 1000, "K": 1000, "M": 1000 ** 2, "G": 1000 ** 3,
-    "T": 1000 ** 4, "P": 1000 ** 5, "E": 1000 ** 6,
+    "Ki": 1024,
+    "Mi": 1024**2,
+    "Gi": 1024**3,
+    "Ti": 1024**4,
+    "Pi": 1024**5,
+    "Ei": 1024**6,
+    "k": 1000,
+    "K": 1000,
+    "M": 1000**2,
+    "G": 1000**3,
+    "T": 1000**4,
+    "P": 1000**5,
+    "E": 1000**6,
 }
 _CPU_RE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*(m)?\s*$")
 _MEM_RE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([KMGTPE]i?|k)?\s*$")
@@ -63,6 +72,7 @@ _MEM_RE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([KMGTPE]i?|k)?\s*$")
 @dataclass
 class Violation:
     """One validation failure. Serialised to GH Actions annotations by the driver."""
+
     field: str
     actual: Any
     expected: Any
@@ -127,11 +137,15 @@ def _safe_parse_cpu(value: Any, field: str, errs: list[Violation]) -> int | None
     try:
         return parse_cpu(value)
     except ValueError as e:
-        errs.append(Violation(
-            field=field, actual=value,
-            expected="valid CPU quantity (e.g. '100m', '1', '1.5')",
-            rule="invalid_quantity", fix=str(e),
-        ))
+        errs.append(
+            Violation(
+                field=field,
+                actual=value,
+                expected="valid CPU quantity (e.g. '100m', '1', '1.5')",
+                rule="invalid_quantity",
+                fix=str(e),
+            )
+        )
         return None
 
 
@@ -139,11 +153,15 @@ def _safe_parse_memory(value: Any, field: str, errs: list[Violation]) -> int | N
     try:
         return parse_memory(value)
     except ValueError as e:
-        errs.append(Violation(
-            field=field, actual=value,
-            expected="valid memory quantity (e.g. '500Mi', '1Gi')",
-            rule="invalid_quantity", fix=str(e),
-        ))
+        errs.append(
+            Violation(
+                field=field,
+                actual=value,
+                expected="valid memory quantity (e.g. '500Mi', '1Gi')",
+                rule="invalid_quantity",
+                fix=str(e),
+            )
+        )
         return None
 
 
@@ -164,13 +182,15 @@ def _check_split_requires_twc(cfg: dict) -> list[Violation]:
     twd = cfg.get("temporalWorkerDeployment") or {}
     if twd.get("enabled") is not False:
         return []
-    return [Violation(
-        field="temporalWorkerDeployment.enabled",
-        actual=False,
-        expected="true (or omit the field — TWC requires SDK >= 2.7.4)",
-        rule="twc_required_for_split",
-        fix="Set temporalWorkerDeployment.enabled: true, or remove the temporalWorkerDeployment block. Split-worker deployments must use TWC (when supported) so image-pull and crashloop failures surface during version rollout.",
-    )]
+    return [
+        Violation(
+            field="temporalWorkerDeployment.enabled",
+            actual=False,
+            expected="true (or omit the field — TWC requires SDK >= 2.7.4)",
+            rule="twc_required_for_split",
+            fix="Set temporalWorkerDeployment.enabled: true, or remove the temporalWorkerDeployment block. Split-worker deployments must use TWC (when supported) so image-pull and crashloop failures surface during version rollout.",
+        )
+    ]
 
 
 def _check_vpa(cfg: dict) -> list[Violation]:
@@ -188,29 +208,38 @@ def _check_vpa(cfg: dict) -> list[Violation]:
 
     parsed: dict[tuple[str, str], int | None] = {}
     for kind, src in (("minAllowed", mn), ("maxAllowed", mx)):
-        for resource, parser in (("cpu", _safe_parse_cpu), ("memory", _safe_parse_memory)):
+        for resource, parser in (
+            ("cpu", _safe_parse_cpu),
+            ("memory", _safe_parse_memory),
+        ):
             if resource in src:
-                parsed[(resource, kind)] = parser(src[resource], f"vpa.{kind}.{resource}", errs)
+                parsed[(resource, kind)] = parser(
+                    src[resource], f"vpa.{kind}.{resource}", errs
+                )
 
     cpu_max = parsed.get(("cpu", "maxAllowed"))
     if cpu_max is not None and cpu_max > MAX_VPA_CPU_MILLI:
-        errs.append(Violation(
-            field="vpa.maxAllowed.cpu",
-            actual=mx.get("cpu"),
-            expected=f"<= 7 cores ({MAX_VPA_CPU_MILLI}m)",
-            rule="vpa_max_cpu_ceiling",
-            fix="Lower vpa.maxAllowed.cpu to 7 cores or less.",
-        ))
+        errs.append(
+            Violation(
+                field="vpa.maxAllowed.cpu",
+                actual=mx.get("cpu"),
+                expected=f"<= 7 cores ({MAX_VPA_CPU_MILLI}m)",
+                rule="vpa_max_cpu_ceiling",
+                fix="Lower vpa.maxAllowed.cpu to 7 cores or less.",
+            )
+        )
 
     mem_max = parsed.get(("memory", "maxAllowed"))
     if mem_max is not None and mem_max > MAX_VPA_MEMORY_BYTES:
-        errs.append(Violation(
-            field="vpa.maxAllowed.memory",
-            actual=mx.get("memory"),
-            expected="<= 27Gi",
-            rule="vpa_max_memory_ceiling",
-            fix="Lower vpa.maxAllowed.memory to 27Gi or less.",
-        ))
+        errs.append(
+            Violation(
+                field="vpa.maxAllowed.memory",
+                actual=mx.get("memory"),
+                expected="<= 27Gi",
+                rule="vpa_max_memory_ceiling",
+                fix="Lower vpa.maxAllowed.memory to 27Gi or less.",
+            )
+        )
 
     for resource in ("cpu", "memory"):
         a = parsed.get((resource, "minAllowed"))
@@ -218,13 +247,15 @@ def _check_vpa(cfg: dict) -> list[Violation]:
         if a is None or b is None:
             continue
         if a > b:
-            errs.append(Violation(
-                field=f"vpa.minAllowed.{resource}",
-                actual=mn[resource],
-                expected=f"<= vpa.maxAllowed.{resource} ({mx[resource]})",
-                rule="vpa_min_le_max",
-                fix=f"Lower vpa.minAllowed.{resource} or raise vpa.maxAllowed.{resource}.",
-            ))
+            errs.append(
+                Violation(
+                    field=f"vpa.minAllowed.{resource}",
+                    actual=mn[resource],
+                    expected=f"<= vpa.maxAllowed.{resource} ({mx[resource]})",
+                    rule="vpa_min_le_max",
+                    fix=f"Lower vpa.minAllowed.{resource} or raise vpa.maxAllowed.{resource}.",
+                )
+            )
     return errs
 
 
@@ -246,7 +277,9 @@ def _resolve_effective_vpa_max(cfg: dict) -> tuple[int | None, int | None]:
         cpu_milli = _safe_parse_cpu(max_allowed["cpu"], "vpa.maxAllowed.cpu", discard)
     mem_bytes: int | None = DEFAULT_VPA_MAX_MEMORY_BYTES
     if "memory" in max_allowed:
-        mem_bytes = _safe_parse_memory(max_allowed["memory"], "vpa.maxAllowed.memory", discard)
+        mem_bytes = _safe_parse_memory(
+            max_allowed["memory"], "vpa.maxAllowed.memory", discard
+        )
     return cpu_milli, mem_bytes
 
 
@@ -274,69 +307,92 @@ def _check_resource_block(
     # violations across rules that touch the same field.
     parsed: dict[tuple[str, str], int | None] = {}
     for kind, src in (("requests", requests), ("limits", limits)):
-        for resource, parser in (("cpu", _safe_parse_cpu), ("memory", _safe_parse_memory)):
+        for resource, parser in (
+            ("cpu", _safe_parse_cpu),
+            ("memory", _safe_parse_memory),
+        ):
             if resource in src:
-                parsed[(resource, kind)] = parser(src[resource], f"{key}.{kind}.{resource}", errs)
+                parsed[(resource, kind)] = parser(
+                    src[resource], f"{key}.{kind}.{resource}", errs
+                )
 
     # Rule: requests <= infra ceilings (mirror vpa.maxAllowed caps).
     # Even without VPA, a raw request that exceeds infra guarantee fails to
     # schedule. Same numeric ceilings as vpa.maxAllowed.
     cpu_req = parsed.get(("cpu", "requests"))
     if cpu_req is not None and cpu_req > MAX_VPA_CPU_MILLI:
-        errs.append(Violation(
-            field=f"{key}.requests.cpu",
-            actual=requests.get("cpu"),
-            expected=f"<= 7 cores ({MAX_VPA_CPU_MILLI}m)",
-            rule="requests_cpu_ceiling",
-            fix=f"Lower {key}.requests.cpu to 7 cores or less.",
-        ))
+        errs.append(
+            Violation(
+                field=f"{key}.requests.cpu",
+                actual=requests.get("cpu"),
+                expected=f"<= 7 cores ({MAX_VPA_CPU_MILLI}m)",
+                rule="requests_cpu_ceiling",
+                fix=f"Lower {key}.requests.cpu to 7 cores or less.",
+            )
+        )
     mem_req = parsed.get(("memory", "requests"))
     if mem_req is not None and mem_req > MAX_VPA_MEMORY_BYTES:
-        errs.append(Violation(
-            field=f"{key}.requests.memory",
-            actual=requests.get("memory"),
-            expected="<= 27Gi",
-            rule="requests_memory_ceiling",
-            fix=f"Lower {key}.requests.memory to 27Gi or less.",
-        ))
+        errs.append(
+            Violation(
+                field=f"{key}.requests.memory",
+                actual=requests.get("memory"),
+                expected="<= 27Gi",
+                rule="requests_memory_ceiling",
+                fix=f"Lower {key}.requests.memory to 27Gi or less.",
+            )
+        )
 
     # Rule: when vpa.enabled, requests <= vpa.maxAllowed (chart defaults
     # used when maxAllowed is not declared). Initial request that exceeds
     # vpa.maxAllowed will be clamped down by VPA at admission, surprising the
     # app owner — fail at config time instead.
-    if cpu_req is not None and vpa_max_cpu_milli is not None and cpu_req > vpa_max_cpu_milli:
-        errs.append(Violation(
-            field=f"{key}.requests.cpu",
-            actual=requests.get("cpu"),
-            expected=f"<= vpa.maxAllowed.cpu ({vpa_max_cpu_milli}m)",
-            rule="requests_exceeds_vpa_max_cpu",
-            fix=f"Lower {key}.requests.cpu, raise vpa.maxAllowed.cpu, or disable vpa.enabled.",
-        ))
-    if mem_req is not None and vpa_max_memory_bytes is not None and mem_req > vpa_max_memory_bytes:
-        errs.append(Violation(
-            field=f"{key}.requests.memory",
-            actual=requests.get("memory"),
-            expected=f"<= vpa.maxAllowed.memory ({vpa_max_memory_bytes} bytes)",
-            rule="requests_exceeds_vpa_max_memory",
-            fix=f"Lower {key}.requests.memory, raise vpa.maxAllowed.memory, or disable vpa.enabled.",
-        ))
+    if (
+        cpu_req is not None
+        and vpa_max_cpu_milli is not None
+        and cpu_req > vpa_max_cpu_milli
+    ):
+        errs.append(
+            Violation(
+                field=f"{key}.requests.cpu",
+                actual=requests.get("cpu"),
+                expected=f"<= vpa.maxAllowed.cpu ({vpa_max_cpu_milli}m)",
+                rule="requests_exceeds_vpa_max_cpu",
+                fix=f"Lower {key}.requests.cpu, raise vpa.maxAllowed.cpu, or disable vpa.enabled.",
+            )
+        )
+    if (
+        mem_req is not None
+        and vpa_max_memory_bytes is not None
+        and mem_req > vpa_max_memory_bytes
+    ):
+        errs.append(
+            Violation(
+                field=f"{key}.requests.memory",
+                actual=requests.get("memory"),
+                expected=f"<= vpa.maxAllowed.memory ({vpa_max_memory_bytes} bytes)",
+                rule="requests_exceeds_vpa_max_memory",
+                fix=f"Lower {key}.requests.memory, raise vpa.maxAllowed.memory, or disable vpa.enabled.",
+            )
+        )
 
     # Rule: requests <= limits (per resource).
     for resource in ("cpu", "memory"):
         if resource not in requests or resource not in limits:
             continue
-        r = parsed.get((resource, "requests"))
-        l = parsed.get((resource, "limits"))
-        if r is None or l is None:
+        req = parsed.get((resource, "requests"))
+        lim = parsed.get((resource, "limits"))
+        if req is None or lim is None:
             continue
-        if r > l:
-            errs.append(Violation(
-                field=f"{key}.requests.{resource}",
-                actual=requests[resource],
-                expected=f"<= {key}.limits.{resource} ({limits[resource]})",
-                rule="requests_le_limits",
-                fix=f"Ensure {key}.requests.{resource} is not greater than {key}.limits.{resource}.",
-            ))
+        if req > lim:
+            errs.append(
+                Violation(
+                    field=f"{key}.requests.{resource}",
+                    actual=requests[resource],
+                    expected=f"<= {key}.limits.{resource} ({limits[resource]})",
+                    rule="requests_le_limits",
+                    fix=f"Ensure {key}.requests.{resource} is not greater than {key}.limits.{resource}.",
+                )
+            )
 
     return errs
 
@@ -370,13 +426,15 @@ def _check_keda(cfg: dict) -> list[Violation]:
     if not isinstance(mn, int) or not isinstance(mx, int):
         return []
     if mn > mx:
-        return [Violation(
-            field="keda.minReplicaCount",
-            actual=mn,
-            expected=f"<= keda.maxReplicaCount ({mx})",
-            rule="keda_min_le_max",
-            fix="Lower keda.minReplicaCount or raise keda.maxReplicaCount.",
-        )]
+        return [
+            Violation(
+                field="keda.minReplicaCount",
+                actual=mn,
+                expected=f"<= keda.maxReplicaCount ({mx})",
+                rule="keda_min_le_max",
+                fix="Lower keda.minReplicaCount or raise keda.maxReplicaCount.",
+            )
+        ]
     return []
 
 
@@ -399,13 +457,17 @@ def validate_config(config_yaml: Any) -> None:
         try:
             cfg = yaml.safe_load(config_yaml or "") or {}
         except yaml.YAMLError as e:
-            raise ConfigValidationError([Violation(
-                field="<yaml>",
-                actual=str(e),
-                expected="valid YAML",
-                rule="yaml_parse",
-                fix="Fix YAML syntax in atlan.yaml.",
-            )])
+            raise ConfigValidationError(
+                [
+                    Violation(
+                        field="<yaml>",
+                        actual=str(e),
+                        expected="valid YAML",
+                        rule="yaml_parse",
+                        fix="Fix YAML syntax in atlan.yaml.",
+                    )
+                ]
+            )
 
     if not isinstance(cfg, dict):
         return

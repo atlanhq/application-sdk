@@ -45,7 +45,9 @@ def main() -> int:
     try:
         validate_config(enriched)
     except ConfigValidationError as e:
-        print(f"\natlan.yaml validation failed with {len(e.violations)} violation(s):\n")
+        print(
+            f"\natlan.yaml validation failed with {len(e.violations)} violation(s):\n"
+        )
         for v in e.violations:
             # GH annotation: red error inline on atlan.yaml in PR Files view.
             print(

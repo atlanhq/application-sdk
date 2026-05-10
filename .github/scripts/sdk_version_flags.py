@@ -24,7 +24,7 @@ import logging
 from typing import Any, List, Optional, Tuple
 
 import yaml
-from packaging.version import Version, InvalidVersion
+from packaging.version import InvalidVersion, Version
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,9 @@ def _parse_version(version_str: str) -> Version | None:
     try:
         return Version(version_str)
     except InvalidVersion:
-        logger.warning(f"Cannot parse sdk_version '{version_str}', skipping flag injection")
+        logger.warning(
+            f"Cannot parse sdk_version '{version_str}', skipping flag injection"
+        )
         return None
 
 
@@ -77,7 +79,9 @@ def inject_sdk_version_flags(config_yaml: str, sdk_version: str | None) -> str:
     try:
         config = yaml.safe_load(config_yaml or "") or {}
     except yaml.YAMLError:
-        logger.warning("Failed to parse config YAML for flag injection, returning as-is")
+        logger.warning(
+            "Failed to parse config YAML for flag injection, returning as-is"
+        )
         return config_yaml
 
     if not isinstance(config, dict):
@@ -85,7 +89,13 @@ def inject_sdk_version_flags(config_yaml: str, sdk_version: str | None) -> str:
 
     additions: dict[str, Any] = {}
     overrides: dict[str, Any] = {}
-    for min_version, key, default_value, max_version, force_override in VERSION_GATED_FLAGS:
+    for (
+        min_version,
+        key,
+        default_value,
+        max_version,
+        force_override,
+    ) in VERSION_GATED_FLAGS:
         if parsed_version < min_version:
             continue
         # max_version is exclusive: lets us retire a flag at a specific SDK

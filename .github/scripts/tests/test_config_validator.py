@@ -16,22 +16,25 @@ from config_validator import (
     validate_config,
 )
 
-
 # ---------------------------------------------------------------------------
 # Quantity parsers
 # ---------------------------------------------------------------------------
 
+
 class TestParseCpu:
-    @pytest.mark.parametrize("value,expected", [
-        ("100m", 100),
-        ("1", 1000),
-        ("1.5", 1500),
-        ("500m", 500),
-        ("7", 7000),
-        (1, 1000),
-        (2, 2000),
-        (0.5, 500),
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("100m", 100),
+            ("1", 1000),
+            ("1.5", 1500),
+            ("500m", 500),
+            ("7", 7000),
+            (1, 1000),
+            (2, 2000),
+            (0.5, 500),
+        ],
+    )
     def test_valid(self, value, expected):
         assert parse_cpu(value) == expected
 
@@ -42,17 +45,20 @@ class TestParseCpu:
 
 
 class TestParseMemory:
-    @pytest.mark.parametrize("value,expected", [
-        ("500Mi", 500 * 1024 ** 2),
-        ("1Gi", 1024 ** 3),
-        ("27Gi", 27 * 1024 ** 3),
-        ("1024", 1024),
-        ("1Ki", 1024),
-        ("1M", 1000 ** 2),
-        ("1G", 1000 ** 3),
-        ("1k", 1000),
-        (1024, 1024),
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("500Mi", 500 * 1024**2),
+            ("1Gi", 1024**3),
+            ("27Gi", 27 * 1024**3),
+            ("1024", 1024),
+            ("1Ki", 1024),
+            ("1M", 1000**2),
+            ("1G", 1000**3),
+            ("1k", 1000),
+            (1024, 1024),
+        ],
+    )
     def test_valid(self, value, expected):
         assert parse_memory(value) == expected
 
@@ -70,6 +76,7 @@ class TestParseMemory:
 # validate_config — happy paths
 # ---------------------------------------------------------------------------
 
+
 class TestValidateHappyPaths:
     def test_empty_config_is_noop(self):
         validate_config("")
@@ -78,10 +85,12 @@ class TestValidateHappyPaths:
     def test_dict_input_skips_yaml_parse(self):
         # validate_config accepts an already-parsed dict.
         with pytest.raises(ConfigValidationError) as exc:
-            validate_config({
-                "splitDeploymentEnabled": True,
-                "temporalWorkerDeployment": {"enabled": False},
-            })
+            validate_config(
+                {
+                    "splitDeploymentEnabled": True,
+                    "temporalWorkerDeployment": {"enabled": False},
+                }
+            )
         assert any(v.rule == "twc_required_for_split" for v in exc.value.violations)
 
     def test_non_mapping_input_is_noop(self):
@@ -130,6 +139,7 @@ vpa:
 # Rule: split requires TWC
 # ---------------------------------------------------------------------------
 
+
 class TestSplitRequiresTwc:
     def test_split_without_twd_passes(self):
         # SDK < 2.7.4: split injected, TWC block absent. Must NOT block —
@@ -171,6 +181,7 @@ temporalWorkerDeployment:
 # Rule: VPA maxAllowed ceilings
 # ---------------------------------------------------------------------------
 
+
 class TestVpaCaps:
     def test_cpu_above_ceiling_fails(self):
         with pytest.raises(ConfigValidationError) as exc:
@@ -200,6 +211,7 @@ class TestVpaCaps:
 # ---------------------------------------------------------------------------
 # Rule: requests <= ceiling
 # ---------------------------------------------------------------------------
+
 
 class TestRequestsCeiling:
     def test_cpu_request_above_ceiling_fails(self):
@@ -249,6 +261,7 @@ workerResources:
 # ---------------------------------------------------------------------------
 # Rule: when vpa.enabled, requests <= vpa.maxAllowed
 # ---------------------------------------------------------------------------
+
 
 class TestRequestsLeVpaMax:
     def test_cpu_request_above_default_max_when_vpa_enabled_no_max_declared(self):
@@ -326,14 +339,18 @@ workerResources:
   requests: {cpu: 3,    memory: 500Mi}
   limits:   {cpu: 3,    memory: 1Gi}
 """)
-        fields = {v.field for v in exc.value.violations
-                  if v.rule == "requests_exceeds_vpa_max_cpu"}
+        fields = {
+            v.field
+            for v in exc.value.violations
+            if v.rule == "requests_exceeds_vpa_max_cpu"
+        }
         assert "workerResources.requests.cpu" in fields
 
 
 # ---------------------------------------------------------------------------
 # Rule: requests <= limits
 # ---------------------------------------------------------------------------
+
 
 class TestRequestsLeLimits:
     def test_cpu_request_above_limit_fails(self):
@@ -359,6 +376,7 @@ resources:
 # Rule: vpa.minAllowed <= maxAllowed
 # ---------------------------------------------------------------------------
 
+
 class TestVpaMinLeMax:
     def test_min_above_max_fails(self):
         with pytest.raises(ConfigValidationError) as exc:
@@ -373,6 +391,7 @@ vpa:
 # ---------------------------------------------------------------------------
 # Rule: keda min <= max
 # ---------------------------------------------------------------------------
+
 
 class TestKedaMinLeMax:
     def test_min_above_max_fails(self):
@@ -392,6 +411,7 @@ class TestKedaMinLeMax:
 # Aggregation, dedup, error shape
 # ---------------------------------------------------------------------------
 
+
 class TestAggregation:
     def test_multiple_violations_reported_in_one_pass(self):
         with pytest.raises(ConfigValidationError) as exc:
@@ -406,8 +426,12 @@ keda:
   maxReplicaCount: 1
 """)
         rules = {v.rule for v in exc.value.violations}
-        assert {"twc_required_for_split", "vpa_max_cpu_ceiling",
-                "vpa_max_memory_ceiling", "keda_min_le_max"} <= rules
+        assert {
+            "twc_required_for_split",
+            "vpa_max_cpu_ceiling",
+            "vpa_max_memory_ceiling",
+            "keda_min_le_max",
+        } <= rules
 
     def test_violation_is_serialisable(self):
         with pytest.raises(ConfigValidationError) as exc:
