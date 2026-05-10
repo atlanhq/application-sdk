@@ -136,9 +136,9 @@ OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observa
 # Temporal Prometheus Metrics
 #: Bind address for the Temporal Runtime's Rust-core Prometheus endpoint.
 #: Defaults to loopback (127.0.0.1) so the endpoint is not externally
-#: reachable — the FastAPI ``/metrics`` endpoint proxies it on the server,
-#: and the worker's ``TemporalCoreCollector`` scrapes it locally to feed the
-#: Pushgateway push.
+#: reachable — combined-mode FastAPI ``/metrics`` proxies it in-process,
+#: and the worker's ``TemporalCoreCollector`` scrapes it locally to feed
+#: the Pushgateway push.
 TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
     "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
 )

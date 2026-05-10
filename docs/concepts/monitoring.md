@@ -14,15 +14,18 @@ one of two transports, depending on pod role:
 
 | Pod role | Transport | Endpoint |
 |---|---|---|
-| **Combined / handler** | Direct scrape | `http://<pod>:8000/metrics` (FastAPI) |
+| **Combined** | Direct scrape | `http://<pod>:8000/metrics` (FastAPI, including proxied Temporal Rust-core metrics when enabled) |
+| **Handler** | Direct scrape | `http://<pod>:8000/metrics` (FastAPI in-process metrics; Temporal Rust-core proxy disabled by default) |
 | **Worker** (split deployment) | Push | Pushgateway at `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` |
 
 The Temporal SDK's Rust-core Prometheus endpoint (`127.0.0.1:9464`) is
 bound **loopback only** and is not externally reachable. The FastAPI
-`/metrics` handler proxies it in-process for combined / handler pods;
-the worker's `TemporalCoreCollector` reads it locally and includes the
-families in each Pushgateway push. So scrape configurations always
-target the FastAPI port (or the Pushgateway), never `:9464` directly.
+`/metrics` handler proxies it in-process for combined pods; handler-only
+pods skip that proxy by default because no local worker/runtime is started
+with the handler process. The worker's `TemporalCoreCollector` reads it
+locally and includes the families in each Pushgateway push. So scrape
+configurations always target the FastAPI port (or the Pushgateway), never
+`:9464` directly.
 
 ### What's in the metric body
 
@@ -48,22 +51,22 @@ The FastAPI `/metrics` endpoint (or a worker push) merges:
   Stable conventions are enabled via `OTEL_SEMCONV_STABILITY_OPT_IN=http`
   — set in the chart by default for v3+ apps.
 - **Temporal SDK** families from `MetricsInterceptor` (counters and
-  histograms emitted by activity/workflow execution) plus the Rust-core
-  families proxied from `127.0.0.1:9464` (`temporal_request_*`,
-  `temporal_workflow_task_*`, `temporal_sticky_cache_*`,
-  `temporal_num_pollers`, etc.)
+  histograms emitted by activity/workflow execution) plus, when enabled
+  and reachable, the Rust-core families proxied from `127.0.0.1:9464`
+  (`temporal_request_*`, `temporal_workflow_task_*`,
+  `temporal_sticky_cache_*`, `temporal_num_pollers`, etc.)
 - **`prometheus_client` defaults** (`process_*`, `python_gc_*`,
   `python_info`)
 
 ### `ATLAN_ENABLE_TEMPORAL_CORE_METRICS`
 
 This env var **does not gate the FastAPI `/metrics` route** — that
-endpoint is always registered. The flag controls only whether the
-Temporal Rust-core endpoint binds `127.0.0.1:9464`:
+endpoint is always registered. The flag controls whether worker/combined
+mode creates a Temporal Runtime that binds `127.0.0.1:9464`:
 
 | Value | Effect |
 |---|---|
-| `true` (default) | Rust core binds 9464; FastAPI proxy + worker `TemporalCoreCollector` can read it |
+| `true` (default) | Rust core binds 9464 in worker/combined mode; combined FastAPI proxy + worker `TemporalCoreCollector` can read it |
 | `false` | Rust core uses `Runtime.default()` (no Prometheus listener); FastAPI `/metrics` still serves SDK + HTTP + python defaults but lacks the `temporal_*` Rust-core families |
 
 `run_dev_combined()` proactively sets it to `false` in local dev so a
