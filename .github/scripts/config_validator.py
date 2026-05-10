@@ -148,17 +148,28 @@ def _safe_parse_memory(value: Any, field: str, errs: list[Violation]) -> int | N
 
 
 def _check_split_requires_twc(cfg: dict) -> list[Violation]:
+    """Block only when the user has explicitly disabled TWC under split.
+
+    TWC requires SDK >= 2.7.4. SDK flag injection only adds the
+    `temporalWorkerDeployment` block on SDK >= 2.7.4. Apps on
+    2.3.1 <= SDK < 2.7.4 receive `splitDeploymentEnabled: true` via injection
+    but no TWC block — that is intentional and must not be blocked here.
+
+    Fail only on the explicit opt-out: `temporalWorkerDeployment.enabled: false`
+    while `splitDeploymentEnabled: true`. Missing field, missing `enabled` key,
+    or `enabled: true` all pass.
+    """
     if cfg.get("splitDeploymentEnabled") is not True:
         return []
     twd = cfg.get("temporalWorkerDeployment") or {}
-    if twd.get("enabled") is True:
+    if twd.get("enabled") is not False:
         return []
     return [Violation(
         field="temporalWorkerDeployment.enabled",
-        actual=twd.get("enabled"),
-        expected=True,
+        actual=False,
+        expected="true (or omit the field — TWC requires SDK >= 2.7.4)",
         rule="twc_required_for_split",
-        fix="Set temporalWorkerDeployment.enabled: true. Split-worker deployments must use TWC so image-pull and crashloop failures surface during version rollout.",
+        fix="Set temporalWorkerDeployment.enabled: true, or remove the temporalWorkerDeployment block. Split-worker deployments must use TWC (when supported) so image-pull and crashloop failures surface during version rollout.",
     )]
 
 

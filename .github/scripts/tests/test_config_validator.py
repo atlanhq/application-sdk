@@ -78,7 +78,10 @@ class TestValidateHappyPaths:
     def test_dict_input_skips_yaml_parse(self):
         # validate_config accepts an already-parsed dict.
         with pytest.raises(ConfigValidationError) as exc:
-            validate_config({"splitDeploymentEnabled": True})
+            validate_config({
+                "splitDeploymentEnabled": True,
+                "temporalWorkerDeployment": {"enabled": False},
+            })
         assert any(v.rule == "twc_required_for_split" for v in exc.value.violations)
 
     def test_non_mapping_input_is_noop(self):
@@ -128,13 +131,29 @@ vpa:
 # ---------------------------------------------------------------------------
 
 class TestSplitRequiresTwc:
-    def test_split_without_twd_fails(self):
-        with pytest.raises(ConfigValidationError) as exc:
-            validate_config("splitDeploymentEnabled: true\n")
-        rules = {v.rule for v in exc.value.violations}
-        assert "twc_required_for_split" in rules
+    def test_split_without_twd_passes(self):
+        # SDK < 2.7.4: split injected, TWC block absent. Must NOT block —
+        # TWC is only available on SDK >= 2.7.4. Rule fires only on the
+        # explicit opt-out (enabled: false), not on missing fields.
+        validate_config("splitDeploymentEnabled: true\n")
+
+    def test_split_with_empty_twd_block_passes(self):
+        # `temporalWorkerDeployment: {}` (no `enabled` key) treated same as
+        # missing field — only explicit `enabled: false` fails.
+        validate_config("""
+splitDeploymentEnabled: true
+temporalWorkerDeployment: {}
+""")
+
+    def test_split_with_twd_enabled_true_passes(self):
+        validate_config("""
+splitDeploymentEnabled: true
+temporalWorkerDeployment:
+  enabled: true
+""")
 
     def test_split_with_twd_disabled_fails(self):
+        # Explicit opt-out is the only case that blocks.
         with pytest.raises(ConfigValidationError) as exc:
             validate_config("""
 splitDeploymentEnabled: true
@@ -378,6 +397,8 @@ class TestAggregation:
         with pytest.raises(ConfigValidationError) as exc:
             validate_config("""
 splitDeploymentEnabled: true
+temporalWorkerDeployment:
+  enabled: false
 vpa:
   maxAllowed: {cpu: 8, memory: 28Gi}
 keda:
@@ -390,14 +411,14 @@ keda:
 
     def test_violation_is_serialisable(self):
         with pytest.raises(ConfigValidationError) as exc:
-            validate_config("splitDeploymentEnabled: true\n")
+            validate_config("vpa:\n  maxAllowed:\n    cpu: 8\n")
         for v in exc.value.violations:
             d = v.to_dict()
             assert set(d.keys()) == {"field", "actual", "expected", "rule", "fix"}
 
     def test_inherits_value_error(self):
         with pytest.raises(ValueError):
-            validate_config("splitDeploymentEnabled: true\n")
+            validate_config("vpa:\n  maxAllowed:\n    cpu: 8\n")
 
 
 class TestParseOnceDedup:
