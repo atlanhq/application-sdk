@@ -1,33 +1,21 @@
 """
 Validate atlan.yaml deploy config against platform guardrails in CI.
 
-Runs in the Build & Publish reusable workflow before image build, against the
-DEPLOY_CONFIG block extracted by parse_atlan_yaml.py. Mirrors the pattern in
-parse_atlan_yaml.py: parse YAML once, run a list of rule functions, raise on
-violation. PyYAML is the only runtime dependency.
-
 Rules enforced:
-  1. splitDeploymentEnabled=true requires temporalWorkerDeployment.enabled=true
+  1. splitDeploymentEnabled=true + temporalWorkerDeployment.enabled=false fails
      (image-pull / crashloop only surfaces via TWC during version rollout).
   2. vpa.maxAllowed.cpu     <= 7 cores (7000m).
   3. vpa.maxAllowed.memory  <= 27Gi (binary, = 27 * 1024^3 bytes).
-  4. requests.cpu           <= 7 cores  (resources / serverResources / workerResources).
+  4. requests.cpu           <= 7 cores.
   5. requests.memory        <= 27Gi.
-  6. When vpa.enabled=true: requests.{cpu,memory} <= effective vpa.maxAllowed.
-     Defaults applied when vpa.maxAllowed not declared: cpu=2000m, memory=18Gi
-     (mirror chart-shipped defaults so validator's effective ceiling matches
-     what VPA enforces in cluster).
-  7. requests.{cpu,memory}  <= limits.{cpu,memory}  (sanity).
+  6. When vpa.enabled=true: requests.{cpu,memory} <= effective vpa.maxAllowed
+     (chart defaults cpu=2000m, memory=18Gi when not declared).
+  7. requests <= limits per resource.
   8. vpa.minAllowed         <= vpa.maxAllowed per resource.
   9. keda.minReplicaCount   <= keda.maxReplicaCount.
 
-Apply scope: rules 4-7 hit `resources` always; `serverResources` and
-`workerResources` only when `splitDeploymentEnabled=true` (chart ignores them
-otherwise).
-
-On failure: raises ConfigValidationError carrying a list of Violation records.
-The CI driver (validate_atlan_yaml.py) maps these to ::error file=atlan.yaml::
-GitHub Actions annotations so violations show inline on the PR diff.
+Rules 4-7 hit `resources` always; `serverResources`/`workerResources` only when
+`splitDeploymentEnabled=true` (chart ignores them otherwise).
 """
 
 from __future__ import annotations
@@ -38,18 +26,16 @@ from typing import Any
 
 import yaml
 
-# Hardcoded infra ceilings. Change requires a PR + platform team review.
-MAX_VPA_CPU_MILLI: int = 7_000  # 7 cores
-MAX_VPA_MEMORY_BYTES: int = 27 * 1024**3  # 27 Gi (binary)
+# Hardcoded infra ceilings. Change requires PR + platform-team review.
+MAX_VPA_CPU_MILLI: int = 7_000
+MAX_VPA_MEMORY_BYTES: int = 27 * 1024**3
 
-# Defaults for vpa.maxAllowed when vpa.enabled=true but maxAllowed not declared
-# in atlan.yaml. Mirror the chart-shipped defaults so validator's effective
-# ceiling matches what VPA actually enforces in cluster.
-DEFAULT_VPA_MAX_CPU_MILLI: int = 2_000  # 2 cores
-DEFAULT_VPA_MAX_MEMORY_BYTES: int = 18 * 1024**3  # 18 Gi (binary)
+# Mirror chart-shipped defaults so validator's effective ceiling matches what
+# VPA actually enforces in cluster.
+DEFAULT_VPA_MAX_CPU_MILLI: int = 2_000
+DEFAULT_VPA_MAX_MEMORY_BYTES: int = 18 * 1024**3
 
-# Memory suffix multipliers. Binary (Ki/Mi/Gi/...) are powers of 1024;
-# decimal (k/K/M/G/...) are powers of 1000. They are NOT interchangeable.
+# Binary (Ki/Mi/Gi/...) use 1024; decimal (k/K/M/G/...) use 1000. Not interchangeable.
 _MEM_SUFFIXES = {
     "Ki": 1024,
     "Mi": 1024**2,
@@ -71,8 +57,6 @@ _MEM_RE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([KMGTPE]i?|k)?\s*$")
 
 @dataclass
 class Violation:
-    """One validation failure. Serialised to GH Actions annotations by the driver."""
-
     field: str
     actual: Any
     expected: Any
@@ -84,8 +68,6 @@ class Violation:
 
 
 class ConfigValidationError(ValueError):
-    """Raised when atlan.yaml fails one or more guardrail rules."""
-
     def __init__(self, violations: list[Violation]) -> None:
         self.violations = violations
         body = "\n".join(
@@ -96,11 +78,7 @@ class ConfigValidationError(ValueError):
 
 
 def parse_cpu(value: Any) -> int:
-    """Parse a Kubernetes CPU quantity into millicores.
-
-    Accepts int/float (treated as cores), "100m", "1", "1.5", "500m".
-    Rejects malformed input with ValueError.
-    """
+    """Parse Kubernetes CPU quantity into millicores. int/float treated as cores."""
     if isinstance(value, bool):  # bool subclass of int — guard explicitly
         raise ValueError(f"invalid cpu quantity: {value!r}")
     if isinstance(value, (int, float)):
@@ -114,11 +92,7 @@ def parse_cpu(value: Any) -> int:
 
 
 def parse_memory(value: Any) -> int:
-    """Parse a Kubernetes memory quantity into bytes.
-
-    Accepts int/float (treated as bytes), "500Mi", "1Gi", "27Gi", "1024".
-    Binary suffixes (Ki/Mi/Gi/...) use 1024; decimal (k/K/M/G/...) use 1000.
-    """
+    """Parse Kubernetes memory quantity into bytes. int/float treated as bytes."""
     if isinstance(value, bool):
         raise ValueError(f"invalid memory quantity: {value!r}")
     if isinstance(value, (int, float)):
@@ -166,16 +140,11 @@ def _safe_parse_memory(value: Any, field: str, errs: list[Violation]) -> int | N
 
 
 def _check_split_requires_twc(cfg: dict) -> list[Violation]:
-    """Block only when the user has explicitly disabled TWC under split.
+    """Fail only on explicit `temporalWorkerDeployment.enabled: false` under split.
 
-    TWC requires SDK >= 2.7.4. SDK flag injection only adds the
-    `temporalWorkerDeployment` block on SDK >= 2.7.4. Apps on
-    2.3.1 <= SDK < 2.7.4 receive `splitDeploymentEnabled: true` via injection
-    but no TWC block — that is intentional and must not be blocked here.
-
-    Fail only on the explicit opt-out: `temporalWorkerDeployment.enabled: false`
-    while `splitDeploymentEnabled: true`. Missing field, missing `enabled` key,
-    or `enabled: true` all pass.
+    TWC requires SDK >= 2.7.4. Apps on older SDKs get `splitDeploymentEnabled`
+    injected without a TWC block — must not be blocked here. Missing field,
+    missing `enabled` key, or `enabled: true` all pass.
     """
     if cfg.get("splitDeploymentEnabled") is not True:
         return []
@@ -196,14 +165,8 @@ def _check_split_requires_twc(cfg: dict) -> list[Violation]:
 def _parse_vpa(
     cfg: dict,
 ) -> tuple[dict[tuple[str, str], int | None], list[Violation]]:
-    """Parse vpa.minAllowed and vpa.maxAllowed quantities once.
-
-    Returns (parsed, errs) where parsed maps (resource, kind) -> int | None
-    and errs is the list of any invalid_quantity violations encountered.
-    Shared between _check_vpa (uses both kinds) and _resolve_effective_vpa_max
-    (only needs maxAllowed) so each field is parsed exactly once per
-    validate_config call.
-    """
+    """Parse vpa.{minAllowed,maxAllowed} once. Shared by _check_vpa and
+    _resolve_effective_vpa_max to avoid duplicate invalid_quantity violations."""
     vpa = cfg.get("vpa") or {}
     mn = vpa.get("minAllowed") or {}
     mx = vpa.get("maxAllowed") or {}
@@ -222,13 +185,6 @@ def _parse_vpa(
 
 
 def _check_vpa(cfg: dict, parsed: dict[tuple[str, str], int | None]) -> list[Violation]:
-    """Run VPA rules over the pre-parsed quantity cache from _parse_vpa.
-
-    Receives parsed values from the caller so each field is parsed once
-    across the whole validation pass. Without this, _check_vpa and
-    _resolve_effective_vpa_max would each re-parse vpa.maxAllowed.{cpu,memory}
-    and emit duplicate invalid_quantity violations on malformed input.
-    """
     vpa = cfg.get("vpa") or {}
     mn = vpa.get("minAllowed") or {}
     mx = vpa.get("maxAllowed") or {}
@@ -279,13 +235,8 @@ def _check_vpa(cfg: dict, parsed: dict[tuple[str, str], int | None]) -> list[Vio
 def _resolve_effective_vpa_max(
     cfg: dict, parsed: dict[tuple[str, str], int | None]
 ) -> tuple[int | None, int | None]:
-    """Compute effective vpa.maxAllowed for cpu/memory when vpa.enabled.
-
-    Returns (cpu_milli, memory_bytes) or (None, None) when vpa is disabled.
-    Falls back to chart defaults when vpa.maxAllowed is not declared in
-    atlan.yaml. Reuses the parsed cache from _parse_vpa so values are not
-    re-parsed (and invalid_quantity violations are not duplicated).
-    """
+    """Effective vpa.maxAllowed (cpu_milli, mem_bytes), or (None, None) when vpa disabled.
+    Falls back to DEFAULT_VPA_MAX_* when maxAllowed not declared."""
     vpa = cfg.get("vpa") or {}
     if vpa.get("enabled") is not True:
         return None, None
@@ -309,12 +260,8 @@ def _check_resource_block(
     vpa_max_cpu_milli: int | None = None,
     vpa_max_memory_bytes: int | None = None,
 ) -> list[Violation]:
-    """Validate one of: resources / serverResources / workerResources.
-
-    *vpa_max_cpu_milli* / *vpa_max_memory_bytes* — effective vpa.maxAllowed
-    when vpa.enabled. None means VPA is disabled and the requests<=vpa.maxAllowed
-    rule is skipped.
-    """
+    """Validate resources / serverResources / workerResources.
+    None vpa_max_* skips the requests<=vpa.maxAllowed rule (vpa disabled)."""
     block = cfg.get(key) or {}
     if not block:
         return []
@@ -322,9 +269,8 @@ def _check_resource_block(
     limits = block.get("limits") or {}
     errs: list[Violation] = []
 
-    # Parse each (resource, kind) at most once. Without the cache, an invalid
-    # quantity (e.g. memory: "abc") would emit duplicate `invalid_quantity`
-    # violations across rules that touch the same field.
+    # Parse-once cache: avoids duplicate invalid_quantity violations across
+    # the multiple rules that touch the same field.
     parsed: dict[tuple[str, str], int | None] = {}
     for kind, src in (("requests", requests), ("limits", limits)):
         for resource, parser in (
@@ -336,9 +282,7 @@ def _check_resource_block(
                     src[resource], f"{key}.{kind}.{resource}", errs
                 )
 
-    # Rule: requests <= infra ceilings (mirror vpa.maxAllowed caps).
-    # Even without VPA, a raw request that exceeds infra guarantee fails to
-    # schedule. Same numeric ceilings as vpa.maxAllowed.
+    # Even without VPA, raw request above infra guarantee fails to schedule.
     cpu_req = parsed.get(("cpu", "requests"))
     if cpu_req is not None and cpu_req > MAX_VPA_CPU_MILLI:
         errs.append(
@@ -362,10 +306,8 @@ def _check_resource_block(
             )
         )
 
-    # Rule: when vpa.enabled, requests <= vpa.maxAllowed (chart defaults
-    # used when maxAllowed is not declared). Initial request that exceeds
-    # vpa.maxAllowed will be clamped down by VPA at admission, surprising the
-    # app owner — fail at config time instead.
+    # Initial request above vpa.maxAllowed gets clamped down by VPA admission,
+    # surprising the app owner — fail at config time instead.
     if (
         cpu_req is not None
         and vpa_max_cpu_milli is not None
@@ -395,7 +337,6 @@ def _check_resource_block(
             )
         )
 
-    # Rule: requests <= limits (per resource).
     for resource in ("cpu", "memory"):
         if resource not in requests or resource not in limits:
             continue
@@ -429,21 +370,16 @@ def _check_resources(
 
 
 def _check_keda(cfg: dict) -> list[Violation]:
-    """Rule: keda.minReplicaCount <= keda.maxReplicaCount (when both set).
+    """keda.minReplicaCount <= keda.maxReplicaCount (when both set).
 
-    Non-int / bool replica counts silently skip this rule — type errors are
-    deliberately surfaced by Helm chart rendering rather than reported as
-    config_validator violations. Validator scope is semantic guardrails;
-    basic type validation lives in the chart's schema.
+    Non-int / bool replica counts silently skip — chart schema handles type errors.
     """
     keda = cfg.get("keda") or {}
     mn = keda.get("minReplicaCount")
     mx = keda.get("maxReplicaCount")
     if mn is None or mx is None:
         return []
-    # bool is a subclass of int — reject explicitly to mirror the parse_cpu /
-    # parse_memory guards.
-    if isinstance(mn, bool) or isinstance(mx, bool):
+    if isinstance(mn, bool) or isinstance(mx, bool):  # bool subclass of int
         return []
     if not isinstance(mn, int) or not isinstance(mx, int):
         return []
@@ -461,17 +397,9 @@ def _check_keda(cfg: dict) -> list[Violation]:
 
 
 def validate_config(config_yaml: Any) -> None:
-    """Run all guardrail rules against *config_yaml*.
-
-    Accepts either a YAML string or an already-parsed dict. The string path is
-    the normal one (called from CI with the DEPLOY_CONFIG block extracted by
-    parse_atlan_yaml.py). The dict path is a defensive escape hatch and lets
-    tests pass dicts directly.
-
-    No-op when the input parses to anything other than a mapping. Raises
-    ConfigValidationError aggregating every violation found in a single pass —
-    the user sees all problems at once rather than fixing them one-at-a-time
-    across N submission attempts.
+    """Run all guardrail rules. Accepts YAML string or already-parsed dict.
+    Raises ConfigValidationError with aggregated violations from a single pass.
+    No-op on non-mapping input.
     """
     if isinstance(config_yaml, dict):
         cfg = config_yaml
@@ -495,10 +423,6 @@ def validate_config(config_yaml: Any) -> None:
         return
 
     errs: list[Violation] = []
-    # Parse vpa.{minAllowed,maxAllowed} once and share with both consumers
-    # (_check_vpa and _resolve_effective_vpa_max via _check_resources). This
-    # prevents duplicate invalid_quantity violations on malformed inputs and
-    # halves the parsing cost.
     vpa_parsed, vpa_parse_errs = _parse_vpa(cfg)
     errs += vpa_parse_errs
     errs += _check_split_requires_twc(cfg)
