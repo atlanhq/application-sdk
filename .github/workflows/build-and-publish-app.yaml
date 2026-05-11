@@ -83,8 +83,79 @@ permissions:
   pull-requests: write
 
 jobs:
+  # ── Job 0: Channel + branch gate ─────────────────────────────────────────────
+  # 'all'-channel releases reach every production tenant, so they MUST come
+  # from the protected `main` branch. Fail here (before the multi-arch build
+  # spends ~10 min) when channel=='all' and the build ref is not main.
+  # Only runs when `publish: true` — build-only invocations are unaffected.
+  # Beta, staging, and tenant-targeted publishes are unrestricted.
+  validate-channel:
+    name: Validate Channel + Branch
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enforce main-branch invariant for channel='all'
+        env:
+          # REF and CHANNEL/TENANTS are passed via env (not interpolated into
+          # the script body) — protects against shell injection from branch
+          # names containing backticks/$().
+          REF: ${{ inputs.ref || github.ref }}
+          CHANNEL: ${{ inputs.channel }}
+          TENANTS: ${{ inputs.tenants }}
+        run: |
+          set -euo pipefail
+
+          # Mirror the channel-resolution rules used at publish time:
+          #   tenants  -> specific  (skip gate)
+          #   channel='' or 'all' -> all  (enforce gate)
+          #   beta/staging/anything else -> skip gate
+          if [ -n "${TENANTS}" ]; then
+            echo "Tenants targeting (${TENANTS}) — main-branch gate skipped."
+            exit 0
+          fi
+          EFFECTIVE_CHANNEL="${CHANNEL:-all}"
+          if [ "${EFFECTIVE_CHANNEL}" != "all" ]; then
+            echo "Channel '${EFFECTIVE_CHANNEL}' — main-branch gate skipped."
+            exit 0
+          fi
+
+          # Accept both the short ('main') and qualified ('refs/heads/main')
+          # forms. Tags ('refs/tags/...') and feature branches are rejected.
+          case "${REF}" in
+            main|refs/heads/main)
+              echo "Channel 'all' on main — proceeding."
+              ;;
+            *)
+              echo "::error title=Publish blocked::Channel 'all' requires the main branch — got ref '${REF}'."
+              {
+                echo "### Publish blocked"
+                echo ""
+                echo "Releases to the **all** channel must be built from the **main** branch."
+                echo ""
+                echo "| Field | Value |"
+                echo "|-------|-------|"
+                echo "| Ref | \`${REF}\` |"
+                echo "| Channel | \`${EFFECTIVE_CHANNEL}\` |"
+                echo ""
+                echo "Re-run with one of:"
+                echo "- \`channel: beta\` or \`channel: staging\` (non-prod)"
+                echo "- \`tenants: <comma-separated-ids>\` (targeted)"
+                echo "- merge to \`main\` and let the push-trigger run"
+              } >> "${GITHUB_STEP_SUMMARY}"
+              exit 1
+              ;;
+          esac
+
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
+    needs: [validate-channel]
+    # `needs: [validate-channel]` only enforces ordering when that job runs.
+    # When publish=false, validate-channel is skipped via its `if:` — which by
+    # default would propagate "skipped" to dependents. The condition below
+    # explicitly allows prepare to run when validate-channel is skipped OR
+    # successful, but NOT when it failed.
+    if: ${{ !failure() && !cancelled() }}
     name: Prepare
     runs-on: ubuntu-latest
     timeout-minutes: 5
