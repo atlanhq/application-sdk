@@ -7,9 +7,6 @@ from typing import Any, ClassVar
 
 from loguru import logger
 from opentelemetry._logs import LogRecord, SeverityNumber
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
 
 from application_sdk.constants import (
@@ -539,6 +536,13 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             otlp_processors = []
 
             if ENABLE_OTLP_LOGS or _has_remote_otlp_endpoint():
+                from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (  # noqa: PLC0415
+                    OTLPLogExporter,
+                )
+                from opentelemetry.sdk._logs._internal.export import (  # noqa: PLC0415
+                    BatchLogRecordProcessor,
+                )
+
                 otlp_processors.append(
                     BatchLogRecordProcessor(
                         OTLPLogExporter(
@@ -553,6 +557,13 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 logging.info("OTLP exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT)
 
             if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
+                from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (  # noqa: PLC0415
+                    OTLPLogExporter,
+                )
+                from opentelemetry.sdk._logs._internal.export import (  # noqa: PLC0415
+                    BatchLogRecordProcessor,
+                )
+
                 otlp_processors.append(
                     BatchLogRecordProcessor(
                         OTLPLogExporter(
@@ -570,6 +581,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 )
 
             if otlp_processors:
+                from opentelemetry.sdk._logs import LoggerProvider  # noqa: PLC0415
+
                 self.logger_provider = LoggerProvider(
                     resource=build_otel_resource(
                         extra_attrs={"sdk.version": _SDK_VERSION}
