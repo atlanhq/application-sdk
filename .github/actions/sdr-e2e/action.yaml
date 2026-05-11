@@ -145,23 +145,31 @@ runs:
         mv docker-compose-generator/generate atlan-configurator
         chmod +x atlan-configurator
 
-    # Connector repos use atlan.yaml as the canonical app-config filename
-    # (see atlan-mssql-app, atlan-mysql-app). Fall back to app.yaml for any
-    # older repos still on the previous convention.
-    - name: Resolve atlan.yaml
+    # atlan-configurator's --app input needs a distinct schema (app_name +
+    # app_image at minimum). Connector repos' atlan.yaml is for the k8s
+    # helm deploy and uses a different shape ('name' not 'app_name', no
+    # image field). Generate a configurator-shaped file inline from
+    # known-good defaults; callers can override via
+    # .github/e2e/app-config.yaml.tmpl if a connector needs more fields
+    # (proxy config, extra env, etc.).
+    - name: Resolve app-config for atlan-configurator
       shell: bash
       env:
+        APP_NAME: ${{ inputs.app-name }}
         APP_IMAGE: ${{ steps.build.outputs.image }}
       run: |
-        if [ -f atlan.yaml ]; then
-          envsubst < atlan.yaml > app-resolved.yaml
-        elif [ -f app.yaml ]; then
-          envsubst < app.yaml > app-resolved.yaml
+        if [ -f .github/e2e/app-config.yaml.tmpl ]; then
+          echo "Using app-level app-config.yaml.tmpl override"
+          envsubst < .github/e2e/app-config.yaml.tmpl > app-resolved.yaml
         else
-          echo "::error::Neither atlan.yaml nor app.yaml found at repo root; "
-          echo "::error::the SDR action needs the connector's app-config file to feed atlan-configurator."
-          exit 1
+          echo "Generating default app-config from action inputs"
+          cat > app-resolved.yaml <<EOF
+        app_name: ${APP_NAME}
+        app_image: ${APP_IMAGE}
+        EOF
         fi
+        echo "--- app-resolved.yaml ---"
+        cat app-resolved.yaml
 
     # Use the app's test-config template if it overrides the SDK default.
     - name: Resolve test-config.yaml
