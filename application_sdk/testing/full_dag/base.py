@@ -293,13 +293,16 @@ class BaseFullDAGE2ETest:
         logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
 
         # Derive the extract task_queue from agent_name (tier-4) or
-        # the connector's default tenant queue (tier-5). The seed DAG
-        # is a placeholder — package-workflows replaces it with the
-        # real submit args on every run — so what we plug in here
-        # mostly just needs to be valid syntax + correct queue routing.
+        # the connector's default tenant queue (tier-5). The Argo
+        # cluster template builds queue = `atlan-{agent-name}` (the
+        # agent-name itself is expected to carry the connector
+        # prefix, e.g. `mysql-ci-<run_id>` → `atlan-mysql-ci-<run_id>`)
+        # — confirmed against the devex sample (agent-name `mysql-dev`
+        # → task_queue `atlan-mysql-dev`). Callers' agent_spec() must
+        # produce a name that already includes the connector prefix.
         agent = self.agent_spec()
         if agent is not None:
-            extract_queue = f"atlan-{self.connector_short_name}-{agent.agent_name}"
+            extract_queue = f"atlan-{agent.agent_name}"
         else:
             extract_queue = f"atlan-{self.connector_short_name}-default"
 
