@@ -161,4 +161,65 @@ facts {
     manifestJson.contains("\"has_native_inputs\": \"HAS_NATIVE_INPUTS\"")
     manifestJson.contains("\"native_inputs_payload\": \"NATIVE_INPUTS_PAYLOAD\"")
   }
+  // Coverage for fields added to PopularityMineColumnMapping in this revision.
+  // Without these, the toolkit silently dropped popularity-app's required
+  // `query_hash` / `query_text` / `source_query_type_qi` /
+  // `parsed_data_keep_filter` / `case_insensitive_match` keys, leaving
+  // consumers (BigQuery, Databricks, Redshift miners) unable to override the
+  // Snowflake-shaped popularity-app defaults. Production repro:
+  // PopularityWorkflow run ae020e5d-431d-4dd4-b942-12e2f33676cf-popularity
+  // (2026-05-07) crashed in popularity-app's `_build_mined_canonical` with
+  //   Binder Error: Column "QUERY_HASH" referenced ...
+  //   cannot be referenced before it is defined
+  // because BigQuery's cleaned_mine parquet has only `CLEANED_QUERY`.
+  //
+  // queryHash default is `md5(QUERY_TEXT)`, not native `QUERY_HASH` — pop-app
+  // pins this convention in `tests/test_query_hash_convention.py` (Snowflake's
+  // native QUERY_HASH is version-bumped/undocumented, breaks cross-tenant
+  // comparability).
+  ["Mine column mapping carries query_hash and query_text"] {
+    manifestJson.contains("\"query_hash\": \"md5(QUERY_TEXT)\"")
+    manifestJson.contains("\"query_text\": \"QUERY_TEXT\"")
+  }
+  ["Mine column mapping carries source_query_type_qi"] {
+    manifestJson.contains("\"source_query_type_qi\": \"SOURCE_QUERY_TYPE\"")
+  }
+  ["Mine column mapping renders parsed_data_keep_filter (default OUTPUT_FLAGS bitmask)"] {
+    manifestJson.contains("\"parsed_data_keep_filter\":")
+    // Bit 25 (GUDUSOFT_TABLES_DETECTED = 33554432) | bit 26
+    // (SQLGLOT_TABLES_DETECTED  = 67108864). The default predicate must keep
+    // both literals so QI's bitmask gate (replacing the deprecated HAS_ERROR
+    // boolean) routes the right rows downstream.
+    manifestJson.contains("33554432")
+    manifestJson.contains("67108864")
+  }
+  ["Mine column mapping renders case_insensitive_match (default true)"] {
+    manifestJson.contains("\"case_insensitive_match\": true")
+  }
+  ["BigQuery-shape mine column mapping round-trips through PopularityMineColumnMapping"] {
+    // Pin the per-source guidance documented on the class — BigQuery
+    // overrides for query_hash/query_text/queryType plus a sourceQueryTypeQi
+    // sentinel for parsed parquet that doesn't carry SOURCE_QUERY_TYPE.
+    local bq = new NativeApp.PopularityMineColumnMapping {
+      queryId = "QUERY_ID"
+      userName = "USER_EMAIL"
+      warehouseName = "NULL"
+      roleName = "NULL"
+      totalElapsedTime = "TOTAL_SLOT_MS"
+      creditsCloudServices = "NULL"
+      creditsCompute = "TOTAL_BYTES_BILLED"
+      queryType = "STATEMENT_TYPE"
+      startTime = "START_TIME"
+      queryHash = "md5(CLEANED_QUERY)"
+      queryText = "CLEANED_QUERY"
+      queryTag = "NULL"
+      queryTagsSql = "process_labels(LABELS)"
+      sourceQueryTypeQi = "NULL::VARCHAR"
+    }
+    bq.queryHash == "md5(CLEANED_QUERY)"
+    bq.queryText == "CLEANED_QUERY"
+    bq.queryType == "STATEMENT_TYPE"
+    bq.sourceQueryTypeQi == "NULL::VARCHAR"
+    bq.creditsCompute == "TOTAL_BYTES_BILLED"
+  }
 }
