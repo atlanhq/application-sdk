@@ -183,8 +183,8 @@ def build_ae_payload(
             # keys*, not literal values — the agent's local Dapr
             # secret-store resolves them at workflow time. Callers should
             # pre-populate the secret store with these keys.
-            "basic.username": f"{connector_short_name.upper()}_USERNAME",
-            "basic.password": f"{connector_short_name.upper()}_PASSWORD",
+            "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
+            "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
         }
         parameters.append(
             {"name": "agent-json", "value": orjson.dumps(agent_json).decode()}
@@ -253,11 +253,11 @@ def build_ae_payload(
                 },
                 {
                     "name": "agent-json.basic.username",
-                    "value": f"{connector_short_name.upper()}_USERNAME",
+                    "value": f"SDR_{connector_short_name.upper()}_USERNAME",
                 },
                 {
                     "name": "agent-json.basic.password",
-                    "value": f"{connector_short_name.upper()}_PASSWORD",
+                    "value": f"SDR_{connector_short_name.upper()}_PASSWORD",
                 },
             ]
         )

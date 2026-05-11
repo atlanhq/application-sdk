@@ -97,12 +97,12 @@ def test_agent_mode_payload_includes_agent_json() -> None:
     assert agent_json["host"] == _DATABASE.host
     # Username/password values in agent-json are *secret-store keys*,
     # not raw credentials — caller's secret store resolves them.
-    assert agent_json["basic.username"] == "MYSQL_USERNAME"
-    assert agent_json["basic.password"] == "MYSQL_PASSWORD"
+    assert agent_json["basic.username"] == "SDR_MYSQL_USERNAME"
+    assert agent_json["basic.password"] == "SDR_MYSQL_PASSWORD"
 
     # Flat agent-json.* duplicates of the same keys should exist
     assert params["agent-json.agent-name"] == "ci-1234"
-    assert params["agent-json.basic.username"] == "MYSQL_USERNAME"
+    assert params["agent-json.basic.username"] == "SDR_MYSQL_USERNAME"
 
 
 def test_agent_mode_without_agent_spec_raises() -> None:
