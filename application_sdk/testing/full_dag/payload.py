@@ -452,6 +452,44 @@ def build_ae_payload(
         ]
     )
 
+    # `payload[]` tells the orchestrator to create a credential and
+    # substitute `{{credentialGuid}}` in the parameters with the
+    # resulting GUID. The body shape *differs by mode*:
+    #
+    # - DIRECT: full credential record (host + port + username +
+    #   password) — the prod-deployed connector pod looks up this
+    #   GUID at runtime and uses the full record to connect.
+    # - AGENT: lightweight record (no host/username/password — those
+    #   live in the agent's local secret-store via agent-json). The
+    #   credential carries auth-type + connectorConfigName metadata;
+    #   the actual creds resolve at the worker via
+    #   `secret://<secret-path>/<key>`.
+    #
+    # Mixing these — sending the DIRECT body shape in agent mode —
+    # causes the orchestrator to skip credential creation (insufficient
+    # validation pass), leaving `{{credentialGuid}}` unsubstituted as
+    # the literal "__placeholder__" string the seed DAG defaults to.
+    # The worker then resolves credential_guid=__placeholder__, gets
+    # HTTP 500 from the Dapr credential vault binding, and the
+    # activity fails with AAF-CRD-002. Validated against the devex
+    # AGENT-mode payload sample.
+    credential_body: dict[str, Any] = {
+        "name": f"default-{connector_short_name}-{run_id}-0",
+        "authType": database.auth_type,
+        "extra": dict(database.extra),
+        "connectorConfigName": database.connector_config_name
+        or f"atlan-connectors-{connector_short_name}",
+    }
+    if mode is RunMode.DIRECT:
+        credential_body.update(
+            {
+                "host": database.host,
+                "port": database.port,
+                "username": database.username,
+                "password": database.password,
+            }
+        )
+
     return {
         "metadata": {
             "labels": {
@@ -502,17 +540,7 @@ def build_ae_payload(
             {
                 "parameter": "credentialGuid",
                 "type": "credential",
-                "body": {
-                    "name": f"default-{connector_short_name}-{run_id}-0",
-                    "host": database.host,
-                    "port": database.port,
-                    "authType": database.auth_type,
-                    "username": database.username,
-                    "password": database.password,
-                    "extra": dict(database.extra),
-                    "connectorConfigName": database.connector_config_name
-                    or f"atlan-connectors-{connector_short_name}",
-                },
+                "body": credential_body,
             }
         ],
         "execution_mode": "native",

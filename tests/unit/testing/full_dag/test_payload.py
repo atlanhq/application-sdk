@@ -139,12 +139,34 @@ def test_connection_attributes_round_trip_through_payload() -> None:
     assert parsed["attributes"]["adminUsers"] == list(_CONNECTION.admin_users)
 
 
-def test_credential_payload_carries_real_credentials() -> None:
-    """The top-level ``payload[]`` is what the orchestrator stores as a credential.
+def test_direct_credential_payload_carries_full_record() -> None:
+    """DIRECT mode payload[] body has the full credential — host, port,
+    username, password — so the prod-deployed pod can resolve and
+    connect at runtime."""
+    payload = build_ae_payload(
+        run_id=42,
+        mode=RunMode.DIRECT,
+        connector_short_name="mysql",
+        argo_package_name="@atlan/mysql",
+        argo_template_name="atlan-mysql",
+        app_service_url="http://mysql.mysql-app.svc.cluster.local",
+        connection=_CONNECTION,
+        database=_DATABASE,
+    )
+    cred = payload["payload"][0]
+    assert cred["parameter"] == "credentialGuid"
+    assert cred["body"]["host"] == _DATABASE.host
+    assert cred["body"]["username"] == _DATABASE.username
+    assert cred["body"]["password"] == _DATABASE.password
+    assert cred["body"]["connectorConfigName"] == "atlan-connectors-mysql"
 
-    Even in agent mode, the real DB creds get persisted on the tenant
-    side here — the agent flow just doesn't pass them through to extract.
-    """
+
+def test_agent_credential_payload_omits_db_creds() -> None:
+    """AGENT mode payload[] body is intentionally lightweight — no
+    host/username/password — because those resolve at the agent worker
+    via the local secret-store. Sending the full body causes the
+    orchestrator to skip credential creation and `{{credentialGuid}}`
+    stays unsubstituted as the seed DAG's "__placeholder__" string."""
     payload = build_ae_payload(
         run_id=42,
         mode=RunMode.AGENT,
@@ -154,14 +176,19 @@ def test_credential_payload_carries_real_credentials() -> None:
         app_service_url="http://mysql.mysql-app.svc.cluster.local",
         connection=_CONNECTION,
         database=_DATABASE,
-        agent=AgentSpec(agent_name="ci-42"),
+        agent=AgentSpec(agent_name="mysql-ci-42"),
     )
     cred = payload["payload"][0]
     assert cred["parameter"] == "credentialGuid"
-    assert cred["body"]["username"] == _DATABASE.username
-    assert cred["body"]["password"] == _DATABASE.password
-    assert cred["body"]["host"] == _DATABASE.host
-    assert cred["body"]["connectorConfigName"] == "atlan-connectors-mysql"
+    body = cred["body"]
+    assert body["connectorConfigName"] == "atlan-connectors-mysql"
+    assert body["authType"] == "basic"
+    # Critical: no DB-connection details — those live in agent-json
+    # / secret-store, not in the credential body.
+    assert "host" not in body
+    assert "port" not in body
+    assert "username" not in body
+    assert "password" not in body
 
 
 def test_ae_workflow_slug_override() -> None:
