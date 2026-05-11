@@ -1,0 +1,165 @@
+{
+  "icon": "https://assets.atlan.com/assets/postgres.svg",
+  "helpdeskLink": "",
+  "logo": "https://assets.atlan.com/assets/postgres.svg",
+  "connector": "postgres",
+  "defaultConnectorType": "jdbc",
+  "config": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Name",
+          "hidden": true,
+          "placeholder": "Host Name"
+        }
+      },
+      "connector": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Connector",
+          "hidden": true,
+          "placeholder": "Connector"
+        }
+      },
+      "connectorType": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "key": "_host",
+          "label": "connectorType",
+          "placeholder": "connectorType",
+          "hidden": true
+        }
+      },
+      "host": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "input",
+          "label": "Host",
+          "hidden": false,
+          "help": "Postgres host name",
+          "placeholder": "postgres.example.com",
+          "grid": 6
+        }
+      },
+      "port": {
+        "type": "number",
+        "required": true,
+        "default": 5432,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Port",
+          "hidden": false,
+          "grid": 2
+        }
+      },
+      "auth-type": {
+        "type": "string",
+        "enum": [
+          "basic"
+        ],
+        "default": "basic",
+        "required": true,
+        "enumNames": [
+          "Basic Authentication"
+        ],
+        "ui": {
+          "widget": "radio",
+          "hidden": false,
+          "label": "Authentication"
+        }
+      },
+      "basic": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "input",
+              "label": "Username",
+              "hidden": false,
+              "placeholder": "Username",
+              "grid": 4
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "password",
+              "label": "Password",
+              "hidden": false,
+              "placeholder": "Password",
+              "grid": 4
+            }
+          },
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
+            },
+            "properties": {
+              "database": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input",
+                  "label": "Database",
+                  "hidden": false,
+                  "help": "Default database to connect to for metadata extraction.",
+                  "placeholder": "postgres",
+                  "grid": 4
+                }
+              },
+              "__enable_ssl": {
+                "type": "string",
+                "required": true,
+                "enum": [
+                  "true",
+                  "false"
+                ],
+                "enumNames": [
+                  "True",
+                  "False"
+                ],
+                "default": "true",
+                "ui": {
+                  "widget": "radio",
+                  "label": "Enable SSL",
+                  "hidden": false,
+                  "grid": 4
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "auth-type": {
+            "const": "basic"
+          }
+        },
+        "required": [
+          "basic"
+        ]
+      }
+    ]
+  }
+}

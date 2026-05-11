@@ -6,7 +6,7 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import Field
 
@@ -15,7 +15,7 @@ from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 
 
-class QueryExtractionInput(Input, allow_unbounded_fields=True):
+class QueryExtractionInput(Input):
     """Top-level input for a SQL query extraction run."""
 
     workflow_id: str = ""
@@ -57,7 +57,7 @@ class QueryExtractionOutput(Output):
     error: str = ""
 
 
-class QueryBatchInput(Input, allow_unbounded_fields=True):
+class QueryBatchInput(Input):
     """Input for the get_query_batches task.
 
     ``workflow_args`` is a pass-through dict rather than typed fields because
@@ -67,7 +67,10 @@ class QueryBatchInput(Input, allow_unbounded_fields=True):
     change.  ``SqlQueryExtractor.run()`` populates it from ``QueryExtractionInput``.
     """
 
-    workflow_args: dict[str, Any] = Field(default_factory=dict)
+    workflow_args: Annotated[
+        dict[str, str | int | float | bool | None],
+        MaxItems(100),
+    ] = Field(default_factory=dict)
 
 
 class QueryBatchOutput(Output):
@@ -78,7 +81,7 @@ class QueryBatchOutput(Output):
     total_count: int = 0
 
 
-class QueryFetchInput(Input, allow_unbounded_fields=True):
+class QueryFetchInput(Input):
     """Input for the fetch_queries task.
 
     ``workflow_args`` carries the same connector context as ``QueryBatchInput``
@@ -86,7 +89,10 @@ class QueryFetchInput(Input, allow_unbounded_fields=True):
     because all connectors need them for pagination.
     """
 
-    workflow_args: dict[str, Any] = Field(default_factory=dict)
+    workflow_args: Annotated[
+        dict[str, str | int | float | bool | None],
+        MaxItems(100),
+    ] = Field(default_factory=dict)
     batch_number: int = 0
     batch_size: int = 100000
 

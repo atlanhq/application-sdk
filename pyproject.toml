@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.6.1"
+version = "3.7.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -280,6 +280,8 @@ extend-select = [
 "tools/**" = ["T201", "PLC0415"]
 "application_sdk/tools/**" = ["T201", "PLC0415"]
 "examples/**" = ["T201", "PLC0415"]
+"contract-toolkit/scripts/**" = ["T201", "PLC0415"]
+"contract-toolkit/examples/**/generated/_input.py" = ["F401"]
 
 [tool.uv]
 default-groups = ["dev", "test"]

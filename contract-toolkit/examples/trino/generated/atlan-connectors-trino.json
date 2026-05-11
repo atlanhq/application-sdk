@@ -1,0 +1,258 @@
+{
+  "icon": "https://assets.atlan.com/assets/trino.svg",
+  "helpdeskLink": "",
+  "logo": "https://assets.atlan.com/assets/trino.svg",
+  "connector": "trino",
+  "defaultConnectorType": "jdbc",
+  "config": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Name",
+          "hidden": true,
+          "placeholder": "Host Name"
+        }
+      },
+      "connector": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Connector",
+          "hidden": true,
+          "placeholder": "Connector"
+        }
+      },
+      "connectorType": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "key": "_host",
+          "label": "connectorType",
+          "placeholder": "connectorType",
+          "hidden": true
+        }
+      },
+      "host": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "input",
+          "label": "Host",
+          "hidden": false,
+          "placeholder": "trino.example.com",
+          "grid": 6
+        }
+      },
+      "port": {
+        "type": "number",
+        "required": true,
+        "default": 443,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Port",
+          "hidden": false,
+          "grid": 2
+        }
+      },
+      "auth-type": {
+        "type": "string",
+        "enum": [
+          "basic",
+          "jwt"
+        ],
+        "default": "basic",
+        "required": true,
+        "enumNames": [
+          "Basic Authentication",
+          "JWT Authentication"
+        ],
+        "ui": {
+          "widget": "radio",
+          "hidden": false,
+          "label": "Authentication"
+        }
+      },
+      "basic": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "input",
+              "label": "Username",
+              "hidden": false,
+              "placeholder": "Username",
+              "grid": 4
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "password",
+              "label": "Password",
+              "hidden": false,
+              "placeholder": "Password",
+              "grid": 4
+            }
+          },
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
+            },
+            "properties": {
+              "__enable_tls_https": {
+                "type": "string",
+                "required": true,
+                "enum": [
+                  "true",
+                  "false"
+                ],
+                "enumNames": [
+                  "True",
+                  "False"
+                ],
+                "default": "false",
+                "ui": {
+                  "widget": "radio",
+                  "label": "Enable TLS/HTTPS",
+                  "hidden": false,
+                  "help": "If enabled will allow only TLS/HTTPS connections on the host/port.",
+                  "grid": 4
+                }
+              },
+              "__disable_ssl_verification": {
+                "type": "string",
+                "required": true,
+                "enum": [
+                  "true",
+                  "false"
+                ],
+                "enumNames": [
+                  "True",
+                  "False"
+                ],
+                "default": "false",
+                "ui": {
+                  "widget": "radio",
+                  "label": "Disable SSL verification",
+                  "hidden": false,
+                  "help": "Disable if using self signed certificates instead of a trusted certificate authority (CA).",
+                  "grid": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "jwt": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
+            },
+            "properties": {
+              "__jwt_token": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "password",
+                  "label": "JWT Token",
+                  "hidden": false,
+                  "placeholder": "JWT Token",
+                  "grid": 8
+                }
+              },
+              "__enable_tls_https": {
+                "type": "string",
+                "required": true,
+                "enum": [
+                  "true",
+                  "false"
+                ],
+                "enumNames": [
+                  "True",
+                  "False"
+                ],
+                "default": "false",
+                "ui": {
+                  "widget": "radio",
+                  "label": "Enable TLS/HTTPS",
+                  "hidden": false,
+                  "help": "If enabled will allow only TLS/HTTPS connections on the host/port.",
+                  "grid": 4
+                }
+              },
+              "__disable_ssl_verification": {
+                "type": "string",
+                "required": true,
+                "enum": [
+                  "true",
+                  "false"
+                ],
+                "enumNames": [
+                  "True",
+                  "False"
+                ],
+                "default": "false",
+                "ui": {
+                  "widget": "radio",
+                  "label": "Disable SSL verification",
+                  "hidden": false,
+                  "help": "Disable if using self signed certificates instead of a trusted certificate authority (CA).",
+                  "grid": 4
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "auth-type": {
+            "const": "basic"
+          }
+        },
+        "required": [
+          "basic"
+        ]
+      },
+      {
+        "properties": {
+          "auth-type": {
+            "const": "jwt"
+          }
+        },
+        "required": [
+          "jwt"
+        ]
+      }
+    ]
+  }
+}

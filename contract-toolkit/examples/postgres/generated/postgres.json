@@ -1,0 +1,149 @@
+{
+  "id": "postgres",
+  "name": "Postgres",
+  "logo": "https://assets.atlan.com/assets/postgres.svg",
+  "config": {
+    "properties": {
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Credential Guid",
+          "grid": 8,
+          "credentialType": "atlan-connectors-postgres",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      },
+      "include-filter": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "sqltree",
+          "label": "Include Metadata",
+          "hidden": false,
+          "help": "",
+          "grid": 4,
+          "connectorConfigName": "atlan-connectors-postgres",
+          "credential": "credential-guid",
+          "sql": "SELECT current_database() AS TABLE_CATALOG, schema_name AS TABLE_SCHEMA FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema', 'pg_catalog') AND schema_name NOT LIKE 'pg_toast%' ORDER BY schema_name",
+          "schemaExcludePattern": [
+            "information_schema",
+            "pg_catalog",
+            "pg_toast.*"
+          ],
+          "description": "Only selected databases and schemas will be extracted."
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      },
+      "exclude-filter": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "sqltree",
+          "label": "Exclude Metadata",
+          "hidden": false,
+          "help": "",
+          "grid": 4,
+          "connectorConfigName": "atlan-connectors-postgres",
+          "credential": "credential-guid",
+          "sql": "SELECT current_database() AS TABLE_CATALOG, schema_name AS TABLE_SCHEMA FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema', 'pg_catalog') AND schema_name NOT LIKE 'pg_toast%' ORDER BY schema_name",
+          "schemaExcludePattern": [
+            "information_schema",
+            "pg_catalog",
+            "pg_toast.*"
+          ],
+          "description": "Selected databases and schemas will not be extracted."
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      },
+      "temp-table-regex": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Exclude regex for tables & views",
+          "hidden": false,
+          "help": "Regex of tables and views to ignore.",
+          "placeholder": ".*_tmp|.*_temp|tmp_.*|temp_.*",
+          "grid": 4
+        }
+      },
+      "preflight-check": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "sageV2",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "config": [
+            {
+              "id": 1,
+              "name": "connectivity",
+              "title": "Connectivity",
+              "loaderText": "Checking connectivity to Postgres"
+            },
+            {
+              "id": 2,
+              "name": "schemasCheck",
+              "title": "Databases and schemas",
+              "loaderText": "Checking schema metadata permissions"
+            }
+          ]
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      },
+      {
+        "title": "Metadata",
+        "description": "",
+        "id": "metadata",
+        "properties": [
+          "include-filter",
+          "exclude-filter",
+          "temp-table-regex",
+          "preflight-check"
+        ]
+      }
+    ]
+  }
+}
