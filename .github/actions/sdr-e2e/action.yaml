@@ -533,6 +533,120 @@ runs:
       shell: bash
       run: docker compose ${{ steps.compose_files.outputs.files }} down -v
 
+    # Scrape the connector container log for per-workflow extract /
+    # transform counts. The SDK's SqlApp logs lines like
+    #
+    #     correlation_id=<uuid> ... - Extracted <entity>: N raw records
+    #     correlation_id=<uuid> ... - Transformed <entity>: N records
+    #
+    # one per entity per workflow scenario. We group by correlation_id so
+    # multi-workflow scenarios show separately, and try to attach each
+    # group to the workflow_id observed in the same correlation block —
+    # which lets the PR comment link directly into the tenant Temporal UI.
+    - name: Compute asset extraction summary
+      id: asset_summary
+      if: always() && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        CI_TENANT_DOMAIN: ${{ env.CI_TENANT_DOMAIN }}
+      run: |
+        uv run python3 - <<'PYEOF'
+        import os
+        import re
+        import secrets
+        from collections import defaultdict
+        from pathlib import Path
+
+        log_path = Path("results/sdr-container.log")
+        if not log_path.exists():
+            print("No container log; skipping asset summary.")
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write("markdown=\n")
+            raise SystemExit
+
+        text = log_path.read_text(errors="replace")
+
+        # correlation_id=<uuid>  ...  Extracted <entity>: N raw records
+        extract_re = re.compile(
+            r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?"
+            r"Extracted (?P<entity>[A-Za-z0-9_-]+): (?P<n>\d+) raw records"
+        )
+        transform_re = re.compile(
+            r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?"
+            r"Transformed (?P<entity>[A-Za-z0-9_-]+): (?P<n>\d+) records"
+        )
+        # Match the workflow_id that appears under the same correlation
+        # block — usually emitted by the handler/service "Starting workflow"
+        # log. Best-effort; if absent we just omit the link.
+        wf_re = re.compile(
+            r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?workflow_id=(?P<wf>[\w-]+)"
+        )
+
+        cids: list[str] = []  # insertion-ordered for deterministic table order
+        extracted: dict[str, dict[str, int]] = defaultdict(dict)
+        transformed: dict[str, dict[str, int]] = defaultdict(dict)
+        wf_id_by_cid: dict[str, str] = {}
+
+        def _seen(cid: str) -> None:
+            if cid not in cids:
+                cids.append(cid)
+
+        for m in extract_re.finditer(text):
+            cid = m.group("cid")
+            _seen(cid)
+            extracted[cid][m.group("entity")] = int(m.group("n"))
+        for m in transform_re.finditer(text):
+            cid = m.group("cid")
+            _seen(cid)
+            transformed[cid][m.group("entity")] = int(m.group("n"))
+        for m in wf_re.finditer(text):
+            cid = m.group("cid")
+            wf_id_by_cid.setdefault(cid, m.group("wf"))
+
+        # Drop correlation groups that produced no asset rows (handler-level
+        # auth / preflight scenarios run through the same scenario runner
+        # but never emit extract/transform lines).
+        cids = [c for c in cids if extracted.get(c) or transformed.get(c)]
+
+        if not cids:
+            print("No extract/transform lines in container log.")
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write("markdown=\n")
+            raise SystemExit
+
+        tenant = os.environ.get("CI_TENANT_DOMAIN", "")
+        lines: list[str] = ["### Extracted + transformed assets", ""]
+        for idx, cid in enumerate(cids, start=1):
+            wf = wf_id_by_cid.get(cid, "")
+            header = f"**Workflow run {idx}**"
+            if wf and tenant:
+                wf_url = (
+                    f"https://{tenant}/api/temporal/namespaces/default"
+                    f"/workflows/{wf}/history"
+                )
+                header += f" — [{wf}]({wf_url})"
+            elif wf:
+                header += f" — `{wf}`"
+            lines.append(header)
+            lines.append("")
+            lines.append("| Entity | Extracted | Transformed |")
+            lines.append("|--------|-----------|-------------|")
+            entities = sorted(set(extracted[cid]) | set(transformed[cid]))
+            for entity in entities:
+                ext = extracted[cid].get(entity)
+                tr = transformed[cid].get(entity)
+                ext_s = "—" if ext is None else str(ext)
+                tr_s = "—" if tr is None else str(tr)
+                lines.append(f"| {entity} | {ext_s} | {tr_s} |")
+            lines.append("")
+
+        markdown = "\n".join(lines)
+        delim = "EOF_ASSETS_" + secrets.token_hex(8)
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"markdown<<{delim}\n{markdown}\n{delim}\n")
+        print(markdown)
+        PYEOF
+
     # Delete any prior SDR comment (matched by sticky marker) and post a
     # fresh one. Using github-script + a sticky HTML-comment marker instead
     # of mshick/add-pr-comment's edit-in-place behaviour: re-runs land as
@@ -546,6 +660,7 @@ runs:
         OUTCOME: ${{ steps.tests.outcome }}
         SUMMARY: ${{ steps.tests.outputs.summary }}
         WF_LINKS: ${{ steps.wf_links.outputs.links }}
+        ASSET_SUMMARY: ${{ steps.asset_summary.outputs.markdown }}
       with:
         github-token: ${{ github.token }}
         script: |
@@ -553,11 +668,16 @@ runs:
           const outcome = process.env.OUTCOME;
           const summary = process.env.SUMMARY || 'No summary';
           const wfLinks = process.env.WF_LINKS || '';
+          const assetSummary = process.env.ASSET_SUMMARY || '';
 
           const sticky = `<!-- sdr-integration-tests:${appName} -->`;
           const status = outcome === 'success' ? 'Passed ✅' : 'Failed ❌';
           const runLink = `[${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
           const linksLine = wfLinks ? `\n**Temporal workflows:** ${wfLinks}\n` : '';
+          // assetSummary is the multiline markdown table block produced by
+          // the "Compute asset extraction summary" step. Empty string when
+          // no workflow scenarios ran (auth/preflight only).
+          const assetBlock = assetSummary ? `\n${assetSummary}\n` : '';
 
           const body = [
             sticky,
@@ -567,6 +687,7 @@ runs:
             `**Summary:** \`${summary}\``,
             `**Run:** ${runLink}`,
             linksLine,
+            assetBlock,
             `### What this validates`,
             `- **Credential resolution from secret store** — workflow \`username\`/\`password\` resolved via the Dapr \`local.file\` secret store using \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.`,
             `- **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly`,
