@@ -116,17 +116,16 @@ That serves the app and playground UI on port `8000`.
 
 ## Feature and Bug Workflow
 
-Use the right repo skill for the job:
+Use the right repo workflow for the job:
 
-| Task | Skill |
+| Task | Workflow |
 |---|---|
 | Build, migrate, generate, or validate a consuming app contract | `make-contract` |
-| Add, debug, or validate a toolkit feature/API/bug fix | `toolkit-feature-workflow` |
-| Review a toolkit PR before merge | `contract-review` |
+| Add, debug, or validate a toolkit feature/API/bug fix | Follow this section directly |
 
-For toolkit source changes, `toolkit-feature-workflow` is mandatory. It owns the
-strict process for issue tracking, API-design triage, cross-repo consumer checks,
-examples, docs, tests, extended commits, PR triage, and independent review.
+For toolkit source changes, follow the strict process below for issue tracking,
+API-design triage, cross-repo consumer checks, examples, docs, tests, extended
+commits, PR triage, and independent review.
 
 When asked to add a feature or fix a bug, start by proving the current behavior
 from the repo. Do not assume the report is correct or complete.
@@ -164,8 +163,8 @@ from the repo. Do not assume the report is correct or complete.
    authors to use the feature without reading the implementation.
 9. Commit with a conventional subject and an extended body covering root cause,
    change, compatibility, and validation.
-10. Open the PR with triage/design/value-flow sections, then run and post
-    `contract-review`.
+10. Open the PR with triage/design/value-flow sections, then post a
+    self-review report.
 11. Run two independent review tracks before merge: one implementation
     correctness review and one API-design/codebase-fit review. Use separate
     subagents when explicitly available/authorized; otherwise do both reviews
@@ -258,4 +257,4 @@ Use conventional PR titles:
 
 Releases are manual from the `atlanhq/application-sdk` repository: Actions -> Release Contract Toolkit -> Run workflow -> enter semver version. The release workflow bumps `contract-toolkit/src/PklProject`, regenerates changelog content, publishes under `app-contract-toolkit/` on the `application-sdk` GitHub Pages branch, tags `contract-toolkit-v<version>`, and creates the GitHub Release.
 
-After opening a PR, run the repo `contract-review` skill against the PR and post the report as the self-review record before human review.
+After opening a PR, post the self-review report before human review.
