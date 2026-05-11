@@ -1,0 +1,551 @@
+name: SDR Integration Tests
+description: |
+  Run a connector app's SDR (Self-Deployed Runtime) integration tests
+  against a real customer-style stack — atlan-configurator-generated
+  docker compose, Dapr embedded, Temporal on a CI test tenant — running
+  entirely on the GitHub Actions runner.
+
+  The composite handles: PR image build, configurator download +
+  invocation, Dapr component overrides, container start + health wait,
+  pytest run, Temporal workflow link extraction, GitHub Step Summary,
+  PR comment, commit status, and teardown.
+
+  Caller is responsible for:
+  - Checking out the PR (this action does NOT call actions/checkout)
+  - Setting the standard CI tenant secrets as job-level env vars:
+    CI_TENANT_DOMAIN, CI_CLIENT_ID, CI_CLIENT_SECRET
+  - Setting any connector-specific secrets the test class reads
+    (typically E2E_<APP>_HOST/PORT/USERNAME/PASSWORD/DATABASE)
+  - Providing a secrets-bundle script at the configured path that writes
+    /app/secrets/credentials.json (the canonical SDR test secrets path)
+
+  Optional caller-side overrides on top of SDK defaults:
+  - .github/e2e/components/*.yaml — additional or replacement Dapr components
+  - .github/e2e/docker-compose.ci.yml — additional compose layer
+  - .github/e2e/test-config.yaml.tmpl — replacement configurator input
+
+inputs:
+  app-name:
+    description: |
+      Connector short name (e.g. "mssql", "saperp"). Used as the
+      ATLAN_APPLICATION_NAME for credential auto-discovery and to label
+      log lines / artifacts. Must match the app's pyproject and CI conventions.
+    required: true
+  app-image-name:
+    description: |
+      GHCR image name (e.g. "atlan-mssql-app"). The composite tags the
+      built image as ghcr.io/atlanhq/<app-image-name>:sdr-test-<short-sha>.
+    required: true
+  test-path:
+    description: Pytest target directory containing the SDR test suite.
+    required: false
+    default: tests/sdr/
+  secrets-script:
+    description: |
+      Path (relative to repo root) to a bash or python script that writes
+      .github/e2e/secrets/credentials.json from job-level env vars. The
+      script is invoked once before the SDR container starts. Must produce
+      a JSON file the local.file Dapr secret store can read.
+    required: false
+    default: .github/e2e/make-secrets.sh
+  container-health-timeout-seconds:
+    description: |
+      How long to wait for the SDR container's /server/health endpoint to
+      respond before failing. Connectors with heavy native deps (e.g. SAP
+      JCo) may need 180s+; default fits most.
+    required: false
+    default: "60"
+  pytest-extra-args:
+    description: Extra arguments appended to the pytest invocation.
+    required: false
+    default: ""
+
+outputs:
+  test-outcome:
+    description: pytest exit outcome (success/failure)
+    value: ${{ steps.tests.outcome }}
+  test-summary:
+    description: One-line pytest summary (e.g. "9 passed, 1 failed in 38s")
+    value: ${{ steps.tests.outputs.summary }}
+  image:
+    description: The full image reference built and pushed for this run.
+    value: ${{ steps.build.outputs.image }}
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to GHCR
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    # Image build runs before setup-deps so the workspace is still pristine —
+    # no host .venv yet, so the Dockerfile's COPY . . won't pull in a
+    # host-built virtualenv whose Python symlinks point outside the image.
+    - name: Build and push PR image
+      id: build
+      shell: bash
+      run: |
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+        IMAGE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
+        docker build -t "${IMAGE}" .
+        docker push "${IMAGE}"
+        echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+    # Must run before atlan-configurator generates ci-deploy/ — setup-deps
+    # uses actions/checkout internally which would wipe generated files.
+    - name: Setup Python and dependencies
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.0.0
+
+    - name: Download atlan-configurator
+      shell: bash
+      run: |
+        curl -fsSL -O https://atlan-public.s3.amazonaws.com/apps/docker-compose-configurator-amd64.tgz
+        tar -xvf docker-compose-configurator-amd64.tgz
+        mv docker-compose-generator/generate atlan-configurator
+        chmod +x atlan-configurator
+
+    - name: Resolve app.yaml
+      shell: bash
+      env:
+        APP_IMAGE: ${{ steps.build.outputs.image }}
+      run: envsubst < app.yaml > app-resolved.yaml
+
+    # Use the app's test-config template if it overrides the SDK default.
+    - name: Resolve test-config.yaml
+      shell: bash
+      env:
+        CI_RUN_SUFFIX: ${{ github.run_id }}
+        SDK_TMPL: ${{ github.action_path }}/test-config.yaml.tmpl
+      run: |
+        if [ -f .github/e2e/test-config.yaml.tmpl ]; then
+          echo "Using app-level test-config.yaml.tmpl override"
+          envsubst < .github/e2e/test-config.yaml.tmpl > test-config.yaml
+        else
+          echo "Using SDK default test-config.yaml.tmpl"
+          envsubst < "${SDK_TMPL}" > test-config.yaml
+        fi
+
+    - name: Generate SDR deployment files
+      shell: bash
+      run: |
+        ./atlan-configurator \
+          --app app-resolved.yaml \
+          --config test-config.yaml \
+          --output ./ci-deploy \
+          --overwrite
+
+    - name: Generate secrets bundle
+      shell: bash
+      run: |
+        mkdir -p .github/e2e/secrets
+        SCRIPT="${{ inputs.secrets-script }}"
+        if [ ! -f "${SCRIPT}" ]; then
+          echo "::error::secrets-script not found at ${SCRIPT}. Provide one that writes .github/e2e/secrets/credentials.json from env vars."
+          exit 1
+        fi
+        case "${SCRIPT}" in
+          *.py) python3 "${SCRIPT}" ;;
+          *)    bash "${SCRIPT}" ;;
+        esac
+        if [ ! -f .github/e2e/secrets/credentials.json ]; then
+          echo "::error::secrets-script ran but did not produce .github/e2e/secrets/credentials.json"
+          exit 1
+        fi
+
+    # SDK defaults first, app overrides on top so apps can replace any single
+    # component file without forking the whole set.
+    - name: Override CI Dapr components
+      shell: bash
+      env:
+        SDK_COMPONENTS: ${{ github.action_path }}/components
+      run: |
+        cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
+        if [ -d .github/e2e/components ] && [ -n "$(ls -A .github/e2e/components 2>/dev/null)" ]; then
+          echo "Applying app-level component overrides"
+          cp .github/e2e/components/*.yaml ci-deploy/components/
+        fi
+
+    - name: Build compose -f chain
+      id: compose_files
+      shell: bash
+      env:
+        SDK_COMPOSE: ${{ github.action_path }}/docker-compose.ci.yml
+      run: |
+        # Order: configurator-generated base → SDK CI overrides → optional app layer.
+        FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
+        if [ -f .github/e2e/docker-compose.ci.yml ]; then
+          echo "Adding app-level compose layer"
+          FILES+=("-f" ".github/e2e/docker-compose.ci.yml")
+        fi
+        # Persist the array as a single space-joined string (compose -f flags
+        # are simple paths, no whitespace issues).
+        echo "files=${FILES[*]}" >> "$GITHUB_OUTPUT"
+
+    # GH-runner docker bridges have no global IPv6 routing, but
+    # temporalio's bundled Rust gRPC resolver returns AAAA records and
+    # tries them first. With temporalio 1.27.x, the IPv6 → IPv4 fallback
+    # doesn't fit inside the container-health timeout and the worker
+    # never finishes connecting. Resolve the Temporal + auth hostnames
+    # to IPv4 on the runner (which has working IPv4) and inject them
+    # into /etc/hosts via compose extra_hosts so the resolver only ever
+    # sees A records.
+    #
+    # Hostnames are derived from CI_TENANT_DOMAIN
+    # (convention: <tenant>.atlan.com → <tenant>-temporal.atlan.com).
+    - name: Resolve Temporal + auth hostnames to IPv4
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -z "${CI_TENANT_DOMAIN:-}" ]; then
+          echo "::error::CI_TENANT_DOMAIN is not set; the caller workflow must export it as a job-level env var."
+          exit 1
+        fi
+        AUTH_HOST="$CI_TENANT_DOMAIN"
+        TEMPORAL_HOST="${CI_TENANT_DOMAIN%.atlan.com}-temporal.atlan.com"
+        AUTH_IPV4=$(dig +short A "$AUTH_HOST" | head -1)
+        TEMPORAL_IPV4=$(dig +short A "$TEMPORAL_HOST" | head -1)
+        if [ -z "$AUTH_IPV4" ] || [ -z "$TEMPORAL_IPV4" ]; then
+          echo "::error::Failed to resolve TEMPORAL_HOST=$TEMPORAL_HOST or AUTH_HOST=$AUTH_HOST"
+          exit 1
+        fi
+        echo "Resolved $AUTH_HOST -> $AUTH_IPV4"
+        echo "Resolved $TEMPORAL_HOST -> $TEMPORAL_IPV4"
+        # Export for compose extra_hosts substitution.
+        {
+          echo "AUTH_HOST=$AUTH_HOST"
+          echo "AUTH_IPV4=$AUTH_IPV4"
+          echo "TEMPORAL_HOST=$TEMPORAL_HOST"
+          echo "TEMPORAL_IPV4=$TEMPORAL_IPV4"
+        } >> "$GITHUB_ENV"
+
+    - name: Start SDR container
+      shell: bash
+      run: docker compose ${{ steps.compose_files.outputs.files }} up -d
+
+    - name: Wait for app to be ready
+      shell: bash
+      run: |
+        TIMEOUT="${{ inputs.container-health-timeout-seconds }}"
+        echo "Waiting for SDR container on :8000/server/health (timeout=${TIMEOUT}s)..."
+        for i in $(seq 1 "${TIMEOUT}"); do
+          if curl -sf http://localhost:8000/server/health > /dev/null 2>&1; then
+            echo "SDR container ready after ${i}s"
+            break
+          fi
+          if [ "$i" -eq "${TIMEOUT}" ]; then
+            echo "::error::SDR container failed to start within ${TIMEOUT}s"
+            docker compose ${{ steps.compose_files.outputs.files }} logs
+            exit 1
+          fi
+          sleep 1
+        done
+
+    - name: Run SDR integration tests
+      id: tests
+      shell: bash
+      env:
+        ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+      run: |
+        mkdir -p results
+        set +e
+        uv run pytest "${{ inputs.test-path }}" -v \
+          --tb=short \
+          --junit-xml=results/sdr-test-results.xml \
+          ${{ inputs.pytest-extra-args }} \
+          2>&1 | tee results/sdr-test-output.txt
+        TEST_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+
+        SUMMARY=$(grep -E "^(FAILED|ERROR|=)" results/sdr-test-output.txt | tail -1)
+        echo "summary=${SUMMARY}" >> "$GITHUB_OUTPUT"
+        echo "exit_code=${TEST_EXIT_CODE}" >> "$GITHUB_OUTPUT"
+        exit "${TEST_EXIT_CODE}"
+
+    - name: Extract Temporal workflow links
+      id: wf_links
+      if: always()
+      shell: bash
+      run: |
+        uv run python3 - <<'PYEOF'
+        import json, os, secrets, xml.etree.ElementTree as ET
+        from pathlib import Path
+
+        # Map scenario name → pytest test class. Only used to group links by
+        # suite for multi-class apps (e.g. saperp's ECC + S4); single-class
+        # apps fall through to a flat list.
+        class_by_scenario: dict[str, str] = {}
+        try:
+            tree = ET.parse("results/sdr-test-results.xml")
+            for tc in tree.getroot().iter("testcase"):
+                classname = (tc.get("classname") or "").rsplit(".", 1)[-1]
+                scenario = (tc.get("name") or "").removeprefix("test_")
+                if classname and scenario:
+                    class_by_scenario[scenario] = classname
+        except Exception:
+            pass  # JUnit XML missing → fall through to ungrouped list
+
+        ICONS = {"passed": "✅", "failed": "❌", "skipped": "⏭"}
+
+        # Multi-class apps land per-class summaries via the SDR base class;
+        # single-class apps still write only the shared file. Read all that
+        # exist so neither case loses data.
+        per_class = sorted(Path(".").glob("integration-test-summary-*.json"))
+        if per_class:
+            summary_files = per_class
+        elif Path("integration-test-summary.json").exists():
+            summary_files = [Path("integration-test-summary.json")]
+        else:
+            summary_files = []
+
+        tenant = os.environ.get("CI_TENANT_DOMAIN", "")
+        # Preserve scenario insertion order (== test execution order) within
+        # each class so the output is deterministic.
+        by_class: dict[str, list[str]] = {}
+        for summary_file in summary_files:
+            if not tenant:
+                break
+            data = json.loads(summary_file.read_text())
+            for s in data.get("scenarios", []):
+                if s.get("api") != "workflow":
+                    continue
+                assertions = s.get("assertions") or {}
+                wf  = assertions.get("data.workflow_id", {}).get("actual", "")
+                run = assertions.get("data.run_id",      {}).get("actual", "")
+                # No workflow_id means /workflow/start failed before
+                # returning IDs — there's nothing to link to.
+                if not (wf and run):
+                    continue
+                url = (
+                    f"https://{tenant}/api/temporal/namespaces/default"
+                    f"/workflows/{wf}/{run}/history"
+                )
+                icon = ICONS.get(s.get("status", ""), "❓")
+                cls = class_by_scenario.get(s["name"], "")
+                by_class.setdefault(cls, []).append(
+                    f"{icon} [{s['name']}]({url})"
+                )
+
+        # Single suite OR no class info → flat list separated by ` · `.
+        # Multiple suites → bulleted list grouped by class on its own line.
+        if not by_class:
+            out = ""
+        elif len(by_class) == 1:
+            out = " · ".join(next(iter(by_class.values())))
+        else:
+            lines = [""]
+            for cls, items in by_class.items():
+                label = f"**{cls}:**" if cls else "**(unknown suite):**"
+                lines.append(f"  - {label} {' · '.join(items)}")
+            out = "\n".join(lines)
+
+        # Multi-line outputs need the heredoc syntax.
+        delim = "EOF_LINKS_" + secrets.token_hex(8)
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"links<<{delim}\n{out}\n{delim}\n")
+        print(f"Temporal links:\n{out or '(none)'}")
+        PYEOF
+
+    - name: Write GitHub Step Summary
+      if: always()
+      shell: bash
+      env:
+        OUTCOME: ${{ steps.tests.outcome }}
+        APP_NAME: ${{ inputs.app-name }}
+      run: |
+        uv run python3 - <<'PYEOF'
+        import os, re, xml.etree.ElementTree as ET
+        from pathlib import Path
+
+        outcome  = os.environ.get("OUTCOME", "unknown")
+        app_name = os.environ.get("APP_NAME", "app")
+        icon     = "✅" if outcome == "success" else "❌"
+
+        totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0, "time": 0.0}
+        scenarios: list[tuple[str, str, str, float, str]] = []
+
+        try:
+            tree = ET.parse("results/sdr-test-results.xml")
+            for suite in tree.getroot().iter("testsuite"):
+                totals["tests"]    += int(suite.get("tests",    0))
+                totals["failures"] += int(suite.get("failures", 0))
+                totals["errors"]   += int(suite.get("errors",   0))
+                totals["skipped"]  += int(suite.get("skipped",  0))
+                totals["time"]     += float(suite.get("time",   0))
+            for tc in tree.getroot().iter("testcase"):
+                raw_name = tc.get("name", "")
+                t        = float(tc.get("time", 0))
+                short    = raw_name.removeprefix("test_")
+                group    = short.split("_")[0]
+                if tc.find("skipped") is not None:
+                    status = "⏭"
+                    msg = (tc.find("skipped").get("message") or "")[:80]
+                elif tc.find("failure") is not None:
+                    status = "❌"
+                    msg = (tc.find("failure").get("message") or "")[:80]
+                elif tc.find("error") is not None:
+                    status = "💥"
+                    msg = (tc.find("error").get("message") or "")[:80]
+                else:
+                    status = "✅"
+                    msg = ""
+                scenarios.append((group, short, status, t, msg))
+        except Exception:
+            pass
+
+        passed = totals["tests"] - totals["failures"] - totals["errors"] - totals["skipped"]
+
+        raw_summary = ""
+        try:
+            with open("results/sdr-test-output.txt") as f:
+                for line in f:
+                    if re.match(r"^=+", line) and ("passed" in line or "failed" in line or "error" in line):
+                        raw_summary = line.strip()
+        except Exception:
+            pass
+
+        summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
+        with open(summary_path, "w") as f:
+            f.write(f"## {icon} SDR Integration Tests — {app_name}\n\n")
+
+            if totals["tests"]:
+                f.write("### Test results\n\n")
+                f.write("| Result | Count |\n|--------|-------|\n")
+                f.write(f"| ✅ Passed  | {passed} |\n")
+                f.write(f"| ❌ Failed  | {totals['failures'] + totals['errors']} |\n")
+                f.write(f"| ⏭ Skipped | {totals['skipped']} |\n")
+                f.write(f"| ⏱ Total time | {totals['time']:.1f}s |\n\n")
+
+            if raw_summary:
+                f.write(f"```\n{raw_summary}\n```\n\n")
+
+            if scenarios:
+                from itertools import groupby
+                f.write("### Scenario details\n\n")
+                for group, group_scenarios in groupby(scenarios, key=lambda s: s[0]):
+                    rows = list(group_scenarios)
+                    f.write(f"<details>\n<summary><b>{group.capitalize()}</b> "
+                            f"({sum(1 for r in rows if r[2]=='✅')} passed, "
+                            f"{sum(1 for r in rows if r[2] in ('❌','💥'))} failed, "
+                            f"{sum(1 for r in rows if r[2]=='⏭')} skipped)</summary>\n\n")
+                    f.write("| Status | Scenario | Time |\n|--------|----------|------|\n")
+                    for _, short, status, t, msg in rows:
+                        time_str = f"{t:.1f}s" if t >= 0.1 else "<0.1s"
+                        note = f" — _{msg}_" if msg else ""
+                        f.write(f"| {status} | `{short}`{note} | {time_str} |\n")
+                    f.write("\n</details>\n\n")
+        PYEOF
+
+    - name: Dump SDR container logs
+      if: always()
+      shell: bash
+      run: |
+        mkdir -p results
+        docker compose ${{ steps.compose_files.outputs.files }} logs >> results/sdr-container.log 2>&1 || true
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sdr-integration-tests-${{ inputs.app-name }}-results
+        path: results/
+        retention-days: 14
+
+    - name: Tear down SDR container
+      if: always()
+      shell: bash
+      run: docker compose ${{ steps.compose_files.outputs.files }} down -v
+
+    # Delete any prior SDR comment (matched by sticky marker) and post a
+    # fresh one. Using github-script + a sticky HTML-comment marker instead
+    # of mshick/add-pr-comment's edit-in-place behaviour: re-runs land as
+    # new comments at the bottom of the conversation rather than silently
+    # mutating an old one, which makes "what's the latest run" obvious.
+    - name: Post PR comment
+      if: always() && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      env:
+        APP_NAME: ${{ inputs.app-name }}
+        OUTCOME: ${{ steps.tests.outcome }}
+        SUMMARY: ${{ steps.tests.outputs.summary }}
+        WF_LINKS: ${{ steps.wf_links.outputs.links }}
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const appName = process.env.APP_NAME;
+          const outcome = process.env.OUTCOME;
+          const summary = process.env.SUMMARY || 'No summary';
+          const wfLinks = process.env.WF_LINKS || '';
+
+          const sticky = `<!-- sdr-integration-tests:${appName} -->`;
+          const status = outcome === 'success' ? 'Passed ✅' : 'Failed ❌';
+          const runLink = `[${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+          const linksLine = wfLinks ? `\n**Temporal workflows:** ${wfLinks}\n` : '';
+
+          const body = [
+            sticky,
+            `## SDR Integration Tests — ${appName}`,
+            ``,
+            `**Status:** ${status}`,
+            `**Summary:** \`${summary}\``,
+            `**Run:** ${runLink}`,
+            linksLine,
+            `### What this validates`,
+            `- **Credential resolution from secret store** — workflow \`username\`/\`password\` resolved via the Dapr \`local.file\` secret store using \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.`,
+            `- **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly`,
+            `- **Preflight** — connectivity, schema/table checks; bad credentials fail correctly`,
+            `- **Workflow** — full extraction run on the test instance, polled to \`COMPLETED\` on the tenant's Temporal cluster`,
+            ``,
+            `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, Temporal worker on CI tenant.`,
+            ``,
+            `<details><summary>Re-run</summary>`,
+            ``,
+            `Remove and re-add the \`sdr-e2e-test\` label, or re-run from the Actions tab.`,
+            `</details>`,
+          ].join('\n');
+
+          // Find prior comments tagged with our sticky marker and delete them.
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            per_page: 100,
+          });
+          for (const c of comments) {
+            if (c.body && c.body.includes(sticky)) {
+              await github.rest.issues.deleteComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: c.id,
+              });
+            }
+          }
+
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body,
+          });
+      continue-on-error: true
+
+    - name: Set commit status
+      if: always() && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const state = '${{ steps.tests.outcome }}' === 'success' ? 'success' : 'failure';
+          const ctx   = 'sdr-e2e-tests';
+          await github.rest.repos.createCommitStatus({
+            owner: context.repo.owner,
+            repo:  context.repo.repo,
+            sha:   context.payload.pull_request.head.sha,
+            state,
+            target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            description: state === 'success' ? `${ctx} passed` : `${ctx} failed`,
+            context: ctx,
+          });
+      continue-on-error: true

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -14,6 +15,7 @@ from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.utils import get_metric_enrichment_labels
 
 logger = get_logger(__name__)
 
@@ -41,12 +43,27 @@ def _get_or_create_runtime(
         with _prometheus_lock:
             if _prometheus_runtime is None:
                 bind_addr = prometheus_bind_address or TEMPORAL_PROMETHEUS_BIND_ADDRESS
+                # Mirror the OTel Prometheus reader's resource enrichment onto
+                # Temporal Rust core's emitted metrics so app_name/app_version/…
+                # appear as labels on every temporal_* series, matching the
+                # SDK-side metrics.
                 _prometheus_runtime = Runtime(
                     telemetry=TelemetryConfig(
-                        metrics=PrometheusConfig(bind_address=bind_addr)
+                        metrics=PrometheusConfig(bind_address=bind_addr),
+                        global_tags=get_metric_enrichment_labels(),
                     )
                 )
                 logger.info("Temporal Prometheus metrics enabled on %s", bind_addr)
+                _host = bind_addr.split(":", 1)[0]
+                if _host in ("127.0.0.1", "::1", "localhost"):
+                    logger.info(
+                        "Temporal Prometheus endpoint bound to loopback (%s) — "
+                        "external scrapes of this address will receive no data. "
+                        "Scrape via the FastAPI /metrics route on the handler "
+                        "port (default 8000); the SDK proxies the Temporal "
+                        "Rust-core series through that endpoint.",
+                        bind_addr,
+                    )
         return _prometheus_runtime
     else:
         with _prometheus_lock:
@@ -273,8 +290,8 @@ async def create_temporal_client(
     tls_client_cert_path: str = "",
     tls_client_private_key_path: str = "",
     tls_domain: str = "",
-    connect_max_attempts: int = 5,
-    connect_retry_delay_seconds: float = 2.0,
+    connect_max_attempts: int = 10,
+    connect_retry_delay_seconds: float = 0.5,
     enable_prometheus: bool = True,
     prometheus_bind_address: str = "",
 ) -> Client:
@@ -358,8 +375,12 @@ async def create_temporal_client(
         prometheus_bind_address=prometheus_bind_address,
     )
 
+    # Full-jitter exponential backoff (per AWS Architecture blog) — keeps the
+    # capped exponential growth but draws each sleep from U(0, cap_at_attempt)
+    # to spread concurrent reconnects across the window and avoid thundering
+    # herd on Temporal frontend recovery.
     last_exc: Exception | None = None
-    delay = connect_retry_delay_seconds
+    backoff_cap = 5.0
     for attempt in range(1, connect_max_attempts + 1):
         try:
             client = await Client.connect(**kwargs)
@@ -368,15 +389,21 @@ async def create_temporal_client(
         except Exception as exc:
             last_exc = exc
             if attempt < connect_max_attempts:
+                cap_at_attempt = min(
+                    connect_retry_delay_seconds * (2 ** (attempt - 1)),
+                    backoff_cap,
+                )
+                jittered = random.uniform(0, cap_at_attempt)
                 logger.warning(
-                    "Temporal connection attempt %d/%d failed, retrying in %.1fs",
+                    "Temporal connection attempt %d/%d failed, retrying in %.2fs "
+                    "(jittered, cap=%.1fs)",
                     attempt,
                     connect_max_attempts,
-                    delay,
+                    jittered,
+                    cap_at_attempt,
                     exc_info=True,
                 )
-                await asyncio.sleep(delay)
-                delay *= 2
+                await asyncio.sleep(jittered)
             else:
                 logger.error(
                     "Temporal connection failed after %d attempts",

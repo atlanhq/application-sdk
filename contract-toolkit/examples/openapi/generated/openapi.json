@@ -1,0 +1,135 @@
+{
+  "id": "openapi",
+  "name": "OpenAPI Spec Loader",
+  "logo": "https://assets.atlan.com/assets/apispec.png",
+  "config": {
+    "properties": {
+      "import_type": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Import type",
+          "hidden": false,
+          "help": "How to provide the spec: URL fetch or cloud object storage.",
+          "grid": 8
+        },
+        "default": "URL",
+        "enum": [
+          "URL",
+          "CLOUD"
+        ],
+        "enumNames": [
+          "URL",
+          "Cloud"
+        ]
+      },
+      "spec_url": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "input",
+          "label": "Spec URL",
+          "hidden": false,
+          "help": "URL to the OpenAPI spec JSON/YAML document. Required when import type is URL.",
+          "placeholder": "https://petstore3.swagger.io/api/v3/openapi.json",
+          "grid": 8
+        }
+      },
+      "spec_prefix": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Object store path",
+          "hidden": false,
+          "help": "Object store directory path. Required when import type is Cloud.",
+          "placeholder": "path/to/file",
+          "grid": 4
+        }
+      },
+      "spec_key": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Object key",
+          "hidden": false,
+          "help": "Object key or filename in the object store. Required when import type is Cloud.",
+          "placeholder": "openapi.json",
+          "grid": 4
+        }
+      },
+      "cloud_source": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "credential",
+          "label": "Cloud source",
+          "hidden": false,
+          "help": "Cloud storage credential. Required when import type is Cloud.",
+          "grid": 8,
+          "credentialType": "csa-connectors-objectstore",
+          "isTestAuthenticationDisabled": true
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "connection",
+          "label": "Connection",
+          "hidden": false,
+          "help": "Atlan connection to create or reuse.",
+          "grid": 8
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "import_type": {
+            "const": "URL"
+          }
+        },
+        "required": [
+          "spec_url"
+        ]
+      },
+      {
+        "properties": {
+          "import_type": {
+            "const": "CLOUD"
+          }
+        },
+        "required": [
+          "cloud_source",
+          "spec_prefix",
+          "spec_key"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "OpenAPI spec configuration",
+        "id": "configuration",
+        "properties": [
+          "import_type",
+          "spec_url",
+          "spec_prefix",
+          "spec_key",
+          "cloud_source"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "Connection details",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      }
+    ]
+  }
+}

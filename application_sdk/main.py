@@ -102,11 +102,11 @@ class AppConfig:
     (``run_dev_combined``).
 
     **Relationship with constants.py:**
-    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``,
-    ``ENABLE_PROMETHEUS_METRICS``). Those constants serve code that runs at
-    **import time** (observability init, logging.basicConfig) — before AppConfig
-    exists. Both AppConfig and constants.py read the **same env vars with the
-    same defaults** so they stay in sync.
+    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``).
+    Those constants serve code that runs at **import time** (observability
+    init, logging.basicConfig) — before AppConfig exists. Both AppConfig and
+    constants.py read the **same env vars with the same defaults** so they
+    stay in sync.
 
     **Construction paths:**
     - Production: ``main()`` → ``AppConfig.from_args_and_env(args)``
@@ -154,16 +154,18 @@ class AppConfig:
     auth_scopes: str = ""
 
     # Runtime flags (env-var defaults, overridable per execution mode)
-    enable_prometheus_metrics: bool = True
-    """Enable Temporal Prometheus metrics endpoint. Default True for prod,
-    set to False in run_dev_combined() to avoid port collisions on reload."""
+    enable_temporal_core_metrics: bool = True
+    """Enable Temporal Runtime's loopback Prometheus endpoint that exposes
+    the Rust-core metric set (``temporal_workflow_*``, ``temporal_activity_*``
+    etc.). Default ``True`` so the FastAPI ``/metrics`` proxy can pull these
+    metrics, and so worker-mode's ``TemporalCoreCollector`` can read them
+    locally to feed the Pushgateway push. Set to ``False`` in
+    ``run_dev_combined()`` to avoid port collisions on hot reload."""
 
-    prometheus_bind_address: str = "0.0.0.0:9464"
-    """Bind address for Temporal Prometheus metrics."""
-
-    enable_app_vitals: bool = True
-    """Enable App Vitals interceptor for activity-level observability.
-    Reads same env var as constants.ENABLE_APP_VITALS (ATLAN_ENABLE_APP_VITALS)."""
+    prometheus_bind_address: str = "127.0.0.1:9464"
+    """Loopback bind address for the Temporal Runtime Prometheus endpoint.
+    Not externally reachable — only the FastAPI ``/metrics`` proxy and the
+    worker's ``TemporalCoreCollector`` consume it."""
 
     enable_mcp: bool = False
     """Enable Model Context Protocol (MCP) server.
@@ -187,10 +189,6 @@ class AppConfig:
 
         def _env(key: str, default: str = "") -> str:
             return os.environ.get(key, default)
-
-        def _env_int(key: str, default: int) -> int:
-            val = os.environ.get(key)
-            return int(val) if val else default
 
         def _env_bool(key: str, default: bool = False) -> bool:
             val = os.environ.get(key, "").lower()
@@ -295,13 +293,12 @@ class AppConfig:
                 "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
             ),
             # Runtime flags
-            enable_prometheus_metrics=_env_bool(
-                "ATLAN_ENABLE_PROMETHEUS_METRICS", default=True
+            enable_temporal_core_metrics=_env_bool(
+                "ATLAN_ENABLE_TEMPORAL_CORE_METRICS", default=True
             ),
             prometheus_bind_address=_env(
-                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
             ),
-            enable_app_vitals=_env_bool("ATLAN_ENABLE_APP_VITALS", default=True),
             enable_mcp=_env_bool("ENABLE_MCP"),
             max_concurrent_storage_transfers=_env_int(
                 "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
@@ -547,6 +544,86 @@ def _derive_task_queue(app_module: str) -> str:
     return f"{_derive_service_name(app_module)}-queue"
 
 
+def _env_int(key: str, default: int = 0) -> int:
+    """Read an int env var, returning ``default`` when unset, empty, or unparsable.
+
+    A malformed value like ``ATLAN_HANDLER_PORT="not-a-number"`` falls through
+    to the next key instead of crashing startup.
+    """
+    val = os.environ.get(key)
+    if not val:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        logger.warning(
+            "Ignoring non-integer env var %s=%r; falling back to default %d",
+            key,
+            val,
+            default,
+        )
+        return default
+
+
+def _build_dev_config(
+    app_module: str,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    temporal_host: str | None = None,
+    temporal_namespace: str | None = None,
+    task_queue: str | None = None,
+) -> AppConfig:
+    """Build an :class:`AppConfig` for the dev-combined path.
+
+    Routes through :meth:`AppConfig.from_args_and_env` so env-var reading is
+    not duplicated. Precedence per connection field:
+    ``explicit kwarg → env var(s) → AppConfig default``.
+
+    Two fields are fixed in the synthetic namespace before construction:
+
+    * ``log_level`` is always ``"DEBUG"``.
+    * ``health_port`` is always ``0`` (OS-assigned ephemeral port).
+
+    Two further overrides are applied to the config after construction,
+    because their dev defaults differ from the production defaults in
+    :meth:`AppConfig.from_args_and_env`:
+
+    * ``handler_host`` defaults to ``"127.0.0.1"`` when neither kwarg nor
+      env var is set — production defaults to ``"0.0.0.0"``.
+    * ``enable_temporal_core_metrics`` defaults to ``False`` to avoid the
+      port-9464 collision on hot reload; honoured when
+      ``ATLAN_ENABLE_TEMPORAL_CORE_METRICS`` is explicitly set.
+    """
+    args = argparse.Namespace(
+        mode="combined",
+        app=app_module,
+        handler=os.environ.get("ATLAN_HANDLER_MODULE"),
+        handler_host=host,
+        handler_port=port,
+        temporal_host=temporal_host,
+        temporal_namespace=temporal_namespace,
+        task_queue=task_queue,
+        log_level="DEBUG",
+        health_port=0,
+        service_name=None,
+    )
+    config = AppConfig.from_args_and_env(args)
+    # Dev default: loopback only. Production defaults to 0.0.0.0 for external
+    # access; dev prefers loopback unless the caller or env var says otherwise.
+    if not (
+        host
+        or os.environ.get("ATLAN_HANDLER_HOST")
+        or os.environ.get("ATLAN_APP_HTTP_HOST")
+    ):
+        config.handler_host = "127.0.0.1"
+    # Dev default: disable Temporal Rust-core Prometheus binding to avoid port
+    # 9464 collision on hot reload. Honour explicit env override.
+    if not os.environ.get("ATLAN_ENABLE_TEMPORAL_CORE_METRICS"):
+        config.enable_temporal_core_metrics = False
+    return config
+
+
 async def _flush_observability() -> None:
     """Flush all observability buffers before exit."""
     from application_sdk.observability.observability import (  # noqa: PLC0415 — cold path: observability components only at startup
@@ -610,11 +687,35 @@ def _install_graceful_signal_handlers(
 ) -> None:
     """Register SIGINT/SIGTERM handlers, with a fallback for platforms that
     don't support loop.add_signal_handler() (e.g. Windows).
+
+    Wraps the caller's handler so the process-wide worker-shutdown flag is
+    set before any caller-specific shutdown logic runs. The activity wrapper
+    reads that flag to attribute mid-activity ``asyncio.CancelledError`` to
+    pod termination instead of ordinary cancellation.
     """
+    from application_sdk.execution.shutdown import (  # noqa: PLC0415 — keep main.py import surface narrow
+        mark_worker_shutting_down,
+    )
+
+    def _wrapped_handler() -> None:
+        mark_worker_shutting_down()
+        handler()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, handler)
+            loop.add_signal_handler(sig, _wrapped_handler)
         except (NotImplementedError, OSError):
+            # Platforms that don't support ``loop.add_signal_handler`` (e.g.
+            # Windows) still need the worker-shutdown flag set so the
+            # eviction-retry path attributes mid-activity ``CancelledError``
+            # correctly. Drop in a plain ``signal.signal`` fallback that, at
+            # minimum, flips the flag — graceful-shutdown event integration
+            # is still unavailable in this branch but eviction detection
+            # continues to work.
+            try:
+                signal.signal(sig, lambda *_: mark_worker_shutting_down())
+            except (ValueError, OSError):
+                pass  # not on the main thread or signal is reserved
             logger.warning(
                 "loop.add_signal_handler() not supported on this platform "
                 "(signal=%s); graceful shutdown via signals is unavailable",
@@ -702,7 +803,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_prometheus_metrics,
+        enable_prometheus=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
     )
 
@@ -710,7 +811,31 @@ async def run_worker_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue)
+    # Discover the app's Handler so SDR workflows can be registered on the
+    # worker.  When no Handler is found, create_worker silently skips SDR.
+    handler_class_for_sdr = load_handler_class(
+        config.app_module,
+        handler_module_path=config.handler_module,
+    )
+    handler_for_sdr = (
+        handler_class_for_sdr() if handler_class_for_sdr is not None else None
+    )
+    if handler_for_sdr is not None:
+        logger.info(
+            "Loaded handler %s for SDR workflow registration",
+            type(handler_for_sdr).__name__,
+        )
+
+    # Worker-only mode pushes metrics to a Pushgateway since the process has
+    # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
+    # leaves enable_pushgateway=False so the FastAPI /metrics endpoint
+    # exposes everything via in-process proxy.
+    worker = create_worker(
+        client,
+        task_queue=config.task_queue,
+        handler=handler_for_sdr,
+        enable_pushgateway=True,
+    )
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -933,7 +1058,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_prometheus_metrics,
+        enable_prometheus=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
     )
 
@@ -941,18 +1066,8 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue)
-
-    for registered_app in AppRegistry.get_instance().list_apps():
-        app_meta = AppRegistry.get_instance().get(registered_app)
-        logger.info("Registered app %s version %s", registered_app, app_meta.version)
-
-    for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
-        for task_meta in tasks:
-            logger.debug(
-                "Registered task %s for app %s", task_meta.name, registered_app
-            )
-
+    # Discover the handler before building the worker so the same instance
+    # serves both the HTTP service and the SDR Temporal workflows.
     handler_class = load_handler_class(
         config.app_module,
         handler_module_path=config.handler_module,
@@ -968,6 +1083,19 @@ async def run_combined_mode(config: AppConfig) -> None:
         )
 
     handler = handler_class()
+
+    worker = create_worker(client, task_queue=config.task_queue, handler=handler)
+
+    for registered_app in AppRegistry.get_instance().list_apps():
+        app_meta = AppRegistry.get_instance().get(registered_app)
+        logger.info("Registered app %s version %s", registered_app, app_meta.version)
+
+    for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
+        for task_meta in tasks:
+            logger.debug(
+                "Registered task %s for app %s", task_meta.name, registered_app
+            )
+
     fastapi_app = create_app_handler_service(
         handler,
         app_name=app_name,
@@ -1055,17 +1183,25 @@ async def run_dev_combined(
     credential_stores: Mapping[str, SecretStore] | None = None,
     credentials: dict[str, Any] | None = None,
     example_input: dict[str, Any] | None = None,
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    temporal_host: str = "localhost:7233",
-    temporal_namespace: str = "default",
-    task_queue: str = "",
+    host: str | None = None,
+    port: int | None = None,
+    temporal_host: str | None = None,
+    temporal_namespace: str | None = None,
+    task_queue: str | None = None,
 ) -> None:
     """Run worker + handler in a single process for local development.
 
     Dev-friendly wrapper around ``run_combined_mode()`` that accepts a
     Python class and keyword arguments directly. Use it in ``run_dev.py``
     scripts; production containers use ``run_combined_mode()`` via CLI flags.
+
+    All five connection-shaped kwargs (``host``, ``port``, ``temporal_host``,
+    ``temporal_namespace``, ``task_queue``) follow the same precedence as the
+    CLI path — ``explicit kwarg → env var → AppConfig default`` — because
+    they are resolved by :func:`_build_dev_config` which routes through
+    :meth:`AppConfig.from_args_and_env`. CI-stack overrides like
+    ``ATLAN_HANDLER_PORT`` or ``ATLAN_TASK_QUEUE`` work without any per-connector
+    ``os.environ.get(...)`` boilerplate at the call site.
 
     Args:
         app_class: The App class to serve (must already be imported).
@@ -1079,11 +1215,17 @@ async def run_dev_combined(
         example_input: Optional dict used as the workflow input. If ``credentials``
             is also provided, ``credential_guid`` is auto-injected before the
             workflow starts.
-        host: Bind host (default: "127.0.0.1").
-        port: Handler HTTP port.
-        temporal_host: Temporal server address.
-        temporal_namespace: Temporal namespace.
-        task_queue: Task queue name (default: "{app_name}-queue").
+        host: Bind host. Default precedence: kwarg → ``ATLAN_HANDLER_HOST`` →
+            ``ATLAN_APP_HTTP_HOST`` → ``"127.0.0.1"``.
+        port: Handler HTTP port. Default precedence: kwarg →
+            ``ATLAN_HANDLER_PORT`` → ``ATLAN_APP_HTTP_PORT`` → ``8000``.
+        temporal_host: Temporal server address. Default precedence: kwarg →
+            ``ATLAN_TEMPORAL_HOST`` → ``"localhost:7233"``.
+        temporal_namespace: Temporal namespace. Default precedence: kwarg →
+            ``ATLAN_TEMPORAL_NAMESPACE`` → ``ATLAN_WORKFLOW_NAMESPACE`` →
+            ``"default"``.
+        task_queue: Task queue name. Default precedence: kwarg →
+            ``ATLAN_TASK_QUEUE`` → ``"{app_name}-queue"``.
 
     Example::
 
@@ -1111,31 +1253,15 @@ async def run_dev_combined(
     os.environ.setdefault("DAPR_HTTP_PORT", "3500")
     os.environ.setdefault("DAPR_GRPC_PORT", "50001")
 
-    app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
-    effective_task_queue = task_queue or f"{app_name}-queue"
     app_module = f"{app_class.__module__}:{app_class.__name__}"
 
-    config = AppConfig(
-        mode="combined",
-        app_module=app_module,
-        handler_module=os.environ.get("ATLAN_HANDLER_MODULE") or None,
+    config = _build_dev_config(
+        app_module,
+        host=host,
+        port=port,
         temporal_host=temporal_host,
         temporal_namespace=temporal_namespace,
-        task_queue=effective_task_queue,
-        handler_host=host,
-        handler_port=port,
-        log_level="DEBUG",
-        service_name=_derive_service_name(app_module),
-        # Dev-friendly: disable Prometheus to avoid port 9464 collision on
-        # hot reload, and use ephemeral health port to avoid 8081 collision.
-        enable_prometheus_metrics=os.environ.get(
-            "ATLAN_ENABLE_PROMETHEUS_METRICS", ""
-        ).lower()
-        in ("true", "1"),
-        health_port=0,
-        frontend_assets_path=os.environ.get(
-            "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
-        ),
+        task_queue=task_queue,
     )
 
     # Create infrastructure early so run_combined_mode uses it directly.
@@ -1154,7 +1280,7 @@ async def run_dev_combined(
 
         async def _provision_and_start() -> None:
             """Wait for handler, provision creds, start workflow — mimics prod."""
-            base = f"http://{host}:{port}"
+            base = f"http://{config.handler_host}:{config.handler_port}"
             async with httpx.AsyncClient() as client:
                 # Wait for the handler to be ready
                 for _ in range(30):
@@ -1203,7 +1329,9 @@ async def run_dev_combined(
         # Schedule provisioning + start as a background task — runs after the server starts
         asyncio.create_task(_provision_and_start())
     else:
-        print(f"\nDev server running at http://{host}:{port}")
+        print(
+            f"\nDev server running at http://{config.handler_host}:{config.handler_port}"
+        )
         print(
             "  POST /workflows/v1/dev/local-vault                            - Provision credentials"
         )
@@ -1215,16 +1343,36 @@ async def run_dev_combined(
         if example_input is not None:
             print("\nExample:")
             example_json = _json.dumps(example_input, indent=2)
-            print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
+            print(
+                f"  curl -X POST http://{config.handler_host}:{config.handler_port}/workflows/v1/start \\"
+            )
             print('    -H "Content-Type: application/json" \\')
             print(f"    -d '{example_json}'")
-        print(f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n")
+        print(
+            f"\n  curl http://{config.handler_host}:{config.handler_port}/workflows/v1/result/{{workflow_id}}\n"
+        )
 
     await run_combined_mode(config)
 
 
 def run_main(config: AppConfig) -> None:
     """Route to worker, handler, or combined mode based on config."""
+    from application_sdk.common.env_warnings import (  # noqa: PLC0415 — cold path: startup-only check
+        warn_removed_env_vars,
+    )
+
+    warn_removed_env_vars()
+
+    # Bootstrap the global MeterProvider once per process so any meter
+    # consumer (instrumentors, interceptors, decorators, …) resolves to the
+    # configured provider. Without this, handler-mode /metrics serves only
+    # the prometheus_client defaults.
+    from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — cold path: meter provider bootstrap at process start
+        get_metrics,
+    )
+
+    get_metrics()
+
     if config.mode == "worker":
         asyncio.run(run_worker_mode(config))
     elif config.mode == "handler":

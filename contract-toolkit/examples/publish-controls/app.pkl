@@ -1,0 +1,74 @@
+/// Minimal example demonstrating publish input opt-out, publish executor
+/// templating, compact activity labels, and workflow-safe error handling for
+/// toolkit-managed extract/publish nodes.
+///
+/// The app keeps the standard extract -> publish DAG, suppresses toolkit
+/// scaffolding fields from _input.py, and declares its own load-to-atlan UI
+/// toggle that flows to the publish node's executor_enabled argument.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "publish-controls"
+displayName = "Publish Controls Example"
+connector = Connectors.TRINO
+workflowType = "PublishControlsWorkflow"
+icon = "https://assets.atlan.com/assets/trino.svg"
+credentialConnectorType = "jdbc"
+hasPublishInputFields = false
+publishExecutorEnabled = "{{load-to-atlan}}"
+extractActivityDisplayName = "Extract"
+publishActivityDisplayName = "Publish"
+extractNodeErrorHandling = new ErrorHandlingConfig {
+  startToCloseTimeoutSeconds = 14400
+}
+publishNodeErrorHandling = new ErrorHandlingConfig {
+  startToCloseTimeoutSeconds = 14400
+}
+
+credentialCommonFields {
+  new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+}
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["extraction-method"] = new Config.TextInput {
+          title = "Extraction method"
+          defaultValue = "direct"
+          hide = true
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-publish-controls"
+          placeholderText = "Credential Guid"
+        }
+      }
+    }
+    ["Connection"] {
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+        ["load-to-atlan"] = new Config.BooleanInput {
+          title = "Load to Atlan"
+          defaultSelection = true
+          width = 4
+        }
+      }
+    }
+  }
+}

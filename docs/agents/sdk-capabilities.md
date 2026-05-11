@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.5.0
-source-sha:    f16e58db2b028551686457584a4fa9fbda4febc6
-source-date:   2026-05-04T14:30:59+01:00
+sdk-version:   3.7.0
+source-sha:    b36a2e9890093b4e0f3029683dbdd8a0c2d25ac2
+source-date:   2026-05-08T17:46:55+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,15 +23,15 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 10 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 51 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 20 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 10 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 4 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
 ## Subpackage Details
@@ -60,7 +60,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import AppError`
 - **Signature:** `class AppError(message: str, ...)`
-- **Summary:** Base exception for App-related errors.
+- **Summary:** Deprecated: use ``application_sdk.errors.AppError`` directly — removed in v4.0.
 - **Defined in:** `application_sdk/app/base.py`
 
 #### `AppRegistry`
@@ -95,7 +95,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import NonRetryableError`
 - **Signature:** `class NonRetryableError`
-- **Summary:** Error that should not be retried.
+- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
 - **Defined in:** `application_sdk/app/base.py`
 
 #### `Output`
@@ -109,7 +109,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import RetryableError`
 - **Signature:** `class RetryableError`
-- **Summary:** Error that may be retried at the workflow level.
+- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
 - **Defined in:** `application_sdk/app/base.py`
 
 #### `RetryPolicy`
@@ -336,7 +336,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 
 - **Import:** `from application_sdk.contracts import ContractValidationError`
 - **Signature:** `class ContractValidationError(message: str, ...)`
-- **Summary:** Raised when a contract validation fails.
+- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `DownloadInput`
@@ -591,21 +591,21 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 
 - **Import:** `from application_sdk.credentials import CredentialError`
 - **Signature:** `class CredentialError(message: str, ...)`
-- **Summary:** Base exception for credential errors.
+- **Summary:** Generic credential-subsystem failure (category=AUTH).
 - **Defined in:** `application_sdk/credentials/errors.py`
 
 #### `CredentialNotFoundError`
 
 - **Import:** `from application_sdk.credentials import CredentialNotFoundError`
 - **Signature:** `class CredentialNotFoundError(credential_name: str)`
-- **Summary:** Raised when a credential ref could not be resolved from the secret store.
+- **Summary:** The requested credential was not found in the secret store or registry.
 - **Defined in:** `application_sdk/credentials/errors.py`
 
 #### `CredentialParseError`
 
 - **Import:** `from application_sdk.credentials import CredentialParseError`
-- **Signature:** `class CredentialParseError`
-- **Summary:** Raised when JSON from the secret store doesn't match the expected schema.
+- **Signature:** `class CredentialParseError(message: str, ...)`
+- **Summary:** Credential data could not be parsed (malformed payload).
 - **Defined in:** `application_sdk/credentials/errors.py`
 
 #### `CredentialRef`
@@ -639,8 +639,8 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `CredentialValidationError`
 
 - **Import:** `from application_sdk.credentials import CredentialValidationError`
-- **Signature:** `class CredentialValidationError`
-- **Summary:** Raised when a typed credential fails its validate() check.
+- **Signature:** `class CredentialValidationError(message: str, ...)`
+- **Summary:** Credential failed schema or business-rule validation.
 - **Defined in:** `application_sdk/credentials/errors.py`
 
 #### `GitSshCredential`
@@ -667,8 +667,8 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `OAuthTokenError`
 
 - **Import:** `from application_sdk.credentials import OAuthTokenError`
-- **Signature:** `class OAuthTokenError`
-- **Summary:** Raised when an OAuth 2.0 token exchange fails.
+- **Signature:** `class OAuthTokenError(message: str, *, cause: Exception | None = None)`
+- **Summary:** Raised when an OAuth 2.0 token exchange or refresh fails (category=AUTH).
 - **Defined in:** `application_sdk/credentials/oauth.py`
 
 #### `OAuthTokenService`
@@ -819,77 +819,364 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 ### Classes
 
+#### `AlreadyExistsError`
+
+- **Import:** `from application_sdk.errors import AlreadyExistsError`
+- **Signature:** `class AlreadyExistsError(*, ...)`
+- **Summary:** Entity the caller tried to create already exists.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `AppError`
+
+- **Import:** `from application_sdk.errors import AppError`
+- **Signature:** `class AppError(*, ...)`
+- **Summary:** Canonical SDK exception base.
+- **Defined in:** `application_sdk/errors/base.py`
+
+#### `AppPermissionDeniedError`
+
+- **Import:** `from application_sdk.errors import AppPermissionDeniedError`
+- **Signature:** `class AppPermissionDeniedError(*, ...)`
+- **Summary:** Authenticated but not authorised.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `AppTimeoutError`
+
+- **Import:** `from application_sdk.errors import AppTimeoutError`
+- **Signature:** `class AppTimeoutError(*, ...)`
+- **Summary:** A bounded wait elapsed.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `Audience`
+
+- **Import:** `from application_sdk.errors import Audience`
+- **Signature:** `class Audience`
+- **Summary:** Who needs to take action to resolve this failure.
+- **Defined in:** `application_sdk/errors/categories.py`
+
+#### `AuthError`
+
+- **Import:** `from application_sdk.errors import AuthError`
+- **Signature:** `class AuthError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `CancelledError`
+
+- **Import:** `from application_sdk.errors import CancelledError`
+- **Signature:** `class CancelledError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `DataIntegrityError`
+
+- **Import:** `from application_sdk.errors import DataIntegrityError`
+- **Signature:** `class DataIntegrityError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `DependencyUnavailableError`
+
+- **Import:** `from application_sdk.errors import DependencyUnavailableError`
+- **Signature:** `class DependencyUnavailableError(*, ...)`
+- **Summary:** Required platform service is temporarily down or degraded.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `ErrorCode`
 
 - **Import:** `from application_sdk.errors import ErrorCode`
 - **Signature:** `class ErrorCode(component: str, id: int) -> None`
 - **Summary:** Structured error code for monitoring and alerting.
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `FailureCategory`
+
+- **Import:** `from application_sdk.errors import FailureCategory`
+- **Signature:** `class FailureCategory`
+- **Summary:** Single-axis failure classification.
+- **Defined in:** `application_sdk/errors/categories.py`
+
+#### `FailureDetails`
+
+- **Import:** `from application_sdk.errors import FailureDetails`
+- **Signature:** `class FailureDetails`
+- **Summary:** Pydantic envelope serialized into ``ApplicationError.details=[…]``.
+- **Defined in:** `application_sdk/errors/wire.py`
+
+#### `InternalError`
+
+- **Import:** `from application_sdk.errors import InternalError`
+- **Signature:** `class InternalError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `InvalidInputError`
+
+- **Import:** `from application_sdk.errors import InvalidInputError`
+- **Signature:** `class InvalidInputError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `NotFoundError`
+
+- **Import:** `from application_sdk.errors import NotFoundError`
+- **Signature:** `class NotFoundError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `PreconditionError`
+
+- **Import:** `from application_sdk.errors import PreconditionError`
+- **Signature:** `class PreconditionError(*, ...)`
+- **Summary:** System state forbids the operation.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `RateLimitedError`
+
+- **Import:** `from application_sdk.errors import RateLimitedError`
+- **Signature:** `class RateLimitedError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ResourceExhaustedError`
+
+- **Import:** `from application_sdk.errors import ResourceExhaustedError`
+- **Signature:** `class ResourceExhaustedError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `UnimplementedError`
+
+- **Import:** `from application_sdk.errors import UnimplementedError`
+- **Signature:** `class UnimplementedError(*, ...)`
+- **Summary:** Operation not supported or capability not yet built.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `WorkerEvictedError`
+
+- **Import:** `from application_sdk.errors import WorkerEvictedError`
+- **Signature:** `class WorkerEvictedError(*, ...)`
+- **Summary:** Activity terminated because the worker pod is shutting down.
+- **Defined in:** `application_sdk/errors/leaves.py`
 
 ### Constants and Enums
+
+#### `APP_ALREADY_REGISTERED`
+
+- **Import:** `from application_sdk.errors import APP_ALREADY_REGISTERED`
+- **Signature:** `APP_ALREADY_REGISTERED`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `APP_CONTEXT_ERROR`
+
+- **Import:** `from application_sdk.errors import APP_CONTEXT_ERROR`
+- **Signature:** `APP_CONTEXT_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_ERROR`
 
 - **Import:** `from application_sdk.errors import APP_ERROR`
 - **Signature:** `APP_ERROR`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_NON_RETRYABLE`
 
 - **Import:** `from application_sdk.errors import APP_NON_RETRYABLE`
 - **Signature:** `APP_NON_RETRYABLE`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `APP_NOT_FOUND`
+
+- **Import:** `from application_sdk.errors import APP_NOT_FOUND`
+- **Signature:** `APP_NOT_FOUND`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `BINDING_ERROR`
+
+- **Import:** `from application_sdk.errors import BINDING_ERROR`
+- **Signature:** `BINDING_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CONTRACT_VALIDATION`
 
 - **Import:** `from application_sdk.errors import CONTRACT_VALIDATION`
 - **Signature:** `CONTRACT_VALIDATION`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_ERROR`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_ERROR`
 - **Signature:** `CREDENTIAL_ERROR`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_NOT_FOUND`
 - **Signature:** `CREDENTIAL_NOT_FOUND`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `CREDENTIAL_PARSE_ERROR`
+
+- **Import:** `from application_sdk.errors import CREDENTIAL_PARSE_ERROR`
+- **Signature:** `CREDENTIAL_PARSE_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `CREDENTIAL_VALIDATION_ERROR`
+
+- **Import:** `from application_sdk.errors import CREDENTIAL_VALIDATION_ERROR`
+- **Signature:** `CREDENTIAL_VALIDATION_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `CREDENTIAL_VAULT_ERROR`
+
+- **Import:** `from application_sdk.errors import CREDENTIAL_VAULT_ERROR`
+- **Signature:** `CREDENTIAL_VAULT_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `DISCOVERY_ERROR`
+
+- **Import:** `from application_sdk.errors import DISCOVERY_ERROR`
+- **Signature:** `DISCOVERY_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `EVENT_BUS`
+
+- **Import:** `from application_sdk.errors import EVENT_BUS`
+- **Signature:** `EVENT_BUS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `EVENT_PUBLISH`
+
+- **Import:** `from application_sdk.errors import EVENT_PUBLISH`
+- **Signature:** `EVENT_PUBLISH`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `EXECUTION_ACTIVITY_ERROR`
+
+- **Import:** `from application_sdk.errors import EXECUTION_ACTIVITY_ERROR`
+- **Signature:** `EXECUTION_ACTIVITY_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `EXECUTION_ERROR`
+
+- **Import:** `from application_sdk.errors import EXECUTION_ERROR`
+- **Signature:** `EXECUTION_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `EXECUTION_WORKER_ERROR`
+
+- **Import:** `from application_sdk.errors import EXECUTION_WORKER_ERROR`
+- **Signature:** `EXECUTION_WORKER_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `HANDLER_ERROR`
 
 - **Import:** `from application_sdk.errors import HANDLER_ERROR`
 - **Signature:** `HANDLER_ERROR`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `PAYLOAD_SAFETY`
 
 - **Import:** `from application_sdk.errors import PAYLOAD_SAFETY`
 - **Signature:** `PAYLOAD_SAFETY`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `PUBSUB_ERROR`
+
+- **Import:** `from application_sdk.errors import PUBSUB_ERROR`
+- **Signature:** `PUBSUB_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `SECRET_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import SECRET_NOT_FOUND`
 - **Signature:** `SECRET_NOT_FOUND`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `SECRET_STORE_ERROR`
+
+- **Import:** `from application_sdk.errors import SECRET_STORE_ERROR`
+- **Signature:** `SECRET_STORE_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `SEGMENT_ERROR`
+
+- **Import:** `from application_sdk.errors import SEGMENT_ERROR`
+- **Signature:** `SEGMENT_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STATE_STORE_ERROR`
+
+- **Import:** `from application_sdk.errors import STATE_STORE_ERROR`
+- **Signature:** `STATE_STORE_ERROR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_CONFIG`
+
+- **Import:** `from application_sdk.errors import STORAGE_CONFIG`
+- **Signature:** `STORAGE_CONFIG`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
 - **Signature:** `STORAGE_NOT_FOUND`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors.py`
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_OPERATION`
+
+- **Import:** `from application_sdk.errors import STORAGE_OPERATION`
+- **Signature:** `STORAGE_OPERATION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_PERMISSION`
+
+- **Import:** `from application_sdk.errors import STORAGE_PERMISSION`
+- **Signature:** `STORAGE_PERMISSION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `TASK_NOT_FOUND`
+
+- **Import:** `from application_sdk.errors import TASK_NOT_FOUND`
+- **Signature:** `TASK_NOT_FOUND`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `WORKER_EVICTED_TYPE`
+
+- **Import:** `from application_sdk.errors import WORKER_EVICTED_TYPE`
+- **Signature:** `WORKER_EVICTED_TYPE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
 
 ## `application_sdk.execution`
 
@@ -907,8 +1194,8 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `AppWorker`
 
 - **Import:** `from application_sdk.execution import AppWorker`
-- **Signature:** `class AppWorker(worker: Worker, *, start_event_params: dict)`
-- **Summary:** Wraps Temporal Worker to emit worker_start on startup.
+- **Signature:** `class AppWorker(worker: Worker, ...)`
+- **Summary:** Wraps Temporal Worker to emit worker_start on startup and to push
 - **Defined in:** `application_sdk/execution/_temporal/worker.py`
 
 #### `TemporalAuthConfig`
@@ -1010,6 +1297,20 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Result of an authentication attempt.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `BaseConnectionConfig`
+
+- **Import:** `from application_sdk.handler import BaseConnectionConfig`
+- **Signature:** `class BaseConnectionConfig`
+- **Summary:** Base type for preflight and metadata connection configuration.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `BaseMetadataConfig`
+
+- **Import:** `from application_sdk.handler import BaseMetadataConfig`
+- **Signature:** `class BaseMetadataConfig`
+- **Summary:** Base type for form-level metadata forwarded alongside preflight credentials.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
 #### `DefaultHandler`
 
 - **Import:** `from application_sdk.handler import DefaultHandler`
@@ -1042,7 +1343,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 
 - **Import:** `from application_sdk.handler import HandlerError`
 - **Signature:** `class HandlerError(message: str, ...)`
-- **Summary:** Structured error raised by handler implementations.
+- **Summary:** Deprecated: use a typed ``AppError`` subclass — removed in v4.0.
 - **Defined in:** `application_sdk/handler/base.py`
 
 #### `MetadataInput`
@@ -1141,7 +1442,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import BindingError`
 - **Signature:** `class BindingError(message: str, ...)`
-- **Summary:** Raised when binding operations fail.
+- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
 
 #### `BindingRequest`
@@ -1176,7 +1477,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import CredentialVaultError`
 - **Signature:** `class CredentialVaultError(message: str, ...)`
-- **Summary:** Raised when credential vault operations fail.
+- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/credential_vault.py`
 
 #### `DaprBinding`
@@ -1267,14 +1568,14 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import PubSubError`
 - **Signature:** `class PubSubError(message: str, ...)`
-- **Summary:** Raised when pub/sub operations fail.
+- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
 
 #### `SecretNotFoundError`
 
 - **Import:** `from application_sdk.infrastructure import SecretNotFoundError`
 - **Signature:** `class SecretNotFoundError(secret_name: str)`
-- **Summary:** Raised when a secret is not found.
+- **Summary:** The requested secret key was not found in the secret store.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `SecretStore`
@@ -1288,7 +1589,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import SecretStoreError`
 - **Signature:** `class SecretStoreError(message: str, ...)`
-- **Summary:** Raised when secret store operations fail.
+- **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `StateStore`
@@ -1302,7 +1603,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import StateStoreError`
 - **Signature:** `class StateStoreError(message: str, ...)`
-- **Summary:** Raised when state store operations fail.
+- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/state.py`
 
 #### `Subscription`
@@ -1437,6 +1738,12 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Get or create an instance of AtlanLoggerAdapter.
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
+#### `metrics`
+
+- **Import:** `from application_sdk.observability import metrics`
+- **Summary:** OTel-native metrics API for app authors.
+- **Defined in:** `application_sdk/observability/metrics.py`
+
 #### `set_correlation_context`
 
 - **Import:** `from application_sdk.observability import set_correlation_context`
@@ -1456,14 +1763,14 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 #### `correlation_context`
 
 - **Import:** `from application_sdk.observability import correlation_context`
-- **Signature:** `correlation_context: ContextVar[Dict[str, Any] | None]`
+- **Signature:** `correlation_context: ContextVar[dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
 
 #### `request_context`
 
 - **Import:** `from application_sdk.observability import request_context`
-- **Signature:** `request_context: ContextVar[Dict[str, Any] | None]`
+- **Signature:** `request_context: ContextVar[dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
 
@@ -1519,29 +1826,29 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StorageConfigError`
 
 - **Import:** `from application_sdk.storage import StorageConfigError`
-- **Signature:** `class StorageConfigError`
-- **Summary:** Raised when the store cannot be configured (bad YAML, missing bucket, etc.).
+- **Signature:** `class StorageConfigError(message: str, ...)`
+- **Summary:** Storage configuration is invalid (e.g., missing bucket name).
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageError`
 
 - **Import:** `from application_sdk.storage import StorageError`
 - **Signature:** `class StorageError(message: str, ...)`
-- **Summary:** Base class for storage errors.
+- **Summary:** Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageNotFoundError`
 
 - **Import:** `from application_sdk.storage import StorageNotFoundError`
-- **Signature:** `class StorageNotFoundError`
-- **Summary:** Raised when a requested key does not exist in the store.
+- **Signature:** `class StorageNotFoundError(message: str, ...)`
+- **Summary:** Object or key not found in the store.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StoragePermissionError`
 
 - **Import:** `from application_sdk.storage import StoragePermissionError`
-- **Signature:** `class StoragePermissionError`
-- **Summary:** Raised when the caller lacks permission to access a key.
+- **Signature:** `class StoragePermissionError(message: str, ...)`
+- **Summary:** Bucket or object access denied.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 ### Functions
@@ -1663,6 +1970,13 @@ SQL metadata extractor templates and their contracts
 - **Signature:** `class IncrementalSqlMetadataExtractor`
 - **Summary:** Base class for incremental SQL metadata extraction apps.
 - **Defined in:** `application_sdk/templates/incremental_sql_metadata_extractor.py`
+
+#### `SqlApp`
+
+- **Import:** `from application_sdk.templates import SqlApp`
+- **Signature:** `class SqlApp`
+- **Summary:** Consolidated SQL metadata extraction App.
+- **Defined in:** `application_sdk/templates/sql_app.py`
 
 #### `SqlMetadataExtractor`
 
@@ -1818,6 +2132,16 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `schema_hash: str | None`
   - `deprecated: bool` `= False`
   - `deprecation_message: str | None`
+- **Defined in:** `application_sdk/contracts/base.py`
+
+#### `ContractValidationError`
+
+- **Import:** `from application_sdk.contracts import ContractValidationError`
+- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
+- **Fields:**
+  - `DEFAULT_ERROR_CODE: ErrorCode` `= CONTRACT_VALIDATION`
+  - `code: str` `= 'CONTRACT_VALIDATION'`
+  - `error_code: ErrorCode`
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `DownloadInput`
@@ -2052,7 +2376,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the fetch_metadata handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
-  - `connection_config: dict[str, Any]` `= {}` — Connection configuration.
+  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
   - `object_filter: str` `= ''` — Filter pattern (e.g., 'public.*', 'mydb.myschema.*').
   - `include_fields: bool` `= True` — Whether to include field/column details.
   - `max_objects: int` `= 1000` — Maximum number of objects to return.
@@ -2084,8 +2408,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the preflight_check handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
-  - `connection_config: dict[str, Any]` `= {}` — Connection configuration (host, port, database, etc.).
-  - `metadata: dict[str, Any]` `= {}` — Form-level metadata forwarded by heracles alongside the credential.
+  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
+  - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
   - `timeout_seconds: int` `= 60` — Maximum seconds to wait for all checks.
 - **Defined in:** `application_sdk/handler/contracts.py`
@@ -2191,6 +2515,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `processes_extracted: int` `= 0`
   - `records_uploaded: int` `= 0`
   - `error: str` `= ''`
+  - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `ExtractionTaskInput`
@@ -2402,7 +2727,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryBatchInput`
 - **Summary:** Input for the get_query_batches task.
 - **Fields:**
-  - `workflow_args: dict[str, Any]` `= Field(default_factory=dict)`
+  - `workflow_args: Annotated[dict[str, str | int | float | bool | None], MaxItems(100)]` `= Field(default_factory=dict)`
 - **Defined in:** `application_sdk/templates/contracts/sql_query.py`
 
 #### `QueryBatchOutput`
@@ -2449,7 +2774,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryFetchInput`
 - **Summary:** Input for the fetch_queries task.
 - **Fields:**
-  - `workflow_args: dict[str, Any]` `= Field(default_factory=dict)`
+  - `workflow_args: Annotated[dict[str, str | int | float | bool | None], MaxItems(100)]` `= Field(default_factory=dict)`
   - `batch_number: int` `= 0`
   - `batch_size: int` `= 100000`
 - **Defined in:** `application_sdk/templates/contracts/sql_query.py`

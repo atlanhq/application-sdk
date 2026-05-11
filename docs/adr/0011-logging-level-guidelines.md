@@ -150,7 +150,7 @@ self.logger.info(f"Loaded {count} records in {elapsed:.2f}s for app {app_name}")
 self.logger.info("Loaded %s records in %.2fs for app %s", count, elapsed, app_name)
 ```
 
-Do **not** pass extra per-field kwargs (e.g. `logger.info("msg", count=n)`). Only Temporal context kwargs (`workflow_id`, `run_id`, etc.) are promoted to indexed fields in the OTEL/Loki pipeline — all other kwargs land in an opaque JSON blob. Embed differentiating context in the message body using `%-style` so it is always visible in log output regardless of pipeline configuration.
+Do **not** pass extra per-field kwargs (e.g. `logger.info("msg", count=n)`). Only Temporal context kwargs (`workflow_id`, `workflow_run_id`, etc.) are promoted to indexed fields in the OTEL/Loki pipeline — all other kwargs land in an opaque JSON blob. Embed differentiating context in the message body using `%-style` so it is always visible in log output regardless of pipeline configuration.
 
 ## Never Swallow Exceptions Silently
 

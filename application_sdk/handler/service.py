@@ -53,13 +53,9 @@ from pydantic import BaseModel as PydanticBaseModel
 from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import (
-    DEPLOYMENT_NAME,
-    ENABLE_PROMETHEUS_METRICS,
-    LOCAL_ENVIRONMENT,
-)
+from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.handler.base import Handler, HandlerError
-from application_sdk.handler.context import HandlerContext
+from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
     EventTriggerConfig,
@@ -74,6 +70,30 @@ from application_sdk.handler.manifest import AppManifest
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def _record_proxy_failure(reason: str, log_message: str) -> None:
+    """Record a Temporal-core ``/metrics`` proxy failure.
+
+    Increments the ``temporal_core_metrics_proxy_failures_total`` counter
+    so failures are observable from VictoriaMetrics (and not just buried
+    in the WARNING logs), and emits the warning. ``reason`` should be a
+    bounded label value — exception class name or ``http_<status>``."""
+    from application_sdk.observability import (  # noqa: PLC0415 — cold path: only on proxy failure
+        metrics as _metrics_module,
+    )
+
+    counter = _metrics_module.create_counter(
+        "temporal_core_metrics_proxy_failures",
+        description=(
+            "Failures fetching the Temporal Rust-core /metrics endpoint via "
+            "the in-process FastAPI proxy. Each increment is one scrape "
+            "where Temporal-core series were not retrievable."
+        ),
+        unit="1",
+    )
+    counter.add(1, {"reason": reason})
+    logger.warning(log_message, exc_info=True)
 
 
 def _serialize_credential_value(v: Any) -> str:
@@ -175,8 +195,15 @@ def _wrap_response(
     message: str = "",
     success: bool = True,
 ) -> dict[str, Any]:
-    """Wrap response data in the standard envelope: {success, message, data}."""
-    return {"success": success, "message": message, "data": data}
+    """Wrap response data in the standard envelope: {success, message, data}.
+
+    ``message`` is omitted from the response when empty to match the legacy
+    /credentials/query format expected by the frontend filter widgets.
+    """
+    result: dict[str, Any] = {"success": success, "data": data}
+    if message:
+        result["message"] = message
+    return result
 
 
 async def _get_workflow_result(
@@ -472,12 +499,24 @@ def create_app_handler_service(
     else:
         app = FastAPI(title=title, description=description, version=version)
 
-    from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
-        LogMiddleware,
-        MetricsMiddleware,
+    from opentelemetry.instrumentation.fastapi import (  # noqa: PLC0415 — cold path: FastAPI instrumentor wired at app creation
+        FastAPIInstrumentor,
     )
 
-    app.add_middleware(MetricsMiddleware)
+    from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
+        EXCLUDED_LOG_PATHS,
+        LogMiddleware,
+    )
+
+    # Auto-instrument HTTP server with OTel: emits http.server.duration,
+    # http.server.active_requests, etc. with route-templated http.route labels
+    # (no raw-path cardinality blowup). Metrics flow through the global
+    # MeterProvider configured in observability/metrics_adaptor.py and land in
+    # prometheus_client.REGISTRY via the PrometheusMetricReader.
+    FastAPIInstrumentor.instrument_app(
+        app,
+        excluded_urls=",".join(sorted(EXCLUDED_LOG_PATHS)),
+    )
     app.add_middleware(LogMiddleware)
 
     def _create_context(credentials: list[HandlerCredential]) -> HandlerContext:
@@ -501,49 +540,49 @@ def create_app_handler_service(
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
         context = _create_context(credentials)
-        handler._context = context
-
-        try:
-            logger.info(
-                "Auth test started: app=%s request=%s", app_name, context.request_id_str
-            )
-            result = await handler.test_auth(auth_input)
-            logger.info(
-                "Auth test completed: app=%s request=%s status=%s",
-                app_name,
-                context.request_id_str,
-                result.status.value,
-            )
-            return JSONResponse(
-                status_code=result.status.http_status,
-                content=_wrap_response(
-                    result.model_dump(),
-                    message=result.message or f"Authentication {result.status.value}",
-                    success=result.status.is_success,
-                ),
-            )
-        except HandlerError as e:
-            logger.error(
-                "Auth test failed for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except Exception as e:
-            logger.error(
-                "Auth test failed unexpectedly for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-        finally:
-            handler._context = None
+        with bind_handler_context(context):
+            try:
+                logger.info(
+                    "Auth test started: app=%s request=%s",
+                    app_name,
+                    context.request_id_str,
+                )
+                result = await handler.test_auth(auth_input)
+                logger.info(
+                    "Auth test completed: app=%s request=%s status=%s",
+                    app_name,
+                    context.request_id_str,
+                    result.status.value,
+                )
+                return JSONResponse(
+                    status_code=result.status.http_status,
+                    content=_wrap_response(
+                        result.model_dump(),
+                        message=result.message
+                        or f"Authentication {result.status.value}",
+                        success=result.status.is_success,
+                    ),
+                )
+            except HandlerError as e:
+                logger.error(
+                    "Auth test failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except Exception as e:
+                logger.error(
+                    "Auth test failed unexpectedly for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Preflight
@@ -558,62 +597,60 @@ def create_app_handler_service(
             for c in preflight_input.credentials
         ]
         context = _create_context(credentials)
-        handler._context = context
-
-        try:
-            logger.info(
-                "Preflight check started: app=%s request=%s",
-                app_name,
-                context.request_id_str,
-            )
-            result = await handler.preflight_check(preflight_input)
-            logger.info(
-                "Preflight check completed: app=%s request=%s status=%s checks=%d",
-                app_name,
-                context.request_id_str,
-                result.status.value,
-                len(result.checks),
-            )
-            # Build v2-compatible response: each check becomes a top-level
-            # key in data so the frontend can iterate check names directly.
-            # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
-            v2_data: dict[str, Any] = {}
-            for check in result.checks:
-                # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
-                key = check.name[0].lower() + check.name[1:]
-                v2_data[key] = {
-                    "success": check.passed,
-                    "message": check.message or "",
-                }
-            return JSONResponse(
-                content=_wrap_response(
-                    v2_data,
-                    message=result.message or f"Preflight check {result.status.value}",
-                    success=result.status == PreflightStatus.READY,
+        with bind_handler_context(context):
+            try:
+                logger.info(
+                    "Preflight check started: app=%s request=%s",
+                    app_name,
+                    context.request_id_str,
                 )
-            )
-        except HandlerError as e:
-            logger.error(
-                "Preflight check failed for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except Exception as e:
-            logger.error(
-                "Preflight check failed unexpectedly for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-        finally:
-            handler._context = None
+                result = await handler.preflight_check(preflight_input)
+                logger.info(
+                    "Preflight check completed: app=%s request=%s status=%s checks=%d",
+                    app_name,
+                    context.request_id_str,
+                    result.status.value,
+                    len(result.checks),
+                )
+                # Build v2-compatible response: each check becomes a top-level
+                # key in data so the frontend can iterate check names directly.
+                # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
+                v2_data: dict[str, Any] = {}
+                for check in result.checks:
+                    # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
+                    key = check.name[0].lower() + check.name[1:]
+                    v2_data[key] = {
+                        "success": check.passed,
+                        "message": check.message or "",
+                    }
+                return JSONResponse(
+                    content=_wrap_response(
+                        v2_data,
+                        message=result.message
+                        or f"Preflight check {result.status.value}",
+                        success=result.status == PreflightStatus.READY,
+                    )
+                )
+            except HandlerError as e:
+                logger.error(
+                    "Preflight check failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except Exception as e:
+                logger.error(
+                    "Preflight check failed unexpectedly for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Metadata
@@ -628,53 +665,50 @@ def create_app_handler_service(
             for c in metadata_input.credentials
         ]
         context = _create_context(credentials)
-        handler._context = context
+        with bind_handler_context(context):
+            try:
+                logger.info(
+                    "Metadata fetch started: app=%s request=%s",
+                    app_name,
+                    context.request_id_str,
+                )
+                result = await handler.fetch_metadata(metadata_input)
 
-        try:
-            logger.info(
-                "Metadata fetch started: app=%s request=%s",
-                app_name,
-                context.request_id_str,
-            )
-            result = await handler.fetch_metadata(metadata_input)
-
-            # Both SqlMetadataOutput and ApiMetadataOutput expose
-            # .objects — model_dump() produces the correct shape for
-            # the corresponding frontend widget (sqltree / apitree).
-            data = [obj.model_dump() for obj in result.objects]
-            count = len(result.objects)
-            logger.info(
-                "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
-                app_name,
-                context.request_id_str,
-                type(result).__name__,
-                count,
-            )
-            return JSONResponse(
-                content=_wrap_response(data, message=f"Fetched {count} objects")
-            )
-        except HandlerError as e:
-            logger.error(
-                "Metadata fetch failed for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except Exception as e:
-            logger.error(
-                "Metadata fetch failed unexpectedly for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-        finally:
-            handler._context = None
+                # Both SqlMetadataOutput and ApiMetadataOutput expose
+                # .objects — model_dump() produces the correct shape for
+                # the corresponding frontend widget (sqltree / apitree).
+                data = [obj.model_dump() for obj in result.objects]
+                count = len(result.objects)
+                logger.info(
+                    "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
+                    app_name,
+                    context.request_id_str,
+                    type(result).__name__,
+                    count,
+                )
+                # message omitted: a non-empty message field caused the
+                # frontend filter widgets to render empty dropdowns
+                return JSONResponse(content=_wrap_response(data))
+            except HandlerError as e:
+                logger.error(
+                    "Metadata fetch failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except Exception as e:
+                logger.error(
+                    "Metadata fetch failed unexpectedly for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Workflow lifecycle
@@ -1673,20 +1707,58 @@ def create_app_handler_service(
     # Prometheus metrics
     # ------------------------------------------------------------------
 
-    if ENABLE_PROMETHEUS_METRICS:
+    @app.get("/metrics")
+    async def prometheus_metrics() -> Response:
+        """Expose application metrics in Prometheus exposition format.
 
-        @app.get("/metrics")
-        async def prometheus_metrics() -> Response:
-            """Expose application metrics in Prometheus exposition format."""
-            from prometheus_client import (  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
-                REGISTRY,
-                generate_latest,
-            )
+        Merges two sources into a single response:
+        1. The OTel ``PrometheusMetricReader`` registry — covers HTTP metrics
+           from FastAPIInstrumentor, the worker's ``MetricsInterceptor``, and
+           any custom user metrics via ``application_sdk.observability.metrics``.
+        2. The Temporal Runtime's loopback Prometheus endpoint — proxies the
+           Rust-core metrics (gRPC client-call latencies on the server,
+           workflow / activity task latencies, sticky cache, etc.) so
+           operators have a single scrape target per pod.
+        """
+        from prometheus_client import (  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
+            REGISTRY,
+            generate_latest,
+        )
 
-            return Response(
-                content=generate_latest(REGISTRY),
-                media_type="text/plain; version=0.0.4; charset=utf-8",
-            )
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when /metrics is hit
+            TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
+            TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+        )
+
+        body = generate_latest(REGISTRY)
+
+        if TEMPORAL_PROMETHEUS_BIND_ADDRESS:
+            try:
+                import httpx  # noqa: PLC0415 — cold path: only when Temporal Rust-core proxy enabled
+
+                async with httpx.AsyncClient(
+                    timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
+                ) as client:
+                    resp = await client.get(
+                        f"http://{TEMPORAL_PROMETHEUS_BIND_ADDRESS}/metrics"
+                    )
+                    if resp.status_code == 200:
+                        body = body + b"\n" + resp.content
+                    else:
+                        _record_proxy_failure(
+                            f"http_{resp.status_code}",
+                            f"Temporal core metrics proxy returned HTTP {resp.status_code}",
+                        )
+            except Exception as exc:
+                _record_proxy_failure(
+                    type(exc).__name__,
+                    "Temporal core metrics unavailable",
+                )
+
+        return Response(
+            content=body,
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     # ------------------------------------------------------------------
     # UI routes
