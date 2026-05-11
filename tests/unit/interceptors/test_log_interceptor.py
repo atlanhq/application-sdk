@@ -7,25 +7,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from temporalio.converter import default as default_converter
-
 from temporalio.exceptions import ApplicationError
 
 from application_sdk.errors.leaves import AuthError, InvalidInputError
 from application_sdk.execution._temporal.interceptors.log import (
-    LogInterceptor,
-    _correlation_id_or_empty,
-    _extract_failure_attrs,
-    _LogActivityInboundInterceptor,
-    _LogWorkflowInboundInterceptor,
-    _LogWorkflowOutboundInterceptor,
-)
-from application_sdk.observability.context import ExecutionContext, _execution_ctx
-from application_sdk.observability.correlation import (
-    CorrelationContext,
-    _correlation_ctx,
-    get_correlation_context,
-    set_correlation_context,
-)
+    LogInterceptor, _correlation_id_or_empty, _extract_failure_attrs,
+    _LogActivityInboundInterceptor, _LogWorkflowInboundInterceptor,
+    _LogWorkflowOutboundInterceptor)
+from application_sdk.observability.context import (ExecutionContext,
+                                                   _execution_ctx)
+from application_sdk.observability.correlation import (CorrelationContext,
+                                                       _correlation_ctx,
+                                                       get_correlation_context,
+                                                       set_correlation_context)
 
 # ---------------------------------------------------------------------------
 # Shared mock dataclasses
@@ -264,9 +258,7 @@ class TestLogWorkflowInboundInterceptor:
         # downstream consumers can tell "uncategorised" from a real category.
         assert "failure.category" not in kwargs
 
-    async def test_workflow_ended_flattens_failure_attrs_for_apperror(
-        self, mock_next
-    ):
+    async def test_workflow_ended_flattens_failure_attrs_for_apperror(self, mock_next):
         # AppError raised directly inside the workflow → interceptor extracts
         # category/audience/code from the class-level ClassVars onto the
         # workflow.ended ERROR log.
@@ -493,9 +485,7 @@ class TestLogActivityInboundInterceptor:
         assert kwargs["otel.status_code"] == "ERROR"
         assert kwargs["exc_info"] is True
 
-    async def test_activity_ended_flattens_failure_attrs_for_apperror(
-        self, mock_next
-    ):
+    async def test_activity_ended_flattens_failure_attrs_for_apperror(self, mock_next):
         mock_next.execute_activity = AsyncMock(
             side_effect=AuthError(message="bad creds")
         )
