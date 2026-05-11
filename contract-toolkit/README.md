@@ -688,7 +688,7 @@ Optional popularity knobs:
 - `accessHistoryDataPrefix`, `windowDays`, `topNQueries`, `topNUsers`, `lakeProvider`, `dryRun`
 - `includeFilter`, `excludeFilter`, `parsedDataFilterHasError`, `relationshipsOutputAttribution`
 - `queryTypesToIgnore` (omit for app defaults; set an empty listing to disable the default ignore list)
-- `mineColumnMapping = new PopularityMineColumnMapping { ... }` for non-Snowflake miner schemas
+- `mineColumnMapping = new PopularityMineColumnMapping { ... }` for source-specific miner schemas (override `queryHash`, `queryText`, `sourceQueryTypeQi`, `parsedDataKeepFilter`, `caseInsensitiveMatch`, and the column-name fields when a connector's `cleaned_mine` / parsed-data shape differs from popularity-app's Snowflake-shaped defaults)
 - `extraArgs`
 
 The Popularity app owns the runtime defaults for `windowDays`, `topNQueries`,

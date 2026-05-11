@@ -83,8 +83,88 @@ permissions:
   pull-requests: write
 
 jobs:
+  # ── Job 0: Channel + branch gate ─────────────────────────────────────────────
+  # 'all'-channel releases reach every production tenant, so they MUST come
+  # from the protected `main` branch. Fail here (before the multi-arch build
+  # spends ~10 min) when channel=='all' and the build ref is not main.
+  # Only runs when `publish: true` — build-only invocations are unaffected.
+  # Beta, staging, and tenant-targeted publishes are unrestricted.
+  validate-channel:
+    name: Validate Channel + Branch
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enforce main-branch invariant for channel='all'
+        env:
+          # REF and CHANNEL/TENANTS are passed via env (not interpolated into
+          # the script body) — protects against shell injection from branch
+          # names containing backticks/$().
+          REF: ${{ inputs.ref || github.ref }}
+          CHANNEL: ${{ inputs.channel }}
+          TENANTS: ${{ inputs.tenants }}
+        run: |
+          set -euo pipefail
+
+          # Mirror the channel-resolution rules used at publish time:
+          #   tenants  -> specific  (skip gate)
+          #   channel='' or 'all' -> all  (enforce gate)
+          #   beta/staging/anything else -> skip gate
+          #
+          # Channel is lowercased before comparison so a stray 'ALL'/'All'
+          # can't slip past — the downstream API treats target_channel
+          # case-sensitively, so we normalize here.
+          if [ -n "${TENANTS}" ]; then
+            echo "Tenants targeting (${TENANTS}) — main-branch gate skipped."
+            exit 0
+          fi
+          EFFECTIVE_CHANNEL="${CHANNEL:-all}"
+          EFFECTIVE_CHANNEL="${EFFECTIVE_CHANNEL,,}"  # bash 4+ lowercase
+          if [ "${EFFECTIVE_CHANNEL}" != "all" ]; then
+            echo "Channel '${EFFECTIVE_CHANNEL}' — main-branch gate skipped."
+            exit 0
+          fi
+
+          # Accept both the short ('main') and qualified ('refs/heads/main')
+          # forms. Anything else falls through to the reject arm, including:
+          #   - feature branches (refs/heads/feat-foo, feat/foo, …)
+          #   - tag refs (refs/tags/v1.2.3) — by design: tag-triggered builds
+          #     should not auto-publish to all tenants; cut a release from
+          #     main and let the push-trigger run instead.
+          case "${REF}" in
+            main|refs/heads/main)
+              echo "Channel 'all' on main — proceeding."
+              ;;
+            *)
+              echo "::error title=Publish blocked::Channel 'all' requires the main branch — got ref '${REF}'."
+              {
+                echo "### Publish blocked"
+                echo ""
+                echo "Releases to the **all** channel must be built from the **main** branch."
+                echo ""
+                echo "| Field | Value |"
+                echo "|-------|-------|"
+                echo "| Ref | \`${REF}\` |"
+                echo "| Channel | \`${EFFECTIVE_CHANNEL}\` |"
+                echo ""
+                echo "Re-run with one of:"
+                echo "- \`channel: beta\` or \`channel: staging\` (non-prod)"
+                echo "- \`tenants: <comma-separated-ids>\` (targeted to specific tenants)"
+                echo "- merge to \`main\` and let the push-trigger run"
+              } >> "${GITHUB_STEP_SUMMARY}"
+              exit 1
+              ;;
+          esac
+
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
+    needs: [validate-channel]
+    # `needs: [validate-channel]` only enforces ordering when that job runs.
+    # When publish=false, validate-channel is skipped via its `if:` — which by
+    # default would propagate "skipped" to dependents. The condition below
+    # explicitly allows prepare to run when validate-channel is skipped OR
+    # successful, but NOT when it failed.
+    if: ${{ !failure() && !cancelled() }}
     name: Prepare
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -129,6 +209,19 @@ jobs:
         # .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py for rules.
         # Unit-tested in tests/test_parse_atlan_yaml.py in the SDK repo.
         run: python3 .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py
+
+      - name: Validate atlan.yaml deploy config
+        # Run platform guardrail rules on the deploy block before image build.
+        # Fails fast with ::error file=atlan.yaml:: annotations so violations
+        # show inline on the PR diff. Skipped when atlan.yaml has no deploy
+        # block (driver no-ops on empty DEPLOY_CONFIG).
+        # See .sdk-entrypoint/.github/scripts/config_validator.py for rules,
+        # validate_atlan_yaml.py for the CI driver,
+        # tests/test_config_validator.py for coverage.
+        env:
+          DEPLOY_CONFIG: ${{ steps.manifest.outputs.deploy_config }}
+          SDK_VERSION:   ${{ steps.manifest.outputs.sdk_version }}
+        run: python3 .sdk-entrypoint/.github/scripts/validate_atlan_yaml.py
 
       - name: Validate SDR secrets
         if: steps.manifest.outputs.enable_sdr == 'true'
