@@ -26,19 +26,27 @@ from uuid import uuid4
 
 from temporalio import activity, workflow
 from temporalio.converter import default as default_converter
-from temporalio.worker import (ActivityInboundInterceptor,
-                               ExecuteActivityInput, ExecuteWorkflowInput,
-                               Interceptor, StartActivityInput,
-                               StartChildWorkflowInput,
-                               WorkflowInboundInterceptor,
-                               WorkflowInterceptorClassInput,
-                               WorkflowOutboundInterceptor)
+from temporalio.worker import (
+    ActivityInboundInterceptor,
+    ExecuteActivityInput,
+    ExecuteWorkflowInput,
+    Interceptor,
+    StartActivityInput,
+    StartChildWorkflowInput,
+    WorkflowInboundInterceptor,
+    WorkflowInterceptorClassInput,
+    WorkflowOutboundInterceptor,
+)
 
-from application_sdk.observability.context import (ExecutionContext,
-                                                   set_execution_context)
-from application_sdk.observability.correlation import (CorrelationContext,
-                                                       get_correlation_context,
-                                                       set_correlation_context)
+from application_sdk.observability.context import (
+    ExecutionContext,
+    set_execution_context,
+)
+from application_sdk.observability.correlation import (
+    CorrelationContext,
+    get_correlation_context,
+    set_correlation_context,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -67,14 +75,16 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
     if exc is None:
         return {}
     try:
-        from application_sdk.errors.base import \
-            AppError  # noqa: PLC0415 — avoid import cycle
+        from application_sdk.errors.base import (  # noqa: PLC0415 — avoid import cycle
+            AppError,
+        )
         from application_sdk.errors.wire import FailureDetails  # noqa: PLC0415
     except Exception:  # noqa: BLE001 — observability path; never raise
         return {}
     try:
-        from temporalio.exceptions import \
-            ApplicationError as _TemporalApplicationError  # noqa: PLC0415
+        from temporalio.exceptions import (  # noqa: PLC0415
+            ApplicationError as _TemporalApplicationError,
+        )
     except Exception:  # noqa: BLE001
         _TemporalApplicationError = None  # type: ignore[assignment]
 

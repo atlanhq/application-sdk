@@ -11,15 +11,20 @@ from temporalio.exceptions import ApplicationError
 
 from application_sdk.errors.leaves import AuthError, InvalidInputError
 from application_sdk.execution._temporal.interceptors.log import (
-    LogInterceptor, _correlation_id_or_empty, _extract_failure_attrs,
-    _LogActivityInboundInterceptor, _LogWorkflowInboundInterceptor,
-    _LogWorkflowOutboundInterceptor)
-from application_sdk.observability.context import (ExecutionContext,
-                                                   _execution_ctx)
-from application_sdk.observability.correlation import (CorrelationContext,
-                                                       _correlation_ctx,
-                                                       get_correlation_context,
-                                                       set_correlation_context)
+    LogInterceptor,
+    _correlation_id_or_empty,
+    _extract_failure_attrs,
+    _LogActivityInboundInterceptor,
+    _LogWorkflowInboundInterceptor,
+    _LogWorkflowOutboundInterceptor,
+)
+from application_sdk.observability.context import ExecutionContext, _execution_ctx
+from application_sdk.observability.correlation import (
+    CorrelationContext,
+    _correlation_ctx,
+    get_correlation_context,
+    set_correlation_context,
+)
 
 # ---------------------------------------------------------------------------
 # Shared mock dataclasses
