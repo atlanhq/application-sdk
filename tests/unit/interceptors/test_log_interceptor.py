@@ -8,9 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from temporalio.converter import default as default_converter
 
+from temporalio.exceptions import ApplicationError
+
+from application_sdk.errors.leaves import AuthError, InvalidInputError
 from application_sdk.execution._temporal.interceptors.log import (
     LogInterceptor,
     _correlation_id_or_empty,
+    _extract_failure_attrs,
     _LogActivityInboundInterceptor,
     _LogWorkflowInboundInterceptor,
     _LogWorkflowOutboundInterceptor,
@@ -112,6 +116,57 @@ class TestCorrelationIdOrEmpty:
 
 
 # ---------------------------------------------------------------------------
+# TestExtractFailureAttrs
+# ---------------------------------------------------------------------------
+
+
+class TestExtractFailureAttrs:
+    def test_none_returns_empty(self):
+        assert _extract_failure_attrs(None) == {}
+
+    def test_non_app_exception_returns_empty(self):
+        assert _extract_failure_attrs(ValueError("oops")) == {}
+
+    def test_direct_apperror(self):
+        attrs = _extract_failure_attrs(AuthError(message="bad creds"))
+        assert attrs == {
+            "failure.category": "AUTH",
+            "failure.audience": "USER",
+            "failure.code": "AUTH",
+        }
+
+    def test_unwraps_cause_chain(self):
+        # Common shape: outer wrapper raised "from" the SDK error.
+        leaf = InvalidInputError(message="missing field")
+        outer = RuntimeError("wrapped")
+        outer.__cause__ = leaf
+        attrs = _extract_failure_attrs(outer)
+        assert attrs["failure.category"] == "INVALID_INPUT"
+
+    def test_extracts_from_application_error_details(self):
+        leaf = AuthError(message="bad creds")
+        app_err = ApplicationError(
+            "bad creds",
+            leaf.to_failure_details(),
+            type="AuthError",
+            non_retryable=True,
+        )
+        attrs = _extract_failure_attrs(app_err)
+        assert attrs == {
+            "failure.category": "AUTH",
+            "failure.audience": "USER",
+            "failure.code": "AUTH",
+        }
+
+    def test_handles_self_cycle(self):
+        # Pathological case — exception that points to itself via __context__.
+        # Helper must not loop forever.
+        exc = RuntimeError("loop")
+        exc.__context__ = exc
+        assert _extract_failure_attrs(exc) == {}
+
+
+# ---------------------------------------------------------------------------
 # TestLogWorkflowInboundInterceptor
 # ---------------------------------------------------------------------------
 
@@ -205,6 +260,80 @@ class TestLogWorkflowInboundInterceptor:
         kwargs = ended_calls[0][1]
         assert kwargs["otel.status_code"] == "ERROR"
         assert kwargs["exc_info"] is True
+        # Raw ValueError has no SDK classification — failure.* keys absent so
+        # downstream consumers can tell "uncategorised" from a real category.
+        assert "failure.category" not in kwargs
+
+    async def test_workflow_ended_flattens_failure_attrs_for_apperror(
+        self, mock_next
+    ):
+        # AppError raised directly inside the workflow → interceptor extracts
+        # category/audience/code from the class-level ClassVars onto the
+        # workflow.ended ERROR log.
+        mock_next.execute_workflow = AsyncMock(
+            side_effect=AuthError(message="bad creds")
+        )
+        interceptor = _LogWorkflowInboundInterceptor(mock_next)
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            with (
+                patch(
+                    "application_sdk.execution._temporal.interceptors.log.logger"
+                ) as mock_logger,
+                pytest.raises(AuthError),
+            ):
+                await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        ended_calls = [
+            c for c in mock_logger.error.call_args_list if c[0][0] == "workflow.ended"
+        ]
+        assert len(ended_calls) == 1
+        kwargs = ended_calls[0][1]
+        assert kwargs["failure.category"] == "AUTH"
+        assert kwargs["failure.audience"] == "USER"
+        assert kwargs["failure.code"] == "AUTH"
+
+    async def test_workflow_ended_flattens_failure_attrs_from_application_error(
+        self, mock_next
+    ):
+        # Activity wrappers re-raise as ApplicationError(..., FailureDetails) —
+        # workflow-side propagation must still surface the original category.
+        leaf = InvalidInputError(message="missing field", field="hostname")
+        app_err = ApplicationError(
+            "missing field",
+            leaf.to_failure_details(),
+            type="InvalidInputError",
+            non_retryable=True,
+        )
+        mock_next.execute_workflow = AsyncMock(side_effect=app_err)
+        interceptor = _LogWorkflowInboundInterceptor(mock_next)
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            with (
+                patch(
+                    "application_sdk.execution._temporal.interceptors.log.logger"
+                ) as mock_logger,
+                pytest.raises(ApplicationError),
+            ):
+                await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        ended_calls = [
+            c for c in mock_logger.error.call_args_list if c[0][0] == "workflow.ended"
+        ]
+        kwargs = ended_calls[0][1]
+        assert kwargs["failure.category"] == "INVALID_INPUT"
+        assert kwargs["failure.audience"] == "USER"
+        assert kwargs["failure.code"] == "INVALID_INPUT"
 
     async def test_generates_new_correlation_id_when_no_headers_no_memo(
         self, interceptor
@@ -363,6 +492,34 @@ class TestLogActivityInboundInterceptor:
         kwargs = ended_calls[0][1]
         assert kwargs["otel.status_code"] == "ERROR"
         assert kwargs["exc_info"] is True
+
+    async def test_activity_ended_flattens_failure_attrs_for_apperror(
+        self, mock_next
+    ):
+        mock_next.execute_activity = AsyncMock(
+            side_effect=AuthError(message="bad creds")
+        )
+        interceptor = _LogActivityInboundInterceptor(mock_next)
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            with (
+                patch(
+                    "application_sdk.execution._temporal.interceptors.log.logger"
+                ) as mock_logger,
+                pytest.raises(AuthError),
+            ):
+                await interceptor.execute_activity(MockExecuteActivityInput())
+
+        ended_calls = [
+            c for c in mock_logger.error.call_args_list if c[0][0] == "activity.ended"
+        ]
+        kwargs = ended_calls[0][1]
+        assert kwargs["failure.category"] == "AUTH"
+        assert kwargs["failure.audience"] == "USER"
+        assert kwargs["failure.code"] == "AUTH"
 
     async def test_reads_correlation_id_from_header(self, interceptor):
         payload = _encode_header("from-header")
