@@ -31,7 +31,10 @@ jobs:
       - name: Install Trivy CLI
         uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
         with:
-          version: latest
+          # Pin to a specific version so scan results don't drift between
+          # runs as Trivy's vuln DB schema and detection logic evolve. Bump
+          # this deliberately when a known scanner fix is needed.
+          version: v0.70.0
           cache: true
 
       # ── Trivy image scan ──────────────────────────────────────────────────
