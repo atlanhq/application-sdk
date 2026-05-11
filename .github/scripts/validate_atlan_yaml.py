@@ -28,24 +28,36 @@ def main() -> int:
         print("No deploy config in atlan.yaml — skipping validation")
         return 0
 
+    # Missing SDK_VERSION → skip validation. Without the SDK version we can't
+    # apply version-gated injection (vpa/keda/TWC defaults) accurately, so
+    # running validation against the un-enriched config would produce results
+    # that diverge from what the chart actually renders. Better to no-op
+    # than emit false-positive errors. Apps without application-sdk pinned
+    # (e.g. early scaffolds) hit this path.
+    if sdk is None:
+        print(
+            "No application-sdk version detected in atlan.yaml — skipping "
+            "validation (version-gated injection cannot run without it)."
+        )
+        return 0
+
     # Bad SDK_VERSION must fail loudly: silent injection skip would validate
     # against un-enriched config, diverging from what the chart applies.
-    if sdk is not None:
-        try:
-            Version(sdk)
-        except InvalidVersion:
-            print(
-                f"::error file=atlan.yaml::SDK_VERSION '{sdk}' is not a valid "
-                "PEP 440 version. SDK flag injection cannot run; validation "
-                "would produce inconsistent results vs chart defaults."
-            )
-            print(f"  - SDK_VERSION: {sdk!r} cannot be parsed")
-            return 1
+    try:
+        Version(sdk)
+    except InvalidVersion:
+        print(
+            f"::error file=atlan.yaml::SDK_VERSION '{sdk}' is not a valid "
+            "PEP 440 version. SDK flag injection cannot run; validation "
+            "would produce inconsistent results vs chart defaults."
+        )
+        print(f"  - SDK_VERSION: {sdk!r} cannot be parsed")
+        return 1
 
     enriched = inject_sdk_version_flags(cfg, sdk)
 
     try:
-        validate_config(enriched)
+        validate_config(enriched, sdk_version=sdk)
     except ConfigValidationError as e:
         print(
             f"\natlan.yaml validation failed with {len(e.violations)} violation(s):\n"

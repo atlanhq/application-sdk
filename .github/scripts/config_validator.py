@@ -4,6 +4,8 @@ Validate atlan.yaml deploy config against platform guardrails in CI.
 Rules enforced:
   1. splitDeploymentEnabled=true + temporalWorkerDeployment.enabled=false fails
      (image-pull / crashloop only surfaces via TWC during version rollout).
+  1b. temporalWorkerDeployment.enabled=true on SDK < 2.7.4 fails
+      (TWC is unsupported below 2.7.4 — chart silently ignores the block).
   2. vpa.maxAllowed.cpu     <= 7 cores (7000m).
   3. vpa.maxAllowed.memory  <= 27Gi (binary, = 27 * 1024^3 bytes).
   4. requests.cpu           <= 7 cores.
@@ -25,6 +27,12 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 import yaml
+from packaging.version import InvalidVersion, Version
+
+# TWC (TemporalWorkerDeployment) controller support landed in SDK 2.7.4.
+# Apps below this version that set `temporalWorkerDeployment.enabled: true`
+# get silently ignored by the chart — they think TWC is on, it isn't.
+MIN_SDK_FOR_TWC: Version = Version("2.7.4")
 
 # Hardcoded infra ceilings. Change requires PR + platform-team review.
 MAX_VPA_CPU_MILLI: int = 7_000
@@ -139,25 +147,119 @@ def _safe_parse_memory(value: Any, field: str, errs: list[Violation]) -> int | N
         return None
 
 
-def _check_split_requires_twc(cfg: dict) -> list[Violation]:
+# Top-level / nested boolean flags. `is True` / `is False` identity checks
+# silently bypass validation if a user writes a quoted string (e.g.
+# `splitDeploymentEnabled: "true"`) — YAML loads it as `str`, not `bool`.
+# _parse_bools type-checks these up front and emits invalid_type once.
+_BOOL_FIELDS: tuple[str, ...] = (
+    "splitDeploymentEnabled",
+    "vpa.enabled",
+    "temporalWorkerDeployment.enabled",
+)
+
+
+def _parse_bools(cfg: dict) -> tuple[dict[str, bool | None], list[Violation]]:
+    """Type-check known boolean fields once. Returns (values, violations).
+
+    Each field in *values* is True / False if explicitly set to bool, or None
+    if missing or invalid (non-bool). Non-bool values emit one invalid_type
+    violation per field; downstream rules then treat them as missing.
+    """
+    parsed: dict[str, bool | None] = {}
+    errs: list[Violation] = []
+    for path in _BOOL_FIELDS:
+        parts = path.split(".")
+        node: Any = cfg
+        for p in parts[:-1]:
+            node = node.get(p) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            parsed[path] = None
+            continue
+        leaf = parts[-1]
+        if leaf not in node:
+            parsed[path] = None
+            continue
+        val = node[leaf]
+        if isinstance(val, bool):
+            parsed[path] = val
+            continue
+        errs.append(
+            Violation(
+                field=path,
+                actual=val,
+                expected="boolean (unquoted true or false)",
+                rule="invalid_type",
+                fix=(
+                    f"Set {path} to an unquoted true or false (got "
+                    f'{type(val).__name__}). Quoted strings like "true" '
+                    "are not booleans and silently disable validation."
+                ),
+            )
+        )
+        parsed[path] = None
+    return parsed, errs
+
+
+def _check_split_requires_twc(
+    cfg: dict, bools: dict[str, bool | None], sdk_version: Version | None
+) -> list[Violation]:
     """Fail only on explicit `temporalWorkerDeployment.enabled: false` under split.
 
-    TWC requires SDK >= 2.7.4. Apps on older SDKs get `splitDeploymentEnabled`
-    injected without a TWC block — must not be blocked here. Missing field,
-    missing `enabled` key, or `enabled: true` all pass.
+    Missing field, missing `enabled` key, or `enabled: true` all pass. Skip
+    entirely on SDK < 2.7.4 — TWC unsupported there, so explicit disable is
+    a no-op (the enabled=true case is caught by _check_twc_sdk_floor).
     """
-    if cfg.get("splitDeploymentEnabled") is not True:
+    if sdk_version is not None and sdk_version < MIN_SDK_FOR_TWC:
         return []
-    twd = cfg.get("temporalWorkerDeployment") or {}
-    if twd.get("enabled") is not False:
+    if bools.get("splitDeploymentEnabled") is not True:
+        return []
+    if bools.get("temporalWorkerDeployment.enabled") is not False:
         return []
     return [
         Violation(
             field="temporalWorkerDeployment.enabled",
             actual=False,
-            expected="true (or omit the field — TWC requires SDK >= 2.7.4)",
+            expected="true (or omit the temporalWorkerDeployment block)",
             rule="twc_required_for_split",
-            fix="Set temporalWorkerDeployment.enabled: true, or remove the temporalWorkerDeployment block. Split-worker deployments must use TWC (when supported) so image-pull and crashloop failures surface during version rollout.",
+            fix=(
+                "Set temporalWorkerDeployment.enabled: true, or remove the "
+                "temporalWorkerDeployment block. Split-worker deployments "
+                "must use TWC so image-pull and crashloop failures surface "
+                "during version rollout."
+            ),
+        )
+    ]
+
+
+def _check_twc_sdk_floor(
+    bools: dict[str, bool | None], sdk_version: Version | None
+) -> list[Violation]:
+    """Fail when `temporalWorkerDeployment.enabled: true` on SDK < 2.7.4.
+
+    TWC controller support landed in 2.7.4. Older SDKs ship a chart that
+    silently drops the temporalWorkerDeployment block — app owner thinks
+    TWC is on, it isn't, and they discover it only when a bad image rolls
+    out without crashloop detection. Skip when sdk_version unknown (driver
+    already fails loud on InvalidVersion).
+    """
+    if sdk_version is None:
+        return []
+    if bools.get("temporalWorkerDeployment.enabled") is not True:
+        return []
+    if sdk_version >= MIN_SDK_FOR_TWC:
+        return []
+    return [
+        Violation(
+            field="temporalWorkerDeployment.enabled",
+            actual=True,
+            expected=f"unset (TWC requires application-sdk >= {MIN_SDK_FOR_TWC})",
+            rule="twc_requires_sdk_2_7_4",
+            fix=(
+                f"Upgrade application-sdk to >= {MIN_SDK_FOR_TWC}, or remove "
+                "the temporalWorkerDeployment block. TWC is unsupported on "
+                "older SDKs and the chart silently ignores it — leaving "
+                "image-pull and crashloop failures undetected at rollout."
+            ),
         )
     ]
 
@@ -233,13 +335,15 @@ def _check_vpa(cfg: dict, parsed: dict[tuple[str, str], int | None]) -> list[Vio
 
 
 def _resolve_effective_vpa_max(
-    cfg: dict, parsed: dict[tuple[str, str], int | None]
+    cfg: dict,
+    parsed: dict[tuple[str, str], int | None],
+    vpa_enabled: bool | None,
 ) -> tuple[int | None, int | None]:
     """Effective vpa.maxAllowed (cpu_milli, mem_bytes), or (None, None) when vpa disabled.
     Falls back to DEFAULT_VPA_MAX_* when maxAllowed not declared."""
-    vpa = cfg.get("vpa") or {}
-    if vpa.get("enabled") is not True:
+    if vpa_enabled is not True:
         return None, None
+    vpa = cfg.get("vpa") or {}
     max_allowed = vpa.get("maxAllowed") or {}
     cpu_milli: int | None = (
         parsed.get(("cpu", "maxAllowed"))
@@ -359,11 +463,15 @@ def _check_resource_block(
 
 
 def _check_resources(
-    cfg: dict, vpa_parsed: dict[tuple[str, str], int | None]
+    cfg: dict,
+    vpa_parsed: dict[tuple[str, str], int | None],
+    bools: dict[str, bool | None],
 ) -> list[Violation]:
-    vpa_cpu, vpa_mem = _resolve_effective_vpa_max(cfg, vpa_parsed)
+    vpa_cpu, vpa_mem = _resolve_effective_vpa_max(
+        cfg, vpa_parsed, bools.get("vpa.enabled")
+    )
     errs = _check_resource_block(cfg, "resources", vpa_cpu, vpa_mem)
-    if cfg.get("splitDeploymentEnabled") is True:
+    if bools.get("splitDeploymentEnabled") is True:
         for k in ("serverResources", "workerResources"):
             errs += _check_resource_block(cfg, k, vpa_cpu, vpa_mem)
     return errs
@@ -396,10 +504,15 @@ def _check_keda(cfg: dict) -> list[Violation]:
     return []
 
 
-def validate_config(config_yaml: Any) -> None:
+def validate_config(config_yaml: Any, sdk_version: str | None = None) -> None:
     """Run all guardrail rules. Accepts YAML string or already-parsed dict.
-    Raises ConfigValidationError with aggregated violations from a single pass.
-    No-op on non-mapping input.
+
+    *sdk_version* (optional) gates version-coupled rules — currently the TWC
+    floor at 2.7.4. Pass None to skip those rules (driver fails loud on
+    InvalidVersion before reaching here, so None means "not provided").
+
+    Raises ConfigValidationError with aggregated violations from a single
+    pass. No-op on non-mapping input.
     """
     if isinstance(config_yaml, dict):
         cfg = config_yaml
@@ -422,12 +535,22 @@ def validate_config(config_yaml: Any) -> None:
     if not isinstance(cfg, dict):
         return
 
+    parsed_sdk: Version | None = None
+    if sdk_version:
+        try:
+            parsed_sdk = Version(sdk_version)
+        except InvalidVersion:
+            parsed_sdk = None
+
     errs: list[Violation] = []
+    bools, bool_errs = _parse_bools(cfg)
+    errs += bool_errs
     vpa_parsed, vpa_parse_errs = _parse_vpa(cfg)
     errs += vpa_parse_errs
-    errs += _check_split_requires_twc(cfg)
+    errs += _check_split_requires_twc(cfg, bools, parsed_sdk)
+    errs += _check_twc_sdk_floor(bools, parsed_sdk)
     errs += _check_vpa(cfg, vpa_parsed)
-    errs += _check_resources(cfg, vpa_parsed)
+    errs += _check_resources(cfg, vpa_parsed, bools)
     errs += _check_keda(cfg)
 
     if errs:

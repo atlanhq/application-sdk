@@ -476,3 +476,157 @@ class TestYamlParseFailure:
         with pytest.raises(ConfigValidationError) as exc:
             validate_config("foo: [unterminated")
         assert any(v.rule == "yaml_parse" for v in exc.value.violations)
+
+
+# ---------------------------------------------------------------------------
+# Rule: invalid_type on non-bool flags
+# ---------------------------------------------------------------------------
+
+
+class TestInvalidBoolType:
+    def test_quoted_split_flag_emits_invalid_type(self):
+        # `splitDeploymentEnabled: "true"` is a string, not bool. Previously
+        # `is True` silently bypassed every split-dependent rule. Must surface
+        # invalid_type so the user sees the typo.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config('splitDeploymentEnabled: "true"\n')
+        fields = {(v.rule, v.field) for v in exc.value.violations}
+        assert ("invalid_type", "splitDeploymentEnabled") in fields
+
+    def test_quoted_vpa_enabled_emits_invalid_type(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config('vpa:\n  enabled: "true"\n')
+        fields = {(v.rule, v.field) for v in exc.value.violations}
+        assert ("invalid_type", "vpa.enabled") in fields
+
+    def test_quoted_twd_enabled_emits_invalid_type(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                "splitDeploymentEnabled: true\n"
+                'temporalWorkerDeployment:\n  enabled: "false"\n'
+            )
+        rules = {v.rule for v in exc.value.violations}
+        assert "invalid_type" in rules
+        # twc_required_for_split must NOT fire on the string — only invalid_type.
+        assert "twc_required_for_split" not in rules
+
+    def test_quoted_vpa_enabled_skips_vpa_max_rule(self):
+        # With `vpa.enabled: "true"` (string), the requests<=vpa.maxAllowed
+        # rule no-ops. Previously this was a silent bypass; now invalid_type
+        # surfaces the typo while the rule still skips (treated as missing).
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                'vpa:\n  enabled: "true"\n'
+                "resources:\n"
+                "  requests: {cpu: 3, memory: 500Mi}\n"
+                "  limits:   {cpu: 3, memory: 1Gi}\n"
+            )
+        rules = {v.rule for v in exc.value.violations}
+        assert "invalid_type" in rules
+        assert "requests_exceeds_vpa_max_cpu" not in rules
+
+    def test_real_bool_passes_type_check(self):
+        # Sanity: explicit bool false on split-enabled is the existing twc rule,
+        # not invalid_type.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                "splitDeploymentEnabled: true\n"
+                "temporalWorkerDeployment:\n  enabled: false\n"
+            )
+        rules = {v.rule for v in exc.value.violations}
+        assert "twc_required_for_split" in rules
+        assert "invalid_type" not in rules
+
+
+class TestTwcSdkFloor:
+    def test_twd_enabled_on_old_sdk_fails(self):
+        # SDK < 2.7.4 has no TWC controller. App owner setting enabled=true
+        # is a silent no-op in cluster — chart drops the block. Must fail
+        # at config time.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                "temporalWorkerDeployment:\n  enabled: true\n",
+                sdk_version="2.6.0",
+            )
+        rules = {v.rule for v in exc.value.violations}
+        assert "twc_requires_sdk_2_7_4" in rules
+
+    def test_twd_enabled_at_floor_passes(self):
+        validate_config(
+            "temporalWorkerDeployment:\n  enabled: true\n",
+            sdk_version="2.7.4",
+        )
+
+    def test_twd_enabled_above_floor_passes(self):
+        validate_config(
+            "temporalWorkerDeployment:\n  enabled: true\n",
+            sdk_version="3.6.0",
+        )
+
+    def test_twd_disabled_on_old_sdk_passes(self):
+        # Explicit enabled=false on old SDK is harmless — chart ignores block.
+        validate_config(
+            "temporalWorkerDeployment:\n  enabled: false\n",
+            sdk_version="2.6.0",
+        )
+
+    def test_split_disabled_check_skipped_below_floor(self):
+        # On SDK < 2.7.4, the split + twd.enabled=false rule must NOT fire —
+        # user has no way to enable TWC there. Only the enabled=true case
+        # is caught (by _check_twc_sdk_floor).
+        validate_config(
+            "splitDeploymentEnabled: true\n"
+            "temporalWorkerDeployment:\n  enabled: false\n",
+            sdk_version="2.6.0",
+        )
+
+    def test_split_disabled_check_fires_at_or_above_floor(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                "splitDeploymentEnabled: true\n"
+                "temporalWorkerDeployment:\n  enabled: false\n",
+                sdk_version="2.7.4",
+            )
+        rules = {v.rule for v in exc.value.violations}
+        assert "twc_required_for_split" in rules
+
+    def test_no_sdk_version_skips_floor_rule(self):
+        # sdk_version=None (e.g. atlan.yaml without sdk_version block) → can't
+        # gate. Skip floor rule rather than guess.
+        validate_config("temporalWorkerDeployment:\n  enabled: true\n")
+
+    def test_invalid_sdk_version_skips_floor_rule(self):
+        # Driver fails loud on invalid sdk_version before reaching here; if
+        # the dict-input test path bypasses the driver, treat as unknown.
+        validate_config(
+            "temporalWorkerDeployment:\n  enabled: true\n",
+            sdk_version="not-a-version",
+        )
+
+    def test_twc_required_message_has_no_version(self):
+        # Regression: twc_required_for_split message must NOT name a specific
+        # SDK version — that constraint lives in twc_requires_sdk_2_7_4 now.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                "splitDeploymentEnabled: true\n"
+                "temporalWorkerDeployment:\n  enabled: false\n",
+                sdk_version="2.7.4",
+            )
+        twc = next(
+            v for v in exc.value.violations if v.rule == "twc_required_for_split"
+        )
+        assert "2.7.4" not in twc.fix
+        assert "2.7.4" not in str(twc.expected)
+
+    def test_floor_message_names_version(self):
+        # Inverse: twc_requires_sdk_2_7_4 MUST name the version — that's the
+        # whole point of the rule.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                "temporalWorkerDeployment:\n  enabled: true\n",
+                sdk_version="2.6.0",
+            )
+        floor = next(
+            v for v in exc.value.violations if v.rule == "twc_requires_sdk_2_7_4"
+        )
+        assert "2.7.4" in floor.fix

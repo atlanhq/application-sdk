@@ -8,8 +8,10 @@ Two flag classes:
     to retire deprecated flags at a specific SDK cutover.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import yaml
 from packaging.version import InvalidVersion, Version
@@ -19,7 +21,7 @@ logger = logging.getLogger(__name__)
 # (min_version, key, default_value, max_version, force_override)
 # Applied when min_version <= sdk_version < max_version (max=None means no upper bound)
 # AND (key absent OR force_override=True).
-VERSION_GATED_FLAGS: List[Tuple[Version, str, Any, Optional[Version], bool]] = [
+VERSION_GATED_FLAGS: list[tuple[Version, str, Any, Version | None, bool]] = [
     (Version("2.3.1"), "splitDeploymentEnabled", True, None, False),
     (Version("2.3.1"), "vpa", {"enabled": True}, None, False),
     (Version("2.5.0"), "keda", {"enabled": True, "minReplicaCount": 0}, None, False),
@@ -81,6 +83,20 @@ def inject_sdk_version_flags(config_yaml: str, sdk_version: str | None) -> str:
         if key in config:
             if force_override and config[key] != default_value:
                 overrides[key] = default_value
+                existing = config[key]
+                # Force-override of a dict replaces the entire value: any
+                # sibling sub-keys the app owner set (e.g. customMetrics.interval,
+                # customMetrics.labels) are silently dropped. Surface them at
+                # warn-level so the CI log shows what's lost.
+                if isinstance(existing, dict) and isinstance(default_value, dict):
+                    dropped = sorted(set(existing) - set(default_value))
+                    if dropped:
+                        logger.warning(
+                            f"Force-override of {key} drops sibling sub-keys "
+                            f"{dropped} for sdk_version={sdk_version}. These "
+                            "are no longer honoured by the chart; remove them "
+                            "from atlan.yaml."
+                        )
                 logger.info(
                     f"Force-overriding {key}={config[key]!r} → {default_value!r} "
                     f"for sdk_version={sdk_version}"

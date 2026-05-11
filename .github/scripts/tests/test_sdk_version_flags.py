@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -146,6 +147,49 @@ class TestInjectSdkVersionFlags:
         parsed = yaml.safe_load(result)
         assert parsed["customMetrics"] == {"enabled": False}
         assert parsed["metrics"] == {"enabled": True}
+
+    def test_force_override_warns_on_dropped_sibling_keys(self, caplog):
+        """Force-override of a dict-valued flag replaces the whole dict.
+        Any sibling sub-keys the app owner set (e.g. customMetrics.interval,
+        customMetrics.labels) silently disappear from the rendered chart.
+        Must emit a warn-level log naming the dropped keys so the CI log
+        shows what's lost — otherwise app owners discover the gap only when
+        scrape config breaks at runtime."""
+
+        config = (
+            "customMetrics:\n"
+            "  enabled: true\n"
+            "  interval: 30s\n"
+            "  labels:\n"
+            "    team: platform\n"
+        )
+        with caplog.at_level(logging.WARNING, logger="sdk_version_flags"):
+            result = inject_sdk_version_flags(config, "3.6.0")
+
+        parsed = yaml.safe_load(result)
+        assert parsed["customMetrics"] == {"enabled": False}
+
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        msgs = " ".join(r.getMessage() for r in warnings)
+        assert "customMetrics" in msgs
+        assert "interval" in msgs
+        assert "labels" in msgs
+
+    def test_force_override_no_warning_when_no_sibling_keys(self, caplog):
+        """If app owner only set the same key the override replaces (no extra
+        sub-keys), nothing is lost — no warning needed."""
+
+        config = "customMetrics:\n  enabled: true\n"
+        with caplog.at_level(logging.WARNING, logger="sdk_version_flags"):
+            inject_sdk_version_flags(config, "3.6.0")
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+            and "drops sibling sub-keys" in r.getMessage()
+        ]
+        assert warnings == []
 
     def test_version_below_3_6_0_preserves_explicit_temporal_metrics_true(self):
         """For SDK < 3.6.0, temporalMetrics is still the legacy path, so an
