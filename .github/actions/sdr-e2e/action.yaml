@@ -71,6 +71,28 @@ inputs:
       ref) action.yaml itself.
     required: false
     default: ""
+  components-dir:
+    description: |
+      Directory (relative to repo root) holding app-level Dapr component
+      overrides that are copied OVER the SDK defaults after configurator
+      generation. Per-tier directories let a connector run multiple test
+      stacks side-by-side — e.g. tier-3 uses the default
+      `.github/e2e/components` (localstorage objectstore for hermetic
+      runs), tier-4 sets `.github/e2e/tier-4-components` (S3 binding
+      pointing at the tenant bucket so publish/qi/lineage can read what
+      extract wrote).
+    required: false
+    default: .github/e2e/components
+  compose-overlay:
+    description: |
+      Path (relative to repo root) to an app-level docker-compose overlay
+      that stacks on top of the configurator output + SDK CI defaults.
+      Default fits tier-3 (`docker-compose.ci.yml` — sibling DB with
+      seed). Tier-4 overrides with its own overlay that propagates
+      AWS_* env vars to the worker for the S3 binding + sets a unique
+      agent-name so the worker registers on its own Temporal queue.
+    required: false
+    default: .github/e2e/docker-compose.ci.yml
 
 outputs:
   test-outcome:
@@ -236,11 +258,12 @@ runs:
       shell: bash
       env:
         SDK_COMPONENTS: ${{ github.action_path }}/components
+        APP_COMPONENTS: ${{ inputs.components-dir }}
       run: |
         cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
-        if [ -d .github/e2e/components ] && [ -n "$(ls -A .github/e2e/components 2>/dev/null)" ]; then
-          echo "Applying app-level component overrides"
-          cp .github/e2e/components/*.yaml ci-deploy/components/
+        if [ -d "${APP_COMPONENTS}" ] && [ -n "$(ls -A "${APP_COMPONENTS}" 2>/dev/null)" ]; then
+          echo "Applying app-level component overrides from ${APP_COMPONENTS}"
+          cp "${APP_COMPONENTS}"/*.yaml ci-deploy/components/
         fi
 
     - name: Build compose -f chain
@@ -248,12 +271,13 @@ runs:
       shell: bash
       env:
         SDK_COMPOSE: ${{ github.action_path }}/docker-compose.ci.yml
+        APP_COMPOSE: ${{ inputs.compose-overlay }}
       run: |
         # Order: configurator-generated base → SDK CI overrides → optional app layer.
         FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
-        if [ -f .github/e2e/docker-compose.ci.yml ]; then
-          echo "Adding app-level compose layer"
-          FILES+=("-f" ".github/e2e/docker-compose.ci.yml")
+        if [ -f "${APP_COMPOSE}" ]; then
+          echo "Adding app-level compose layer from ${APP_COMPOSE}"
+          FILES+=("-f" "${APP_COMPOSE}")
         fi
         # Persist the array as a single space-joined string (compose -f flags
         # are simple paths, no whitespace issues).
