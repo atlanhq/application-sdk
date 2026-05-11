@@ -11,6 +11,11 @@ contract and regenerated SDK artifacts, not to hand-edit generated JSON.
 
 ## Hard Rules
 
+- Treat `atlanhq/application-sdk` as the canonical source for this skill. The
+  repo-local copies live at `.agents/skills/make-contract/SKILL.md` and
+  `.claude/skills/make-contract/SKILL.md`; mirror any edits between them and do
+  not add nested `make-contract` skill copies under `contract-toolkit/` or app
+  repos.
 - Use the Atlan CLI contract commands first. Fall back to direct `pkl` commands
   only when the CLI is missing, too old, or cannot support the requested change.
 - Do not expose internal service, repository, or implementation details in
