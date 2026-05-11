@@ -9,6 +9,7 @@ import inspect
 import os
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Union, cast
 
@@ -17,6 +18,7 @@ import orjson
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
+from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.storage.formats.utils import (
@@ -25,6 +27,24 @@ from application_sdk.storage.formats.utils import (
     path_gen,
 )
 from application_sdk.storage.ops import upload_file as _upload_file
+
+
+@dataclass
+class WriterResult:
+    """Outcome of a Writer.close() call.
+
+    Attributes:
+        statistics: Aggregate counts written.
+        files: Ephemeral ``FileReference`` to the writer-owned output
+            directory. Pass this through an activity's typed Output and the
+            Temporal interceptor's ``persist_file_refs`` will upload it
+            (with SHA-256 sidecars). No caller-side ``persist_file_reference``
+            call is required.
+    """
+
+    statistics: TaskStatistics
+    files: FileReference
+
 
 logger = get_logger(__name__)
 
@@ -211,16 +231,18 @@ class Writer(ABC):
     Example:
         Using close() explicitly::
 
-            writer = JsonFileWriter(path="/data/output")
+            writer = ParquetFileWriter(path="/data/output", typename="users")
             await writer.write(dataframe)
-            await writer.write({"key": "value"})  # Dict support
-            stats = await writer.close()
+            result = await writer.close()
+            # result.statistics → TaskStatistics
+            # result.files      → ephemeral FileReference for the output dir
 
         Using context manager (recommended)::
 
-            async with JsonFileWriter(path="/data/output") as writer:
-                await writer.write(dataframe)
-            # close() called automatically
+            async with ParquetFileWriter(path=base, typename="users") as w:
+                await w.write(dataframe)
+            # close() called automatically; final result retrievable via
+            # w.last_result if needed.
     """
 
     path: str
@@ -237,6 +259,7 @@ class Writer(ABC):
     dataframe_type: DataframeType
     _is_closed: bool = False
     _statistics: TaskStatistics | None = None
+    _result: "WriterResult | None" = None
 
     async def __aenter__(self) -> "Writer":
         """Enter the async context manager.
@@ -547,6 +570,20 @@ class Writer(ABC):
         """
 
     @property
+    def last_result(self) -> "WriterResult | None":
+        """Return the result of the most recent close(), or None if not closed yet.
+
+        Useful when calling close() implicitly via ``async with``: the
+        context manager discards close()'s return value, so read it here
+        afterwards::
+
+            async with ParquetFileWriter(path=base, typename="t") as w:
+                await w.write(df)
+            result = w.last_result  # WriterResult
+        """
+        return self._result
+
+    @property
     def statistics(self) -> TaskStatistics:
         """Get current statistics without closing the writer.
 
@@ -570,19 +607,23 @@ class Writer(ABC):
         upload remaining files, etc. This is called by close() before writing statistics.
         """
 
-    async def close(self) -> TaskStatistics:
-        """Close the writer, flush buffers, upload files, and return statistics.
+    async def close(self) -> WriterResult:
+        """Close the writer, flush buffers, and return statistics + file reference.
 
-        This method finalizes all pending writes, uploads any remaining files to
-        the object store, writes statistics, and marks the writer as closed.
-        Calling close() multiple times is safe (subsequent calls are no-ops).
+        Finalizes all pending writes, writes the statistics sidecar, and marks
+        the writer as closed. Calling close() multiple times is safe — subsequent
+        calls return the cached :class:`WriterResult`.
 
-        The typename for statistics is automatically taken from `self.typename`
-        if it was set during initialization.
+        The returned :class:`WriterResult` carries an ephemeral
+        :class:`FileReference` pointing at the writer-owned output directory
+        (``self.path``). When that ``FileReference`` is placed on an activity's
+        typed Output, the Temporal interceptor's ``persist_file_refs`` uploads
+        it transparently with SHA-256 sidecars — callers do not need to call
+        ``persist_file_reference`` themselves.
 
         Returns:
-            TaskStatistics: Final statistics including total_record_count,
-                chunk_count, and partitions.
+            WriterResult: ``statistics`` (record/chunk counts) and ``files``
+                (ephemeral ``FileReference`` to the output directory).
 
         Raises:
             ValueError: If statistics data is invalid.
@@ -590,16 +631,22 @@ class Writer(ABC):
 
         Example:
             ```python
-            writer = JsonFileWriter(path="/data/output", typename="table")
-            await writer.write(dataframe)
-            stats = await writer.close()
-            print(f"Wrote {stats.total_record_count} records")
+            async with ParquetFileWriter(path=base, typename="table") as w:
+                await w.write(df)
+            result = await w.close()
+            return MyOutput(statistics=result.statistics, data=result.files)
             ```
         """
         if self._is_closed:
-            if self._statistics:
-                return self._statistics
-            return self.statistics
+            if self._result is not None:
+                return self._result
+            # Idempotent fallback: re-derive when called more than once on an
+            # already-closed instance with no cached result (defensive — should
+            # not happen in normal flow).
+            return WriterResult(
+                statistics=self._statistics or self.statistics,
+                files=FileReference.from_local(self.path),
+            )
 
         try:
             # Allow subclasses to perform final flush/upload operations
@@ -618,7 +665,11 @@ class Writer(ABC):
                 self._statistics.typename = typename
 
             self._is_closed = True
-            return self._statistics
+            self._result = WriterResult(
+                statistics=self._statistics,
+                files=FileReference.from_local(self.path),
+            )
+            return self._result
 
         except Exception as e:
             raise rewrap(e, "Error closing writer") from e
@@ -719,8 +770,10 @@ class Writer(ABC):
             with open(output_file_name, "wb") as f:
                 f.write(orjson.dumps(statistics))
 
-            # Push the file to the object store (key = local path for consistency)
-            await _upload_file(output_file_name, output_file_name)
+            # Route through self._upload_file so subclasses (ParquetFileWriter)
+            # that defer uploads to the close()-returned FileReference can
+            # neutralise this call.
+            await self._upload_file(output_file_name)
 
             return statistics
         except Exception as e:

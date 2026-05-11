@@ -266,14 +266,17 @@ class TestWriterDataIntegrity:
 
 
 class TestParquetWriterDataIntegrity:
-    """Verify ParquetFileWriter preserves all data on disk.
+    """Verify ParquetFileWriter preserves all data both on disk AND through
+    the new FileReference upload boundary.
 
     Parquet's pq.write_table() overwrites the target file (unlike JSON which
     appends). The _flush_buffer override in ParquetFileWriter ensures each
     sub-chunk gets a unique filename via chunk_part advancement. See HYP-773.
 
-    Upload is deferred to the caller via persist_file_reference(); these tests
-    verify only the local-disk contract. All tests use buffer_size=50.
+    Upload is deferred to close()'s returned WriterResult.files — these tests
+    verify both the local-disk contract AND that persisting result.files via
+    persist_file_reference produces a complete copy in the store. All tests
+    use buffer_size=50.
     """
 
     BUFFER_SIZE = 50
@@ -287,44 +290,42 @@ class TestParquetWriterDataIntegrity:
     async def _run_write_scenario(
         self, temp_dir: str, row_count: int, num_writes: int = 1
     ) -> dict:
-        """Run a write scenario and return disk results.
+        """Run a write scenario, persist via FileReference, and return results.
 
-        Uploads are no longer inline — ParquetFileWriter now leaves files on
-        disk and callers use persist_file_reference() to push them to the store.
-        These tests verify the local-disk contract only.
-
-        The base-class _upload_file is patched as a no-op so that
-        close()/_write_statistics() does not fail when no object store is
-        configured in the test environment.
+        Verifies the full contract: writer leaves files on disk, close() hands
+        back a WriterResult, and ``persist_file_reference(store, result.files)``
+        uploads every parquet file (and statistics sidecar) — zero loss.
         """
-        from unittest.mock import AsyncMock, patch
-
+        from application_sdk.storage.factory import create_memory_store
         from application_sdk.storage.formats.parquet import ParquetFileWriter
+        from application_sdk.storage.reference import persist_file_reference
 
-        with patch(
-            "application_sdk.storage.formats._upload_file",
-            new_callable=AsyncMock,
-        ):
-            writer = ParquetFileWriter(
-                path=temp_dir,
-                typename="test_entity",
-                buffer_size=self.BUFFER_SIZE,
-                use_consolidation=False,
-            )
+        writer = ParquetFileWriter(
+            path=temp_dir,
+            typename="test_entity",
+            buffer_size=self.BUFFER_SIZE,
+            use_consolidation=False,
+        )
 
-            rows_per_write = row_count // num_writes
-            total = 0
-            for batch_idx in range(num_writes):
-                start = batch_idx * rows_per_write
-                df = pd.DataFrame({"id": list(range(start, start + rows_per_write))})
-                await writer.write(df)
-                total += rows_per_write
+        rows_per_write = row_count // num_writes
+        total = 0
+        for batch_idx in range(num_writes):
+            start = batch_idx * rows_per_write
+            df = pd.DataFrame({"id": list(range(start, start + rows_per_write))})
+            await writer.write(df)
+            total += rows_per_write
 
-            await writer.close()
+        result = await writer.close()
 
-        # Disk: read back all parquet files
+        # The writer must surface an ephemeral FileReference scoped to its
+        # own output directory — never to anything outside.
+        assert result.files.is_durable is False
+        assert result.files.local_path == writer.path
+        assert result.files.local_path.startswith(temp_dir)
+
+        # Disk: read back all parquet files from the writer-owned subdir.
         parquet_files = glob.glob(
-            os.path.join(temp_dir, "test_entity", "**", "*.parquet"),
+            os.path.join(result.files.local_path, "**", "*.parquet"),
             recursive=True,
         )
         if parquet_files:
@@ -334,19 +335,46 @@ class TestParquetWriterDataIntegrity:
         else:
             disk_df = pd.DataFrame()
 
+        # Object store: persist via the FileReference and read everything back.
+        store = create_memory_store()
+        durable = await persist_file_reference(store, result.files)
+        assert durable.is_durable is True
+
+        from application_sdk.storage.batch import list_keys
+
+        store_keys = await list_keys(durable.storage_path, store, suffix=".parquet")
+        # Download each parquet key and re-read to count rows.
+        from application_sdk.storage.ops import _get_bytes
+
+        store_ids: set[int] = set()
+        store_rows = 0
+        import io as _io
+
+        for key in store_keys:
+            data = await _get_bytes(key, store, normalize=False)
+            df_back = pd.read_parquet(_io.BytesIO(data))
+            store_rows += len(df_back)
+            store_ids.update(df_back["id"].tolist())
+
         return {
             "disk_rows": len(disk_df),
             "disk_ids": set(disk_df["id"].tolist()) if len(disk_df) > 0 else set(),
+            "store_rows": store_rows,
+            "store_ids": store_ids,
             "expected": total,
         }
 
     def _assert_no_data_loss(self, r: dict, expected: int) -> None:
-        """Assert zero data loss on disk."""
+        """Assert zero data loss on disk AND in the object store."""
         expected_ids = set(range(expected))
         assert (
             r["disk_rows"] == expected
         ), f"Disk data loss: {r['disk_rows']}/{expected} rows"
         assert r["disk_ids"] == expected_ids, "Disk: missing IDs detected"
+        assert (
+            r["store_rows"] == expected
+        ), f"Store data loss: {r['store_rows']}/{expected} rows"
+        assert r["store_ids"] == expected_ids, "Store: missing IDs detected"
 
     # --- Single write() scenarios ---
 

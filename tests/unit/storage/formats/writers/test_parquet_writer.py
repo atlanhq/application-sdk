@@ -21,6 +21,7 @@ from application_sdk.storage.batch import list_keys, upload_prefix
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.formats.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.storage.formats.utils import path_gen
+from application_sdk.storage.reference import persist_file_reference
 
 
 @pytest.fixture
@@ -112,8 +113,11 @@ class TestParquetFileWriterInit:
         """Test ParquetFileWriter initialization with default values."""
         parquet_output = ParquetFileWriter(path=base_output_path)
 
-        # The output path gets modified by adding suffix, so check it ends with the base path
-        assert base_output_path in parquet_output.path
+        # Without a typename, the writer must create a scoped sub-directory so
+        # close()'s FileReference covers only what this writer wrote.
+        assert parquet_output.path.startswith(base_output_path + os.sep)
+        assert os.path.basename(parquet_output.path).startswith("_parquet_")
+        assert parquet_output.path != base_output_path
         assert parquet_output.typename is None
 
         assert parquet_output.chunk_size == 100000
@@ -123,6 +127,30 @@ class TestParquetFileWriterInit:
         assert parquet_output.start_marker is None
         assert parquet_output.end_marker is None
         # partition_cols was removed from the implementation
+
+    def test_init_isolates_writes_from_sibling_content(self, tmp_path):
+        """Writer-owned subdir must isolate parquet output from sibling files.
+
+        Manager's /tmp concern: if a caller passes a shared directory (no
+        typename), the writer must never co-mingle its chunks with other
+        files in that directory — otherwise close()'s FileReference would
+        upload everything in the shared dir, not just the parquet output.
+        """
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        # Pre-existing sibling file the writer must not touch.
+        sibling = shared / "do_not_upload.txt"
+        sibling.write_text("hands off")
+
+        writer = ParquetFileWriter(path=str(shared))
+
+        # Writer chose a subdir, not the shared dir itself.
+        assert writer.path != str(shared)
+        assert writer.path.startswith(str(shared) + os.sep)
+        # FileReference.from_local(writer.path) at the end will scope uploads
+        # to writer.path — sibling stays untouched outside.
+        assert sibling.exists()
+        assert sibling.read_text() == "hands off"
 
     def test_init_custom_values(self, base_output_path: str):
         """Test ParquetFileWriter initialization with custom values."""
@@ -354,6 +382,87 @@ class TestParquetFileWriterReplacePrefix:
             clear_infrastructure()
 
 
+class TestParquetFileWriterCloseContract:
+    """End-to-end verification of the new close() → WriterResult contract."""
+
+    @pytest.mark.asyncio
+    async def test_close_returns_writer_result_with_filereference(
+        self, base_output_path: str, sample_dataframe: pd.DataFrame
+    ):
+        """close() must hand back statistics + an ephemeral FileReference."""
+        writer = ParquetFileWriter(path=base_output_path, typename="users")
+        await writer.write(sample_dataframe)
+        result = await writer.close()
+
+        assert result.statistics.total_record_count == len(sample_dataframe)
+        assert result.statistics.typename == "users"
+        assert result.files.local_path == writer.path
+        assert result.files.is_durable is False
+
+        # And it's surfaced via last_result for async-with callers.
+        assert writer.last_result is result
+
+    @pytest.mark.asyncio
+    async def test_close_then_persist_file_reference_uploads_full_output(
+        self, tmp_path: Path
+    ):
+        """The 'trivial' caller pattern: close() then persist the ref.
+
+        Mirrors the docstring example — no caller-side upload_prefix /
+        upload_file boilerplate, just persist the returned FileReference.
+        Validates that every parquet chunk plus the statistics sidecar
+        appear in the store under the persisted prefix.
+        """
+        writer = ParquetFileWriter(
+            path=str(tmp_path / "out"),
+            typename="orders",
+            buffer_size=50,
+        )
+        # 120 rows -> 3 sub-chunks (50+50+20) -> HYP-773 territory.
+        df = pd.DataFrame({"id": list(range(120))})
+        await writer.write(df)
+        result = await writer.close()
+
+        store = create_memory_store()
+        durable = await persist_file_reference(store, result.files)
+        assert durable.is_durable is True
+        assert durable.storage_path is not None
+
+        parquet_keys = await list_keys(durable.storage_path, store, suffix=".parquet")
+        assert len(parquet_keys) >= 3  # at least one per sub-chunk
+
+        # Statistics sidecar landed inside the persisted prefix too — no
+        # separate handoff needed by the caller.
+        all_keys = await list_keys(durable.storage_path, store)
+        assert any("statistics" in k for k in all_keys)
+
+    @pytest.mark.asyncio
+    async def test_no_inline_uploads_during_write(
+        self, base_output_path: str, sample_dataframe: pd.DataFrame
+    ):
+        """No code path on this writer may upload inline.
+
+        Guards against regression to the pre-BLDX-1136 half-on/half-off
+        state where some flush paths uploaded and others didn't.
+        """
+        with (
+            patch(
+                "application_sdk.storage.formats._upload_file",
+                new_callable=AsyncMock,
+            ) as base_upload,
+            patch(
+                "application_sdk.storage.formats.parquet._delete_prefix",
+                new_callable=AsyncMock,
+            ) as delete_prefix,
+        ):
+            writer = ParquetFileWriter(path=base_output_path, typename="t")
+            await writer.write(sample_dataframe)
+            await writer.close()
+
+        base_upload.assert_not_called()
+        delete_prefix.assert_not_called()
+
+
 class TestParquetFileWriterWriteDaftDataframe:
     """Test ParquetFileWriter daft DataFrame writing via _write_daft_dataframe.
 
@@ -379,14 +488,8 @@ class TestParquetFileWriterWriteDaftDataframe:
 
     @pytest.mark.asyncio
     async def test_write_success(self, base_output_path: str):
-        """Test successful daft DataFrame writing."""
-        with (
-            patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-        ):
-            mock_upload.return_value = AsyncMock()
+        """Test successful daft DataFrame writing — no inline uploads."""
+        with patch("daft.execution_config_ctx") as mock_ctx:
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -414,23 +517,10 @@ class TestParquetFileWriterWriteDaftDataframe:
                 partition_cols=None,
             )
 
-            # Check that upload_prefix was called
-            mock_upload.assert_called_once()
-
     @pytest.mark.asyncio
     async def test_write_with_parameter_overrides(self, base_output_path: str):
         """Test daft DataFrame writing with parameter overrides."""
-        with (
-            patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-            patch(
-                "application_sdk.storage.formats.parquet._delete_prefix"
-            ) as mock_delete,
-        ):
-            mock_upload.return_value = AsyncMock()
-            mock_delete.return_value = AsyncMock()
+        with patch("daft.execution_config_ctx") as mock_ctx:
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -458,19 +548,10 @@ class TestParquetFileWriterWriteDaftDataframe:
                 partition_cols=["department", "year"],  # Overridden
             )
 
-            # Check that delete_prefix was called for overwrite mode
-            mock_delete.assert_called_once_with(base_output_path)
-
     @pytest.mark.asyncio
     async def test_write_with_default_parameters(self, base_output_path: str):
         """Test daft DataFrame writing with default parameters (uses method default write_mode='append')."""
-        with (
-            patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-        ):
-            mock_upload.return_value = AsyncMock()
+        with patch("daft.execution_config_ctx") as mock_ctx:
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -499,13 +580,7 @@ class TestParquetFileWriterWriteDaftDataframe:
     @pytest.mark.asyncio
     async def test_write_with_execution_configuration(self, base_output_path: str):
         """Test that DAPR limit is properly configured."""
-        with (
-            patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-        ):
-            mock_upload.return_value = AsyncMock()
+        with patch("daft.execution_config_ctx") as mock_ctx:
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -574,13 +649,9 @@ class TestParquetFileWriterMetrics:
         with (
             patch("daft.execution_config_ctx") as mock_ctx,
             patch(
-                "application_sdk.storage.formats.parquet._upload_file"
-            ) as mock_upload,
-            patch(
                 "application_sdk.storage.formats.parquet.get_metrics"
             ) as mock_get_metrics,
         ):
-            mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
             mock_metrics = MagicMock()

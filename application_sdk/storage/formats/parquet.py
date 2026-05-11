@@ -1,5 +1,6 @@
 import inspect
 import os
+import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from typing import TYPE_CHECKING, Union, cast
 
@@ -17,7 +18,6 @@ from application_sdk.storage.formats.utils import (
     path_gen,
 )
 from application_sdk.storage.ops import normalize_key
-from application_sdk.storage.ops import upload_file as _upload_file
 
 logger = get_logger(__name__)
 
@@ -500,9 +500,14 @@ class ParquetFileWriter(Writer):
 
         if not self.path:
             raise ValueError("path is required")
-        # Create output directory
+        # Create a writer-owned subdir so close()'s FileReference covers
+        # *only* what this writer wrote — never sibling content in `path`.
+        # Without this, a caller passing path="/tmp" with no typename would
+        # later upload the entire /tmp directory when persisting the ref.
         if self.typename:
             self.path = os.path.join(self.path, self.typename)
+        else:
+            self.path = os.path.join(self.path, f"_parquet_{uuid.uuid4().hex[:8]}")
         SafeFileOps.makedirs(self.path, exist_ok=True)
 
     async def _ensure_prefix_replaced(self) -> None:
@@ -667,15 +672,13 @@ class ParquetFileWriter(Writer):
                 description="Number of write operations to Parquet files",
             )
 
-            #  Upload the entire directory (contains multiple parquet files created by Daft)
-            if write_mode == WriteMode.OVERWRITE:
-                # Delete the directory from object store
-                try:
-                    await _delete_prefix(self.path)
-                except FileNotFoundError:
-                    logger.info("No files found under prefix: %s", self.path)
-            for path in file_paths:
-                await _upload_file(path, path, retain_local_copy=self.retain_local_copy)
+            # OVERWRITE semantics on the object store are handled by
+            # constructing the writer with replace_prefix=True (which runs
+            # _ensure_prefix_replaced before the first write). The writer no
+            # longer pushes anything to the object store from this method —
+            # the caller persists the directory via the FileReference returned
+            # from close().
+            _ = file_paths  # local files; surfaced to the caller via close().files
 
         except Exception as e:
             # Record metrics for failed write
@@ -876,12 +879,27 @@ class ParquetFileWriter(Writer):
         override _write_dataframe's buffer loop writes every sub-chunk to the
         same filename, silently losing all data except the last sub-chunk.
 
-        Upload is deferred to the caller via FileReference / persist_file_reference
-        rather than happening inline here. See HYP-773, BLDX-1136.
+        Upload is deferred to close()'s returned FileReference. See HYP-773,
+        BLDX-1136.
         """
         await super()._flush_buffer(chunk, chunk_part)
         # Advance part so the next sub-chunk gets a unique filename.
         self.chunk_part += 1
+
+    async def _upload_file(self, file_name: str) -> None:
+        """Neutralise base-class inline uploads.
+
+        The base ``Writer._write_dataframe`` and ``Writer._write_statistics``
+        still call ``self._upload_file`` for per-chunk and statistics uploads.
+        ParquetFileWriter defers all object-store transfers to the caller
+        via the ``FileReference`` returned from :meth:`close`, so we override
+        this to a no-op that only resets buffer accounting. This guarantees
+        every code path through this writer (pandas single, pandas multi-
+        sub-chunk, daft, consolidation, statistics) leaves files on disk and
+        never uploads inline — eliminating the half-on / half-off behaviour
+        flagged in BLDX-1136.
+        """
+        self.current_buffer_size_bytes = 0
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a Parquet file, casting null-typed columns to string.
