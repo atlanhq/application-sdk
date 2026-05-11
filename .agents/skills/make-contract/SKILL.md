@@ -102,6 +102,13 @@ atlan app contract update-toolkit -p <app-dir>
 atlan app contract update-toolkit -p <app-dir> --version <semver>
 ```
 
+The toolkit package is named `app-contract-toolkit`, but latest-version lookup
+must come from the SDK repo releases, not the old standalone toolkit repo:
+
+```bash
+gh release list --repo atlanhq/application-sdk --limit 50 --json tagName --jq '[.[] | select(.tagName | startswith("contract-toolkit-v"))][0].tagName | sub("^contract-toolkit-v"; "")'
+```
+
 If the CLI cannot be used, say why and use the smallest fallback:
 
 ```bash
