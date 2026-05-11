@@ -228,9 +228,7 @@ class AEWorkflowClient:
         data = body.get("data") if isinstance(body.get("data"), dict) else body
         slug = data.get("slug") if isinstance(data, dict) else None
         if not slug:
-            raise RuntimeError(
-                f"create_workflow returned no slug\nresponse={body!r}"
-            )
+            raise RuntimeError(f"create_workflow returned no slug\nresponse={body!r}")
         return str(slug)
 
     def create_version(self, slug: str, version_payload: dict[str, Any]) -> int:
@@ -257,9 +255,7 @@ class AEWorkflowClient:
         data = body.get("data") if isinstance(body.get("data"), dict) else body
         version = data.get("version") if isinstance(data, dict) else None
         if version is None:
-            raise RuntimeError(
-                f"create_version returned no version\nresponse={body!r}"
-            )
+            raise RuntimeError(f"create_version returned no version\nresponse={body!r}")
         return int(version)
 
     def publish_version(

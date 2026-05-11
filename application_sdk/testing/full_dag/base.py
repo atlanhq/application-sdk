@@ -166,6 +166,11 @@ class BaseFullDAGE2ETest:
     # devex sample) uses ``competitive``. Subclasses override to match
     # their manifest.json.
     qi_parsing_mode: ClassVar[str] = "competitive"
+    # Override when the connector's worker registers a non-default
+    # workflow name. Default = connector_short_name (v3 convention,
+    # what mysql uses). Set to e.g. ``"mssql-metadata-extractor"`` for
+    # v2-style connectors. Empty string means "use the SDK default".
+    extract_workflow_type: ClassVar[str] = ""
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
@@ -306,6 +311,7 @@ class BaseFullDAGE2ETest:
             lineage_task_queue=self.lineage_task_queue,
             connection=self.connection_spec(),
             qi_parsing_mode=self.qi_parsing_mode,
+            extract_workflow_type=self.extract_workflow_type or None,
         )
         version = self.client.create_version(
             slug,

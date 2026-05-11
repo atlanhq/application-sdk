@@ -134,10 +134,12 @@ def build_seed_dag(
     seed is that the DAG topology + task_queue references are correct
     — the actual extract args get overridden at submit time.
 
-    Per-connector overrides (subclasses can pass via kwargs):
-        - ``extract_workflow_type`` — defaults to
-          ``{connector_short_name}-metadata-extractor`` for SQL-style
-          connectors; override for non-SQL apps.
+    Per-connector overrides (subclasses pass via kwargs):
+        - ``extract_workflow_type`` — must match what the connector's
+          worker actually registers as. v3 mysql registers ``"mysql"``
+          (just the connector name); v2 mssql registers
+          ``"mssql-metadata-extractor"``. Default = ``connector_short_name``
+          (the v3 convention); override for v2-style connectors.
         - ``qi_parsing_mode`` — ``"lorien-only"`` (mssql) vs.
           ``"competitive"`` (mysql per devex sample); driven by what
           the connector emits as parseable SQL.
@@ -145,7 +147,7 @@ def build_seed_dag(
           qi/lineage queues; override for non-production tenants.
     """
     if extract_workflow_type is None:
-        extract_workflow_type = f"{connector_short_name}-metadata-extractor"
+        extract_workflow_type = connector_short_name
 
     return {
         "extract": {
