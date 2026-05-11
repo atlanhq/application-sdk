@@ -26,6 +26,7 @@ from uuid import uuid4
 
 from temporalio import activity, workflow
 from temporalio.converter import default as default_converter
+from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 from temporalio.worker import (
     ActivityInboundInterceptor,
     ExecuteActivityInput,
@@ -38,6 +39,8 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
+from application_sdk.errors.base import AppError
+from application_sdk.errors.wire import FailureDetails
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -74,20 +77,6 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
     """
     if exc is None:
         return {}
-    try:
-        from application_sdk.errors.base import (  # noqa: PLC0415 — avoid import cycle
-            AppError,
-        )
-        from application_sdk.errors.wire import FailureDetails  # noqa: PLC0415
-    except Exception:  # noqa: BLE001 — observability path; never raise
-        return {}
-    try:
-        from temporalio.exceptions import (  # noqa: PLC0415
-            ApplicationError as _TemporalApplicationError,
-        )
-    except Exception:  # noqa: BLE001
-        _TemporalApplicationError = None  # type: ignore[assignment]
-
     seen: set[int] = set()
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
@@ -98,9 +87,7 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
                 "failure.audience": type(current).audience.value,
                 "failure.code": current.code,
             }
-        if _TemporalApplicationError is not None and isinstance(
-            current, _TemporalApplicationError
-        ):
+        if isinstance(current, _TemporalApplicationError):
             for detail in getattr(current, "details", None) or ():
                 if isinstance(detail, FailureDetails):
                     return {
