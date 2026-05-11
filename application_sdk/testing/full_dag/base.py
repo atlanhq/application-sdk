@@ -138,6 +138,19 @@ class BaseFullDAGE2ETest:
     connection_admin_users: ClassVar[tuple[str, ...]] = ()
     connection_admin_groups: ClassVar[tuple[str, ...]] = ()
     connection_admin_roles: ClassVar[tuple[str, ...]] = ()
+    # When set, the harness uses this slug verbatim instead of generating
+    # a unique-per-run one. Required when the tenant doesn't auto-create
+    # workflows on submit (every tenant we've seen — package-workflows
+    # returns HTTP 404 "Workflow with slug <X> not found. Create the
+    # workflow first." if the slug is new). Subclasses point this at a
+    # pre-existing workflow created via the UI / Heracles. The submit
+    # endpoint creates a new version each call, so different runs
+    # produce distinct Connections without colliding on the slug.
+    #
+    # Follow-up: implement AEWorkflowClient.create_workflow +
+    # publish_seed_version so the harness self-bootstraps + this knob
+    # becomes optional.
+    ae_workflow_slug: ClassVar[str] = ""
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
@@ -254,6 +267,7 @@ class BaseFullDAGE2ETest:
             include_filter=self.include_filter,
             exclude_filter=self.exclude_filter,
             agent=self.agent_spec(),
+            ae_workflow_slug=self.ae_workflow_slug,
         )
 
         logger.info(

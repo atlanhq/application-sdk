@@ -125,6 +125,7 @@ def build_ae_payload(
     include_filter: str = '{"^def$":[".*"]}',
     exclude_filter: str = "{}",
     agent: AgentSpec | None = None,
+    ae_workflow_slug: str = "",
 ) -> dict[str, Any]:
     """Assemble the AE submit body.
 
@@ -308,7 +309,13 @@ def build_ae_payload(
             },
             "name": ae_workflow_name,
             "namespace": "default",
-            "ae_workflow_slug": f"{connector_short_name}-e2e-{run_id}",
+            # If the caller passes an existing slug, the AE submit
+            # endpoint creates a new version under it rather than
+            # rejecting with HTTP 404 ("Workflow not found, create
+            # first"). Per-run slugs only work on tenants that auto-
+            # create workflows on submit (none we've seen).
+            "ae_workflow_slug": ae_workflow_slug
+            or f"{connector_short_name}-e2e-{run_id}",
             "app_service_url": app_service_url,
         },
         "spec": {

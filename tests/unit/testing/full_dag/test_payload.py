@@ -164,6 +164,43 @@ def test_credential_payload_carries_real_credentials() -> None:
     assert cred["body"]["connectorConfigName"] == "atlan-connectors-mysql"
 
 
+def test_ae_workflow_slug_override() -> None:
+    """When the caller passes a slug, it should land verbatim in metadata.
+
+    Required for tenants that don't auto-create workflows on submit —
+    the engineer pre-creates a workflow via UI / Heracles and the test
+    points at its slug.
+    """
+    payload = build_ae_payload(
+        run_id=1234,
+        mode=RunMode.DIRECT,
+        connector_short_name="mysql",
+        argo_package_name="@atlan/mysql",
+        argo_template_name="atlan-mysql",
+        app_service_url="http://mysql.mysql-app.svc.cluster.local",
+        connection=_CONNECTION,
+        database=_DATABASE,
+        ae_workflow_slug="mysql-existing-prod-slug",
+    )
+    assert payload["metadata"]["ae_workflow_slug"] == "mysql-existing-prod-slug"
+
+
+def test_ae_workflow_slug_defaults_to_per_run_when_blank() -> None:
+    """Empty slug → fall back to the auto-generated unique-per-run slug."""
+    payload = build_ae_payload(
+        run_id=99,
+        mode=RunMode.DIRECT,
+        connector_short_name="mysql",
+        argo_package_name="@atlan/mysql",
+        argo_template_name="atlan-mysql",
+        app_service_url="http://mysql.mysql-app.svc.cluster.local",
+        connection=_CONNECTION,
+        database=_DATABASE,
+        ae_workflow_slug="",
+    )
+    assert payload["metadata"]["ae_workflow_slug"] == "mysql-e2e-99"
+
+
 def test_run_id_drives_uniqueness() -> None:
     """Two payloads with different run_ids must produce different workflow names."""
     p1 = build_ae_payload(
