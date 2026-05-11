@@ -26,7 +26,7 @@ inputs:
 outputs:
   - app/failures.py (typed classes + optional classifier)
   - edited raise sites across app/ (ValueError/RuntimeError → typed classes)
-  - tests/unit/test_failures.py (wire-shape tests + classifier dispatch tests)
+  - tests/unit/test_failures.py (wire-shape tests + classifier dispatch tests — match the app's existing test directory layout if different)
   - pyproject.toml (SDK pin bump to >= v3.7.0 if needed)
   - blind-spot report (printed, not committed — phase-2 punch list)
 gates:
@@ -78,7 +78,6 @@ owner sign-off — surface it in the phase-2 report instead.
   failures.py if the new leaves cover existing raise sites better).
 
 **Not** the right tool when:
-- The app has no Atlan SDK dependency (this only helps SDK-based apps).
 - The owner has explicitly opted out of failure attribution for this app.
 - The app is a one-off script with no Temporal workflows behind it.
 
@@ -323,11 +322,29 @@ tests, then SDK pin bump, then verification.**
 
 ### Step 2.1 — Build app/failures.py
 
-Create or update `app/failures.py`. Always start with the module docstring
+**If the file doesn't exist**: create it. Start with the module docstring
 explaining the convention and the deliberate non-uses. Use the Athena
 reference's docstring as a template — adapt the connector name.
 
-For each typed class you're going to need, define it in `failures.py` with:
+**If the file already exists** (partial-typing case): read it first. For
+each class you're about to add, check whether a class with the same
+`code` or with semantically overlapping triggers already exists.
+
+- Same `code` already defined → reuse the existing class, don't duplicate.
+  If the existing audience / retryable / evidence shape doesn't match what
+  you'd write, surface the mismatch to the developer and ask before
+  changing it (existing callers may depend on the current shape).
+- Same trigger but different `code` → ask the developer which code is
+  canonical; pick one and remove the duplicate. Two codes for the same
+  root cause splits dashboard cuts.
+- Existing classifier function present → extend the marker tuples rather
+  than building a parallel `classify_<app>_v2`.
+
+Never overwrite an existing typed class silently. The file is owned by
+the app team; preserve their work and additively extend.
+
+For each typed class you're going to need (new or added), define it in
+`failures.py` with:
 - A docstring describing what triggers it and who acts
 - `code: ClassVar[str]` following the convention
 - `audience: ClassVar[Audience]` only if overriding the SDK base
@@ -362,6 +379,14 @@ def classify_<app>_exception(exc: BaseException) -> AppError | None:
     # ...
     return None
 ```
+
+**Why `cause=exc` AND `raise … from e`?** They are two different fields
+serving two different consumers: `cause=exc` populates the SDK's wire
+envelope (`FailureDetails.cause_repr` — sanitised + length-capped string
+visible to dashboards and AE), while `from e` sets Python's `__cause__`
+attribute (preserves the in-process traceback for local debugging and
+logger `exc_info`). Both are correct and both are needed; remove either
+and you lose one consumer.
 
 ### Step 2.2 — Convert raise sites (auto-classify obvious, ask on ambiguous)
 
@@ -496,6 +521,33 @@ print(<App>AuthFailed(message='test').to_failure_details().model_dump())
 
 Verify category / code / audience / retryable match the documented spec.
 
+### Step 2.7 — Run pre-commit (mandatory before any commit)
+
+The SDK's `CLAUDE.md` mandates `uv run pre-commit run --files <file>` before
+any commit. The raise-site rewrites in Step 2.3 frequently touch ruff/pyright
+gates (unused imports from the old exception types, type-hint mismatches
+when constructors gain `field=` / evidence kwargs). Skipping this step ships
+edits that pass `pytest` locally but fail CI on lint / type.
+
+Run on the modified files:
+
+```bash
+uv run pre-commit run --files \
+  app/failures.py \
+  tests/unit/test_failures.py \
+  <every-modified-source-file>
+```
+
+Or on the full diff if simpler:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+Fix any issues pre-commit surfaces (unused imports left from the old raises,
+formatter normalisations, type annotations on new evidence fields) and
+re-run until pre-commit passes. **Do not commit until it does.**
+
 ---
 
 ## Phase 3 — Blind-spot report (the phase-2 punch list)
@@ -562,8 +614,15 @@ phase-2 sign-off.
    wrong. `AUTH_INVALID_CREDENTIALS` is right. Vendor identity rides on the
    DAG node label.
 
-3. **Pre-populating `app_name` / `suggested_action` / `run_id`.** All three
-   have documented reasons to stay `None` by default. Read the property
+3. **Pre-populating `app_name` / `suggested_action` / `run_id` on the class
+   definition.** All three have documented reasons to stay `None` by default.
+   `app_name` and `run_id` are deliberately never set by the producer (AE
+   provides both at consumption). `suggested_action` may be set at a *raise
+   site* when the call site has specific guidance worth shipping ("regrant
+   Glue read access on the IAM role"), but do not default it on the class
+   itself and do not set it when the existing `message` already contains
+   the action ("aws_role_arn is required" doesn't need a separate
+   suggested_action saying "provide aws_role_arn"). Read the property
    matrix above and the Athena `failures.py` module docstring.
 
 4. **Promoting silent-swallow paths to raises in this skill's output.** That's
