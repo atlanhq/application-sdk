@@ -94,8 +94,6 @@ jobs:
   # Testing
   unit:
     name: Unit Tests
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
