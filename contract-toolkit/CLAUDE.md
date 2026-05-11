@@ -68,15 +68,10 @@ pkl eval -m examples/trino/generated examples/trino/app.pkl
 
 ## Feature/Bug Flow
 
-Use the right skill:
-
-- `make-contract`: consuming app contract work.
-- `toolkit-feature-workflow`: toolkit source/API feature, bug, or design work.
-- `contract-review`: PR self-review before human review.
-
-For toolkit source changes, `toolkit-feature-workflow` is mandatory. It covers
-issue tracking, API-design triage, cross-repo consumer checks, examples, docs,
-tests, extended commits, PR triage, and independent review.
+Use `make-contract` for consuming app contract work. For toolkit source changes,
+follow the workflow below for issue tracking, API-design triage, cross-repo
+consumer checks, examples, docs, tests, extended commits, PR triage, and
+independent review.
 
 For any feature or bug request, prove current behavior before changing code:
 
@@ -91,7 +86,7 @@ For any feature or bug request, prove current behavior before changing code:
    clone it into `/tmp/app-contract-toolkit-consumers/<repo>` and validate there.
 5. Preserve existing output by default unless fixing a confirmed bug.
 6. Add targeted tests, update an executable example, regenerate generated output,
-   update all three docs, then run validation and `contract-review`.
+   update all three docs, then run validation.
 7. Before merge, run two review tracks: implementation correctness and
    API-design/codebase fit. Use separate subagents when explicitly available;
    otherwise keep the two reviews separate yourself.
@@ -121,4 +116,4 @@ python scripts/test-sdk-import.py
 
 Use conventional PR titles: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`, or breaking-change syntax. Do not hand-edit `CHANGELOG.md`; release automation owns it.
 
-After opening a PR, run the `contract-review` skill against the PR and post the self-review report.
+After opening a PR, post the self-review report before human review.
