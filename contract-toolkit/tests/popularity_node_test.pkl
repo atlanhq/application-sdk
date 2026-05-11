@@ -172,8 +172,13 @@ facts {
   //   Binder Error: Column "QUERY_HASH" referenced ...
   //   cannot be referenced before it is defined
   // because BigQuery's cleaned_mine parquet has only `CLEANED_QUERY`.
+  //
+  // queryHash default is `md5(QUERY_TEXT)`, not native `QUERY_HASH` — pop-app
+  // pins this convention in `tests/test_query_hash_convention.py` (Snowflake's
+  // native QUERY_HASH is version-bumped/undocumented, breaks cross-tenant
+  // comparability).
   ["Mine column mapping carries query_hash and query_text"] {
-    manifestJson.contains("\"query_hash\": \"QUERY_HASH\"")
+    manifestJson.contains("\"query_hash\": \"md5(QUERY_TEXT)\"")
     manifestJson.contains("\"query_text\": \"QUERY_TEXT\"")
   }
   ["Mine column mapping carries source_query_type_qi"] {

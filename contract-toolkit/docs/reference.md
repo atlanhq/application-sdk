@@ -1292,7 +1292,7 @@ class PopularityMineColumnMapping {
   creditsCompute: String = "CREDITS_USED_COMPUTE"
   queryType: String = "QUERY_TYPE"
   startTime: String = "START_TIME"
-  queryHash: String = "QUERY_HASH"
+  queryHash: String = "md5(QUERY_TEXT)"
   queryText: String = "QUERY_TEXT"
   queryTag: String = "NULL"
   queryTagsSql: String = "NULL"
@@ -1307,13 +1307,20 @@ class PopularityMineColumnMapping {
 Per-source guidance for the source-shape fields:
 
 - `queryHash` / `queryText`:
-  - Snowflake: native `QUERY_HASH` / `QUERY_TEXT` on `QUERY_HISTORY`.
-  - BigQuery: `md5(CLEANED_QUERY)` / `CLEANED_QUERY` (no native hash on
-    `cleaned_mine`; only `CLEANED_QUERY` is projected).
-  - Redshift / Databricks: compute md5 on the cleaned-text column.
-  - Both are required even on sources where the values are not consumed
-    downstream — popularity's canonical `v_mined` projection references
-    both unconditionally.
+  Pop-app pins `query_hash = md5(<text-column>)` across all sources — see
+  `tests/test_query_hash_convention.py` in `atlan-popularity-app`. Native
+  source hash columns (Snowflake `QUERY_HASH`, Redshift `HASH`) are
+  intentionally NOT used: Snowflake's hash is version-bumped/undocumented and
+  breaks cross-tenant and cross-source comparability. The toolkit default
+  matches pop-app's Snowflake default; non-Snowflake connectors override the
+  text-column name.
+  - Snowflake: `md5(QUERY_TEXT)` / `QUERY_TEXT` (default).
+  - BigQuery: `md5(CLEANED_QUERY)` / `CLEANED_QUERY`.
+  - Databricks: `md5(statement_text)` / `statement_text`.
+  - Redshift: `md5(QUERYTXT)` / `QUERYTXT`.
+  Both are required even on sources where the values are not consumed
+  downstream — popularity's canonical `v_mined` projection references both
+  unconditionally.
 - `sourceQueryTypeQi`: SQL expression projected as `SOURCE_QUERY_TYPE` on the
   parsed-data view (`v_qi`). Snowflake / BigQuery parsed_data carry this
   column natively; Databricks parsed_data does NOT, so set
