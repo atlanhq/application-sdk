@@ -59,6 +59,18 @@ inputs:
     description: Extra arguments appended to the pytest invocation.
     required: false
     default: ""
+  application-sdk-ref:
+    description: |
+      Optional application-sdk commit SHA / ref. When supplied, the
+      action re-pins atlan-application-sdk in the caller's pyproject.toml
+      to this ref before building the Docker image and again after
+      setup-deps (which re-checks-out the workspace). Used by cross-repo
+      dispatches from apps-sdk PRs so SDK changes are exercised end-to-end
+      — Docker image, host pytest runtime, and (because the caller
+      already invokes the action via a local-path checkout of this same
+      ref) action.yaml itself.
+    required: false
+    default: ""
 
 outputs:
   test-outcome:
@@ -81,6 +93,18 @@ runs:
         username: ${{ github.actor }}
         password: ${{ github.token }}
 
+    # Cross-repo dispatch from apps-sdk PRs hands us a specific SDK ref;
+    # rewrite the [tool.uv.sources] entry so the Docker build's COPY +
+    # uv sync resolves atlan-application-sdk to that ref. Repeated again
+    # below after setup-deps re-checks-out the workspace (which wipes
+    # this edit) so the host pytest runtime also picks up the ref.
+    - name: Pin application-sdk to dispatched ref (pre-build)
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: ${{ github.action_path }}/repin-application-sdk.sh
+
     # Image build runs before setup-deps so the workspace is still pristine —
     # no host .venv yet, so the Dockerfile's COPY . . won't pull in a
     # host-built virtualenv whose Python symlinks point outside the image.
@@ -98,6 +122,20 @@ runs:
     # uses actions/checkout internally which would wipe generated files.
     - name: Setup Python and dependencies
       uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.0.0
+
+    # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
+    # it again so the host pytest runtime resolves the dispatched SDK
+    # (the BaseSDRIntegrationTest, agent contracts, etc.). Followed by
+    # an explicit uv sync so the lockfile reflects the new pin.
+    - name: Pin application-sdk to dispatched ref (post-setup)
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: |
+        ${{ github.action_path }}/repin-application-sdk.sh
+        uv lock
+        uv sync --all-extras --all-groups
 
     - name: Download atlan-configurator
       shell: bash

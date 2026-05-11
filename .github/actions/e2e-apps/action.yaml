@@ -23,6 +23,22 @@ inputs:
   target-branch:
     required: true
     description: The target branch to test.
+  workflow:
+    required: false
+    default: e2e-integration-test.yaml
+    description: |
+      Filename of the workflow to dispatch in the target repo. Defaults
+      to the historical e2e-integration-test.yaml. Set to
+      sdr-integration-tests.yaml for the SDR cross-repo path.
+  workflow-inputs:
+    required: false
+    default: "{}"
+    description: |
+      Optional JSON object of inputs to pass to the dispatched workflow
+      (in addition to distinct_id, which is always passed). Used by the
+      SDR path to forward application_sdk_ref so the connector can pin
+      atlan-application-sdk to the apps-sdk PR's head SHA. Defaults to
+      an empty object so codex-/return-dispatch always sees valid JSON.
 
 runs:
   using: "composite"
@@ -54,10 +70,11 @@ runs:
         ref: ${{ inputs.target-branch }}
         repo: ${{ inputs.repo-name }}
         owner: "atlanhq"
-        workflow: "e2e-integration-test.yaml"
+        workflow: "${{ inputs.workflow }}"
         workflow_timeout_seconds: 300
         workflow_job_steps_retry_seconds: 60
         distinct_id: "${{ env.distinct_id }}"
+        workflow_inputs: ${{ inputs.workflow-inputs }}
 
     - name: Check the test logs using the below run URL
       shell: bash
