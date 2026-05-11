@@ -315,6 +315,9 @@ class BaseFullDAGE2ETest:
             connection=self.connection_spec(),
             qi_parsing_mode=self.qi_parsing_mode,
             extract_workflow_type=self.extract_workflow_type or None,
+            mode=self.mode,
+            agent=agent,
+            database=self.database_spec(),
         )
         version = self.client.create_version(
             slug,

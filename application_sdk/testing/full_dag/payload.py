@@ -124,6 +124,9 @@ def build_seed_dag(
     qi_parsing_mode: str = "lorien-only",
     qi_mine_output_type: str = "json",
     lake_provider: str = "aws",
+    mode: RunMode = RunMode.DIRECT,
+    agent: AgentSpec | None = None,
+    database: DatabaseSpec | None = None,
 ) -> dict[str, Any]:
     """Build a seed-version DAG matching the connector's manifest.json shape.
 
@@ -149,6 +152,43 @@ def build_seed_dag(
     if extract_workflow_type is None:
         extract_workflow_type = connector_short_name
 
+    # The orchestrator's `submit=true` endpoint substitutes only the
+    # placeholder fields it knows about (`{{credentialGuid}}`) when
+    # creating the new version — it does NOT rewrite extraction_method
+    # or agent_json from the submit's parameters. So if the seed
+    # hardcodes `extraction_method: direct` and `agent_json` is
+    # missing, the new version inherits that shape and the runtime
+    # CredentialRef.resolve() falls through to guid mode (since
+    # agent_spec is None) → tries to look up '__placeholder__' →
+    # AAF-CRD-002. Mirror the submit's mode in the seed.
+    extract_args: dict[str, Any] = {
+        "credential_guid": "__placeholder__",
+        "connection": {
+            "connection_name": connection.name,
+            "connection_qualified_name": connection.qualified_name,
+        },
+        "extraction_method": mode.value,
+        "include_filter": "",
+        "exclude_filter": "",
+        "temp_table_regex": "",
+    }
+    if mode is RunMode.AGENT and agent is not None and database is not None:
+        # Same agent-json shape build_ae_payload uses for the submit
+        # parameter — keeps the seed consistent with the new version
+        # so the activity input has a populated agent_spec.
+        extract_args["agent_json"] = {
+            "host": database.host,
+            "port": database.port,
+            "auth-type": database.auth_type,
+            "agent-name": agent.agent_name,
+            "agent-type": agent.agent_type,
+            "key-type": agent.key_type,
+            "aws-auth-method": agent.aws_auth_method,
+            "azure-auth-method": agent.azure_auth_method,
+            "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
+            "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
+        }
+
     return {
         "extract": {
             "node_type": "workflow",
@@ -159,17 +199,7 @@ def build_seed_dag(
             "inputs": {
                 "workflow_type": extract_workflow_type,
                 "task_queue": extract_task_queue,
-                "args": {
-                    "credential_guid": "__placeholder__",
-                    "connection": {
-                        "connection_name": connection.name,
-                        "connection_qualified_name": connection.qualified_name,
-                    },
-                    "extraction_method": "direct",
-                    "include_filter": "",
-                    "exclude_filter": "",
-                    "temp_table_regex": "",
-                },
+                "args": extract_args,
             },
         },
         "qi": {
