@@ -112,6 +112,160 @@ class AgentSpec:
     azure_auth_method: str = "managed_identity"
 
 
+def build_seed_dag(
+    *,
+    connector_short_name: str,
+    extract_task_queue: str,
+    publish_task_queue: str = "atlan-publish-production",
+    qi_task_queue: str = "atlan-query-intelligence-production",
+    lineage_task_queue: str = "atlan-lineage-production",
+    connection: ConnectionSpec,
+    extract_workflow_type: str | None = None,
+    qi_parsing_mode: str = "lorien-only",
+    qi_mine_output_type: str = "json",
+    lake_provider: str = "aws",
+) -> dict[str, Any]:
+    """Build a seed-version DAG matching the connector's manifest.json shape.
+
+    Workflows need at least one PUBLISHED version before package-
+    workflows submit will accept them; the seed version is a no-op
+    placeholder (uses ``credential_guid: __placeholder__``) that
+    package-workflows replaces on every submit. What matters for the
+    seed is that the DAG topology + task_queue references are correct
+    — the actual extract args get overridden at submit time.
+
+    Per-connector overrides (subclasses can pass via kwargs):
+        - ``extract_workflow_type`` — defaults to
+          ``{connector_short_name}-metadata-extractor`` for SQL-style
+          connectors; override for non-SQL apps.
+        - ``qi_parsing_mode`` — ``"lorien-only"`` (mssql) vs.
+          ``"competitive"`` (mysql per devex sample); driven by what
+          the connector emits as parseable SQL.
+        - Task queue names default to the tenant's production publish/
+          qi/lineage queues; override for non-production tenants.
+    """
+    if extract_workflow_type is None:
+        extract_workflow_type = f"{connector_short_name}-metadata-extractor"
+
+    return {
+        "extract": {
+            "node_type": "workflow",
+            "activity_name": "execute_workflow",
+            "activity_display_name": f"Extract {connector_short_name.title()} Metadata",
+            "app_name": connector_short_name,
+            "app_task_queue": extract_task_queue,
+            "inputs": {
+                "workflow_type": extract_workflow_type,
+                "task_queue": extract_task_queue,
+                "args": {
+                    "credential_guid": "__placeholder__",
+                    "connection": {
+                        "connection_name": connection.name,
+                        "connection_qualified_name": connection.qualified_name,
+                    },
+                    "extraction_method": "direct",
+                    "include_filter": "",
+                    "exclude_filter": "",
+                    "temp_table_regex": "",
+                },
+            },
+        },
+        "qi": {
+            "node_type": "workflow",
+            "activity_name": "execute_workflow",
+            "activity_display_name": "Parse View Lineage",
+            "app_name": "query-intelligence",
+            "app_task_queue": qi_task_queue,
+            "inputs": {
+                "workflow_type": "QueryIntelligenceWorkflow",
+                "task_queue": qi_task_queue,
+                "args": {
+                    "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+                    "vendor_name": connector_short_name,
+                    "sql_key": "attributes.definition",
+                    "catalog_key": "attributes.databaseName",
+                    "schema_key": "attributes.schemaName",
+                    "timestamp_key": "",
+                    "mine_output_type": qi_mine_output_type,
+                    "parsing_mode": qi_parsing_mode,
+                    "lake_provider": lake_provider,
+                    "storage_bucket": "$.extract.outputs.storage_bucket",
+                    "input_prefix": "$.extract.outputs.view_data_prefix",
+                    "output_prefix": "$.extract.outputs.view_lineage_output_prefix",
+                },
+            },
+            "depends_on": {"node_id": "extract"},
+        },
+        "publish": {
+            "node_type": "workflow",
+            "activity_name": "execute_workflow",
+            "activity_display_name": "Publish to Atlas",
+            "app_name": "publish",
+            "app_task_queue": publish_task_queue,
+            "inputs": {
+                "workflow_type": "PublishWorkflow",
+                "task_queue": publish_task_queue,
+                "args": {
+                    "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+                    "transformed_data_prefix": "$.extract.outputs.transformed_data_prefix",
+                    "publish_state_prefix": "$.extract.outputs.publish_state_prefix",
+                    "current_state_prefix": "$.extract.outputs.current_state_prefix",
+                },
+            },
+            "depends_on": {"node_id": "extract"},
+        },
+        "lineage-app": {
+            "node_type": "workflow",
+            "activity_name": "execute_workflow",
+            "activity_display_name": "Build Lineage Entities",
+            "app_name": "automation-engine",
+            "app_task_queue": lineage_task_queue,
+            "inputs": {
+                "workflow_type": "LineageWorkflow",
+                "task_queue": lineage_task_queue,
+                "args": {
+                    "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+                    "connector_name": connector_short_name,
+                    "session_key": "view-lineage",
+                    "sql_unquoted_case": "lower",
+                    "ignore_all_case": False,
+                    "input_path": "",
+                    "parsed_views_path": "$.extract.outputs.view_lineage_output_prefix",
+                    "lineage_output_path": "$.extract.outputs.lineage_stage_prefix",
+                    "cache_path": "connection-cache",
+                    "file_type": "json",
+                    "lake_provider": lake_provider,
+                    "cloud_storage_bucket": "$.extract.outputs.storage_bucket",
+                },
+            },
+            "depends_on": {
+                "and_conditions": [
+                    {"node_id": "qi", "tag": "success"},
+                    {"node_id": "publish", "tag": "success"},
+                ]
+            },
+        },
+        "lineage-publish": {
+            "node_type": "workflow",
+            "activity_name": "execute_workflow",
+            "activity_display_name": "Publish Lineage to Atlas",
+            "app_name": "publish",
+            "app_task_queue": publish_task_queue,
+            "inputs": {
+                "workflow_type": "PublishWorkflow",
+                "task_queue": publish_task_queue,
+                "args": {
+                    "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+                    "transformed_data_prefix": "$.extract.outputs.lineage_stage_prefix",
+                    "publish_state_prefix": "$.extract.outputs.lineage_publish_state_prefix",
+                    "current_state_prefix": "$.extract.outputs.lineage_current_state_prefix",
+                },
+            },
+            "depends_on": {"node_id": "lineage-app", "tag": "success"},
+        },
+    }
+
+
 def build_ae_payload(
     *,
     run_id: int,

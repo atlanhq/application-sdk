@@ -44,7 +44,7 @@ from application_sdk.testing.full_dag.client import (
     DAGNodeStatus,
     DAGRunStatus,
 )
-from application_sdk.testing.full_dag.payload import build_ae_payload
+from application_sdk.testing.full_dag.payload import build_ae_payload, build_seed_dag
 
 __all__ = [
     "AEWorkflowClient",
@@ -53,4 +53,5 @@ __all__ = [
     "DAGRunStatus",
     "RunMode",
     "build_ae_payload",
+    "build_seed_dag",
 ]

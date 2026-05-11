@@ -199,6 +199,119 @@ class AEWorkflowClient:
     # Endpoints
     # ------------------------------------------------------------------
 
+    def create_workflow(self, name: str, description: str = "") -> str:
+        """POST ``/automation/api/v1/workflows`` — create or upsert a workflow.
+
+        AE doesn't auto-create workflows on submit: a fresh slug → HTTP
+        404 ("Workflow with slug 'X' not found. Create the workflow
+        first."). So every full-DAG run begins by creating (or
+        re-creating) the workflow under a stable name. The endpoint is
+        idempotent on name — submitting the same name returns the
+        existing workflow's slug.
+
+        Returns:
+            The workflow slug (used by subsequent version + submit
+            calls).
+
+        Raises:
+            RuntimeError: On non-2xx or missing slug in response.
+        """
+        status, body = self._request(
+            "POST",
+            "/automation/api/v1/workflows",
+            body={"name": name, "description": description},
+        )
+        if status >= 300 or not isinstance(body, dict):
+            raise RuntimeError(
+                f"create_workflow failed: HTTP {status}\nresponse={body!r}"
+            )
+        data = body.get("data") if isinstance(body.get("data"), dict) else body
+        slug = data.get("slug") if isinstance(data, dict) else None
+        if not slug:
+            raise RuntimeError(
+                f"create_workflow returned no slug\nresponse={body!r}"
+            )
+        return str(slug)
+
+    def create_version(self, slug: str, version_payload: dict[str, Any]) -> int:
+        """POST ``/automation/api/v1/workflows/<slug>/versions`` — create a version.
+
+        The version carries the full DAG manifest (extract / qi / publish
+        / lineage-app / lineage-publish nodes). A workflow must have at
+        least one *published* version before package-workflows submit
+        will accept a run against it.
+
+        Returns:
+            The version number assigned by AE (typically a Unix
+            timestamp, but treat as opaque int).
+        """
+        status, body = self._request(
+            "POST",
+            f"/automation/api/v1/workflows/{slug}/versions",
+            body=version_payload,
+        )
+        if status >= 300 or not isinstance(body, dict):
+            raise RuntimeError(
+                f"create_version failed: HTTP {status}\nresponse={body!r}"
+            )
+        data = body.get("data") if isinstance(body.get("data"), dict) else body
+        version = data.get("version") if isinstance(data, dict) else None
+        if version is None:
+            raise RuntimeError(
+                f"create_version returned no version\nresponse={body!r}"
+            )
+        return int(version)
+
+    def publish_version(
+        self,
+        slug: str,
+        version: int,
+        *,
+        retries: int = 5,
+        retry_sleep_seconds: int = 5,
+    ) -> None:
+        """POST ``/automation/api/v1/workflows/<slug>/versions/<v>/publish``.
+
+        AE can lag a few seconds between version-create and version-
+        publish — early calls return 404 (AE-WF-404-02 "version not
+        found"). Retries on failure (mssql platform-smoke does the
+        same: 5 attempts, 5s spacing).
+
+        Raises:
+            RuntimeError: If all retries return a non-success status.
+        """
+        last_body: dict[str, Any] | str = ""
+        for attempt in range(1, retries + 1):
+            status, body = self._request(
+                "POST",
+                f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
+            )
+            last_body = body
+            if (
+                status < 300
+                and isinstance(body, dict)
+                and body.get("status") == "success"
+            ):
+                logger.info(
+                    "Published workflow %s version %d (attempt %d)",
+                    slug,
+                    version,
+                    attempt,
+                )
+                return
+            logger.warning(
+                "publish_version attempt %d/%d: HTTP %s body=%r",
+                attempt,
+                retries,
+                status,
+                body,
+            )
+            if attempt < retries:
+                time.sleep(retry_sleep_seconds)
+        raise RuntimeError(
+            f"publish_version failed after {retries} attempts: {last_body!r}"
+        )
+
     def submit_workflow(self, payload: dict[str, Any]) -> str:
         """POST ``/api/service/package-workflows?submit=true``.
 

@@ -62,6 +62,7 @@ from application_sdk.testing.full_dag.payload import (
     DatabaseSpec,
     RunMode,
     build_ae_payload,
+    build_seed_dag,
 )
 
 logger = get_logger(__name__)
@@ -138,19 +139,33 @@ class BaseFullDAGE2ETest:
     connection_admin_users: ClassVar[tuple[str, ...]] = ()
     connection_admin_groups: ClassVar[tuple[str, ...]] = ()
     connection_admin_roles: ClassVar[tuple[str, ...]] = ()
-    # When set, the harness uses this slug verbatim instead of generating
-    # a unique-per-run one. Required when the tenant doesn't auto-create
-    # workflows on submit (every tenant we've seen — package-workflows
-    # returns HTTP 404 "Workflow with slug <X> not found. Create the
-    # workflow first." if the slug is new). Subclasses point this at a
-    # pre-existing workflow created via the UI / Heracles. The submit
-    # endpoint creates a new version each call, so different runs
-    # produce distinct Connections without colliding on the slug.
-    #
-    # Follow-up: implement AEWorkflowClient.create_workflow +
-    # publish_seed_version so the harness self-bootstraps + this knob
-    # becomes optional.
+    # When set, the harness uses this slug verbatim and skips the
+    # create-workflow / publish-seed-version bootstrap. Useful if the
+    # caller has pre-created the workflow via UI / Heracles (matches
+    # the tier-5 pattern where the production-deployed pod registered
+    # the workflow once on first install). Default empty → harness
+    # auto-creates on every run, idempotent on workflow name.
     ae_workflow_slug: ClassVar[str] = ""
+
+    # Workflow name passed to `POST /automation/api/v1/workflows`.
+    # Defaults to the connector short name; AE treats name as the
+    # idempotency key — re-running this test does not create a new
+    # workflow, only a new VERSION + a new RUN. Override to
+    # ``"{connector}-ci-tier-4"`` etc. if you want CI runs to live
+    # under a dedicated test workflow separate from production.
+    ae_workflow_name_override: ClassVar[str] = ""
+
+    # Task queues for the system-app nodes in the seed DAG. Defaults
+    # fit devex / prod-style tenants where publish/qi/lineage all
+    # listen on the ``-production`` queues. Override for tenants that
+    # name queues differently per deployment.
+    publish_task_queue: ClassVar[str] = "atlan-publish-production"
+    qi_task_queue: ClassVar[str] = "atlan-query-intelligence-production"
+    lineage_task_queue: ClassVar[str] = "atlan-lineage-production"
+    # mssql ships ``lorien-only`` view-lineage parsing; mysql (per
+    # devex sample) uses ``competitive``. Subclasses override to match
+    # their manifest.json.
+    qi_parsing_mode: ClassVar[str] = "competitive"
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
@@ -244,6 +259,63 @@ class BaseFullDAGE2ETest:
     # The actual flow
     # ------------------------------------------------------------------
 
+    def _bootstrap_workflow(self) -> str:
+        """Ensure an AE workflow exists with a published version.
+
+        Returns the slug to use for the subsequent submit. If
+        ``ae_workflow_slug`` is set on the subclass, returns it
+        verbatim (caller has pre-bootstrapped). Otherwise:
+
+          1. Create the workflow (idempotent on name).
+          2. Publish a seed version with the full 5-node DAG.
+
+        Without a published version, ``POST /api/service/package-
+        workflows?submit=true`` returns HTTP 404 ("Workflow with slug
+        'X' not found. Create the workflow first.").
+        """
+        if self.ae_workflow_slug:
+            logger.info(
+                "Using pre-existing AE workflow slug: %s",
+                self.ae_workflow_slug,
+            )
+            return self.ae_workflow_slug
+
+        name = self.ae_workflow_name_override or self.connector_short_name
+        slug = self.client.create_workflow(
+            name=name,
+            description=f"Full-DAG e2e harness — {self.connector_short_name}",
+        )
+        logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
+
+        # Derive the extract task_queue from agent_name (tier-4) or
+        # the connector's default tenant queue (tier-5). The seed DAG
+        # is a placeholder — package-workflows replaces it with the
+        # real submit args on every run — so what we plug in here
+        # mostly just needs to be valid syntax + correct queue routing.
+        agent = self.agent_spec()
+        if agent is not None:
+            extract_queue = f"atlan-{self.connector_short_name}-{agent.agent_name}"
+        else:
+            extract_queue = f"atlan-{self.connector_short_name}-default"
+
+        seed_dag = build_seed_dag(
+            connector_short_name=self.connector_short_name,
+            extract_task_queue=extract_queue,
+            publish_task_queue=self.publish_task_queue,
+            qi_task_queue=self.qi_task_queue,
+            lineage_task_queue=self.lineage_task_queue,
+            connection=self.connection_spec(),
+            qi_parsing_mode=self.qi_parsing_mode,
+        )
+        version = self.client.create_version(
+            slug,
+            {"version": int(time.time()), "dag": seed_dag},
+        )
+        logger.info("Created seed version %d under slug %s", version, slug)
+
+        self.client.publish_version(slug, version)
+        return slug
+
     def run_full_dag(self) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome.
 
@@ -255,6 +327,8 @@ class BaseFullDAGE2ETest:
         Returns:
             FullDAGOutcome describing AE node status + Atlas presence.
         """
+        slug = self._bootstrap_workflow()
+
         payload = build_ae_payload(
             run_id=self.run_id,
             mode=self.mode,
@@ -267,7 +341,7 @@ class BaseFullDAGE2ETest:
             include_filter=self.include_filter,
             exclude_filter=self.exclude_filter,
             agent=self.agent_spec(),
-            ae_workflow_slug=self.ae_workflow_slug,
+            ae_workflow_slug=slug,
         )
 
         logger.info(
