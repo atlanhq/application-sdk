@@ -157,15 +157,15 @@ class AppConfig:
     enable_temporal_core_metrics: bool = True
     """Enable Temporal Runtime's loopback Prometheus endpoint that exposes
     the Rust-core metric set (``temporal_workflow_*``, ``temporal_activity_*``
-    etc.). Default ``True`` so the FastAPI ``/metrics`` proxy can pull these
-    metrics, and so worker-mode's ``TemporalCoreCollector`` can read them
-    locally to feed the Pushgateway push. Set to ``False`` in
+    etc.). Default ``True`` so combined-mode FastAPI ``/metrics`` can proxy
+    these metrics, and so worker-mode's ``TemporalCoreCollector`` can read
+    them locally to feed the Pushgateway push. Set to ``False`` in
     ``run_dev_combined()`` to avoid port collisions on hot reload."""
 
     prometheus_bind_address: str = "127.0.0.1:9464"
     """Loopback bind address for the Temporal Runtime Prometheus endpoint.
-    Not externally reachable — only the FastAPI ``/metrics`` proxy and the
-    worker's ``TemporalCoreCollector`` consume it."""
+    Not externally reachable — only the combined-mode FastAPI ``/metrics``
+    proxy and the worker's ``TemporalCoreCollector`` consume it."""
 
     enable_mcp: bool = False
     """Enable Model Context Protocol (MCP) server.
@@ -953,6 +953,8 @@ def run_handler_mode(config: AppConfig) -> None:
         auth_token_url=config.auth_token_url,
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
+        enable_temporal_core_metrics=False,
+        prometheus_bind_address=config.prometheus_bind_address,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
@@ -1115,6 +1117,8 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_token_url=config.auth_token_url,
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
+        enable_temporal_core_metrics=config.enable_temporal_core_metrics,
+        prometheus_bind_address=config.prometheus_bind_address,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
