@@ -145,11 +145,23 @@ runs:
         mv docker-compose-generator/generate atlan-configurator
         chmod +x atlan-configurator
 
-    - name: Resolve app.yaml
+    # Connector repos use atlan.yaml as the canonical app-config filename
+    # (see atlan-mssql-app, atlan-mysql-app). Fall back to app.yaml for any
+    # older repos still on the previous convention.
+    - name: Resolve atlan.yaml
       shell: bash
       env:
         APP_IMAGE: ${{ steps.build.outputs.image }}
-      run: envsubst < app.yaml > app-resolved.yaml
+      run: |
+        if [ -f atlan.yaml ]; then
+          envsubst < atlan.yaml > app-resolved.yaml
+        elif [ -f app.yaml ]; then
+          envsubst < app.yaml > app-resolved.yaml
+        else
+          echo "::error::Neither atlan.yaml nor app.yaml found at repo root; "
+          echo "::error::the SDR action needs the connector's app-config file to feed atlan-configurator."
+          exit 1
+        fi
 
     # Use the app's test-config template if it overrides the SDK default.
     - name: Resolve test-config.yaml
