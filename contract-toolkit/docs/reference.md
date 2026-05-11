@@ -1276,8 +1276,10 @@ omit the field instead of emitting `""` to mean "use default".
 ### PopularityMineColumnMapping
 
 Typed source-specific query-history column mapping for `PopularityNode`.
-Defaults match the popularity app's built-in Snowflake-compatible mapping.
-Override only fields that use different source column names.
+Defaults mirror `atlan-popularity-app`'s built-in `MineColumnMapping`
+(Snowflake-shaped). Override only fields that use different source column
+names. The class is purely additive: existing connectors that don't set
+`mineColumnMapping` still emit no `mine_column_mapping` block.
 
 ```pkl
 class PopularityMineColumnMapping {
@@ -1290,16 +1292,48 @@ class PopularityMineColumnMapping {
   creditsCompute: String = "CREDITS_USED_COMPUTE"
   queryType: String = "QUERY_TYPE"
   startTime: String = "START_TIME"
+  queryHash: String = "QUERY_HASH"
+  queryText: String = "QUERY_TEXT"
   queryTag: String = "NULL"
   queryTagsSql: String = "NULL"
+  sourceQueryTypeQi: String = "SOURCE_QUERY_TYPE"
+  parsedDataKeepFilter: String = "(OUTPUT_FLAGS & (33554432 | 67108864)) != 0"
+  caseInsensitiveMatch: Boolean = true
   hasNativeInputs: String?
   nativeInputsPayload: String?
 }
 ```
 
+Per-source guidance for the source-shape fields:
+
+- `queryHash` / `queryText`:
+  - Snowflake: native `QUERY_HASH` / `QUERY_TEXT` on `QUERY_HISTORY`.
+  - BigQuery: `md5(CLEANED_QUERY)` / `CLEANED_QUERY` (no native hash on
+    `cleaned_mine`; only `CLEANED_QUERY` is projected).
+  - Redshift / Databricks: compute md5 on the cleaned-text column.
+  - Both are required even on sources where the values are not consumed
+    downstream — popularity's canonical `v_mined` projection references
+    both unconditionally.
+- `sourceQueryTypeQi`: SQL expression projected as `SOURCE_QUERY_TYPE` on the
+  parsed-data view (`v_qi`). Snowflake / BigQuery parsed_data carry this
+  column natively; Databricks parsed_data does NOT, so set
+  `"NULL::VARCHAR"` there. Also set `"NULL::VARCHAR"` for any source whose
+  Query Intelligence step is configured with a `columnsToPreserve` that
+  omits `SOURCE_QUERY_TYPE` (e.g. BigQuery today).
+- `parsedDataKeepFilter`: SQL predicate applied at `v_qi` build time to keep
+  only popularity-relevant parsed rows. Default is QI's `OUTPUT_FLAGS`
+  bitmask — bit 25 (Gudusoft, `33554432`) plus bit 26 (sqlglot,
+  `67108864`). Sources still pre-dating `OUTPUT_FLAGS` can override to
+  `"COALESCE(HAS_ERROR, FALSE) = FALSE"`.
+- `caseInsensitiveMatch`: case-folding for asset matching. Default `true`
+  matches the miner YAMLs in marketplace-packages
+  (Snowflake / BigQuery / Redshift / Databricks).
+
 The rendered manifest uses the snake_case keys expected by
 `PopularityParameters.mine_column_mapping`, for example `query_id`,
-`credits_cloud_services`, and `native_inputs_payload`.
+`credits_cloud_services`, `query_hash`, `query_text`, `source_query_type_qi`,
+`parsed_data_keep_filter`, `case_insensitive_match`, and
+`native_inputs_payload`.
 
 ### PopularityNode
 
