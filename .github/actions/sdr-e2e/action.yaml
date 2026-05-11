@@ -98,12 +98,29 @@ runs:
     # uv sync resolves atlan-application-sdk to that ref. Repeated again
     # below after setup-deps re-checks-out the workspace (which wipes
     # this edit) so the host pytest runtime also picks up the ref.
+    #
+    # The Docker build runs `uv sync --locked` which requires uv.lock and
+    # pyproject.toml to be consistent. The repin only modifies
+    # pyproject.toml, so install uv inline and run `uv lock` before the
+    # Docker build to keep them aligned. setup-uv@v5 (which installs uv
+    # the "official" way) isn't available here because the composite
+    # action can't invoke another action mid-sequence with conditional
+    # `uses:` — curl install is the simplest fallback that doesn't pin a
+    # specific runner image.
     - name: Pin application-sdk to dispatched ref (pre-build)
       if: inputs.application-sdk-ref != ''
       shell: bash
       env:
         SDK_REF: ${{ inputs.application-sdk-ref }}
-      run: ${{ github.action_path }}/repin-application-sdk.sh
+      run: |
+        ${{ github.action_path }}/repin-application-sdk.sh
+        if ! command -v uv >/dev/null 2>&1; then
+          echo "Installing uv for the pre-build re-lock..."
+          curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        fi
+        uv lock
 
     # Image build runs before setup-deps so the workspace is still pristine —
     # no host .venv yet, so the Dockerfile's COPY . . won't pull in a
