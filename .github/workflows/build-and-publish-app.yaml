@@ -115,12 +115,10 @@ jobs:
         # github.workflow_ref and github.workflow_sha both resolve to the *caller's*
         # ref in a reusable workflow context (GitHub bug) — ref is pinned to main
         # so it always picks up the latest released version of the scripts.
-        # TEMP: pinned to feat/atlan-yaml-validator-in-ci for end-to-end testing
-        # against redshift-app. REVERT to `ref: main` before merging this PR.
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: atlanhq/application-sdk
-          ref: feat/atlan-yaml-validator-in-ci
+          ref: main
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false

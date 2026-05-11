@@ -38,7 +38,7 @@ def _parse_version(version_str: str) -> Version | None:
         return Version(version_str)
     except InvalidVersion:
         logger.warning(
-            f"Cannot parse sdk_version '{version_str}', skipping flag injection"
+            "Cannot parse sdk_version '%s', skipping flag injection", version_str
         )
         return None
 
@@ -92,19 +92,26 @@ def inject_sdk_version_flags(config_yaml: str, sdk_version: str | None) -> str:
                     dropped = sorted(set(existing) - set(default_value))
                     if dropped:
                         logger.warning(
-                            f"Force-override of {key} drops sibling sub-keys "
-                            f"{dropped} for sdk_version={sdk_version}. These "
-                            "are no longer honoured by the chart; remove them "
-                            "from atlan.yaml."
+                            "Force-override of %s drops sibling sub-keys %s "
+                            "for sdk_version=%s. These are no longer honoured "
+                            "by the chart; remove them from atlan.yaml.",
+                            key,
+                            dropped,
+                            sdk_version,
                         )
                 logger.info(
-                    f"Force-overriding {key}={config[key]!r} → {default_value!r} "
-                    f"for sdk_version={sdk_version}"
+                    "Force-overriding %s=%r → %r for sdk_version=%s",
+                    key,
+                    config[key],
+                    default_value,
+                    sdk_version,
                 )
             continue
 
         additions[key] = default_value
-        logger.info(f"Injected {key}={default_value} for sdk_version={sdk_version}")
+        logger.info(
+            "Injected %s=%s for sdk_version=%s", key, default_value, sdk_version
+        )
 
     if not additions and not overrides:
         return config_yaml
