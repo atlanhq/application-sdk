@@ -11,6 +11,11 @@ contract and regenerated SDK artifacts, not to hand-edit generated JSON.
 
 ## Hard Rules
 
+- Treat `atlanhq/application-sdk` as the canonical source for this skill. The
+  repo-local copies live at `.agents/skills/make-contract/SKILL.md` and
+  `.claude/skills/make-contract/SKILL.md`; mirror any edits between them and do
+  not add nested `make-contract` skill copies under `contract-toolkit/` or app
+  repos.
 - Use the Atlan CLI contract commands first. Fall back to direct `pkl` commands
   only when the CLI is missing, too old, or cannot support the requested change.
 - Do not expose internal service, repository, or implementation details in
@@ -95,6 +100,13 @@ atlan app contract generate -p <app-dir>
 # Update the toolkit dependency and refresh PklProject.deps.json.
 atlan app contract update-toolkit -p <app-dir>
 atlan app contract update-toolkit -p <app-dir> --version <semver>
+```
+
+The toolkit package is named `app-contract-toolkit`, but latest-version lookup
+must come from the SDK repo releases, not the old standalone toolkit repo:
+
+```bash
+gh release list --repo atlanhq/application-sdk --limit 50 --json tagName --jq '[.[] | select(.tagName | startswith("contract-toolkit-v"))][0].tagName | sub("^contract-toolkit-v"; "")'
 ```
 
 If the CLI cannot be used, say why and use the smallest fallback:
