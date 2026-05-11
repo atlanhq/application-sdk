@@ -130,6 +130,19 @@ jobs:
         # Unit-tested in tests/test_parse_atlan_yaml.py in the SDK repo.
         run: python3 .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py
 
+      - name: Validate atlan.yaml deploy config
+        # Run platform guardrail rules on the deploy block before image build.
+        # Fails fast with ::error file=atlan.yaml:: annotations so violations
+        # show inline on the PR diff. Skipped when atlan.yaml has no deploy
+        # block (driver no-ops on empty DEPLOY_CONFIG).
+        # See .sdk-entrypoint/.github/scripts/config_validator.py for rules,
+        # validate_atlan_yaml.py for the CI driver,
+        # tests/test_config_validator.py for coverage.
+        env:
+          DEPLOY_CONFIG: ${{ steps.manifest.outputs.deploy_config }}
+          SDK_VERSION:   ${{ steps.manifest.outputs.sdk_version }}
+        run: python3 .sdk-entrypoint/.github/scripts/validate_atlan_yaml.py
+
       - name: Validate SDR secrets
         if: steps.manifest.outputs.enable_sdr == 'true'
         env:
