@@ -81,8 +81,11 @@ extraNodes {
     outputPrefix = "$.extract.outputs.popularity_output_prefix"
     accessHistoryDataPrefix = "$.extract.outputs.access_history_prefix"
     mineColumnMapping = new PopularityMineColumnMapping {
+      queryHash = "md5(QUERY_TEXT)"
+      queryText = "QUERY_TEXT"
       queryTag = "QUERY_TAG"
       queryTagsSql = "QUERY_TAGS_SQL"
+      sourceQueryTypeQi = "SOURCE_QUERY_TYPE"
       hasNativeInputs = "HAS_NATIVE_INPUTS"
       nativeInputsPayload = "NATIVE_INPUTS_PAYLOAD"
     }
