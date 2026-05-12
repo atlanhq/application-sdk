@@ -75,5 +75,3 @@ __all__ = [
     "StoragePermissionError",
     "StorageConfigError",
 ]
-# NOTE: TimeChunkedWriter lives in application_sdk.storage.chunked and is
-# imported directly from there to avoid a circular import via observability.

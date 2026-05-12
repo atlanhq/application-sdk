@@ -313,8 +313,7 @@ class JsonFileWriter(Writer):
             "sidecars and parallel transfers, no caller-side upload code "
             "needed. See the 'Replacing ParquetFileWriter / JsonFileWriter' "
             "section in docs/agents/coding-standards.md for copy-paste "
-            "blocks and the TimeChunkedWriter helper (time-based rollover "
-            "for heartbeat-friendly streaming workloads).",
+            "replacement blocks.",
             DeprecationWarning,
             stacklevel=2,
         )
