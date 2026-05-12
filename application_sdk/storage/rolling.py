@@ -74,16 +74,11 @@ import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from application_sdk.common.file_ops import SafeFileOps
+from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
-
-if TYPE_CHECKING:
-    # Avoid circular import: contracts.types ← observability ←
-    # storage.__init__ ← rolling. The runtime reference inside the
-    # ``file_reference`` property uses a lazy import below.
-    from application_sdk.contracts.types import FileReference
 
 logger = get_logger(__name__)
 
@@ -258,10 +253,6 @@ class RollingFileWriter(Generic[T]):
         + parallel transfers). No caller-side ``persist_file_reference``
         call is required.
         """
-        from application_sdk.contracts.types import (  # noqa: PLC0415 — lazy: see TYPE_CHECKING block at top
-            FileReference,
-        )
-
         return FileReference.from_local(self.output_dir)
 
     @property

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Union, cast
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
@@ -26,8 +27,6 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     import daft  # type: ignore
     import pandas as pd
-
-    from application_sdk.contracts.types import FileReference
 
 
 class ParquetFileReader(Reader):
@@ -983,8 +982,6 @@ class ParquetFileWriter(Writer):
         """
         if not self.defer_uploads:
             return None
-        from application_sdk.contracts.types import FileReference  # noqa: PLC0415
-
         return FileReference.from_local(self.path)
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
