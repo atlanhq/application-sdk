@@ -38,6 +38,32 @@ Use `FileReference` for any data that cannot fit in Temporal's 2 MB payload limi
 See `docs/concepts/file-reference.md` for the full guide: decision matrix, lifecycle,
 the `Lazy()` marker for selective materialization, dedup behaviour, and observability events.
 
+## Writer.close() contract (3.7.0+)
+
+`ParquetFileWriter.close()` (and other `Writer` subclasses) returns a `WriterResult`
+with two fields:
+
+- `result.statistics` — `TaskStatistics` (record count, chunk count, partitions, typename)
+- `result.files` — ephemeral `FileReference` scoped to the writer's output directory
+
+Pass `result.files` through your task's typed Output and the activity interceptor
+auto-uploads it (SHA-256 sidecars + parallel transfers via `_gather_with_semaphore`).
+Do not call `persist_file_reference` yourself, and do not reconstruct paths with
+`os.path.join` / `FileReference.from_local`.
+
+```python
+async with ParquetFileWriter(path=base, typename="users") as writer:
+    await writer.write(df)
+result = writer.last_result  # WriterResult
+return MyOutput(statistics=result.statistics, data=result.files)
+```
+
+The writer creates its own sub-directory (`<typename>` if set, else `_parquet_<uuid>`)
+so the resulting `FileReference` covers only the chunks this writer wrote — never
+sibling content in the caller's `path`. Skipping `close()` means no `WriterResult`
+and no Output, so the contract is structurally enforced (loud `NameError`, not silent
+data loss). Use `async with` whenever possible.
+
 ## Before Every Commit
 
 ```bash

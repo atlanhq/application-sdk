@@ -462,6 +462,58 @@ class TestParquetFileWriterCloseContract:
         base_upload.assert_not_called()
         delete_prefix.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_consolidation_end_to_end_persist(self, tmp_path: Path):
+        """`use_consolidation=True` must reach the store via the new boundary.
+
+        Claude review flagged the consolidation path as a silent regression
+        risk: pre-PR it uploaded inline; mid-PR it stopped uploading at all.
+        After this PR, consolidated files live in the writer's output dir
+        and reach the store only when the caller persists `result.files`.
+        This test exercises the full chain: many small DataFrames → daft
+        consolidation → close() → persist → store has the consolidated keys.
+        """
+        pytest.importorskip("daft")
+
+        writer = ParquetFileWriter(
+            path=str(tmp_path / "out"),
+            typename="orders",
+            chunk_size=200,
+            buffer_size=50,
+            use_consolidation=True,
+        )
+
+        async def _batches():
+            # 3 DataFrames of 100 records each = 300 total.
+            # consolidation_threshold=200 → one consolidation at ~200,
+            # final consolidation at the end with the remaining 100.
+            for i in range(3):
+                yield pd.DataFrame(
+                    {
+                        "id": list(range(i * 100, (i + 1) * 100)),
+                        "batch": [i] * 100,
+                    }
+                )
+
+        await writer.write_batches(_batches())
+        result = await writer.close()
+
+        assert result.statistics.total_record_count == 300
+        # Local consolidated files must exist on disk before persist.
+        local_parquet = list(Path(writer.path).rglob("*.parquet"))
+        assert local_parquet, "Consolidation produced no local parquet files"
+
+        store = create_memory_store()
+        durable = await persist_file_reference(store, result.files)
+        assert durable.is_durable is True
+
+        # Every consolidated file lands in the store under the persisted prefix.
+        store_keys = await list_keys(durable.storage_path, store, suffix=".parquet")
+        assert len(store_keys) == len(local_parquet), (
+            f"Store key count {len(store_keys)} != local file count "
+            f"{len(local_parquet)} — consolidation upload boundary broken"
+        )
+
 
 class TestParquetFileWriterWriteDaftDataframe:
     """Test ParquetFileWriter daft DataFrame writing via _write_daft_dataframe.
