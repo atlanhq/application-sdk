@@ -268,9 +268,7 @@ class AEWorkflowClient:
             )
             last = (status, body)
             if status < 300 and isinstance(body, dict):
-                data = (
-                    body.get("data") if isinstance(body.get("data"), dict) else body
-                )
+                data = body.get("data") if isinstance(body.get("data"), dict) else body
                 version = data.get("version") if isinstance(data, dict) else None
                 if version is not None:
                     return int(version)
@@ -289,9 +287,7 @@ class AEWorkflowClient:
             if attempt < retries:
                 time.sleep(retry_sleep_seconds)
         status, body = last
-        raise RuntimeError(
-            f"create_version failed: HTTP {status}\nresponse={body!r}"
-        )
+        raise RuntimeError(f"create_version failed: HTTP {status}\nresponse={body!r}")
 
     def publish_version(
         self,

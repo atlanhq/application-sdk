@@ -327,6 +327,16 @@ class BaseFullDAGE2ETest:
             qi_task_queue=self.qi_task_queue,
             lineage_task_queue=self.lineage_task_queue,
             connection=self.connection_spec(),
+            # The seed is the source of truth for the run's actual
+            # extract_args (submit=true only fills `{{credentialGuid}}`,
+            # not filters) — pass the subclass-configured filters
+            # through so the connector actually receives them at run
+            # time. Mismatch here was the cause of a prior tier-4 run
+            # where extract returned 0 entities, propagating an empty
+            # connection_qualified_name into publish and ultimately
+            # making AE raise ApplicationError.
+            include_filter=self.include_filter,
+            exclude_filter=self.exclude_filter,
             qi_parsing_mode=self.qi_parsing_mode,
             extract_workflow_type=self.extract_workflow_type or None,
             mode=self.mode,

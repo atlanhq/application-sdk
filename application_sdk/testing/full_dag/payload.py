@@ -120,6 +120,9 @@ def build_seed_dag(
     qi_task_queue: str = "atlan-query-intelligence-production",
     lineage_task_queue: str = "atlan-lineage-production",
     connection: ConnectionSpec,
+    include_filter: str = '{"^def$":[".*"]}',
+    exclude_filter: str = "{}",
+    temp_table_regex: str = "",
     extract_workflow_type: str | None = None,
     qi_parsing_mode: str = "lorien-only",
     qi_mine_output_type: str = "json",
@@ -152,25 +155,32 @@ def build_seed_dag(
     if extract_workflow_type is None:
         extract_workflow_type = connector_short_name
 
-    # The orchestrator's `submit=true` endpoint substitutes only the
-    # placeholder fields it knows about (`{{credentialGuid}}`) when
-    # creating the new version — it does NOT rewrite extraction_method
-    # or agent_json from the submit's parameters. So if the seed
-    # hardcodes `extraction_method: direct` and `agent_json` is
-    # missing, the new version inherits that shape and the runtime
-    # CredentialRef.resolve() falls through to guid mode (since
-    # agent_spec is None) → tries to look up '__placeholder__' →
-    # AAF-CRD-002. Mirror the submit's mode in the seed.
+    # The orchestrator's `submit=true` endpoint only substitutes Mustache
+    # placeholders it recognises (today: `{{credentialGuid}}`). It does
+    # NOT splat the submit's flat parameters back into the seed's
+    # extract_args. So:
+    #   - credential_guid must be `{{credentialGuid}}` (not a string
+    #     literal like `__placeholder__` — that would propagate verbatim
+    #     and the runtime CredentialRef.resolve would later try to look
+    #     up a credential named `__placeholder__` → AAF-CRD-002).
+    #   - include_filter / exclude_filter / temp_table_regex must be the
+    #     ACTUAL values the run should use — leaving them empty here
+    #     makes the connector extract nothing (which then propagates as
+    #     `connection_qualified_name=""` from extract → publish sees no
+    #     entities → AE workflow raises ApplicationError on assert).
+    #   - extraction_method + agent_json must mirror the submit's mode
+    #     (AGENT vs DIRECT) for credential resolution to land on the
+    #     right path at runtime.
     extract_args: dict[str, Any] = {
-        "credential_guid": "__placeholder__",
+        "credential_guid": "{{credentialGuid}}",
         "connection": {
             "connection_name": connection.name,
             "connection_qualified_name": connection.qualified_name,
         },
         "extraction_method": mode.value,
-        "include_filter": "",
-        "exclude_filter": "",
-        "temp_table_regex": "",
+        "include_filter": include_filter,
+        "exclude_filter": exclude_filter,
+        "temp_table_regex": temp_table_regex,
     }
     if mode is RunMode.AGENT and agent is not None and database is not None:
         # Same agent-json shape build_ae_payload uses for the submit
