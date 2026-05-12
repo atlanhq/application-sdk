@@ -307,13 +307,14 @@ class JsonFileWriter(Writer):
         # already supported, fully optimised, and copy-paste documented.
         warnings.warn(
             "JsonFileWriter is deprecated and will be removed in v4.0. "
-            "Migrate now: write JSON locally (orjson.dumps + open(path, "
-            "'wb')) and return a FileReference for the output directory — "
-            "the Temporal activity interceptor persists it with SHA-256 "
-            "sidecars and parallel transfers, no caller-side upload code "
-            "needed. See the 'Replacing ParquetFileWriter / JsonFileWriter' "
-            "section in docs/agents/coding-standards.md for copy-paste "
-            "replacement blocks.",
+            "Migrate now: use application_sdk.storage.rolling.RollingFileWriter "
+            "(time-based rollover, heartbeat-friendly) or write JSON locally "
+            "(orjson.dumps + open(path, 'wb')) and return a FileReference "
+            "for the output directory — the Temporal activity interceptor "
+            "persists it with SHA-256 sidecars and parallel transfers, no "
+            "caller-side upload code needed. See the 'Replacing "
+            "ParquetFileWriter / JsonFileWriter' section in "
+            "docs/agents/coding-standards.md.",
             DeprecationWarning,
             stacklevel=2,
         )

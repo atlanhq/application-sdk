@@ -42,78 +42,144 @@ the `Lazy()` marker for selective materialization, dedup behaviour, and observab
 
 `ParquetFileWriter`, `JsonFileWriter`, `ParquetFileReader`, and `JsonFileReader`
 emit `DeprecationWarning` on construction and **will be removed in v4.0**.
-Migrate now — the replacement pattern is fully supported and fully optimised
-(SHA-256 dedup + sidecars + parallel transfers via `_gather_with_semaphore`),
-copy-paste ready.
+Migrate now — the replacement is fully supported and fully optimised
+(SHA-256 dedup + sidecars + parallel transfers via `_gather_with_semaphore`).
 
-The replacement is the same shape for every format:
+### Recommended: `RollingFileWriter`
 
-1. Pick an output directory the writer alone owns (so the resulting
-   `FileReference` covers only your chunks, never sibling content).
-2. Write each chunk to a file on disk using whichever library suits the
-   format (`pandas.to_parquet`, `orjson.dumps`, etc.).
-3. Surface a `FileReference.from_local(output_dir)` on your task's typed
-   Output. The Temporal activity interceptor calls `persist_file_refs`
-   automatically on task return — you write **no** upload code.
+`application_sdk/storage/rolling.py` provides a small format-agnostic helper
+that encapsulates the common pattern:
 
-### Copy-paste — Parquet writer
+- Owns a scoped output sub-directory (so the resulting `FileReference`
+  covers only your chunks — never sibling content in `base_path`).
+- Buffers appended batches and rolls over to a new chunk file every
+  `chunk_interval_seconds` of wall clock (default 60s).
+- Optional `on_chunk_complete(chunk_index, chunk_path)` callback wires
+  cleanly to `activity.heartbeat(...)` for within-heartbeat checkpointing.
+- `writer.file_reference` returns an ephemeral `FileReference` for your
+  typed Output; the activity interceptor uploads on task return.
+
+**Why time-based rollover (not record-count):** the SDK runs in two extreme
+regimes — slow JDBC streams (~200 rows/min) and fast msgspec transforms
+(~10 000 records/ms). A record-count threshold like `chunk_size=10_000`
+either never trips (slow stream → one huge final file, blocks heartbeat)
+or trips every millisecond (fast stream → thousands of tiny files).
+A wall-clock interval gives both regimes the same predictable checkpoint
+cadence regardless of throughput.
+
+#### Parquet (pandas)
+
+```python
+import pandas as pd
+
+from application_sdk.contracts.types import FileReference
+from application_sdk.storage.rolling import RollingFileWriter
+
+
+def _flush_parquet(batches: list[pd.DataFrame], path: str) -> None:
+    pd.concat(batches, ignore_index=True).to_parquet(path)
+
+
+async def extract_users(self, inp: ExtractInput) -> ExtractOutput:
+    async with RollingFileWriter[pd.DataFrame](
+        base_path=inp.output_path,
+        extension=".parquet",
+        flush_fn=_flush_parquet,
+        chunk_interval_seconds=60.0,
+        on_chunk_complete=self._heartbeat_chunk,   # optional — see below
+    ) as writer:
+        async for df in self._stream_users():
+            await writer.append(df)
+    return ExtractOutput(data=writer.file_reference)
+
+
+async def _heartbeat_chunk(self, chunk_index: int, chunk_path: str) -> None:
+    from temporalio import activity  # noqa: PLC0415
+    activity.heartbeat(f"wrote {chunk_path}")
+```
+
+#### JSON (line-delimited, `orjson`)
+
+```python
+import orjson
+
+from application_sdk.contracts.types import FileReference
+from application_sdk.storage.rolling import RollingFileWriter
+
+
+def _flush_jsonl(batches: list[list[dict]], path: str) -> None:
+    with open(path, "wb") as f:
+        for batch in batches:
+            for record in batch:
+                f.write(orjson.dumps(record))
+                f.write(b"\n")
+
+
+async def extract_events(self, inp: ExtractInput) -> ExtractOutput:
+    async with RollingFileWriter[list[dict]](
+        base_path=inp.output_path,
+        extension=".json",
+        flush_fn=_flush_jsonl,
+        chunk_interval_seconds=60.0,
+    ) as writer:
+        async for records in self._stream_events():
+            await writer.append(records)
+    return ExtractOutput(data=writer.file_reference)
+```
+
+To support a new format, write a 3-line `flush_fn` and plug it in. CSV via
+`pandas.to_csv`, Arrow IPC via `pyarrow.ipc`, msgpack via `msgpack.pack` —
+all the same shape.
+
+### Alternative: bare copy-paste (no helper class)
+
+If you want zero new dependencies, the loop the helper wraps is small enough
+to inline directly.
+
+**Parquet:**
 
 ```python
 import os
 import uuid
-from pathlib import Path
-
 import pandas as pd
-
 from application_sdk.contracts.types import FileReference
 
 
 async def extract_users(self, inp: ExtractInput) -> ExtractOutput:
-    # Writer-owned subdir: nothing else writes here, so the FileReference
-    # below covers only what this task wrote.
     output_dir = os.path.join(inp.output_path, f"users_{uuid.uuid4().hex[:8]}")
     os.makedirs(output_dir, exist_ok=True)
-
     chunk_index = 0
     async for df in self._stream_users():
-        chunk_path = os.path.join(output_dir, f"chunk-{chunk_index}.parquet")
-        df.to_parquet(chunk_path)
+        df.to_parquet(os.path.join(output_dir, f"chunk-{chunk_index}.parquet"))
         chunk_index += 1
-        # Optional: heartbeat between chunks for long-running activities.
-        # from temporalio import activity
-        # activity.heartbeat(f"wrote {chunk_path}")
-
     return ExtractOutput(data=FileReference.from_local(output_dir))
 ```
 
-### Copy-paste — JSON writer (line-delimited)
+**JSON (line-delimited):**
 
 ```python
 import os
 import uuid
-
 import orjson
-
 from application_sdk.contracts.types import FileReference
 
 
 async def extract_events(self, inp: ExtractInput) -> ExtractOutput:
     output_dir = os.path.join(inp.output_path, f"events_{uuid.uuid4().hex[:8]}")
     os.makedirs(output_dir, exist_ok=True)
-
     chunk_index = 0
     async for records in self._stream_events():
-        chunk_path = os.path.join(output_dir, f"chunk-{chunk_index}.json")
-        with open(chunk_path, "wb") as f:
+        with open(os.path.join(output_dir, f"chunk-{chunk_index}.json"), "wb") as f:
             for record in records:
                 f.write(orjson.dumps(record))
                 f.write(b"\n")
         chunk_index += 1
-        # Optional: heartbeat between chunks.
-        # activity.heartbeat(f"wrote {chunk_path}")
-
     return ExtractOutput(data=FileReference.from_local(output_dir))
 ```
+
+The bare pattern has no rollover or heartbeat awareness — each iteration of
+your stream loop produces one chunk file. Prefer `RollingFileWriter` when
+you want predictable checkpoint cadence on long-running activities.
 
 ### Reading a `FileReference` (replaces `ParquetFileReader` / `JsonFileReader`)
 
