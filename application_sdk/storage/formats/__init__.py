@@ -441,14 +441,17 @@ class Writer(ABC):
             for i in range(0, len(dataframe), self.buffer_size):
                 chunk = dataframe[i : i + self.buffer_size]
 
+                # Only upload accumulated data if there is any — guards against
+                # the first chunk being larger than max_file_size_bytes where
+                # no prior _flush_buffer call has written the file yet.
                 if (
                     self.current_buffer_size_bytes + chunk_size_bytes
                     > self.max_file_size_bytes
+                    and self.current_buffer_size_bytes > 0
                 ):
                     output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
-                    if os.path.exists(output_file_name):
-                        await self._upload_file(output_file_name)
-                        self.chunk_part += 1
+                    await self._upload_file(output_file_name)
+                    self.chunk_part += 1
 
                 self.current_buffer_size += len(chunk)
                 self.current_buffer_size_bytes += chunk_size_bytes * len(chunk)
@@ -458,11 +461,11 @@ class Writer(ABC):
                 gc.collect()
 
             if self.current_buffer_size_bytes > 0:
-                # Finally upload the final file to the object store
+                # Finally upload the final file to the object store.
+                # _flush_buffer already wrote the file; no existence check needed.
                 output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
-                if os.path.exists(output_file_name):
-                    await self._upload_file(output_file_name)
-                    self.chunk_part += 1
+                await self._upload_file(output_file_name)
+                self.chunk_part += 1
 
             # Record metrics for successful write
             self.metrics.record_metric(

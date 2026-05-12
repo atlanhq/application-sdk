@@ -1086,6 +1086,9 @@ class TestRunHandlerMode:
 
         mock_default.assert_called_once()
         mock_run_svc.assert_called_once()
+        kwargs = mock_run_svc.call_args.kwargs
+        assert kwargs["enable_temporal_core_metrics"] is False
+        assert kwargs["prometheus_bind_address"] == "127.0.0.1:9464"
 
     def test_uses_custom_handler_when_loaded(self) -> None:
         """When load_handler_class returns a class, that class is instantiated."""
@@ -1250,6 +1253,9 @@ class TestRunCombinedMode:
         await run_combined_mode(cfg)
         combined_patches["create_client"].assert_awaited_once()
         combined_patches["create_svc"].assert_called_once()
+        kwargs = combined_patches["create_svc"].call_args.kwargs
+        assert kwargs["enable_temporal_core_metrics"] is True
+        assert kwargs["prometheus_bind_address"] == "127.0.0.1:9464"
         combined_patches["uvicorn_server"].serve.assert_awaited()
         combined_patches["close_infra"].assert_awaited_once()
 

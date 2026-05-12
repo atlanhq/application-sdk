@@ -323,8 +323,8 @@ response merges all in-process metric sources:
 - Custom metrics from `record_metric()` and direct OTel meter use
 - HTTP server instrumentation (FastAPIInstrumentor, stable OTel HTTP
   semantic conventions: `http.request.method`, `http.route`, etc.)
-- Temporal SDK Rust-core families (proxied in-process from
-  `127.0.0.1:9464`)
+- Temporal SDK Rust-core families when enabled and reachable (proxied
+  in-process from `127.0.0.1:9464` in combined mode)
 - `prometheus_client` defaults (`process_*`, `python_*`)
 
 See [Monitoring](../concepts/monitoring.md) for the full architecture
