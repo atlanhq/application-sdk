@@ -430,17 +430,15 @@ class TestFlushBuffer:
 class TestWriterClose:
     @pytest.mark.asyncio
     async def test_close_idempotent_returns_cached_result(self) -> None:
-        from application_sdk.common.models import TaskStatistics
-        from application_sdk.contracts.types import FileReference
         from application_sdk.storage.formats import WriterResult
 
         writer = _StubWriter()
         writer._is_closed = True
         cached = WriterResult(
-            statistics=TaskStatistics(
-                total_record_count=5, chunk_count=2, partitions=[0, 1]
-            ),
-            files=FileReference.from_local(writer.path),
+            total_record_count=5,
+            chunk_count=2,
+            partitions=[0, 1],
+            files=None,
         )
         writer._result = cached
         result = await writer.close()
@@ -455,9 +453,11 @@ class TestWriterClose:
         writer.total_record_count = 7
         writer.partitions = [0, 1, 2]
         result = await writer.close()
-        assert result.statistics.total_record_count == 7
-        assert result.statistics.chunk_count == 3
-        assert result.files.local_path == writer.path
+        # WriterResult subclasses TaskStatistics, so attribute access is direct.
+        assert result.total_record_count == 7
+        assert result.chunk_count == 3
+        # Base Writer doesn't opt into deferred uploads → no FileReference.
+        assert result.files is None
 
     @pytest.mark.asyncio
     async def test_close_rewraps_finalize_failure(self) -> None:
@@ -486,9 +486,10 @@ class TestWriterClose:
             result = await writer.close()
 
         assert writer._is_closed is True
-        assert result.statistics.total_record_count == 4
-        assert result.files.local_path == str(tmp_path / "out")
-        assert result.files.is_durable is False
+        # WriterResult subclasses TaskStatistics — inherited attributes.
+        assert result.total_record_count == 4
+        # Base Writer keeps the legacy inline-upload contract; no FileReference.
+        assert result.files is None
         # Statistics file uploaded by base Writer (not overridden in _StubWriter).
         mock_upload.assert_awaited()
 

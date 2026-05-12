@@ -1,4 +1,5 @@
 import os
+import warnings
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Union
 
@@ -83,6 +84,15 @@ class JsonFileReader(Reader):
         Raises:
             ValueError: When path is not provided or when single file path is combined with file_names
         """
+        warnings.warn(
+            "JsonFileReader is deprecated and will be removed in v4.0. "
+            "Receive a FileReference on your task's typed Input — the SDK "
+            "auto-materializes it to a local path before the task runs, then "
+            "read it directly with the JSON library of your choice. See "
+            "docs/agents/coding-standards.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.extension = JSON_FILE_EXTENSION
 
         # Validate that single file path and file_names are not both specified
@@ -289,6 +299,18 @@ class JsonFileWriter(Writer):
                 Defaults to False.
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
+        # DeprecationWarning: JsonFileWriter is planned for removal in v4.0.
+        # Recommended forward pattern is direct JSON writes + a FileReference
+        # for the output directory; the activity interceptor handles persistence.
+        warnings.warn(
+            "JsonFileWriter is deprecated and will be removed in v4.0. "
+            "Write JSON locally (e.g. orjson.dumps + open(path, 'wb')) and "
+            "return a FileReference for the output directory — the activity "
+            "interceptor will persist it with SHA-256 sidecars and parallel "
+            "transfers. See docs/agents/coding-standards.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.path = path
         self.typename = typename
         self.chunk_start = chunk_start

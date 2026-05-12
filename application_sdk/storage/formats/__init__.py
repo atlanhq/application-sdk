@@ -30,20 +30,26 @@ from application_sdk.storage.ops import upload_file as _upload_file
 
 
 @dataclass
-class WriterResult:
+class WriterResult(TaskStatistics):
     """Outcome of a Writer.close() call.
 
-    Attributes:
-        statistics: Aggregate counts written.
-        files: Ephemeral ``FileReference`` to the writer-owned output
-            directory. Pass this through an activity's typed Output and the
-            Temporal interceptor's ``persist_file_refs`` will upload it
-            (with SHA-256 sidecars). No caller-side ``persist_file_reference``
-            call is required.
+    Subclasses ``TaskStatistics`` so existing callers that read
+    ``result.total_record_count``, ``result.chunk_count``, ``result.partitions``,
+    ``result.typename`` keep working unchanged via inheritance.
+
+    Adds one new field — ``files`` — for callers who opted into the deferred-
+    upload contract via ``defer_uploads=True`` on the writer constructor.
+    When deferred uploads are off (the default), ``files`` is ``None`` because
+    files have already been uploaded inline and surfacing a ``FileReference``
+    would risk a double-upload through the activity interceptor.
+
+    Apps that want SHA-256 dedup, integrity verification, and parallel
+    transfers via the ``FileReference`` boundary set ``defer_uploads=True``
+    and read ``result.files`` here. Apps that don't care can ignore this
+    field entirely — their existing code paths are unaffected.
     """
 
-    statistics: TaskStatistics
-    files: FileReference
+    files: FileReference | None = None
 
 
 logger = get_logger(__name__)
@@ -643,9 +649,13 @@ class Writer(ABC):
             # Idempotent fallback: re-derive when called more than once on an
             # already-closed instance with no cached result (defensive — should
             # not happen in normal flow).
+            base = self._statistics or self.statistics
             return WriterResult(
-                statistics=self._statistics or self.statistics,
-                files=FileReference.from_local(self.path),
+                total_record_count=base.total_record_count,
+                chunk_count=base.chunk_count,
+                partitions=base.partitions,
+                typename=base.typename,
+                files=self._build_file_reference(),
             )
 
         try:
@@ -666,13 +676,29 @@ class Writer(ABC):
 
             self._is_closed = True
             self._result = WriterResult(
-                statistics=self._statistics,
-                files=FileReference.from_local(self.path),
+                total_record_count=self._statistics.total_record_count,
+                chunk_count=self._statistics.chunk_count,
+                partitions=self._statistics.partitions,
+                typename=self._statistics.typename,
+                files=self._build_file_reference(),
             )
             return self._result
 
         except Exception as e:
             raise rewrap(e, "Error closing writer") from e
+
+    def _build_file_reference(self) -> "FileReference | None":
+        """Return an ephemeral FileReference for the writer's output directory.
+
+        Only populated when the subclass opts into deferred uploads (e.g.
+        ``ParquetFileWriter(defer_uploads=True)``). For the default
+        inline-upload path, returns ``None`` so the activity interceptor
+        does not double-upload files that are already in the object store.
+
+        Subclasses that defer uploads override this to return
+        ``FileReference.from_local(self.path)``.
+        """
+        return None
 
     async def _upload_file(self, file_name: str):
         """Upload a file to the object store."""
@@ -770,9 +796,10 @@ class Writer(ABC):
             with open(output_file_name, "wb") as f:
                 f.write(orjson.dumps(statistics))
 
-            # Route through self._upload_file so subclasses (ParquetFileWriter)
-            # that defer uploads to the close()-returned FileReference can
-            # neutralise this call.
+            # Push the file to the object store (key = local path for consistency).
+            # ParquetFileWriter with defer_uploads=True overrides _upload_file
+            # to a no-op so the statistics sidecar travels via close()'s
+            # returned FileReference instead of inline.
             await self._upload_file(output_file_name)
 
             return statistics

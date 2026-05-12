@@ -38,31 +38,53 @@ Use `FileReference` for any data that cannot fit in Temporal's 2 MB payload limi
 See `docs/concepts/file-reference.md` for the full guide: decision matrix, lifecycle,
 the `Lazy()` marker for selective materialization, dedup behaviour, and observability events.
 
-## Writer.close() contract (3.7.0+)
+## Format-specific writers/readers are deprecated (removal in v4.0)
 
-`ParquetFileWriter.close()` (and other `Writer` subclasses) returns a `WriterResult`
-with two fields:
+`ParquetFileWriter`, `JsonFileWriter`, `ParquetFileReader`, and `JsonFileReader`
+emit `DeprecationWarning` on construction and are planned for removal in v4.0.
+The canonical v4.0 pattern is to write the file with the library of your choice
+(`df.to_parquet`, `orjson.dumps + open`, daft's `write_parquet`, etc.) and let
+`FileReference` carry the result through your task's typed Output. The activity
+interceptor handles upload with SHA-256 sidecars and parallel transfers via
+`_gather_with_semaphore` — no caller-side `persist_file_reference` needed.
 
-- `result.statistics` — `TaskStatistics` (record count, chunk count, partitions, typename)
-- `result.files` — ephemeral `FileReference` scoped to the writer's output directory
+### Opt-in deferred uploads in 3.x (`ParquetFileWriter`)
 
-Pass `result.files` through your task's typed Output and the activity interceptor
-auto-uploads it (SHA-256 sidecars + parallel transfers via `_gather_with_semaphore`).
-Do not call `persist_file_reference` yourself, and do not reconstruct paths with
-`os.path.join` / `FileReference.from_local`.
+`ParquetFileWriter` accepts `defer_uploads=True` to opt into the v4.0-style
+contract today, without breaking existing apps. Default (`False`) preserves
+the pre-3.7 inline-upload behaviour — apps that don't pass the flag see no
+change.
 
 ```python
-async with ParquetFileWriter(path=base, typename="users") as writer:
+# Opt-in: writer skips all inline uploads. Caller surfaces result.files
+# on a typed Output; the activity interceptor uploads it on task return.
+async with ParquetFileWriter(
+    path=base, typename="users", defer_uploads=True,
+) as writer:
     await writer.write(df)
-result = writer.last_result  # WriterResult
-return MyOutput(statistics=result.statistics, data=result.files)
+result = writer.last_result            # WriterResult (subclass of TaskStatistics)
+return MyOutput(
+    statistics=result,                 # `WriterResult` IS a `TaskStatistics`
+    data=result.files,                 # ephemeral FileReference scoped to the
+                                       # writer's output directory
+)
 ```
 
-The writer creates its own sub-directory (`<typename>` if set, else `_parquet_<uuid>`)
-so the resulting `FileReference` covers only the chunks this writer wrote — never
-sibling content in the caller's `path`. Skipping `close()` means no `WriterResult`
-and no Output, so the contract is structurally enforced (loud `NameError`, not silent
-data loss). Use `async with` whenever possible.
+`WriterResult` subclasses `TaskStatistics`, so `result.total_record_count`,
+`result.chunk_count`, `result.partitions`, and `result.typename` continue to
+work — `defer_uploads=True` only adds the `result.files` field. Default mode
+returns `result.files = None` so the interceptor never double-uploads files
+that are already in the store.
+
+When `defer_uploads=True` is set without `typename`, the writer creates a
+scoped sub-directory (`_parquet_<8-char-uuid>`) under `path` so the resulting
+`FileReference` covers only the chunks this writer wrote — never sibling
+content in the caller's `path`. Default mode (`defer_uploads=False`) preserves
+main's path layout unchanged.
+
+Skipping `close()` means no `WriterResult` and no Output payload, so the
+contract is structurally enforced (loud `NameError`, not silent data loss).
+Use `async with` whenever possible.
 
 ## Before Every Commit
 

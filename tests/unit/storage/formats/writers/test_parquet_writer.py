@@ -110,15 +110,18 @@ class TestParquetFileWriterInit:
     """Test ParquetFileWriter initialization."""
 
     def test_init_default_values(self, base_output_path: str):
-        """Test ParquetFileWriter initialization with default values."""
+        """Test ParquetFileWriter initialization with default values.
+
+        Default mode (defer_uploads=False) preserves main's path behaviour:
+        when no typename is supplied, the writer uses `path` directly so
+        existing apps see no surprise sub-directory.
+        """
         parquet_output = ParquetFileWriter(path=base_output_path)
 
-        # Without a typename, the writer must create a scoped sub-directory so
-        # close()'s FileReference covers only what this writer wrote.
-        assert parquet_output.path.startswith(base_output_path + os.sep)
-        assert os.path.basename(parquet_output.path).startswith("_parquet_")
-        assert parquet_output.path != base_output_path
+        # Default mode → path is unchanged when typename is absent.
+        assert parquet_output.path == base_output_path
         assert parquet_output.typename is None
+        assert parquet_output.defer_uploads is False
 
         assert parquet_output.chunk_size == 100000
         assert parquet_output.total_record_count == 0
@@ -128,13 +131,28 @@ class TestParquetFileWriterInit:
         assert parquet_output.end_marker is None
         # partition_cols was removed from the implementation
 
-    def test_init_isolates_writes_from_sibling_content(self, tmp_path):
-        """Writer-owned subdir must isolate parquet output from sibling files.
+    def test_init_defer_uploads_creates_scoped_subdir(self, base_output_path: str):
+        """defer_uploads=True without typename → writer-owned scoped subdir.
 
-        Manager's /tmp concern: if a caller passes a shared directory (no
-        typename), the writer must never co-mingle its chunks with other
-        files in that directory — otherwise close()'s FileReference would
-        upload everything in the shared dir, not just the parquet output.
+        Manager's /tmp concern only matters when the caller opts into the
+        deferred-upload contract (because that's when close()'s FileReference
+        flows through the interceptor). In that mode, the writer creates its
+        own sub-directory so the resulting FileReference covers only what
+        this writer wrote.
+        """
+        writer = ParquetFileWriter(path=base_output_path, defer_uploads=True)
+
+        assert writer.path.startswith(base_output_path + os.sep)
+        assert os.path.basename(writer.path).startswith("_parquet_")
+        assert writer.path != base_output_path
+
+    def test_init_isolates_writes_from_sibling_content(self, tmp_path):
+        """defer_uploads=True scoped subdir must isolate output from siblings.
+
+        If a caller passes a shared directory and opts into deferred uploads,
+        the writer must never co-mingle its chunks with other files —
+        otherwise close()'s FileReference would upload everything in the
+        shared dir, not just the parquet output.
         """
         shared = tmp_path / "shared"
         shared.mkdir()
@@ -142,7 +160,7 @@ class TestParquetFileWriterInit:
         sibling = shared / "do_not_upload.txt"
         sibling.write_text("hands off")
 
-        writer = ParquetFileWriter(path=str(shared))
+        writer = ParquetFileWriter(path=str(shared), defer_uploads=True)
 
         # Writer chose a subdir, not the shared dir itself.
         assert writer.path != str(shared)
@@ -187,6 +205,24 @@ class TestParquetFileWriterInit:
         expected_path = os.path.join(base_output_path, "test_dir", "test_table")
         assert os.path.exists(expected_path)
         assert parquet_output.path == expected_path
+
+    def test_init_emits_deprecation_warning(self, base_output_path: str):
+        """Construction must signal removal in v4.0."""
+        import warnings as _warnings
+
+        with _warnings.catch_warnings(record=True) as captured:
+            _warnings.simplefilter("always")
+            ParquetFileWriter(path=base_output_path, typename="t")
+
+        messages = [
+            str(w.message)
+            for w in captured
+            if issubclass(w.category, DeprecationWarning)
+        ]
+        assert any(
+            "v4.0" in m for m in messages
+        ), f"Expected DeprecationWarning mentioning v4.0; got: {messages}"
+        assert any("ParquetFileWriter is deprecated" in m for m in messages)
 
 
 class TestParquetFileWriterPathGen:
@@ -383,24 +419,53 @@ class TestParquetFileWriterReplacePrefix:
 
 
 class TestParquetFileWriterCloseContract:
-    """End-to-end verification of the new close() → WriterResult contract."""
+    """End-to-end verification of the opt-in close() → WriterResult contract.
+
+    All tests in this class use ``defer_uploads=True`` because the contract
+    under test (deferred uploads, ephemeral FileReference on close) is opt-in.
+    Apps that do not pass the flag get main's inline-upload behaviour and a
+    ``result.files`` of ``None``.
+    """
 
     @pytest.mark.asyncio
     async def test_close_returns_writer_result_with_filereference(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """close() must hand back statistics + an ephemeral FileReference."""
-        writer = ParquetFileWriter(path=base_output_path, typename="users")
+        writer = ParquetFileWriter(
+            path=base_output_path, typename="users", defer_uploads=True
+        )
         await writer.write(sample_dataframe)
         result = await writer.close()
 
-        assert result.statistics.total_record_count == len(sample_dataframe)
-        assert result.statistics.typename == "users"
+        # WriterResult subclasses TaskStatistics — fields are direct.
+        assert result.total_record_count == len(sample_dataframe)
+        assert result.typename == "users"
         assert result.files.local_path == writer.path
         assert result.files.is_durable is False
 
         # And it's surfaced via last_result for async-with callers.
         assert writer.last_result is result
+
+    @pytest.mark.asyncio
+    async def test_default_mode_returns_no_filereference(
+        self, base_output_path: str, sample_dataframe: pd.DataFrame
+    ):
+        """defer_uploads=False (default) → result.files is None.
+
+        Apps on the legacy inline-upload path should never see a FileReference
+        in their result. Surfacing one would cause the activity interceptor
+        to re-upload files that are already in the store.
+        """
+        with patch(
+            "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
+        ):
+            writer = ParquetFileWriter(path=base_output_path, typename="users")
+            await writer.write(sample_dataframe)
+            result = await writer.close()
+
+        assert result.total_record_count == len(sample_dataframe)
+        assert result.files is None
 
     @pytest.mark.asyncio
     async def test_close_then_persist_file_reference_uploads_full_output(
@@ -417,6 +482,7 @@ class TestParquetFileWriterCloseContract:
             path=str(tmp_path / "out"),
             typename="orders",
             buffer_size=50,
+            defer_uploads=True,
         )
         # 120 rows -> 3 sub-chunks (50+50+20) -> HYP-773 territory.
         df = pd.DataFrame({"id": list(range(120))})
@@ -437,13 +503,13 @@ class TestParquetFileWriterCloseContract:
         assert any("statistics" in k for k in all_keys)
 
     @pytest.mark.asyncio
-    async def test_no_inline_uploads_during_write(
+    async def test_no_inline_uploads_during_write_when_deferred(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
-        """No code path on this writer may upload inline.
+        """defer_uploads=True must skip every inline upload site.
 
-        Guards against regression to the pre-BLDX-1136 half-on/half-off
-        state where some flush paths uploaded and others didn't.
+        Guards against regression in the deferred path where some flush
+        sites might leak an inline upload.
         """
         with (
             patch(
@@ -451,27 +517,30 @@ class TestParquetFileWriterCloseContract:
                 new_callable=AsyncMock,
             ) as base_upload,
             patch(
+                "application_sdk.storage.formats.parquet._upload_file",
+                new_callable=AsyncMock,
+            ) as parquet_upload,
+            patch(
                 "application_sdk.storage.formats.parquet._delete_prefix",
                 new_callable=AsyncMock,
             ) as delete_prefix,
         ):
-            writer = ParquetFileWriter(path=base_output_path, typename="t")
+            writer = ParquetFileWriter(
+                path=base_output_path, typename="t", defer_uploads=True
+            )
             await writer.write(sample_dataframe)
             await writer.close()
 
         base_upload.assert_not_called()
+        parquet_upload.assert_not_called()
         delete_prefix.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_consolidation_end_to_end_persist(self, tmp_path: Path):
-        """`use_consolidation=True` must reach the store via the new boundary.
+        """`use_consolidation=True` + `defer_uploads=True` reach the store via close().
 
-        Claude review flagged the consolidation path as a silent regression
-        risk: pre-PR it uploaded inline; mid-PR it stopped uploading at all.
-        After this PR, consolidated files live in the writer's output dir
-        and reach the store only when the caller persists `result.files`.
-        This test exercises the full chain: many small DataFrames → daft
-        consolidation → close() → persist → store has the consolidated keys.
+        Exercises the full chain: many small DataFrames → daft consolidation
+        → close() → persist → store has the consolidated keys.
         """
         pytest.importorskip("daft")
 
@@ -481,6 +550,7 @@ class TestParquetFileWriterCloseContract:
             chunk_size=200,
             buffer_size=50,
             use_consolidation=True,
+            defer_uploads=True,
         )
 
         async def _batches():
@@ -498,7 +568,7 @@ class TestParquetFileWriterCloseContract:
         await writer.write_batches(_batches())
         result = await writer.close()
 
-        assert result.statistics.total_record_count == 300
+        assert result.total_record_count == 300
         # Local consolidated files must exist on disk before persist.
         local_parquet = list(Path(writer.path).rglob("*.parquet"))
         assert local_parquet, "Consolidation produced no local parquet files"
@@ -555,6 +625,7 @@ class TestParquetFileWriterWriteDaftDataframe:
             parquet_output = ParquetFileWriter(
                 path=base_output_path,
                 dataframe_type=DataframeType.daft,
+                defer_uploads=True,
             )
 
             await parquet_output._write_daft_dataframe(mock_df)
@@ -586,6 +657,7 @@ class TestParquetFileWriterWriteDaftDataframe:
             parquet_output = ParquetFileWriter(
                 path=base_output_path,
                 dataframe_type=DataframeType.daft,
+                defer_uploads=True,
             )
 
             # Override parameters in method call
@@ -617,6 +689,7 @@ class TestParquetFileWriterWriteDaftDataframe:
             parquet_output = ParquetFileWriter(
                 path=base_output_path,
                 dataframe_type=DataframeType.daft,
+                defer_uploads=True,
             )
 
             # Use default parameters
@@ -646,6 +719,7 @@ class TestParquetFileWriterWriteDaftDataframe:
             parquet_output = ParquetFileWriter(
                 path=base_output_path,
                 dataframe_type=DataframeType.daft,
+                defer_uploads=True,
             )
 
             await parquet_output._write_daft_dataframe(mock_df)
@@ -683,9 +757,16 @@ class TestParquetFileWriterMetrics:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test that metrics are recorded for pandas DataFrame writes."""
-        with patch(
-            "application_sdk.storage.formats.parquet.get_metrics"
-        ) as mock_get_metrics:
+        with (
+            patch(
+                "application_sdk.storage.formats.parquet.get_metrics"
+            ) as mock_get_metrics,
+            # Stub inline upload — no object store configured in this test.
+            patch(
+                "application_sdk.storage.formats._upload_file",
+                new_callable=AsyncMock,
+            ),
+        ):
             mock_metrics = MagicMock()
             mock_get_metrics.return_value = mock_metrics
 
@@ -719,6 +800,7 @@ class TestParquetFileWriterMetrics:
             parquet_output = ParquetFileWriter(
                 path=base_output_path,
                 dataframe_type=DataframeType.daft,
+                defer_uploads=True,
             )
 
             # Call _write_daft_dataframe directly to test daft-specific metrics
@@ -977,6 +1059,7 @@ class TestParquetFileWriterConsolidation:
                 path=base_output_path,
                 chunk_size=500,  # Small threshold for testing
                 buffer_size=100,  # Small buffer for testing
+                defer_uploads=True,  # skip inline upload (no store in unit test)
             )
 
             # Create test data generator

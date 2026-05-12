@@ -305,6 +305,7 @@ class TestParquetWriterDataIntegrity:
             typename="test_entity",
             buffer_size=self.BUFFER_SIZE,
             use_consolidation=False,
+            defer_uploads=True,  # opt into FileReference boundary for these tests
         )
 
         rows_per_write = row_count // num_writes
