@@ -189,6 +189,14 @@ class BaseFullDAGE2ETest:
     # devex sample) uses ``competitive``. Subclasses override to match
     # their manifest.json.
     qi_parsing_mode: ClassVar[str] = "competitive"
+    # JSONPath field that QI reads view rows from, resolved against
+    # the extract activity's outputs. mssql-style connectors emit a
+    # dedicated ``view_data_prefix`` subfolder; v3 connectors that
+    # bundle views into the main transformed output (e.g. mysql) must
+    # override to ``transformed_data_prefix``. Leaving this mismatched
+    # makes AE fail QI with ``Jsonpath '$.extract.outputs.X' did not
+    # match any value`` before extract assets ever reach Atlas.
+    qi_input_prefix_field: ClassVar[str] = "view_data_prefix"
     # Override when the connector's worker registers a non-default
     # workflow name. Default = connector_short_name (v3 convention,
     # what mysql uses). Set to e.g. ``"mssql-metadata-extractor"`` for
@@ -371,6 +379,7 @@ class BaseFullDAGE2ETest:
             include_filter=self.include_filter,
             exclude_filter=self.exclude_filter,
             qi_parsing_mode=self.qi_parsing_mode,
+            qi_input_prefix_field=self.qi_input_prefix_field,
             extract_workflow_type=self.extract_workflow_type or None,
             mode=self.mode,
             agent=agent,

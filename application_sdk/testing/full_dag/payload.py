@@ -126,6 +126,7 @@ def build_seed_dag(
     extract_workflow_type: str | None = None,
     qi_parsing_mode: str = "lorien-only",
     qi_mine_output_type: str = "json",
+    qi_input_prefix_field: str = "view_data_prefix",
     lake_provider: str = "aws",
     mode: RunMode = RunMode.DIRECT,
     agent: AgentSpec | None = None,
@@ -222,7 +223,14 @@ def build_seed_dag(
                 "workflow_type": "QueryIntelligenceWorkflow",
                 "task_queue": qi_task_queue,
                 "args": {
-                    "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+                    # Inline the connection_qualified_name rather than
+                    # reading from `$.extract.outputs.connection_qualified_name`
+                    # — v3 connectors don't echo the input CQN back on
+                    # their output (the field is present but empty),
+                    # which would silently feed empty CQN into publish
+                    # / qi / lineage and produce 0 entities even though
+                    # everything else "succeeded".
+                    "connection_qualified_name": connection.qualified_name,
                     "vendor_name": connector_short_name,
                     "sql_key": "attributes.definition",
                     "catalog_key": "attributes.databaseName",
@@ -232,7 +240,16 @@ def build_seed_dag(
                     "parsing_mode": qi_parsing_mode,
                     "lake_provider": lake_provider,
                     "storage_bucket": "$.extract.outputs.storage_bucket",
-                    "input_prefix": "$.extract.outputs.view_data_prefix",
+                    # `view_data_prefix` is the field name mssql-style
+                    # extracts emit when they write view definitions to
+                    # a dedicated subfolder. v3 connectors that bundle
+                    # views into the main transformed output (e.g.
+                    # mysql) override `qi_input_prefix_field` to
+                    # `transformed_data_prefix`. QI scans rows and
+                    # only acts on those where `sql_key` is non-null,
+                    # so reading from the bundled prefix is harmless
+                    # for non-view rows.
+                    "input_prefix": f"$.extract.outputs.{qi_input_prefix_field}",
                     "output_prefix": "$.extract.outputs.view_lineage_output_prefix",
                 },
             },
@@ -248,7 +265,7 @@ def build_seed_dag(
                 "workflow_type": "PublishWorkflow",
                 "task_queue": publish_task_queue,
                 "args": {
-                    "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+                    "connection_qualified_name": connection.qualified_name,  # inlined (see qi node)
                     "transformed_data_prefix": "$.extract.outputs.transformed_data_prefix",
                     "publish_state_prefix": "$.extract.outputs.publish_state_prefix",
                     "current_state_prefix": "$.extract.outputs.current_state_prefix",
@@ -266,7 +283,7 @@ def build_seed_dag(
                 "workflow_type": "LineageWorkflow",
                 "task_queue": lineage_task_queue,
                 "args": {
-                    "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+                    "connection_qualified_name": connection.qualified_name,  # inlined (see qi node)
                     "connector_name": connector_short_name,
                     "session_key": "view-lineage",
                     "sql_unquoted_case": "lower",
@@ -297,7 +314,7 @@ def build_seed_dag(
                 "workflow_type": "PublishWorkflow",
                 "task_queue": publish_task_queue,
                 "args": {
-                    "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+                    "connection_qualified_name": connection.qualified_name,  # inlined (see qi node)
                     "transformed_data_prefix": "$.extract.outputs.lineage_stage_prefix",
                     "publish_state_prefix": "$.extract.outputs.lineage_publish_state_prefix",
                     "current_state_prefix": "$.extract.outputs.lineage_current_state_prefix",
