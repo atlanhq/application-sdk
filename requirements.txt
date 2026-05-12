@@ -585,7 +585,7 @@ tzdata==2025.3
     #   pandas
 uncalled-for==0.3.1
     # via fastmcp
-urllib3==2.6.3
+urllib3==2.7.0
     # via
     #   botocore
     #   requests
