@@ -231,7 +231,7 @@ Names emitted by the consolidated SDK surface (all use OTel base units
 | `http_server_response_body_size_bytes` | histogram | same |
 | `http_server_active_requests` | gauge | same |
 | `temporal_*` (Rust-core families) | various | Temporal SDK Rust core, scraped via FastAPI proxy or pushed via `TemporalCoreCollector` |
-| `temporal_core_metrics_proxy_failures_total` | counter | `handler/service.py` — bumped (with `reason` label) when the in-process Temporal-core proxy fetch from `127.0.0.1:9464` fails (timeout, non-200, etc.) so `up=1` scrapes with missing `temporal_*` series are observable from VictoriaMetrics rather than only from WARNING logs |
+| `temporal_core_metrics_proxy_failures_total` | counter | `handler/service.py` — bumped (with `reason` label) when the in-process Temporal-core proxy fetch from `127.0.0.1:9464` fails (timeout, non-200, etc.) so `up=1` scrapes with missing `temporal_*` series are observable from VictoriaMetrics rather than only from logs |
 
 ## User-facing Metrics Shim
 

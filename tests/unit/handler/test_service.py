@@ -467,7 +467,9 @@ class TestMetadataEndpoint:
             {"TABLE_CATALOG": "DEFAULT", "TABLE_SCHEMA": "FINANCE"},
             {"TABLE_CATALOG": "DEFAULT", "TABLE_SCHEMA": "SALES"},
         ]
-        assert body["message"] == "Fetched 2 objects"
+        assert (
+            "message" not in body
+        )  # omitted on success — fixes frontend filter dropdowns
 
     def test_metadata_api_returns_tree_nodes(self) -> None:
         """ApiMetadataOutput → [{value, title, node_type, children}] for apitree widget."""
@@ -483,7 +485,9 @@ class TestMetadataEndpoint:
             {"value": "tag-1", "title": "Tag One", "node_type": "tag", "children": []},
             {"value": "tag-2", "title": "Tag Two", "node_type": "tag", "children": []},
         ]
-        assert body["message"] == "Fetched 2 objects"
+        assert (
+            "message" not in body
+        )  # omitted on success — fixes frontend filter dropdowns
 
     def test_metadata_api_nested_children(self) -> None:
         """ApiMetadataOutput with nested children serializes the full tree."""
@@ -840,7 +844,7 @@ class TestWrapResponse:
     def test_basic_structure(self) -> None:
         result = _wrap_response({"key": "value"})
         assert result["success"] is True
-        assert result["message"] == ""
+        assert "message" not in result  # omitted when empty (frontend dropdowns)
         assert result["data"] == {"key": "value"}
 
     def test_custom_message(self) -> None:
@@ -2269,6 +2273,35 @@ class TestGetTemporalClientInlineImports:
         assert mock_create.call_args.args[1] == "default"
         assert kwargs["api_key"] is None
         assert kwargs["tls_enabled"] is False
+        assert kwargs["enable_prometheus"] is True
+        assert kwargs["prometheus_bind_address"] == ""
+
+    @pytest.mark.asyncio
+    async def test_temporal_client_uses_metrics_runtime_config(
+        self, reset_temporal_client_singleton
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from application_sdk.handler import service as svc_module
+
+        svc_module._workflow_config = svc_module.WorkflowClientConfig(
+            host="temporal:7233",
+            namespace="default",
+            enable_temporal_core_metrics=False,
+            prometheus_bind_address="127.0.0.1:9999",
+        )
+
+        fake_client = object()
+        with patch(
+            "application_sdk.execution.create_temporal_client",
+            new=AsyncMock(return_value=fake_client),
+        ) as mock_create:
+            result = await svc_module._get_temporal_client()
+
+        assert result is fake_client
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["enable_prometheus"] is False
+        assert kwargs["prometheus_bind_address"] == "127.0.0.1:9999"
 
     @pytest.mark.asyncio
     async def test_returns_cached_client_on_second_call(
@@ -3342,6 +3375,110 @@ class TestFrontendHomeEndpoint:
         response = client.get("/")
         assert response.status_code == 200
         assert "HELLO" in response.text
+
+
+class TestMetricsEndpoint:
+    """Tests for GET /metrics Temporal-core proxy behavior."""
+
+    def test_metrics_skips_temporal_core_proxy_when_disabled(
+        self, tmp_path: Path
+    ) -> None:
+        app = create_app_handler_service(
+            _TestHandler(),
+            app_name="metrics-test",
+            enable_temporal_core_metrics=False,
+            frontend_assets_path=str(tmp_path),
+        )
+        client = TestClient(app)
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            response = client.get("/metrics")
+
+        assert response.status_code == 200
+        assert "python_info" in response.text
+        mock_async_client.assert_not_called()
+
+    def test_metrics_connect_error_logs_warning_with_traceback(
+        self, tmp_path: Path
+    ) -> None:
+        import httpx
+
+        class _UnavailableTemporalMetricsClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                return None
+
+            async def get(self, url: str) -> object:
+                raise httpx.ConnectError("All connection attempts failed")
+
+        app = create_app_handler_service(
+            _TestHandler(),
+            app_name="metrics-test",
+            enable_temporal_core_metrics=True,
+            prometheus_bind_address="127.0.0.1:9464",
+            frontend_assets_path=str(tmp_path),
+        )
+        client = TestClient(app)
+
+        with (
+            patch("httpx.AsyncClient", new=_UnavailableTemporalMetricsClient),
+            patch("application_sdk.handler.service.logger.debug") as mock_debug,
+            patch("application_sdk.handler.service.logger.warning") as mock_warning,
+        ):
+            response = client.get("/metrics")
+
+        assert response.status_code == 200
+        assert "python_info" in response.text
+        mock_debug.assert_not_called()
+        mock_warning.assert_called_once()
+        assert "proxy request failed" in mock_warning.call_args.args[0]
+        assert mock_warning.call_args.kwargs.get("exc_info") is True
+
+    def test_metrics_request_error_logs_warning_with_traceback(
+        self, tmp_path: Path
+    ) -> None:
+        import httpx
+
+        class _FailingTemporalMetricsClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                return None
+
+            async def get(self, url: str) -> object:
+                raise httpx.ReadTimeout("read timed out")
+
+        app = create_app_handler_service(
+            _TestHandler(),
+            app_name="metrics-test",
+            enable_temporal_core_metrics=True,
+            prometheus_bind_address="127.0.0.1:9464",
+            frontend_assets_path=str(tmp_path),
+        )
+        client = TestClient(app)
+
+        with (
+            patch("httpx.AsyncClient", new=_FailingTemporalMetricsClient),
+            patch("application_sdk.handler.service.logger.debug") as mock_debug,
+            patch("application_sdk.handler.service.logger.warning") as mock_warning,
+        ):
+            response = client.get("/metrics")
+
+        assert response.status_code == 200
+        assert "python_info" in response.text
+        mock_debug.assert_not_called()
+        mock_warning.assert_called_once()
+        assert "proxy request failed" in mock_warning.call_args.args[0]
+        assert mock_warning.call_args.kwargs.get("exc_info") is True
 
 
 class TestRunAppHandlerService:
