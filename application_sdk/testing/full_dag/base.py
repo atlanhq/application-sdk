@@ -395,21 +395,26 @@ class BaseFullDAGE2ETest:
             timeout_seconds=self.ae_poll_timeout_seconds,
         )
 
-        # Only bother probing Atlas if the publish node succeeded —
-        # otherwise we waste 25 min waiting for an asset that won't land.
-        publish_succeeded = any(
-            n.name in {"publish", "publish-stage"} and n.status.is_success
-            for n in ae_result.nodes
-        )
-        if publish_succeeded:
+        # Only probe Atlas if every DAG node succeeded — extract feeds
+        # publish, qi feeds lineage-app, lineage-app feeds lineage-
+        # publish, so a partial-success DAG produces a partial-success
+        # Connection (or no Connection at all). Polling 25 min for an
+        # asset that was never fully materialised wastes CI minutes and
+        # buries the real failure under a timeout. Fail fast instead so
+        # the assertion message names the failed node.
+        if ae_result.all_nodes_succeeded:
             connection_in_atlas = self.client.poll_atlas_for_connection(
                 self.connection_qualified_name,
                 interval_seconds=self.atlas_poll_interval_seconds,
                 timeout_seconds=self.atlas_poll_timeout_seconds,
             )
         else:
+            failed_names = ", ".join(n.name for n in ae_result.failed_nodes) or "(none)"
             logger.warning(
-                "Publish node did not succeed — skipping Atlas probe to save time"
+                "Skipping Atlas probe — %d/%d DAG nodes did not succeed (failed: %s)",
+                len(ae_result.failed_nodes),
+                len(ae_result.nodes),
+                failed_names,
             )
             connection_in_atlas = False
 

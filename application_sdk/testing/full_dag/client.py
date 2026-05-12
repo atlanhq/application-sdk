@@ -457,14 +457,25 @@ class AEWorkflowClient:
         *,
         interval_seconds: int = 30,
         timeout_seconds: int = 1500,
+        max_forbidden_attempts: int = 5,
     ) -> bool:
         """Poll Atlas until the Connection appears or timeout elapses.
 
         Wide default budget (25 min) because publish runs after the AE
         DAG completes and can take a while to flush large connections.
         Callers with smaller datasets can tighten this.
+
+        HTTP 403 is treated separately from other non-200 responses: it
+        almost always means the calling identity is not on the
+        Connection's admin ACL (the publish step succeeded, but the
+        probe was set up with the wrong adminRoles/adminUsers). Polling
+        through this won't fix it — the ACL won't change mid-run — so
+        the caller bails out after ``max_forbidden_attempts`` 403s with
+        a clear log line, instead of silently burning the full 25 min
+        budget on a config bug.
         """
         elapsed = 0
+        forbidden_streak = 0
         while elapsed < timeout_seconds:
             status = self.get_connection_in_atlas(qualified_name)
             logger.info(
@@ -475,6 +486,21 @@ class AEWorkflowClient:
             )
             if status == 200:
                 return True
+            if status == 403:
+                forbidden_streak += 1
+                if forbidden_streak >= max_forbidden_attempts:
+                    logger.error(
+                        "Atlas Connection probe gave HTTP 403 %d times in a row — "
+                        "stopping early. The Connection probably landed in Atlas; "
+                        "the calling identity is just not on its admin ACL. Add "
+                        "$admin (or the API key's role) to adminRoles, or add the "
+                        "service-account username to adminUsers, on the test's "
+                        "connection_spec().",
+                        forbidden_streak,
+                    )
+                    return False
+            else:
+                forbidden_streak = 0
             if status >= 500:
                 logger.warning(
                     "Atlas returned %d for Connection probe; retrying", status
