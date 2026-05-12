@@ -422,7 +422,7 @@ python-dotenv==1.2.1
     #   fastmcp
     #   pydantic-settings
     #   uvicorn
-python-multipart==0.0.22
+python-multipart==0.0.28
     # via
     #   fastapi
     #   mcp
