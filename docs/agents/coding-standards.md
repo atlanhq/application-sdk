@@ -52,20 +52,35 @@ that encapsulates the common pattern:
 
 - Owns a scoped output sub-directory (so the resulting `FileReference`
   covers only your chunks — never sibling content in `base_path`).
-- Buffers appended batches and rolls over to a new chunk file every
-  `chunk_interval_seconds` of wall clock (default 60s).
+- Buffers appended batches and rolls over to a new chunk file when **any**
+  of the configured policies fire:
+  - `chunk_interval_seconds` — wall clock (default **30s**)
+  - `max_buffer_bytes` — buffer ceiling in bytes (default **50 MB**)
+  - `max_buffer_records` — buffer ceiling in records (default `None`,
+    opt-in)
 - Optional `on_chunk_complete(chunk_index, chunk_path)` callback wires
   cleanly to `activity.heartbeat(...)` for within-heartbeat checkpointing.
 - `writer.file_reference` returns an ephemeral `FileReference` for your
   typed Output; the activity interceptor uploads on task return.
 
-**Why time-based rollover (not record-count):** the SDK runs in two extreme
+**Why the default policy bundle:** the SDK runs in two extreme streaming
 regimes — slow JDBC streams (~200 rows/min) and fast msgspec transforms
-(~10 000 records/ms). A record-count threshold like `chunk_size=10_000`
+(~10 000 records/ms). A pure record-count threshold like `chunk_size=10_000`
 either never trips (slow stream → one huge final file, blocks heartbeat)
-or trips every millisecond (fast stream → thousands of tiny files).
-A wall-clock interval gives both regimes the same predictable checkpoint
-cadence regardless of throughput.
+or trips every millisecond (fast stream → thousands of tiny files). A
+pure wall-clock interval handles the slow case but leaves no ceiling on
+memory when the stream is fast. The default bundle (time + bytes, plus
+opt-in records) gives:
+
+- Predictable checkpoint cadence regardless of upstream throughput.
+- Bounded peak memory: a runaway fast upstream hits the 50 MB ceiling
+  long before it can OOM a typical pod.
+- An optional records-based escape hatch for callers who think in rows.
+
+For advanced cases (e.g. fixed-size exports where only size matters), pass
+a custom `rollover_policy=` — see :class:`TimePolicy`, :class:`SizePolicy`,
+:class:`CountPolicy`, and :class:`AnyOfPolicy` exposed from
+`application_sdk.storage.rolling`.
 
 #### Parquet (pandas)
 
