@@ -133,7 +133,11 @@ class BaseFullDAGE2ETest:
     app_service_url: ClassVar[str] = ""
 
     # --- optional class attrs ------------------------------------------
-    connection_name_prefix: ClassVar[str] = "full-dag-e2e"
+    # Per-run identifier prefix. Every name the harness builds
+    # (Connection QN, AE workflow, credential, agent) embeds this
+    # prefix + run_id so cross-system traceability is one grep.
+    # Default fits tier-4 e2e-sdr-full; tier-5 e2e-full overrides.
+    connection_name_prefix: ClassVar[str] = "e2e-full-ci"
     include_filter: ClassVar[str] = '{"^def$":[".*"]}'
     exclude_filter: ClassVar[str] = "{}"
     connection_admin_users: ClassVar[tuple[str, ...]] = ()
@@ -148,11 +152,13 @@ class BaseFullDAGE2ETest:
     ae_workflow_slug: ClassVar[str] = ""
 
     # Workflow name passed to `POST /automation/api/v1/workflows`.
-    # Defaults to the connector short name; AE treats name as the
-    # idempotency key — re-running this test does not create a new
-    # workflow, only a new VERSION + a new RUN. Override to
-    # ``"{connector}-ci-tier-4"`` etc. if you want CI runs to live
-    # under a dedicated test workflow separate from production.
+    # When empty, the harness builds a unique-per-run name as
+    # ``{connector}-{connection_name_prefix}-{run_id}`` so every CI run
+    # creates its own workflow + leaves a clearly-labeled trace in AE
+    # rather than reusing a static name (the latter would also work via
+    # AE's name-idempotency, but obscures which run produced which
+    # version on inspection). Override to a static string if you want
+    # a single shared CI workflow.
     ae_workflow_name_override: ClassVar[str] = ""
 
     # Task queues for the system-app nodes in the seed DAG. Defaults
@@ -285,7 +291,10 @@ class BaseFullDAGE2ETest:
             )
             return self.ae_workflow_slug
 
-        name = self.ae_workflow_name_override or self.connector_short_name
+        name = (
+            self.ae_workflow_name_override
+            or f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
+        )
         slug = self.client.create_workflow(
             name=name,
             description=f"Full-DAG e2e harness — {self.connector_short_name}",
