@@ -509,6 +509,103 @@ class AEWorkflowClient:
             elapsed += interval_seconds
         return False
 
+    def _atlan_client(self) -> "AtlanClient":  # noqa: F821
+        """Lazily construct a pyatlan AtlanClient for downstream queries.
+
+        Cached on the instance so per-call cost is one HTTP-pool
+        instantiation, not one per asset-search. The token is the same
+        bearer the AE-side calls use, so search permissions match the
+        Connection's admin ACL (which is why callers must put the API
+        key's identity on adminRoles/adminUsers, not just adminGroups).
+        """
+        from pyatlan.client.atlan import AtlanClient
+
+        if not hasattr(self, "_pyatlan"):
+            self._pyatlan = AtlanClient(
+                base_url=self.tenant_url, api_key=self._api_token
+            )
+        return self._pyatlan
+
+    def count_assets_under_connection(
+        self,
+        connection_qualified_name: str,
+        *,
+        type_names: tuple[str, ...] = ("Database", "Schema", "Table", "View", "Column"),
+    ) -> dict[str, int]:
+        """Per-typeName counts of assets under a connection's QN prefix.
+
+        Uses pyatlan's ``FluentSearch`` so we don't hand-roll Elastic
+        DSL. Returns ``{typeName: count}`` with zeros for types that
+        produced no matches. One round-trip per type — fine at the
+        single-digit number of types we query here, and clearer than
+        a single aggregations call.
+
+        Used by the harness to assert extract + publish actually landed
+        assets in Atlas, not just the Connection envelope. A Connection
+        with zero descendants is almost always a config bug (filter
+        mismatch, transform error) that the basic ``connection_in_atlas``
+        check would silently pass.
+        """
+        from pyatlan.model.assets import Asset
+        from pyatlan.model.fluent_search import FluentSearch
+
+        client = self._atlan_client()
+        prefix = f"{connection_qualified_name}/"
+        counts: dict[str, int] = {}
+        for type_name in type_names:
+            try:
+                request = (
+                    FluentSearch()
+                    .where(Asset.QUALIFIED_NAME.startswith(prefix))
+                    .where(Asset.TYPE_NAME.eq(type_name))
+                ).to_request()
+                # size=0 keeps the response cheap — we only need .count
+                request.dsl.size = 0
+                results = client.asset.search(request)
+                counts[type_name] = int(results.count)
+            except Exception:
+                logger.exception(
+                    "FluentSearch for %s under %s failed",
+                    type_name,
+                    connection_qualified_name,
+                )
+                counts[type_name] = 0
+        return counts
+
+    def has_lineage_under_connection(
+        self, connection_qualified_name: str
+    ) -> bool:
+        """True iff at least one lineage Process exists under this connection.
+
+        QI + lineage-app + lineage-publish together produce ``Process``
+        and ``ColumnProcess`` assets whose ``qualifiedName`` is anchored
+        under the Connection. Querying for any single Process row tells
+        us lineage actually flowed through to Atlas — not just that the
+        lineage nodes returned success at the DAG level.
+        """
+        from pyatlan.model.assets import Asset
+        from pyatlan.model.fluent_search import FluentSearch
+
+        client = self._atlan_client()
+        prefix = f"{connection_qualified_name}/"
+        for type_name in ("Process", "ColumnProcess"):
+            try:
+                request = (
+                    FluentSearch()
+                    .where(Asset.QUALIFIED_NAME.startswith(prefix))
+                    .where(Asset.TYPE_NAME.eq(type_name))
+                ).to_request()
+                request.dsl.size = 0
+                if int(client.asset.search(request).count) > 0:
+                    return True
+            except Exception:
+                logger.exception(
+                    "FluentSearch for %s under %s failed",
+                    type_name,
+                    connection_qualified_name,
+                )
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Helpers — defensive parsing for forward-compat

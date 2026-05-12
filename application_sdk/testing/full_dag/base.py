@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -75,11 +75,28 @@ class FullDAGOutcome:
     Returned by :meth:`BaseFullDAGE2ETest.run_full_dag` so subclasses
     can build their own assertions on top — e.g. "extract took less
     than X seconds", "all four entity types extracted", etc.
+
+    Attributes:
+        ae_result: Native-status snapshot from AE for the run.
+        connection_qualified_name: QN of the Connection the seed
+            DAG would have materialised on success.
+        connection_in_atlas: True iff GET /api/meta/entity/
+            uniqueAttribute/type/Connection?attr:qualifiedName=...
+            returned 200 before the harness gave up.
+        asset_counts: Per-typeName counts of descendant assets under
+            the Connection QN (Database, Schema, Table, View, Column
+            by default). Empty when the Connection probe didn't
+            succeed.
+        lineage_present: True iff at least one Process / ColumnProcess
+            asset exists under the Connection QN. Empty (False) when
+            the Connection probe didn't succeed.
     """
 
     ae_result: DAGRunResult
     connection_qualified_name: str
     connection_in_atlas: bool
+    asset_counts: dict[str, int] = field(default_factory=dict)
+    lineage_present: bool = False
 
     @property
     def succeeded(self) -> bool:
@@ -182,6 +199,22 @@ class BaseFullDAGE2ETest:
     ae_poll_timeout_seconds: ClassVar[int] = 600
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
+
+    # Per-typeName minimums for the inventory assertion the default
+    # test runs after Connection lands. Keys must be valid Atlas
+    # typeNames; values are inclusive lower bounds. Override per
+    # connector to encode the hermetic seed dataset's shape — e.g.
+    # mysql's seed.sql under include_filter `e2e_main` produces
+    # at least: Database=1 (e2e_main), Schema=1, Table=2 (customers
+    # + orders), View=1 (v_customer_order_totals), Column=11.
+    expected_min_asset_counts: ClassVar[dict[str, int]] = {}
+
+    # When True, the default test asserts that at least one Process /
+    # ColumnProcess exists under the Connection — i.e. QI + lineage-
+    # app + lineage-publish actually flowed lineage to Atlas, not just
+    # reported success at the DAG level. Set False for connectors whose
+    # seed dataset has no view definitions to drive lineage from.
+    expect_lineage: ClassVar[bool] = True
 
     # ------------------------------------------------------------------
     # Setup
@@ -402,12 +435,32 @@ class BaseFullDAGE2ETest:
         # asset that was never fully materialised wastes CI minutes and
         # buries the real failure under a timeout. Fail fast instead so
         # the assertion message names the failed node.
+        asset_counts: dict[str, int] = {}
+        lineage_present = False
         if ae_result.all_nodes_succeeded:
             connection_in_atlas = self.client.poll_atlas_for_connection(
                 self.connection_qualified_name,
                 interval_seconds=self.atlas_poll_interval_seconds,
                 timeout_seconds=self.atlas_poll_timeout_seconds,
             )
+            if connection_in_atlas:
+                # Connection envelope landed — now confirm descendant
+                # assets and lineage actually flowed through, not just
+                # the empty-connection placeholder. Skipping these
+                # would let an extract that returned zero entities pass
+                # the e2e (Connection lands either way).
+                asset_counts = self.client.count_assets_under_connection(
+                    self.connection_qualified_name
+                )
+                lineage_present = self.client.has_lineage_under_connection(
+                    self.connection_qualified_name
+                )
+                logger.info(
+                    "Atlas inventory under %s: %s lineage_present=%s",
+                    self.connection_qualified_name,
+                    asset_counts,
+                    lineage_present,
+                )
         else:
             failed_names = ", ".join(n.name for n in ae_result.failed_nodes) or "(none)"
             logger.warning(
@@ -422,6 +475,8 @@ class BaseFullDAGE2ETest:
             ae_result=ae_result,
             connection_qualified_name=self.connection_qualified_name,
             connection_in_atlas=connection_in_atlas,
+            asset_counts=asset_counts,
+            lineage_present=lineage_present,
         )
 
     # ------------------------------------------------------------------
@@ -431,9 +486,19 @@ class BaseFullDAGE2ETest:
     def test_full_dag_runs_end_to_end(self) -> None:
         """Default pytest method — submit, run, assert success.
 
-        Subclasses can override with their own assertions (entity-count
-        thresholds, duration budgets, etc.) — call :meth:`run_full_dag`
-        and inspect the returned :class:`FullDAGOutcome`.
+        Asserts (in order, so the first true failure gets the focus):
+          1. Every DAG node succeeded.
+          2. The Connection asset exists in Atlas.
+          3. Per-type asset counts under the Connection meet the
+             subclass-configured ``expected_min_asset_counts`` floor
+             (skipped if that dict is empty — back-compat for
+             connectors that haven't characterised their seed yet).
+          4. At least one Process/ColumnProcess exists under the
+             Connection (skipped when ``expect_lineage`` is False).
+
+        Subclasses can override entirely with their own assertions
+        (duration budgets, per-entity name checks, etc.) — call
+        :meth:`run_full_dag` and inspect the :class:`FullDAGOutcome`.
         """
         outcome = self.run_full_dag()
         if not outcome.succeeded:
@@ -453,4 +518,31 @@ class BaseFullDAGE2ETest:
                 f"AE status={outcome.ae_result.status.value}\n"
                 f"Connection in Atlas? {outcome.connection_in_atlas}\n"
                 f"Failed nodes:\n{failures_msg}"
+            )
+
+        # --- post-success assertions ---------------------------------
+        # Connection landed — now check the descendants did too. A
+        # silently empty Connection (zero tables, no lineage) is an
+        # easy regression to miss with a Connection-only assertion.
+        if self.expected_min_asset_counts:
+            shortfalls = [
+                f"  - {tn}: got {outcome.asset_counts.get(tn, 0)}, expected >= {floor}"
+                for tn, floor in self.expected_min_asset_counts.items()
+                if outcome.asset_counts.get(tn, 0) < floor
+            ]
+            if shortfalls:
+                raise AssertionError(
+                    "Atlas inventory under "
+                    f"{outcome.connection_qualified_name} below thresholds:\n"
+                    + "\n".join(shortfalls)
+                    + f"\nFull counts: {outcome.asset_counts}"
+                )
+
+        if self.expect_lineage and not outcome.lineage_present:
+            raise AssertionError(
+                "No lineage Process/ColumnProcess assets found under "
+                f"{outcome.connection_qualified_name}. The DAG's qi + "
+                "lineage-app + lineage-publish nodes reported success but "
+                "no lineage rows reached Atlas — likely an issue with "
+                "view parsing or the lineage-publish output prefix."
             )
