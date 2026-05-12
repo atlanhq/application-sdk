@@ -573,7 +573,7 @@ class TestClose:
             fake_thread.join.call_args.kwargs.get("timeout")
             or fake_thread.join.call_args.args[0]
         )
-        assert join_timeout == 5.0
+        assert join_timeout == 10.0
         # 3. close() must NOT touch the httpx client directly — that's run_worker's job.
         fake_loop.run_until_complete.assert_not_called()
         fake_loop.run_coroutine_threadsafe.assert_not_called()

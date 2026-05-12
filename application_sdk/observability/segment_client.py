@@ -226,7 +226,9 @@ class SegmentClient:
         for a complete drain.
         Bridges to the worker's dedicated event loop via asyncio.wrap_future.
         No-op if the client is disabled or the worker loop is not running.
-        Times out after 5 s to keep shutdown bounded.
+        Times out after 10 s to keep shutdown bounded (matches the
+        Pushgateway per-call budget; two 10 s calls fit within K8s'
+        default 30 s terminationGracePeriodSeconds).
         """
         if not self.enabled or not self._loop or not self._queue:
             return
@@ -234,7 +236,7 @@ class SegmentClient:
             return
         future = asyncio.run_coroutine_threadsafe(self._flush_queue(), self._loop)
         try:
-            await asyncio.wait_for(asyncio.wrap_future(future), timeout=5.0)
+            await asyncio.wait_for(asyncio.wrap_future(future), timeout=10.0)
         except TimeoutError:
             future.cancel()
             logging.warning("Segment queue flush timed out")
@@ -444,7 +446,7 @@ class SegmentClient:
         # has been sent and the httpx client closed before we return.
         if self._worker_thread and self._worker_thread.is_alive():
             try:
-                self._worker_thread.join(timeout=5.0)
+                self._worker_thread.join(timeout=10.0)
                 if self._worker_thread.is_alive():
                     logging.warning(
                         "SegmentClient worker thread did not terminate within timeout"
