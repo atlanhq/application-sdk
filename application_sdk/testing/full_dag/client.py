@@ -437,18 +437,49 @@ class AEWorkflowClient:
         *,
         interval_seconds: int = 10,
         timeout_seconds: int = 600,
+        max_transient_failures: int = 5,
     ) -> DAGRunResult:
         """Poll until the run reaches a terminal top-level status.
 
         Logs a one-line summary per poll only when the status string
         changes (i.e. progress moments), to avoid spamming logs during
         long-running publish / lineage stages.
+
+        Tolerates transient HTTP failures from ``get_native_status``:
+        the tenant's Temporal occasionally blips during multi-minute
+        runs and AE then returns ``AE-COMMON-500-01: An unexpected
+        error occurred`` for a few seconds before recovering. We log
+        a warning and keep polling rather than failing the whole test
+        on a single bad response. After ``max_transient_failures``
+        consecutive errors we give up and re-raise — that's a
+        sustained outage, not a blip, and there's no point waiting.
         """
         elapsed = 0
         last_summary: str | None = None
         last_result: DAGRunResult | None = None
+        transient_streak = 0
         while elapsed < timeout_seconds:
-            result = self.get_native_status(run_id)
+            try:
+                result = self.get_native_status(run_id)
+            except RuntimeError as e:
+                transient_streak += 1
+                if transient_streak >= max_transient_failures:
+                    logger.error(
+                        "native-status failed %d times in a row — giving up",
+                        transient_streak,
+                    )
+                    raise
+                logger.warning(
+                    "native-status transient error (streak %d/%d): %s — sleeping %ds and retrying",
+                    transient_streak,
+                    max_transient_failures,
+                    e,
+                    interval_seconds,
+                )
+                time.sleep(interval_seconds)
+                elapsed += interval_seconds
+                continue
+            transient_streak = 0
             last_result = result
             summary = "; ".join(f"{n.name}={n.status.value}" for n in result.nodes)
             if summary != last_summary:
