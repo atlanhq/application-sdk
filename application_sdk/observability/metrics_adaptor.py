@@ -137,6 +137,10 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         except Exception:
             logging.error("Failed to setup OTel meter provider", exc_info=True)
 
+    async def _flush_buffer(self, force=False):
+        await super()._flush_buffer(force=force)
+        await self.segment_client.flush()
+
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic metric flushing.
 
