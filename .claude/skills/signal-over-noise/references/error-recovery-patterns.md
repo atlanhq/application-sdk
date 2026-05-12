@@ -681,7 +681,7 @@ without a per-file allowlist). A targeted check:
 
 ```bash
 # Fail if any bare builtin raise survives in application_sdk/ (outside __post_init__ / validators)
-grep -rnE "raise\s+(ValueError|RuntimeError|Exception)\b" application_sdk/ \
+grep -rnP "raise\s+(ValueError|RuntimeError|Exception)\b" application_sdk/ \
   | grep -v "__post_init__" | grep -v "# stdlib-interop"
 ```
 

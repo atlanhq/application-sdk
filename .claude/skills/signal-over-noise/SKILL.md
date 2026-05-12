@@ -101,7 +101,7 @@ Pattern catalogue, severity criteria, fix templates, and linting rules are in:
 
 #### Step 1.2 — Pattern Detection
 
-Run all 10 grep searches in parallel against `TARGET_PATH` (`*.py` files only):
+Run all 13 grep searches in parallel against `TARGET_PATH` (`*.py` files only):
 
 | # | Pattern ID | Grep |
 |---|------------|------|
@@ -163,7 +163,7 @@ Pattern:  P12
 Current:
     raise ValueError("Engine is not initialized. Call load() first.")
 Prescribed:
-    InternalError(code="INTERNAL_ENGINE_NOT_INITIALIZED")
+    InternalError  (wire code: INTERNAL_ENGINE_NOT_INITIALIZED — ClassVar, not a constructor arg)
     audience=APP_OWNER  retryable=False
 Fix (FT-8):
     raise InternalError(
@@ -250,7 +250,7 @@ TODO comment format for swallow/logging findings:
 
 TODO comment format for untyped/legacy raise findings — include the prescribed leaf:
 ```python
-# TODO(signal-over-noise): [P12] convert to typed AppError. Suggested: InternalError(code="INTERNAL_ENGINE_NOT_INITIALIZED"). See references/typed-error-prescription.md#4
+# TODO(signal-over-noise): [P12] convert to typed AppError. Leaf: InternalError (wire code: INTERNAL_ENGINE_NOT_INITIALIZED). See references/typed-error-prescription.md#4
 # TODO(signal-over-noise): [P13] legacy AtlanError — migrate to DependencyUnavailableError. See references/typed-error-prescription.md#5
 ```
 

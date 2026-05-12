@@ -122,7 +122,20 @@ principal lacks permission for the resource or action → `AppPermissionDeniedEr
 ## §4 — SDK raise-context → leaf cookbook
 
 Common situations in `application_sdk/`. Each entry gives a worked example.
-Use the `code` suggestion as-is or append a more specific suffix.
+
+Each entry includes a **Code:** annotation. `code` is a `ClassVar[str]` on the leaf
+class — it cannot be passed to the constructor. To use a specific code, subclass the
+leaf and override it:
+
+```python
+@dataclass(kw_only=True)
+class EngineNotInitializedError(InternalError):
+    code: ClassVar[str] = "INTERNAL_ENGINE_NOT_INITIALIZED"
+```
+
+If the leaf's default code is adequate for triage, use the leaf directly without
+subclassing. Subclass only when a stable, recognisable wire code is required for
+cross-process routing or dashboard attribution.
 
 **Code naming rule**: always start with the category prefix
 (`AUTH_`, `INTERNAL_`, `DEPENDENCY_UNAVAILABLE_`, etc.) so the code is
