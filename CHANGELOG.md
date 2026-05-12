@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.9.0 (May 12, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.8.0...v3.9.0
+
+### Features
+
+- port signal-over-noise from awesome-ai (#1719) (by @Garavitey in [3756697](https://github.com/atlanhq/application-sdk/commit/3756697))
+
+### Bug Fixes
+
+- flush SegmentClient queue on SIGTERM (BLDX-1260) (#1723) (by @cmgrote in [1ff0297](https://github.com/atlanhq/application-sdk/commit/1ff0297))
+
+
 ## v3.8.0 (May 11, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.7.0...v3.8.0
