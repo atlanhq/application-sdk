@@ -60,6 +60,13 @@ _USER_AGENT = "atlan-sdk-full-dag-e2e/1.0 (+https://github.com/atlanhq/applicati
 # any one call from hanging the whole loop.
 _HTTP_TIMEOUT = 30
 
+# Cadence for "still polling" heartbeat log lines in
+# ``poll_native_status`` — lineage stages take 2-5 min on small
+# datasets and the status string doesn't change during that time, so
+# the loop would otherwise look wedged in CI output. Long enough that
+# we don't drown the log on a fast happy-path run.
+_HEARTBEAT_SECONDS = 30
+
 
 class DAGNodeStatus(str, Enum):
     """Status values returned by ``native-status`` per DAG node."""
@@ -458,6 +465,7 @@ class AEWorkflowClient:
         last_summary: str | None = None
         last_result: DAGRunResult | None = None
         transient_streak = 0
+        last_log_elapsed = 0  # seconds since the last info log fired
         while elapsed < timeout_seconds:
             try:
                 result = self.get_native_status(run_id)
@@ -482,15 +490,26 @@ class AEWorkflowClient:
             transient_streak = 0
             last_result = result
             summary = "; ".join(f"{n.name}={n.status.value}" for n in result.nodes)
-            if summary != last_summary:
+            # Log on every status change. Also emit a heartbeat every
+            # ``_HEARTBEAT_SECONDS`` even when the status hasn't moved,
+            # so long-running stages (lineage takes 2-5 min) don't look
+            # silent in CI logs. Without the heartbeat the operator
+            # can't distinguish "still polling" from "harness wedged".
+            should_log = (
+                summary != last_summary
+                or (elapsed - last_log_elapsed) >= _HEARTBEAT_SECONDS
+            )
+            if should_log:
                 logger.info(
-                    "AE run %s (slug=%s) status=%s | %s",
+                    "AE run %s (slug=%s) status=%s elapsed=%ds | %s",
                     result.run_id,
                     result.workflow_slug,
                     result.status.value,
+                    elapsed,
                     summary,
                 )
                 last_summary = summary
+                last_log_elapsed = elapsed
             if result.status.is_terminal:
                 return result
             time.sleep(interval_seconds)
