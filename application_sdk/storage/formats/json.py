@@ -86,9 +86,11 @@ class JsonFileReader(Reader):
         """
         warnings.warn(
             "JsonFileReader is deprecated and will be removed in v4.0. "
-            "Receive a FileReference on your task's typed Input — the SDK "
-            "auto-materializes it to a local path before the task runs, then "
-            "read it directly with the JSON library of your choice. See "
+            "Migrate now: declare the upstream artifact as a FileReference "
+            "field on your task's typed Input — the SDK's activity "
+            "interceptor auto-materialises it to a local path before the "
+            "task runs (with sha256 sidecar verification + parallel "
+            "transfers), then read it directly with orjson / json. See "
             "docs/agents/coding-standards.md.",
             DeprecationWarning,
             stacklevel=2,
@@ -299,15 +301,20 @@ class JsonFileWriter(Writer):
                 Defaults to False.
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
-        # DeprecationWarning: JsonFileWriter is planned for removal in v4.0.
-        # Recommended forward pattern is direct JSON writes + a FileReference
-        # for the output directory; the activity interceptor handles persistence.
+        # JsonFileWriter is on the v4.0 removal path. We surface a
+        # DeprecationWarning here to push callers onto FileReference *now*
+        # rather than waiting for v4.0 to break them — the new pattern is
+        # already supported, fully optimised, and copy-paste documented.
         warnings.warn(
             "JsonFileWriter is deprecated and will be removed in v4.0. "
-            "Write JSON locally (e.g. orjson.dumps + open(path, 'wb')) and "
-            "return a FileReference for the output directory — the activity "
-            "interceptor will persist it with SHA-256 sidecars and parallel "
-            "transfers. See docs/agents/coding-standards.md.",
+            "Migrate now: write JSON locally (orjson.dumps + open(path, "
+            "'wb')) and return a FileReference for the output directory — "
+            "the Temporal activity interceptor persists it with SHA-256 "
+            "sidecars and parallel transfers, no caller-side upload code "
+            "needed. See the 'Replacing ParquetFileWriter / JsonFileWriter' "
+            "section in docs/agents/coding-standards.md for copy-paste "
+            "blocks and the TimeChunkedWriter helper (time-based rollover "
+            "for heartbeat-friendly streaming workloads).",
             DeprecationWarning,
             stacklevel=2,
         )
