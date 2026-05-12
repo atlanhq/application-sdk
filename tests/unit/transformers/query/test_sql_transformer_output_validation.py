@@ -1,10 +1,20 @@
 import glob
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any
 
-import daft
 import pytest
+
+try:
+    import daft
+except BaseException as _daft_err:
+    # daft's Rust extension panics when certain OTel env vars (e.g.
+    # OTEL_EXPORTER_OTLP_PROTOCOL=http/json) conflict with its internal OTel
+    # initialisation. Skip the whole module rather than failing to collect.
+    pytest.skip(
+        f"daft unavailable in this environment: {_daft_err}",
+        allow_module_level=True,
+    )
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers.query import QueryBasedTransformer
@@ -33,7 +43,7 @@ def get_raw_json_files():
     return glob.glob(os.path.join(resources_dir, "*.json"))
 
 
-def remove_run_time_sensitive_fields(row: Dict[str, Any]):
+def remove_run_time_sensitive_fields(row: dict[str, Any]):
     """
     Remove run time sensitive fields from a row
     E.g time sensitive fields: lastSyncRunAt, createdAt, updatedAt which can change on each run
@@ -77,7 +87,7 @@ def test_transform_metadata_output_validation(sql_transformer):
         transformed_result_ouput = result.to_pylist()
 
         # read the expected transformed json file
-        expected_transformed_output: List[Dict[str, Any]] = []
+        expected_transformed_output: list[dict[str, Any]] = []
         with open(json_file.replace("raw", "transformed"), "r") as f:
             for line in f:
                 json_object = json.loads(line)
