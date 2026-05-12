@@ -5,12 +5,17 @@ Atlan's Automation Engine via the SDK's lakehouse module:
 
     event-ingestion-app  ─►  AE event-consumer-node  ─►  this workflow
 
-When AE detects unprocessed rows in its events Iceberg table
-(``automation_engine.<events_table>``), it triggers this workflow with the
-table name. A single ``handle_events`` activity uses ``events_read`` to
-read pending events in batches of 1000 (capped at 5000 total), dispatches
-them to a ``handler``, then publishes the AE-expected Parquet ack via
-``events_ack``.
+When AE detects unprocessed rows in its per-trigger Iceberg table
+(``apps.automation-engine.<workflow_slug>``), it triggers this workflow
+with the table name. A single ``handle_events`` activity uses
+``events_read`` to read pending events in batches of 1000 (capped at
+5000 total), dispatches them to a ``handler``, then publishes the
+AE-expected Parquet ack via ``events_ack``.
+
+AE writes events with CloudEvent column names (``id``, ``data``,
+``source``, ``topic``, ``time``, ...). ``events_ack`` keys the ack
+Parquet by ``event_id``, so before publishing the ack we map AE's
+``id`` column → the SDK's expected ``event_id`` key.
 
 Required env vars (Polaris-vended, marketplace-injected in production):
 
@@ -66,7 +71,7 @@ class ProcessEventsInput(Input):
     """Payload AE's event-consumer-node passes when triggering this workflow."""
 
     iceberg_table_name: str = ""
-    events_namespace: str = "automation_engine"
+    events_namespace: str = "apps.automation-engine"
     workflow_id: str = ""
     triggered_by: str = ""
     trigger_id: str = ""
@@ -106,6 +111,9 @@ class LakehouseEventApp(App):
         """
 
         async def _handler(events: list[dict[str, Any]]) -> list[EventResult]:
+            # Each event is an AE CloudEvent row: keys include
+            # ``id``, ``data`` (JSON-stringified), ``source``, ``topic``,
+            # ``time``, ``received_at``, ``status``, ``retry_count``.
             # Replace this with your real per-event business logic.
             return [EventResult(status="SUCCESS") for _ in events]
 
@@ -121,8 +129,13 @@ class LakehouseEventApp(App):
         if not events:
             return ProcessEventsOutput()
 
+        # Map AE's CloudEvent ``id`` column to the ``event_id`` key that
+        # ``events_ack`` writes into the ack Parquet. Until the SDK key
+        # mismatch is resolved, every events_read→events_ack caller needs
+        # this shim.
+        events_for_ack = [{"event_id": e["id"]} for e in events]
         ack_path = await events_ack(
-            events,
+            events_for_ack,
             results,
             app_name=_APP_NAME,
             workflow_name=_WORKFLOW_NAME,
