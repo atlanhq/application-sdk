@@ -567,7 +567,7 @@ class TestClose:
         # 1. Cancellation must be signalled via call_soon_threadsafe.
         fake_loop.call_soon_threadsafe.assert_called_once()
         assert fake_loop.call_soon_threadsafe.call_args.args[0] is fake_task.cancel
-        # 2. Thread join must be called (with the new 5 s timeout).
+        # 2. Thread join must be called (with the 10 s timeout).
         fake_thread.join.assert_called_once()
         join_timeout = (
             fake_thread.join.call_args.kwargs.get("timeout")

@@ -441,8 +441,8 @@ class BaseSQLClient(ClientInterface):
             Union["daft.DataFrame", Iterator["daft.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
-        # Guard before the optional import so the ValueError fires even when
-        # daft is not installed or fails to import in the current environment.
+        # Guard must come before the daft import: daft's Rust OTel extension can
+        # raise BaseException at import time, which would prevent this check from running.
         if not self.engine:
             raise ValueError("Engine is not initialized. Call load() first.")
 
