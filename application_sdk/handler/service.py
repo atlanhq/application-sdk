@@ -72,12 +72,17 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-def _record_proxy_failure(reason: str, log_message: str) -> None:
+def _record_proxy_failure(
+    reason: str,
+    log_message: str,
+    *log_args: object,
+    exc_info: bool = False,
+) -> None:
     """Record a Temporal-core ``/metrics`` proxy failure.
 
     Increments the ``temporal_core_metrics_proxy_failures_total`` counter
     so failures are observable from VictoriaMetrics (and not just buried
-    in the WARNING logs), and emits the warning. ``reason`` should be a
+    in the logs), and emits a bounded diagnostic. ``reason`` should be a
     bounded label value — exception class name or ``http_<status>``."""
     from application_sdk.observability import (  # noqa: PLC0415 — cold path: only on proxy failure
         metrics as _metrics_module,
@@ -93,7 +98,7 @@ def _record_proxy_failure(reason: str, log_message: str) -> None:
         unit="1",
     )
     counter.add(1, {"reason": reason})
-    logger.warning(log_message, exc_info=True)
+    logger.warning(log_message, *log_args, exc_info=exc_info)
 
 
 def _serialize_credential_value(v: Any) -> str:
@@ -195,8 +200,15 @@ def _wrap_response(
     message: str = "",
     success: bool = True,
 ) -> dict[str, Any]:
-    """Wrap response data in the standard envelope: {success, message, data}."""
-    return {"success": success, "message": message, "data": data}
+    """Wrap response data in the standard envelope: {success, message, data}.
+
+    ``message`` is omitted from the response when empty to match the legacy
+    /credentials/query format expected by the frontend filter widgets.
+    """
+    result: dict[str, Any] = {"success": success, "data": data}
+    if message:
+        result["message"] = message
+    return result
 
 
 async def _get_workflow_result(
@@ -266,6 +278,10 @@ class WorkflowClientConfig:
     auth_token_url: str = ""
     auth_base_url: str = ""
     auth_scopes: str = ""
+
+    # Temporal Rust-core metrics
+    enable_temporal_core_metrics: bool = True
+    prometheus_bind_address: str = ""
 
     def is_configured(self) -> bool:
         return bool(self.host and self.app_class)
@@ -357,6 +373,8 @@ async def _get_temporal_client() -> Client:
         tls_client_cert_path=_workflow_config.tls_client_cert_path,
         tls_client_private_key_path=_workflow_config.tls_client_private_key_path,
         tls_domain=_workflow_config.tls_domain,
+        enable_prometheus=_workflow_config.enable_temporal_core_metrics,
+        prometheus_bind_address=_workflow_config.prometheus_bind_address,
     )
     logger.info("Connected to Temporal")
 
@@ -401,6 +419,8 @@ def create_app_handler_service(
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
     frontend_assets_path: str = "app/generated/frontend/static",
+    enable_temporal_core_metrics: bool = True,
+    prometheus_bind_address: str = "",
     # Deprecated: state_store is no longer used. Credential resolution now
     # goes through DaprCredentialVault exclusively. Passing this parameter
     # emits a DeprecationWarning. Will be removed in v3.2.0.
@@ -424,6 +444,10 @@ def create_app_handler_service(
         frontend_assets_path: Path to the directory containing frontend static assets.
             Serves ``index.html`` at ``GET /`` and mounts remaining assets as static
             files. Defaults to ``"app/generated/frontend/static"``.
+        enable_temporal_core_metrics: When true, ``GET /metrics`` proxies
+            Temporal Rust-core metrics from ``prometheus_bind_address``.
+        prometheus_bind_address: Loopback bind address for the Temporal
+            Rust-core metrics endpoint. Defaults to the SDK constant.
 
     Returns:
         Configured FastAPI application.
@@ -458,6 +482,8 @@ def create_app_handler_service(
         auth_token_url=auth_token_url,
         auth_base_url=auth_base_url,
         auth_scopes=auth_scopes,
+        enable_temporal_core_metrics=enable_temporal_core_metrics,
+        prometheus_bind_address=prometheus_bind_address,
     )
 
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
@@ -679,9 +705,9 @@ def create_app_handler_service(
                     type(result).__name__,
                     count,
                 )
-                return JSONResponse(
-                    content=_wrap_response(data, message=f"Fetched {count} objects")
-                )
+                # message omitted: a non-empty message field caused the
+                # frontend filter widgets to render empty dropdowns
+                return JSONResponse(content=_wrap_response(data))
             except HandlerError as e:
                 logger.error(
                     "Metadata fetch failed for app %s (request %s): %s",
@@ -1709,9 +1735,9 @@ def create_app_handler_service(
            from FastAPIInstrumentor, the worker's ``MetricsInterceptor``, and
            any custom user metrics via ``application_sdk.observability.metrics``.
         2. The Temporal Runtime's loopback Prometheus endpoint — proxies the
-           Rust-core metrics (gRPC client-call latencies on the server,
-           workflow / activity task latencies, sticky cache, etc.) so
-           operators have a single scrape target per pod.
+           Rust-core metrics when enabled and reachable (gRPC client-call
+           latencies on the server, workflow / activity task latencies,
+           sticky cache, etc.) so combined pods have a single scrape target.
         """
         from prometheus_client import (  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
             REGISTRY,
@@ -1723,30 +1749,41 @@ def create_app_handler_service(
             TEMPORAL_PROMETHEUS_BIND_ADDRESS,
         )
 
-        body = generate_latest(REGISTRY)
+        temporal_metrics_body: bytes | None = None
 
-        if TEMPORAL_PROMETHEUS_BIND_ADDRESS:
+        temporal_bind_address = (
+            prometheus_bind_address or TEMPORAL_PROMETHEUS_BIND_ADDRESS
+        )
+        if enable_temporal_core_metrics and temporal_bind_address:
+            temporal_metrics_url = f"http://{temporal_bind_address}/metrics"
+            import httpx  # noqa: PLC0415 — cold path: only when Temporal Rust-core proxy enabled
+
             try:
-                import httpx  # noqa: PLC0415 — cold path: only when Temporal Rust-core proxy enabled
-
                 async with httpx.AsyncClient(
                     timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
                 ) as client:
-                    resp = await client.get(
-                        f"http://{TEMPORAL_PROMETHEUS_BIND_ADDRESS}/metrics"
-                    )
+                    resp = await client.get(temporal_metrics_url)
                     if resp.status_code == 200:
-                        body = body + b"\n" + resp.content
+                        temporal_metrics_body = resp.content
                     else:
                         _record_proxy_failure(
                             f"http_{resp.status_code}",
-                            f"Temporal core metrics proxy returned HTTP {resp.status_code}",
+                            "Temporal core metrics proxy returned HTTP %s from %s; serving /metrics without Temporal core series",
+                            resp.status_code,
+                            temporal_metrics_url,
                         )
-            except Exception as exc:
+            except httpx.RequestError as exc:
+                # Handler-only mode disables this proxy; enabled proxy failures are unexpected.
                 _record_proxy_failure(
                     type(exc).__name__,
-                    "Temporal core metrics unavailable",
+                    "Temporal core metrics proxy request failed for %s; serving /metrics without Temporal core series",
+                    temporal_metrics_url,
+                    exc_info=True,
                 )
+
+        body = generate_latest(REGISTRY)
+        if temporal_metrics_body:
+            body = body + b"\n" + temporal_metrics_body
 
         return Response(
             content=body,

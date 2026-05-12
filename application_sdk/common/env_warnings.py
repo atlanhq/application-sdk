@@ -38,10 +38,6 @@ _REMOVED_ENV_VARS: frozenset[str] = frozenset(
         "ATLAN_TRACES_CLEANUP_ENABLED",
         "ATLAN_TRACES_FLUSH_INTERVAL_SECONDS",
         "ATLAN_TRACES_RETENTION_DAYS",
-        # Workflow-logs dual-export pipeline was removed; use the standard
-        # OTLP log endpoint instead.
-        "ENABLE_OTLP_WORKFLOW_LOGS",
-        "OTEL_WORKFLOW_LOGS_ENDPOINT",
         # CorrelationContextInterceptor was folded into LogInterceptor;
         # no longer toggleable.
         "APPLICATION_SDK_ENABLE_CORRELATION_INTERCEPTOR",

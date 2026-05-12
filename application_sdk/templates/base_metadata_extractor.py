@@ -7,6 +7,9 @@ own Input/Output contracts.
 
 from __future__ import annotations
 
+import warnings
+from typing import Any
+
 from typing_extensions import deprecated
 
 from application_sdk.app.base import App
@@ -22,10 +25,32 @@ from application_sdk.templates.contracts.base_metadata_extraction import (
 class BaseMetadataExtractor(App):
     """Base App for all metadata extraction connectors.
 
+    .. deprecated::
+        Will be removed in v4.0.0. Use
+        :class:`application_sdk.templates.SqlApp` instead.
+
     ``upload_to_atlan`` is preserved as a thin deprecated wrapper so existing
     connectors continue to work.  Subclasses must implement ``run()`` with their
     own Input/Output contracts.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Skip intra-SDK chains (SqlMetadataExtractor, SqlQueryExtractor, …)
+        # and skip when a more-specific deprecated parent already warned
+        # — so a connector subclassing SqlMetadataExtractor sees one
+        # warning, not two.
+        if cls.__module__.startswith("application_sdk."):
+            return
+        if BaseMetadataExtractor not in cls.__bases__:
+            return
+        warnings.warn(
+            f"{cls.__name__} subclasses BaseMetadataExtractor which is deprecated. "
+            "Use application_sdk.templates.SqlApp instead. "
+            "Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     @deprecated(
         "upload_to_atlan is deprecated and will be removed in the next major SDK release. "

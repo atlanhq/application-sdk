@@ -177,10 +177,17 @@ dev-workstation convenience and unused in production.
 `ATLAN_ENABLE_PROMETHEUS_METRICS` (renamed to
 `ATLAN_ENABLE_TEMPORAL_CORE_METRICS`), `ENABLE_OTLP_METRICS`,
 `ENABLE_OTLP_TRACES` (consolidated to `ATLAN_ENABLE_OTLP_TRACES`),
-`ENABLE_OTLP_WORKFLOW_LOGS`, `OTEL_WORKFLOW_LOGS_ENDPOINT`,
 `METRICS_*` (batch / flush / retention / cleanup),
 `TRACES_*` (batch / flush / retention / cleanup),
 `enable_correlation_interceptor`.
+
+**Retained:** `ENABLE_OTLP_WORKFLOW_LOGS` and `OTEL_WORKFLOW_LOGS_ENDPOINT`
+gate an optional secondary OTLP log exporter that ships logs to an
+archival collector (e.g. one writing to S3) in parallel with the
+primary `OTEL_EXPORTER_OTLP_ENDPOINT` pipeline. They were briefly
+removed in this consolidation but restored once we confirmed the
+production chart wires up an S3-archival collector that depends on
+this dual-export.
 
 **Added:**
 - `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` (default `true`) — replaces

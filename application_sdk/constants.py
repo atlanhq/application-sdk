@@ -136,9 +136,9 @@ OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observa
 # Temporal Prometheus Metrics
 #: Bind address for the Temporal Runtime's Rust-core Prometheus endpoint.
 #: Defaults to loopback (127.0.0.1) so the endpoint is not externally
-#: reachable — the FastAPI ``/metrics`` endpoint proxies it on the server,
-#: and the worker's ``TemporalCoreCollector`` scrapes it locally to feed the
-#: Pushgateway push.
+#: reachable — combined-mode FastAPI ``/metrics`` proxies it in-process,
+#: and the worker's ``TemporalCoreCollector`` scrapes it locally to feed
+#: the Pushgateway push.
 TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
     "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
 )
@@ -282,6 +282,24 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 #: graceful_shutdown_timeout.
 SHUTDOWN_DRAIN_DELAY_SECONDS = int(os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5))
 
+
+#: Maximum re-dispatches per activity caused by worker pod eviction (SIGTERM
+#: during activity execution: KEDA scale-down, VPA eviction, spot reclaim,
+#: node drain, rolling deploy). These re-dispatches do not consume the
+#: activity's Temporal RetryPolicy ``max_attempts`` budget, so this cap bounds
+#: the worst case (e.g. a flaky liveness probe masquerading as eviction).
+#: Validated to a non-negative integer; malformed values fall back to 3.
+def _load_worker_eviction_max_retries() -> int:
+    raw = os.getenv("ATLAN_WORKER_EVICTION_MAX_RETRIES", "3")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 3
+    return max(0, value)
+
+
+WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
 USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
@@ -353,6 +371,14 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 )
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to enable a secondary OpenTelemetry log exporter for workflow-log
+#: archival (e.g. S3 sink). When true, logs are emitted to both the primary
+#: OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_WORKFLOW_LOGS_ENDPOINT.
+ENABLE_OTLP_WORKFLOW_LOGS: bool = (
+    os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
+)
+#: Endpoint for the secondary archival OTel collector
+OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 
 # OTEL Constants
 #: Node name for workflow telemetry

@@ -465,16 +465,14 @@ class JsonFileWriter(Writer):
         """Finalize the JSON writer before closing.
 
         Uploads any remaining buffered data to the object store.
+        Only updates chunk_count/partitions when it performs the upload, to
+        avoid double-counting with _write_dataframe/_write_daft_dataframe which
+        already update statistics after their own upload.
         """
-        # Upload the final file if there's remaining buffered data
         if self.current_buffer_size_bytes > 0:
             output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
-            if SafeFileOps.exists(output_file_name):
-                await self._upload_file(output_file_name)
-                self.chunk_part += 1
-
-        # If chunk_start is set we don't want to increment the chunk_count
-        # Since it should only increment the chunk_part in this case
-        if self.chunk_start is None:
-            self.chunk_count += 1
-        self.partitions.append(self.chunk_part)
+            await self._upload_file(output_file_name)
+            self.chunk_part += 1
+            if self.chunk_start is None:
+                self.chunk_count += 1
+            self.partitions.append(self.chunk_part)

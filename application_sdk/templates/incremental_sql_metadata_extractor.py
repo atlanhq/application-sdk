@@ -51,8 +51,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import warnings
 from abc import abstractmethod
-from typing import ClassVar, List, Optional
+from typing import Any, ClassVar, List, Optional
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
@@ -98,6 +99,11 @@ MAX_CONCURRENT_COLUMN_BATCHES: int = 10
 class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     """Base class for incremental SQL metadata extraction apps.
 
+    .. deprecated::
+        Will be removed in v4.0.0. Use
+        :class:`application_sdk.templates.SqlApp` instead (custom ``run()``
+        for incremental orchestration).
+
     Subclass this and override the abstract ``@task`` methods to implement
     connector-specific extraction logic.  The ``run()`` method is fully
     concrete and orchestrates the end-to-end incremental flow:
@@ -129,6 +135,20 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
     incremental_table_sql: ClassVar[Optional[str]] = None
     incremental_column_sql: ClassVar[Optional[str]] = None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if cls.__module__.startswith("application_sdk."):
+            return
+        if IncrementalSqlMetadataExtractor not in cls.__bases__:
+            return
+        warnings.warn(
+            f"{cls.__name__} subclasses IncrementalSqlMetadataExtractor which is "
+            "deprecated. Use application_sdk.templates.SqlApp with a custom "
+            "run() for incremental orchestration. Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     # ------------------------------------------------------------------
     # Abstract tasks — must be implemented by connector subclasses

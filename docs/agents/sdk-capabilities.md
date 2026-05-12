@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.5.0
-source-sha:    40420508bad4f3db6ab55f55a655e26c8154500c
-source-date:   2026-05-05T12:00:19+01:00
+sdk-version:   3.8.0
+source-sha:    de1e7a2d7251d3bd2b3b9cd68dfe88587f3d237e
+source-date:   2026-05-11T12:16:02+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 49 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 51 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -31,7 +31,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 4 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
 ## Subpackage Details
@@ -952,6 +952,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Operation not supported or capability not yet built.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `WorkerEvictedError`
+
+- **Import:** `from application_sdk.errors import WorkerEvictedError`
+- **Signature:** `class WorkerEvictedError(*, ...)`
+- **Summary:** Activity terminated because the worker pod is shutting down.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 ### Constants and Enums
 
 #### `APP_ALREADY_REGISTERED`
@@ -1163,6 +1170,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Signature:** `TASK_NOT_FOUND`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `WORKER_EVICTED_TYPE`
+
+- **Import:** `from application_sdk.errors import WORKER_EVICTED_TYPE`
+- **Signature:** `WORKER_EVICTED_TYPE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
 
 ## `application_sdk.execution`
 
@@ -1957,6 +1971,13 @@ SQL metadata extractor templates and their contracts
 - **Summary:** Base class for incremental SQL metadata extraction apps.
 - **Defined in:** `application_sdk/templates/incremental_sql_metadata_extractor.py`
 
+#### `SqlApp`
+
+- **Import:** `from application_sdk.templates import SqlApp`
+- **Signature:** `class SqlApp`
+- **Summary:** Consolidated SQL metadata extraction App.
+- **Defined in:** `application_sdk/templates/sql_app.py`
+
 #### `SqlMetadataExtractor`
 
 - **Import:** `from application_sdk.templates import SqlMetadataExtractor`
@@ -2494,6 +2515,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `processes_extracted: int` `= 0`
   - `records_uploaded: int` `= 0`
   - `error: str` `= ''`
+  - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `ExtractionTaskInput`
@@ -2705,7 +2727,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryBatchInput`
 - **Summary:** Input for the get_query_batches task.
 - **Fields:**
-  - `workflow_args: dict[str, Any]` `= Field(default_factory=dict)`
+  - `workflow_args: Annotated[dict[str, str | int | float | bool | None], MaxItems(100)]` `= Field(default_factory=dict)`
 - **Defined in:** `application_sdk/templates/contracts/sql_query.py`
 
 #### `QueryBatchOutput`
@@ -2752,7 +2774,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryFetchInput`
 - **Summary:** Input for the fetch_queries task.
 - **Fields:**
-  - `workflow_args: dict[str, Any]` `= Field(default_factory=dict)`
+  - `workflow_args: Annotated[dict[str, str | int | float | bool | None], MaxItems(100)]` `= Field(default_factory=dict)`
   - `batch_number: int` `= 0`
   - `batch_size: int` `= 100000`
 - **Defined in:** `application_sdk/templates/contracts/sql_query.py`
