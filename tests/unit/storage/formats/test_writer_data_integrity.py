@@ -14,6 +14,7 @@ Run with:
 """
 
 import glob
+import io
 import json
 import os
 import shutil
@@ -24,7 +25,12 @@ import pandas as pd
 import pytest
 
 from application_sdk.common.types import DataframeType
+from application_sdk.storage.batch import list_keys
+from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.formats.json import JsonFileWriter
+from application_sdk.storage.formats.parquet import ParquetFileWriter
+from application_sdk.storage.ops import _get_bytes
+from application_sdk.storage.reference import persist_file_reference
 
 
 class TestWriterDataIntegrity:
@@ -296,9 +302,6 @@ class TestParquetWriterDataIntegrity:
         back a WriterResult, and ``persist_file_reference(store, result.files)``
         uploads every parquet file (and statistics sidecar) — zero loss.
         """
-        from application_sdk.storage.factory import create_memory_store
-        from application_sdk.storage.formats.parquet import ParquetFileWriter
-        from application_sdk.storage.reference import persist_file_reference
 
         writer = ParquetFileWriter(
             path=temp_dir,
@@ -341,19 +344,13 @@ class TestParquetWriterDataIntegrity:
         durable = await persist_file_reference(store, result.files)
         assert durable.is_durable is True
 
-        from application_sdk.storage.batch import list_keys
-
-        store_keys = await list_keys(durable.storage_path, store, suffix=".parquet")
         # Download each parquet key and re-read to count rows.
-        from application_sdk.storage.ops import _get_bytes
-
+        store_keys = await list_keys(durable.storage_path, store, suffix=".parquet")
         store_ids: set[int] = set()
         store_rows = 0
-        import io as _io
-
         for key in store_keys:
             data = await _get_bytes(key, store, normalize=False)
-            df_back = pd.read_parquet(_io.BytesIO(data))
+            df_back = pd.read_parquet(io.BytesIO(data))
             store_rows += len(df_back)
             store_ids.update(df_back["id"].tolist())
 
