@@ -441,13 +441,15 @@ class BaseSQLClient(ClientInterface):
             Union["daft.DataFrame", Iterator["daft.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
+        # Guard before the optional import so the ValueError fires even when
+        # daft is not installed or fails to import in the current environment.
+        if not self.engine:
+            raise ValueError("Engine is not initialized. Call load() first.")
+
         # Daft uses ConnectorX to read data from SQL by default for supported connectors
         # If a connection string is passed, it will use ConnectorX to read data
         # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
         import daft  # noqa: PLC0415 — optional dep: daft
-
-        if not self.engine:
-            raise ValueError("Engine is not initialized. Call load() first.")
 
         if isinstance(self.engine, str):
             return daft.read_sql(query, self.engine, infer_schema_length=chunksize)
