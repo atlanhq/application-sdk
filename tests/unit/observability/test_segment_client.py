@@ -697,3 +697,32 @@ class TestFlush:
         # The coroutine handed off should be _flush_queue's coroutine object.
         assert hasattr(captured.get("coro"), "close")
         captured["coro"].close()
+
+    @pytest.mark.timeout(2)
+    async def test_flush_times_out_and_cancels_future(self):
+        """flush() cancels the concurrent future and logs warning on timeout."""
+        import concurrent.futures
+
+        client = _enabled_client_no_thread()
+        fake_loop = mock.MagicMock()
+        fake_loop.is_running.return_value = True
+        client._loop = fake_loop
+        client._queue = asyncio.Queue()
+
+        cf_future: concurrent.futures.Future = concurrent.futures.Future()
+
+        def _stub(coro, loop):
+            coro.close()  # prevent "coroutine was never awaited" warning
+            return cf_future
+
+        with (
+            mock.patch.object(
+                sc_module.asyncio, "run_coroutine_threadsafe", side_effect=_stub
+            ),
+            mock.patch.object(
+                sc_module.asyncio, "wait_for", side_effect=asyncio.TimeoutError
+            ),
+        ):
+            await client.flush()  # must not raise
+
+        assert cf_future.cancelled()

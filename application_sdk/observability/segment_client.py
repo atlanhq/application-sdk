@@ -218,19 +218,26 @@ class SegmentClient:
             )
 
     async def flush(self) -> None:
-        """Flush all pending events to Segment.
+        """Flush queued events to Segment.
 
-        Drains the async queue and sends any buffered events immediately.
+        Drains the asyncio queue and sends any queued events immediately.
+        Events already dequeued by the worker into its in-flight batch are
+        sent when close() cancels the worker task — call close() after flush()
+        for a complete drain.
         Bridges to the worker's dedicated event loop via asyncio.wrap_future.
         No-op if the client is disabled or the worker loop is not running.
+        Times out after 5 s to keep shutdown bounded.
         """
         if not self.enabled or not self._loop or not self._queue:
             return
         if not self._loop.is_running():
             return
+        future = asyncio.run_coroutine_threadsafe(self._flush_queue(), self._loop)
         try:
-            future = asyncio.run_coroutine_threadsafe(self._flush_queue(), self._loop)
-            await asyncio.wrap_future(future)
+            await asyncio.wait_for(asyncio.wrap_future(future), timeout=5.0)
+        except TimeoutError:
+            future.cancel()
+            logging.warning("Segment queue flush timed out")
         except Exception:
             logging.warning("Error flushing Segment queue", exc_info=True)
 
