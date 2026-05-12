@@ -95,7 +95,8 @@ class BaseSQLClient(ClientInterface):
             credentials (Dict[str, Any]): Database connection credentials.
 
         Raises:
-            ClientError: If credentials are invalid or engine creation fails
+            DBConfigNotSetError: If DB_CONFIG is not set on the client subclass.
+            SqlClientAuthFailedError: If engine creation or initial connection fails.
         """
         if not self.DB_CONFIG:
             raise DBConfigNotSetError()
@@ -161,7 +162,7 @@ class BaseSQLClient(ClientInterface):
             str: A temporary authentication token for database access.
 
         Raises:
-            CommonError: If required credentials (username or database) are missing.
+            MissingRequiredFieldError: If username or database is not present in credentials.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_access_key_id = self.credentials.get("username")
@@ -204,7 +205,7 @@ class BaseSQLClient(ClientInterface):
             str: A temporary authentication token for database access.
 
         Raises:
-            CommonError: If required credentials (aws_role_arn or database) are missing.
+            MissingRequiredFieldError: If aws_role_arn or database is not present in credentials.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_role_arn = extra.get("aws_role_arn")
@@ -250,7 +251,7 @@ class BaseSQLClient(ClientInterface):
             str: URL-encoded authentication token.
 
         Raises:
-            CommonError: If an invalid authentication type is specified.
+            InvalidAuthTypeError: If authType is not one of basic, iam_user, or iam_role.
         """
         authType = self.credentials.get("authType", "basic")  # Default to basic auth
         token = None
@@ -302,7 +303,8 @@ class BaseSQLClient(ClientInterface):
             str: Complete SQLAlchemy connection string.
 
         Raises:
-            ValueError: If required connection parameters are missing.
+            DBConfigNotSetError: If DB_CONFIG is not set on the client subclass.
+            MissingRequiredFieldError: If a required connection parameter is absent from credentials.
         """
         if not self.DB_CONFIG:
             raise DBConfigNotSetError()
@@ -361,8 +363,7 @@ class BaseSQLClient(ClientInterface):
                 a dictionary mapping column names to values.
 
         Raises:
-            ValueError: If engine is not initialized.
-            Exception: If query execution fails.
+            EngineNotInitializedError: If load() has not been called before run_query().
         """
         if not self.engine:
             raise EngineNotInitializedError()
@@ -530,8 +531,7 @@ class BaseSQLClient(ClientInterface):
             AsyncIterator["pd.DataFrame"]: Async iterator yielding batches of query results.
 
         Raises:
-            ValueError: If engine is a string instead of SQLAlchemy engine.
-            Exception: If there's an error executing the query.
+            EngineWrongTypeError: If engine is a connection string rather than an AsyncEngine.
         """
         try:
             # We cast to Iterator because passing chunk_size guarantees an Iterator return
@@ -547,8 +547,8 @@ class BaseSQLClient(ClientInterface):
             pd.DataFrame: Query results as a DataFrame.
 
         Raises:
-            ValueError: If engine is a string instead of SQLAlchemy engine.
-            Exception: If there's an error executing the query.
+            EngineWrongTypeError: If engine is a connection string rather than an AsyncEngine.
+            PandasResultTypeError: If the query result is not a DataFrame when chunksize is None.
         """
         try:
             result = await self._execute_async_read_operation(query, None)
@@ -590,7 +590,8 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 host, port, username, password, and other connection parameters.
 
         Raises:
-            ValueError: If credentials are invalid or engine creation fails.
+            DBConfigNotSetError: If DB_CONFIG is not set on the client subclass.
+            SqlClientAuthFailedError: If async engine creation or initial connection fails.
         """
         self.credentials = credentials
         if not self.DB_CONFIG:
@@ -650,8 +651,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 a dictionary mapping column names to values.
 
         Raises:
-            ValueError: If engine is not initialized.
-            Exception: If query execution fails.
+            EngineNotInitializedError: If load() has not been called before run_query().
         """
         if not self.engine:
             raise EngineNotInitializedError()
