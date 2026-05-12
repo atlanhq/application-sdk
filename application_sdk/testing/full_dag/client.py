@@ -231,7 +231,14 @@ class AEWorkflowClient:
             raise RuntimeError(f"create_workflow returned no slug\nresponse={body!r}")
         return str(slug)
 
-    def create_version(self, slug: str, version_payload: dict[str, Any]) -> int:
+    def create_version(
+        self,
+        slug: str,
+        version_payload: dict[str, Any],
+        *,
+        retries: int = 5,
+        retry_sleep_seconds: int = 5,
+    ) -> int:
         """POST ``/automation/api/v1/workflows/<slug>/versions`` — create a version.
 
         The version carries the full DAG manifest (extract / qi / publish
@@ -239,24 +246,52 @@ class AEWorkflowClient:
         least one *published* version before package-workflows submit
         will accept a run against it.
 
+        Retries on HTTP 404 because AE has a brief indexing window
+        between ``create_workflow`` returning a slug and that slug
+        being queryable on this endpoint — early calls hit AE-WF-404-02
+        ("Workflow with slug 'X' not found. Create the workflow
+        first.") even though we just created it. mssql platform-smoke
+        bridges the gap with a ``sleep 3`` after create_workflow; we
+        retry on 404 directly so the harness self-recovers regardless
+        of how slow indexing is on a given tenant.
+
         Returns:
             The version number assigned by AE (typically a Unix
             timestamp, but treat as opaque int).
         """
-        status, body = self._request(
-            "POST",
-            f"/automation/api/v1/workflows/{slug}/versions",
-            body=version_payload,
-        )
-        if status >= 300 or not isinstance(body, dict):
-            raise RuntimeError(
-                f"create_version failed: HTTP {status}\nresponse={body!r}"
+        last: tuple[int, dict[str, Any] | str] = (0, "")
+        for attempt in range(1, retries + 1):
+            status, body = self._request(
+                "POST",
+                f"/automation/api/v1/workflows/{slug}/versions",
+                body=version_payload,
             )
-        data = body.get("data") if isinstance(body.get("data"), dict) else body
-        version = data.get("version") if isinstance(data, dict) else None
-        if version is None:
-            raise RuntimeError(f"create_version returned no version\nresponse={body!r}")
-        return int(version)
+            last = (status, body)
+            if status < 300 and isinstance(body, dict):
+                data = (
+                    body.get("data") if isinstance(body.get("data"), dict) else body
+                )
+                version = data.get("version") if isinstance(data, dict) else None
+                if version is not None:
+                    return int(version)
+            # 404 is the indexing-lag case — retry. Other failures are
+            # not retryable (auth, validation, etc.) so bail immediately
+            # with the body for diagnostic.
+            if status != 404:
+                break
+            logger.warning(
+                "create_version attempt %d/%d: HTTP 404 (slug %s indexing); retrying in %ds",
+                attempt,
+                retries,
+                slug,
+                retry_sleep_seconds,
+            )
+            if attempt < retries:
+                time.sleep(retry_sleep_seconds)
+        status, body = last
+        raise RuntimeError(
+            f"create_version failed: HTTP {status}\nresponse={body!r}"
+        )
 
     def publish_version(
         self,

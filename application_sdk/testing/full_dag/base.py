@@ -300,6 +300,11 @@ class BaseFullDAGE2ETest:
             description=f"Full-DAG e2e harness — {self.connector_short_name}",
         )
         logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
+        # AE has a brief indexing window before the slug is queryable
+        # by /versions — sleep 3s here so the first create_version
+        # attempt usually succeeds. create_version also retries on
+        # 404, so this is belt-and-suspenders for cheap-and-fast.
+        time.sleep(3)
 
         # Derive the extract task_queue from agent_name (tier-4) or
         # the connector's default tenant queue (tier-5). The Argo
