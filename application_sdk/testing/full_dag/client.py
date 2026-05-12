@@ -340,27 +340,62 @@ class AEWorkflowClient:
             f"publish_version failed after {retries} attempts: {last_body!r}"
         )
 
-    def submit_workflow(self, payload: dict[str, Any]) -> str:
+    def submit_workflow(
+        self,
+        payload: dict[str, Any],
+        *,
+        retries: int = 4,
+        retry_sleep_seconds: int = 5,
+    ) -> str:
         """POST ``/api/service/package-workflows?submit=true``.
 
         Returns the run UUID from the submit response. The submit
         response shape is not officially documented; we look for
         ``run_id`` under either the top level or a nested ``data`` key.
 
+        Retries on HTTP 5xx — AE's submit can race with the
+        publish_version indexing window and surface a generic
+        ``AE-COMMON-500-01: An unexpected error occurred`` even after
+        publish_version returned 200. 4 retries at 5s intervals
+        covers the longest indexing lag we've observed (~15s) without
+        sitting on a hard failure.
+
         Raises:
-            RuntimeError: On non-2xx HTTP status or missing ``run_id``.
+            RuntimeError: On non-2xx HTTP status after retries are
+                exhausted, or on missing ``run_id`` in the response.
         """
-        status, body = self._request(
-            "POST",
-            "/api/service/package-workflows?submit=true",
-            body=payload,
-        )
-        if status >= 300 or not isinstance(body, dict):
-            raise RuntimeError(f"AE submit failed: HTTP {status}\nresponse={body!r}")
-        data = body.get("data") if isinstance(body.get("data"), dict) else body
-        run_id = data.get("run_id") if isinstance(data, dict) else None
-        if not run_id:
-            raise RuntimeError(f"AE submit returned no run_id\nresponse={body!r}")
+        last: tuple[int, Any] = (0, {})
+        for attempt in range(1, retries + 2):
+            status, body = self._request(
+                "POST",
+                "/api/service/package-workflows?submit=true",
+                body=payload,
+            )
+            last = (status, body)
+            if status < 300 and isinstance(body, dict):
+                data = body.get("data") if isinstance(body.get("data"), dict) else body
+                run_id = data.get("run_id") if isinstance(data, dict) else None
+                if run_id:
+                    if attempt > 1:
+                        logger.info("AE submit succeeded on attempt %d", attempt)
+                    return run_id
+                raise RuntimeError(
+                    f"AE submit returned no run_id\nresponse={body!r}"
+                )
+            if status >= 500 and attempt <= retries:
+                logger.warning(
+                    "AE submit attempt %d/%d: HTTP %d (retrying in %ds) body=%r",
+                    attempt,
+                    retries + 1,
+                    status,
+                    retry_sleep_seconds,
+                    body,
+                )
+                time.sleep(retry_sleep_seconds)
+                continue
+            break
+        status, body = last
+        raise RuntimeError(f"AE submit failed: HTTP {status}\nresponse={body!r}")
         return str(run_id)
 
     def get_native_status(self, run_id: str) -> DAGRunResult:
