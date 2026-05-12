@@ -34,6 +34,7 @@ node statuses, ``"Running" | "Pending" | "Scheduled"`` as in-flight.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import urllib.error
 import urllib.request
@@ -509,23 +510,6 @@ class AEWorkflowClient:
             elapsed += interval_seconds
         return False
 
-    def _atlan_client(self) -> "AtlanClient":  # noqa: F821
-        """Lazily construct a pyatlan AtlanClient for downstream queries.
-
-        Cached on the instance so per-call cost is one HTTP-pool
-        instantiation, not one per asset-search. The token is the same
-        bearer the AE-side calls use, so search permissions match the
-        Connection's admin ACL (which is why callers must put the API
-        key's identity on adminRoles/adminUsers, not just adminGroups).
-        """
-        from pyatlan.client.atlan import AtlanClient
-
-        if not hasattr(self, "_pyatlan"):
-            self._pyatlan = AtlanClient(
-                base_url=self.tenant_url, api_key=self._api_token
-            )
-        return self._pyatlan
-
     def count_assets_under_connection(
         self,
         connection_qualified_name: str,
@@ -534,43 +518,24 @@ class AEWorkflowClient:
     ) -> dict[str, int]:
         """Per-typeName counts of assets under a connection's QN prefix.
 
-        Uses pyatlan's ``FluentSearch`` so we don't hand-roll Elastic
-        DSL. Returns ``{typeName: count}`` with zeros for types that
-        produced no matches. One round-trip per type — fine at the
-        single-digit number of types we query here, and clearer than
-        a single aggregations call.
+        Uses pyatlan's async client + ``asyncio.gather`` so all
+        per-type searches share a single HTTPS connection pool and
+        fire concurrently — sequentially this is ~2.7s wall-time for
+        the default 5 types, concurrent should land under 700ms once
+        the TLS handshake is paid (one-time per harness run).
 
-        Used by the harness to assert extract + publish actually landed
-        assets in Atlas, not just the Connection envelope. A Connection
-        with zero descendants is almost always a config bug (filter
-        mismatch, transform error) that the basic ``connection_in_atlas``
-        check would silently pass.
+        Returns ``{typeName: count}`` with zeros for types that
+        produced no matches. Used by the harness to assert extract +
+        publish actually landed assets in Atlas, not just the
+        Connection envelope — a Connection with zero descendants is
+        almost always a config bug (filter mismatch, transform error)
+        that the basic ``connection_in_atlas`` check would pass.
         """
-        from pyatlan.model.assets import Asset
-        from pyatlan.model.fluent_search import FluentSearch
-
-        client = self._atlan_client()
+        if not type_names:
+            return {}
         prefix = f"{connection_qualified_name}/"
-        counts: dict[str, int] = {}
-        for type_name in type_names:
-            try:
-                request = (
-                    FluentSearch()
-                    .where(Asset.QUALIFIED_NAME.startswith(prefix))
-                    .where(Asset.TYPE_NAME.eq(type_name))
-                ).to_request()
-                # size=0 keeps the response cheap — we only need .count
-                request.dsl.size = 0
-                results = client.asset.search(request)
-                counts[type_name] = int(results.count)
-            except Exception:
-                logger.exception(
-                    "FluentSearch for %s under %s failed",
-                    type_name,
-                    connection_qualified_name,
-                )
-                counts[type_name] = 0
-        return counts
+        results = asyncio.run(self._search_counts_async(prefix, type_names))
+        return dict(zip(type_names, results))
 
     def has_lineage_under_connection(
         self, connection_qualified_name: str
@@ -579,32 +544,55 @@ class AEWorkflowClient:
 
         QI + lineage-app + lineage-publish together produce ``Process``
         and ``ColumnProcess`` assets whose ``qualifiedName`` is anchored
-        under the Connection. Querying for any single Process row tells
-        us lineage actually flowed through to Atlas — not just that the
-        lineage nodes returned success at the DAG level.
+        under the Connection. Tells us lineage actually flowed through
+        to Atlas — not just that the lineage nodes returned success at
+        the DAG level.
         """
+        prefix = f"{connection_qualified_name}/"
+        counts = asyncio.run(
+            self._search_counts_async(prefix, ("Process", "ColumnProcess"))
+        )
+        return any(c > 0 for c in counts)
+
+    async def _search_counts_async(
+        self,
+        prefix: str,
+        type_names: tuple[str, ...],
+    ) -> list[int]:
+        """Parallel per-type ``count`` searches via pyatlan AsyncAtlanClient.
+
+        Single async client / connection pool shared across all
+        gathered searches — much cheaper than firing one sync HTTPS
+        call per type, and the standard pyatlan pattern for batched
+        reads.
+        """
+        from pyatlan.client.aio.client import AsyncAtlanClient
         from pyatlan.model.assets import Asset
         from pyatlan.model.fluent_search import FluentSearch
 
-        client = self._atlan_client()
-        prefix = f"{connection_qualified_name}/"
-        for type_name in ("Process", "ColumnProcess"):
+        async def _count_one(client: AsyncAtlanClient, type_name: str) -> int:
             try:
                 request = (
                     FluentSearch()
                     .where(Asset.QUALIFIED_NAME.startswith(prefix))
                     .where(Asset.TYPE_NAME.eq(type_name))
                 ).to_request()
-                request.dsl.size = 0
-                if int(client.asset.search(request).count) > 0:
-                    return True
+                request.dsl.size = 0  # cheap response: we only want .count
+                return int((await client.asset.search(request)).count)
             except Exception:
                 logger.exception(
-                    "FluentSearch for %s under %s failed",
-                    type_name,
-                    connection_qualified_name,
+                    "FluentSearch for %s under %s failed", type_name, prefix
                 )
-        return False
+                return 0
+
+        async with AsyncAtlanClient(
+            base_url=self.tenant_url, api_key=self._api_token
+        ) as client:
+            return list(
+                await asyncio.gather(
+                    *(_count_one(client, tn) for tn in type_names)
+                )
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -144,17 +144,39 @@ runs:
         fi
         uv lock
 
+    # Buildx is required for the GHA cache backend below. Set up once
+    # per run, before the image build that uses `cache-from/cache-to`.
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
     # Image build runs before setup-deps so the workspace is still pristine —
     # no host .venv yet, so the Dockerfile's COPY . . won't pull in a
     # host-built virtualenv whose Python symlinks point outside the image.
+    #
+    # `cache-from/cache-to: type=gha` plugs buildx into GitHub Actions'
+    # cache backend so the expensive `uv sync` layer (~2 min on a cold
+    # build) is reused across PR pushes. `mode=max` saves intermediate
+    # stages too, which matters here because the Dockerfile has a
+    # separate dependency-install layer ahead of the source copy.
+    # `scope:` is keyed on the connector so two repos sharing this
+    # action don't collide caches.
     - name: Build and push PR image
       id: build
       shell: bash
       run: |
         SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
         IMAGE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
-        docker build -t "${IMAGE}" .
-        docker push "${IMAGE}"
+        # --push pushes to GHCR; compose pulls from there at run-time
+        # (atlan-configurator wires app_image into the generated
+        # compose file as a pull target). --load would conflict with
+        # --push under the standard buildx driver, and we don't need
+        # the image in the local daemon since compose handles the pull.
+        docker buildx build \
+          --tag "${IMAGE}" \
+          --push \
+          --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}" \
+          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}" \
+          .
         echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
     # Must run before atlan-configurator generates ci-deploy/ — setup-deps
