@@ -178,24 +178,43 @@ class BaseFullDAGE2ETest:
     # a single shared CI workflow.
     ae_workflow_name_override: ClassVar[str] = ""
 
-    # Task queues for the system-app nodes in the seed DAG. Defaults
-    # fit devex / prod-style tenants where publish/qi/lineage all
-    # listen on the ``-production`` queues. Override for tenants that
-    # name queues differently per deployment.
+    # Path to the connector's manifest.json — the canonical source for
+    # the system-app DAG shape (per-node args, depends_on, task queue
+    # templates). The harness loads this file at bootstrap time and
+    # uses it directly as the seed DAG (with placeholder substitution
+    # for ``{app_name}`` and ``{deployment_name}``). This keeps the
+    # test in lockstep with whatever the connector ships — when the
+    # connector adds a new arg or flag to a node, the e2e test picks
+    # it up automatically. No more hand-maintained duplicate.
+    #
+    # Path is resolved relative to the pytest cwd (typically the
+    # connector repo root). Set to ``""`` to fall back to the legacy
+    # hand-crafted seed produced by :func:`build_seed_dag` — useful
+    # for connectors that don't ship a manifest yet.
+    manifest_path: ClassVar[str] = "app/generated/manifest.json"
+
+    # Tenant-side ``{deployment_name}`` value substituted into the
+    # task queues of the qi / publish / lineage / lineage-publish
+    # nodes (everything that's NOT the extract worker). Defaults to
+    # ``production`` because the devex tenant's system apps listen on
+    # ``atlan-publish-production`` etc. Override for tenants that use
+    # a different deployment name.
+    tenant_deployment_name: ClassVar[str] = "production"
+
+    # Override when the connector's worker registers a non-default
+    # workflow name. Default = connector_short_name (v3 convention,
+    # what mysql uses). Set to e.g. ``"mssql-metadata-extractor"`` for
+    # v2-style connectors. Empty string means "use the SDK default".
+    extract_workflow_type: ClassVar[str] = ""
+
+    # The class attributes below only apply when ``manifest_path`` is
+    # unset (i.e. the legacy hand-crafted seed DAG path). With a real
+    # manifest in play these are ignored — the manifest carries the
+    # canonical values.
     publish_task_queue: ClassVar[str] = "atlan-publish-production"
     qi_task_queue: ClassVar[str] = "atlan-query-intelligence-production"
     lineage_task_queue: ClassVar[str] = "atlan-lineage-production"
-    # mssql ships ``lorien-only`` view-lineage parsing; mysql (per
-    # devex sample) uses ``competitive``. Subclasses override to match
-    # their manifest.json.
     qi_parsing_mode: ClassVar[str] = "competitive"
-    # JSONPath field that QI reads view rows from, resolved against
-    # the extract activity's outputs. mssql-style connectors emit a
-    # dedicated ``view_data_prefix`` subfolder; v3 connectors that
-    # bundle views into the main transformed output (e.g. mysql) must
-    # override to ``transformed_data_prefix``. Leaving this mismatched
-    # makes AE fail QI with ``Jsonpath '$.extract.outputs.X' did not
-    # match any value`` before extract assets ever reach Atlas.
     qi_input_prefix_field: ClassVar[str] = "view_data_prefix"
     # Override when the connector's worker registers a non-default
     # workflow name. Default = connector_short_name (v3 convention,
@@ -308,6 +327,91 @@ class BaseFullDAGE2ETest:
         )
 
     # ------------------------------------------------------------------
+    # Seed DAG — loaded from the connector's manifest.json
+    # ------------------------------------------------------------------
+
+    def _seed_dag_from_manifest(self, extract_task_queue: str) -> dict:
+        """Load the connector's manifest.json and use it as the seed DAG.
+
+        Reads ``self.manifest_path`` (relative to the test's cwd —
+        typically the connector repo root), parses out the ``dag``
+        block, and substitutes the two curly-brace placeholders the
+        configurator normally fills:
+
+          * ``{app_name}`` → :attr:`connector_short_name`
+          * ``{deployment_name}`` →
+            - in ``extract.inputs.task_queue``: the agent / CI worker
+              identity (``atlan-{agent_name}`` style queue derived from
+              :meth:`agent_spec`).
+            - elsewhere (qi / publish / lineage / lineage-publish):
+              :attr:`tenant_deployment_name` (default ``production``).
+
+        Mustache placeholders (``{{credentialGuid}}``, ``{{connection}}``,
+        ``{{include-filter}}``, etc.) are left in place — AE substitutes
+        them at submit time from the matching named parameters in the
+        submit payload.
+
+        Raises:
+            RuntimeError: If ``manifest_path`` can't be read or doesn't
+                contain a top-level ``dag`` object.
+        """
+        import json  # noqa: PLC0415 — cold path: only at bootstrap
+        from pathlib import Path  # noqa: PLC0415 — cold path: only at bootstrap
+
+        path = Path(self.manifest_path)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if not path.is_file():
+            raise RuntimeError(
+                f"Manifest file not found at {path} — set `manifest_path` on "
+                "the test class to the location of the connector's "
+                "manifest.json, or set it to '' to fall back to the "
+                "hand-crafted seed DAG."
+            )
+        manifest = json.loads(path.read_text())
+        dag = manifest.get("dag")
+        if not isinstance(dag, dict) or not dag:
+            raise RuntimeError(
+                f"Manifest at {path} has no top-level `dag` object — "
+                "can't use as a seed DAG."
+            )
+
+        def _sub_queue(node_name: str, raw: str) -> str:
+            if node_name == "extract":
+                # extract goes to the agent / CI worker queue; manifest's
+                # `{deployment_name}` template is irrelevant here because
+                # CI doesn't use the tenant's deployment identity.
+                return extract_task_queue
+            return raw.replace("{deployment_name}", self.tenant_deployment_name)
+
+        # In-place substitution — manifest's dag is the seed shape we
+        # need to publish. We don't deep-copy because we're parsing a
+        # freshly loaded file each call; nothing reuses this dict.
+        for name, node in dag.items():
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            if isinstance(inputs.get("app_name"), str):
+                inputs["app_name"] = inputs["app_name"].replace(
+                    "{app_name}", self.connector_short_name
+                )
+            if isinstance(node.get("app_name"), str):
+                node["app_name"] = node["app_name"].replace(
+                    "{app_name}", self.connector_short_name
+                )
+            tq = inputs.get("task_queue")
+            if isinstance(tq, str):
+                inputs["task_queue"] = _sub_queue(name, tq)
+
+        logger.info(
+            "Loaded seed DAG from %s (%d nodes: %s)",
+            path,
+            len(dag),
+            ", ".join(sorted(dag.keys())),
+        )
+        return dag
+
+    # ------------------------------------------------------------------
     # The actual flow
     # ------------------------------------------------------------------
 
@@ -361,30 +465,33 @@ class BaseFullDAGE2ETest:
         else:
             extract_queue = f"atlan-{self.connector_short_name}-default"
 
-        seed_dag = build_seed_dag(
-            connector_short_name=self.connector_short_name,
-            extract_task_queue=extract_queue,
-            publish_task_queue=self.publish_task_queue,
-            qi_task_queue=self.qi_task_queue,
-            lineage_task_queue=self.lineage_task_queue,
-            connection=self.connection_spec(),
-            # The seed is the source of truth for the run's actual
-            # extract_args (submit=true only fills `{{credentialGuid}}`,
-            # not filters) — pass the subclass-configured filters
-            # through so the connector actually receives them at run
-            # time. Mismatch here was the cause of a prior tier-4 run
-            # where extract returned 0 entities, propagating an empty
-            # connection_qualified_name into publish and ultimately
-            # making AE raise ApplicationError.
-            include_filter=self.include_filter,
-            exclude_filter=self.exclude_filter,
-            qi_parsing_mode=self.qi_parsing_mode,
-            qi_input_prefix_field=self.qi_input_prefix_field,
-            extract_workflow_type=self.extract_workflow_type or None,
-            mode=self.mode,
-            agent=agent,
-            database=self.database_spec(),
-        )
+        if self.manifest_path:
+            # DRY: load the connector's manifest.json as the seed DAG
+            # so the test stays in lockstep with whatever the connector
+            # actually ships. Falls back to the hand-crafted seed only
+            # if the manifest is missing or the caller explicitly cleared
+            # `manifest_path`.
+            seed_dag = self._seed_dag_from_manifest(extract_queue)
+        else:
+            logger.info(
+                "manifest_path empty — falling back to hand-crafted build_seed_dag"
+            )
+            seed_dag = build_seed_dag(
+                connector_short_name=self.connector_short_name,
+                extract_task_queue=extract_queue,
+                publish_task_queue=self.publish_task_queue,
+                qi_task_queue=self.qi_task_queue,
+                lineage_task_queue=self.lineage_task_queue,
+                connection=self.connection_spec(),
+                include_filter=self.include_filter,
+                exclude_filter=self.exclude_filter,
+                qi_parsing_mode=self.qi_parsing_mode,
+                qi_input_prefix_field=self.qi_input_prefix_field,
+                extract_workflow_type=self.extract_workflow_type or None,
+                mode=self.mode,
+                agent=agent,
+                database=self.database_spec(),
+            )
         version = self.client.create_version(
             slug,
             {"version": int(time.time()), "dag": seed_dag},
