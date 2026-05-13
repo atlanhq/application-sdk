@@ -1,4 +1,4 @@
-"""Worker-eviction path: SIGTERM mid-activity → typed WorkerEvictedError →
+"""Worker-eviction path: SIGTERM mid-activity → ApplicationError(type="WorkerEvicted") →
 workflow-side eviction retry loop without burning the application-error
 retry budget.
 
@@ -177,7 +177,8 @@ def _make_activity_error_with_app_error_cause(
 ) -> Exception:
     """Build a ``temporalio.exceptions.ActivityError`` whose ``cause`` is an
     ``ApplicationError`` with the given ``type`` attribute, mirroring what
-    the workflow sees when the activity raises ``WorkerEvictedError``.
+    the workflow sees when the activity wrapper raises
+    ``ApplicationError(type=WORKER_EVICTED_TYPE)``.
     """
     from temporalio.exceptions import ActivityError
 
