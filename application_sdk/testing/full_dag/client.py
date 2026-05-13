@@ -71,32 +71,37 @@ _HEARTBEAT_SECONDS = 30
 # quick visual scan of "what's done / what's running" without parsing
 # a long ``a=Succeeded; b=Running; c=Pending`` string. Used by
 # :func:`_node_glyph` (per-node) and :data:`_RUN_GLYPHS` (top-level).
+# Colour emoji rather than monochrome glyphs: GH Actions logs render
+# them inline and the colour signals status faster than the shape.
 _NODE_GLYPHS = {
-    "Succeeded": "✓",
-    "Failed": "✗",
-    "Running": "⟳",
-    "Pending": "·",
-    "Cancelled": "⊘",
-    "TimedOut": "⏱",
+    "Succeeded": "✅",
+    "Failed": "❌",
+    "Running": "🔄",
+    "Pending": "🟡",
+    "Cancelled": "🚫",
+    "TimedOut": "⏰",
 }
 _RUN_GLYPHS = {
-    "Succeeded": "✓",
-    "Failed": "✗",
-    "Running": "⟳",
-    "Pending": "·",
-    "Cancelled": "⊘",
-    "TimedOut": "⏱",
+    "Succeeded": "✅",
+    "Failed": "❌",
+    "Running": "🔄",
+    "Pending": "🟡",
+    "Cancelled": "🚫",
+    "TimedOut": "⏰",
 }
 
 
 def _node_glyph(node) -> str:
-    """Format one node as ``glyph:name`` for the poll-loop summary."""
-    g = _NODE_GLYPHS.get(node.status.value, "?")
+    """Format one node as ``glyph name`` for the poll-loop summary."""
+    g = _NODE_GLYPHS.get(node.status.value, "❔")
     # Trim long node names so the per-poll line stays scannable
     name = node.name.replace("lineage-publish", "lin-pub").replace(
         "lineage-app", "lin-app"
     )
-    return f"{g}{name}"
+    # Space between glyph and name — colour emoji renders wider than
+    # the monochrome glyphs we used before, so the previous tight
+    # "✓extract" lost legibility.
+    return f"{g} {name}"
 
 
 class DAGNodeStatus(str, Enum):
