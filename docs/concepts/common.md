@@ -53,6 +53,7 @@ AppError  (base — application_sdk.errors)
 │   ├── PreconditionError      PRECONDITION               retryable=False  audience=USER
 │   ├── RateLimitedError       RATE_LIMITED               retryable=True   audience=USER
 │   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
+│   │   └── WorkerEvictedError     DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM  (SDK-internal; wire type "WorkerEvicted")
 │   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
 │   ├── AppTimeoutError        TIMEOUT                    retryable=True   audience=APP_OWNER
 │   ├── CancelledError         CANCELLED                  retryable=False  audience=APP_OWNER
@@ -151,7 +152,7 @@ fd = e.to_failure_details()
 # fd.code          — str (app-owned fine-grained code, e.g. "STORAGE_NOT_FOUND")
 # fd.suggested_action — str | None (imperative hint; voice shifts with audience)
 # fd.evidence      — dict of per-error structured context (dataclass fields)
-# fd.cause_repr    — str | None (repr of wrapped exception; never the live object)
+# fd.cause_repr    — str | None (sanitised str of wrapped exception: "{ExcType}: {msg}", URL/secret-redacted, capped at 500 chars; never the live object)
 ```
 
 Tenant identity is intentionally absent from `FailureDetails`. Per-tenant attribution is
