@@ -128,12 +128,17 @@ runs:
           echo "Workflow run $run_id in $repo_name succeeded"
         fi
 
-    # Pull the dispatched run's pytest summary line out of the uploaded
-    # results artifact so the SDK-side sticky shows the actual test
-    # counts, not just pass/fail. Workflow-dispatch can't return step
-    # outputs to the caller, so this is the only path from a dispatched
-    # run's per-step output back to the apps-sdk PR comment.
-    - name: Fetch dispatched-run summary
+    # Pull the dispatched run's rendered PR-comment body out of the
+    # uploaded results artifact so the SDK-side sticky shows the same
+    # markdown as the connector-side sticky (status, summary, asset
+    # tables, lineage coverage, validates block). Workflow-dispatch
+    # can't return step outputs to the caller, so the results artifact
+    # is the only channel from the dispatched run's output back to the
+    # apps-sdk PR comment.
+    #
+    # Falls back to a status-only body when the artifact is missing
+    # (dispatch failed, run cancelled before tests, etc.).
+    - name: Fetch dispatched-run report body
       id: dispatched_summary
       if: always() && steps.return_dispatch.outputs.run_id != ''
       shell: bash
@@ -147,26 +152,19 @@ runs:
           "repos/atlanhq/${REPO_NAME}/actions/runs/${RUN_ID}/artifacts" \
           --jq '.artifacts[] | select(.name | test("results$")) | .id' \
           | head -1)
-        if [ -z "${artifact_id}" ]; then
-          echo "No results artifact on run ${RUN_ID}; skipping summary fetch."
-          echo "summary=" >> "$GITHUB_OUTPUT"
-          exit 0
+        body_path=""
+        if [ -n "${artifact_id}" ]; then
+          work=$(mktemp -d)
+          gh api \
+            "repos/atlanhq/${REPO_NAME}/actions/artifacts/${artifact_id}/zip" \
+            > "${work}/results.zip" 2>/dev/null || true
+          unzip -qq -o "${work}/results.zip" -d "${work}" 2>/dev/null || true
+          if [ -f "${work}/pr-comment-body.md" ]; then
+            body_path="${work}/pr-comment-body.md"
+            echo "Found rendered comment body in artifact."
+          fi
         fi
-        work=$(mktemp -d)
-        gh api \
-          "repos/atlanhq/${REPO_NAME}/actions/artifacts/${artifact_id}/zip" \
-          > "${work}/results.zip" 2>/dev/null || true
-        unzip -qq -o "${work}/results.zip" -d "${work}" 2>/dev/null || true
-        out="${work}/sdr-test-output.txt"
-        if [ ! -f "${out}" ]; then
-          echo "sdr-test-output.txt not in artifact; skipping summary."
-          echo "summary=" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        summary=$(grep -E "^=+.*(passed|failed|error).*in [0-9.]+s" "${out}" | tail -1 | tr -d '=' | xargs)
-        echo "Captured summary: ${summary}"
-        # Quote multi-line safety: pytest summary is single line.
-        echo "summary=${summary}" >> "$GITHUB_OUTPUT"
+        echo "body_path=${body_path}" >> "$GITHUB_OUTPUT"
 
     # Sticky comment back on the calling SDK PR so reviewers see the
     # cross-repo dispatch outcome without clicking through to the
@@ -182,49 +180,64 @@ runs:
         RUN_URL: ${{ steps.return_dispatch.outputs.run_url }}
         DISPATCHED_CONCLUSION: ${{ steps.status.outputs.conclusion }}
         DISPATCHED_STATUS: ${{ steps.status.outputs.status }}
-        DISPATCHED_SUMMARY: ${{ steps.dispatched_summary.outputs.summary }}
+        RENDERED_BODY_PATH: ${{ steps.dispatched_summary.outputs.body_path }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          const fs = require('fs');
           const repoName = process.env.REPO_NAME;
           const workflow = process.env.WORKFLOW;
           const runId    = process.env.RUN_ID;
           const runUrl   = process.env.RUN_URL;
           const conclusion = process.env.DISPATCHED_CONCLUSION || '';
           const status    = process.env.DISPATCHED_STATUS || '';
-          const summary   = (process.env.DISPATCHED_SUMMARY || '').trim();
-
-          const titlesByWorkflow = {
-            "sdr-integration-tests.yaml": `SDR Integration Tests (testcontainer) — ${repoName}`,
-            "e2e-full.yaml":               `E2E Full Tests (system apps) — ${repoName}`,
-          };
-          const title = titlesByWorkflow[workflow] || `${workflow} — ${repoName}`;
-
-          const statusLine =
-              conclusion === "success"   ? "Passed ✅"
-            : conclusion === "failure"   ? "Failed ❌"
-            : conclusion === "cancelled" ? "Cancelled 🚫"
-            : conclusion === "timeout"   ? "Timed out ⏰ (dispatched run still in progress when the SDK side gave up — check the run link)"
-            : `Unknown — status=${status}, conclusion=${conclusion}`;
-
-          const runLine = runId
-            ? `[${runId}](${runUrl})`
-            : `_dispatch failed before a run id was assigned_`;
+          const renderedPath = process.env.RENDERED_BODY_PATH || '';
 
           const sticky = `<!-- e2e-apps-cross-repo:${workflow}:${repoName} -->`;
-          const lines = [
-            sticky,
-            `## 🧪 ${title}`,
-            ``,
-            `**Status:** ${statusLine}`,
-          ];
-          if (summary) {
-            lines.push(`**Summary:** \`${summary}\``);
+
+          // Prefer the connector-side rendered body so both PRs (the
+          // connector PR and this SDK PR) show identical content. The
+          // connector sticky line (e.g. <!-- sdr-integration-tests... -->)
+          // gets stripped and replaced with this side's marker so
+          // sticky-updates don't collide.
+          let body = '';
+          if (renderedPath && fs.existsSync(renderedPath)) {
+            const raw = fs.readFileSync(renderedPath, 'utf8');
+            // Drop a leading HTML-comment marker line so we can prepend
+            // our own; otherwise leave the body untouched.
+            const lines = raw.split('\n');
+            const startsWithMarker = /^<!--\s.*\s-->\s*$/.test(lines[0] || '');
+            const stripped = startsWithMarker ? lines.slice(1).join('\n') : raw;
+            body = sticky + '\n' + stripped.trimStart();
+          } else {
+            // Fallback: status-only body when the artifact wasn't
+            // available (dispatch failed before tests ran, run cancelled
+            // pre-upload, etc.). Keeps the SDK PR informed even when the
+            // connector-side rendering didn't happen.
+            const titlesByWorkflow = {
+              "sdr-integration-tests.yaml": `SDR Integration Tests (testcontainer) — ${repoName}`,
+              "e2e-full.yaml":               `E2E Full Tests (system apps) — ${repoName}`,
+            };
+            const title = titlesByWorkflow[workflow] || `${workflow} — ${repoName}`;
+            const statusLine =
+                conclusion === "success"   ? "Passed ✅"
+              : conclusion === "failure"   ? "Failed ❌"
+              : conclusion === "cancelled" ? "Cancelled 🚫"
+              : conclusion === "timeout"   ? "Timed out ⏰ (dispatched run still in progress when the SDK side gave up — check the run link)"
+              : `Unknown — status=${status}, conclusion=${conclusion}`;
+            const runLine = runId
+              ? `[${runId}](${runUrl})`
+              : `_dispatch failed before a run id was assigned_`;
+            body = [
+              sticky,
+              `## 🧪 ${title}`,
+              ``,
+              `**Status:** ${statusLine}`,
+              `**Dispatched run:** ${runLine}`,
+              ``,
+              `> Cross-repo dispatch from this SDK PR. Detailed report unavailable — the dispatched run did not produce a results artifact.`,
+            ].join('\n');
           }
-          lines.push(`**Dispatched run:** ${runLine}`);
-          lines.push(``);
-          lines.push(`> Cross-repo dispatch from this SDK PR. The connector-side run posts its own sticky comment with asset counts + validates block to [${repoName}](https://github.com/atlanhq/${repoName}) when triggered from a connector PR; this comment is the SDK-side echo.`);
-          const body = lines.join('\n');
 
           const comments = await github.paginate(github.rest.issues.listComments, {
             owner: context.repo.owner,

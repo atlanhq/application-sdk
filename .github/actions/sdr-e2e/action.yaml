@@ -642,14 +642,6 @@ runs:
         mkdir -p results
         docker compose ${{ steps.compose_files.outputs.files }} logs >> results/sdr-container.log 2>&1 || true
 
-    - name: Upload test results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: sdr-integration-tests-${{ inputs.app-name }}-results
-        path: results/
-        retention-days: 14
-
     - name: Tear down SDR container
       if: always()
       shell: bash
@@ -667,7 +659,11 @@ runs:
     # which lets the PR comment link directly into the tenant Temporal UI.
     - name: Compute asset extraction summary
       id: asset_summary
-      if: always() && github.event_name == 'pull_request'
+      # Always runs (no pull_request gate): the workflow_dispatch path
+      # used by apps-sdk cross-repo dispatch also needs the summary
+      # markdown so the rendered pr-comment-body.md captures asset +
+      # lineage tables for the SDK PR's sticky.
+      if: always()
       shell: bash
       env:
         CI_TENANT_DOMAIN: ${{ env.CI_TENANT_DOMAIN }}
@@ -829,8 +825,8 @@ runs:
     # of mshick/add-pr-comment's edit-in-place behaviour: re-runs land as
     # new comments at the bottom of the conversation rather than silently
     # mutating an old one, which makes "what's the latest run" obvious.
-    - name: Post PR comment
-      if: always() && github.event_name == 'pull_request'
+    - name: Render PR comment + post (when on a PR)
+      if: always()
       uses: actions/github-script@v7
       env:
         APP_NAME: ${{ inputs.app-name }}
@@ -938,6 +934,23 @@ runs:
             `</details>`,
           ].join('\n');
 
+          // Always serialise the rendered body to the results artifact
+          // so the cross-repo dispatch caller (apps-sdk side) can post
+          // an identical sticky on its own PR. The artifact upload step
+          // further down packages results/ as-is.
+          const fs = require('fs');
+          fs.mkdirSync('results', { recursive: true });
+          fs.writeFileSync('results/pr-comment-body.md', body);
+
+          // Only post a comment when we're on a pull_request event with
+          // a `context.issue.number` to target — workflow_dispatch runs
+          // (used by the apps-sdk cross-repo path) skip the API call and
+          // rely on the artifact above being consumed by the caller.
+          if (context.eventName !== 'pull_request' || !context.issue.number) {
+            core.info('Not a pull_request event with a PR number — skipping comment post; body persisted to results/pr-comment-body.md for the cross-repo caller to reuse.');
+            return;
+          }
+
           // Sticky update: find an existing comment carrying our marker
           // and patch its body in-place, otherwise create a fresh one.
           // Earlier iterations did delete+create, which re-pushed the
@@ -965,6 +978,20 @@ runs:
             });
           }
       continue-on-error: true
+
+    # Artifact upload deliberately runs AFTER the comment-render step
+    # so results/pr-comment-body.md (written by that step) ships with
+    # the rest of the suite output. apps-sdk's e2e-apps composite
+    # downloads this same artifact and posts the body verbatim on the
+    # SDK PR (only the sticky marker line differs), so both PRs see
+    # the same rendered report.
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sdr-integration-tests-${{ inputs.app-name }}-results
+        path: results/
+        retention-days: 14
 
     # No explicit `createCommitStatus` step: the workflow job already
     # surfaces a check_run on the PR (e.g. `E2E Full Tests (system
