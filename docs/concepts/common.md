@@ -151,7 +151,7 @@ fd = e.to_failure_details()
 # fd.code          — str (app-owned fine-grained code, e.g. "STORAGE_NOT_FOUND")
 # fd.suggested_action — str | None (imperative hint; voice shifts with audience)
 # fd.evidence      — dict of per-error structured context (dataclass fields)
-# fd.cause_repr    — str | None (repr of wrapped exception; never the live object)
+# fd.cause_repr    — str | None (sanitised str of wrapped exception: "{ExcType}: {msg}", URL/secret-redacted; cause message capped at 500 chars; never the live object)
 ```
 
 Tenant identity is intentionally absent from `FailureDetails`. Per-tenant attribution is
