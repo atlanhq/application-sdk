@@ -96,6 +96,16 @@ on:
         required: false
         type: string
         default: ""
+      distinct-id:
+        description: |
+          Identifier passed through from the caller's
+          ``workflow_dispatch.inputs.distinct_id`` so
+          ``codex-/return-dispatch`` on the apps-sdk side can locate
+          this run from the calling workflow. Echoed in the
+          "distinct-id" step name; never read by test code.
+        required: false
+        type: string
+        default: ""
     secrets:
       SDR_TEST_TENANT:
         description: Tenant DNS short name read by the configurator.
@@ -148,6 +158,14 @@ jobs:
       SDR_OAUTH_CLIENT_SECRET: ${{ secrets.SDR_OAUTH_CLIENT_SECRET }}
       ATLAN_BASE_URL: ${{ secrets.ATLAN_BASE_URL }}
     steps:
+      # codex-/return-dispatch on the apps-sdk side scans step *names*
+      # for "distinct-id <value>". Always-run, no-op; lets the SDK PR's
+      # e2e-full-mysql job locate this run via the GH Actions API.
+      - name: distinct-id ${{ inputs.distinct-id }}
+        if: inputs.distinct-id != ''
+        shell: bash
+        run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+
       - uses: actions/checkout@v4
         with:
           persist-credentials: false

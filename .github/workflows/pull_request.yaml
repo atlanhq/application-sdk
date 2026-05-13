@@ -363,7 +363,7 @@ jobs:
   # application_sdk_ref input and re-pins atlan-application-sdk to that
   # SHA before building the image + running tests.
   sdr-e2e-apps:
-    name: SDR E2E (Apps)
+    name: SDR Integration Test with testcontainer (E&T)
     needs: [changes, sdr-matrix-builder]
     # No label gate — runs on every push to a non-fork, non-dependabot
     # PR. ~3 min per connector and validates the SDR contract end-to-
@@ -392,7 +392,7 @@ jobs:
   # filename + the dispatch label (e2e-full-postgres, e2e-full-mssql,
   # …) when wiring up a new connector.
   e2e-full-mysql:
-    name: e2e-full (mysql)
+    name: E2E Full with system apps (atlan-mysql-app, main)
     needs: [changes]
     if: |
       (
