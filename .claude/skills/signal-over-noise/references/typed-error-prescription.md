@@ -66,14 +66,13 @@ subclass a leaf and override `code` — never add a new category value.
 | `InternalError` | INTERNAL | APP_OWNER | False | SDK or app bug; invariant broken in our code |
 | `UnimplementedError` | UNIMPLEMENTED | APP_OWNER | False | Operation not supported or capability not yet built (known gap, not a bug) |
 
-**Cross-process type identification** — for failures that must be recognised by
-*string match* across the Temporal activity/workflow boundary, the SDK uses
-`WORKER_EVICTED_TYPE = "WorkerEvicted"` (`leaves.py:172`), a plain string
-constant. The activity wrapper raises Temporal's own
-`ApplicationError(type=WORKER_EVICTED_TYPE)` — **not** an `AppError` subclass.
-Workflow code matches `cause.type == WORKER_EVICTED_TYPE`. This is the
-existing SDK mechanism for cross-process recognition; it does not involve
-subclassing `AppError`.
+**Platform-internal special case** — `WORKER_EVICTED_TYPE = "WorkerEvicted"`
+(`leaves.py:172`) is a narrow internal mechanism used exclusively to detect
+when Kubernetes has terminated a worker pod mid-activity. The activity wrapper
+raises Temporal's own `ApplicationError(type=WORKER_EVICTED_TYPE)` so the
+workflow retry loop can identify the eviction by string match. This is **not**
+a general pattern: do not use string-typed `ApplicationError` for anything else,
+and do not model new failure types on this approach.
 
 **`audience` override pattern** — when an SDK base default doesn't fit the locus,
 override `audience` on a minimal subclass. For connector apps, the source-side
@@ -629,11 +628,10 @@ blocks any evidence key matching the exact denylist or the suffix denylist
 the `/typed-failures` skill. Every connector app's typed classes live there,
 not in the SDK.
 
-**The SDK** raises leaves directly in most cases. For *cross-process* type
-recognition across the activity/workflow boundary, the SDK uses a string
-constant (`WORKER_EVICTED_TYPE = "WorkerEvicted"`, `leaves.py:172`) passed to
-Temporal's own `ApplicationError(type=…)` — not an `AppError` subclass. There
-are currently no `AppError` subclasses in the SDK itself.
+**The SDK** raises leaves directly in most cases. There are currently no
+`AppError` subclasses in the SDK itself. (`WORKER_EVICTED_TYPE` is a
+platform-internal special case for k8s pod eviction detection — not a model
+to follow; see §2.)
 
 If you are tempted to subclass a leaf in the SDK:
 1. Is there a cross-process recognition need? If not, raise the leaf directly
