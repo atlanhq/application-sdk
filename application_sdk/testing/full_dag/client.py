@@ -322,9 +322,7 @@ class AEWorkflowClient:
                 continue
             break
         status, body = last
-        raise RuntimeError(
-            f"create_workflow failed: HTTP {status}\nresponse={body!r}"
-        )
+        raise RuntimeError(f"create_workflow failed: HTTP {status}\nresponse={body!r}")
 
     def create_version(
         self,
@@ -473,9 +471,7 @@ class AEWorkflowClient:
                     if attempt > 1:
                         logger.info("AE submit succeeded on attempt %d", attempt)
                     return run_id
-                raise RuntimeError(
-                    f"AE submit returned no run_id\nresponse={body!r}"
-                )
+                raise RuntimeError(f"AE submit returned no run_id\nresponse={body!r}")
             if status >= 500 and attempt <= retries:
                 logger.warning(
                     "AE submit attempt %d/%d: HTTP %d (retrying in %ds) body=%r",
@@ -629,9 +625,9 @@ class AEWorkflowClient:
         return asyncio.run(self._connection_search_async(qualified_name))
 
     async def _connection_search_async(self, qualified_name: str) -> bool:
-        from pyatlan.client.aio.client import AsyncAtlanClient
-        from pyatlan.model.assets import Asset
-        from pyatlan.model.fluent_search import FluentSearch
+        # Lazy: pyatlan is a heavy import; testing-time-only.
+        from pyatlan.model.assets import Asset  # noqa: PLC0415
+        from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
 
         try:
             async with self._build_async_atlan_client() as client:
@@ -649,7 +645,7 @@ class AEWorkflowClient:
             )
             return False
 
-    def _build_async_atlan_client(self) -> "AsyncAtlanClient":  # noqa: F821
+    def _build_async_atlan_client(self) -> Any:
         """Construct an AsyncAtlanClient using OAuth if configured, else bearer.
 
         Centralised so every pyatlan call (search, role_cache) goes
@@ -659,7 +655,7 @@ class AEWorkflowClient:
         broad-permissioned service account whose name confuses RBAC
         diagnostics.
         """
-        from pyatlan.client.aio.client import AsyncAtlanClient
+        from pyatlan.client.aio.client import AsyncAtlanClient  # noqa: PLC0415
 
         if self._oauth_client_id and self._oauth_client_secret:
             return AsyncAtlanClient(
@@ -667,9 +663,7 @@ class AEWorkflowClient:
                 oauth_client_id=self._oauth_client_id,
                 oauth_client_secret=self._oauth_client_secret,
             )
-        return AsyncAtlanClient(
-            base_url=self.tenant_url, api_key=self._api_token
-        )
+        return AsyncAtlanClient(base_url=self.tenant_url, api_key=self._api_token)
 
     def poll_atlas_for_connection(
         self,
@@ -762,9 +756,7 @@ class AEWorkflowClient:
         results = asyncio.run(self._search_counts_async(prefix, type_names))
         return dict(zip(type_names, results))
 
-    def has_lineage_under_connection(
-        self, connection_qualified_name: str
-    ) -> bool:
+    def has_lineage_under_connection(self, connection_qualified_name: str) -> bool:
         """True iff at least one lineage Process exists under this connection.
 
         QI + lineage-app + lineage-publish together produce ``Process``
@@ -791,9 +783,9 @@ class AEWorkflowClient:
         call per type, and the standard pyatlan pattern for batched
         reads.
         """
-        from pyatlan.client.aio.client import AsyncAtlanClient
-        from pyatlan.model.assets import Asset
-        from pyatlan.model.fluent_search import FluentSearch
+        from pyatlan.client.aio.client import AsyncAtlanClient  # noqa: PLC0415
+        from pyatlan.model.assets import Asset  # noqa: PLC0415
+        from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
 
         async def _count_one(client: AsyncAtlanClient, type_name: str) -> int:
             try:
@@ -814,9 +806,7 @@ class AEWorkflowClient:
             base_url=self.tenant_url, api_key=self._api_token
         ) as client:
             return list(
-                await asyncio.gather(
-                    *(_count_one(client, tn) for tn in type_names)
-                )
+                await asyncio.gather(*(_count_one(client, tn) for tn in type_names))
             )
 
 

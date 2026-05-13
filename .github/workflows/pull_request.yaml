@@ -384,19 +384,20 @@ jobs:
           workflow-inputs: |
             { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}" }
 
-  # Tier-4 full-DAG e2e against the mysql connector. Opt-in via the
-  # `test-e2e-full-mysql-app` label because each run is ~20 min and
-  # creates real Connection assets on the test tenant. Add a similar
-  # job + label per app as more connectors adopt the e2e-full harness
-  # (the e2e-apps composite action is generic; just changes the
-  # `workflow` filename + the dispatch label name).
-  e2e-full-mysql-app:
+  # Full-DAG e2e against the mysql connector. Opt-in via the
+  # `e2e-full-mysql` label because each run is ~20 min and creates
+  # real Connection assets on the test tenant. Add a similar job +
+  # label per app as more connectors adopt the e2e-full harness — the
+  # e2e-apps composite action is generic; just change the `workflow`
+  # filename + the dispatch label (e2e-full-postgres, e2e-full-mssql,
+  # …) when wiring up a new connector.
+  e2e-full-mysql:
     name: e2e-full (mysql)
     needs: [changes]
     if: |
       (
-        (github.event.action == 'labeled' && github.event.label.name == 'test-e2e-full-mysql-app') ||
-        contains(github.event.pull_request.labels.*.name, 'test-e2e-full-mysql-app')
+        (github.event.action == 'labeled' && github.event.label.name == 'e2e-full-mysql') ||
+        contains(github.event.pull_request.labels.*.name, 'e2e-full-mysql')
       ) && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
