@@ -38,6 +38,209 @@ Use `FileReference` for any data that cannot fit in Temporal's 2 MB payload limi
 See `docs/concepts/file-reference.md` for the full guide: decision matrix, lifecycle,
 the `Lazy()` marker for selective materialization, dedup behaviour, and observability events.
 
+## Replacing `ParquetFileWriter` / `JsonFileWriter` (v4.0 removal path)
+
+`ParquetFileWriter`, `JsonFileWriter`, `ParquetFileReader`, and `JsonFileReader`
+emit `DeprecationWarning` on construction and **will be removed in v4.0**.
+Migrate now — the replacement is fully supported and fully optimised
+(SHA-256 dedup + sidecars + parallel transfers via `_gather_with_semaphore`).
+
+### Recommended: `RollingFileWriter`
+
+`application_sdk/storage/rolling.py` provides a small format-agnostic helper
+that encapsulates the common pattern:
+
+- Owns a scoped output sub-directory (so the resulting `FileReference`
+  covers only your chunks — never sibling content in `base_path`).
+- Buffers appended batches and rolls over to a new chunk file when **any**
+  of the configured policies fire:
+  - `chunk_interval_seconds` — wall clock (default **30s**)
+  - `max_buffer_bytes` — buffer ceiling in bytes (default **50 MB**)
+  - `max_buffer_records` — buffer ceiling in records (default `None`,
+    opt-in)
+- Optional `on_chunk_complete(chunk_index, chunk_path)` callback wires
+  cleanly to `activity.heartbeat(...)` for within-heartbeat checkpointing.
+- `writer.file_reference` returns an ephemeral `FileReference` for your
+  typed Output; the activity interceptor uploads on task return.
+
+**Why the default policy bundle:** the SDK runs in two extreme streaming
+regimes — slow JDBC streams (~200 rows/min) and fast msgspec transforms
+(~10 000 records/ms). A pure record-count threshold like `chunk_size=10_000`
+either never trips (slow stream → one huge final file, blocks heartbeat)
+or trips every millisecond (fast stream → thousands of tiny files). A
+pure wall-clock interval handles the slow case but leaves no ceiling on
+memory when the stream is fast. The default bundle (time + bytes, plus
+opt-in records) gives:
+
+- Predictable checkpoint cadence regardless of upstream throughput.
+- Bounded peak memory: a runaway fast upstream hits the 50 MB ceiling
+  long before it can OOM a typical pod.
+- An optional records-based escape hatch for callers who think in rows.
+
+For advanced cases (e.g. fixed-size exports where only size matters), pass
+a custom `rollover_policy=` — see :class:`TimePolicy`, :class:`SizePolicy`,
+:class:`CountPolicy`, and :class:`AnyOfPolicy` exposed from
+`application_sdk.storage.rolling`.
+
+#### Parquet (pandas)
+
+```python
+import pandas as pd
+
+from application_sdk.contracts.types import FileReference
+from application_sdk.storage.rolling import RollingFileWriter
+
+
+def _flush_parquet(batches: list[pd.DataFrame], path: str) -> None:
+    pd.concat(batches, ignore_index=True).to_parquet(path)
+
+
+async def extract_users(self, inp: ExtractInput) -> ExtractOutput:
+    async with RollingFileWriter[pd.DataFrame](
+        base_path=inp.output_path,
+        extension=".parquet",
+        flush_fn=_flush_parquet,
+        chunk_interval_seconds=60.0,
+        on_chunk_complete=self._heartbeat_chunk,   # optional — see below
+    ) as writer:
+        async for df in self._stream_users():
+            await writer.append(df)
+    return ExtractOutput(data=writer.file_reference)
+
+
+async def _heartbeat_chunk(self, chunk_index: int, chunk_path: str) -> None:
+    from temporalio import activity  # noqa: PLC0415
+    activity.heartbeat(f"wrote {chunk_path}")
+```
+
+#### JSON (line-delimited, `orjson`)
+
+```python
+import orjson
+
+from application_sdk.contracts.types import FileReference
+from application_sdk.storage.rolling import RollingFileWriter
+
+
+def _flush_jsonl(batches: list[list[dict]], path: str) -> None:
+    with open(path, "wb") as f:
+        for batch in batches:
+            for record in batch:
+                f.write(orjson.dumps(record))
+                f.write(b"\n")
+
+
+async def extract_events(self, inp: ExtractInput) -> ExtractOutput:
+    async with RollingFileWriter[list[dict]](
+        base_path=inp.output_path,
+        extension=".json",
+        flush_fn=_flush_jsonl,
+        chunk_interval_seconds=60.0,
+    ) as writer:
+        async for records in self._stream_events():
+            await writer.append(records)
+    return ExtractOutput(data=writer.file_reference)
+```
+
+To support a new format, write a 3-line `flush_fn` and plug it in. CSV via
+`pandas.to_csv`, Arrow IPC via `pyarrow.ipc`, msgpack via `msgpack.pack` —
+all the same shape.
+
+### Alternative: bare copy-paste (no helper class)
+
+If you want zero new dependencies, the loop the helper wraps is small enough
+to inline directly.
+
+**Parquet:**
+
+```python
+import os
+import uuid
+import pandas as pd
+from application_sdk.contracts.types import FileReference
+
+
+async def extract_users(self, inp: ExtractInput) -> ExtractOutput:
+    output_dir = os.path.join(inp.output_path, f"users_{uuid.uuid4().hex[:8]}")
+    os.makedirs(output_dir, exist_ok=True)
+    chunk_index = 0
+    async for df in self._stream_users():
+        df.to_parquet(os.path.join(output_dir, f"chunk-{chunk_index}.parquet"))
+        chunk_index += 1
+    return ExtractOutput(data=FileReference.from_local(output_dir))
+```
+
+**JSON (line-delimited):**
+
+```python
+import os
+import uuid
+import orjson
+from application_sdk.contracts.types import FileReference
+
+
+async def extract_events(self, inp: ExtractInput) -> ExtractOutput:
+    output_dir = os.path.join(inp.output_path, f"events_{uuid.uuid4().hex[:8]}")
+    os.makedirs(output_dir, exist_ok=True)
+    chunk_index = 0
+    async for records in self._stream_events():
+        with open(os.path.join(output_dir, f"chunk-{chunk_index}.json"), "wb") as f:
+            for record in records:
+                f.write(orjson.dumps(record))
+                f.write(b"\n")
+        chunk_index += 1
+    return ExtractOutput(data=FileReference.from_local(output_dir))
+```
+
+The bare pattern has no rollover or heartbeat awareness — each iteration of
+your stream loop produces one chunk file. Prefer `RollingFileWriter` when
+you want predictable checkpoint cadence on long-running activities.
+
+### Reading a `FileReference` (replaces `ParquetFileReader` / `JsonFileReader`)
+
+Declare the upstream artifact as a `FileReference` field on the consuming
+task's typed Input. The activity interceptor auto-materialises it to a local
+path before the task runs (with sidecar verification + parallel transfers).
+Read it directly with the library of your choice:
+
+```python
+class TransformInput(Input):
+    data: FileReference                              # auto-materialised
+
+async def transform_users(self, inp: TransformInput) -> TransformOutput:
+    df = pd.read_parquet(inp.data.local_path)        # or daft.read_parquet
+    ...
+```
+
+For JSON inputs, swap `pd.read_parquet` for an `orjson.loads` loop over the
+file lines. No `ParquetFileReader` / `JsonFileReader` construction required —
+they exist only to bridge the legacy inline-upload contract and will be
+deleted in v4.0.
+
+### Transitional opt-in on the legacy `ParquetFileWriter`
+
+If you cannot migrate to the direct pattern immediately but want the SHA-256
++ parallel-transfer benefits today, `ParquetFileWriter` accepts a
+`defer_uploads=True` flag. Default (`False`) preserves the pre-3.8 inline-
+upload behaviour so existing call sites are unaffected; `True` switches to
+the `FileReference` boundary. `close()` always returns a `WriterResult` that
+subclasses `TaskStatistics` (so `result.total_record_count` etc. continue to
+work via inheritance) and gains a `result.files: FileReference | None`
+field — `None` in default mode (no double-upload risk), ephemeral in opt-in
+mode.
+
+```python
+async with ParquetFileWriter(
+    path=base, typename="users", defer_uploads=True,
+) as writer:
+    await writer.write(df)
+result = writer.last_result
+return MyOutput(statistics=result, data=result.files)
+```
+
+The opt-in flag is a bridge for in-flight migrations only. New code should
+go straight to the direct copy-paste pattern above.
+
 ## Before Every Commit
 
 ```bash

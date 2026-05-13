@@ -1,4 +1,5 @@
 import os
+import warnings
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Union
 
@@ -85,6 +86,17 @@ class JsonFileReader(Reader):
         Raises:
             ValueError: When path is not provided or when single file path is combined with file_names
         """
+        warnings.warn(
+            "JsonFileReader is deprecated and will be removed in v4.0. "
+            "Migrate now: declare the upstream artifact as a FileReference "
+            "field on your task's typed Input — the SDK's activity "
+            "interceptor auto-materialises it to a local path before the "
+            "task runs (with sha256 sidecar verification + parallel "
+            "transfers), then read it directly with orjson / json. See "
+            "docs/agents/coding-standards.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.extension = JSON_FILE_EXTENSION
 
         # Validate that single file path and file_names are not both specified
@@ -301,6 +313,23 @@ class JsonFileWriter(Writer):
                 Defaults to False.
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
+        # JsonFileWriter is on the v4.0 removal path. We surface a
+        # DeprecationWarning here to push callers onto FileReference *now*
+        # rather than waiting for v4.0 to break them — the new pattern is
+        # already supported, fully optimised, and copy-paste documented.
+        warnings.warn(
+            "JsonFileWriter is deprecated and will be removed in v4.0. "
+            "Migrate now: use application_sdk.storage.rolling.RollingFileWriter "
+            "(time-based rollover, heartbeat-friendly) or write JSON locally "
+            "(orjson.dumps + open(path, 'wb')) and return a FileReference "
+            "for the output directory — the Temporal activity interceptor "
+            "persists it with SHA-256 sidecars and parallel transfers, no "
+            "caller-side upload code needed. See the 'Replacing "
+            "ParquetFileWriter / JsonFileWriter' section in "
+            "docs/agents/coding-standards.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.path = path
         self.typename = typename
         self.chunk_start = chunk_start

@@ -66,7 +66,9 @@ class _StubWriter(Writer):
         self.dataframe_type = dataframe_type
         self._is_closed = False
         self._statistics = None
+        self._result = None
         self.chunk_start = None
+        self.typename = None
         self.metrics = MagicMock()
 
     async def _write_daft_dataframe(self, dataframe: Any, **kwargs: Any) -> None:
@@ -443,26 +445,35 @@ class TestFlushBuffer:
 
 class TestWriterClose:
     @pytest.mark.asyncio
-    async def test_close_idempotent_returns_cached_statistics(self) -> None:
-        from application_sdk.common.models import TaskStatistics
+    async def test_close_idempotent_returns_cached_result(self) -> None:
+        from application_sdk.storage.formats import WriterResult
 
         writer = _StubWriter()
         writer._is_closed = True
-        cached = TaskStatistics(total_record_count=5, chunk_count=2, partitions=[0, 1])
-        writer._statistics = cached
+        cached = WriterResult(
+            total_record_count=5,
+            chunk_count=2,
+            partitions=[0, 1],
+            files=None,
+        )
+        writer._result = cached
         result = await writer.close()
         assert result is cached
 
     @pytest.mark.asyncio
-    async def test_close_idempotent_returns_live_statistics_when_no_cache(self) -> None:
+    async def test_close_idempotent_rederives_when_no_cached_result(self) -> None:
         writer = _StubWriter()
         writer._is_closed = True
         writer._statistics = None
+        writer._result = None
         writer.total_record_count = 7
         writer.partitions = [0, 1, 2]
         result = await writer.close()
+        # WriterResult subclasses TaskStatistics, so attribute access is direct.
         assert result.total_record_count == 7
         assert result.chunk_count == 3
+        # Base Writer doesn't opt into deferred uploads → no FileReference.
+        assert result.files is None
 
     @pytest.mark.asyncio
     async def test_close_rewraps_finalize_failure(self) -> None:
@@ -488,11 +499,14 @@ class TestWriterClose:
         with patch(
             "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
         ) as mock_upload:
-            stats = await writer.close()
+            result = await writer.close()
 
         assert writer._is_closed is True
-        assert stats.total_record_count == 4
-        # Statistics file uploaded.
+        # WriterResult subclasses TaskStatistics — inherited attributes.
+        assert result.total_record_count == 4
+        # Base Writer keeps the legacy inline-upload contract; no FileReference.
+        assert result.files is None
+        # Statistics file uploaded by base Writer (not overridden in _StubWriter).
         mock_upload.assert_awaited()
 
 
