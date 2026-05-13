@@ -128,6 +128,46 @@ runs:
           echo "Workflow run $run_id in $repo_name succeeded"
         fi
 
+    # Pull the dispatched run's pytest summary line out of the uploaded
+    # results artifact so the SDK-side sticky shows the actual test
+    # counts, not just pass/fail. Workflow-dispatch can't return step
+    # outputs to the caller, so this is the only path from a dispatched
+    # run's per-step output back to the apps-sdk PR comment.
+    - name: Fetch dispatched-run summary
+      id: dispatched_summary
+      if: always() && steps.return_dispatch.outputs.run_id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO_NAME: ${{ inputs.repo-name }}
+        RUN_ID: ${{ steps.return_dispatch.outputs.run_id }}
+      run: |
+        set -uo pipefail
+        artifact_id=$(gh api \
+          "repos/atlanhq/${REPO_NAME}/actions/runs/${RUN_ID}/artifacts" \
+          --jq '.artifacts[] | select(.name | test("results$")) | .id' \
+          | head -1)
+        if [ -z "${artifact_id}" ]; then
+          echo "No results artifact on run ${RUN_ID}; skipping summary fetch."
+          echo "summary=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        work=$(mktemp -d)
+        gh api \
+          "repos/atlanhq/${REPO_NAME}/actions/artifacts/${artifact_id}/zip" \
+          > "${work}/results.zip" 2>/dev/null || true
+        unzip -qq -o "${work}/results.zip" -d "${work}" 2>/dev/null || true
+        out="${work}/sdr-test-output.txt"
+        if [ ! -f "${out}" ]; then
+          echo "sdr-test-output.txt not in artifact; skipping summary."
+          echo "summary=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        summary=$(grep -E "^=+.*(passed|failed|error).*in [0-9.]+s" "${out}" | tail -1 | tr -d '=' | xargs)
+        echo "Captured summary: ${summary}"
+        # Quote multi-line safety: pytest summary is single line.
+        echo "summary=${summary}" >> "$GITHUB_OUTPUT"
+
     # Sticky comment back on the calling SDK PR so reviewers see the
     # cross-repo dispatch outcome without clicking through to the
     # connector run. Uses updateComment in-place when a prior marker
@@ -142,6 +182,7 @@ runs:
         RUN_URL: ${{ steps.return_dispatch.outputs.run_url }}
         DISPATCHED_CONCLUSION: ${{ steps.status.outputs.conclusion }}
         DISPATCHED_STATUS: ${{ steps.status.outputs.status }}
+        DISPATCHED_SUMMARY: ${{ steps.dispatched_summary.outputs.summary }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -151,6 +192,7 @@ runs:
           const runUrl   = process.env.RUN_URL;
           const conclusion = process.env.DISPATCHED_CONCLUSION || '';
           const status    = process.env.DISPATCHED_STATUS || '';
+          const summary   = (process.env.DISPATCHED_SUMMARY || '').trim();
 
           const titlesByWorkflow = {
             "sdr-integration-tests.yaml": `SDR Integration Tests (testcontainer) — ${repoName}`,
@@ -170,15 +212,19 @@ runs:
             : `_dispatch failed before a run id was assigned_`;
 
           const sticky = `<!-- e2e-apps-cross-repo:${workflow}:${repoName} -->`;
-          const body = [
+          const lines = [
             sticky,
-            `## ${title}`,
+            `## 🧪 ${title}`,
             ``,
             `**Status:** ${statusLine}`,
-            `**Dispatched run:** ${runLine}`,
-            ``,
-            `> Cross-repo dispatch from this SDK PR. The connector-side run posts its own sticky comment with asset counts + validates block to [${repoName}](https://github.com/atlanhq/${repoName}) when triggered from a connector PR; this comment is the SDK-side echo.`,
-          ].join('\n');
+          ];
+          if (summary) {
+            lines.push(`**Summary:** \`${summary}\``);
+          }
+          lines.push(`**Dispatched run:** ${runLine}`);
+          lines.push(``);
+          lines.push(`> Cross-repo dispatch from this SDK PR. The connector-side run posts its own sticky comment with asset counts + validates block to [${repoName}](https://github.com/atlanhq/${repoName}) when triggered from a connector PR; this comment is the SDK-side echo.`);
+          const body = lines.join('\n');
 
           const comments = await github.paginate(github.rest.issues.listComments, {
             owner: context.repo.owner,

@@ -756,25 +756,41 @@ class AEWorkflowClient:
         results = asyncio.run(self._search_counts_async(prefix, type_names))
         return dict(zip(type_names, results))
 
-    def has_lineage_under_connection(self, connection_qualified_name: str) -> bool:
-        """True iff at least one lineage Process exists under this connection.
+    def count_lineage_under_connection(
+        self,
+        connection_qualified_name: str,
+        *,
+        type_names: tuple[str, ...] = ("Database", "Schema", "Table", "View", "Column"),
+    ) -> dict[str, int]:
+        """Per-typeName count of entity assets with lineage attached.
 
-        QI + lineage-app + lineage-publish together produce ``Process``
-        and ``ColumnProcess`` assets whose ``qualifiedName`` is anchored
-        under the Connection. Tells us lineage actually flowed through
-        to Atlas — not just that the lineage nodes returned success at
-        the DAG level.
+        Matches the "Lineage coverage" card in the Atlan workflow-center
+        UI — counts entity assets (Database/Schema/Table/View/Column)
+        whose ``__hasLineage`` is true under the Connection prefix.
+        That's "how many of my assets did QI + lineage-app actually wire
+        up", not "how many Process/ColumnProcess edges exist". The two
+        signals are correlated but the asset-coverage view is what the
+        product surfaces to reviewers, so the PR comment renders it
+        verbatim.
+
+        Returns ``{typeName: count}`` including zeros so missing
+        coverage at a level (e.g. no lineage on Schemas) is visible
+        rather than hidden.
         """
+        if not type_names:
+            return {}
         prefix = f"{connection_qualified_name}/"
-        counts = asyncio.run(
-            self._search_counts_async(prefix, ("Process", "ColumnProcess"))
+        results = asyncio.run(
+            self._search_counts_async(prefix, type_names, has_lineage_only=True)
         )
-        return any(c > 0 for c in counts)
+        return dict(zip(type_names, results))
 
     async def _search_counts_async(
         self,
         prefix: str,
         type_names: tuple[str, ...],
+        *,
+        has_lineage_only: bool = False,
     ) -> list[int]:
         """Parallel per-type ``count`` searches via pyatlan AsyncAtlanClient.
 
@@ -782,6 +798,10 @@ class AEWorkflowClient:
         gathered searches — much cheaper than firing one sync HTTPS
         call per type, and the standard pyatlan pattern for batched
         reads.
+
+        When ``has_lineage_only`` is set, the per-type query also
+        filters ``HAS_LINEAGE.eq(True)`` so the count matches the
+        Atlan UI's "Lineage coverage" card.
         """
         from pyatlan.client.aio.client import AsyncAtlanClient  # noqa: PLC0415
         from pyatlan.model.assets import Asset  # noqa: PLC0415
@@ -789,11 +809,14 @@ class AEWorkflowClient:
 
         async def _count_one(client: AsyncAtlanClient, type_name: str) -> int:
             try:
-                request = (
+                builder = (
                     FluentSearch()
                     .where(Asset.QUALIFIED_NAME.startswith(prefix))
                     .where(Asset.TYPE_NAME.eq(type_name))
-                ).to_request()
+                )
+                if has_lineage_only:
+                    builder = builder.where(Asset.HAS_LINEAGE.eq(True))
+                request = builder.to_request()
                 request.dsl.size = 0  # cheap response: we only want .count
                 return int((await client.asset.search(request)).count)
             except Exception:

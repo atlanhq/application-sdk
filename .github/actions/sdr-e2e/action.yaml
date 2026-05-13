@@ -762,55 +762,60 @@ runs:
                 lines.append(f"| {entity} | {ext_s} | {tr_s} |")
             lines.append("")
 
-        # Full-DAG runs append the post-lineage Atlas inventory the harness
-        # logs at the end of its run ("Atlas inventory under <qn>: {...}
-        # lineage_present=True"). SDR runs never emit this line, so the
-        # section is added only when a match is found — keeps the SDR
-        # comment unchanged. Reads sdr-test-output.txt (pytest stdout)
-        # because the line comes from the harness logger, not the
-        # docker container.
+        # Full-DAG runs append two Atlas-side sections mirroring the
+        # Atlan workflow-center UI cards (Assets / Lineage coverage):
+        #   "Atlas inventory under <qn>: {<typeName>: <count>, ...}"
+        #   "Lineage inventory under <qn>: {<typeName>: <count>, ...} lineage_present=<bool>"
+        # SDR runs never emit these lines, so the sections are added
+        # only when matches are found — keeps the SDR comment unchanged.
         import ast
+
+        def _safe_dict(literal: str) -> dict[str, int]:
+            try:
+                value = ast.literal_eval(literal)
+            except (ValueError, SyntaxError):
+                return {}
+            return value if isinstance(value, dict) else {}
+
+        def _render_section(title: str, qn: str, counts: dict[str, int]) -> list[str]:
+            total = sum(counts.values())
+            section = [f"### {title}", "", f"**Connection:** `{qn}`", "", f"**Total:** {total}", ""]
+            if counts:
+                section.append("| Type | Count |")
+                section.append("|------|-------|")
+                for type_name in sorted(counts):
+                    section.append(f"| {type_name} | {counts[type_name]} |")
+                section.append("")
+            return section
 
         test_log = Path("results/sdr-test-output.txt")
         if test_log.exists():
             test_text = test_log.read_text(errors="replace")
-            atlas_re = re.compile(
-                r"Atlas inventory under (?P<qn>\S+):\s+(?P<counts>\{.*?\})\s+lineage_present=(?P<lin>True|False)"
+            assets_re = re.compile(
+                r"Atlas inventory under (?P<qn>\S+):\s+(?P<counts>\{.*?\})"
             )
-            last_match = None
-            for m in atlas_re.finditer(test_text):
-                last_match = m  # keep the last one in case retries logged earlier ones
-            if last_match:
-                try:
-                    counts = ast.literal_eval(last_match.group("counts"))
-                    if not isinstance(counts, dict):
-                        counts = {}
-                except (ValueError, SyntaxError):
-                    counts = {}
-                lineage_present = last_match.group("lin") == "True"
-                lineage_count = (
-                    counts.get("Process", 0) + counts.get("ColumnProcess", 0)
-                )
-                lines.append(
-                    f"### Atlas inventory under `{last_match.group('qn')}`"
-                )
-                lines.append("")
-                lines.append("| Type | Count |")
-                lines.append("|------|-------|")
-                for type_name in sorted(counts):
-                    lines.append(f"| {type_name} | {counts[type_name]} |")
-                lines.append("")
-                if lineage_count or lineage_present:
-                    lineage_status = (
-                        f"✅ {lineage_count} edge{'s' if lineage_count != 1 else ''} "
-                        "(`Process` + `ColumnProcess`)"
-                        if lineage_count
-                        else "✅ present"
-                    )
-                else:
-                    lineage_status = "⚠️ none observed (waived for connectors without view-derived lineage)"
-                lines.append(f"**Lineage:** {lineage_status}")
-                lines.append("")
+            lineage_re = re.compile(
+                r"Lineage inventory under (?P<qn>\S+):\s+(?P<counts>\{.*?\})\s+lineage_present=(?P<lin>True|False)"
+            )
+            # Take the last match in case retries logged earlier ones.
+            assets_match = next(iter(list(assets_re.finditer(test_text))[::-1]), None)
+            lineage_match = next(iter(list(lineage_re.finditer(test_text))[::-1]), None)
+            if assets_match:
+                lines.extend(_render_section(
+                    "Assets in Atlas",
+                    assets_match.group("qn"),
+                    _safe_dict(assets_match.group("counts")),
+                ))
+            if lineage_match:
+                lineage_counts = _safe_dict(lineage_match.group("counts"))
+                lines.extend(_render_section(
+                    "Lineage coverage",
+                    lineage_match.group("qn"),
+                    lineage_counts,
+                ))
+                if lineage_match.group("lin") == "False" and sum(lineage_counts.values()) == 0:
+                    lines.append("> No lineage assets observed — waived when the seed dataset has no view-derived lineage.")
+                    lines.append("")
 
         markdown = "\n".join(lines)
         delim = "EOF_ASSETS_" + secrets.token_hex(8)
@@ -915,7 +920,7 @@ runs:
 
           const body = [
             sticky,
-            `## ${reportTitle} — ${appName}`,
+            `## 🧪 ${reportTitle} — ${appName}`,
             ``,
             `**Status:** ${status}`,
             `**Summary:** \`${summary}\``,

@@ -677,13 +677,22 @@ class BaseFullDAGE2ETest:
                 asset_counts = self.client.count_assets_under_connection(
                     self.connection_qualified_name
                 )
-                lineage_present = self.client.has_lineage_under_connection(
+                lineage_counts = self.client.count_lineage_under_connection(
                     self.connection_qualified_name
                 )
+                lineage_present = any(c > 0 for c in lineage_counts.values())
+                # Two separate log lines so the CI PR-comment parser can
+                # surface them as distinct sections ("Assets in Atlas" /
+                # "Lineage") matching the Atlan workflow-center UI.
                 logger.info(
-                    "Atlas inventory under %s: %s lineage_present=%s",
+                    "Atlas inventory under %s: %s",
                     self.connection_qualified_name,
                     asset_counts,
+                )
+                logger.info(
+                    "Lineage inventory under %s: %s lineage_present=%s",
+                    self.connection_qualified_name,
+                    lineage_counts,
                     lineage_present,
                 )
         else:
