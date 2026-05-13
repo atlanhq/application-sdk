@@ -400,6 +400,12 @@ jobs:
         contains(github.event.pull_request.labels.*.name, 'e2e-full-mysql')
       ) && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
+    # The dispatched mysql-app run budget is timeout-minutes: 120
+    # (matches the SDK's e2e-full-reusable.yaml ceiling). Add ~10 min
+    # of overhead for dispatch + queue + artifact-fetch + comment-post
+    # on this side so the SDK job doesn't get killed before the
+    # dispatched run finishes legitimately.
+    timeout-minutes: 130
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/e2e-apps"

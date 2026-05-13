@@ -99,21 +99,46 @@ runs:
         status="in_progress"
         conclusion=""
         start_time=$(date +%s)
-        timeout=600
+        # Match the dispatched workflow's own timeout-minutes ceiling.
+        # mysql-app's e2e-full-reusable.yaml sets timeout-minutes: 120
+        # (the full-DAG harness needs ~20-40 min wall-time; the SDR
+        # testcontainer suite stays well under this). 600s was the
+        # earlier value tuned only for SDR — full-DAG was timing out
+        # the SDK-side poll loop while the dispatched run was still
+        # legitimately running.
+        timeout=7200
+        # Heartbeat cadence: 60s matches the connector-side AE poll
+        # cadence emitted by AEWorkflowClient.poll_native_status so
+        # the SDK-side log doesn't out-spam the dispatched run's own
+        # progress glyphs. Drop to 30s only when nearing the timeout.
+        poll_interval=60
+        glyph_for_status() {
+          case "$1" in
+            queued|waiting|pending) echo "🟡" ;;
+            in_progress)            echo "🔄" ;;
+            completed)              echo "✅" ;;
+            *)                      echo "❔" ;;
+          esac
+        }
         while [[ "$status" == "in_progress" || "$status" == "queued" || "$status" == "pending" || "$status" == "waiting" ]]; do
-          sleep 30
+          sleep $poll_interval
           response=$(curl -s -H "Authorization: Bearer ${{ inputs.github-token }}" \
             https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id)
           status=$(echo $response | jq -r '.status')
           conclusion=$(echo $response | jq -r '.conclusion')
 
-          echo "Status: $status, Conclusion: $conclusion"
-
           current_time=$(date +%s)
           elapsed_time=$((current_time - start_time))
 
+          # Mirror the connector-side poll-line shape:
+          #   🔄 dispatched run [120s] in_progress
+          # so the SDK PR's log scans the same way as the mysql-app
+          # PR's worker log (test-tube emoji + elapsed + status).
+          printf '%s dispatched run [%3ds] %s\n' \
+            "$(glyph_for_status "$status")" "$elapsed_time" "$status"
+
           if [[ $elapsed_time -ge $timeout ]]; then
-            echo "Workflow run timeout reached after $timeout seconds"
+            echo "⏰ Workflow run timeout reached after $timeout seconds"
             echo "status=timeout" >> "$GITHUB_OUTPUT"
             echo "conclusion=timeout" >> "$GITHUB_OUTPUT"
             exit 0
