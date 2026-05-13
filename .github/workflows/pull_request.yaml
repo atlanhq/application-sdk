@@ -292,9 +292,14 @@ jobs:
   # above, but a different default (the SDR-enabled connector fleet,
   # not openapi-app). Keeping them separate so the SDR path can grow
   # connectors independently of the legacy e2e path.
+  #
+  # No label gate — the SDR connector suite (~3 min per app) auto-runs
+  # on every PR push so SDK changes are validated end-to-end against
+  # the connector fleet by default. Custom <repo>:<branch> labels
+  # still override the default matrix when a contributor wants to pin
+  # an alternate target branch for a specific connector.
   sdr-matrix-builder:
     name: Build SDR Test Matrix
-    if: (github.event.action == 'labeled' && github.event.label.name == 'sdr-e2e-test') || contains(github.event.pull_request.labels.*.name, 'sdr-e2e-test')
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -360,7 +365,10 @@ jobs:
   sdr-e2e-apps:
     name: SDR E2E (Apps)
     needs: [changes, sdr-matrix-builder]
-    if: ((github.event.action == 'labeled' && github.event.label.name == 'sdr-e2e-test') || contains(github.event.pull_request.labels.*.name, 'sdr-e2e-test')) && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
+    # No label gate — runs on every push to a non-fork, non-dependabot
+    # PR. ~3 min per connector and validates the SDR contract end-to-
+    # end, which is worth the spend on every SDK PR.
+    if: github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -373,6 +381,32 @@ jobs:
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: sdr-integration-tests.yaml
+          workflow-inputs: |
+            { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}" }
+
+  # Tier-4 full-DAG e2e against the mysql connector. Opt-in via the
+  # `test-e2e-full-mysql-app` label because each run is ~20 min and
+  # creates real Connection assets on the test tenant. Add a similar
+  # job + label per app as more connectors adopt the e2e-full harness
+  # (the e2e-apps composite action is generic; just changes the
+  # `workflow` filename + the dispatch label name).
+  e2e-full-mysql-app:
+    name: e2e-full (mysql)
+    needs: [changes]
+    if: |
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'test-e2e-full-mysql-app') ||
+        contains(github.event.pull_request.labels.*.name, 'test-e2e-full-mysql-app')
+      ) && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: "./.github/actions/e2e-apps"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-name: atlan-mysql-app
+          target-branch: "refs/heads/${{ github.base_ref }}"
+          workflow: e2e-full.yaml
           workflow-inputs: |
             { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}" }
 
