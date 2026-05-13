@@ -122,11 +122,11 @@ principal lacks permission for the resource or action → `AppPermissionDeniedEr
 
 Common situations in `application_sdk/`. Each entry gives a worked example.
 
-Each entry includes a **Code:** annotation showing the suggested wire code for that
-scenario. `code` is a `ClassVar[str]` on the leaf class — it cannot be passed to the
-constructor, and inline raise examples emit the leaf's own default code (e.g.
-`InvalidInputError` emits `INVALID_INPUT`). To use the scenario-specific code shown in
-the annotation, subclass the leaf and override the `ClassVar`:
+Each entry includes a **Subclass code:** annotation — the wire code you get if you
+subclass the leaf and override the `ClassVar`. The inline raise examples in each entry
+emit the leaf's own default code instead (e.g. `InvalidInputError` emits `INVALID_INPUT`,
+not `INVALID_INPUT_MISSING_FIELD`). `code` cannot be passed to the constructor. To emit
+the scenario-specific code, subclass the leaf and override it:
 
 ```python
 @dataclass(kw_only=True)
@@ -180,7 +180,7 @@ raise InvalidInputError(
     field="aws_role_arn",
 )
 ```
-Code: `INVALID_INPUT_MISSING_FIELD`. Use `field=` evidence to name the param.
+Subclass code: `INVALID_INPUT_MISSING_FIELD`. Use `field=` evidence to name the param.
 
 ---
 
@@ -194,7 +194,7 @@ raise InternalError(
     invariant="load_before_use",
 )
 ```
-Code: `INTERNAL_ENGINE_NOT_INITIALIZED`. Audience: APP_OWNER.
+Subclass code: `INTERNAL_ENGINE_NOT_INITIALIZED`. Audience: APP_OWNER.
 `component=` names the SDK layer; `invariant=` is a short stable key suitable
 for runbook lookup.
 
@@ -209,7 +209,7 @@ raise AuthError(
     failure_reason="credentials_absent",
 )
 ```
-Code: `AUTH_MISSING_CREDENTIALS`. Audience: USER (default — correct).
+Subclass code: `AUTH_MISSING_CREDENTIALS`. Audience: USER (default — correct).
 
 ---
 
@@ -224,7 +224,7 @@ except HTTPError as exc:
         cause=exc,
     ) from exc
 ```
-Code: `AUTH_REJECTED`. Set `cause=exc` + `from exc` (see §6).
+Subclass code: `AUTH_REJECTED`. Set `cause=exc` + `from exc` (see §6).
 
 ---
 
@@ -239,7 +239,7 @@ except SomeSourceError as exc:
         cause=exc,
     ) from exc
 ```
-Code: `PERMISSION_DENIED`. Audience: USER (default — correct).
+Subclass code: `PERMISSION_DENIED`. Audience: USER (default — correct).
 
 ---
 
@@ -254,7 +254,7 @@ except SomeSourceError as exc:
         cause=exc,
     ) from exc
 ```
-Code: `NOT_FOUND_RESOURCE`. Evidence: `resource_type=` and `resource_identifier=`.
+Subclass code: `NOT_FOUND_RESOURCE`. Evidence: `resource_type=` and `resource_identifier=`.
 
 ---
 
@@ -267,7 +267,7 @@ raise AlreadyExistsError(
     resource_identifier=entity_id,
 )
 ```
-Code: `ALREADY_EXISTS_RESOURCE`.
+Subclass code: `ALREADY_EXISTS_RESOURCE`.
 
 ---
 
@@ -281,7 +281,7 @@ raise RateLimitedError(
     cause=exc,
 ) from exc
 ```
-Code: `RATE_LIMITED_API`. Set `retry_after_seconds=` from response header when
+Subclass code: `RATE_LIMITED_API`. Set `retry_after_seconds=` from response header when
 available.
 
 ---
@@ -297,7 +297,7 @@ raise DependencyUnavailableError(
     cause=exc,
 ) from exc
 ```
-Code: `DEPENDENCY_UNAVAILABLE_NETWORK`. Audience: default PLATFORM.
+Subclass code: `DEPENDENCY_UNAVAILABLE_NETWORK`. Audience: default PLATFORM.
 **Override to USER** when the unreachable host is the customer's own source
 (their firewall / VPC). Add `audience: ClassVar[Audience] = Audience.USER`
 on a minimal subclass if doing this consistently.
@@ -314,7 +314,7 @@ raise DependencyUnavailableError(
     cause=exc,
 ) from exc
 ```
-Code: `DEPENDENCY_UNAVAILABLE_DAPR` / `DEPENDENCY_UNAVAILABLE_TEMPORAL` /
+Subclass code: `DEPENDENCY_UNAVAILABLE_DAPR` / `DEPENDENCY_UNAVAILABLE_TEMPORAL` /
 `DEPENDENCY_UNAVAILABLE_OBJECT_STORE`. Audience: PLATFORM (default — correct).
 
 ---
@@ -329,7 +329,7 @@ raise PreconditionError(
     actual_state="v1",
 )
 ```
-Code: `PRECONDITION_SCHEMA_MISMATCH`.
+Subclass code: `PRECONDITION_SCHEMA_MISMATCH`.
 
 ---
 
@@ -343,7 +343,7 @@ raise AppTimeoutError(
     cause=exc,
 ) from exc
 ```
-Code: `TIMEOUT_QUERY`. Set `operation=` and `timeout_seconds=` from the
+Subclass code: `TIMEOUT_QUERY`. Set `operation=` and `timeout_seconds=` from the
 configured limit.
 
 ---
@@ -359,7 +359,7 @@ raise ResourceExhaustedError(
     cause=exc,
 ) from exc
 ```
-Code: `RESOURCE_EXHAUSTED_MEMORY`. Audience: PLATFORM (default — correct).
+Subclass code: `RESOURCE_EXHAUSTED_MEMORY`. Audience: PLATFORM (default — correct).
 
 ---
 
@@ -373,7 +373,7 @@ raise DataIntegrityError(
     location="transformer:finalize",
 )
 ```
-Code: `DATA_INTEGRITY_ROW_COUNT_MISMATCH`. Audience: APP_OWNER (default).
+Subclass code: `DATA_INTEGRITY_ROW_COUNT_MISMATCH`. Audience: APP_OWNER (default).
 
 ---
 
@@ -386,7 +386,7 @@ raise UnimplementedError(
     reason="server_side_cursor_not_implemented",
 )
 ```
-Code: `UNIMPLEMENTED_CURSOR_TYPE`. Audience: APP_OWNER. Use this — **not**
+Subclass code: `UNIMPLEMENTED_CURSOR_TYPE`. Audience: APP_OWNER. Use this — **not**
 `InternalError` — for known feature gaps so on-call is not paged for an
 expected absence.
 
@@ -403,7 +403,7 @@ raise CancelledError(
     reason="graceful_shutdown",
 )
 ```
-Code: `CANCELLED`.
+Subclass code: `CANCELLED`.
 
 ---
 
