@@ -119,8 +119,8 @@ Run all 13 grep searches in parallel against `TARGET_PATH` (`*.py` files only):
 | 12 | P12 | `raise\s+(ValueError\|RuntimeError\|Exception\|TypeError\|NotImplementedError\|OSError\|KeyError\|LookupError)\b` |
 | 13 | P13 | `raise\s+(ClientError\|ApiError\|OrchestratorError\|WorkflowError\|IOError\|CommonError\|DocGenError\|ActivityError\|AtlanError)\b` |
 
-For P5, P7, P9, P11, P12: raw grep over-matches. Collect `file:line` hits and read context in Step 1.3.
-P13 is mechanical — every hit is a finding (no context reading needed).
+For P5, P7, P9, P11, P12, P13: raw grep over-matches. Collect `file:line` hits and read context in Step 1.3.
+P13 context note: `IOError` is also a Python builtin alias for `OSError` — confirm the hit imports from `application_sdk.common.error_codes` before classifying as legacy. Bare `AtlanError` raises (no constant) require litmus-test classification (§3 of `typed-error-prescription.md`).
 
 Collect all hits as a flat list: `(file, line_number, pattern_id, raw_snippet)`.
 
@@ -142,13 +142,13 @@ Classify each finding:
 Apply `SEVERITY_FILTER`: discard findings below the threshold before proceeding.
 
 P12 classification notes:
-- Inside `__post_init__` / stdlib dataclass validators: check for a comment
+- Inside `__post_init__`, stdlib dataclass validators, or Pydantic `@field_validator` / `@validator` methods: check for a comment
   explaining the stdlib-interop need. If present → `acceptable`. If absent →
   flag as `genuine-bug` (MEDIUM — add the comment).
-- Inside an `@task`-decorated activity body → escalate to CRITICAL.
+- Inside an `@task`-decorated activity body or `@activity.defn`-decorated function → escalate to CRITICAL.
 
-P13: all hits are `genuine-bug` (HIGH). Use the §5 migration table from
-`typed-error-prescription.md` for the `Prescribed:` field.
+P13: confirmed hits are `genuine-bug` (HIGH). After context reading (see over-matches note above), use the §5 migration table from
+`typed-error-prescription.md` for the `Prescribed:` field. When no matching legacy constant is present, use §3 litmus tests to select a leaf directly.
 
 #### Step 1.4 — Build Remediation Plan
 
@@ -247,8 +247,8 @@ TODO comment format for swallow/logging findings:
 
 TODO comment format for untyped/legacy raise findings — include the prescribed leaf:
 ```python
-# TODO(signal-over-noise): [P12] convert to typed AppError. Leaf: InternalError (wire code: INTERNAL_ENGINE_NOT_INITIALIZED). See references/typed-error-prescription.md#4
-# TODO(signal-over-noise): [P13] legacy AtlanError — migrate to DependencyUnavailableError. See references/typed-error-prescription.md#5
+# TODO(signal-over-noise): [P12] convert to typed AppError. Leaf: InternalError (wire code: INTERNAL_ENGINE_NOT_INITIALIZED). See typed-error-prescription.md §4
+# TODO(signal-over-noise): [P13] legacy AtlanError — migrate to DependencyUnavailableError. See typed-error-prescription.md §5
 ```
 
 #### After applying fixes:

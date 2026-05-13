@@ -260,7 +260,7 @@ results are not subsequently checked for exception instances.
 ### P12 — Untyped builtin raise where a typed `AppError` code applies
 
 **Grep:** `raise\s+(ValueError|RuntimeError|Exception|TypeError|NotImplementedError|OSError|KeyError|LookupError)\b`
-**Severity:** HIGH (CRITICAL when inside an `@task`-decorated activity body)
+**Severity:** HIGH (CRITICAL when inside an `@task`-decorated activity body or `@activity.defn`-decorated function)
 **What it is:** SDK code raises a bare Python builtin. The Automation Engine
 receives an opaque string — no `category`, no `code`, no `audience`, no
 `retryable`. Dashboards are blind; on-call routing is impossible. Direct
@@ -302,20 +302,29 @@ envelope.
 # BAD
 raise IOError("Object store download failed")
 
-# GOOD
+# GOOD (standalone raise — no enclosing exception to chain)
 from application_sdk.errors import DependencyUnavailableError
 raise DependencyUnavailableError(
     message="Object store download failed",
     service="object_store",
-    cause=exc,
-) from exc
+)
+
+# GOOD (inside except block — chain the cause)
+except SomeError as exc:
+    raise DependencyUnavailableError(
+        message="Object store download failed",
+        service="object_store",
+        cause=exc,
+    ) from exc
 ```
 
-**Acceptable?** Never. Every legacy raise has a deterministic target in the
-`typed-error-prescription.md` §5 migration table.
+**Acceptable?** Never, except `IOError` hits — confirm the name refers to the `AtlanError`
+subclass (imported from `application_sdk.common.error_codes`) rather than the Python builtin
+alias for `OSError`.
 
-**Fix:** FT-9. Look up the legacy constant in the §5 migration table — the
-mapping is exhaustive and deterministic.
+**Fix:** FT-9. If the raise site uses a legacy constant, look it up in the §5 migration table
+in `typed-error-prescription.md`. If there is no constant (bare `raise AtlanError(msg)`), use
+the §3 litmus tests to select a leaf directly.
 
 ---
 
@@ -634,13 +643,20 @@ raise InternalError(
 # Before
 raise IOError("Object store download failed")
 
-# After
+# After (standalone — no enclosing exception)
 from application_sdk.errors import DependencyUnavailableError
 raise DependencyUnavailableError(
     message="Object store download failed",
     service="object_store",
-    cause=exc,
-) from exc
+)
+
+# After (inside except block — chain the cause)
+except SomeError as exc:
+    raise DependencyUnavailableError(
+        message="Object store download failed",
+        service="object_store",
+        cause=exc,
+    ) from exc
 ```
 
 ---
@@ -680,8 +696,10 @@ a CI-level grep is more practical than a ruff rule (false-positive rate is high
 without a per-file allowlist). A targeted check:
 
 ```bash
-# Fail if any bare builtin raise survives in application_sdk/ (outside __post_init__ / validators)
-grep -rnP "raise\s+(ValueError|RuntimeError|Exception)\b" application_sdk/ \
+# Fail if any bare builtin raise survives in application_sdk/ (outside interop sites).
+# Note: these -v filters are line-level — they won't exclude a raise on a separate line from
+# its interop comment. Put the "# stdlib-interop" marker on the raise line itself.
+grep -rnP "raise\s+(ValueError|RuntimeError|Exception|TypeError|NotImplementedError|OSError|KeyError|LookupError)\b" application_sdk/ \
   | grep -v "__post_init__" | grep -v "# stdlib-interop"
 ```
 

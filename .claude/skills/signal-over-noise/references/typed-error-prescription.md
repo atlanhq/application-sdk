@@ -76,7 +76,7 @@ this specific need.
 **`audience` override pattern** — when an SDK base default doesn't fit the locus,
 override `audience` on a minimal subclass. Example from the SDK itself:
 `WorkerEvictedError` inherits PLATFORM from `DependencyUnavailableError` and
-keeps it (correct — the pod is platform infrastructure). For connector apps that
+keeps it (correct — the pod is platform infrastructure). For connector apps, the
 source-side network is `audience=USER` (the customer controls it), so they
 override in their `failures.py`. The SDK's own code should follow the same logic.
 
@@ -123,9 +123,11 @@ principal lacks permission for the resource or action → `AppPermissionDeniedEr
 
 Common situations in `application_sdk/`. Each entry gives a worked example.
 
-Each entry includes a **Code:** annotation. `code` is a `ClassVar[str]` on the leaf
-class — it cannot be passed to the constructor. To use a specific code, subclass the
-leaf and override it:
+Each entry includes a **Code:** annotation showing the suggested wire code for that
+scenario. `code` is a `ClassVar[str]` on the leaf class — it cannot be passed to the
+constructor, and inline raise examples emit the leaf's own default code (e.g.
+`InvalidInputError` emits `INVALID_INPUT`). To use the scenario-specific code shown in
+the annotation, subclass the leaf and override the `ClassVar`:
 
 ```python
 @dataclass(kw_only=True)
@@ -230,12 +232,13 @@ Code: `AUTH_REJECTED`. Set `cause=exc` + `from exc` (see §6).
 ### 403 from source
 
 ```python
-raise AppPermissionDeniedError(
-    message="Permission denied by source",
-    resource=endpoint,
-    required_action="read",
-    cause=exc,
-) from exc
+except SomeSourceError as exc:
+    raise AppPermissionDeniedError(
+        message="Permission denied by source",
+        resource=endpoint,
+        required_action="read",
+        cause=exc,
+    ) from exc
 ```
 Code: `PERMISSION_DENIED`. Audience: USER (default — correct).
 
@@ -244,12 +247,13 @@ Code: `PERMISSION_DENIED`. Audience: USER (default — correct).
 ### 404 from source
 
 ```python
-raise NotFoundError(
-    message=f"Resource not found: {resource_id}",
-    resource_type="table",
-    resource_identifier=resource_id,
-    cause=exc,
-) from exc
+except SomeSourceError as exc:
+    raise NotFoundError(
+        message=f"Resource not found: {resource_id}",
+        resource_type="table",
+        resource_identifier=resource_id,
+        cause=exc,
+    ) from exc
 ```
 Code: `NOT_FOUND_RESOURCE`. Evidence: `resource_type=` and `resource_identifier=`.
 
@@ -598,12 +602,13 @@ except SomeSourceError as exc:
     ) from exc
 ```
 
-**Never set `app_name`, `run_id`, or `suggested_action` from inside the SDK.**
+**Never set `app_name` or `run_id` from inside the SDK.**
 - `app_name` — AE provides via DAG node label (single source of truth).
 - `run_id` — AE attaches from Temporal context at ingest time.
-- `suggested_action` — only set at a *raise site* when the call site has specific
-  user-facing guidance ("regrant Glue read access on the IAM role"). Never
-  default it on the class definition.
+
+**`suggested_action`** — may be set at a raise site when the call site has specific
+user-facing guidance (e.g. "regrant Glue read access on the IAM role"). Omit when no
+specific action can be prescribed. Never default it on the class definition.
 
 **Evidence fields.** Add dataclass fields when the call site has obvious context
 that aids debugging. Use the leaf's existing fields first (`field` on
@@ -632,10 +637,12 @@ workflow code identify the failure without depending on the Python class name.
 
 If you are tempted to subclass a leaf in the SDK:
 1. Is there a cross-process recognition need? If not, raise the leaf directly
-   and set `code` via a keyword arg at the raise site (not supported on the
-   current `ClassVar` design — so if `code` truly needs to vary, subclass).
-2. Does the new subclass add evidence fields? If yes, that justifies a subclass.
-3. Otherwise: raise the existing leaf directly.
+   using the leaf's default `code`. If a specific `code` string is needed,
+   subclass and override the `ClassVar` — `code` cannot be set at the raise site.
+2. Does the new subclass bake repeated message+evidence defaults (≥2 call sites)?
+   If yes, that also justifies a subclass (see §4 "When to bake defaults").
+3. Does the new subclass add evidence fields? If yes, that justifies a subclass.
+4. Otherwise: raise the existing leaf directly.
 
 ---
 
