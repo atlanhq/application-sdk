@@ -142,17 +142,21 @@ runs:
     # action can't invoke another action mid-sequence with conditional
     # `uses:` — curl install is the simplest fallback that doesn't pin a
     # specific runner image.
-    # Stash the repin script in /tmp before setup-deps' actions/checkout
-    # wipes the entire workspace (which includes ${{ github.action_path }}
-    # when this action is invoked as a LOCAL action via
-    # `uses: ./.application-sdk/.github/actions/sdr-e2e`). The post-setup
-    # repin step exec's from /tmp/sdr-e2e-repin-application-sdk.sh instead.
-    - name: Stash repin script
-      if: inputs.application-sdk-ref != ''
+    # Stash the entire action directory to /tmp before setup-deps'
+    # actions/checkout wipes the workspace. When this action is invoked
+    # as a LOCAL action (uses: ./.application-sdk/.github/actions/sdr-e2e),
+    # ${{ github.action_path }} sits inside the workspace and is wiped
+    # along with everything else. Post-setup steps that reference the
+    # repin script, test-config template, Dapr component overlays, or
+    # the compose overlay must fall back to /tmp/sdr-e2e/ — those
+    # references are guarded by env vars (SDR_E2E_ROOT_*) resolved
+    # immediately after setup-deps.
+    - name: Stash action assets
       shell: bash
       run: |
-        cp "${{ github.action_path }}/repin-application-sdk.sh" /tmp/sdr-e2e-repin-application-sdk.sh
-        chmod +x /tmp/sdr-e2e-repin-application-sdk.sh
+        rm -rf /tmp/sdr-e2e
+        cp -R "${{ github.action_path }}" /tmp/sdr-e2e
+        chmod +x /tmp/sdr-e2e/repin-application-sdk.sh || true
 
     - name: Pin application-sdk to dispatched ref (pre-build)
       if: inputs.application-sdk-ref != ''
@@ -221,17 +225,31 @@ runs:
     # can't reference it again here. The "stash repin script" step
     # below copies the script to /tmp before setup-deps runs; this step
     # exec's from the stash.
+    # Resolve the action-asset root after setup-deps. When invoked as a
+    # local action the workspace (and ${{ github.action_path }}) has been
+    # wiped — fall back to the /tmp stash that the "Stash action assets"
+    # step populated before setup-deps ran. Exported as a step output so
+    # downstream steps can reference it as ${{ steps.action_root.outputs.path }}.
+    - name: Resolve action-asset root
+      id: action_root
+      shell: bash
+      run: |
+        if [ -d "${{ github.action_path }}" ] && [ -f "${{ github.action_path }}/test-config.yaml.tmpl" ]; then
+          ROOT="${{ github.action_path }}"
+        else
+          ROOT="/tmp/sdr-e2e"
+        fi
+        echo "Using SDR action assets from: $ROOT"
+        echo "path=$ROOT" >> "$GITHUB_OUTPUT"
+
     - name: Pin application-sdk to dispatched ref (post-setup)
       if: inputs.application-sdk-ref != ''
       shell: bash
       env:
         SDK_REF: ${{ inputs.application-sdk-ref }}
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
       run: |
-        if [ -f /tmp/sdr-e2e-repin-application-sdk.sh ]; then
-          /tmp/sdr-e2e-repin-application-sdk.sh
-        else
-          ${{ github.action_path }}/repin-application-sdk.sh
-        fi
+        "$SDR_E2E_ROOT/repin-application-sdk.sh"
         uv lock
         uv sync --all-extras --all-groups
 
@@ -274,7 +292,7 @@ runs:
       shell: bash
       env:
         CI_RUN_SUFFIX: ${{ github.run_id }}
-        SDK_TMPL: ${{ github.action_path }}/test-config.yaml.tmpl
+        SDK_TMPL: ${{ steps.action_root.outputs.path }}/test-config.yaml.tmpl
       run: |
         if [ -f .github/e2e/test-config.yaml.tmpl ]; then
           echo "Using app-level test-config.yaml.tmpl override"
@@ -316,7 +334,7 @@ runs:
     - name: Override CI Dapr components
       shell: bash
       env:
-        SDK_COMPONENTS: ${{ github.action_path }}/components
+        SDK_COMPONENTS: ${{ steps.action_root.outputs.path }}/components
         APP_COMPONENTS: ${{ inputs.components-dir }}
       run: |
         cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
@@ -329,7 +347,7 @@ runs:
       id: compose_files
       shell: bash
       env:
-        SDK_COMPOSE: ${{ github.action_path }}/docker-compose.ci.yml
+        SDK_COMPOSE: ${{ steps.action_root.outputs.path }}/docker-compose.ci.yml
         APP_COMPOSE: ${{ inputs.compose-overlay }}
       run: |
         # Order: configurator-generated base → SDK CI overrides → optional app layer.
