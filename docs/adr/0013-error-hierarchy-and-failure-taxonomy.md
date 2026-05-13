@@ -109,7 +109,7 @@ add dataclass fields for structured, per-category evidence:
 | `InvalidInputError` | INVALID_INPUT | No | USER | `field`, `constraint`, `value_summary` |
 | `PreconditionError` | PRECONDITION | No | USER | `resource`, `expected_state`, `actual_state` |
 | `DependencyUnavailableError` | DEPENDENCY_UNAVAILABLE | **Yes** | PLATFORM | `service`, `target`, `network_error` |
-| `WorkerEvictedError` *(subclass of `DependencyUnavailableError`)* | DEPENDENCY_UNAVAILABLE | **Yes** | PLATFORM | *(inherits `service`, `target`, `network_error`); wire type constant `WORKER_EVICTED_TYPE = "WorkerEvicted"` for cross-boundary recognition* |
+| `WorkerEvictedError` *(subclass of `DependencyUnavailableError`)* | DEPENDENCY_UNAVAILABLE | **Yes** | PLATFORM | *(inherits `service`, `target`, `network_error`); companion constant `WORKER_EVICTED_TYPE = "WorkerEvicted"` is set as Temporal's `ApplicationError.type` by the SDK activity wrapper — workflow code matches on this string, not the Python class* |
 | `ResourceExhaustedError` | RESOURCE_EXHAUSTED | **Yes** | PLATFORM | `resource`, `limit`, `observed` |
 | `DataIntegrityError` | DATA_INTEGRITY | No | APP_OWNER | `expectation`, `observed`, `location` |
 | `InternalError` | INTERNAL | No | APP_OWNER | `component`, `invariant`, `classification_pending` |
@@ -120,16 +120,22 @@ locus varies: a source network timeout is USER-fixable; an internal Temporal
 deadline is PLATFORM-routed. Subclasses override `audience` when the locus is
 known.
 
-`WorkerEvictedError` is a specialisation of `DependencyUnavailableError` raised
-by the SDK's activity wrapper when `asyncio.CancelledError` arrives while the
-process-wide worker-shutdown flag is set (SIGTERM from KEDA, VPA, spot reclaim,
-or rolling deploy). It carries the wire type string `WORKER_EVICTED_TYPE =
-"WorkerEvicted"` — set as Temporal's `ApplicationError.type` — so workflow code
-can recognise the failure across the activity/workflow boundary without
-depending on the Python class. The SDK's per-activity eviction loop
+`WorkerEvictedError` is a specialisation of `DependencyUnavailableError` that
+carries the `DEPENDENCY_UNAVAILABLE` category and `PLATFORM` audience for
+worker-pod-termination failures. The companion constant `WORKER_EVICTED_TYPE =
+"WorkerEvicted"` is the Temporal wire type string.
+
+**How the eviction signal is actually emitted**: when `asyncio.CancelledError`
+arrives inside an activity while the process-wide worker-shutdown flag is set
+(SIGTERM from KEDA, VPA, spot reclaim, or rolling deploy), the SDK's activity
+wrapper raises `ApplicationError(type=WORKER_EVICTED_TYPE, non_retryable=True)`
+— a Temporal `ApplicationError`, not a `WorkerEvictedError` instance. Workflow
+code recognises the failure by reading the `type` string across the
+activity/workflow boundary; the SDK's per-activity eviction loop then
 re-dispatches the activity without burning the application-error retry budget.
-Because the worker pod is itself a platform dependency, the category stays
-`DEPENDENCY_UNAVAILABLE` and `audience` stays `PLATFORM`.
+`WorkerEvictedError` is available as a Python class for app or connector code
+that wants to raise a semantically typed error for the same scenario in its own
+layers.
 
 `InternalError.classification_pending` is a triage flag. Caught-but-
 unclassified failures surface as `InternalError(classification_pending=True)`,
@@ -164,7 +170,7 @@ suggested_action  str | None      imperative hint (voice shifts with audience)
 evidence        dict[str, Any]    per-leaf structured context
 app_name        str | None        correlation
 run_id          str | None        correlation
-cause_repr      str | None        sanitised str of cause: "{ExcType}: {str(exc)}" — URL userinfo and secret query params redacted, length-capped at 500 chars; never the live exception
+cause_repr      str | None        sanitised str of cause: "{ExcType}: {str(exc)}" — URL userinfo and secret query params redacted; cause message capped at 500 chars (total field may be slightly longer due to type-name prefix); never the live exception
 ```
 
 `cause_repr` is a string. The live exception never crosses the wire: no
