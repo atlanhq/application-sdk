@@ -195,25 +195,38 @@ runs:
 
           const sticky = `<!-- e2e-apps-cross-repo:${workflow}:${repoName} -->`;
 
+          const hasRenderedBody = renderedPath && fs.existsSync(renderedPath);
+          const hasKnownConclusion = [
+            "success", "failure", "cancelled", "timeout",
+          ].includes(conclusion);
+
+          // Skip the comment entirely when we have nothing useful to say:
+          // no rendered body from the dispatched run AND no resolved
+          // conclusion. The job check_run on the SDK PR still signals
+          // the failure — a "Status: Unknown" sticky just adds noise.
+          if (!hasRenderedBody && !hasKnownConclusion) {
+            core.info('No rendered body and no resolved conclusion — skipping SDK-side PR comment.');
+            return;
+          }
+
           // Prefer the connector-side rendered body so both PRs (the
           // connector PR and this SDK PR) show identical content. The
           // connector sticky line (e.g. <!-- sdr-integration-tests... -->)
           // gets stripped and replaced with this side's marker so
           // sticky-updates don't collide.
           let body = '';
-          if (renderedPath && fs.existsSync(renderedPath)) {
+          if (hasRenderedBody) {
             const raw = fs.readFileSync(renderedPath, 'utf8');
-            // Drop a leading HTML-comment marker line so we can prepend
-            // our own; otherwise leave the body untouched.
             const lines = raw.split('\n');
             const startsWithMarker = /^<!--\s.*\s-->\s*$/.test(lines[0] || '');
             const stripped = startsWithMarker ? lines.slice(1).join('\n') : raw;
             body = sticky + '\n' + stripped.trimStart();
           } else {
-            // Fallback: status-only body when the artifact wasn't
-            // available (dispatch failed before tests ran, run cancelled
-            // pre-upload, etc.). Keeps the SDK PR informed even when the
-            // connector-side rendering didn't happen.
+            // Resolved conclusion but no artifact — happens when the
+            // dispatched run failed/cancelled before its render step
+            // wrote pr-comment-body.md. Post a status-only sticky so
+            // the reviewer sees the outcome + run link without having
+            // to dig through the SDK PR's check_run list.
             const titlesByWorkflow = {
               "sdr-integration-tests.yaml": `SDR Integration Tests (testcontainer) — ${repoName}`,
               "e2e-full.yaml":               `E2E Full Tests (system apps) — ${repoName}`,
@@ -223,8 +236,7 @@ runs:
                 conclusion === "success"   ? "Passed ✅"
               : conclusion === "failure"   ? "Failed ❌"
               : conclusion === "cancelled" ? "Cancelled 🚫"
-              : conclusion === "timeout"   ? "Timed out ⏰ (dispatched run still in progress when the SDK side gave up — check the run link)"
-              : `Unknown — status=${status}, conclusion=${conclusion}`;
+              :                              "Timed out ⏰ (dispatched run still in progress when the SDK side gave up — check the run link)";
             const runLine = runId
               ? `[${runId}](${runUrl})`
               : `_dispatch failed before a run id was assigned_`;
