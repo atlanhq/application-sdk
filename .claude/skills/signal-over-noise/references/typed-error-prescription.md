@@ -122,11 +122,12 @@ principal lacks permission for the resource or action → `AppPermissionDeniedEr
 
 Common situations in `application_sdk/`. Each entry gives a worked example.
 
-Each entry includes a **Subclass code:** annotation — the wire code you get if you
-subclass the leaf and override the `ClassVar`. The inline raise examples in each entry
-emit the leaf's own default code instead (e.g. `InvalidInputError` emits `INVALID_INPUT`,
-not `INVALID_INPUT_MISSING_FIELD`). `code` cannot be passed to the constructor. To emit
-the scenario-specific code, subclass the leaf and override it:
+Each entry includes a **Subclass code:** annotation — the wire code you get
+when you subclass the leaf and override the `ClassVar`. The inline raise
+examples show which leaf to use and which evidence fields to populate; they
+emit the leaf's generic default code (e.g. `INVALID_INPUT`) as shorthand.
+In practice, always wrap them in a subclass that overrides `code` — `code`
+cannot be passed to the constructor. Example:
 
 ```python
 @dataclass(kw_only=True)
@@ -134,15 +135,27 @@ class EngineNotInitializedError(InternalError):
     code: ClassVar[str] = "INTERNAL_ENGINE_NOT_INITIALIZED"
 ```
 
-If the leaf's default code is adequate for triage, use the leaf directly without
-subclassing. Subclass only when a stable, recognisable wire code is required for
-cross-process routing or dashboard attribution.
+**Always subclass.** Cookbook entries below model both subclassed and inline
+forms; treat the subclass form as the default. Sharing a generic code
+(`INTERNAL`, `INVALID_INPUT`, `UNIMPLEMENTED`) collapses unrelated failure modes
+into a single dashboard bucket and makes post-incident triage harder. The one
+exception: use bare `InternalError(classification_pending=True)` at catch-and-
+rewrap sites where the failure mode is genuinely unknown — ADR-0013 §2 documents
+this as the auditable-backlog mechanism.
 
 **Code naming rule**: always start with the category prefix
 (`AUTH_`, `INTERNAL_`, `DEPENDENCY_UNAVAILABLE_`, etc.) so the code is
-self-describing without joining against the category column. No vendor name in
-the code (vendor identity lives in `evidence`). Generic subtypes reused across
-callers are better than hyper-specific ones.
+self-describing without joining against the category column. When all subclasses
+share a sibling module, use that module's domain as a uniform infix in every
+subclass code (`_SQL_`, `_AWS_`, `_REDIS_`, connector name, etc.). Examples:
+every subclass in `application_sdk/clients/_sql_errors.py` uses `_SQL_` —
+`INTERNAL_SQL_ENGINE_NOT_INITIALIZED`, `AUTH_SQL_CLIENT_FAILED`,
+`UNIMPLEMENTED_SQL_CURSOR_TYPE`. Same rule applies to a connector app's
+`app/failures.py` — use the source name as the infix
+(`INTERNAL_REDSHIFT_*`, `AUTH_REDSHIFT_*`). This matches the existing
+migration-table conventions in §5 (e.g. `INTERNAL_SQL_PANDAS`,
+`AUTH_AWS_CREDENTIALS`). No vendor name or free-form label that isn't the
+stable domain token.
 
 ### When to bake defaults into a subclass
 
@@ -166,8 +179,53 @@ class EngineNotInitializedError(InternalError):
 raise EngineNotInitializedError()
 ```
 
-Raise inline (no subclass) only when the leaf's default code is adequate and
-the site appears once; the cookbook entries below show the inline form.
+The raise-site form is always minimal. The subclass absorbs all static defaults;
+the raise site passes only what is genuinely dynamic (typically `cause=` on
+wrapped-exception paths, or a per-site field value like a specific param name).
+
+**Worked end-to-end example** — a sibling errors module with three subclasses
+covering three distinct failure modes (same pattern applies to an SDK sibling
+`_<area>_errors.py` and to a connector app's `app/failures.py`):
+
+```python
+# application_sdk/clients/_sql_errors.py (or app/failures.py for an app)
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import ClassVar
+from application_sdk.errors import AuthError, InternalError, InvalidInputError
+
+# 1. Recurring pattern (4 raise sites) — bake message + evidence
+@dataclass(kw_only=True)
+class EngineNotInitializedError(InternalError):
+    code: ClassVar[str] = "INTERNAL_SQL_ENGINE_NOT_INITIALIZED"
+    message: str = "Engine is not initialized. Call load() first."
+    component: str | None = "sql_client"
+    invariant: str | None = "load_before_use"
+
+# 2. Auth failure — bake code + evidence defaults; raise site supplies cause
+@dataclass(kw_only=True)
+class SqlClientAuthFailedError(AuthError):
+    code: ClassVar[str] = "AUTH_SQL_CLIENT_FAILED"
+    message: str = "SQL client authentication failed"
+    auth_method: str | None = "sql"
+    failure_reason: str | None = "engine_load_failed"
+
+# 3. One-off — bake only code; raise site supplies message + evidence
+@dataclass(kw_only=True)
+class UnsupportedCursorError(UnimplementedError):
+    code: ClassVar[str] = "UNIMPLEMENTED_SQL_CURSOR_TYPE"
+```
+
+```python
+# Raise sites — always minimal
+raise EngineNotInitializedError()                      # no args needed
+raise SqlClientAuthFailedError(cause=exc) from exc     # only dynamic part
+raise UnsupportedCursorError(                          # one-off: per-site context
+    message="Cursor not supported by this driver",
+    operation="sql_run_query",
+    reason="dbapi_cursor_unavailable",
+) from exc
+```
 
 ---
 
@@ -248,13 +306,14 @@ Subclass code: `PERMISSION_DENIED`. Audience: USER (default — correct).
 ```python
 except SomeSourceError as exc:
     raise NotFoundError(
-        message=f"Resource not found: {resource_id}",
+        message="Resource not found",
         resource_type="table",
         resource_identifier=resource_id,
         cause=exc,
     ) from exc
 ```
-Subclass code: `NOT_FOUND_RESOURCE`. Evidence: `resource_type=` and `resource_identifier=`.
+Subclass code: `NOT_FOUND_RESOURCE`. Evidence: `resource_type=` and `resource_identifier=`
+carry the dynamic identity; `message` stays static so dashboard grouping is stable.
 
 ---
 
@@ -262,12 +321,12 @@ Subclass code: `NOT_FOUND_RESOURCE`. Evidence: `resource_type=` and `resource_id
 
 ```python
 raise AlreadyExistsError(
-    message=f"Entity already exists: {entity_id}",
+    message="Entity already exists",
     resource_type="connection",
     resource_identifier=entity_id,
 )
 ```
-Subclass code: `ALREADY_EXISTS_RESOURCE`.
+Subclass code: `ALREADY_EXISTS_RESOURCE`. `resource_identifier=` carries the dynamic ID.
 
 ---
 
@@ -293,11 +352,13 @@ raise DependencyUnavailableError(
     message="Source database unreachable",
     service="source_db",
     target=host,
-    network_error=str(exc),
     cause=exc,
 ) from exc
 ```
 Subclass code: `DEPENDENCY_UNAVAILABLE_NETWORK`. Audience: default PLATFORM.
+`cause=exc` routes the exception detail through `cause_repr` automatically — do
+not also set `network_error=str(exc)` as that duplicates what `cause_repr` already
+carries.
 **Override to USER** when the unreachable host is the customer's own source
 (their firewall / VPC). Add `audience: ClassVar[Audience] = Audience.USER`
 on a minimal subclass if doing this consistently.
@@ -310,12 +371,12 @@ on a minimal subclass if doing this consistently.
 raise DependencyUnavailableError(
     message="Dapr state store unavailable",
     service="dapr_state_store",
-    network_error=str(exc),
     cause=exc,
 ) from exc
 ```
 Subclass code: `DEPENDENCY_UNAVAILABLE_DAPR` / `DEPENDENCY_UNAVAILABLE_TEMPORAL` /
 `DEPENDENCY_UNAVAILABLE_OBJECT_STORE`. Audience: PLATFORM (default — correct).
+Exception detail flows through `cause_repr`; do not also set `network_error=str(exc)`.
 
 ---
 
@@ -355,11 +416,11 @@ raise ResourceExhaustedError(
     message="Worker ran out of memory processing batch",
     resource="heap_memory",
     limit="container_limit",
-    observed=str(exc),
     cause=exc,
 ) from exc
 ```
 Subclass code: `RESOURCE_EXHAUSTED_MEMORY`. Audience: PLATFORM (default — correct).
+Drop `observed=str(exc)` — `cause_repr` already carries the exception text.
 
 ---
 
@@ -580,9 +641,25 @@ Columns: `legacy constant` | `target leaf` | `suggested code` |
 These rules apply to every raise site in `application_sdk/` and in connector
 apps. Enforce them whenever creating or reviewing a raise.
 
-**`message=` is always required.** Set it to the same human-readable text the
-legacy raise used. Don't re-engineer the message during a migration — preserve
-it verbatim. The message is visible in logs, AE, and Temporal history.
+**`message=` is a static summary of what failed.** Bake it on the subclass
+(`message: str = "..."` default) whenever the description is stable across
+raise sites. Per-site override is allowed only when the site has genuinely
+distinct context (e.g. a field name that differs by call site) — but even then,
+see the evidence-fields rule below.
+
+**Never interpolate exception text into `message`.** No `{exc!s}`, `{exc!r}`,
+`str(exc)`, or any `f"...: {exc}"` form. The wrapped exception travels through
+`cause=exc` → `FailureDetails.cause_repr` automatically (sanitised, length-
+capped, secret-redacted). Duplicating it into `message` confuses log grouping,
+breaks dashboard string-matching, and may leak secret detail that `cause_repr`
+would have redacted.
+
+**Domain identifiers go in evidence fields, not the message.** Table names,
+hostnames, field names, and resource IDs belong in `field=`, `service=`,
+`resource_identifier=`, or a subclass-specific evidence field — not embedded in
+the message string. If the identifier is also useful in the message for human
+readability, it must already appear in an evidence field; the message must not
+be the sole carrier.
 
 **`cause=exc` AND `raise typed from exc` when wrapping.** Always apply both.
 They serve different consumers:
@@ -622,25 +699,38 @@ blocks any evidence key matching the exact denylist or the suffix denylist
 
 ---
 
-## §7 — SDK vs app subclassing rule
+## §7 — Subclassing rule (SDK and apps)
 
-**Connector apps** build `app/failures.py` with their own subclasses using
-the `/typed-failures` skill. Every connector app's typed classes live there,
-not in the SDK.
+**Default everywhere**: every distinct failure mode gets its own leaf subclass
+with a stable `code: ClassVar[str]`. This rule applies equally to SDK code and
+connector app code.
 
-**The SDK** raises leaves directly in most cases. There are currently no
-`AppError` subclasses in the SDK itself. (`WORKER_EVICTED_TYPE` is a
-platform-internal special case for k8s pod eviction detection — not a model
-to follow; see §2.)
+- Subclass files in the SDK live in `application_sdk/<area>/errors.py` (domain
+  umbrellas shared across that area) or a sibling `_<area>_errors.py` (narrow
+  internal-only sets, not re-exported from `application_sdk.errors`).
+- Subclass files in connector apps live in `app/failures.py`.
 
-If you are tempted to subclass a leaf in the SDK:
-1. Is there a cross-process recognition need? If not, raise the leaf directly
-   using the leaf's default `code`. If a specific `code` string is needed,
-   subclass and override the `ClassVar` — `code` cannot be set at the raise site.
-2. Does the new subclass bake repeated message+evidence defaults (≥2 call sites)?
-   If yes, that also justifies a subclass (see §4 "When to bake defaults").
-3. Does the new subclass add evidence fields? If yes, that justifies a subclass.
-4. Otherwise: raise the existing leaf directly.
+The subclass may bake `message` and evidence-field defaults when the site is
+recurring; for one-off sites, the subclass may just override `code` and let
+the raise site pass `message`.
+
+**The only acceptable "raise parent leaf directly" pattern** is
+`InternalError(classification_pending=True)` at catch-and-rewrap sites where
+the failure mode is genuinely unknown — ADR-0013 §2 documents this as the
+auditable-backlog mechanism.
+
+**Live precedents in the SDK:**
+- `application_sdk/storage/errors.py` — `StorageError`, `StorageNotFoundError`,
+  `StoragePermissionError`, `StorageConfigError` (domain umbrella + shape subclasses)
+- `application_sdk/credentials/errors.py` — `CredentialError`,
+  `CredentialNotFoundError`, `CredentialParseError`, `CredentialValidationError`
+- `application_sdk/infrastructure/secrets.py` — `SecretStoreError`,
+  `SecretNotFoundError`
+- `application_sdk/app/` — inline single-purpose subclasses:
+  `AppNotFoundError`, `TaskNotFoundError`, `EntrypointContractError`, etc.
+
+(`WORKER_EVICTED_TYPE` is a platform-internal special case for k8s pod eviction
+detection — not a model to follow; see §2.)
 
 ---
 
