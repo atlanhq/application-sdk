@@ -697,6 +697,32 @@ blocks any evidence key matching the exact denylist or the suffix denylist
 (`_secret`, `_password`, `_token`). Use a safe proxy name (e.g.
 `credential_name` instead of `credential_token`) or omit.
 
+**Test assertion migration — when updating `pytest.raises` blocks after FT-8/FT-9.**
+`AppError.__str__` returns `self.message` only (`base.py:65-66`). The cause
+string should not appear in `str(exc_info.value)` — if it does, §6 has been
+violated. Apply these rules:
+
+1. Change the exception type to the new typed subclass:
+   `pytest.raises(LegacyError)` → `pytest.raises(TypedSubclass)`
+2. If the old assertion checked an error-code string or cause text via
+   `str(exc_info.value)`, replace it with the subclass's baked `message`:
+   ```python
+   # Correct — checks the typed subclass's static message field
+   assert exc_info.value.message == "SQL client authentication failed"
+   # Also correct — str() returns self.message
+   assert "SQL client authentication failed" in str(exc_info.value)
+   ```
+3. **Never** assert that the cause exception's string appears in
+   `str(exc_info.value)`. `__str__` returns only `self.message`; the cause
+   travels to `FailureDetails.cause_repr` and is not appended automatically.
+   An assertion like `assert "boom" in str(exc_info.value)` will fail for
+   any subclass whose baked `message` doesn't contain the cause text — which
+   §6 requires it not to.
+4. To verify cause propagation, use the `cause` field directly:
+   ```python
+   assert isinstance(exc_info.value.cause, RuntimeError)
+   ```
+
 ---
 
 ## §7 — Subclassing rule (SDK and apps)
