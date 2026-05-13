@@ -698,8 +698,8 @@ blocks any evidence key matching the exact denylist or the suffix denylist
 `credential_name` instead of `credential_token`) or omit.
 
 **Test assertion migration — when updating `pytest.raises` blocks after FT-8/FT-9.**
-`AppError.__str__` returns `self.message` only (`base.py:65-66`). The cause
-exception string never appears in `str(exc_info.value)`. Apply these rules:
+`AppError.__str__` returns `self.message` only (`base.py:65-66`) — it does not
+automatically include the cause. Apply these rules:
 
 1. Change the exception type to the new typed subclass:
    `pytest.raises(LegacyError)` → `pytest.raises(TypedSubclass)`
@@ -712,10 +712,11 @@ exception string never appears in `str(exc_info.value)`. Apply these rules:
    assert "SQL client authentication failed" in str(exc_info.value)
    ```
 3. **Never** assert that the cause exception's string appears in
-   `str(exc_info.value)`. The cause travels to `FailureDetails.cause_repr`
-   only — it is not exposed by `__str__`. An assertion like
-   `assert "boom" in str(exc_info.value)` will always fail once the
-   subclass bakes a static message that doesn't contain the cause text.
+   `str(exc_info.value)`. `__str__` returns only `self.message`; the cause
+   travels to `FailureDetails.cause_repr` and is not appended automatically.
+   An assertion like `assert "boom" in str(exc_info.value)` will fail for
+   any subclass whose baked `message` doesn't contain the cause text — which
+   §6 requires it not to.
 4. To verify cause propagation, use the `cause` field directly:
    ```python
    assert isinstance(exc_info.value.cause, RuntimeError)
