@@ -544,6 +544,7 @@ class AEWorkflowClient:
         interval_seconds: int = 30,
         timeout_seconds: int = 1500,
         max_forbidden_attempts: int = 5,
+        max_not_found_attempts: int = 10,
     ) -> bool:
         """Poll Atlas until the Connection appears or timeout elapses.
 
@@ -551,17 +552,26 @@ class AEWorkflowClient:
         DAG completes and can take a while to flush large connections.
         Callers with smaller datasets can tighten this.
 
-        HTTP 403 is treated separately from other non-200 responses: it
-        almost always means the calling identity is not on the
-        Connection's admin ACL (the publish step succeeded, but the
-        probe was set up with the wrong adminRoles/adminUsers). Polling
-        through this won't fix it — the ACL won't change mid-run — so
-        the caller bails out after ``max_forbidden_attempts`` 403s with
-        a clear log line, instead of silently burning the full 25 min
-        budget on a config bug.
+        HTTP 403 and 404 are each tracked separately from generic
+        non-200 responses, and each has its own cap on consecutive
+        occurrences:
+
+        * 403 almost always means the calling identity is not on the
+          Connection's admin ACL — polling through this won't fix it,
+          so bail after ``max_forbidden_attempts`` (default 5).
+        * 404 means publish hasn't materialised the Connection yet.
+          For real workloads that can lag a few seconds while the
+          Atlas indexer catches up; longer streaks mean the publish
+          activity reported success but the entities never actually
+          reached Atlas (proxy mis-routing, wrong storage bucket,
+          asset-server outage). Bail after
+          ``max_not_found_attempts`` (default 10 → ~100s at the
+          default 10s interval, ~5 min at the 30s default) instead of
+          silently burning the full 25 min budget.
         """
         elapsed = 0
         forbidden_streak = 0
+        not_found_streak = 0
         while elapsed < timeout_seconds:
             status = self.get_connection_in_atlas(qualified_name)
             logger.info(
@@ -574,6 +584,7 @@ class AEWorkflowClient:
                 return True
             if status == 403:
                 forbidden_streak += 1
+                not_found_streak = 0
                 if forbidden_streak >= max_forbidden_attempts:
                     logger.error(
                         "Atlas Connection probe gave HTTP 403 %d times in a row — "
@@ -585,8 +596,24 @@ class AEWorkflowClient:
                         forbidden_streak,
                     )
                     return False
+            elif status == 404:
+                not_found_streak += 1
+                forbidden_streak = 0
+                if not_found_streak >= max_not_found_attempts:
+                    logger.error(
+                        "Atlas Connection probe gave HTTP 404 %d times in a row "
+                        "(%ds elapsed) — stopping early. The Connection never "
+                        "materialised in Atlas: publish likely reported success "
+                        "but the entities did not reach the asset server. Check "
+                        "publish metrics vs the storage bucket the worker wrote "
+                        "to and the one publish reads from.",
+                        not_found_streak,
+                        elapsed,
+                    )
+                    return False
             else:
                 forbidden_streak = 0
+                not_found_streak = 0
             if status >= 500:
                 logger.warning(
                     "Atlas returned %d for Connection probe; retrying", status
