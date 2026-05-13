@@ -45,6 +45,7 @@ from application_sdk.testing.full_dag.client import (
     DAGRunStatus,
 )
 from application_sdk.testing.full_dag.payload import build_ae_payload, build_seed_dag
+from application_sdk.testing.full_dag.sql_app import SQLAppE2EFullTest
 
 __all__ = [
     "AEWorkflowClient",
@@ -52,6 +53,7 @@ __all__ = [
     "DAGNodeStatus",
     "DAGRunStatus",
     "RunMode",
+    "SQLAppE2EFullTest",
     "build_ae_payload",
     "build_seed_dag",
 ]
