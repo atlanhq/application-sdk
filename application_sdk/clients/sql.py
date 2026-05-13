@@ -14,13 +14,22 @@ from typing import TYPE_CHECKING, Any, Union, cast
 from urllib.parse import quote_plus
 
 from application_sdk.clients._interface import ClientInterface
+from application_sdk.clients._sql_errors import (
+    DBConfigNotSetError,
+    EngineNotInitializedError,
+    EngineWrongTypeError,
+    InvalidAuthTypeError,
+    MissingRequiredFieldError,
+    PandasResultTypeError,
+    SqlClientAuthFailedError,
+    UnsupportedCursorError,
+)
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql_typecasters import install_tolerant_text_decoder_hook
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
 )
-from application_sdk.common.error_codes import ClientError, CommonError
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
@@ -89,7 +98,7 @@ class BaseSQLClient(ClientInterface):
             ClientError: If credentials are invalid or engine creation fails
         """
         if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+            raise DBConfigNotSetError()
 
         self.credentials = credentials  # Update the instance credentials
         try:
@@ -132,7 +141,7 @@ class BaseSQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise SqlClientAuthFailedError(cause=e) from e
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -161,12 +170,14 @@ class BaseSQLClient(ClientInterface):
         user = extra.get("username")
         database = extra.get("database")
         if not user:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: username is required for IAM user authentication"
+            raise MissingRequiredFieldError(
+                message="username is required for IAM user authentication",
+                field="username",
             )
         if not database:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM user authentication"
+            raise MissingRequiredFieldError(
+                message="database is required for IAM user authentication",
+                field="database",
             )
 
         port = self.credentials.get("port")
@@ -201,12 +212,14 @@ class BaseSQLClient(ClientInterface):
         external_id = extra.get("aws_external_id")
 
         if not aws_role_arn:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: aws_role_arn is required for IAM role authentication"
+            raise MissingRequiredFieldError(
+                message="aws_role_arn is required for IAM role authentication",
+                field="aws_role_arn",
             )
         if not database:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM role authentication"
+            raise MissingRequiredFieldError(
+                message="database is required for IAM role authentication",
+                field="database",
             )
 
         session_name = AWS_SESSION_NAME
@@ -250,7 +263,7 @@ class BaseSQLClient(ClientInterface):
             case "basic":
                 token = self.credentials.get("password")
             case _:
-                raise CommonError(f"{CommonError.CREDENTIALS_PARSE_ERROR}: {authType}")
+                raise InvalidAuthTypeError(message=f"Unsupported authType: {authType}")
 
         # Handle None values and ensure token is a string before encoding
         encoded_token = quote_plus(str(token or ""))
@@ -292,7 +305,7 @@ class BaseSQLClient(ClientInterface):
             ValueError: If required connection parameters are missing.
         """
         if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+            raise DBConfigNotSetError()
 
         extra = parse_credentials_extra(self.credentials)
 
@@ -306,7 +319,10 @@ class BaseSQLClient(ClientInterface):
             else:
                 value = self.credentials.get(param) or extra.get(param)
                 if value is None:
-                    raise ValueError(f"{param} is required")
+                    raise MissingRequiredFieldError(
+                        message=f"{param} is required",
+                        field=param,
+                    )
                 param_values[param] = value
 
         # Fill in base template
@@ -349,7 +365,7 @@ class BaseSQLClient(ClientInterface):
             Exception: If query execution fails.
         """
         if not self.engine:
-            raise ValueError("Engine is not initialized. Call load() first.")
+            raise EngineNotInitializedError()
 
         loop = asyncio.get_running_loop()
         logger.debug(
@@ -370,7 +386,7 @@ class BaseSQLClient(ClientInterface):
                     pool, connection.execute, text(query)
                 )
                 if not cursor or not cursor.cursor:
-                    raise ValueError("Cursor is not supported")
+                    raise UnsupportedCursorError()
                 column_names: list[str] = [
                     description.name.lower()
                     for description in cursor.cursor.description
@@ -444,7 +460,7 @@ class BaseSQLClient(ClientInterface):
         # Guard must come before the daft import: daft's Rust OTel extension can
         # raise BaseException at import time, which would prevent this check from running.
         if not self.engine:
-            raise ValueError("Engine is not initialized. Call load() first.")
+            raise EngineNotInitializedError()
 
         # Daft uses ConnectorX to read data from SQL by default for supported connectors
         # If a connection string is passed, it will use ConnectorX to read data
@@ -465,7 +481,7 @@ class BaseSQLClient(ClientInterface):
                 or iterator of DataFrames if chunked.
         """
         if not self.engine:
-            raise ValueError("Engine is not initialized. Call load() first.")
+            raise EngineNotInitializedError()
 
         with self.engine.connect() as conn:
             return self._execute_pandas_query(conn, query, chunksize)
@@ -475,7 +491,7 @@ class BaseSQLClient(ClientInterface):
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Helper to execute async read operation with either async session or thread executor."""
         if isinstance(self.engine, str):
-            raise ValueError("Engine should be an SQLAlchemy engine object")
+            raise EngineWrongTypeError()
 
         from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
             AsyncEngine,
@@ -540,7 +556,7 @@ class BaseSQLClient(ClientInterface):
 
             if isinstance(result, pd.DataFrame):
                 return result
-            raise Exception("Unable to get pandas dataframe from SQL query results")
+            raise PandasResultTypeError()
 
         except Exception as e:
             raise rewrap(e, "Error reading data(pandas) from SQL") from e
@@ -578,7 +594,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         """
         self.credentials = credentials
         if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+            raise DBConfigNotSetError()
 
         try:
             from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
@@ -608,7 +624,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise SqlClientAuthFailedError(cause=e) from e
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""
@@ -638,7 +654,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             Exception: If query execution fails.
         """
         if not self.engine:
-            raise ValueError("Engine is not initialized. Call load() first.")
+            raise EngineNotInitializedError()
 
         logger.debug(
             "Running query (sha=%s, len=%d)",
