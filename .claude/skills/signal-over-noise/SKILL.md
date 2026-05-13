@@ -163,15 +163,12 @@ Pattern:  P12
 Current:
     raise ValueError("Engine is not initialized. Call load() first.")
 Prescribed:
-    InternalError  (wire code: INTERNAL_ENGINE_NOT_INITIALIZED — ClassVar, not a constructor arg)
-    audience=APP_OWNER  retryable=False
+    EngineNotInitializedError(InternalError)  →  code=INTERNAL_ENGINE_NOT_INITIALIZED
+    Subclass bakes message + component + invariant. Place in a sibling
+    module (e.g. _<area>_errors.py); follow the WorkerEvictedError precedent.
 Fix (FT-8):
-    raise InternalError(
-        message="Engine is not initialized. Call load() first.",
-        component="sql_client",
-        invariant="load_before_use",
-    )
-Auto-fixable: no  (leaf choice needs context — manual review)
+    raise EngineNotInitializedError()
+Auto-fixable: no  (leaf + subclass choice needs context — manual review)
 Priority: P1
 ```
 
@@ -240,8 +237,8 @@ Apply the remediation plan that was approved. Only fix what was listed in the ap
 - **FT-5b** (typed re-raise for non-best-effort suppress): leaf choice is contextual
 - **FT-6** (narrow broad catch): `# TODO(signal-over-noise): [P4] narrow this catch`
 - **FT-7** (Filter exception safety): `# TODO(signal-over-noise): [P11] wrap filter body in try/except`
-- **FT-8** (convert untyped builtin raise to typed `AppError`): leaf from `typed-error-prescription.md` §4
-- **FT-9** (convert legacy `AtlanError` raise to typed `AppError`): leaf from `typed-error-prescription.md` §5
+- **FT-8** (convert untyped builtin raise to typed `AppError`): leaf from `typed-error-prescription.md` §4. If the same leaf+message+evidence recurs across ≥2 raise sites, define a subclass that bakes the defaults in a sibling `_<area>_errors.py` and reduce raise sites to the minimal form (`raise XError()`).
+- **FT-9** (convert legacy `AtlanError` raise to typed `AppError`): leaf from `typed-error-prescription.md` §5. Same subclassing rule applies when the same error recurs.
 
 TODO comment format for swallow/logging findings:
 ```python

@@ -143,6 +143,31 @@ self-describing without joining against the category column. No vendor name in
 the code (vendor identity lives in `evidence`). Generic subtypes reused across
 callers are better than hyper-specific ones.
 
+### When to bake defaults into a subclass
+
+If the same leaf will be raised with the same message and evidence at ≥2 call
+sites, encode those defaults on the subclass itself so each raise site collapses
+to one line. Raise sites pass only what is genuinely dynamic (typically
+`cause=` or a per-site message that names a specific field). Use
+`@dataclass(kw_only=True)` so the subclass can provide defaults for parent
+default-less fields like `message: str` (Python 3.10+).
+
+```python
+# Subclass — typically in a sibling module (see WorkerEvictedError precedent).
+@dataclass(kw_only=True)
+class EngineNotInitializedError(InternalError):
+    code: ClassVar[str] = "INTERNAL_ENGINE_NOT_INITIALIZED"
+    message: str = "Engine is not initialized. Call load() first."
+    component: str | None = "sql_client"
+    invariant: str | None = "load_before_use"
+
+# Raise sites — minimal.
+raise EngineNotInitializedError()
+```
+
+Raise inline (no subclass) only when the leaf's default code is adequate and
+the site appears once; the cookbook entries below show the inline form.
+
 ---
 
 ### Required field / config missing
