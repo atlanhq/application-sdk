@@ -142,6 +142,18 @@ runs:
     # action can't invoke another action mid-sequence with conditional
     # `uses:` — curl install is the simplest fallback that doesn't pin a
     # specific runner image.
+    # Stash the repin script in /tmp before setup-deps' actions/checkout
+    # wipes the entire workspace (which includes ${{ github.action_path }}
+    # when this action is invoked as a LOCAL action via
+    # `uses: ./.application-sdk/.github/actions/sdr-e2e`). The post-setup
+    # repin step exec's from /tmp/sdr-e2e-repin-application-sdk.sh instead.
+    - name: Stash repin script
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      run: |
+        cp "${{ github.action_path }}/repin-application-sdk.sh" /tmp/sdr-e2e-repin-application-sdk.sh
+        chmod +x /tmp/sdr-e2e-repin-application-sdk.sh
+
     - name: Pin application-sdk to dispatched ref (pre-build)
       if: inputs.application-sdk-ref != ''
       shell: bash
@@ -201,13 +213,25 @@ runs:
     # it again so the host pytest runtime resolves the dispatched SDK
     # (the BaseSDRIntegrationTest, agent contracts, etc.). Followed by
     # an explicit uv sync so the lockfile reflects the new pin.
+    #
+    # Important: when this action is invoked as a LOCAL action (uses:
+    # ./.application-sdk/.github/actions/sdr-e2e), setup-deps' inner
+    # actions/checkout wipes the entire workspace — including
+    # ${{ github.action_path }}/repin-application-sdk.sh itself, so we
+    # can't reference it again here. The "stash repin script" step
+    # below copies the script to /tmp before setup-deps runs; this step
+    # exec's from the stash.
     - name: Pin application-sdk to dispatched ref (post-setup)
       if: inputs.application-sdk-ref != ''
       shell: bash
       env:
         SDK_REF: ${{ inputs.application-sdk-ref }}
       run: |
-        ${{ github.action_path }}/repin-application-sdk.sh
+        if [ -f /tmp/sdr-e2e-repin-application-sdk.sh ]; then
+          /tmp/sdr-e2e-repin-application-sdk.sh
+        else
+          ${{ github.action_path }}/repin-application-sdk.sh
+        fi
         uv lock
         uv sync --all-extras --all-groups
 
