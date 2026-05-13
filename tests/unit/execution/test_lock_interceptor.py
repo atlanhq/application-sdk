@@ -139,18 +139,20 @@ class TestStartActivityWithLock:
 
     async def test_missing_schedule_to_close_raises(self):
         """Activity with @needs_lock but no schedule_to_close_timeout raises."""
-        from application_sdk.common.error_codes import WorkflowError
+        from application_sdk.errors import InvalidInputError
 
         lock_fn = _make_activity_fn()
         interceptor, _ = _make_outbound_interceptor(activities={"my_activity": lock_fn})
         inp = _make_start_activity_input(schedule_to_close_timeout=None)
 
-        with patch(
-            "application_sdk.execution._temporal.interceptors.lock.IS_LOCKING_DISABLED",
-            False,
+        with (
+            patch(
+                "application_sdk.execution._temporal.interceptors.lock.IS_LOCKING_DISABLED",
+                False,
+            ),
+            pytest.raises(InvalidInputError),
         ):
-            with pytest.raises(WorkflowError):
-                await interceptor.start_activity(inp)
+            await interceptor.start_activity(inp)
 
     async def test_acquire_execute_release_sequence(self):
         """Lock is acquired, business activity runs, then lock is released."""
@@ -308,7 +310,6 @@ class TestStartActivityWithLock:
                 raise TimeoutError("could not acquire lock")
             if activity_name == "release_distributed_lock":
                 released.append(True)
-            return None
 
         wf_info = MagicMock()
         wf_info.run_id = "run-4"

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from application_sdk.errors import AuthError, InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -81,7 +82,7 @@ class TemporalAuthManager:
             The access_token string for Temporal client auth.
 
         Raises:
-            RuntimeError: If token acquisition fails.
+            AuthError: If token acquisition fails.
         """
         token_url = self._resolve_token_url()
 
@@ -94,8 +95,10 @@ class TemporalAuthManager:
         try:
             access_token = await self._get_token_service().get_token(force_refresh=True)
         except Exception as exc:
-            raise RuntimeError(
-                f"Failed to acquire initial Temporal auth token: {exc}"
+            raise AuthError(
+                message=f"Failed to acquire initial Temporal auth token: {exc}",
+                auth_method="oauth_client_credentials",
+                cause=exc,
             ) from exc
 
         expires_at = self._get_token_service().current_expires_at
@@ -173,8 +176,9 @@ class TemporalAuthManager:
         if self.config.base_url:
             base = self.config.base_url.rstrip("/")
             return f"{base}/auth/realms/default/protocol/openid-connect/token"
-        raise ValueError(
-            "Either token_url or base_url must be set in TemporalAuthConfig"
+        raise InvalidInputError(
+            message="Either token_url or base_url must be set in TemporalAuthConfig",
+            field="token_url_or_base_url",
         )
 
     async def _refresh_loop(self, client: Client) -> None:

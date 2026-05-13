@@ -6,7 +6,7 @@ import pytest
 from azure.core.exceptions import ClientAuthenticationError
 
 from application_sdk.clients.azure.auth import AzureAuthProvider
-from application_sdk.common.error_codes import CommonError
+from application_sdk.errors import AppError
 
 
 class TestAzureAuthProvider:
@@ -20,12 +20,12 @@ class TestAzureAuthProvider:
     @pytest.mark.asyncio
     async def test_unsupported_auth_type(self, auth_provider):
         """Test that unsupported authentication types raise appropriate errors."""
-        with pytest.raises(CommonError) as exc_info:
+        with pytest.raises(AppError) as exc_info:
             await auth_provider.create_credential("unsupported_type", {})
 
         error_message = str(exc_info.value)
         assert "Only 'service_principal' authentication is supported" in error_message
-        assert "Received: unsupported_type" in error_message
+        assert "unsupported_type" in error_message
 
     @pytest.mark.asyncio
     async def test_missing_tenant_id(self, auth_provider):
@@ -35,7 +35,7 @@ class TestAzureAuthProvider:
             "client_secret": "test_client_secret",
         }
 
-        with pytest.raises(CommonError) as exc_info:
+        with pytest.raises(AppError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
         error_message = str(exc_info.value)
@@ -51,7 +51,7 @@ class TestAzureAuthProvider:
             "client_secret": "test_client_secret",
         }
 
-        with pytest.raises(CommonError) as exc_info:
+        with pytest.raises(AppError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
         error_message = str(exc_info.value)
@@ -64,7 +64,7 @@ class TestAzureAuthProvider:
         """Test error message when client_secret is missing."""
         credentials = {"tenant_id": "test_tenant_id", "client_id": "test_client_id"}
 
-        with pytest.raises(CommonError) as exc_info:
+        with pytest.raises(AppError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
         error_message = str(exc_info.value)
@@ -82,7 +82,7 @@ class TestAzureAuthProvider:
             # Missing client_id and client_secret
         }
 
-        with pytest.raises(CommonError) as exc_info:
+        with pytest.raises(AppError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
         error_message = str(exc_info.value)
@@ -95,7 +95,7 @@ class TestAzureAuthProvider:
         """Test error message when all keys are missing."""
         credentials = {}
 
-        with pytest.raises(CommonError) as exc_info:
+        with pytest.raises(AppError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
         error_message = str(exc_info.value)
@@ -107,7 +107,7 @@ class TestAzureAuthProvider:
     @pytest.mark.asyncio
     async def test_none_credentials(self, auth_provider):
         """Test error message when credentials is None."""
-        with pytest.raises(CommonError) as exc_info:
+        with pytest.raises(AppError) as exc_info:
             await auth_provider._create_service_principal_credential(None)
 
         error_message = str(exc_info.value)
@@ -118,7 +118,7 @@ class TestAzureAuthProvider:
     @pytest.mark.asyncio
     async def test_empty_credentials(self, auth_provider):
         """Test error message when credentials is empty dict."""
-        with pytest.raises(CommonError) as exc_info:
+        with pytest.raises(AppError) as exc_info:
             await auth_provider._create_service_principal_credential({})
 
         error_message = str(exc_info.value)
@@ -185,8 +185,8 @@ class TestAzureAuthProvider:
 
     @pytest.mark.asyncio
     async def test_create_credential_none_credentials_raises(self, auth_provider):
-        """create_credential with no credentials must raise CommonError."""
-        with pytest.raises(CommonError) as exc_info:
+        """create_credential with no credentials must raise AppError."""
+        with pytest.raises(AppError) as exc_info:
             await auth_provider.create_credential(
                 auth_type="service_principal", credentials=None
             )
@@ -196,8 +196,8 @@ class TestAzureAuthProvider:
 
     @pytest.mark.asyncio
     async def test_create_credential_empty_credentials_raises(self, auth_provider):
-        """create_credential with empty dict credentials must raise CommonError."""
-        with pytest.raises(CommonError) as exc_info:
+        """create_credential with empty dict credentials must raise AppError."""
+        with pytest.raises(AppError) as exc_info:
             await auth_provider.create_credential(
                 auth_type="service_principal", credentials={}
             )
@@ -211,7 +211,7 @@ class TestAzureAuthProvider:
         self, auth_provider
     ):
         """Unsupported auth type with non-empty creds reaches the auth_type guard."""
-        with pytest.raises(CommonError) as exc_info:
+        with pytest.raises(AppError) as exc_info:
             await auth_provider.create_credential(
                 auth_type="oauth",
                 credentials={
@@ -242,78 +242,86 @@ class TestAzureAuthProvider:
 
     @pytest.mark.asyncio
     async def test_create_credential_wraps_value_error(self, auth_provider):
-        """ValueError from inner method becomes CommonError CREDENTIALS_PARSE_ERROR."""
-        with patch.object(
-            auth_provider,
-            "_create_service_principal_credential",
-            new=AsyncMock(side_effect=ValueError("bad")),
+        """ValueError from inner method becomes AppError CREDENTIALS_PARSE_ERROR."""
+        with (
+            patch.object(
+                auth_provider,
+                "_create_service_principal_credential",
+                new=AsyncMock(side_effect=ValueError("bad")),
+            ),
+            pytest.raises(AppError) as exc_info,
         ):
-            with pytest.raises(CommonError) as exc_info:
-                await auth_provider.create_credential(
-                    auth_type="service_principal",
-                    credentials={
-                        "tenant_id": "t",
-                        "client_id": "c",
-                        "client_secret": "s",
-                    },
-                )
+            await auth_provider.create_credential(
+                auth_type="service_principal",
+                credentials={
+                    "tenant_id": "t",
+                    "client_id": "c",
+                    "client_secret": "s",
+                },
+            )
         assert "Invalid credential parameters" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_create_credential_wraps_type_error(self, auth_provider):
-        """TypeError from inner method becomes CommonError CREDENTIALS_PARSE_ERROR."""
-        with patch.object(
-            auth_provider,
-            "_create_service_principal_credential",
-            new=AsyncMock(side_effect=TypeError("bad type")),
+        """TypeError from inner method becomes AppError CREDENTIALS_PARSE_ERROR."""
+        with (
+            patch.object(
+                auth_provider,
+                "_create_service_principal_credential",
+                new=AsyncMock(side_effect=TypeError("bad type")),
+            ),
+            pytest.raises(AppError) as exc_info,
         ):
-            with pytest.raises(CommonError) as exc_info:
-                await auth_provider.create_credential(
-                    auth_type="service_principal",
-                    credentials={
-                        "tenant_id": "t",
-                        "client_id": "c",
-                        "client_secret": "s",
-                    },
-                )
+            await auth_provider.create_credential(
+                auth_type="service_principal",
+                credentials={
+                    "tenant_id": "t",
+                    "client_id": "c",
+                    "client_secret": "s",
+                },
+            )
         assert "Invalid credential parameter types" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_create_credential_wraps_client_auth_error(self, auth_provider):
         """ClientAuthenticationError gets mapped to AZURE_CREDENTIAL_ERROR."""
-        with patch.object(
-            auth_provider,
-            "_create_service_principal_credential",
-            new=AsyncMock(side_effect=ClientAuthenticationError("auth fail")),
+        with (
+            patch.object(
+                auth_provider,
+                "_create_service_principal_credential",
+                new=AsyncMock(side_effect=ClientAuthenticationError("auth fail")),
+            ),
+            pytest.raises(AppError) as exc_info,
         ):
-            with pytest.raises(CommonError) as exc_info:
-                await auth_provider.create_credential(
-                    auth_type="service_principal",
-                    credentials={
-                        "tenant_id": "t",
-                        "client_id": "c",
-                        "client_secret": "s",
-                    },
-                )
+            await auth_provider.create_credential(
+                auth_type="service_principal",
+                credentials={
+                    "tenant_id": "t",
+                    "client_id": "c",
+                    "client_secret": "s",
+                },
+            )
         assert "auth fail" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_create_credential_wraps_unexpected_error(self, auth_provider):
         """Generic Exception is wrapped as 'Unexpected error'."""
-        with patch.object(
-            auth_provider,
-            "_create_service_principal_credential",
-            new=AsyncMock(side_effect=RuntimeError("boom")),
+        with (
+            patch.object(
+                auth_provider,
+                "_create_service_principal_credential",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            pytest.raises(AppError) as exc_info,
         ):
-            with pytest.raises(CommonError) as exc_info:
-                await auth_provider.create_credential(
-                    auth_type="service_principal",
-                    credentials={
-                        "tenant_id": "t",
-                        "client_id": "c",
-                        "client_secret": "s",
-                    },
-                )
+            await auth_provider.create_credential(
+                auth_type="service_principal",
+                credentials={
+                    "tenant_id": "t",
+                    "client_id": "c",
+                    "client_secret": "s",
+                },
+            )
         assert "Unexpected error" in str(exc_info.value)
 
     # ------------------------------------------------------------------
@@ -340,45 +348,51 @@ class TestAzureAuthProvider:
     async def test_create_service_principal_run_in_thread_value_error(
         self, auth_provider
     ):
-        """ValueError from run_in_thread becomes CommonError."""
-        with patch(
-            "application_sdk.clients.azure.auth.run_in_thread",
-            new=AsyncMock(side_effect=ValueError("bad value")),
+        """ValueError from run_in_thread becomes AppError."""
+        with (
+            patch(
+                "application_sdk.clients.azure.auth.run_in_thread",
+                new=AsyncMock(side_effect=ValueError("bad value")),
+            ),
+            pytest.raises(AppError) as exc_info,
         ):
-            with pytest.raises(CommonError) as exc_info:
-                await auth_provider._create_service_principal_credential(
-                    {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
-                )
+            await auth_provider._create_service_principal_credential(
+                {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
+            )
         assert "Invalid credential parameters" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_create_service_principal_run_in_thread_type_error(
         self, auth_provider
     ):
-        """TypeError from run_in_thread becomes CommonError."""
-        with patch(
-            "application_sdk.clients.azure.auth.run_in_thread",
-            new=AsyncMock(side_effect=TypeError("bad type")),
+        """TypeError from run_in_thread becomes AppError."""
+        with (
+            patch(
+                "application_sdk.clients.azure.auth.run_in_thread",
+                new=AsyncMock(side_effect=TypeError("bad type")),
+            ),
+            pytest.raises(AppError) as exc_info,
         ):
-            with pytest.raises(CommonError) as exc_info:
-                await auth_provider._create_service_principal_credential(
-                    {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
-                )
+            await auth_provider._create_service_principal_credential(
+                {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
+            )
         assert "Invalid credential parameter types" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_create_service_principal_run_in_thread_client_auth_error(
         self, auth_provider
     ):
-        """ClientAuthenticationError from run_in_thread becomes CommonError."""
-        with patch(
-            "application_sdk.clients.azure.auth.run_in_thread",
-            new=AsyncMock(side_effect=ClientAuthenticationError("nope")),
+        """ClientAuthenticationError from run_in_thread becomes AppError."""
+        with (
+            patch(
+                "application_sdk.clients.azure.auth.run_in_thread",
+                new=AsyncMock(side_effect=ClientAuthenticationError("nope")),
+            ),
+            pytest.raises(AppError) as exc_info,
         ):
-            with pytest.raises(CommonError) as exc_info:
-                await auth_provider._create_service_principal_credential(
-                    {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
-                )
+            await auth_provider._create_service_principal_credential(
+                {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
+            )
         assert "nope" in str(exc_info.value)
 
     @pytest.mark.asyncio
@@ -386,14 +400,16 @@ class TestAzureAuthProvider:
         self, auth_provider
     ):
         """Generic exception in run_in_thread becomes 'Unexpected error'."""
-        with patch(
-            "application_sdk.clients.azure.auth.run_in_thread",
-            new=AsyncMock(side_effect=RuntimeError("boom")),
+        with (
+            patch(
+                "application_sdk.clients.azure.auth.run_in_thread",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            pytest.raises(AppError) as exc_info,
         ):
-            with pytest.raises(CommonError) as exc_info:
-                await auth_provider._create_service_principal_credential(
-                    {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
-                )
+            await auth_provider._create_service_principal_credential(
+                {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
+            )
         assert "Unexpected error" in str(exc_info.value)
 
     # ------------------------------------------------------------------

@@ -57,22 +57,26 @@ class TestDaprRequiredStartup:
         """_create_infrastructure raises when DAPR_HTTP_PORT not set."""
         import pytest
 
+        from application_sdk.errors import PreconditionError
+
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
         from application_sdk.main import _create_infrastructure
 
-        with pytest.raises(RuntimeError, match="Dapr sidecar not detected"):
+        with pytest.raises(PreconditionError, match="Dapr sidecar not detected"):
             await _create_infrastructure()
 
     async def test_error_message_includes_poe_command(self, monkeypatch):
         """Error message tells developer how to fix it."""
+        from application_sdk.errors import PreconditionError
+
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
         from application_sdk.main import _create_infrastructure
 
         try:
             await _create_infrastructure()
-        except RuntimeError as e:
+        except PreconditionError as e:
             assert "poe start-deps" in str(e)
             assert "DAPR_HTTP_PORT" in str(e)
 

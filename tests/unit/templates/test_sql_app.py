@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors import UnimplementedError
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
@@ -287,31 +288,31 @@ class TestTransformTasks:
 
 
 class TestAssetMapperStubs:
-    """Asset mapper stubs raise NotImplementedError on base SqlApp."""
+    """Asset mapper stubs raise UnimplementedError on base SqlApp."""
 
     def test_base_map_database_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             base.map_database({}, "conn/qn")
 
     def test_base_map_schema_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             base.map_schema({}, "conn/qn")
 
     def test_base_map_table_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             base.map_table({}, "conn/qn")
 
     def test_base_map_column_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             base.map_column({}, "conn/qn")
 
     def test_base_map_procedure_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             base.map_procedure({}, "conn/qn")
 
     def test_subclass_mappers_work(self, app):

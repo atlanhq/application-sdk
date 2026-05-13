@@ -59,12 +59,15 @@ except ImportError:  # pragma: no cover
     _ObstoreBaseError = None  # type: ignore[assignment,misc]
     _ObstoreNotFoundError = None  # type: ignore[assignment,misc]
 
+
 if TYPE_CHECKING:
     from typing import Any
 
     from obstore.store import ObjectStore
 
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
+
+from application_sdk.app._context_errors import NoObjectStoreError
 
 # stdlib logger: cannot use get_logger here due to circular import
 # (observability -> storage -> batch -> ops -> observability)
@@ -144,10 +147,7 @@ def _resolve_store(store: ObjectStore | None) -> ObjectStore:
 
     infra = get_infrastructure()
     if infra is None or infra.storage is None:
-        raise RuntimeError(
-            "No ObjectStore provided and no infrastructure storage is configured. "
-            "Pass store= explicitly or call set_infrastructure() with a storage store."
-        )
+        raise NoObjectStoreError(message="No ObjectStore provided")
     return infra.storage
 
 

@@ -1,12 +1,12 @@
 import os
 import sys
 from pathlib import Path
-from typing import Union
 
 from application_sdk.constants import WINDOWS_EXTENDED_PATH_PREFIX
+from application_sdk.errors import InvalidInputError
 
 
-def convert_to_extended_path(path: Union[str, Path]) -> str:
+def convert_to_extended_path(path: str | Path) -> str:
     """
     Robust conversion to Windows extended-length path ({WINDOWS_EXTENDED_PATH_PREFIX}).
 
@@ -21,7 +21,7 @@ def convert_to_extended_path(path: Union[str, Path]) -> str:
         Optional[str]: The converted path string, or None if input is empty.
     """
     if not path:
-        raise ValueError("Path cannot be empty")
+        raise InvalidInputError(message="Path cannot be empty", field="path")
 
     path_str = str(path)
 

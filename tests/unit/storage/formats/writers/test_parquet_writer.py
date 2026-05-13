@@ -208,6 +208,9 @@ class TestParquetFileWriterWriteDataframe:
             patch(
                 "application_sdk.storage.formats.parquet._upload_file"
             ) as mock_upload,
+            patch(
+                "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
+            ),
             patch("pyarrow.parquet.write_table") as mock_write_table,
         ):
             mock_upload.return_value = AsyncMock()
@@ -771,7 +774,9 @@ class TestParquetFileWriterConsolidation:
         parquet_output = ParquetFileWriter(path=base_output_path)
 
         # Should raise error when no temp folder path is set
-        with pytest.raises(ValueError, match="No temp folder path available"):
+        from application_sdk.errors.leaves import InternalError
+
+        with pytest.raises(InternalError, match="No temp folder path available"):
             await parquet_output._write_chunk_to_temp_folder(sample_dataframe)
 
     @pytest.mark.asyncio

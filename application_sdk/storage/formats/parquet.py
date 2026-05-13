@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Union, cast
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+from application_sdk.errors import InternalError, InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
 from application_sdk.storage.formats import DataframeType, Reader, WriteMode, Writer
+from application_sdk.storage.formats._format_errors import ClosedReaderError
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
     _download_files,
@@ -88,9 +90,11 @@ class ParquetFileReader(Reader):
 
         # Validate that single file path and file_names are not both specified
         if path.endswith(PARQUET_FILE_EXTENSION) and file_names:
-            raise ValueError(
-                f"Cannot specify both a single file path ('{path}') and file_names filter. "
-                f"Either provide a directory path with file_names, or specify the exact file path without file_names."
+            raise InvalidInputError(
+                message=f"Cannot specify both a single file path ('{path}') and file_names filter. "
+                f"Either provide a directory path with file_names, or specify the exact file path without file_names.",
+                field="path",
+                value_summary=path,
             )
 
         # Initialise the Reader base class so `_is_closed` and
@@ -114,14 +118,18 @@ class ParquetFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot read from a closed reader")
+            raise ClosedReaderError(message="Cannot read from a closed reader")
 
         if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
         elif self.dataframe_type == DataframeType.daft:
             return await self._get_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            raise InvalidInputError(
+                message=f"Unsupported dataframe_type: {self.dataframe_type}",
+                field="dataframe_type",
+                value_summary=str(self.dataframe_type),
+            )
 
     def read_batches(
         self,
@@ -136,14 +144,18 @@ class ParquetFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot read from a closed reader")
+            raise ClosedReaderError(message="Cannot read from a closed reader")
 
         if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
         elif self.dataframe_type == DataframeType.daft:
             return self._get_batched_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            raise InvalidInputError(
+                message=f"Unsupported dataframe_type: {self.dataframe_type}",
+                field="dataframe_type",
+                value_summary=str(self.dataframe_type),
+            )
 
     async def _get_dataframe(self) -> "pd.DataFrame":
         """Read data from parquet file(s) and return as pandas DataFrame.
@@ -499,7 +511,7 @@ class ParquetFileWriter(Writer):
             self.chunk_count = self.chunk_start + self.chunk_count
 
         if not self.path:
-            raise ValueError("path is required")
+            raise InvalidInputError(message="path is required", field="path")
         # Create output directory
         if self.typename:
             self.path = os.path.join(self.path, self.typename)
@@ -512,8 +524,10 @@ class ParquetFileWriter(Writer):
 
         normalized_prefix = normalize_key(self.path)
         if not normalized_prefix:
-            raise ValueError(
-                "replace_prefix=True requires a non-empty object-store prefix"
+            raise InvalidInputError(
+                message="replace_prefix=True requires a non-empty object-store prefix",
+                field="path",
+                value_summary=self.path,
             )
 
         try:
@@ -759,7 +773,11 @@ class ParquetFileWriter(Writer):
     async def _write_chunk_to_temp_folder(self, chunk: "pd.DataFrame"):
         """Write a chunk to the current temp folder."""
         if self.current_temp_folder_path is None:
-            raise ValueError("No temp folder path available")
+            raise InternalError(
+                message="No temp folder path available",
+                component="ParquetFileWriter._write_chunk_to_temp_folder",
+                invariant="current_temp_folder_path must be set before writing a chunk",
+            )
 
         # Generate file name for this chunk within the temp folder
         existing_files = len(

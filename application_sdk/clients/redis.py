@@ -1,13 +1,18 @@
 """Redis client for distributed locking with high availability support."""
 
 from enum import Enum
-from typing import NoReturn, Union
+from typing import NoReturn
 
 import redis
 import redis.asyncio as async_redis
 from redis.exceptions import ConnectionError, RedisError, TimeoutError
 
-from application_sdk.common.error_codes import ClientError
+from application_sdk.clients._redis_errors import (
+    RedisConfigError,
+    RedisConnectionError,
+    RedisProtocolError,
+    RedisTimeoutError,
+)
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     IS_LOCKING_DISABLED,
@@ -17,6 +22,7 @@ from application_sdk.constants import (
     REDIS_SENTINEL_HOSTS,
     REDIS_SENTINEL_SERVICE_NAME,
 )
+from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -29,16 +35,35 @@ def _handle_redis_error(e: Exception) -> NoReturn:
         e: The Redis exception that occurred
 
     Raises:
-        ClientError: Appropriate ClientError based on exception type
+        AppError subclass: Appropriate typed error based on exception type
     """
-    if isinstance(e, ConnectionError):
-        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}") from e
-    elif isinstance(e, TimeoutError):
-        raise ClientError(f"{ClientError.REDIS_TIMEOUT_ERROR}: {e}") from e
+    if isinstance(e, TimeoutError):
+        raise RedisTimeoutError(
+            message=f"Redis operation timed out: {e}",
+            operation="redis_operation",
+            cause=e,
+        ) from e
+    elif isinstance(e, ConnectionError):
+        raise RedisConnectionError(
+            message=f"Redis connection failed: {e}",
+            service="redis",
+            network_error=str(e),
+            cause=e,
+        ) from e
     elif isinstance(e, RedisError):
-        raise ClientError(f"{ClientError.REDIS_PROTOCOL_ERROR}: {e}") from e
+        raise RedisProtocolError(
+            message=f"Redis protocol error: {e}",
+            service="redis",
+            network_error=str(e),
+            cause=e,
+        ) from e
     else:
-        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}") from e
+        raise RedisConnectionError(
+            message=f"Redis connection failed: {e}",
+            service="redis",
+            network_error=str(e),
+            cause=e,
+        ) from e
 
 
 class LockReleaseResult(Enum):
@@ -74,8 +99,9 @@ class BaseRedisClient:
         if not REDIS_PASSWORD or (
             not REDIS_SENTINEL_HOSTS and not (REDIS_HOST and REDIS_PORT)
         ):
-            raise ClientError(
-                f"{ClientError.REQUEST_VALIDATION_ERROR}: Redis configuration invalid - REDIS_PASSWORD is required and either REDIS_SENTINEL_HOSTS or REDIS_HOST/REDIS_PORT must be configured"
+            raise RedisConfigError(
+                message="Redis configuration invalid - REDIS_PASSWORD is required and either REDIS_SENTINEL_HOSTS or REDIS_HOST/REDIS_PORT must be configured",
+                field="REDIS_HOST_or_REDIS_SENTINEL_HOSTS",
             )
 
     def _parse_sentinel_hosts(self) -> list[tuple[str, int]]:
@@ -86,7 +112,7 @@ class BaseRedisClient:
 
         Raises:
             ValueError: If host format is invalid
-            ClientError: If no hosts are configured
+            RedisConfigError: If no hosts are configured
         """
         try:
             sentinel_hosts = [
@@ -100,14 +126,15 @@ class BaseRedisClient:
             ) from e
 
         if not sentinel_hosts:
-            raise ClientError(
-                f"{ClientError.REQUEST_VALIDATION_ERROR}: No Sentinel hosts configured"
+            raise RedisConfigError(
+                message="No Sentinel hosts configured",
+                field="REDIS_SENTINEL_HOSTS",
             )
 
         return sentinel_hosts
 
     def _process_lock_release_result(
-        self, result: Union[int, None], resource_id: str
+        self, result: int | None, resource_id: str
     ) -> tuple[bool, LockReleaseResult]:
         """Process lock release Lua script result.
 
@@ -119,7 +146,7 @@ class BaseRedisClient:
             tuple[bool, LockReleaseResult]: A tuple ``(success, outcome)``.
 
         Raises:
-            ClientError: If result type is unexpected or unknown.
+            RedisConnectionError: If result type is unexpected or unknown.
         """
         if not isinstance(result, int):
             logger.error(
@@ -128,8 +155,9 @@ class BaseRedisClient:
                 type(result),
                 result,
             )
-            raise ClientError(
-                f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
+            raise RedisConnectionError(
+                message="Redis connection failed: unexpected eval result",
+                service="redis",
             )
 
         if result >= 1:
@@ -147,8 +175,9 @@ class BaseRedisClient:
                 resource_id,
                 result,
             )
-            raise ClientError(
-                f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
+            raise RedisConnectionError(
+                message="Redis connection failed: unexpected eval result",
+                service="redis",
             )
 
 
@@ -174,14 +203,15 @@ class RedisClient(BaseRedisClient):
 
             # Test connection
             if not self.redis_client:
-                raise ClientError(
-                    f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
+                raise RedisConnectionError(
+                    message="Redis connection failed: no client after connect",
+                    service="redis",
                 )
 
             self.redis_client.ping()
             logger.info("Sync Redis connection established for strict locking")
 
-        except ClientError:
+        except AppError:
             raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
@@ -256,11 +286,12 @@ class RedisClient(BaseRedisClient):
             True if lock was acquired, False if lock is already held by another owner
 
         Raises:
-            ClientError: If Redis connection or operation fails
+            RedisConnectionError: If Redis connection or operation fails
         """
         if not self.redis_client:
-            raise ClientError(
-                f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
+            raise RedisConnectionError(
+                message="Redis connection failed: no client for lock acquire",
+                service="redis",
             )
 
         try:
@@ -287,11 +318,12 @@ class RedisClient(BaseRedisClient):
                 - (False, LockReleaseResult.WRONG_OWNER): Lock owned by a different owner.
 
         Raises:
-            ClientError: If Redis connection or operation fails.
+            RedisConnectionError: If Redis connection or operation fails.
         """
         if not self.redis_client:
-            raise ClientError(
-                f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
+            raise RedisConnectionError(
+                message="Redis connection failed: no client for lock release",
+                service="redis",
             )
 
         try:
@@ -299,8 +331,8 @@ class RedisClient(BaseRedisClient):
                 _LOCK_RELEASE_LUA_SCRIPT, 1, resource_id, owner_id
             )
             return self._process_lock_release_result(result, resource_id)
-        except ClientError:
-            # `_process_lock_release_result` raises ClientError on unexpected
+        except AppError:
+            # `_process_lock_release_result` raises AppError subclasses on unexpected
             # results (carries a structured error code). Re-raise unchanged
             # instead of letting `_handle_redis_error` re-wrap it.
             raise
@@ -330,19 +362,18 @@ class RedisClientAsync(BaseRedisClient):
 
             # Test connection
             if not self.redis_client:
-                raise ClientError(
-                    f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
+                raise RedisConnectionError(
+                    message="Redis connection failed: no client after connect",
+                    service="redis",
                 )
 
             await self.redis_client.ping()
             logger.info("Async Redis connection established for strict locking")
 
-        except ClientError:
-            # Internal ClientError raised above (e.g. REDIS_CONNECTION_ERROR
-            # for missing redis_client) carries a structured error code that
-            # callers depend on. Re-raise unchanged instead of letting
-            # `_handle_redis_error` re-wrap it. Mirrors the sync `_connect`
-            # fix from BLDX-1165.
+        except AppError:
+            # Internal AppError raised above (e.g. RedisConnectionError for missing
+            # redis_client) carries a structured error code that callers depend on.
+            # Re-raise unchanged instead of letting `_handle_redis_error` re-wrap it.
             raise
         except (ConnectionError, TimeoutError, RedisError, Exception) as e:
             _handle_redis_error(e)
@@ -417,11 +448,12 @@ class RedisClientAsync(BaseRedisClient):
             True if lock was acquired, False if lock is already held by another owner
 
         Raises:
-            ClientError: If Redis connection or operation fails
+            RedisConnectionError: If Redis connection or operation fails
         """
         if not self.redis_client:
-            raise ClientError(
-                f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
+            raise RedisConnectionError(
+                message="Redis connection failed: no client for lock acquire",
+                service="redis",
             )
 
         try:
@@ -448,11 +480,12 @@ class RedisClientAsync(BaseRedisClient):
                 - (False, LockReleaseResult.WRONG_OWNER): Lock owned by a different owner.
 
         Raises:
-            ClientError: If Redis connection or operation fails.
+            RedisConnectionError: If Redis connection or operation fails.
         """
         if not self.redis_client:
-            raise ClientError(
-                f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
+            raise RedisConnectionError(
+                message="Redis connection failed: no client for lock release",
+                service="redis",
             )
 
         try:
@@ -460,8 +493,8 @@ class RedisClientAsync(BaseRedisClient):
                 _LOCK_RELEASE_LUA_SCRIPT, 1, resource_id, owner_id
             )
             return self._process_lock_release_result(result, resource_id)
-        except ClientError:
-            # `_process_lock_release_result` raises ClientError on unexpected
+        except AppError:
+            # `_process_lock_release_result` raises AppError subclasses on unexpected
             # results (carries a structured error code). Re-raise unchanged
             # instead of letting `_handle_redis_error` re-wrap it.
             raise

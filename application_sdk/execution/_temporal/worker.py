@@ -24,6 +24,7 @@ from application_sdk.constants import (
     APP_DEPLOYMENT_NAME,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
 )
+from application_sdk.errors import InvalidInputError
 from application_sdk.execution._temporal.activities import get_all_task_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig
@@ -360,10 +361,14 @@ def create_worker(
         type(i).__name__ for i in (interceptors or []) if isinstance(i, _builtin_types)
     ]
     if _duplicates:
-        raise ValueError(
-            f"create_worker(interceptors=...) contains {_duplicates}, but the SDK "
-            "now adds LogInterceptor / MetricsInterceptor / TraceInterceptor "
-            "automatically. Remove them from your `interceptors` list."
+        raise InvalidInputError(
+            message=(
+                f"create_worker(interceptors=...) contains {_duplicates}, but the SDK "
+                "now adds LogInterceptor / MetricsInterceptor / TraceInterceptor "
+                "automatically. Remove them from your `interceptors` list."
+            ),
+            field="interceptors",
+            value_summary=str(_duplicates),
         )
 
     all_interceptors: list[TemporalInterceptor] = [

@@ -11,9 +11,10 @@ Functions:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Set
+from typing import TYPE_CHECKING
 
 from application_sdk.common.exc_utils import rewrap
+from application_sdk.errors import InvalidInputError
 
 if TYPE_CHECKING:
     import duckdb
@@ -28,7 +29,7 @@ logger = get_logger(__name__)
 
 def get_backfill_tables(
     current_transformed_dir: Path, previous_current_state_dir: Path | None
-) -> Set[str] | None:
+) -> set[str] | None:
     """Use DuckDB to compare current tables vs previous current-state.
 
     Returns qualified names of tables that need backfilling
@@ -58,8 +59,9 @@ def get_backfill_tables(
             )
 
             if current_tables is None or current_tables == 0:
-                raise ValueError(
-                    "No transformed tables found for finding backfill tables"
+                raise InvalidInputError(
+                    message="No transformed tables found for finding backfill tables",
+                    field="current_tables",
                 )
 
             if previous_tables is None or previous_tables == 0:
@@ -101,7 +103,7 @@ def get_backfill_tables(
 
             return backfill_qns
 
-    except ValueError:
+    except (ValueError, InvalidInputError):
         logger.warning(
             "Backfill analysis: legitimate skip (no transformed tables); "
             "returning None",

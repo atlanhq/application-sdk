@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.errors import InvalidInputError, PreconditionError
 from application_sdk.main import (
     AppConfig,
     _create_infrastructure,
@@ -157,7 +158,7 @@ class TestAppConfigFromArgsAndEnv:
         monkeypatch.delenv("ATLAN_APP_MODULE", raising=False)
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")
         args = self._make_args(mode="worker")
-        with pytest.raises(ValueError, match="App module is required"):
+        with pytest.raises(InvalidInputError, match="App module is required"):
             AppConfig.from_args_and_env(args)
 
     def test_app_module_parsed_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -335,7 +336,7 @@ class TestRunMain:
 
     def test_unknown_mode_raises_value_error(self) -> None:
         config = AppConfig(mode="invalid", app_module="pkg:App")
-        with pytest.raises(ValueError, match="Unknown mode"):
+        with pytest.raises(InvalidInputError, match="Unknown mode"):
             run_main(config)
 
     def test_worker_mode_calls_asyncio_run(self) -> None:
@@ -593,7 +594,7 @@ class TestAppConfigCommaRejection:
             log_level=None,
             service_name=None,
         )
-        with pytest.raises(ValueError, match="comma"):
+        with pytest.raises(InvalidInputError, match="comma"):
             AppConfig.from_args_and_env(args)
 
     def test_post_init_derives_task_queue(self) -> None:
@@ -615,7 +616,7 @@ class TestCreateInfrastructureNoDapr:
     ) -> None:
         """Without DAPR_HTTP_PORT, _create_infrastructure must raise RuntimeError."""
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
-        with pytest.raises(RuntimeError, match="Dapr sidecar not detected"):
+        with pytest.raises(PreconditionError, match="Dapr sidecar not detected"):
             await _create_infrastructure()
 
 

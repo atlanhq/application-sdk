@@ -33,16 +33,17 @@
 """
 
 import os
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from temporalio import activity
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     APPLICATION_NAME,
     TEMPORARY_PATH,
     WORKFLOW_OUTPUT_PATH_TEMPLATE,
 )
+from application_sdk.errors import PreconditionError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -71,18 +72,17 @@ def get_workflow_id() -> str:
         The workflow ID of the current activity.
 
     Raises:
-        Exception: If called outside an activity context, or if the
-            workflow ID cannot be retrieved.
+        PreconditionError: If called outside an activity context, or if the
+            workflow ID is unavailable.
     """
-    try:
-        wf_id = activity.info().workflow_id
-        if wf_id is None:
-            raise ValueError(
-                "workflow_id unavailable outside a workflow-backed activity"
-            )
-        return wf_id
-    except Exception as e:
-        raise rewrap(e, "Failed to get workflow id") from e
+    wf_id = activity.info().workflow_id
+    if wf_id is None:
+        raise PreconditionError(
+            message="workflow_id unavailable outside a workflow-backed activity",
+            resource="activity_context",
+            expected_state="running inside a workflow-backed activity",
+        )
+    return wf_id
 
 
 def get_workflow_run_id() -> str:
@@ -99,16 +99,19 @@ def get_workflow_run_id() -> str:
     Used by SDK framework code that genuinely needs the per-attempt
     run ID (e.g. cleanup of artifacts written under the current
     attempt's prefix).
+
+    Raises:
+        PreconditionError: If called outside an activity context, or if the
+            workflow run ID is unavailable.
     """
-    try:
-        wf_run_id = activity.info().workflow_run_id
-        if wf_run_id is None:
-            raise ValueError(
-                "workflow_run_id unavailable outside a workflow-backed activity"
-            )
-        return wf_run_id
-    except Exception as e:
-        raise rewrap(e, "Failed to get workflow run id") from e
+    wf_run_id = activity.info().workflow_run_id
+    if wf_run_id is None:
+        raise PreconditionError(
+            message="workflow_run_id unavailable outside a workflow-backed activity",
+            resource="activity_context",
+            expected_state="running inside a workflow-backed activity",
+        )
+    return wf_run_id
 
 
 def build_output_path() -> str:

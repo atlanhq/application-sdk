@@ -17,7 +17,8 @@ threads or loops beyond pytest-asyncio.
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -191,8 +192,10 @@ class TestConvertToDataframe:
         assert list(result["a"]) == [1, 2]
 
     def test_unsupported_type_raises_typeerror(self) -> None:
+        from application_sdk.errors import InvalidInputError
+
         writer = _StubWriter(dataframe_type=DataframeType.pandas)
-        with pytest.raises(TypeError, match="Unsupported data type"):
+        with pytest.raises(InvalidInputError, match="Unsupported data type"):
             writer._convert_to_dataframe(42)
 
     def test_pandas_input_with_daft_type_without_daft_raises(self) -> None:
@@ -200,6 +203,8 @@ class TestConvertToDataframe:
         import builtins
 
         import pandas as pd
+
+        from application_sdk.errors import InvalidInputError
 
         writer = _StubWriter(dataframe_type=DataframeType.daft)
         df = pd.DataFrame({"a": [1]})
@@ -212,12 +217,14 @@ class TestConvertToDataframe:
             return original_import(name, *args, **kwargs)
 
         with patch.object(builtins, "__import__", side_effect=_raise_for_daft):
-            with pytest.raises(TypeError, match="daft is not installed"):
+            with pytest.raises(InvalidInputError, match="daft is not installed"):
                 writer._convert_to_dataframe(df)
 
     def test_dict_input_with_daft_type_without_daft_raises(self) -> None:
         """Inline ``import daft`` ImportError on dict→daft conversion path."""
         import builtins
+
+        from application_sdk.errors import InvalidInputError
 
         writer = _StubWriter(dataframe_type=DataframeType.daft)
         original_import = builtins.__import__
@@ -228,7 +235,9 @@ class TestConvertToDataframe:
             return original_import(name, *args, **kwargs)
 
         with patch.object(builtins, "__import__", side_effect=_raise_for_daft):
-            with pytest.raises(TypeError, match="Dict and list inputs require daft"):
+            with pytest.raises(
+                InvalidInputError, match="Dict and list inputs require daft"
+            ):
                 writer._convert_to_dataframe({"a": 1})
 
 
@@ -240,17 +249,21 @@ class TestConvertToDataframe:
 class TestWriterWrite:
     @pytest.mark.asyncio
     async def test_write_to_closed_writer_raises(self) -> None:
+        from application_sdk.storage.formats._format_errors import ClosedWriterError
+
         writer = _StubWriter()
         writer._is_closed = True
-        with pytest.raises(ValueError, match="closed writer"):
+        with pytest.raises(ClosedWriterError, match="closed writer"):
             await writer.write({"a": 1})
 
     @pytest.mark.asyncio
     async def test_write_unsupported_dtype_raises(self) -> None:
+        from application_sdk.errors import InvalidInputError
+
         writer = _StubWriter()
         # Replace with an arbitrary value the dispatcher does not understand.
         writer.dataframe_type = "unknown"
-        with pytest.raises(ValueError, match="Unsupported dataframe_type"):
+        with pytest.raises(InvalidInputError, match="Unsupported dataframe_type"):
             await writer.write({"a": 1})
 
     @pytest.mark.asyncio
@@ -286,24 +299,28 @@ class TestWriterWrite:
 class TestWriteBatches:
     @pytest.mark.asyncio
     async def test_write_batches_to_closed_writer_raises(self) -> None:
+        from application_sdk.storage.formats._format_errors import ClosedWriterError
+
         writer = _StubWriter()
         writer._is_closed = True
 
         async def _gen() -> AsyncGenerator[Any, None]:  # pragma: no cover
             yield None
 
-        with pytest.raises(ValueError, match="closed writer"):
+        with pytest.raises(ClosedWriterError, match="closed writer"):
             await writer.write_batches(_gen())
 
     @pytest.mark.asyncio
     async def test_write_batches_unsupported_dtype_raises(self) -> None:
+        from application_sdk.errors import InvalidInputError
+
         writer = _StubWriter()
         writer.dataframe_type = "weird"
 
         def _gen():
             yield None
 
-        with pytest.raises(ValueError, match="Unsupported dataframe_type"):
+        with pytest.raises(InvalidInputError, match="Unsupported dataframe_type"):
             await writer.write_batches(_gen())
 
     @pytest.mark.asyncio
@@ -377,14 +394,16 @@ class TestFlushBuffer:
         import pandas as pd
 
         writer = _StubWriter()
-        with patch.object(
-            writer,
-            "_write_chunk",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("disk full"),
+        with (
+            patch.object(
+                writer,
+                "_write_chunk",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("disk full"),
+            ),
+            pytest.raises(RuntimeError, match="disk full"),
         ):
-            with pytest.raises(RuntimeError, match="disk full"):
-                await writer._flush_buffer(pd.DataFrame({"a": [1]}), 0)
+            await writer._flush_buffer(pd.DataFrame({"a": [1]}), 0)
 
         # Last metric call should record write_errors.
         names = [
@@ -448,14 +467,16 @@ class TestWriterClose:
     @pytest.mark.asyncio
     async def test_close_rewraps_finalize_failure(self) -> None:
         writer = _StubWriter()
-        with patch.object(
-            writer,
-            "_finalize",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("flush fail"),
+        with (
+            patch.object(
+                writer,
+                "_finalize",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("flush fail"),
+            ),
+            pytest.raises(Exception) as excinfo,
         ):
-            with pytest.raises(Exception) as excinfo:
-                await writer.close()
+            await writer.close()
         assert "Error closing writer" in str(excinfo.value)
 
     @pytest.mark.asyncio

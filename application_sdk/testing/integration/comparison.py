@@ -35,16 +35,17 @@ Usage::
 import os
 from dataclasses import dataclass, field
 from glob import glob
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import orjson
 
+from application_sdk.errors import DataIntegrityError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 # Fields that change between runs and should be ignored by default
-DEFAULT_IGNORED_FIELDS: Set[str] = {
+DEFAULT_IGNORED_FIELDS: set[str] = {
     "qualifiedName",
     "connectionQualifiedName",
     "lastSyncWorkflowName",
@@ -59,7 +60,7 @@ DEFAULT_IGNORED_FIELDS: Set[str] = {
 }
 
 # Nested reference fields that contain run-specific qualified names
-DEFAULT_IGNORED_NESTED_FIELDS: Set[str] = {
+DEFAULT_IGNORED_NESTED_FIELDS: set[str] = {
     "atlanSchema",
     "database",
     "table",
@@ -88,7 +89,7 @@ class AssetDiff:
     asset_type: str
     asset_name: str
     diff_type: str
-    field: Optional[str] = None
+    field: str | None = None
     expected: Any = None
     actual: Any = None
 
@@ -110,9 +111,9 @@ class GapReport:
         summary: Count of diffs by type.
     """
 
-    diffs: List[AssetDiff] = field(default_factory=list)
-    summary: Dict[str, int] = field(default_factory=dict)
-    expected_file: Optional[str] = None
+    diffs: list[AssetDiff] = field(default_factory=list)
+    summary: dict[str, int] = field(default_factory=dict)
+    expected_file: str | None = None
 
     @property
     def has_gaps(self) -> bool:
@@ -138,7 +139,7 @@ class GapReport:
         lines.append("")
 
         # Group diffs by asset type
-        by_type: Dict[str, List[AssetDiff]] = {}
+        by_type: dict[str, list[AssetDiff]] = {}
         for diff in self.diffs:
             by_type.setdefault(diff.asset_type, []).append(diff)
 
@@ -152,11 +153,11 @@ class GapReport:
 
 
 def compare_metadata(
-    expected: Dict[str, List[Dict[str, Any]]],
-    actual: List[Dict[str, Any]],
+    expected: dict[str, list[dict[str, Any]]],
+    actual: list[dict[str, Any]],
     strict: bool = True,
-    ignored_fields: Optional[Set[str]] = None,
-    expected_file: Optional[str] = None,
+    ignored_fields: set[str] | None = None,
+    expected_file: str | None = None,
 ) -> GapReport:
     """Compare actual extracted metadata against an expected baseline.
 
@@ -180,7 +181,7 @@ def compare_metadata(
     report = GapReport(expected_file=expected_file)
 
     # Group actual assets by typeName
-    actual_by_type: Dict[str, List[Dict[str, Any]]] = {}
+    actual_by_type: dict[str, list[dict[str, Any]]] = {}
     for record in actual:
         type_name = record.get("typeName", "Unknown")
         actual_by_type.setdefault(type_name, []).append(record)
@@ -203,14 +204,14 @@ def compare_metadata(
             _increment_summary(report, "count_mismatch")
 
         # Build lookup dict for actual assets keyed by attributes.name
-        actual_by_name: Dict[str, Dict[str, Any]] = {}
+        actual_by_name: dict[str, dict[str, Any]] = {}
         for asset in actual_assets:
             name = _get_asset_name(asset)
             if name:
                 actual_by_name[name] = asset
 
         # Check each expected asset
-        expected_names: Set[str] = set()
+        expected_names: set[str] = set()
         for expected_asset in expected_assets:
             name = _get_asset_name(expected_asset)
             if not name:
@@ -289,7 +290,7 @@ def compare_metadata(
     return report
 
 
-def load_expected_data(file_path: str) -> Dict[str, List[Dict[str, Any]]]:
+def load_expected_data(file_path: str) -> dict[str, list[dict[str, Any]]]:
     """Load expected metadata from a JSON file.
 
     The file should contain a JSON object mapping asset type names to lists
@@ -312,16 +313,20 @@ def load_expected_data(file_path: str) -> Dict[str, List[Dict[str, Any]]]:
         data = orjson.loads(f.read())
 
     if not isinstance(data, dict):
-        raise ValueError(
-            f"Expected data file must contain a JSON object mapping asset types "
-            f"to lists, got {type(data).__name__}"
+        raise DataIntegrityError(
+            message=f"Expected data file must contain a JSON object mapping asset types to lists, got {type(data).__name__}",
+            expectation="JSON object at top level",
+            observed=type(data).__name__,
+            location=file_path,
         )
 
     for key, value in data.items():
         if not isinstance(value, list):
-            raise ValueError(
-                f"Expected data for asset type '{key}' must be a list, "
-                f"got {type(value).__name__}"
+            raise DataIntegrityError(
+                message=f"Expected data for asset type '{key}' must be a list, got {type(value).__name__}",
+                expectation="list value per asset type",
+                observed=type(value).__name__,
+                location=f"{file_path}[{key}]",
             )
 
     return data
@@ -332,7 +337,7 @@ def load_actual_output(
     workflow_id: str,
     run_id: str,
     subdirectory: str = "transformed",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Load all extracted metadata from the output directory.
 
     Reads JSONL files from ``{base_path}/{workflow_id}/{run_id}/{subdirectory}/``
@@ -373,7 +378,7 @@ def load_actual_output(
                 output_dir,
             )
 
-    records: List[Dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     json_files = glob(os.path.join(search_dir, "**", "*.json"), recursive=True)
 
     for json_file in sorted(json_files):
@@ -392,7 +397,7 @@ def load_actual_output(
     return records
 
 
-def _get_asset_name(asset: Dict[str, Any]) -> Optional[str]:
+def _get_asset_name(asset: dict[str, Any]) -> str | None:
     """Extract a unique lookup key from an asset's attributes.
 
     For child assets like Columns that share names across parents (e.g.,
@@ -423,10 +428,10 @@ def _compare_attributes(
     report: GapReport,
     asset_type: str,
     asset_name: str,
-    expected_attrs: Dict[str, Any],
-    actual_attrs: Dict[str, Any],
+    expected_attrs: dict[str, Any],
+    actual_attrs: dict[str, Any],
     prefix: str,
-    ignored_fields: Set[str],
+    ignored_fields: set[str],
 ) -> None:
     """Compare attributes between expected and actual, adding diffs to report."""
     if not expected_attrs:

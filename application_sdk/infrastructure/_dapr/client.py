@@ -5,6 +5,7 @@ from typing import Any
 
 import orjson
 
+from application_sdk.errors import UnimplementedError
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
 from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
@@ -102,12 +103,14 @@ class DaprStateStore:
         """List keys via Dapr.
 
         Note: Not all Dapr state stores support listing keys.
-        This may raise NotImplementedError for some backends.
+        This may raise UnimplementedError for some backends.
         """
         # Dapr doesn't have a native list operation for all stores
         # This would need to be implemented per-backend
-        raise NotImplementedError(
-            "Key listing is not supported by all Dapr state stores"
+        raise UnimplementedError(
+            message="Key listing is not supported by all Dapr state stores",
+            operation="list_keys",
+            reason="not_supported_by_all_backends",
         )
 
 

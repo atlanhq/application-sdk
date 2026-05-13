@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from application_sdk.errors import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ logger = get_logger(__name__)
 _VALIDATED_ASYNC_CLIENT_KEY = "validated_async_atlan_client"
 
 
-def create_async_atlan_client(cred: "Credential") -> "object":
+def create_async_atlan_client(cred: Credential) -> object:
     """Create an AsyncAtlanClient from a resolved Atlan credential.
 
     Args:
@@ -56,9 +57,13 @@ def create_async_atlan_client(cred: "Credential") -> "object":
             oauth_client_id=cred.client_id,
             oauth_client_secret=cred.client_secret,
         )
-    raise TypeError(
-        f"Unsupported Atlan credential type: {type(cred).__name__}. "
-        "Expected AtlanApiToken or AtlanOAuthClient."
+    raise InvalidInputError(
+        message=(
+            f"Unsupported Atlan credential type: {type(cred).__name__}. "
+            "Expected AtlanApiToken or AtlanOAuthClient."
+        ),
+        field="credential_type",
+        value_summary=type(cred).__name__,
     )
 
 
@@ -75,8 +80,8 @@ class AtlanClientMixin:
     """
 
     async def get_or_create_async_atlan_client(
-        self, credential: "CredentialRef"
-    ) -> "object":
+        self, credential: CredentialRef
+    ) -> object:
         """Return a cached AsyncAtlanClient for the given credential ref.
 
         Lookup order:

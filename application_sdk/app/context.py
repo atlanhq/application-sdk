@@ -9,6 +9,7 @@ from uuid import uuid4
 from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
 
+from application_sdk.app._context_errors import NoSecretStoreError, NoStateStoreError
 from application_sdk.contracts.base import HeartbeatDetails
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.observability.context import get_execution_context
@@ -263,7 +264,7 @@ class AppContext:
             RuntimeError: If no state store is configured.
         """
         if self._state_store is None:
-            raise RuntimeError("No state store configured")
+            raise NoStateStoreError(message="No state store configured")
         namespaced_key = f"{self.app_name}:{self.run_id}:{key}"
         await self._state_store.save(namespaced_key, value)
 
@@ -280,7 +281,7 @@ class AppContext:
             RuntimeError: If no state store is configured.
         """
         if self._state_store is None:
-            raise RuntimeError("No state store configured")
+            raise NoStateStoreError(message="No state store configured")
         namespaced_key = f"{self.app_name}:{self.run_id}:{key}"
         return await self._state_store.load(namespaced_key)
 
@@ -297,7 +298,7 @@ class AppContext:
             RuntimeError: If no secret store is configured.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
+            raise NoSecretStoreError(message="No secret store configured")
         return await self._secret_store.get(name)
 
     async def get_secret_optional(self, name: str) -> str | None:
@@ -353,7 +354,7 @@ class AppContext:
             CredentialParseError: If parsing fails.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
+            raise NoSecretStoreError(message="No secret store configured")
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve(ref)
 
@@ -370,7 +371,7 @@ class AppContext:
             RuntimeError: If no secret store is configured.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
+            raise NoSecretStoreError(message="No secret store configured")
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve_raw(ref)
 

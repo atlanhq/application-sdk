@@ -74,6 +74,7 @@ from application_sdk.constants import (
 )
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors import PreconditionError, UnimplementedError
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
@@ -404,25 +405,41 @@ class SqlApp(App):
         self, record: dict[str, Any], connection_qn: str
     ) -> Asset | dict[str, Any]:
         """Map a raw database record to a pyatlan_v9 Asset. Override in subclass."""
-        raise NotImplementedError("Override map_database() in your SqlApp subclass")
+        raise UnimplementedError(
+            message="Override map_database() in your SqlApp subclass",
+            operation="map_database",
+            reason="subclass_must_override",
+        )
 
     def map_schema(
         self, record: dict[str, Any], connection_qn: str
     ) -> Asset | dict[str, Any]:
         """Map a raw schema record to a pyatlan_v9 Asset. Override in subclass."""
-        raise NotImplementedError("Override map_schema() in your SqlApp subclass")
+        raise UnimplementedError(
+            message="Override map_schema() in your SqlApp subclass",
+            operation="map_schema",
+            reason="subclass_must_override",
+        )
 
     def map_table(
         self, record: dict[str, Any], connection_qn: str
     ) -> Asset | dict[str, Any]:
         """Map a raw table record to a pyatlan_v9 Asset. Override in subclass."""
-        raise NotImplementedError("Override map_table() in your SqlApp subclass")
+        raise UnimplementedError(
+            message="Override map_table() in your SqlApp subclass",
+            operation="map_table",
+            reason="subclass_must_override",
+        )
 
     def map_column(
         self, record: dict[str, Any], connection_qn: str
     ) -> Asset | dict[str, Any]:
         """Map a raw column record to a pyatlan_v9 Asset. Override in subclass."""
-        raise NotImplementedError("Override map_column() in your SqlApp subclass")
+        raise UnimplementedError(
+            message="Override map_column() in your SqlApp subclass",
+            operation="map_column",
+            reason="subclass_must_override",
+        )
 
     def map_procedure(
         self, record: dict[str, Any], connection_qn: str
@@ -430,9 +447,13 @@ class SqlApp(App):
         """Map a raw procedure record to a pyatlan_v9 Asset. Override in
         subclass if your connector emits procedures via the
         ``transform_procedures()`` task. Without an override the task
-        raises ``NotImplementedError`` rather than ``AttributeError``.
+        raises ``UnimplementedError`` rather than ``AttributeError``.
         """
-        raise NotImplementedError("Override map_procedure() in your SqlApp subclass")
+        raise UnimplementedError(
+            message="Override map_procedure() in your SqlApp subclass",
+            operation="map_procedure",
+            reason="subclass_must_override",
+        )
 
     # =====================================================================
     # run() — default orchestration
@@ -551,7 +572,10 @@ class SqlApp(App):
         ``build_task_input``. So here we just consume that ref.
         """
         if self.sql_client_class is None:
-            raise ValueError("sql_client_class must be set on the SqlApp subclass")
+            raise PreconditionError(
+                message="sql_client_class must be set on the SqlApp subclass",
+                expected_state="sql_client_class is not None",
+            )
 
         client = self.sql_client_class()
         creds: dict[str, Any] = {}

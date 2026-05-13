@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors import InvalidInputError
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -76,8 +77,9 @@ class StorageTier(StrEnum):
             return "file_refs"
         if self is StorageTier.RETAINED:
             if not run_prefix:
-                raise ValueError(
-                    "run_prefix is required when computing upload prefix for RETAINED tier"
+                raise InvalidInputError(
+                    message="run_prefix is required when computing upload prefix for RETAINED tier",
+                    field="run_prefix",
                 )
             return run_prefix
         # PERSISTENT
@@ -130,8 +132,9 @@ class StorageTier(StrEnum):
             return "file_refs"
         if self is StorageTier.RETAINED:
             if not run_prefix:
-                raise ValueError(
-                    "run_prefix is required when persisting a RETAINED-tier FileReference"
+                raise InvalidInputError(
+                    message="run_prefix is required when persisting a RETAINED-tier FileReference",
+                    field="run_prefix",
                 )
             return f"{run_prefix}/file_refs"
         # PERSISTENT

@@ -54,6 +54,7 @@ from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+from application_sdk.errors import InvalidInputError
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -322,7 +323,9 @@ def _validated_temp_path(path: str) -> str:
     tmp_root = os.path.realpath(tempfile.gettempdir())
     real = os.path.realpath(path)
     if real != tmp_root and not real.startswith(tmp_root + os.sep):
-        raise ValueError("Temp file path escapes system temp directory")
+        raise InvalidInputError(
+            message="Temp file path escapes system temp directory", field="path"
+        )
     return real
 
 
@@ -1184,9 +1187,17 @@ def create_app_handler_service(
         Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
         """
         if not _CONFIG_KEY_RE.match(config_id):
-            raise ValueError(f"Invalid config_id: {config_id!r}")
+            raise InvalidInputError(
+                message=f"Invalid config_id: {config_id!r}",
+                field="config_id",
+                value_summary=str(config_id),
+            )
         if not _CONFIG_KEY_RE.match(config_type):
-            raise ValueError(f"Invalid config_type: {config_type!r}")
+            raise InvalidInputError(
+                message=f"Invalid config_type: {config_type!r}",
+                field="config_type",
+                value_summary=str(config_type),
+            )
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app paths
             APPLICATION_NAME,
         )

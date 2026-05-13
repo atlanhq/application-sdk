@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+from application_sdk.errors import UnimplementedError
+
 
 class ClientInterface(ABC):
     """Base interface class for implementing client connections.
@@ -17,9 +19,13 @@ class ClientInterface(ABC):
         for the specific client implementation.
 
         Raises:
-            NotImplementedError: If the subclass does not implement this method.
+            UnimplementedError: If the subclass does not implement this method.
         """
-        raise NotImplementedError("load method is not implemented")
+        raise UnimplementedError(
+            message="Subclass must implement load()",
+            operation="load",
+            reason="subclass_must_override",
+        )
 
     async def close(self, *args: Any, **kwargs: Any) -> None:
         """Close the client connection.

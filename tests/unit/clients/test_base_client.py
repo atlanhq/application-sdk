@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -7,6 +7,7 @@ from httpx import Headers
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.base import BaseClient
+from application_sdk.errors import UnimplementedError
 from application_sdk.testing.hypothesis.strategies.clients.sql import (
     sql_credentials_strategy,
 )
@@ -42,10 +43,10 @@ class TestBaseClient:
 
     @pytest.mark.asyncio
     async def test_load_not_implemented(self, base_client):
-        """Test that load method raises NotImplementedError."""
+        """Test that load method raises UnimplementedError."""
         credentials = {"username": "test", "password": "secret"}
 
-        with pytest.raises(NotImplementedError, match="load method is not implemented"):
+        with pytest.raises(UnimplementedError):
             await base_client.load(credentials=credentials)
 
     @pytest.mark.asyncio
@@ -353,7 +354,7 @@ class TestBaseClient:
     @settings(
         max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
     )
-    def test_initialization_with_various_credentials(self, credentials: Dict[str, Any]):
+    def test_initialization_with_various_credentials(self, credentials: dict[str, Any]):
         """Property-based test for initialization with various credentials."""
         client = BaseClient(credentials=credentials)
         assert client.credentials == credentials
@@ -380,11 +381,11 @@ class TestBaseClient:
         credentials = {"username": "test", "password": "secret"}
 
         # Should not raise TypeError for wrong parameters
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             await base_client.load(credentials=credentials)
 
         # Test with additional kwargs
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             await base_client.load(credentials=credentials, extra_param="value")
 
     def test_http_retry_transport_initialization(self, base_client):

@@ -20,6 +20,7 @@ import obstore as obs
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
+from application_sdk.app._context_errors import NoObjectStoreError
 from application_sdk.app.context import (
     AppContext,
     TaskExecutionContext,
@@ -52,6 +53,7 @@ from application_sdk.errors import (
     APP_ERROR,
     APP_NON_RETRYABLE,
     ErrorCode,
+    UnimplementedError,
 )
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.leaves import InternalError as _InternalError
@@ -897,8 +899,10 @@ class App(ABC):
         Returns:
             The typed output dataclass.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement run() or define @entrypoint methods."
+        raise UnimplementedError(
+            message="Subclass must implement run()",
+            operation="run",
+            reason="subclass_must_override",
         )
 
     def continue_with(self, input: Input) -> Never:
@@ -983,10 +987,7 @@ class App(ABC):
 
         store = self.context.storage
         if store is None:
-            raise RuntimeError(
-                "No object store configured. "
-                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
-            )
+            raise NoObjectStoreError(message="No object store configured")
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
@@ -1044,10 +1045,7 @@ class App(ABC):
 
         store = self.context.storage
         if store is None:
-            raise RuntimeError(
-                "No object store configured. "
-                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
-            )
+            raise NoObjectStoreError(message="No object store configured")
 
         # Resolve storage_path: explicit field takes precedence over ref.storage_path
         storage_path = input.storage_path

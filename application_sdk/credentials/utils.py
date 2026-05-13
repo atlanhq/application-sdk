@@ -7,9 +7,9 @@ from typing import Any
 
 import orjson
 
-from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import download_file_from_upload_response
 from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME, TEMPORARY_PATH
+from application_sdk.errors import InvalidInputError
 from application_sdk.observability import get_logger
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.ops import download_file
@@ -41,8 +41,10 @@ def parse_credentials_extra(credentials: dict[str, Any]) -> dict[str, Any]:
         try:
             return json.loads(extra)
         except json.JSONDecodeError as e:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: Invalid JSON in credentials extra field: {e}"
+            raise InvalidInputError(
+                message=f"Invalid JSON in credentials extra field: {e}",
+                field="extra",
+                cause=e,
             ) from e
 
     return extra

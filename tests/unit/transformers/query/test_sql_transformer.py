@@ -15,6 +15,7 @@ except BaseException as _daft_err:
         allow_module_level=True,
     )
 
+from application_sdk.errors import InvalidInputError
 from application_sdk.transformers.common.utils import flatten_yaml_columns
 from application_sdk.transformers.query import QueryBasedTransformer
 
@@ -165,20 +166,24 @@ def test_build_struct(sql_transformer):
 
 
 def test_build_struct_with_none_level(sql_transformer):
-    """Test the _build_struct method raises ValueError when level is None"""
-    with pytest.raises(ValueError, match="level cannot be None in _build_struct"):
+    """Test the _build_struct method raises InvalidInputError when level is None"""
+    with pytest.raises(
+        InvalidInputError, match="level cannot be None in _build_struct"
+    ):
         sql_transformer._build_struct(level=None, prefix="test")
 
 
 def test_build_struct_with_none_prefix(sql_transformer):
-    """Test the _build_struct method raises ValueError when prefix is None"""
+    """Test the _build_struct method raises InvalidInputError when prefix is None"""
     level = {
         "columns": [
             ("attributes.name", "name"),
             ("attributes.qualifiedName", "qualifiedName"),
         ],
     }
-    with pytest.raises(ValueError, match="prefix cannot be None in _build_struct"):
+    with pytest.raises(
+        InvalidInputError, match="prefix cannot be None in _build_struct"
+    ):
         sql_transformer._build_struct(level=level, prefix=None)
 
 

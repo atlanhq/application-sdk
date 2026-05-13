@@ -9,9 +9,9 @@ Most functions previously in this module have been moved to more logical homes:
 
 import json
 import os
-from typing import Union
 
 from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.errors import DataIntegrityError, InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
 from application_sdk.storage.ops import download_file
@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 
 async def download_file_from_upload_response(
-    response: Union[dict, str, FileUploadResponse],
+    response: dict | str | FileUploadResponse,
 ) -> str:
     """Download a file that was uploaded via the /file endpoint.
 
@@ -43,16 +43,26 @@ async def download_file_from_upload_response(
         try:
             response = json.loads(response)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON string: {e}") from e
+            raise InvalidInputError(
+                message=f"Invalid JSON string: {e}", field="response"
+            ) from e
 
     if isinstance(response, FileUploadResponse):
         key = response.key
     elif isinstance(response, dict):
         if "key" not in response:
-            raise ValueError("Response dict is missing required 'key' field")
+            raise DataIntegrityError(
+                message="Response dict is missing required 'key' field",
+                expectation="key present in response",
+                location="response",
+            )
         key = response["key"]
     else:
-        raise ValueError(f"Unsupported response type: {type(response)}")
+        raise DataIntegrityError(
+            message=f"Unsupported response type: {type(response)}",
+            expectation="FileUploadResponse or dict",
+            observed=str(type(response)),
+        )
 
     local_path = os.path.join(TEMPORARY_PATH, key)
 

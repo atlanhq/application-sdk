@@ -47,6 +47,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk.app._context_errors import NoObjectStoreError
 from application_sdk.contracts.types import FileReference
 
 if TYPE_CHECKING:
@@ -640,10 +641,7 @@ async def fetch(
 
         infra = get_infrastructure()
         if infra is None or infra.storage is None:
-            raise RuntimeError(
-                "fetch(): no object store available — pass store= explicitly "
-                "or call from inside a Temporal activity."
-            )
+            raise NoObjectStoreError(message="fetch(): no object store available")
         store = infra.storage
 
     return await materialize_file_reference(store, ref)

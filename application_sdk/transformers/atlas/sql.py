@@ -7,13 +7,15 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional, Set, TypeVar, overload
+from typing import Any, TypeVar, overload
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
 from pyatlan.utils import init_guid, validate_required_fields
 
+from application_sdk.errors import DataIntegrityError, InternalError
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.transformers.atlas._atlas_errors import EntityTransformError
 from application_sdk.transformers.common.utils import build_atlas_qualified_name
 
 logger = get_logger(__name__)
@@ -41,7 +43,7 @@ class Procedure(assets.Procedure):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Procedure entity's attributes.
 
         This method validates required fields and constructs the procedure's
@@ -63,7 +65,7 @@ class Procedure(assets.Procedure):
                 - entity_class (Type): The Procedure class type
 
         Raises:
-            ValueError: If any required fields are missing or None.
+            EntityTransformError: If any required fields are missing or None.
         """
         try:
             assert (
@@ -124,7 +126,14 @@ class Procedure(assets.Procedure):
                 "entity_class": Procedure,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Procedure Entity: {str(e)}") from e
+            raise EntityTransformError(
+                message=f"Error creating Procedure Entity: {e!s}",
+                entity_type="Procedure",
+                expectation="entity invariant",
+                observed=str(e),
+                location="atlas_transformer",
+                cause=e,
+            ) from e
 
 
 class Database(assets.Database):
@@ -134,7 +143,7 @@ class Database(assets.Database):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Database entity.
 
         Args:
@@ -144,7 +153,7 @@ class Database(assets.Database):
             assets.Database: The created Database entity.
 
         Raises:
-            ValueError: If required fields are missing or invalid.
+            EntityTransformError: If required fields are missing or invalid.
         """
         try:
             assert obj.get("database_name") is not None and isinstance(
@@ -176,7 +185,14 @@ class Database(assets.Database):
                 "entity_class": Database,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Database Entity: {str(e)}") from e
+            raise EntityTransformError(
+                message=f"Error creating Database Entity: {e!s}",
+                entity_type="Database",
+                expectation="entity invariant",
+                observed=str(e),
+                location="atlas_transformer:database",
+                cause=e,
+            ) from e
 
 
 class Schema(assets.Schema):
@@ -186,7 +202,7 @@ class Schema(assets.Schema):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Schema entity.
 
         Args:
@@ -196,7 +212,7 @@ class Schema(assets.Schema):
             assets.Schema: The created Schema entity.
 
         Raises:
-            ValueError: If required fields are missing or invalid.
+            EntityTransformError: If required fields are missing or invalid.
         """
         try:
             assert obj.get("schema_name") is not None and isinstance(
@@ -245,7 +261,14 @@ class Schema(assets.Schema):
                 "entity_class": Schema,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Schema Entity: {str(e)}") from e
+            raise EntityTransformError(
+                message=f"Error creating Schema Entity: {e!s}",
+                entity_type="Schema",
+                expectation="entity invariant",
+                observed=str(e),
+                location="atlas_transformer:schema",
+                cause=e,
+            ) from e
 
 
 class Table(assets.Table):
@@ -256,7 +279,7 @@ class Table(assets.Table):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Table entity.
 
         Args:
@@ -267,7 +290,7 @@ class Table(assets.Table):
                 The created Table entity.
 
         Raises:
-            ValueError: If required fields are missing or invalid.
+            EntityTransformError: If required fields are missing or invalid.
         """
         try:
             # Needed? Sequences don't have a table_name, table_schema
@@ -481,7 +504,14 @@ class Table(assets.Table):
                 "entity_class": table_type,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Table Entity: {str(e)}") from e
+            raise EntityTransformError(
+                message=f"Error creating Table Entity: {e!s}",
+                entity_type="Table",
+                expectation="entity invariant",
+                observed=str(e),
+                location="atlas_transformer:table",
+                cause=e,
+            ) from e
 
 
 class Column(assets.Column):
@@ -491,7 +521,7 @@ class Column(assets.Column):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Column entity.
 
         Args:
@@ -501,7 +531,7 @@ class Column(assets.Column):
             assets.Column: The created Column entity.
 
         Raises:
-            ValueError: If required fields are missing or invalid.
+            EntityTransformError: If required fields are missing or invalid.
         """
         try:
             assert obj.get("column_name") is not None, "Column name cannot be None"
@@ -648,7 +678,14 @@ class Column(assets.Column):
                 "entity_class": Column,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Column Entity: {str(e)}") from e
+            raise EntityTransformError(
+                message=f"Error creating Column Entity: {e!s}",
+                entity_type="Column",
+                expectation="entity invariant",
+                observed=str(e),
+                location="atlas_transformer:column",
+                cause=e,
+            ) from e
 
 
 class Function(assets.Function):
@@ -688,7 +725,7 @@ class Function(assets.Function):
         database_name: None = None,
         database_qualified_name: None = None,
         connection_qualified_name: None = None,
-    ) -> "Function": ...
+    ) -> Function: ...
 
     @overload
     @classmethod
@@ -701,7 +738,7 @@ class Function(assets.Function):
         database_name: str,
         database_qualified_name: str,
         connection_qualified_name: str,
-    ) -> "Function": ...
+    ) -> Function: ...
 
     @classmethod
     @init_guid
@@ -710,11 +747,11 @@ class Function(assets.Function):
         *,
         name: str,
         schema_qualified_name: str,
-        schema_name: Optional[str] = None,
-        database_name: Optional[str] = None,
-        database_qualified_name: Optional[str] = None,
-        connection_qualified_name: Optional[str] = None,
-    ) -> "Function":
+        schema_name: str | None = None,
+        database_name: str | None = None,
+        database_qualified_name: str | None = None,
+        connection_qualified_name: str | None = None,
+    ) -> Function:
         """Create a new Function entity.
 
         Args:
@@ -756,7 +793,7 @@ class Function(assets.Function):
         """
 
         # overriding function_arguments same as in super class
-        function_arguments: Optional[Set[str]] = None
+        function_arguments: set[str] | None = None
 
         @classmethod
         @init_guid
@@ -765,11 +802,11 @@ class Function(assets.Function):
             *,
             name: str,
             schema_qualified_name: str,
-            schema_name: Optional[str] = None,
-            database_name: Optional[str] = None,
-            database_qualified_name: Optional[str] = None,
-            connection_qualified_name: Optional[str] = None,
-        ) -> "Function.Attributes":
+            schema_name: str | None = None,
+            database_name: str | None = None,
+            database_qualified_name: str | None = None,
+            connection_qualified_name: str | None = None,
+        ) -> Function.Attributes:
             """Create a new Function.Attributes instance.
 
             Args:
@@ -805,8 +842,10 @@ class Function(assets.Function):
                         else "unknown"
                     )
                 else:
-                    raise ValueError(
-                        f"Invalid result from AtlanConnectorType.get_connector_name: {result}"
+                    raise InternalError(
+                        message=f"Invalid result from AtlanConnectorType.get_connector_name: {result!r}",
+                        component="atlas_transformer:Function",
+                        invariant="get_connector_name returns (connection_qn, connector_name) tuple",
                     )
 
             fields = schema_qualified_name.split("/")
@@ -833,7 +872,7 @@ class Function(assets.Function):
             )
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Function entity.
 
         Args:
@@ -843,7 +882,7 @@ class Function(assets.Function):
             assets.Function: The created Function entity.
 
         Raises:
-            ValueError: If required fields are missing or invalid.
+            EntityTransformError: If required fields are missing or invalid.
         """
         try:
             assert (
@@ -911,8 +950,10 @@ class Function(assets.Function):
             if not (
                 argument_signature.startswith("(") and argument_signature.endswith(")")
             ):
-                raise ValueError(
-                    f"Malformed argument_signature: {argument_signature!r}"
+                raise DataIntegrityError(
+                    message=f"Malformed argument_signature: {argument_signature!r}",
+                    expectation="argument_signature starts with '(' and ends with ')'",
+                    observed=argument_signature,
                 )
             inner = argument_signature[1:-1]
             function_attributes["function_arguments"] = list(inner.split(","))
@@ -935,7 +976,14 @@ class Function(assets.Function):
                 "entity_class": Function,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Function Entity: {str(e)}") from e
+            raise EntityTransformError(
+                message=f"Error creating Function Entity: {e!s}",
+                entity_type="Function",
+                expectation="entity invariant",
+                observed=str(e),
+                location="atlas_transformer:function",
+                cause=e,
+            ) from e
 
 
 class TagAttachment(assets.TagAttachment):
@@ -956,7 +1004,7 @@ class TagAttachment(assets.TagAttachment):
         database_name: None = None,
         database_qualified_name: None = None,
         connection_qualified_name: None = None,
-    ) -> "TagAttachment": ...
+    ) -> TagAttachment: ...
 
     @overload
     @classmethod
@@ -969,7 +1017,7 @@ class TagAttachment(assets.TagAttachment):
         database_name: str,
         database_qualified_name: str,
         connection_qualified_name: str,
-    ) -> "TagAttachment": ...
+    ) -> TagAttachment: ...
 
     @classmethod
     @init_guid
@@ -978,11 +1026,11 @@ class TagAttachment(assets.TagAttachment):
         *,
         name: str,
         schema_qualified_name: str,
-        schema_name: Optional[str] = None,
-        database_name: Optional[str] = None,
-        database_qualified_name: Optional[str] = None,
-        connection_qualified_name: Optional[str] = None,
-    ) -> "TagAttachment":
+        schema_name: str | None = None,
+        database_name: str | None = None,
+        database_qualified_name: str | None = None,
+        connection_qualified_name: str | None = None,
+    ) -> TagAttachment:
         """Create a new TagAttachment entity.
 
         Args:
@@ -1021,8 +1069,8 @@ class TagAttachment(assets.TagAttachment):
             *,
             name: str,
             schema_qualified_name: str,
-            connection_qualified_name: Optional[str] = None,
-        ) -> "TagAttachment.Attributes":
+            connection_qualified_name: str | None = None,
+        ) -> TagAttachment.Attributes:
             """Create a new TagAttachment.Attributes instance.
 
             Args:
@@ -1055,8 +1103,10 @@ class TagAttachment(assets.TagAttachment):
                     )
                 else:
                     # Handle the case where result is not a tuple
-                    raise ValueError(
-                        f"Invalid result from AtlanConnectorType.get_connector_name: {result}"
+                    raise InternalError(
+                        message=f"Invalid result from AtlanConnectorType.get_connector_name: {result!r}",
+                        component="atlas_transformer:TagAttachment",
+                        invariant="get_connector_name returns (connection_qn, connector_name) tuple",
                     )
 
             qualified_name = f"{schema_qualified_name}/{name}"
@@ -1070,7 +1120,7 @@ class TagAttachment(assets.TagAttachment):
             )
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a TagAttachment entity.
 
         Args:
@@ -1080,7 +1130,7 @@ class TagAttachment(assets.TagAttachment):
             assets.TagAttachment: The created TagAttachment entity.
 
         Raises:
-            ValueError: If required fields are missing or invalid.
+            EntityTransformError: If required fields are missing or invalid.
         """
         try:
             assert (
@@ -1161,14 +1211,11 @@ class TagAttachment(assets.TagAttachment):
                     object_qualified_name = build_atlas_qualified_name(
                         obj["connection_qualified_name"], object_cat, object_name
                     )
-                elif object_domain == "SCHEMA":
-                    object_qualified_name = build_atlas_qualified_name(
-                        obj["connection_qualified_name"],
-                        object_cat,
-                        object_schema,
-                        object_name,
-                    )
-                elif object_domain in ["TABLE", "STREAM", "PIPE"]:
+                elif object_domain == "SCHEMA" or object_domain in [
+                    "TABLE",
+                    "STREAM",
+                    "PIPE",
+                ]:
                     object_qualified_name = build_atlas_qualified_name(
                         obj["connection_qualified_name"],
                         object_cat,
@@ -1218,4 +1265,11 @@ class TagAttachment(assets.TagAttachment):
                 "entity_class": TagAttachment,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating TagAttachment Entity: {str(e)}") from e
+            raise EntityTransformError(
+                message=f"Error creating TagAttachment Entity: {e!s}",
+                entity_type="TagAttachment",
+                expectation="entity invariant",
+                observed=str(e),
+                location="atlas_transformer:tag_attachment",
+                cause=e,
+            ) from e

@@ -85,8 +85,12 @@ class TestCreateAsyncAtlanClient:
         assert result is mock_client
 
     def test_unsupported_type_raises_type_error(self) -> None:
+        from application_sdk.errors import InvalidInputError
+
         cred = BasicCredential(username="user", password="pass")
-        with pytest.raises(TypeError, match="Unsupported Atlan credential type"):
+        with pytest.raises(
+            InvalidInputError, match="Unsupported Atlan credential type"
+        ):
             with patch("pyatlan_v9.client.aio.AsyncAtlanClient"):
                 create_async_atlan_client(cred)  # type: ignore[arg-type]
 

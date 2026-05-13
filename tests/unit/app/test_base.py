@@ -39,7 +39,7 @@ from application_sdk.app.entrypoint import (
 from application_sdk.app.registry import AppNotFoundError, AppRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
-from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE
+from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, UnimplementedError
 
 # =============================================================================
 # Test fixtures
@@ -208,7 +208,7 @@ class TestAppRegistration:
         """
 
         class AbstractSubApp(App):
-            # No run() override — inherits the default raise NotImplementedError
+            # No run() override — inherits the default raise UnimplementedError
             pass
 
         registry = AppRegistry.get_instance()
@@ -726,7 +726,7 @@ class TestAppConvenience:
 
 
 # =============================================================================
-# default run() — raises NotImplementedError when not overridden
+# default run() — raises UnimplementedError when not overridden
 # =============================================================================
 
 
@@ -734,11 +734,11 @@ class TestRunStub:
     @pytest.mark.asyncio
     async def test_default_run_raises_not_implemented(self) -> None:
         # NoRunApp inherits the App.run stub silently; call it directly to
-        # exercise the NotImplementedError branch.
+        # exercise the UnimplementedError branch.
         class _NoRun(App):
             pass
 
-        with pytest.raises(NotImplementedError, match="must implement run"):
+        with pytest.raises(UnimplementedError, match="must implement run"):
             await _NoRun().run(_BLDXInput())
 
 

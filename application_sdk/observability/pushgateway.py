@@ -35,6 +35,7 @@ from prometheus_client import (
 from prometheus_client.exposition import default_handler
 from prometheus_client.parser import text_string_to_metric_families
 
+from application_sdk.errors import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 #: Regex extracting ``push_time_seconds{labels} value`` lines from a
@@ -76,6 +77,9 @@ class TemporalCoreCollector:
             yield from text_string_to_metric_families(resp.text)
         except Exception:
             # Silent — a transient Temporal core hiccup must not poison the push.
+            logger.debug(
+                "Temporal core metrics scrape failed (non-fatal)", exc_info=True
+            )
             return
 
 
@@ -154,9 +158,13 @@ class PushGatewayClient:
         task_queue: str = "",
     ) -> None:
         if not url:
-            raise ValueError("PushGatewayClient requires a non-empty url")
+            raise InvalidInputError(
+                message="PushGatewayClient requires a non-empty url", field="url"
+            )
         if not job:
-            raise ValueError("PushGatewayClient requires a non-empty job")
+            raise InvalidInputError(
+                message="PushGatewayClient requires a non-empty job", field="job"
+            )
         self._url = url
         self._job = job
         self._grouping_key = grouping_key or _default_grouping_key(task_queue)

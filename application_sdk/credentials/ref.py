@@ -8,6 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict
 
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.errors import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 
@@ -81,7 +82,7 @@ class CredentialRef(BaseModel, frozen=True):
     credential_guid: str = ""
     """Platform-issued credential GUID — non-empty triggers GUID resolution path."""
 
-    agent_spec: "AgentCredentialSpec | None" = None
+    agent_spec: AgentCredentialSpec | None = None
     """Typed agent credential spec — non-None triggers v3 agent resolution.
 
     Parsed from the ``agent_json`` workflow field.  Contains the typed
@@ -110,7 +111,7 @@ class CredentialRef(BaseModel, frozen=True):
     # ------------------------------------------------------------------
 
     @classmethod
-    def resolve(cls, source: CredentialResolvable) -> "CredentialRef":
+    def resolve(cls, source: CredentialResolvable) -> CredentialRef:
         """Resolve a :class:`CredentialRef` from a workflow input.
 
         Routes to agent resolution (via ``agent_json``) or direct GUID
@@ -131,9 +132,13 @@ class CredentialRef(BaseModel, frozen=True):
             ValueError: If no routable credential source is present.
         """
         if not isinstance(source, CredentialResolvable):
-            raise TypeError(
-                f"Expected a CredentialResolvable (with extraction_method, "
-                f"agent_json, credential_guid), got {type(source).__name__}"
+            raise InvalidInputError(
+                message=(
+                    f"Expected a CredentialResolvable (with extraction_method, "
+                    f"agent_json, credential_guid), got {type(source).__name__}"
+                ),
+                field="source",
+                value_summary=type(source).__name__,
             )
 
         method = (source.extraction_method or "direct").strip().lower()
@@ -152,14 +157,17 @@ class CredentialRef(BaseModel, frozen=True):
                 credential_guid=guid,
             )
 
-        raise ValueError(
-            "No routable credential source: need either "
-            "extraction_method='agent' with a non-empty agent_json, "
-            "or extraction_method='direct' with a non-empty credential_guid"
+        raise InvalidInputError(
+            message=(
+                "No routable credential source: need either "
+                "extraction_method='agent' with a non-empty agent_json, "
+                "or extraction_method='direct' with a non-empty credential_guid"
+            ),
+            field="extraction_method_or_credential_guid",
         )
 
     @classmethod
-    def from_workflow_args(cls, workflow_args: dict[str, Any]) -> "CredentialRef":
+    def from_workflow_args(cls, workflow_args: dict[str, Any]) -> CredentialRef:
         """Build a :class:`CredentialRef` from a Temporal workflow payload.
 
         .. deprecated::
@@ -247,10 +255,13 @@ class CredentialRef(BaseModel, frozen=True):
                 credential_guid=guid,
             )
 
-        raise ValueError(
-            "workflow_args has no routable credential source: need either "
-            "extraction_method='agent' with a non-empty agent_json, "
-            "or a non-empty credential_guid"
+        raise InvalidInputError(
+            message=(
+                "workflow_args has no routable credential source: need either "
+                "extraction_method='agent' with a non-empty agent_json, "
+                "or a non-empty credential_guid"
+            ),
+            field="extraction_method_or_credential_guid",
         )
 
 

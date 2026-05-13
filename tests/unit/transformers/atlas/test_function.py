@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 from pyatlan.model.assets import Function
@@ -14,13 +14,13 @@ def resources_dir() -> str:
 
 
 @pytest.fixture
-def raw_data(resources_dir: str) -> Dict[str, Any]:
+def raw_data(resources_dir: str) -> dict[str, Any]:
     with open(os.path.join(resources_dir, "raw_functions.json")) as f:
         return json.load(f)
 
 
 @pytest.fixture
-def expected_data(resources_dir: str) -> Dict[str, Any]:
+def expected_data(resources_dir: str) -> dict[str, Any]:
     with open(os.path.join(resources_dir, "transformed_functions.json")) as f:
         return json.load(f)
 
@@ -31,8 +31,8 @@ def transformer() -> AtlasTransformer:
 
 
 def assert_attributes(
-    transformed_data: Dict[str, Any],
-    expected_data: Dict[str, Any],
+    transformed_data: dict[str, Any],
+    expected_data: dict[str, Any],
     attributes: list[str],
     is_custom: bool = False,
 ) -> None:
@@ -180,7 +180,7 @@ def test_function_get_attributes_malformed_argument_signature_raises(
     """
     from application_sdk.transformers.atlas.sql import Function as SqlFunction
 
-    obj: Dict[str, Any] = {
+    obj: dict[str, Any] = {
         "function_name": "test_function",
         "argument_signature": bad_signature,
         "function_definition": "SELECT 1",
@@ -193,7 +193,9 @@ def test_function_get_attributes_malformed_argument_signature_raises(
         "data_type": "NUMBER",
     }
 
-    with pytest.raises(ValueError, match="Malformed argument_signature"):
+    from application_sdk.errors import DataIntegrityError
+
+    with pytest.raises(DataIntegrityError, match="Malformed argument_signature"):
         SqlFunction.get_attributes(obj)
 
 
@@ -202,7 +204,7 @@ def test_function_get_attributes_well_formed_signature_succeeds():
     after the BLDX-1170 paren-validation guard."""
     from application_sdk.transformers.atlas.sql import Function as SqlFunction
 
-    obj: Dict[str, Any] = {
+    obj: dict[str, Any] = {
         "function_name": "test_function",
         "argument_signature": "(arg1 type1)",
         "function_definition": "SELECT 1",

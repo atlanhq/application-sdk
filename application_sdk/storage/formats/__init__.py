@@ -17,8 +17,17 @@ import orjson
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
+from application_sdk.errors import InternalError as InternalError
+from application_sdk.errors import InvalidInputError as InvalidInputError
+from application_sdk.errors import UnimplementedError as UnimplementedError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
+from application_sdk.storage.formats._format_errors import (
+    ClosedReaderError as ClosedReaderError,
+)
+from application_sdk.storage.formats._format_errors import (
+    ClosedWriterError as ClosedWriterError,
+)
 from application_sdk.storage.formats.utils import (
     estimate_dataframe_record_size,
     is_empty_dataframe,
@@ -163,10 +172,14 @@ class Reader(ABC):
             Iterator["pd.DataFrame"]: An iterator of batched pandas DataFrames.
 
         Raises:
-            NotImplementedError: If the method is not implemented.
-            ValueError: If the reader has been closed.
+            UnimplementedError: If the method is not implemented.
+            ClosedReaderError: If the reader has been closed.
         """
-        raise NotImplementedError
+        raise UnimplementedError(
+            message="Subclass must implement read_batches",
+            operation="read_batches",
+            reason="subclass_must_override",
+        )
 
     @abstractmethod
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
@@ -176,10 +189,14 @@ class Reader(ABC):
             Union["pd.DataFrame", "daft.DataFrame"]: A pandas or daft DataFrame.
 
         Raises:
-            NotImplementedError: If the method is not implemented.
-            ValueError: If the reader has been closed.
+            UnimplementedError: If the method is not implemented.
+            ClosedReaderError: If the reader has been closed.
         """
-        raise NotImplementedError
+        raise UnimplementedError(
+            message="Subclass must implement read",
+            operation="read",
+            reason="subclass_must_override",
+        )
 
 
 class WriteMode(Enum):
@@ -283,9 +300,11 @@ class Writer(ABC):
 
                     return daft.from_pandas(data)
                 except ImportError:
-                    raise TypeError(
-                        "daft is not installed. Please install daft to use DataframeType.daft, "
-                        "or use DataframeType.pandas instead."
+                    raise InvalidInputError(
+                        message="daft is not installed. Please install daft to use DataframeType.daft, "
+                        "or use DataframeType.pandas instead.",
+                        field="dataframe_type",
+                        value_summary="daft",
                     )
             return data
 
@@ -321,16 +340,19 @@ class Writer(ABC):
                                 columnar_data[key].append(value)
                     return daft.from_pydict(columnar_data)
                 except ImportError:
-                    raise TypeError(
-                        "Dict and list inputs require daft to be installed when using DataframeType.daft. "
-                        "Please install daft or use DataframeType.pandas instead."
+                    raise InvalidInputError(
+                        message="Dict and list inputs require daft to be installed when using DataframeType.daft. "
+                        "Please install daft or use DataframeType.pandas instead.",
+                        field="dataframe_type",
+                        value_summary="daft",
                     )
             # For pandas dataframe_type, convert to pandas DataFrame
             return pd.DataFrame([data] if isinstance(data, dict) else data)
 
-        raise TypeError(
-            f"Unsupported data type: {type(data).__name__}. "
-            "Expected DataFrame, dict, or list of dicts."
+        raise InvalidInputError(
+            message=f"Unsupported data type: {type(data).__name__}. Expected DataFrame, dict, or list of dicts.",
+            field="data",
+            value_summary=type(data).__name__,
         )
 
     async def write(
@@ -354,7 +376,7 @@ class Writer(ABC):
             TypeError: If data type is not supported.
         """
         if self._is_closed:
-            raise ValueError("Cannot write to a closed writer")
+            raise ClosedWriterError(message="Cannot write to a closed writer")
 
         # Convert to DataFrame if needed
         dataframe = self._convert_to_dataframe(data)
@@ -364,7 +386,11 @@ class Writer(ABC):
         elif self.dataframe_type == DataframeType.daft:
             await self._write_daft_dataframe(dataframe, **kwargs)
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            raise InvalidInputError(
+                message=f"Unsupported dataframe_type: {self.dataframe_type}",
+                field="dataframe_type",
+                value_summary=str(self.dataframe_type),
+            )
 
     async def write_batches(
         self,
@@ -382,14 +408,18 @@ class Writer(ABC):
             ValueError: If the writer has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot write to a closed writer")
+            raise ClosedWriterError(message="Cannot write to a closed writer")
 
         if self.dataframe_type == DataframeType.pandas:
             await self._write_batched_dataframe(dataframe)
         elif self.dataframe_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            raise InvalidInputError(
+                message=f"Unsupported dataframe_type: {self.dataframe_type}",
+                field="dataframe_type",
+                value_summary=str(self.dataframe_type),
+            )
 
     async def _write_batched_dataframe(
         self,
@@ -611,7 +641,11 @@ class Writer(ABC):
             # Write statistics to file and object store
             statistics_dict = await self._write_statistics(typename)
             if not statistics_dict:
-                raise ValueError("No statistics data available")
+                raise InternalError(
+                    message="No statistics data available",
+                    component="Writer._write_statistics",
+                    invariant="statistics_dict must be non-empty after _write_statistics",
+                )
 
             self._statistics = TaskStatistics(**statistics_dict)
             if typename:

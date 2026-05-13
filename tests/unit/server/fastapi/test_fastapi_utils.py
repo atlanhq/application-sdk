@@ -7,6 +7,7 @@ import pytest
 from fastapi import UploadFile
 
 from application_sdk.common.utils import download_file_from_upload_response
+from application_sdk.errors import DataIntegrityError, InvalidInputError
 from application_sdk.server.fastapi.models import FileUploadResponse
 from application_sdk.server.fastapi.utils import (
     _build_object_store_key,
@@ -580,12 +581,12 @@ class TestDownloadFileFromUploadResponse:
 
     async def test_download_missing_key_error(self):
         """Test that ValueError is raised when 'key' is missing from dict."""
-        with pytest.raises(ValueError, match="missing required 'key' field"):
+        with pytest.raises(DataIntegrityError, match="missing required 'key' field"):
             await download_file_from_upload_response({"id": "abc123"})
 
     async def test_download_invalid_json_error(self):
         """Test that ValueError is raised for invalid JSON string."""
-        with pytest.raises(ValueError, match="Invalid JSON string"):
+        with pytest.raises(InvalidInputError, match="Invalid JSON string"):
             await download_file_from_upload_response("not valid json")
 
     @patch("application_sdk.common.utils.download_file")

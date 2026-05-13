@@ -38,6 +38,7 @@ from application_sdk.common.file_converter import (
     convert_parquet_to_json,
     file_converter_registry,
 )
+from application_sdk.errors import InvalidInputError
 
 # Only mark async tests individually
 
@@ -131,14 +132,14 @@ class TestConvertDataFiles:
     @pytest.mark.asyncio
     @patch("application_sdk.common.file_converter.file_converter_registry")
     async def test_converter_not_found_error(self, mock_registry):
-        """Test that when converter function is None, ValueError is raised."""
+        """Test that when converter function is None, InvalidInputError is raised."""
         # Arrange - registry returns None for unknown converter
         mock_registry.registry.get.return_value = None
 
         input_files = ["/path/input.json"]
 
-        # Act & Assert - Should raise ValueError with descriptive message
-        with pytest.raises(ValueError, match="No converter found"):
+        # Act & Assert - Should raise InvalidInputError with descriptive message
+        with pytest.raises(InvalidInputError, match="No converter found"):
             await convert_data_files(input_files, FileType.PARQUET)
 
     @pytest.mark.asyncio

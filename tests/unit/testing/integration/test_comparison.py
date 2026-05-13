@@ -6,6 +6,7 @@ import tempfile
 
 import pytest
 
+from application_sdk.errors import DataIntegrityError
 from application_sdk.testing.integration.comparison import (
     AssetDiff,
     GapReport,
@@ -366,12 +367,12 @@ class TestLoadExpectedData:
             load_expected_data("/nonexistent/path.json")
 
     def test_invalid_json_structure(self):
-        """Non-dict JSON raises ValueError."""
+        """Non-dict JSON raises DataIntegrityError."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump([1, 2, 3], f)
             f.flush()
 
-        with pytest.raises(ValueError, match="JSON object"):
+        with pytest.raises(DataIntegrityError, match="JSON object"):
             load_expected_data(f.name)
 
         os.unlink(f.name)
@@ -391,8 +392,7 @@ class TestLoadActualOutput:
                 {"typeName": "Table", "attributes": {"name": "users"}},
             ]
             with open(os.path.join(workflow_dir, "table.json"), "wb") as f:
-                for r in records:
-                    f.write(json.dumps(r).encode() + b"\n")
+                f.writelines(json.dumps(r).encode() + b"\n" for r in records)
 
             result = load_actual_output(tmpdir, "wf1", "run1")
             assert len(result) == 2

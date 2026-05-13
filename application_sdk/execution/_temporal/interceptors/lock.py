@@ -10,7 +10,7 @@ when all lock slots are taken.
 """
 
 from datetime import timedelta
-from typing import Any, Dict, Optional, Type
+from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -22,13 +22,13 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from application_sdk.common.error_codes import WorkflowError
 from application_sdk.constants import (
     APPLICATION_NAME,
     IS_LOCKING_DISABLED,
     LOCK_METADATA_KEY,
     LOCK_RETRY_INTERVAL_SECONDS,
 )
+from application_sdk.errors import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 class RedisLockInterceptor(Interceptor):
     """Main interceptor class for Redis distributed locking."""
 
-    def __init__(self, activities: Dict[str, Any]):
+    def __init__(self, activities: dict[str, Any]):
         """Initialize Redis lock interceptor.
 
         Args:
@@ -47,7 +47,7 @@ class RedisLockInterceptor(Interceptor):
 
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput
-    ) -> Optional[Type[WorkflowInboundInterceptor]]:
+    ) -> type[WorkflowInboundInterceptor] | None:
         activities = self.activities
 
         class RedisLockWorkflowInboundInterceptor(WorkflowInboundInterceptor):
@@ -64,7 +64,7 @@ class RedisLockInterceptor(Interceptor):
 class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
     """Outbound interceptor that acquires Redis locks before activity execution."""
 
-    def __init__(self, next: WorkflowOutboundInterceptor, activities: Dict[str, Any]):
+    def __init__(self, next: WorkflowOutboundInterceptor, activities: dict[str, Any]):
         super().__init__(next)
         self.activities = activities
 
@@ -90,9 +90,9 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
                 "Activity %s with @needs_lock decorator requires schedule_to_close_timeout",
                 input.activity,
             )
-            raise WorkflowError(
-                f"{WorkflowError.WORKFLOW_CONFIG_ERROR}: Activity '{input.activity}' with @needs_lock decorator must be called with schedule_to_close_timeout parameter. "
-                f"Example: workflow.execute_activity('{input.activity}', schedule_to_close_timeout=timedelta(minutes=10))"
+            raise InvalidInputError(
+                message=f"Activity '{input.activity}' with @needs_lock decorator must be called with schedule_to_close_timeout parameter. Example: workflow.execute_activity('{input.activity}', schedule_to_close_timeout=timedelta(minutes=10))",
+                field="schedule_to_close_timeout",
             )
         ttl_seconds = int(input.schedule_to_close_timeout.total_seconds())
 

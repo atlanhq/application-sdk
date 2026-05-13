@@ -13,6 +13,7 @@ from application_sdk.common.aws_utils import (
     get_cluster_identifier,
     get_region_name_from_hostname,
 )
+from application_sdk.errors import InvalidInputError
 
 
 class TestAWSUtils:
@@ -27,7 +28,7 @@ class TestAWSUtils:
     def test_get_region_name_from_hostname_invalid(self):
         """Test extracting region from invalid hostname."""
         hostname = "invalid.hostname.com"
-        with pytest.raises(ValueError, match="Could not find valid AWS region"):
+        with pytest.raises(InvalidInputError, match="Could not find valid AWS region"):
             get_region_name_from_hostname(hostname)
 
     @patch("boto3.client")
@@ -320,7 +321,7 @@ class TestAWSUtils:
     def test_create_aws_client_no_credentials(self):
         """Test creating AWS client with no credentials provided."""
         with pytest.raises(
-            ValueError, match="At least one credential source must be provided"
+            InvalidInputError, match="At least one credential source must be provided"
         ):
             create_aws_client(service="s3", region="us-east-1")
 
@@ -334,7 +335,8 @@ class TestAWSUtils:
         }
 
         with pytest.raises(
-            ValueError, match="Only one credential source should be provided at a time"
+            InvalidInputError,
+            match="Only one credential source should be provided at a time",
         ):
             create_aws_client(
                 service="s3",

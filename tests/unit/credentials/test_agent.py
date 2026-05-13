@@ -894,11 +894,12 @@ class TestCredentialRefFromWorkflowArgs:
         import pytest
 
         from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.errors import InvalidInputError
 
-        with pytest.raises(ValueError, match="no routable credential source"):
+        with pytest.raises(InvalidInputError, match="no routable credential source"):
             CredentialRef.from_workflow_args({})
 
-        with pytest.raises(ValueError, match="no routable credential source"):
+        with pytest.raises(InvalidInputError, match="no routable credential source"):
             CredentialRef.from_workflow_args(
                 {"extraction_method": "direct", "agent_json": "", "credential_guid": ""}
             )
@@ -907,8 +908,9 @@ class TestCredentialRefFromWorkflowArgs:
         import pytest
 
         from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.errors import InvalidInputError
 
-        with pytest.raises(ValueError, match="no routable credential source"):
+        with pytest.raises(InvalidInputError, match="no routable credential source"):
             CredentialRef.from_workflow_args(
                 {"extraction_method": "agent", "agent_json": "{}"}
             )

@@ -179,23 +179,29 @@ class TestCredentialRefResolve:
         assert ref.credential_guid == "abc-123"
 
     def test_resolve_no_credential_source_raises(self):
+        from application_sdk.errors import InvalidInputError
+
         inp = ExtractionInput(
             extraction_method="direct",
             credential_guid="",
         )
-        with pytest.raises(ValueError, match="No routable credential source"):
+        with pytest.raises(InvalidInputError, match="No routable credential source"):
             CredentialRef.resolve(inp)
 
     def test_resolve_non_resolvable_raises_type_error(self):
-        with pytest.raises(TypeError, match="Expected a CredentialResolvable"):
+        from application_sdk.errors import InvalidInputError
+
+        with pytest.raises(InvalidInputError, match="Expected a CredentialResolvable"):
             CredentialRef.resolve("not-a-model")  # type: ignore[arg-type]
 
     def test_resolve_agent_with_empty_spec_and_guid_falls_through(self):
         """Agent mode with unpopulated agent_json but valid guid should fail
         because resolve() requires explicit direct mode for GUID resolution."""
+        from application_sdk.errors import InvalidInputError
+
         inp = ExtractionInput(
             extraction_method="agent",
             credential_guid="abc-123",
         )
-        with pytest.raises(ValueError, match="No routable credential source"):
+        with pytest.raises(InvalidInputError, match="No routable credential source"):
             CredentialRef.resolve(inp)

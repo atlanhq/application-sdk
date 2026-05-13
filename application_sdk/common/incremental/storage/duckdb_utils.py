@@ -10,14 +10,16 @@ from __future__ import annotations
 import os
 import shutil
 import uuid
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator, List, Optional, Union
+from typing import Any, Optional
 
 from application_sdk.constants import (
     DUCKDB_COMMON_TEMP_FOLDER,
     DUCKDB_DEFAULT_MEMORY_LIMIT,
 )
+from application_sdk.errors import PreconditionError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -93,10 +95,14 @@ class DuckDBConnectionManager:
         )
 
     @property
-    def connection(self) -> "duckdb.DuckDBPyConnection":
+    def connection(self) -> duckdb.DuckDBPyConnection:
         """Get the underlying DuckDB connection."""
         if self._is_closed:
-            raise RuntimeError("DuckDB connection has been closed")
+            raise PreconditionError(
+                message="DuckDB connection has been closed",
+                resource="duckdb_connection",
+                expected_state="open",
+            )
         return self._connection
 
     def close(self) -> None:
@@ -114,10 +120,10 @@ class DuckDBConnectionManager:
             if self._auto_cleanup:
                 shutil.rmtree(self._instance_path, ignore_errors=True)
 
-    def __enter__(self) -> "DuckDBConnectionManager":
+    def __enter__(self) -> DuckDBConnectionManager:
         return self
 
-    def __exit__(self, *_: Any) -> None:
+    def __exit__(self, *_: object) -> None:
         self.close()
 
 
@@ -158,7 +164,7 @@ def escape_sql_string(value: str) -> str:
     return value.replace("'", "''")
 
 
-def json_scan(files: Union[List[Path], List[str]]) -> str:
+def json_scan(files: list[Path] | list[str]) -> str:
     """Generate DuckDB read_json_auto SQL fragment.
 
     Args:

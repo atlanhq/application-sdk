@@ -134,10 +134,12 @@ class TestPersistFileReference:
         assert a_side.decode().strip() == _hash_bytes(b"a")
 
     async def test_retained_tier_requires_run_prefix(self, store, tmp_path) -> None:
+        from application_sdk.errors import InvalidInputError
+
         f = tmp_path / "data.bin"
         f.write_bytes(b"x")
         ref = FileReference(local_path=str(f), tier=StorageTier.RETAINED)
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidInputError):
             await persist_file_reference(store, ref)
 
     async def test_retained_tier_with_output_path(self, store, tmp_path) -> None:

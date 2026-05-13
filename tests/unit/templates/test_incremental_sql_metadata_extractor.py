@@ -11,6 +11,7 @@ import pytest
 from application_sdk.app.task import is_task, task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+from application_sdk.errors import InvalidInputError, UnimplementedError
 from application_sdk.templates.contracts.incremental_sql import (
     ExecuteColumnBatchInput,
     ExecuteColumnBatchOutput,
@@ -202,23 +203,23 @@ class TestFetchColumnsSkip:
         assert result.chunk_count == 0
 
     def test_raises_not_implemented_when_full_extraction(self) -> None:
-        """fetch_columns must raise NotImplementedError on full extraction."""
+        """fetch_columns must raise UnimplementedError on full extraction."""
         extractor = self._make_extractor()
         inp = FetchColumnsIncrementalInput(
             marker_timestamp="",
             current_state_available=False,
         )
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             asyncio.run(extractor.fetch_columns(inp))
 
     def test_raises_not_implemented_when_marker_but_no_state(self) -> None:
-        """fetch_columns must raise NotImplementedError if state not available."""
+        """fetch_columns must raise UnimplementedError if state not available."""
         extractor = self._make_extractor()
         inp = FetchColumnsIncrementalInput(
             marker_timestamp="2025-01-01T00:00:00Z",
             current_state_available=False,
         )
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             asyncio.run(extractor.fetch_columns(inp))
 
 
@@ -477,7 +478,7 @@ class TestExecuteSingleColumnBatchInlineImports:
 
     async def test_raises_when_output_path_missing(self) -> None:
         extractor = _make_extractor()
-        with pytest.raises(ValueError, match="output_path"):
+        with pytest.raises(InvalidInputError, match="output_path"):
             await extractor.execute_single_column_batch(
                 ExecuteColumnBatchInput(output_path="", batch_index=0, total_batches=1)
             )
@@ -490,7 +491,7 @@ class TestExecuteSingleColumnBatchInlineImports:
         batch_file = batches_dir / "batch-0.json"
         batch_file.write_text('["t1", "t2", "t3"]', encoding="utf-8")
 
-        async def fake_execute_column_sql(self, sql, inp, ctx):  # noqa: ARG001
+        async def fake_execute_column_sql(self, sql, inp, ctx):
             return 42
 
         # bind execute_column_sql at instance level
@@ -568,7 +569,7 @@ class TestExecuteSingleColumnBatchInlineImports:
                 "application_sdk.storage.ops.download_file",
                 new=AsyncMock(return_value=None),
             ),
-            pytest.raises(NotImplementedError, match="execute_column_sql"),
+            pytest.raises(UnimplementedError, match="execute_column_sql"),
         ):
             await extractor.execute_single_column_batch(
                 ExecuteColumnBatchInput(

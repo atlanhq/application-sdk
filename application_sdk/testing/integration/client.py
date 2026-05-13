@@ -10,19 +10,20 @@ It wraps the existing APIServerClient and provides:
 """
 
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 from urllib.parse import urljoin
 
 import requests
 
+from application_sdk.errors import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
 def _to_v3_credentials(
-    creds: Union[Dict[str, Any], List[Dict[str, str]]],
-) -> List[Dict[str, str]]:
+    creds: dict[str, Any] | list[dict[str, str]],
+) -> list[dict[str, str]]:
     """Convert a flat credential dict to v3 ``[{"key": k, "value": v}]`` format.
 
     If *creds* is already a list (v3 format), it is returned as-is.
@@ -39,7 +40,7 @@ def _to_v3_credentials(
     if isinstance(creds, list):
         return creds
 
-    pairs: List[Dict[str, str]] = []
+    pairs: list[dict[str, str]] = []
     # Shallow-copy to avoid mutating the caller's dict
     creds = dict(creds)
     extra = creds.pop("extra", None)
@@ -115,9 +116,9 @@ class IntegrationTestClient:
     def call_api(
         self,
         api: str,
-        args: Dict[str, Any],
-        endpoint_override: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        args: dict[str, Any],
+        endpoint_override: str | None = None,
+    ) -> dict[str, Any]:
         """Call an API based on the API type.
 
         This is the main entry point for the test framework. It routes
@@ -148,12 +149,13 @@ class IntegrationTestClient:
         elif api_lower == "config":
             return self._call_config(args)
         else:
-            raise ValueError(
-                f"Unsupported API type: '{api}'. "
-                f"Must be one of: auth, metadata, preflight, workflow, config"
+            raise InvalidInputError(
+                message=f"Unsupported API type: '{api}'. Must be one of: auth, metadata, preflight, workflow, config",
+                field="api",
+                value_summary=api,
             )
 
-    def _call_auth(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _call_auth(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the authentication API.
 
         Sends v3-native credential format (list of key-value pairs).
@@ -169,7 +171,7 @@ class IntegrationTestClient:
         data = {"credentials": _to_v3_credentials(creds)}
         return self._post("/auth", data=data)
 
-    def _call_metadata(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _call_metadata(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the metadata API.
 
         Sends v3-native credential format and optional connection_config.
@@ -182,14 +184,14 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response.
         """
         creds = args.get("credentials", {})
-        data: Dict[str, Any] = {"credentials": _to_v3_credentials(creds)}
+        data: dict[str, Any] = {"credentials": _to_v3_credentials(creds)}
         if "connection_config" in args:
             data["connection_config"] = args["connection_config"]
         if "object_filter" in args:
             data["object_filter"] = args["object_filter"]
         return self._post("/metadata", data=data)
 
-    def _call_preflight(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _call_preflight(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the preflight check API.
 
         Sends v3-native credential format and connection_config.
@@ -205,7 +207,7 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response.
         """
         creds = args.get("credentials", {})
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "credentials": _to_v3_credentials(creds),
             "connection_config": args.get(
                 "connection_config", args.get("metadata", {})
@@ -219,9 +221,9 @@ class IntegrationTestClient:
 
     def _call_workflow(
         self,
-        args: Dict[str, Any],
-        endpoint_override: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        args: dict[str, Any],
+        endpoint_override: str | None = None,
+    ) -> dict[str, Any]:
         """Call the workflow start API.
 
         Converts flat credential dicts to v3 key-value format before sending.
@@ -240,7 +242,7 @@ class IntegrationTestClient:
             data["credentials"] = _to_v3_credentials(data["credentials"])
         return self._post(endpoint, data=data)
 
-    def _call_config(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _call_config(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the config GET or POST API.
 
         Args:
@@ -270,7 +272,7 @@ class IntegrationTestClient:
                 "error": f"Invalid config_action: '{action}'. Must be 'get' or 'update'",
             }
 
-    def get_config(self, workflow_id: str) -> Dict[str, Any]:
+    def get_config(self, workflow_id: str) -> dict[str, Any]:
         """Get the configuration for a workflow.
 
         Args:
@@ -282,8 +284,8 @@ class IntegrationTestClient:
         return self._get(f"/config/{workflow_id}")
 
     def update_config(
-        self, workflow_id: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, workflow_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         """Update the configuration for a workflow.
 
         Args:
@@ -299,7 +301,7 @@ class IntegrationTestClient:
         self,
         workflow_id: str,
         run_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get the status of a workflow execution.
 
         Args:
@@ -311,7 +313,7 @@ class IntegrationTestClient:
         """
         return self._get(f"/status/{workflow_id}/{run_id}")
 
-    def _get(self, endpoint: str) -> Dict[str, Any]:
+    def _get(self, endpoint: str) -> dict[str, Any]:
         """Make a GET request to the API.
 
         Args:
@@ -364,7 +366,7 @@ class IntegrationTestClient:
                 },
             }
 
-    def _post(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _post(self, endpoint: str, data: dict[str, Any]) -> dict[str, Any]:
         """Make a POST request to the API.
 
         Args:
@@ -420,7 +422,7 @@ class IntegrationTestClient:
                 },
             }
 
-    def _handle_response(self, response: requests.Response) -> Dict[str, Any]:
+    def _handle_response(self, response: requests.Response) -> dict[str, Any]:
         """Handle the HTTP response and convert to dictionary.
 
         Args:

@@ -89,7 +89,9 @@ class TestDaprStateStore:
             await self.store.delete("k1")
 
     async def test_list_keys_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError):
+        from application_sdk.errors.leaves import UnimplementedError
+
+        with pytest.raises(UnimplementedError):
             await self.store.list_keys()
 
 

@@ -13,6 +13,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 
 from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
+from application_sdk.errors import DependencyUnavailableError, InvalidInputError
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.utils import get_metric_enrichment_labels
@@ -139,9 +140,10 @@ class TemporalExecutorBackend:
         )
         if entry_point is not None and ep_meta is None:
             available = list(app_cls._app_metadata.entry_points)
-            raise ValueError(
-                f"Unknown entry point '{entry_point}' for app '{app_cls._app_name}'. "
-                f"Available: {available}"
+            raise InvalidInputError(
+                message=f"Unknown entry point {entry_point!r} for app {app_cls._app_name!r}. Available: {available}",
+                field="entry_point",
+                value_summary=entry_point,
             )
         output_type = (
             ep_meta.output_type
@@ -250,9 +252,9 @@ def _build_tls_config(
     has_cert = bool(client_cert_path)
     has_key = bool(client_private_key_path)
     if has_cert != has_key:
-        raise ValueError(
-            "mTLS requires both client cert and client private key. "
-            f"Got cert={client_cert_path!r}, key={client_private_key_path!r}"
+        raise InvalidInputError(
+            message=f"mTLS requires both client cert and client private key. Got cert={client_cert_path!r}, key={client_private_key_path!r}",
+            field="client_cert_path_or_client_private_key_path",
         )
 
     if client_cert_path:
@@ -411,6 +413,9 @@ async def create_temporal_client(
                     exc_info=True,
                 )
 
-    raise RuntimeError(
-        f"Failed to connect to Temporal at {host!r} after {connect_max_attempts} attempts"
+    raise DependencyUnavailableError(
+        message=f"Failed to connect to Temporal at {host!r} after {connect_max_attempts} attempts",
+        service="temporal",
+        target=host,
+        cause=last_exc,
     ) from last_exc

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from application_sdk.errors import InvalidInputError
 from application_sdk.observability.pushgateway import (
     PushGatewayClient,
     TemporalCoreCollector,
@@ -106,11 +107,11 @@ class TestTemporalCoreCollector:
 
 class TestPushGatewayClientInit:
     def test_empty_url_raises(self):
-        with pytest.raises(ValueError, match="url"):
+        with pytest.raises(InvalidInputError, match="url"):
             PushGatewayClient(url="", job="job")
 
     def test_empty_job_raises(self):
-        with pytest.raises(ValueError, match="job"):
+        with pytest.raises(InvalidInputError, match="job"):
             PushGatewayClient(url="http://localhost:9091", job="")
 
     def test_default_grouping_key_excludes_task_queue_to_avoid_label_conflict(self):

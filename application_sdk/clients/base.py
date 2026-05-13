@@ -13,6 +13,7 @@ from httpx._types import (
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.ssl_utils import get_ssl_context
 from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
+from application_sdk.errors import UnimplementedError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -137,9 +138,13 @@ class BaseClient(ClientInterface):
                 create a custom http_retry_transport.
 
         Raises:
-            NotImplementedError: If the subclass does not implement this method.
+            UnimplementedError: If the subclass does not implement this method.
         """
-        raise NotImplementedError("load method is not implemented")
+        raise UnimplementedError(
+            message="Subclass must implement load()",
+            operation="load",
+            reason="subclass_must_override",
+        )
 
     async def execute_http_get_request(
         self,

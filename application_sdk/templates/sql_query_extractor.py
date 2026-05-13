@@ -25,6 +25,7 @@ from typing import Any, ClassVar
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.credentials import legacy_credential_ref
+from application_sdk.errors import UnimplementedError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.sql_query import (
@@ -78,8 +79,10 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
         Override in your subclass to implement connector-specific batch counting.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement get_query_batches()."
+        raise UnimplementedError(
+            message=f"{type(self).__name__} must implement get_query_batches().",
+            operation="get_query_batches",
+            reason="subclass_must_override",
         )
 
     @task(timeout_seconds=3600)
@@ -88,8 +91,10 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
         Override this method in your connector subclass.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_queries()."
+        raise UnimplementedError(
+            message=f"{type(self).__name__} must implement fetch_queries().",
+            operation="fetch_queries",
+            reason="subclass_must_override",
         )
 
     async def run(self, input: QueryExtractionInput) -> QueryExtractionOutput:  # type: ignore[override]

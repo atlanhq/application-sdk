@@ -10,6 +10,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
 
+from application_sdk.errors import InternalError
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -1564,7 +1565,7 @@ class TestProcessRecord:
     def test_unsupported_type_raises_value_error(
         self, logger_adapter: AtlanLoggerAdapter
     ):
-        with pytest.raises(ValueError):
+        with pytest.raises(InternalError):
             logger_adapter.process_record(12345)
 
     def test_loguru_like_record_is_normalized(self, logger_adapter: AtlanLoggerAdapter):

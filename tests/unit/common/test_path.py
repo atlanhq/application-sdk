@@ -6,14 +6,15 @@ import pytest
 
 from application_sdk.common.path import convert_to_extended_path
 from application_sdk.constants import WINDOWS_EXTENDED_PATH_PREFIX
+from application_sdk.errors import InvalidInputError
 
 
 class TestConvertToExtendedPath:
     """Test suite for convert_to_extended_path function."""
 
     def test_raises_value_error_for_empty_path(self) -> None:
-        """Test that empty path raises ValueError."""
-        with pytest.raises(ValueError, match="Path cannot be empty"):
+        """Test that empty path raises InvalidInputError."""
+        with pytest.raises(InvalidInputError, match="Path cannot be empty"):
             convert_to_extended_path("")
 
     def test_returns_path_as_is_on_non_windows(self) -> None:

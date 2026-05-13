@@ -39,6 +39,7 @@ from application_sdk.discovery import (
     load_handler_class,
     validate_app_class,
 )
+from application_sdk.errors import InvalidInputError, PreconditionError
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Enable faulthandler so C-level crashes dump a traceback to stderr.
@@ -208,17 +209,22 @@ class AppConfig:
 
         app_module_raw = args.app or _env("ATLAN_APP_MODULE")
         if not app_module_raw:
-            raise ValueError(
-                "App module is required. Use --app or set ATLAN_APP_MODULE."
+            raise InvalidInputError(
+                message="App module is required. Use --app or set ATLAN_APP_MODULE.",
+                field="app_module",
             )
 
         app_module = app_module_raw.strip()
 
         if "," in app_module:
-            raise ValueError(
-                f"ATLAN_APP_MODULE contains a comma: {app_module!r}. "
-                "The multi-app pattern is not supported in v3. "
-                "Define multiple @entrypoint methods on a single App subclass instead."
+            raise InvalidInputError(
+                message=(
+                    f"ATLAN_APP_MODULE contains a comma: {app_module!r}. "
+                    "The multi-app pattern is not supported in v3. "
+                    "Define multiple @entrypoint methods on a single App subclass instead."
+                ),
+                field="app_module",
+                value_summary=app_module,
             )
 
         service_name = (
@@ -509,10 +515,14 @@ async def _create_infrastructure(
         )
     else:
         # No Dapr sidecar — require it for all modes
-        raise RuntimeError(
-            "Dapr sidecar not detected (DAPR_HTTP_PORT not set). "
-            "Run 'poe start-deps' to start local Dapr + Temporal, "
-            "or set DAPR_HTTP_PORT if running daprd manually."
+        raise PreconditionError(
+            message=(
+                "Dapr sidecar not detected (DAPR_HTTP_PORT not set). "
+                "Run 'poe start-deps' to start local Dapr + Temporal, "
+                "or set DAPR_HTTP_PORT if running daprd manually."
+            ),
+            resource="dapr_sidecar",
+            expected_state="running",
         )
 
 
@@ -1384,8 +1394,10 @@ def run_main(config: AppConfig) -> None:
     elif config.mode == "combined":
         asyncio.run(run_combined_mode(config))
     else:
-        raise ValueError(
-            f"Unknown mode: {config.mode!r}. Must be 'worker', 'handler', or 'combined'."
+        raise InvalidInputError(
+            message=f"Unknown mode: {config.mode!r}. Must be 'worker', 'handler', or 'combined'.",
+            field="mode",
+            value_summary=config.mode,
         )
 
 
@@ -1471,7 +1483,7 @@ def main() -> NoReturn:
 
     try:
         config = AppConfig.from_args_and_env(args)
-    except ValueError:
+    except (ValueError, InvalidInputError):
         logger.error("Configuration error", exc_info=True)
         sys.exit(1)
 

@@ -6,12 +6,12 @@ deadlock timeout.
 """
 
 import random
-from typing import Any, Dict
+from typing import Any
 
 from temporalio import activity
 
 from application_sdk.clients.redis import RedisClientAsync
-from application_sdk.common.error_codes import ActivityError
+from application_sdk.errors import DependencyUnavailableError
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -24,7 +24,7 @@ async def acquire_distributed_lock(
     max_locks: int,
     ttl_seconds: int = 100,
     owner_id: str = "default_owner",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Acquire a distributed lock with retry logic.
 
     Args:
@@ -45,7 +45,7 @@ async def acquire_distributed_lock(
     # Input validation
     if max_locks <= 0:
         raise ApplicationError(
-            f"{ActivityError.LOCK_ACQUISITION_ERROR}: max_locks must be greater than 0, got {max_locks}",
+            f"max_locks must be greater than 0, got {max_locks}",
             non_retryable=True,
         )
     slot = random.randint(0, max_locks - 1)
@@ -66,12 +66,13 @@ async def acquire_distributed_lock(
                     "owner_id": owner_id,
                 }
 
-            raise ActivityError(
-                f"{ActivityError.LOCK_ACQUISITION_ERROR}: Lock not acquired for {resource_id}, will retry after some time"
+            raise DependencyUnavailableError(
+                message=f"Lock not acquired for {resource_id}, will retry after some time",
+                service="dapr_lock",
             )
     except Exception as e:
         # Redis connection or operation failed - propagate as activity error
-        if isinstance(e, ActivityError):
+        if isinstance(e, DependencyUnavailableError):
             raise
         raise ApplicationError(
             f"Redis error during lock acquisition for {resource_id}",

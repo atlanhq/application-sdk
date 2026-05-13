@@ -41,8 +41,13 @@ from pydantic import BaseModel
 
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
+from application_sdk.clients.azure._azure_errors import (
+    AzureAuthError,
+    AzureCredentialParseError,
+    AzureNoCredentialError,
+)
 from application_sdk.clients.azure.auth import AzureAuthProvider
-from application_sdk.common.error_codes import ClientError
+from application_sdk.errors import AppError
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -129,14 +134,18 @@ class AzureClient(ClientInterface):
                 Must include tenant_id, client_id, and client_secret.
 
         Raises:
-            ClientError: If connection fails due to authentication or connection issues
+            AzureNoCredentialError: If the client has been closed.
+            AzureAuthError: If connection fails due to authentication issues.
+            AzureCredentialParseError: If credential parameters are invalid.
         """
         if credentials:
             self.credentials = credentials
 
         if self._executor is None:
-            raise ClientError(
-                f"{ClientError.CLIENT_AUTH_ERROR}: client has been closed; instantiate a new AzureClient"
+            raise AzureNoCredentialError(
+                message="Azure client has been closed; instantiate a new AzureClient",
+                resource="azure_client",
+                expected_state="open",
             )
 
         try:
@@ -182,22 +191,36 @@ class AzureClient(ClientInterface):
             logger.info("Azure client loaded successfully")
 
         except ClientAuthenticationError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise AzureAuthError(
+                message=str(e),
+                auth_method="azure_service_principal",
+                cause=e,
+            ) from e
         except AzureError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise AzureAuthError(
+                message=str(e),
+                auth_method="azure_service_principal",
+                cause=e,
+            ) from e
         except ValueError as e:
-            raise ClientError(
-                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {e!s}"
+            raise AzureCredentialParseError(
+                message=f"Invalid parameters: {e!s}",
+                field="credentials",
+                cause=e,
             ) from e
         except TypeError as e:
-            raise ClientError(
-                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameter types - {e!s}"
+            raise AzureCredentialParseError(
+                message=f"Invalid parameter types: {e!s}",
+                field="credentials",
+                cause=e,
             ) from e
-        except ClientError:
+        except AppError:
             raise
         except Exception as e:
-            raise ClientError(
-                f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {e!s}"
+            raise AzureAuthError(
+                message=f"Unexpected error: {e!s}",
+                auth_method="azure_service_principal",
+                cause=e,
             ) from e
 
     async def close(self) -> None:
@@ -296,11 +319,14 @@ class AzureClient(ClientInterface):
         Test the Azure connection by attempting to get a token.
 
         Raises:
-            ClientAuthenticationError: If connection test fails.
+            AzureNoCredentialError: If no credential is available.
+            AzureAuthError: If connection test fails.
         """
         if not self.credential:
-            raise ClientError(
-                f"{ClientError.AUTH_CREDENTIALS_ERROR}: No credential available for connection test"
+            raise AzureNoCredentialError(
+                message="No credential available for connection test",
+                resource="azure_credential",
+                expected_state="credential_loaded",
             )
 
         try:
@@ -309,16 +335,28 @@ class AzureClient(ClientInterface):
                 self.credential.get_token, AZURE_MANAGEMENT_API_ENDPOINT
             )
         except ClientAuthenticationError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise AzureAuthError(
+                message=str(e),
+                auth_method="azure_service_principal",
+                cause=e,
+            ) from e
         except AzureError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise AzureAuthError(
+                message=str(e),
+                auth_method="azure_service_principal",
+                cause=e,
+            ) from e
         except ValueError as e:
-            raise ClientError(
-                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {e!s}"
+            raise AzureCredentialParseError(
+                message=f"Invalid parameters: {e!s}",
+                field="credentials",
+                cause=e,
             ) from e
         except Exception as e:
-            raise ClientError(
-                f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {e!s}"
+            raise AzureAuthError(
+                message=f"Unexpected error: {e!s}",
+                auth_method="azure_service_principal",
+                cause=e,
             ) from e
 
     def __enter__(self):

@@ -20,6 +20,7 @@ import pytest
 
 # These tests intentionally import a private Temporal backend module because
 # they verify internal client/runtime wiring that is not exposed publicly.
+from application_sdk.errors import DependencyUnavailableError, InvalidInputError
 from application_sdk.execution._temporal import backend as backend_module
 from application_sdk.execution._temporal.backend import (
     TemporalExecutorBackend,
@@ -134,7 +135,7 @@ class TestTemporalExecutorBackendExecute:
         backend = TemporalExecutorBackend(client=client)
         app_cls = _make_app_cls(name="noeps", entry_points={"a": mock.MagicMock()})
         ctx = mock.MagicMock(app_name="noeps", correlation_id="c")
-        with pytest.raises(ValueError, match="Unknown entry point"):
+        with pytest.raises(InvalidInputError, match="Unknown entry point"):
             await backend.execute(
                 app_cls,
                 _make_input_data(),
@@ -247,11 +248,11 @@ class TestBuildTlsConfig:
             _build_tls_config(server_root_ca_cert_path=str(tmp_path / "missing.pem"))
 
     def test_raises_when_client_cert_without_key(self, tmp_path: Any) -> None:
-        with pytest.raises(ValueError, match="mTLS requires both"):
+        with pytest.raises(InvalidInputError, match="mTLS requires both"):
             _build_tls_config(client_cert_path=str(tmp_path / "client.pem"))
 
     def test_raises_when_client_key_without_cert(self, tmp_path: Any) -> None:
-        with pytest.raises(ValueError, match="mTLS requires both"):
+        with pytest.raises(InvalidInputError, match="mTLS requires both"):
             _build_tls_config(client_private_key_path=str(tmp_path / "key.pem"))
 
     def test_raises_when_client_cert_missing(self, tmp_path: Any) -> None:
@@ -455,7 +456,9 @@ class TestCreateTemporalClient:
             mock.patch.object(backend_module.Client, "connect", new=connect_mock),
             mock.patch.object(backend_module.asyncio, "sleep", new=mock.AsyncMock()),
         ):
-            with pytest.raises(RuntimeError, match="Failed to connect to Temporal"):
+            with pytest.raises(
+                DependencyUnavailableError, match="Failed to connect to Temporal"
+            ):
                 await create_temporal_client(
                     connect_max_attempts=2,
                     connect_retry_delay_seconds=0.0,

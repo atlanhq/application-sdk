@@ -15,6 +15,7 @@ from unittest import mock
 import pytest
 
 from application_sdk.contracts.events import ApplicationEventNames, EventTypes
+from application_sdk.errors import AuthError, InvalidInputError
 from application_sdk.execution._temporal.auth import (
     TemporalAuthConfig,
     TemporalAuthManager,
@@ -289,7 +290,7 @@ class TestResolveTokenUrl:
 
     def test_raises_when_neither_set(self) -> None:
         manager = _make_manager(token_url="", base_url="")
-        with pytest.raises(ValueError, match="token_url or base_url"):
+        with pytest.raises(InvalidInputError, match="token_url or base_url"):
             manager._resolve_token_url()
 
 
@@ -379,7 +380,7 @@ class TestAcquireInitialToken:
         svc = _stub_token_service(manager)
         svc.get_token = mock.AsyncMock(side_effect=ValueError("bad creds"))
 
-        with pytest.raises(RuntimeError, match="Failed to acquire initial"):
+        with pytest.raises(AuthError, match="Failed to acquire initial"):
             await manager.acquire_initial_token()
 
     @pytest.mark.asyncio
@@ -399,7 +400,7 @@ class TestAcquireInitialToken:
         svc = _stub_token_service(manager)
         svc.get_token = mock.AsyncMock(side_effect=original)
 
-        with pytest.raises(RuntimeError) as ei:
+        with pytest.raises(AuthError) as ei:
             await manager.acquire_initial_token()
 
         assert ei.value.__cause__ is original

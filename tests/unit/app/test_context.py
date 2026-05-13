@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from application_sdk.app._context_errors import NoSecretStoreError, NoStateStoreError
 from application_sdk.app.context import (
     AppContext,
     AppMetadata,
@@ -149,13 +150,13 @@ class TestAppContextStateStore:
     @pytest.mark.asyncio
     async def test_save_state_without_store_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No state store configured"):
+        with pytest.raises(NoStateStoreError, match="No state store configured"):
             await ctx.save_state("k", {})
 
     @pytest.mark.asyncio
     async def test_load_state_without_store_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No state store configured"):
+        with pytest.raises(NoStateStoreError, match="No state store configured"):
             await ctx.load_state("k")
 
 
@@ -175,7 +176,7 @@ class TestAppContextSecretStore:
     @pytest.mark.asyncio
     async def test_get_secret_without_store_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No secret store configured"):
+        with pytest.raises(NoSecretStoreError, match="No secret store configured"):
             await ctx.get_secret("anything")
 
     @pytest.mark.asyncio
@@ -227,7 +228,7 @@ class TestAppContextCredentialResolution:
         cred_store = MockCredentialStore()
         ref = cred_store.add_basic("svc", username="u", password="p")
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No secret store configured"):
+        with pytest.raises(NoSecretStoreError, match="No secret store configured"):
             await ctx.resolve_credential(ref)
 
     @pytest.mark.asyncio
@@ -235,7 +236,7 @@ class TestAppContextCredentialResolution:
         cred_store = MockCredentialStore()
         ref = cred_store.add_basic("svc", username="u", password="p")
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No secret store configured"):
+        with pytest.raises(NoSecretStoreError, match="No secret store configured"):
             await ctx.resolve_credential_raw(ref)
 
 
@@ -478,13 +479,13 @@ class TestModuleHelpers:
 
     def test_is_atlan_logger_duck_type(self) -> None:
         class Atlan:
-            def process(self):  # noqa: D401
+            def process(self):
                 return None
 
             logger_name = "x"
 
         class NotAtlan:
-            def process(self):  # noqa: D401
+            def process(self):
                 return None
 
         assert _is_atlan_logger(Atlan()) is True
@@ -671,7 +672,7 @@ class TestTaskExecutionContextRunInThread:
         ``application_sdk.execution.heartbeat`` without updating ``context.py``,
         this assertion fails fast with a clear error.
         """
-        from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
+        from application_sdk.execution.heartbeat import run_in_thread
 
         assert callable(run_in_thread)
 
