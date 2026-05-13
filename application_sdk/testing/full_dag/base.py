@@ -335,21 +335,28 @@ class BaseFullDAGE2ETest:
 
         Reads ``self.manifest_path`` (relative to the test's cwd —
         typically the connector repo root), parses out the ``dag``
-        block, and substitutes the two curly-brace placeholders the
-        configurator normally fills:
+        block, and substitutes the placeholders the configurator
+        normally fills at deployment time.
 
-          * ``{app_name}`` → :attr:`connector_short_name`
-          * ``{deployment_name}`` →
-            - in ``extract.inputs.task_queue``: the agent / CI worker
-              identity (``atlan-{agent_name}`` style queue derived from
-              :meth:`agent_spec`).
-            - elsewhere (qi / publish / lineage / lineage-publish):
-              :attr:`tenant_deployment_name` (default ``production``).
+        Two substitution passes:
 
-        Mustache placeholders (``{{credentialGuid}}``, ``{{connection}}``,
-        ``{{include-filter}}``, etc.) are left in place — AE substitutes
-        them at submit time from the matching named parameters in the
-        submit payload.
+        1. Curly-brace `{...}` (the configurator's static fills):
+           ``{app_name}`` → :attr:`connector_short_name`; and
+           ``{deployment_name}`` → CI agent queue on ``extract``,
+           :attr:`tenant_deployment_name` elsewhere.
+
+        2. Mustache `{{...}}` (the configurator's dynamic fills): these
+           map to per-run identities the harness owns — connection,
+           agent_json, filters, extraction_method, etc. AE does NOT
+           runtime-substitute these in the seed args; they have to be
+           concrete by the time the seed version is published or the
+           worker receives them as literal placeholder strings and
+           hangs.
+
+        ``{{credential-guid}}`` is special-cased: substituted with
+        ``{{credentialGuid}}`` (camelCase, the AE-recognised
+        Mustache that *is* runtime-substituted from the submit's
+        ``payload[].body``).
 
         Raises:
             RuntimeError: If ``manifest_path`` can't be read or doesn't
@@ -384,9 +391,8 @@ class BaseFullDAGE2ETest:
                 return extract_task_queue
             return raw.replace("{deployment_name}", self.tenant_deployment_name)
 
-        # In-place substitution — manifest's dag is the seed shape we
-        # need to publish. We don't deep-copy because we're parsing a
-        # freshly loaded file each call; nothing reuses this dict.
+        # Pass 1: curly-brace `{...}` substitutions on the per-node
+        # metadata (app_name, task_queue).
         for name, node in dag.items():
             inputs = node.get("inputs")
             if not isinstance(inputs, dict):
@@ -403,6 +409,19 @@ class BaseFullDAGE2ETest:
             if isinstance(tq, str):
                 inputs["task_queue"] = _sub_queue(name, tq)
 
+        # Pass 2: Mustache `{{...}}` substitutions on the per-node args
+        # (the dynamic fills the configurator does at deployment time —
+        # we do them in-process so the published seed has concrete
+        # values the worker can act on).
+        mustache_subs = self._mustache_substitutions()
+        for name, node in dag.items():
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            args = inputs.get("args")
+            if isinstance(args, dict):
+                inputs["args"] = self._apply_mustache_subs(args, mustache_subs)
+
         logger.info(
             "Loaded seed DAG from %s (%d nodes: %s)",
             path,
@@ -410,6 +429,76 @@ class BaseFullDAGE2ETest:
             ", ".join(sorted(dag.keys())),
         )
         return dag
+
+    def _mustache_substitutions(self) -> dict:
+        """Build the ``{{...}}`` → runtime-value map for seed-DAG fills.
+
+        Acts as the local-CI equivalent of the configurator's
+        deployment-time substitution: takes the per-run identities the
+        harness owns (connection, agent_json, filter strings, etc.) and
+        maps them to the Mustache keys the connector's manifest uses.
+
+        ``{{credential-guid}}`` is the only key we forward to AE rather
+        than fill in directly — its value is ``{{credentialGuid}}``
+        (camelCase), which AE *does* runtime-substitute from the
+        ``payload[].body`` credential it creates at submit time.
+        """
+        agent = self.agent_spec()
+        connection = self.connection_spec()
+        database = self.database_spec()
+
+        # Full Connection entity shape — same JSON we attach as the
+        # `connection` submit parameter in build_ae_payload.
+        connection_entity = {
+            "attributes": connection.attributes(),
+            "typeName": "Connection",
+        }
+
+        # Agent-json shape mirrors what build_seed_dag's hand-crafted
+        # extract_args used pre-manifest: AGENT mode → secret-store
+        # bundle keys; DIRECT mode → None (worker takes credentials
+        # straight from the credential the credential_guid points at).
+        if agent is not None:
+            agent_json: dict | None = {
+                "host": database.host,
+                "port": database.port,
+                "auth-type": database.auth_type,
+                "agent-name": agent.agent_name,
+                "agent-type": agent.agent_type,
+                "key-type": agent.key_type,
+                "aws-auth-method": agent.aws_auth_method,
+                "azure-auth-method": agent.azure_auth_method,
+                "basic.username": (
+                    f"SDR_{self.connector_short_name.upper()}_USERNAME"
+                ),
+                "basic.password": (
+                    f"SDR_{self.connector_short_name.upper()}_PASSWORD"
+                ),
+            }
+        else:
+            agent_json = None
+
+        return {
+            "{{credential}}": None,
+            "{{credential-guid}}": "{{credentialGuid}}",
+            "{{connection}}": connection_entity,
+            "{{extraction-method}}": self.mode.value,
+            "{{agent-json}}": agent_json,
+            "{{include-filter}}": self.include_filter,
+            "{{exclude-filter}}": self.exclude_filter,
+            "{{exclude-table-regex}}": "",
+            "{{preflight-check}}": True,
+        }
+
+    def _apply_mustache_subs(self, obj, subs: dict):
+        """Recursively replace exact-match ``{{...}}`` strings."""
+        if isinstance(obj, dict):
+            return {k: self._apply_mustache_subs(v, subs) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._apply_mustache_subs(x, subs) for x in obj]
+        if isinstance(obj, str) and obj in subs:
+            return subs[obj]
+        return obj
 
     # ------------------------------------------------------------------
     # The actual flow

@@ -34,9 +34,15 @@ _MANIFEST: dict[str, Any] = {
                 "app_name": "{app_name}",
                 "task_queue": "atlan-mysql-{deployment_name}",
                 "args": {
+                    "credential": "{{credential}}",
                     "credential_guid": "{{credential-guid}}",
                     "connection": "{{connection}}",
+                    "extraction_method": "{{extraction-method}}",
+                    "agent_json": "{{agent-json}}",
                     "include_filter": "{{include-filter}}",
+                    "exclude_filter": "{{exclude-filter}}",
+                    "exclude_table_regex": "{{exclude-table-regex}}",
+                    "preflight_check": "{{preflight-check}}",
                 },
             },
         },
@@ -178,31 +184,59 @@ def test_seed_dag_tenant_deployment_name_override(
     assert dag["publish"]["inputs"]["task_queue"] == "atlan-publish-staging"
 
 
-def test_seed_dag_preserves_mustache_placeholders(
+def test_seed_dag_substitutes_mustache_placeholders(
     manifest_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AE-substituted ``{{...}}`` placeholders must reach AE intact."""
+    """Mustache ``{{...}}`` placeholders are filled with runtime values.
+
+    AE does NOT runtime-substitute these in the seed args — they have
+    to be concrete by the time the seed version is published, or the
+    worker receives them as literal placeholder strings and hangs.
+    Only ``{{credentialGuid}}`` (camelCase, set on credential_guid)
+    survives because AE *does* substitute that one from the submit's
+    payload[].body.
+    """
     _bootstrap_env(monkeypatch)
     cls = _make_test(str(manifest_file))
     instance = cls()
     instance.setup_method()
 
-    dag = instance._seed_dag_from_manifest(
-        extract_task_queue="atlan-mysql-test"
-    )
+    dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
 
     extract_args = dag["extract"]["inputs"]["args"]
-    assert extract_args["credential_guid"] == "{{credential-guid}}"
-    assert extract_args["connection"] == "{{connection}}"
-    assert extract_args["include_filter"] == "{{include-filter}}"
-    assert dag["publish"]["inputs"]["args"]["connection_entity"] == "{{connection}}"
+    # credential_guid forwards to AE via the camelCase placeholder
+    assert extract_args["credential_guid"] == "{{credentialGuid}}"
+    # connection is the full Connection entity, not a placeholder
+    assert isinstance(extract_args["connection"], dict)
+    assert extract_args["connection"]["typeName"] == "Connection"
+    # filter is the literal string the test class configures
+    assert extract_args["include_filter"] == instance.include_filter
+    # extraction_method is filled with the mode value
+    assert extract_args["extraction_method"] == "agent"
+    # agent_json is the actual agent dict in AGENT mode
+    assert isinstance(extract_args["agent_json"], dict)
+    assert extract_args["agent_json"]["agent-name"] == "mysql-test"
+    # publish's connection_entity is the full Connection JSON too
+    assert isinstance(dag["publish"]["inputs"]["args"]["connection_entity"], dict)
+    # No literal {{...}} left anywhere
+    import json as _json
+
+    rendered = _json.dumps(dag)
+    # {{credentialGuid}} is the only acceptable remaining Mustache
+    assert "{{credential-guid}}" not in rendered
+    assert "{{connection}}" not in rendered
+    assert "{{include-filter}}" not in rendered
+    assert "{{extraction-method}}" not in rendered
+    assert "{{agent-json}}" not in rendered
 
 
 def test_seed_dag_preserves_publish_creation_flags(
     manifest_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """All six publish flags carry through untouched — regression guard for
-    the silent-update-only-mode bug we hit on run 25788289284."""
+    """All publish flags carry through untouched — regression guard for
+    the silent-update-only-mode bug we hit on run 25788289284. Boolean
+    flags don't get touched by Mustache substitution; only the
+    ``connection_entity`` placeholder is filled."""
     _bootstrap_env(monkeypatch)
     cls = _make_test(str(manifest_file))
     instance = cls()
@@ -214,8 +248,125 @@ def test_seed_dag_preserves_publish_creation_flags(
     assert pub_args["connection_creation_enabled"] is True
     assert pub_args["executor_enabled"] is True
     assert pub_args["connection_cache_enabled"] is True
-    # connection_entity stays as the Mustache placeholder for AE to fill
-    assert pub_args["connection_entity"] == "{{connection}}"
+    # connection_entity is filled with the full Connection JSON
+    assert isinstance(pub_args["connection_entity"], dict)
+    assert pub_args["connection_entity"]["typeName"] == "Connection"
+    attrs = pub_args["connection_entity"]["attributes"]
+    assert attrs["connectorName"] == "mysql"
+    # The QN on the Connection attributes carries the run-stamped id
+    assert attrs["qualifiedName"].startswith("default/mysql/e2e-full-ci-")
+
+
+def test_seed_dag_direct_mode_agent_json_is_null(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DIRECT mode (no agent_spec) substitutes ``{{agent-json}}`` with None.
+
+    The worker reads credentials straight from the credential the
+    credential_guid points at, so there's no agent_json bundle to ship.
+    """
+    _bootstrap_env(monkeypatch)
+    cls = _make_test(str(manifest_file))
+    cls.mode = RunMode.DIRECT
+    cls.agent_spec = lambda self: None  # type: ignore[assignment]
+    instance = cls()
+    instance.setup_method()
+
+    dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-default")
+    extract_args = dag["extract"]["inputs"]["args"]
+    assert extract_args["agent_json"] is None
+    assert extract_args["extraction_method"] == "direct"
+
+
+def test_seed_dag_result_is_json_serialisable(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The substituted DAG must be a pure JSON tree — it's about to be
+    POSTed as the seed version body. Catches accidentally embedding
+    non-serialisable objects (Enum / dataclass / function) in the subs.
+    """
+    _bootstrap_env(monkeypatch)
+    cls = _make_test(str(manifest_file))
+    instance = cls()
+    instance.setup_method()
+
+    dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
+    # If this raises TypeError the substitution leaked a non-JSON value
+    rendered = json.dumps(dag)
+    assert len(rendered) > 0
+
+
+def test_seed_dag_substitution_only_replaces_exact_mustache_keys(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Substring matches inside a longer string are NOT replaced — the
+    substitution only fires on exact ``{{X}}`` string values."""
+    # Add a dummy node arg with a string that *contains* but doesn't
+    # equal a Mustache placeholder. Should be left alone.
+    p = manifest_file
+    raw = json.loads(p.read_text())
+    raw["dag"]["extract"]["inputs"]["args"]["some_label"] = (
+        "label-{{connection}}-suffix"
+    )
+    p.write_text(json.dumps(raw))
+
+    _bootstrap_env(monkeypatch)
+    cls = _make_test(str(p))
+    instance = cls()
+    instance.setup_method()
+
+    dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
+    # The substring-containing label is left as-is
+    assert (
+        dag["extract"]["inputs"]["args"]["some_label"]
+        == "label-{{connection}}-suffix"
+    )
+    # And the exact-match Mustache field WAS substituted
+    assert isinstance(dag["extract"]["inputs"]["args"]["connection"], dict)
+
+
+def test_seed_dag_credential_guid_forwards_to_ae(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``{{credential-guid}}`` is the one Mustache we forward — replaced
+    with ``{{credentialGuid}}`` (camelCase) which AE *does* substitute
+    at submit time from the payload[].body credential."""
+    _bootstrap_env(monkeypatch)
+    cls = _make_test(str(manifest_file))
+    instance = cls()
+    instance.setup_method()
+
+    dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
+    assert (
+        dag["extract"]["inputs"]["args"]["credential_guid"]
+        == "{{credentialGuid}}"
+    )
+
+
+def test_seed_dag_substitution_walks_nested_lists(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mustache values inside list args are still substituted."""
+    p = manifest_file
+    raw = json.loads(p.read_text())
+    raw["dag"]["extract"]["inputs"]["args"]["nested_list"] = [
+        "{{include-filter}}",
+        "plain-string",
+        ["{{exclude-filter}}", 42],
+    ]
+    p.write_text(json.dumps(raw))
+
+    _bootstrap_env(monkeypatch)
+    cls = _make_test(str(p))
+    instance = cls()
+    instance.setup_method()
+
+    dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
+    nested = dag["extract"]["inputs"]["args"]["nested_list"]
+    assert nested[0] == instance.include_filter
+    assert nested[1] == "plain-string"
+    assert nested[2][0] == instance.exclude_filter
+    assert nested[2][1] == 42
 
 
 def test_seed_dag_preserves_jsonpath_extract_outputs(
