@@ -8,10 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from application_sdk.testing.full_dag import (
-    RunMode,
-    SQLAppE2EFullTest,
-)
+from application_sdk.testing.full_dag import RunMode, SQLAppE2EFullTest
 from application_sdk.testing.full_dag.payload import AgentSpec, DatabaseSpec
 
 

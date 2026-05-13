@@ -32,11 +32,7 @@ import os
 from typing import ClassVar
 
 from application_sdk.testing.full_dag.base import BaseFullDAGE2ETest
-from application_sdk.testing.full_dag.payload import (
-    AgentSpec,
-    ConnectionSpec,
-    RunMode,
-)
+from application_sdk.testing.full_dag.payload import AgentSpec, ConnectionSpec, RunMode
 
 
 class SQLAppE2EFullTest(BaseFullDAGE2ETest):

@@ -14,10 +14,7 @@ from typing import Any
 import pytest
 
 from application_sdk.testing.full_dag import BaseFullDAGE2ETest, RunMode
-from application_sdk.testing.full_dag.payload import (
-    AgentSpec,
-    DatabaseSpec,
-)
+from application_sdk.testing.full_dag.payload import AgentSpec, DatabaseSpec
 
 # Minimum-viable manifest mirroring the mysql-app shape with `{app_name}`
 # and `{deployment_name}` placeholders intact. Used by tests that want
@@ -130,9 +127,7 @@ def test_seed_dag_from_manifest_substitutes_app_name(
     instance = cls()
     instance.setup_method()
 
-    dag = instance._seed_dag_from_manifest(
-        extract_task_queue="atlan-mysql-test-queue"
-    )
+    dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test-queue")
 
     assert dag["extract"]["app_name"] == "mysql"
     assert dag["extract"]["inputs"]["app_name"] == "mysql"
@@ -153,13 +148,8 @@ def test_seed_dag_substitutes_deployment_name_per_node(
         extract_task_queue="atlan-mysql-e2e-full-ci-9999999"
     )
 
-    assert (
-        dag["extract"]["inputs"]["task_queue"] == "atlan-mysql-e2e-full-ci-9999999"
-    )
-    assert (
-        dag["qi"]["inputs"]["task_queue"]
-        == "atlan-query-intelligence-production"
-    )
+    assert dag["extract"]["inputs"]["task_queue"] == "atlan-mysql-e2e-full-ci-9999999"
+    assert dag["qi"]["inputs"]["task_queue"] == "atlan-query-intelligence-production"
     assert dag["publish"]["inputs"]["task_queue"] == "atlan-publish-production"
     # Default tenant_deployment_name = production. No literal {deployment_name}
     # template strings should leak.
@@ -176,9 +166,7 @@ def test_seed_dag_tenant_deployment_name_override(
     instance = cls()
     instance.setup_method()
 
-    dag = instance._seed_dag_from_manifest(
-        extract_task_queue="atlan-mysql-test"
-    )
+    dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
 
     assert dag["qi"]["inputs"]["task_queue"] == "atlan-query-intelligence-staging"
     assert dag["publish"]["inputs"]["task_queue"] == "atlan-publish-staging"
@@ -318,8 +306,7 @@ def test_seed_dag_substitution_only_replaces_exact_mustache_keys(
     dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
     # The substring-containing label is left as-is
     assert (
-        dag["extract"]["inputs"]["args"]["some_label"]
-        == "label-{{connection}}-suffix"
+        dag["extract"]["inputs"]["args"]["some_label"] == "label-{{connection}}-suffix"
     )
     # And the exact-match Mustache field WAS substituted
     assert isinstance(dag["extract"]["inputs"]["args"]["connection"], dict)
@@ -337,10 +324,7 @@ def test_seed_dag_credential_guid_forwards_to_ae(
     instance.setup_method()
 
     dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
-    assert (
-        dag["extract"]["inputs"]["args"]["credential_guid"]
-        == "{{credentialGuid}}"
-    )
+    assert dag["extract"]["inputs"]["args"]["credential_guid"] == "{{credentialGuid}}"
 
 
 def test_seed_dag_substitution_walks_nested_lists(

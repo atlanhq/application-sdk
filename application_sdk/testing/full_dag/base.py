@@ -492,12 +492,8 @@ class BaseFullDAGE2ETest:
                 "key-type": agent.key_type,
                 "aws-auth-method": agent.aws_auth_method,
                 "azure-auth-method": agent.azure_auth_method,
-                "basic.username": (
-                    f"SDR_{self.connector_short_name.upper()}_USERNAME"
-                ),
-                "basic.password": (
-                    f"SDR_{self.connector_short_name.upper()}_PASSWORD"
-                ),
+                "basic.username": (f"SDR_{self.connector_short_name.upper()}_USERNAME"),
+                "basic.password": (f"SDR_{self.connector_short_name.upper()}_PASSWORD"),
             }
         else:
             agent_json = None
