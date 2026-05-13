@@ -15,17 +15,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.clients._sql_errors import SqlClientAuthFailedError
 from application_sdk.common.error_codes import ClientError
 
 # ---------------------------------------------------------------------------
-# BLDX-1180 — async SQL load() raises ClientError, not ValueError
+# BLDX-1180 — async SQL load() raises SqlClientAuthFailedError, not ValueError
 # ---------------------------------------------------------------------------
 
 
 class TestAsyncSqlLoadErrorContract:
-    """``AsyncBaseSQLClient.load()`` must raise ``ClientError`` on auth /
-    connection failure, mirroring sync ``BaseSQLClient.load()``. Before
-    BLDX-1180 it raised generic ``ValueError(str(e))``.
+    """``AsyncBaseSQLClient.load()`` must raise ``SqlClientAuthFailedError`` on
+    auth / connection failure. Before BLDX-1180 it raised a generic
+    ``ValueError(str(e))``. Migrated from ``ClientError`` to the typed
+    ``SqlClientAuthFailedError(AuthError)`` subclass per BLDX-1261.
     """
 
     @pytest.mark.asyncio
@@ -46,14 +48,17 @@ class TestAsyncSqlLoadErrorContract:
         # `create_async_engine` is imported inline inside `load()` (PLC0415
         # exception); patch at the source module so the inline import picks
         # up the mock.
-        with patch(
-            "sqlalchemy.ext.asyncio.create_async_engine",
-            side_effect=RuntimeError("boom"),
+        with (
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                side_effect=RuntimeError("boom"),
+            ),
+            pytest.raises(SqlClientAuthFailedError) as exc_info,
         ):
-            with pytest.raises(ClientError) as exc_info:
-                await client.load({"username": "u", "password": "p"})
+            await client.load({"username": "u", "password": "p"})
 
-        assert str(ClientError.SQL_CLIENT_AUTH_ERROR) in str(exc_info.value)
+        assert exc_info.value.message == "SQL client authentication failed"
+        assert isinstance(exc_info.value.cause, RuntimeError)
 
 
 # ---------------------------------------------------------------------------
