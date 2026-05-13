@@ -67,6 +67,37 @@ _HTTP_TIMEOUT = 30
 # we don't drown the log on a fast happy-path run.
 _HEARTBEAT_SECONDS = 30
 
+# Per-status glyphs for the poll-loop log line — gives the operator a
+# quick visual scan of "what's done / what's running" without parsing
+# a long ``a=Succeeded; b=Running; c=Pending`` string. Used by
+# :func:`_node_glyph` (per-node) and :data:`_RUN_GLYPHS` (top-level).
+_NODE_GLYPHS = {
+    "Succeeded": "✓",
+    "Failed": "✗",
+    "Running": "⟳",
+    "Pending": "·",
+    "Cancelled": "⊘",
+    "TimedOut": "⏱",
+}
+_RUN_GLYPHS = {
+    "Succeeded": "✓",
+    "Failed": "✗",
+    "Running": "⟳",
+    "Pending": "·",
+    "Cancelled": "⊘",
+    "TimedOut": "⏱",
+}
+
+
+def _node_glyph(node) -> str:
+    """Format one node as ``glyph:name`` for the poll-loop summary."""
+    g = _NODE_GLYPHS.get(node.status.value, "?")
+    # Trim long node names so the per-poll line stays scannable
+    name = node.name.replace("lineage-publish", "lin-pub").replace(
+        "lineage-app", "lin-app"
+    )
+    return f"{g}{name}"
+
 
 class DAGNodeStatus(str, Enum):
     """Status values returned by ``native-status`` per DAG node."""
@@ -160,13 +191,30 @@ class AEWorkflowClient:
     Args:
         tenant_url: Base URL of the tenant (e.g. ``https://devex.atlan.com``).
             Trailing slash is stripped if present.
-        api_token: Bearer token. Accepts either a long-lived API key or a
-            short-lived OAuth ``client_credentials`` access token.
+        api_token: Bearer token used for AE / Atlas REST calls. Accepts
+            either a long-lived API key or a short-lived OAuth
+            ``client_credentials`` access token.
+        oauth_client_id / oauth_client_secret: Optional OAuth client pair.
+            When supplied, the lazily-constructed pyatlan ``AtlanClient``
+            (used for asset search + role-cache lookups) authenticates via
+            OAuth ``client_credentials`` instead of the bearer api_token.
+            This yields a *different* service-account identity than the
+            API key — useful when the API key's service account isn't on
+            an asset's admin ACL but the OAuth client is.
     """
 
-    def __init__(self, tenant_url: str, api_token: str) -> None:
+    def __init__(
+        self,
+        tenant_url: str,
+        api_token: str,
+        *,
+        oauth_client_id: str | None = None,
+        oauth_client_secret: str | None = None,
+    ) -> None:
         self.tenant_url = tenant_url.rstrip("/")
         self._api_token = api_token
+        self._oauth_client_id = oauth_client_id
+        self._oauth_client_secret = oauth_client_secret
 
     # ------------------------------------------------------------------
     # Low-level HTTP
@@ -489,7 +537,8 @@ class AEWorkflowClient:
                 continue
             transient_streak = 0
             last_result = result
-            summary = "; ".join(f"{n.name}={n.status.value}" for n in result.nodes)
+            summary = " ".join(_node_glyph(n) for n in result.nodes)
+            run_glyph = _RUN_GLYPHS.get(result.status.value, "•")
             # Log on every status change. Also emit a heartbeat every
             # ``_HEARTBEAT_SECONDS`` even when the status hasn't moved,
             # so long-running stages (lineage takes 2-5 min) don't look
@@ -501,11 +550,10 @@ class AEWorkflowClient:
             )
             if should_log:
                 logger.info(
-                    "AE run %s (slug=%s) status=%s elapsed=%ds | %s",
-                    result.run_id,
-                    result.workflow_slug,
-                    result.status.value,
+                    "%s AE run [%3ds] %s — %s",
+                    run_glyph,
                     elapsed,
+                    result.status.value,
                     summary,
                 )
                 last_summary = summary
@@ -523,19 +571,66 @@ class AEWorkflowClient:
             f"native-status timed out after {timeout_seconds}s with no response"
         )
 
-    def get_connection_in_atlas(self, qualified_name: str) -> int:
-        """HEAD-style probe for a Connection asset. Returns HTTP status code.
+    def connection_exists_in_atlas_via_search(self, qualified_name: str) -> bool:
+        """Search-based Connection probe — works around the direct-fetch ACL.
 
-        200 means the Connection exists and is queryable in Atlas. 404
-        means publish hasn't flushed it yet (or the workflow failed).
-        Any other status is a real error worth surfacing.
+        Hits the indexsearch endpoint with an exact ``qualifiedName`` +
+        ``typeName=Connection`` filter. The search ACL is permissive
+        (anyone with read on the connector namespace can see results)
+        whereas the direct entity-fetch endpoint enforces the
+        Connection's ``adminUsers``/``adminRoles``. Use this when the
+        harness's identity isn't expected to be on the Connection's
+        admin list — e.g. when adminRoles is just ``$admin`` and the
+        OAuth-client service account isn't.
+
+        Returns True iff at least one Connection asset matches the QN.
+        Network errors / search failures return False (treated as
+        "not yet visible").
         """
-        status, _ = self._request(
-            "GET",
-            "/api/meta/entity/uniqueAttribute/type/Connection"
-            f"?attr:qualifiedName={qualified_name}",
+        return asyncio.run(self._connection_search_async(qualified_name))
+
+    async def _connection_search_async(self, qualified_name: str) -> bool:
+        from pyatlan.client.aio.client import AsyncAtlanClient
+        from pyatlan.model.assets import Asset
+        from pyatlan.model.fluent_search import FluentSearch
+
+        try:
+            async with self._build_async_atlan_client() as client:
+                request = (
+                    FluentSearch()
+                    .where(Asset.QUALIFIED_NAME.eq(qualified_name))
+                    .where(Asset.TYPE_NAME.eq("Connection"))
+                ).to_request()
+                request.dsl.size = 0
+                return int((await client.asset.search(request)).count) > 0
+        except Exception:
+            logger.exception(
+                "Connection search for %s failed (treating as not-yet-visible)",
+                qualified_name,
+            )
+            return False
+
+    def _build_async_atlan_client(self) -> "AsyncAtlanClient":  # noqa: F821
+        """Construct an AsyncAtlanClient using OAuth if configured, else bearer.
+
+        Centralised so every pyatlan call (search, role_cache) goes
+        through the same auth path. OAuth-client identity is preferred
+        when both are present because OAuth tokens are explicitly
+        scoped, whereas the API-key bearer often resolves to a
+        broad-permissioned service account whose name confuses RBAC
+        diagnostics.
+        """
+        from pyatlan.client.aio.client import AsyncAtlanClient
+
+        if self._oauth_client_id and self._oauth_client_secret:
+            return AsyncAtlanClient(
+                base_url=self.tenant_url,
+                oauth_client_id=self._oauth_client_id,
+                oauth_client_secret=self._oauth_client_secret,
+            )
+        return AsyncAtlanClient(
+            base_url=self.tenant_url, api_key=self._api_token
         )
-        return status
 
     def poll_atlas_for_connection(
         self,
@@ -545,79 +640,58 @@ class AEWorkflowClient:
         timeout_seconds: int = 1500,
         max_forbidden_attempts: int = 5,
         max_not_found_attempts: int = 10,
+        max_not_found_attempts_override: int | None = None,
     ) -> bool:
         """Poll Atlas until the Connection appears or timeout elapses.
 
-        Wide default budget (25 min) because publish runs after the AE
+        Uses :meth:`connection_exists_in_atlas_via_search` rather than
+        the direct entity-fetch endpoint because the search index ACL
+        is permissive — direct fetch enforces the Connection's
+        ``adminUsers``/``adminRoles`` and would 403 for identities not
+        explicitly on that list. Indirect side-effect: the
+        ``max_forbidden_attempts`` knob is now mostly vestigial since
+        search doesn't surface 403. Kept on the signature for back-
+        compat.
+
+        Wide default timeout (25 min) because publish runs after the AE
         DAG completes and can take a while to flush large connections.
         Callers with smaller datasets can tighten this.
 
-        HTTP 403 and 404 are each tracked separately from generic
-        non-200 responses, and each has its own cap on consecutive
-        occurrences:
-
-        * 403 almost always means the calling identity is not on the
-          Connection's admin ACL — polling through this won't fix it,
-          so bail after ``max_forbidden_attempts`` (default 5).
-        * 404 means publish hasn't materialised the Connection yet.
-          For real workloads that can lag a few seconds while the
-          Atlas indexer catches up; longer streaks mean the publish
-          activity reported success but the entities never actually
-          reached Atlas (proxy mis-routing, wrong storage bucket,
-          asset-server outage). Bail after
-          ``max_not_found_attempts`` (default 10 → ~100s at the
-          default 10s interval, ~5 min at the 30s default) instead of
-          silently burning the full 25 min budget.
+        ``max_not_found_attempts`` caps consecutive empty-search
+        responses (~100s at the default 10s interval, ~5 min at the
+        30s default) so the harness fails fast on a publish that
+        reports success but doesn't actually land the Connection.
         """
+        if max_not_found_attempts_override is not None:
+            max_not_found_attempts = max_not_found_attempts_override
         elapsed = 0
-        forbidden_streak = 0
         not_found_streak = 0
+        # `max_forbidden_attempts` kept on the signature for back-compat
+        # but unused now that the search path doesn't surface 403.
+        del max_forbidden_attempts
         while elapsed < timeout_seconds:
-            status = self.get_connection_in_atlas(qualified_name)
+            found = self.connection_exists_in_atlas_via_search(qualified_name)
             logger.info(
-                "Atlas Connection probe [%ds] qn=%s HTTP %d",
+                "Atlas Connection probe [%ds] qn=%s exists=%s",
                 elapsed,
                 qualified_name,
-                status,
+                found,
             )
-            if status == 200:
+            if found:
                 return True
-            if status == 403:
-                forbidden_streak += 1
-                not_found_streak = 0
-                if forbidden_streak >= max_forbidden_attempts:
-                    logger.error(
-                        "Atlas Connection probe gave HTTP 403 %d times in a row — "
-                        "stopping early. The Connection probably landed in Atlas; "
-                        "the calling identity is just not on its admin ACL. Add "
-                        "$admin (or the API key's role) to adminRoles, or add the "
-                        "service-account username to adminUsers, on the test's "
-                        "connection_spec().",
-                        forbidden_streak,
-                    )
-                    return False
-            elif status == 404:
-                not_found_streak += 1
-                forbidden_streak = 0
-                if not_found_streak >= max_not_found_attempts:
-                    logger.error(
-                        "Atlas Connection probe gave HTTP 404 %d times in a row "
-                        "(%ds elapsed) — stopping early. The Connection never "
-                        "materialised in Atlas: publish likely reported success "
-                        "but the entities did not reach the asset server. Check "
-                        "publish metrics vs the storage bucket the worker wrote "
-                        "to and the one publish reads from.",
-                        not_found_streak,
-                        elapsed,
-                    )
-                    return False
-            else:
-                forbidden_streak = 0
-                not_found_streak = 0
-            if status >= 500:
-                logger.warning(
-                    "Atlas returned %d for Connection probe; retrying", status
+            not_found_streak += 1
+            if not_found_streak >= max_not_found_attempts:
+                logger.error(
+                    "Atlas Connection probe found nothing %d times in a row "
+                    "(%ds elapsed) — stopping early. The Connection never "
+                    "materialised in Atlas: publish likely reported success "
+                    "but the entities did not reach the asset server. Check "
+                    "publish metrics vs the storage bucket the worker wrote "
+                    "to and the one publish reads from.",
+                    not_found_streak,
+                    elapsed,
                 )
+                return False
             time.sleep(interval_seconds)
             elapsed += interval_seconds
         return False

@@ -163,33 +163,48 @@ def test_poll_native_status_returns_last_observation_on_timeout(
     assert result.status is DAGRunStatus.RUNNING
 
 
-def test_poll_atlas_for_connection_succeeds_on_200(
+def test_poll_atlas_for_connection_succeeds_when_search_finds_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """``poll_atlas_for_connection`` returns True as soon as the
+    search-based existence check returns True (indexer may have lagged
+    earlier polls)."""
     monkeypatch.setattr("time.sleep", lambda _: None)
-    client, _ = _make_client(
-        monkeypatch, [(404, ""), (404, ""), (200, {"any": "thing"})]
-    )
+    client, _ = _make_client(monkeypatch, [])
+
+    # Stub the search-based existence check directly — first two polls
+    # return False (indexer lag), third returns True (Connection found).
+    calls = {"n": 0}
+
+    def fake_search(_qn: str) -> bool:
+        calls["n"] += 1
+        return calls["n"] >= 3
+
+    monkeypatch.setattr(client, "connection_exists_in_atlas_via_search", fake_search)
     assert (
         client.poll_atlas_for_connection(
             "default/mysql/test", interval_seconds=1, timeout_seconds=10
         )
         is True
     )
+    assert calls["n"] == 3
 
 
-def test_poll_atlas_for_connection_returns_false_on_timeout(
+def test_poll_atlas_for_connection_bails_after_not_found_streak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """``max_not_found_attempts`` consecutive empty searches → False fast."""
     monkeypatch.setattr("time.sleep", lambda _: None)
-    client, _ = _make_client(
-        monkeypatch,
-        # interval=1, timeout=2 → 2 polls; both 404 → returns False
-        [(404, ""), (404, "")],
+    client, _ = _make_client(monkeypatch, [])
+    monkeypatch.setattr(
+        client, "connection_exists_in_atlas_via_search", lambda _: False
     )
     assert (
         client.poll_atlas_for_connection(
-            "default/mysql/test", interval_seconds=1, timeout_seconds=2
+            "default/mysql/test",
+            interval_seconds=1,
+            timeout_seconds=1000,
+            max_not_found_attempts_override=3,
         )
         is False
     )
