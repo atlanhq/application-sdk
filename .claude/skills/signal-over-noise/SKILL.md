@@ -95,12 +95,13 @@ Pattern catalogue, severity criteria, fix templates, and linting rules are in:
 #### Step 1.1 — Setup
 
 1. Read `.claude/skills/signal-over-noise/references/error-recovery-patterns.md` in full.
-2. Resolve `TARGET_PATH` from arguments (default: current directory). Confirm it exists.
-3. Set `SEVERITY_FILTER` from `--severity` (default: `all`).
+2. Read `.claude/skills/signal-over-noise/references/typed-error-prescription.md` in full.
+3. Resolve `TARGET_PATH` from arguments (default: current directory). Confirm it exists.
+4. Set `SEVERITY_FILTER` from `--severity` (default: `all`).
 
 #### Step 1.2 — Pattern Detection
 
-Run all 10 grep searches in parallel against `TARGET_PATH` (`*.py` files only):
+Run all 13 grep searches in parallel against `TARGET_PATH` (`*.py` files only):
 
 | # | Pattern ID | Grep |
 |---|------------|------|
@@ -115,8 +116,11 @@ Run all 10 grep searches in parallel against `TARGET_PATH` (`*.py` files only):
 | 9 | P9 | except block with only an assignment — collect hits for Step 1.3 |
 | 10 | P10 | `return_exceptions=True` |
 | 11 | P11 | `class\s+\w+.*logging\.Filter` or `def filter\(self` inside a Filter subclass |
+| 12 | P12 | `raise\s+(ValueError\|RuntimeError\|Exception\|TypeError\|NotImplementedError\|OSError\|KeyError\|LookupError)\b` |
+| 13 | P13 | `raise\s+(ClientError\|ApiError\|OrchestratorError\|WorkflowError\|IOError\|CommonError\|DocGenError\|ActivityError\|AtlanError)\b` |
 
-For P5, P7, P9, P11: raw grep over-matches. Collect `file:line` hits and read context in Step 1.3.
+For P5, P7, P9, P11, P12, P13: raw grep over-matches. Collect `file:line` hits and read context in Step 1.3.
+P13 context note: `IOError` is also a Python builtin alias for `OSError` — confirm the hit imports from `application_sdk.common.error_codes` before classifying as legacy. Bare `AtlanError` raises (no constant) require litmus-test classification (§3 of `typed-error-prescription.md`).
 
 Collect all hits as a flat list: `(file, line_number, pattern_id, raw_snippet)`.
 
@@ -128,27 +132,48 @@ Classify each finding:
 - **Severity:** CRITICAL, HIGH, MEDIUM, or LOW (from §Severity Classification in reference)
 - **Legitimacy:** `genuine-bug` or `acceptable` (from §Legitimacy in reference)
 - **Category:** `silent-swallow`, `missing-traceback`, `overly-broad-catch`,
-  `error-to-return-value`, `suppress-operational`, `optional-import`, `asyncio-unexamined`
+  `error-to-return-value`, `suppress-operational`, `optional-import`,
+  `asyncio-unexamined`, `untyped-raise`, `legacy-raise`
+- **Typed-error prescription:** for every `genuine-bug` finding whose fix involves
+  a `raise` (FT-1b, FT-3b, FT-5b, FT-8, FT-9), look up the prescribed leaf and
+  code from `references/typed-error-prescription.md`. Record as `Prescribed:` on
+  the remediation entry so the user sees the target class in the plan.
 
 Apply `SEVERITY_FILTER`: discard findings below the threshold before proceeding.
 
+P12 classification notes:
+- Inside `__post_init__`, stdlib dataclass validators, or Pydantic `@field_validator` / `@validator` methods: check for a comment
+  explaining the stdlib-interop need. If present → `acceptable`. If absent →
+  flag as `genuine-bug` (MEDIUM — add the comment).
+- Inside an `@task`-decorated activity body or `@activity.defn`-decorated function → escalate to CRITICAL.
+
+P13: confirmed hits are `genuine-bug` (HIGH). After context reading (see over-matches note above), use the §5 migration table from
+`typed-error-prescription.md` for the `Prescribed:` field. When no matching legacy constant is present, use §3 litmus tests to select a leaf directly.
+
 #### Step 1.4 — Build Remediation Plan
 
-For each `genuine-bug` finding, produce a remediation entry:
+For each `genuine-bug` finding, produce a remediation entry. Include `Prescribed:`
+whenever the fix involves raising an exception:
 
 ```
-File:     src/foo/bar.py:42
+File:     application_sdk/clients/sql.py:352
 Severity: HIGH
-Category: missing-traceback
+Category: untyped-raise
+Pattern:  P12
 Current:
-    except ValueError as e:
-        logger.warning(f"Parse failed: {e}")
-Fix (FT-2):
-    except ValueError:
-        logger.warning("Parse failed", exc_info=True)
-Auto-fixable: yes
+    raise ValueError("Engine is not initialized. Call load() first.")
+Prescribed:
+    EngineNotInitializedError(InternalError)  →  code=INTERNAL_ENGINE_NOT_INITIALIZED
+    Subclass bakes message + component + invariant. Place in a sibling
+    module (e.g. _<area>_errors.py); see typed-error-prescription.md §4.
+Fix (FT-8):
+    raise EngineNotInitializedError()
+Auto-fixable: no  (leaf + subclass choice needs context — manual review)
 Priority: P1
 ```
+
+For existing-pattern (P1–P11) findings whose fix re-raises, also include
+`Prescribed:` with the leaf selected from `typed-error-prescription.md` §4.
 
 Priority mapping:
 - **P0** — CRITICAL: fix immediately, block merges
@@ -200,19 +225,30 @@ Call `ExitPlanMode` to request user approval. Wait for approval before proceedin
 Apply the remediation plan that was approved. Only fix what was listed in the approved plan.
 
 #### Auto-fixable patterns — apply directly:
-- **FT-1:** Add logging to silent-swallow (`except X: pass` → add `logger.warning`)
+- **FT-1a:** Add logging to silent-swallow (log-and-continue, best-effort paths)
 - **FT-2:** Add `exc_info=True` to existing log call in except block
-- **FT-3:** Add logging before error-to-return-value (`except X: return Y`)
+- **FT-3a:** Add logging before error-to-return-value (when caller treats default as valid)
 - **FT-4:** Add exception inspection after `asyncio.gather(..., return_exceptions=True)`
-- **FT-5:** Replace broad `contextlib.suppress(Exception)` with logged try/except
+- **FT-5a:** Replace broad `contextlib.suppress(Exception)` with logged try/except (best-effort)
 
 #### Manual review required — leave TODO comments:
+- **FT-1b** (log + typed re-raise): leaf choice is contextual
+- **FT-3b** (convert swallow to typed raise): default for error-to-return-value when caller trusts result
+- **FT-5b** (typed re-raise for non-best-effort suppress): leaf choice is contextual
 - **FT-6** (narrow broad catch): `# TODO(signal-over-noise): [P4] narrow this catch`
 - **FT-7** (Filter exception safety): `# TODO(signal-over-noise): [P11] wrap filter body in try/except`
+- **FT-8** (convert untyped builtin raise to typed `AppError`): leaf from `typed-error-prescription.md` §4. If the same leaf+message+evidence recurs across ≥2 raise sites, define a subclass that bakes the defaults in a sibling `_<area>_errors.py` and reduce raise sites to the minimal form (`raise XError()`).
+- **FT-9** (convert legacy `AtlanError` raise to typed `AppError`): leaf from `typed-error-prescription.md` §5. Same subclassing rule applies when the same error recurs.
 
-TODO comment format:
+TODO comment format for swallow/logging findings:
 ```python
 # TODO(signal-over-noise): [P2] silent swallow — add logging. See references/error-recovery-patterns.md#P2
+```
+
+TODO comment format for untyped/legacy raise findings — include the prescribed leaf:
+```python
+# TODO(signal-over-noise): [P12] convert to typed AppError. Leaf: InternalError (wire code: INTERNAL_ENGINE_NOT_INITIALIZED). See typed-error-prescription.md §4
+# TODO(signal-over-noise): [P13] legacy AtlanError — migrate to DependencyUnavailableError. See typed-error-prescription.md §5
 ```
 
 #### After applying fixes:
@@ -518,3 +554,11 @@ Report a brief summary: N files changed, N auto-fixes applied, N TODO comments a
 7. **Phase ordering matters:** Run Surface before Tune. A silent-swallow in an except block (P1/P2)
    overlaps with a missing-exc_info finding (L4). Surface fixes the structural problem; Tune then
    verifies the logging quality of the fix. Avoid double-reporting the same line.
+
+8. **Typed-error prescription is mandatory.** Every fix that re-raises must name an `AppError`
+   leaf from `application_sdk.errors`. The skill never recommends raising a bare builtin or a
+   legacy `AtlanError`. The leaf catalogue (§2), litmus tests (§3), SDK-context cookbook (§4),
+   and exhaustive legacy-constant migration table (§5) all live in
+   `references/typed-error-prescription.md`. P12 (untyped builtin raises) and P13 (legacy
+   `AtlanError` raises) fold the BLDX-1261 audit into surface mode — every finding gets a
+   `Prescribed:` entry naming the target leaf and suggested code string.
