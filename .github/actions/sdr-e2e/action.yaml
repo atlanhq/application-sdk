@@ -106,15 +106,6 @@ inputs:
       agent-name so the worker registers on its own Temporal queue.
     required: false
     default: .github/e2e/docker-compose.ci.yml
-  commit-status-context:
-    description: |
-      `context` value used when posting the final PR commit status.
-      Each caller workflow should pass a distinct value so multiple
-      pipelines (e.g. `sdr-integration-tests.yaml` + `e2e-full.yaml`)
-      don't overwrite each other's status on the same PR head SHA.
-    required: false
-    default: sdr-e2e-tests
-
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -880,26 +871,12 @@ runs:
           });
       continue-on-error: true
 
-    - name: Set commit status
-      if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@v7
-      env:
-        STATUS_CONTEXT: ${{ inputs.commit-status-context }}
-      with:
-        github-token: ${{ github.token }}
-        script: |
-          const state = '${{ steps.tests.outcome }}' === 'success' ? 'success' : 'failure';
-          const ctx   = process.env.STATUS_CONTEXT;
-          await github.rest.repos.createCommitStatus({
-            owner: context.repo.owner,
-            repo:  context.repo.repo,
-            sha:   context.payload.pull_request.head.sha,
-            state,
-            target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            description: state === 'success' ? `${ctx} passed` : `${ctx} failed`,
-            context: ctx,
-          });
-      continue-on-error: true
+    # No explicit `createCommitStatus` step: the workflow job already
+    # surfaces a check_run on the PR (e.g. `E2E Full with system apps
+    # / e2e-full` or `SDR Integration Tests / sdr-tests`). Posting an
+    # additional commit status duplicates that signal under a separate
+    # `sdr-e2e-tests` row and, when two callers share this composite,
+    # they overwrite each other on the same head SHA.
 
     # GH Actions re-reads ${{ github.action_path }}/action.yaml when
     # running each step's `post:` hook. When this composite is invoked
