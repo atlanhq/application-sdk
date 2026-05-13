@@ -192,7 +192,7 @@ covering three distinct failure modes (same pattern applies to an SDK sibling
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
-from application_sdk.errors import AuthError, InternalError, InvalidInputError
+from application_sdk.errors import AuthError, InternalError, UnimplementedError
 
 # 1. Recurring pattern (4 raise sites) — bake message + evidence
 @dataclass(kw_only=True)
