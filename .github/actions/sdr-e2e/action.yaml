@@ -45,8 +45,8 @@ inputs:
       Short label used in the PR-comment / step-summary report title and
       the PR comment marker. When empty (the default), the action derives
       a title from `test-path`:
-        tests/sdr/        → "SDR Integration Tests"
-        tests/full_dag/   → "Full-DAG E2E Tests"
+        tests/sdr/        → "SDR Integration Tests (testcontainer)"
+        tests/full_dag/   → "E2E Full Tests (system apps)"
         tests/<other>/    → "<other> Tests" (with hyphens/underscores
                             replaced by spaces and the first letter
                             uppercased).
@@ -546,8 +546,8 @@ runs:
         # repo (e.g. tier-3 sdr-integration-tests vs e2e-full).
         def _title_from_test_path(path: str) -> str:
             specials = {
-                "sdr": "SDR Integration Tests",
-                "full_dag": "Full-DAG E2E Tests",
+                "sdr": "SDR Integration Tests (testcontainer)",
+                "full_dag": "E2E Full Tests (system apps)",
             }
             seg = path.strip("/").split("/")[-1] if path else ""
             if seg in specials:
@@ -799,8 +799,8 @@ runs:
           // step-summary step so both report surfaces stay aligned.
           const titleFromTestPath = (path) => {
             const specials = {
-              "sdr": "SDR Integration Tests",
-              "full_dag": "Full-DAG E2E Tests",
+              "sdr": "SDR Integration Tests (testcontainer)",
+              "full_dag": "E2E Full Tests (system apps)",
             };
             const seg = (path || "").replace(/\/+$/, "").split("/").pop() || "";
             if (seg in specials) return specials[seg];
@@ -830,14 +830,17 @@ runs:
           // apps on a live tenant and asserts asset counts + lineage in
           // Atlas. Keep the surface narrow per pipeline so reviewers
           // don't get a misleading "this also validates X" claim.
+          const SDR_TITLE = "SDR Integration Tests (testcontainer)";
+          const FULL_DAG_TITLE = "E2E Full Tests (system apps)";
+
           const validatesByPipeline = {
-            "SDR Integration Tests": [
+            [SDR_TITLE]: [
               `- **Credential resolution from secret store** — workflow \`username\`/\`password\` resolved via the Dapr \`local.file\` secret store using \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.`,
               `- **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly`,
               `- **Preflight** — connectivity, schema/table checks; bad credentials fail correctly`,
               `- **Workflow** — full extraction run on the test instance, polled to \`COMPLETED\` on the tenant's Temporal cluster`,
             ],
-            "Full-DAG E2E Tests": [
+            [FULL_DAG_TITLE]: [
               `- **Connector extract + transform** — workflow polled to \`COMPLETED\` on the tenant's Temporal cluster; asset JSON written to the tenant object store`,
               `- **System apps DAG** — \`publish\` → \`query-intelligence\` → \`lineage-app\` → \`lineage-publish\` all reach \`Succeeded\` on their respective task queues`,
               `- **Connection materialised in Atlas** — \`/api/meta/entity\` resolves the Connection QN that the workflow published`,
@@ -846,20 +849,19 @@ runs:
               `- **Agent + connection contract** — \`agent_spec\` / \`connection_spec\` accepted by AE workflow + version create endpoints; credentials resolved via \`AgentCredentialSpec\``,
             ],
           };
-          const defaultValidates = validatesByPipeline["SDR Integration Tests"];
-          const validates = validatesByPipeline[reportTitle] || defaultValidates;
+          const validates = validatesByPipeline[reportTitle] || validatesByPipeline[SDR_TITLE];
 
           const stackByPipeline = {
-            "SDR Integration Tests": `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, Temporal worker on CI tenant.`,
-            "Full-DAG E2E Tests": `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, worker registered with the CI tenant's Temporal + the live publish/qi/lineage system apps.`,
+            [SDR_TITLE]: `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, Temporal worker on CI tenant.`,
+            [FULL_DAG_TITLE]: `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, worker registered with the CI tenant's Temporal + the live publish/qi/lineage system apps.`,
           };
-          const stackLine = stackByPipeline[reportTitle] || stackByPipeline["SDR Integration Tests"];
+          const stackLine = stackByPipeline[reportTitle] || stackByPipeline[SDR_TITLE];
 
           const rerunHintByPipeline = {
-            "SDR Integration Tests": `Push a new commit, or re-run from the Actions tab.`,
-            "Full-DAG E2E Tests": `Remove and re-add the \`e2e-full-test\` label, or re-run from the Actions tab.`,
+            [SDR_TITLE]: `Push a new commit, or re-run from the Actions tab.`,
+            [FULL_DAG_TITLE]: `Remove and re-add the \`e2e-full\` label, or re-run from the Actions tab.`,
           };
-          const rerunHint = rerunHintByPipeline[reportTitle] || rerunHintByPipeline["SDR Integration Tests"];
+          const rerunHint = rerunHintByPipeline[reportTitle] || rerunHintByPipeline[SDR_TITLE];
 
           const body = [
             sticky,
@@ -907,8 +909,8 @@ runs:
       continue-on-error: true
 
     # No explicit `createCommitStatus` step: the workflow job already
-    # surfaces a check_run on the PR (e.g. `E2E Full with system apps
-    # / e2e-full` or `SDR Integration Tests / sdr-tests`). Posting an
+    # surfaces a check_run on the PR (e.g. `E2E Full Tests (system
+    # apps)` or `SDR Integration Tests (testcontainer)`). Posting an
     # additional commit status duplicates that signal under a separate
     # `sdr-e2e-tests` row and, when two callers share this composite,
     # they overwrite each other on the same head SHA.
