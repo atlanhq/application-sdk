@@ -106,6 +106,14 @@ inputs:
       agent-name so the worker registers on its own Temporal queue.
     required: false
     default: .github/e2e/docker-compose.ci.yml
+  commit-status-context:
+    description: |
+      `context` value used when posting the final PR commit status.
+      Each caller workflow should pass a distinct value so multiple
+      pipelines (e.g. `sdr-integration-tests.yaml` + `e2e-full.yaml`)
+      don't overwrite each other's status on the same PR head SHA.
+    required: false
+    default: sdr-e2e-tests
 
 outputs:
   test-outcome:
@@ -875,11 +883,13 @@ runs:
     - name: Set commit status
       if: always() && github.event_name == 'pull_request'
       uses: actions/github-script@v7
+      env:
+        STATUS_CONTEXT: ${{ inputs.commit-status-context }}
       with:
         github-token: ${{ github.token }}
         script: |
           const state = '${{ steps.tests.outcome }}' === 'success' ? 'success' : 'failure';
-          const ctx   = 'sdr-e2e-tests';
+          const ctx   = process.env.STATUS_CONTEXT;
           await github.rest.repos.createCommitStatus({
             owner: context.repo.owner,
             repo:  context.repo.repo,
@@ -890,3 +900,19 @@ runs:
             context: ctx,
           });
       continue-on-error: true
+
+    # GH Actions re-reads ${{ github.action_path }}/action.yaml when
+    # running each step's `post:` hook. When this composite is invoked
+    # as a LOCAL action (`uses: ./.application-sdk/.github/actions/sdr-e2e`),
+    # setup-deps' inner actions/checkout earlier in the run wiped that
+    # path. Restore it from the /tmp/sdr-e2e stash so post-hooks find
+    # the action manifest (otherwise the job fails after a green
+    # test run with "Can't find 'action.yml' under ...").
+    - name: Restore action assets for post-hooks
+      if: always()
+      shell: bash
+      run: |
+        if [ ! -f "${{ github.action_path }}/action.yaml" ] && [ -d /tmp/sdr-e2e ]; then
+          mkdir -p "${{ github.action_path }}"
+          cp -R /tmp/sdr-e2e/. "${{ github.action_path }}/"
+        fi

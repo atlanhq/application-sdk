@@ -202,3 +202,7 @@ jobs:
           # instead of waiting for a final dump.
           pytest-extra-args: "-s"
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          # Distinct commit-status context so this pipeline's PR check
+          # doesn't overwrite (or get overwritten by) the SDR
+          # testcontainer pipeline's `sdr-e2e-tests` status.
+          commit-status-context: e2e-full-tests

@@ -71,7 +71,11 @@ runs:
         repo: ${{ inputs.repo-name }}
         owner: "atlanhq"
         workflow: "${{ inputs.workflow }}"
-        workflow_timeout_seconds: 300
+        # 300s wasn't enough for the e2e-full path: the dispatched run
+        # spends 1–3 min in the GH-hosted runner queue before its
+        # `distinct-id <sha>` step (step #2) is even visible. Bump to
+        # 600s so return-dispatch can poll past the queue delay.
+        workflow_timeout_seconds: 600
         workflow_job_steps_retry_seconds: 60
         distinct_id: "${{ env.distinct_id }}"
         workflow_inputs: ${{ inputs.workflow-inputs }}
