@@ -216,11 +216,6 @@ class BaseFullDAGE2ETest:
     lineage_task_queue: ClassVar[str] = "atlan-lineage-production"
     qi_parsing_mode: ClassVar[str] = "competitive"
     qi_input_prefix_field: ClassVar[str] = "view_data_prefix"
-    # Override when the connector's worker registers a non-default
-    # workflow name. Default = connector_short_name (v3 convention,
-    # what mysql uses). Set to e.g. ``"mssql-metadata-extractor"`` for
-    # v2-style connectors. Empty string means "use the SDK default".
-    extract_workflow_type: ClassVar[str] = ""
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600

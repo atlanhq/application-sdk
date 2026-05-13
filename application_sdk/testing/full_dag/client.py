@@ -486,7 +486,6 @@ class AEWorkflowClient:
             break
         status, body = last
         raise RuntimeError(f"AE submit failed: HTTP {status}\nresponse={body!r}")
-        return str(run_id)
 
     def get_native_status(self, run_id: str) -> DAGRunResult:
         """GET ``/api/service/package-workflows/native-status/<run_id>``.
@@ -803,11 +802,10 @@ class AEWorkflowClient:
         filters ``HAS_LINEAGE.eq(True)`` so the count matches the
         Atlan UI's "Lineage coverage" card.
         """
-        from pyatlan.client.aio.client import AsyncAtlanClient  # noqa: PLC0415
         from pyatlan.model.assets import Asset  # noqa: PLC0415
         from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
 
-        async def _count_one(client: AsyncAtlanClient, type_name: str) -> int:
+        async def _count_one(client: Any, type_name: str) -> int:
             try:
                 builder = (
                     FluentSearch()
@@ -825,9 +823,15 @@ class AEWorkflowClient:
                 )
                 return 0
 
-        async with AsyncAtlanClient(
-            base_url=self.tenant_url, api_key=self._api_token
-        ) as client:
+        # Route through _build_async_atlan_client so the count searches
+        # honour the OAuth client_credentials config when present
+        # (a service account with realm-admin can be missing from an
+        # asset ACL the OAuth client *is* on — the choice between the
+        # two identities is the entire reason _build_async_atlan_client
+        # exists). Using AsyncAtlanClient(api_key=...) here would always
+        # fall back to the API-key identity and silently break asset /
+        # lineage coverage counts for OAuth-only tenants.
+        async with self._build_async_atlan_client() as client:
             return list(
                 await asyncio.gather(*(_count_one(client, tn) for tn in type_names))
             )
