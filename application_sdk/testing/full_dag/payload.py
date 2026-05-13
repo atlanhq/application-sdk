@@ -265,7 +265,19 @@ def build_seed_dag(
                 "workflow_type": "PublishWorkflow",
                 "task_queue": publish_task_queue,
                 "args": {
-                    "connection_qualified_name": connection.qualified_name,  # inlined (see qi node)
+                    # PublishWorkflow reads the Connection asset from
+                    # the JSONL bundle under `transformed_data_prefix`
+                    # (which includes the full Connection object with
+                    # `qualifiedName` on its attributes). Passing a
+                    # populated `connection_qualified_name` here makes
+                    # the tenant publish app silently switch to an
+                    # "update only" mode where the asset POSTs land in
+                    # an unrelated namespace — confirmed empirically:
+                    # historic runs with CQN="" landed assets in Atlas;
+                    # runs with CQN populated reported entities-created
+                    # in the publish metric but Atlas got nothing. Pass
+                    # empty string so publish takes its QN from JSONL.
+                    "connection_qualified_name": "",
                     "transformed_data_prefix": "$.extract.outputs.transformed_data_prefix",
                     "publish_state_prefix": "$.extract.outputs.publish_state_prefix",
                     "current_state_prefix": "$.extract.outputs.current_state_prefix",
