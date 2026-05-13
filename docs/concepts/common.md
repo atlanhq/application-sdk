@@ -53,7 +53,6 @@ AppError  (base — application_sdk.errors)
 │   ├── PreconditionError      PRECONDITION               retryable=False  audience=USER
 │   ├── RateLimitedError       RATE_LIMITED               retryable=True   audience=USER
 │   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
-│   │   └── WorkerEvictedError     DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM  (SDK-internal; wire type "WorkerEvicted")
 │   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
 │   ├── AppTimeoutError        TIMEOUT                    retryable=True   audience=APP_OWNER
 │   ├── CancelledError         CANCELLED                  retryable=False  audience=APP_OWNER
