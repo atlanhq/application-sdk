@@ -762,6 +762,56 @@ runs:
                 lines.append(f"| {entity} | {ext_s} | {tr_s} |")
             lines.append("")
 
+        # Full-DAG runs append the post-lineage Atlas inventory the harness
+        # logs at the end of its run ("Atlas inventory under <qn>: {...}
+        # lineage_present=True"). SDR runs never emit this line, so the
+        # section is added only when a match is found — keeps the SDR
+        # comment unchanged. Reads sdr-test-output.txt (pytest stdout)
+        # because the line comes from the harness logger, not the
+        # docker container.
+        import ast
+
+        test_log = Path("results/sdr-test-output.txt")
+        if test_log.exists():
+            test_text = test_log.read_text(errors="replace")
+            atlas_re = re.compile(
+                r"Atlas inventory under (?P<qn>\S+):\s+(?P<counts>\{.*?\})\s+lineage_present=(?P<lin>True|False)"
+            )
+            last_match = None
+            for m in atlas_re.finditer(test_text):
+                last_match = m  # keep the last one in case retries logged earlier ones
+            if last_match:
+                try:
+                    counts = ast.literal_eval(last_match.group("counts"))
+                    if not isinstance(counts, dict):
+                        counts = {}
+                except (ValueError, SyntaxError):
+                    counts = {}
+                lineage_present = last_match.group("lin") == "True"
+                lineage_count = (
+                    counts.get("Process", 0) + counts.get("ColumnProcess", 0)
+                )
+                lines.append(
+                    f"### Atlas inventory under `{last_match.group('qn')}`"
+                )
+                lines.append("")
+                lines.append("| Type | Count |")
+                lines.append("|------|-------|")
+                for type_name in sorted(counts):
+                    lines.append(f"| {type_name} | {counts[type_name]} |")
+                lines.append("")
+                if lineage_count or lineage_present:
+                    lineage_status = (
+                        f"✅ {lineage_count} edge{'s' if lineage_count != 1 else ''} "
+                        "(`Process` + `ColumnProcess`)"
+                        if lineage_count
+                        else "✅ present"
+                    )
+                else:
+                    lineage_status = "⚠️ none observed (waived for connectors without view-derived lineage)"
+                lines.append(f"**Lineage:** {lineage_status}")
+                lines.append("")
+
         markdown = "\n".join(lines)
         delim = "EOF_ASSETS_" + secrets.token_hex(8)
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
