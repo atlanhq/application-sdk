@@ -110,6 +110,10 @@ def _bootstrap_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
     monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+    monkeypatch.delenv("SDR_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SDR_OAUTH_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("ATLAN_AUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ATLAN_AUTH_CLIENT_SECRET", raising=False)
     monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
 
 

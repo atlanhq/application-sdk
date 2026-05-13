@@ -265,10 +265,40 @@ class BaseFullDAGE2ETest:
                 )
 
         tenant_url = os.environ.get("ATLAN_BASE_URL", "").rstrip("/")
-        api_token = os.environ.get("ATLAN_API_KEY", "")
-        if not tenant_url or not api_token:
+        if not tenant_url:
             raise RuntimeError(
-                "Full-DAG e2e harness requires ATLAN_BASE_URL + ATLAN_API_KEY"
+                "Full-DAG e2e harness requires ATLAN_BASE_URL"
+            )
+
+        # Prefer OAuth-client credentials (long-lived GH repo secrets;
+        # short-lived bearer minted at run time and refreshed by the
+        # harness) over the raw API key. The OAuth-issued service
+        # account has explicit scopes (events-app + temporal-app +
+        # default:read/write) which is enough for every AE / Atlas /
+        # search call the harness makes — and produces predictable
+        # RBAC diagnostics ('service-account-oauth-client-<id>' instead
+        # of the opaque 'service-account-apikey-<uuid>'). Falls back to
+        # the bearer API key when OAuth creds aren't in the env, so
+        # local development with ATLAN_API_KEY still works.
+        oauth_client_id = os.environ.get("SDR_OAUTH_CLIENT_ID", "") or os.environ.get(
+            "ATLAN_AUTH_CLIENT_ID", ""
+        )
+        oauth_client_secret = os.environ.get(
+            "SDR_OAUTH_CLIENT_SECRET", ""
+        ) or os.environ.get("ATLAN_AUTH_CLIENT_SECRET", "")
+        api_key = os.environ.get("ATLAN_API_KEY", "")
+        if oauth_client_id and oauth_client_secret:
+            api_token = self._exchange_oauth_for_token(
+                tenant_url, oauth_client_id, oauth_client_secret
+            )
+        elif api_key:
+            api_token = api_key
+            oauth_client_id = ""
+            oauth_client_secret = ""
+        else:
+            raise RuntimeError(
+                "Full-DAG e2e harness requires either SDR_OAUTH_CLIENT_ID + "
+                "SDR_OAUTH_CLIENT_SECRET (preferred) or ATLAN_API_KEY"
             )
 
         # Prefer GH-provided run identifier (cross-correlatable with
@@ -277,7 +307,12 @@ class BaseFullDAGE2ETest:
         self.run_id = (
             int(gh_run_id) if gh_run_id and gh_run_id.isdigit() else int(time.time())
         )
-        self.client = AEWorkflowClient(tenant_url, api_token)
+        self.client = AEWorkflowClient(
+            tenant_url,
+            api_token,
+            oauth_client_id=oauth_client_id or None,
+            oauth_client_secret=oauth_client_secret or None,
+        )
         self.connection_qualified_name = (
             f"default/{self.connector_short_name}/"
             f"{self.connection_name_prefix}-{self.run_id}"
@@ -285,6 +320,48 @@ class BaseFullDAGE2ETest:
         self.connection_display_name = (
             f"{self.connection_name_prefix}-{self.connector_short_name}-{self.run_id}"
         )
+
+    @staticmethod
+    def _exchange_oauth_for_token(
+        tenant_url: str, client_id: str, client_secret: str
+    ) -> str:
+        """Trade an OAuth client_credentials pair for a bearer access token.
+
+        Used at ``setup_method`` time to mint a short-lived bearer the
+        AE REST client can use directly. The token typically lasts
+        15 min — enough to cover an entire e2e run end-to-end (5-15 min
+        wall-time). For runs that exceed the TTL, the AE-side calls
+        will start returning 401; that's a signal to refresh, but we
+        haven't seen it in practice.
+        """
+        import urllib.parse  # noqa: PLC0415 — cold path: only at setup
+        import urllib.request  # noqa: PLC0415 — cold path: only at setup
+        from json import loads  # noqa: PLC0415 — cold path: only at setup
+
+        body = urllib.parse.urlencode(
+            {
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            }
+        ).encode()
+        req = urllib.request.Request(
+            f"{tenant_url}/auth/realms/default/protocol/openid-connect/token",
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "atlan-sdk-full-dag-e2e/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = loads(resp.read())
+        token = payload.get("access_token")
+        if not isinstance(token, str) or not token:
+            raise RuntimeError(
+                "OAuth token exchange returned no access_token "
+                f"(keys: {list(payload.keys())})"
+            )
+        return token
 
     # ------------------------------------------------------------------
     # Subclass hooks — override these
