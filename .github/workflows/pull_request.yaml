@@ -406,7 +406,12 @@ jobs:
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: atlan-mysql-app
-          target-branch: "refs/heads/${{ github.base_ref }}"
+          # TODO: revert to "refs/heads/${{ github.base_ref }}" once
+          # PR #107 on atlan-mysql-app merges. Until then, target the
+          # PR branch so the dispatched run picks up the e2e-full.yaml
+          # that declares the `distinct_id` workflow_dispatch input
+          # codex-/return-dispatch always passes.
+          target-branch: "refs/heads/aryaman/bump-setup-uv-v6"
           workflow: e2e-full.yaml
           workflow-inputs: |
             { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}" }
