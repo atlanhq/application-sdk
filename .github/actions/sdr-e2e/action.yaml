@@ -883,29 +883,32 @@ runs:
             `</details>`,
           ].join('\n');
 
-          // Find prior comments tagged with our sticky marker and delete them.
+          // Sticky update: find an existing comment carrying our marker
+          // and patch its body in-place, otherwise create a fresh one.
+          // Earlier iterations did delete+create, which re-pushed the
+          // PR thread on every retry and pinged subscribers each time.
           const comments = await github.paginate(github.rest.issues.listComments, {
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
             per_page: 100,
           });
-          for (const c of comments) {
-            if (c.body && c.body.includes(sticky)) {
-              await github.rest.issues.deleteComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: c.id,
-              });
-            }
+          const existing = comments.find(c => c.body && c.body.includes(sticky));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
           }
-
-          await github.rest.issues.createComment({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-            body,
-          });
       continue-on-error: true
 
     # No explicit `createCommitStatus` step: the workflow job already
