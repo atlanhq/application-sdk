@@ -693,17 +693,24 @@ runs:
             r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?"
             r"Transformed (?P<entity>[A-Za-z0-9_-]+): (?P<n>\d+) records"
         )
-        # Match the workflow_id that appears under the same correlation
-        # block — usually emitted by the handler/service "Starting workflow"
-        # log. Best-effort; if absent we just omit the link.
+        # Match workflow_id + run_id emitted under the same correlation
+        # block — usually from the handler/service "Starting workflow"
+        # log. The Atlan Temporal proxy at
+        # /api/temporal/namespaces/default/workflows/<wf>/<run>/history
+        # rejects requests missing the run_id (just /workflows/<wf>/history
+        # 404s), so we capture both and only link when we have the pair.
         wf_re = re.compile(
             r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?workflow_id=(?P<wf>[\w-]+)"
+        )
+        run_re = re.compile(
+            r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?run_id=(?P<run>[\w-]+)"
         )
 
         cids: list[str] = []  # insertion-ordered for deterministic table order
         extracted: dict[str, dict[str, int]] = defaultdict(dict)
         transformed: dict[str, dict[str, int]] = defaultdict(dict)
         wf_id_by_cid: dict[str, str] = {}
+        run_id_by_cid: dict[str, str] = {}
 
         def _seen(cid: str) -> None:
             if cid not in cids:
@@ -720,6 +727,9 @@ runs:
         for m in wf_re.finditer(text):
             cid = m.group("cid")
             wf_id_by_cid.setdefault(cid, m.group("wf"))
+        for m in run_re.finditer(text):
+            cid = m.group("cid")
+            run_id_by_cid.setdefault(cid, m.group("run"))
 
         # Drop correlation groups that produced no asset rows (handler-level
         # auth / preflight scenarios run through the same scenario runner
@@ -736,14 +746,18 @@ runs:
         lines: list[str] = ["### Extracted + transformed assets", ""]
         for idx, cid in enumerate(cids, start=1):
             wf = wf_id_by_cid.get(cid, "")
+            run = run_id_by_cid.get(cid, "")
             header = f"**Workflow run {idx}**"
-            if wf and tenant:
+            if wf and run and tenant:
                 wf_url = (
                     f"https://{tenant}/api/temporal/namespaces/default"
-                    f"/workflows/{wf}/history"
+                    f"/workflows/{wf}/{run}/history"
                 )
                 header += f" — [{wf}]({wf_url})"
             elif wf:
+                # Workflow id without a run id — show the id verbatim but
+                # don't emit a clickable link; the proxy 404s on
+                # /workflows/<wf>/history without the run id.
                 header += f" — `{wf}`"
             lines.append(header)
             lines.append("")
