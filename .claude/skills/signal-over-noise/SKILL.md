@@ -165,7 +165,7 @@ Current:
 Prescribed:
     EngineNotInitializedError(InternalError)  →  code=INTERNAL_ENGINE_NOT_INITIALIZED
     Subclass bakes message + component + invariant. Place in a sibling
-    module (e.g. _<area>_errors.py); follow the WorkerEvictedError precedent.
+    module (e.g. _<area>_errors.py); see typed-error-prescription.md §4.
 Fix (FT-8):
     raise EngineNotInitializedError()
 Auto-fixable: no  (leaf + subclass choice needs context — manual review)
