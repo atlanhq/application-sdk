@@ -698,8 +698,9 @@ blocks any evidence key matching the exact denylist or the suffix denylist
 `credential_name` instead of `credential_token`) or omit.
 
 **Test assertion migration — when updating `pytest.raises` blocks after FT-8/FT-9.**
-`AppError.__str__` returns `self.message` only (`base.py:65-66`) — it does not
-automatically include the cause. Apply these rules:
+`AppError.__str__` returns `self.message` only (`base.py:65-66`). The cause
+string should not appear in `str(exc_info.value)` — if it does, §6 has been
+violated. Apply these rules:
 
 1. Change the exception type to the new typed subclass:
    `pytest.raises(LegacyError)` → `pytest.raises(TypedSubclass)`
