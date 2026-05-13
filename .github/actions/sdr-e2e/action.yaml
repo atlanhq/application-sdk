@@ -823,6 +823,44 @@ runs:
           // no workflow scenarios ran (auth/preflight only).
           const assetBlock = assetSummary ? `\n${assetSummary}\n` : '';
 
+          // Validation bullets + stack/re-run footer are pipeline-specific.
+          // SDR exercises auth/preflight/extract against a hermetic
+          // testcontainer DB; Full-DAG additionally drives publish,
+          // query-intelligence, lineage-app and lineage-publish system
+          // apps on a live tenant and asserts asset counts + lineage in
+          // Atlas. Keep the surface narrow per pipeline so reviewers
+          // don't get a misleading "this also validates X" claim.
+          const validatesByPipeline = {
+            "SDR Integration Tests": [
+              `- **Credential resolution from secret store** — workflow \`username\`/\`password\` resolved via the Dapr \`local.file\` secret store using \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.`,
+              `- **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly`,
+              `- **Preflight** — connectivity, schema/table checks; bad credentials fail correctly`,
+              `- **Workflow** — full extraction run on the test instance, polled to \`COMPLETED\` on the tenant's Temporal cluster`,
+            ],
+            "Full-DAG E2E Tests": [
+              `- **Connector extract + transform** — workflow polled to \`COMPLETED\` on the tenant's Temporal cluster; asset JSON written to the tenant object store`,
+              `- **System apps DAG** — \`publish\` → \`query-intelligence\` → \`lineage-app\` → \`lineage-publish\` all reach \`Succeeded\` on their respective task queues`,
+              `- **Connection materialised in Atlas** — \`/api/meta/entity\` resolves the Connection QN that the workflow published`,
+              `- **Asset counts in Atlas** — per-typeName descendant counts meet the connector's \`expected_min_asset_counts\` floor (Database, Schema, Table, View, Column, …)`,
+              `- **Lineage in Atlas** — at least one \`Process\` / \`ColumnProcess\` asset under the Connection QN (waived when the seed dataset has no view definitions)`,
+              `- **Agent + connection contract** — \`agent_spec\` / \`connection_spec\` accepted by AE workflow + version create endpoints; credentials resolved via \`AgentCredentialSpec\``,
+            ],
+          };
+          const defaultValidates = validatesByPipeline["SDR Integration Tests"];
+          const validates = validatesByPipeline[reportTitle] || defaultValidates;
+
+          const stackByPipeline = {
+            "SDR Integration Tests": `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, Temporal worker on CI tenant.`,
+            "Full-DAG E2E Tests": `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, worker registered with the CI tenant's Temporal + the live publish/qi/lineage system apps.`,
+          };
+          const stackLine = stackByPipeline[reportTitle] || stackByPipeline["SDR Integration Tests"];
+
+          const rerunHintByPipeline = {
+            "SDR Integration Tests": `Push a new commit, or re-run from the Actions tab.`,
+            "Full-DAG E2E Tests": `Remove and re-add the \`e2e-full-test\` label, or re-run from the Actions tab.`,
+          };
+          const rerunHint = rerunHintByPipeline[reportTitle] || rerunHintByPipeline["SDR Integration Tests"];
+
           const body = [
             sticky,
             `## ${reportTitle} — ${appName}`,
@@ -833,16 +871,13 @@ runs:
             linksLine,
             assetBlock,
             `### What this validates`,
-            `- **Credential resolution from secret store** — workflow \`username\`/\`password\` resolved via the Dapr \`local.file\` secret store using \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.`,
-            `- **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly`,
-            `- **Preflight** — connectivity, schema/table checks; bad credentials fail correctly`,
-            `- **Workflow** — full extraction run on the test instance, polled to \`COMPLETED\` on the tenant's Temporal cluster`,
+            ...validates,
             ``,
-            `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, Temporal worker on CI tenant.`,
+            stackLine,
             ``,
             `<details><summary>Re-run</summary>`,
             ``,
-            `Remove and re-add the \`sdr-e2e-test\` label, or re-run from the Actions tab.`,
+            rerunHint,
             `</details>`,
           ].join('\n');
 
