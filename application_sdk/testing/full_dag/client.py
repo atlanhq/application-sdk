@@ -255,7 +255,14 @@ class AEWorkflowClient:
     # Endpoints
     # ------------------------------------------------------------------
 
-    def create_workflow(self, name: str, description: str = "") -> str:
+    def create_workflow(
+        self,
+        name: str,
+        description: str = "",
+        *,
+        retries: int = 4,
+        retry_sleep_seconds: int = 5,
+    ) -> str:
         """POST ``/automation/api/v1/workflows`` — create or upsert a workflow.
 
         AE doesn't auto-create workflows on submit: a fresh slug → HTTP
@@ -265,27 +272,54 @@ class AEWorkflowClient:
         idempotent on name — submitting the same name returns the
         existing workflow's slug.
 
+        Retries on HTTP 5xx (same ``AE-COMMON-500-01: An unexpected
+        error occurred`` shape we already handle on ``create_version``
+        / ``submit_workflow`` / ``poll_native_status``). 4 attempts at
+        5s intervals covers the typical AE recovery window without
+        sitting on a hard failure.
+
         Returns:
             The workflow slug (used by subsequent version + submit
             calls).
 
         Raises:
-            RuntimeError: On non-2xx or missing slug in response.
+            RuntimeError: On non-2xx after retries are exhausted or on
+                missing slug in the response body.
         """
-        status, body = self._request(
-            "POST",
-            "/automation/api/v1/workflows",
-            body={"name": name, "description": description},
-        )
-        if status >= 300 or not isinstance(body, dict):
-            raise RuntimeError(
-                f"create_workflow failed: HTTP {status}\nresponse={body!r}"
+        last: tuple[int, Any] = (0, {})
+        for attempt in range(1, retries + 2):
+            status, body = self._request(
+                "POST",
+                "/automation/api/v1/workflows",
+                body={"name": name, "description": description},
             )
-        data = body.get("data") if isinstance(body.get("data"), dict) else body
-        slug = data.get("slug") if isinstance(data, dict) else None
-        if not slug:
-            raise RuntimeError(f"create_workflow returned no slug\nresponse={body!r}")
-        return str(slug)
+            last = (status, body)
+            if status < 300 and isinstance(body, dict):
+                data = body.get("data") if isinstance(body.get("data"), dict) else body
+                slug = data.get("slug") if isinstance(data, dict) else None
+                if not slug:
+                    raise RuntimeError(
+                        f"create_workflow returned no slug\nresponse={body!r}"
+                    )
+                if attempt > 1:
+                    logger.info("create_workflow succeeded on attempt %d", attempt)
+                return str(slug)
+            if status >= 500 and attempt <= retries:
+                logger.warning(
+                    "create_workflow attempt %d/%d: HTTP %d (retrying in %ds) body=%r",
+                    attempt,
+                    retries + 1,
+                    status,
+                    retry_sleep_seconds,
+                    body,
+                )
+                time.sleep(retry_sleep_seconds)
+                continue
+            break
+        status, body = last
+        raise RuntimeError(
+            f"create_workflow failed: HTTP {status}\nresponse={body!r}"
+        )
 
     def create_version(
         self,
