@@ -692,15 +692,73 @@ Note: `TRY300` and `TRY302` can be noisy on existing codebases — introduce sep
 fixing the higher-severity issues.
 
 To prevent regressions on P12 (untyped builtin raises inside `application_sdk/`),
-a CI-level grep is more practical than a ruff rule (false-positive rate is high
-without a per-file allowlist). A targeted check:
+a CI-level AST check is more practical than a ruff rule (false-positive rate is high
+without a per-file allowlist). A grep-based approach can't correctly exclude raises
+inside `__post_init__` or validator bodies because those raises appear on a different
+line from the function definition. Use this AST-based check instead:
 
 ```bash
-# Fail if any bare builtin raise survives in application_sdk/ (outside interop sites).
-# Note: these -v filters are line-level — they won't exclude a raise on a separate line from
-# its interop comment. Put the "# stdlib-interop" marker on the raise line itself.
-grep -rnP "raise\s+(ValueError|RuntimeError|Exception|TypeError|NotImplementedError|OSError|KeyError|LookupError)\b" application_sdk/ \
-  | grep -v "__post_init__" | grep -v "# stdlib-interop"
+python - <<'PY'
+import ast, pathlib, sys
+
+BUILTIN_RAISES = {
+    "ValueError", "RuntimeError", "Exception", "TypeError",
+    "NotImplementedError", "OSError", "KeyError", "LookupError",
+}
+# Raises inside these methods / decorator names are acceptable stdlib-interop
+INTEROP_METHOD_NAMES = {"__post_init__", "__init__"}
+INTEROP_DECORATOR_NAMES = {"field_validator", "validator"}
+
+class Checker(ast.NodeVisitor):
+    def __init__(self, path: pathlib.Path):
+        self._path = path
+        self._interop_depth = 0
+        self.findings: list[str] = []
+
+    def _is_interop(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        if node.name in INTEROP_METHOD_NAMES:
+            return True
+        for dec in node.decorator_list:
+            name = (dec.id if isinstance(dec, ast.Name)
+                    else dec.func.id if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name)
+                    else None)
+            if name in INTEROP_DECORATOR_NAMES:
+                return True
+        return False
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        in_interop = self._is_interop(node)
+        if in_interop:
+            self._interop_depth += 1
+        self.generic_visit(node)
+        if in_interop:
+            self._interop_depth -= 1
+
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+
+    def visit_Raise(self, node: ast.Raise) -> None:
+        if self._interop_depth > 0 or node.exc is None:
+            return
+        exc = node.exc
+        name = (exc.id if isinstance(exc, ast.Name)
+                else exc.func.id if isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name)
+                else None)
+        if name in BUILTIN_RAISES:
+            self.findings.append(f"{self._path}:{node.lineno}: raise {name}")
+
+findings: list[str] = []
+for path in pathlib.Path("application_sdk").rglob("*.py"):
+    try:
+        checker = Checker(path)
+        checker.visit(ast.parse(path.read_text(), filename=str(path)))
+        findings.extend(checker.findings)
+    except SyntaxError:
+        pass
+
+if findings:
+    print("\n".join(findings), file=sys.stderr)
+    sys.exit(1)
+PY
 ```
 
 This is tracked under BLDX-1261; enforcement is out of scope for this skill.
