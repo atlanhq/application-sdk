@@ -237,7 +237,7 @@ Apply the remediation plan that was approved. Only fix what was listed in the ap
 - **FT-5b** (typed re-raise for non-best-effort suppress): leaf choice is contextual
 - **FT-6** (narrow broad catch): `# TODO(signal-over-noise): [P4] narrow this catch`
 - **FT-7** (Filter exception safety): `# TODO(signal-over-noise): [P11] wrap filter body in try/except`
-- **FT-8** (convert untyped builtin raise to typed `AppError`): leaf from `typed-error-prescription.md` §4. If the same leaf+message+evidence recurs across ≥2 raise sites, define a subclass that bakes the defaults in a sibling `_<area>_errors.py` and reduce raise sites to the minimal form (`raise XError()`).
+- **FT-8** (convert untyped builtin raise to typed `AppError`): leaf from `typed-error-prescription.md` §4. Define a subclass for each distinct failure mode in a sibling errors module (SDK: `application_sdk/<area>/errors.py` or `_<area>_errors.py`; app: `app/failures.py`). Bake `message` and evidence-field defaults when they're stable across raise sites; for one-off sites, the subclass may just override `code` and let the raise site pass `message`.
 - **FT-9** (convert legacy `AtlanError` raise to typed `AppError`): leaf from `typed-error-prescription.md` §5. Same subclassing rule applies when the same error recurs.
 
 TODO comment format for swallow/logging findings:
