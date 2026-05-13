@@ -156,7 +156,7 @@ For each `genuine-bug` finding, produce a remediation entry. Include `Prescribed
 whenever the fix involves raising an exception:
 
 ```
-File:     application_sdk/clients/sql.py:142
+File:     application_sdk/clients/sql.py:352
 Severity: HIGH
 Category: untyped-raise
 Pattern:  P12

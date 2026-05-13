@@ -66,19 +66,19 @@ subclass a leaf and override `code` — never add a new category value.
 | `InternalError` | INTERNAL | APP_OWNER | False | SDK or app bug; invariant broken in our code |
 | `UnimplementedError` | UNIMPLEMENTED | APP_OWNER | False | Operation not supported or capability not yet built (known gap, not a bug) |
 
-**Special SDK subclass** — `WorkerEvictedError` (`leaves.py:175-195`) subclasses
-`DependencyUnavailableError` with `code = "WORKER_EVICTED"`. This is the
-precedent for when the SDK itself should subclass a leaf: when a stable wire
-`code` string is needed for cross-process recognition (Temporal serialises only
-the type string, not the Python class). Do not add further SDK subclasses without
-this specific need.
+**Cross-process type identification** — for failures that must be recognised by
+*string match* across the Temporal activity/workflow boundary, the SDK uses
+`WORKER_EVICTED_TYPE = "WorkerEvicted"` (`leaves.py:172`), a plain string
+constant. The activity wrapper raises Temporal's own
+`ApplicationError(type=WORKER_EVICTED_TYPE)` — **not** an `AppError` subclass.
+Workflow code matches `cause.type == WORKER_EVICTED_TYPE`. This is the
+existing SDK mechanism for cross-process recognition; it does not involve
+subclassing `AppError`.
 
 **`audience` override pattern** — when an SDK base default doesn't fit the locus,
-override `audience` on a minimal subclass. Example from the SDK itself:
-`WorkerEvictedError` inherits PLATFORM from `DependencyUnavailableError` and
-keeps it (correct — the pod is platform infrastructure). For connector apps, the
-source-side network is `audience=USER` (the customer controls it), so they
-override in their `failures.py`. The SDK's own code should follow the same logic.
+override `audience` on a minimal subclass. For connector apps, the source-side
+network is `audience=USER` (the customer controls it), so they override in their
+`failures.py`. The SDK's own code should follow the same logic.
 
 ---
 
@@ -155,7 +155,7 @@ to one line. Raise sites pass only what is genuinely dynamic (typically
 default-less fields like `message: str` (Python 3.10+).
 
 ```python
-# Subclass — typically in a sibling module (see WorkerEvictedError precedent).
+# Subclass — typically in a sibling module (e.g. application_sdk/clients/_sql_errors.py).
 @dataclass(kw_only=True)
 class EngineNotInitializedError(InternalError):
     code: ClassVar[str] = "INTERNAL_ENGINE_NOT_INITIALIZED"
@@ -629,11 +629,11 @@ blocks any evidence key matching the exact denylist or the suffix denylist
 the `/typed-failures` skill. Every connector app's typed classes live there,
 not in the SDK.
 
-**The SDK** raises leaves directly in most cases. The exception: when a stable
-wire `code` string is needed for *cross-process* recognition across the
-activity/workflow boundary — `WorkerEvictedError` is the only current example
-(`leaves.py:172`, `code = "WORKER_EVICTED"`). The wire type string lets
-workflow code identify the failure without depending on the Python class name.
+**The SDK** raises leaves directly in most cases. For *cross-process* type
+recognition across the activity/workflow boundary, the SDK uses a string
+constant (`WORKER_EVICTED_TYPE = "WorkerEvicted"`, `leaves.py:172`) passed to
+Temporal's own `ApplicationError(type=…)` — not an `AppError` subclass. There
+are currently no `AppError` subclasses in the SDK itself.
 
 If you are tempted to subclass a leaf in the SDK:
 1. Is there a cross-process recognition need? If not, raise the leaf directly
