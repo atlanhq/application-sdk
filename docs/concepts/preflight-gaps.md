@@ -4,6 +4,12 @@
 **Component:** `application_sdk/handler/` × `heracles/handler/` × `heracles/pkg/app/`
 **Status:** Analysis complete — fixes tracked in HYP-829
 
+> **Production incident (2026-05-13, datavant):** A publish-app workflow ran through the full
+> extraction and query-parsing pipeline, then failed at the publish phase with `"user disabled"`.
+> Mustafa T confirmed the triggering user's account was disabled in Keycloak. The entire extract
+> cost was wasted because no preflight or pre-submission check validated IdP account status.
+> This is documented as **G15** below.
+
 This document maps every known gap between what the SDK's preflight system checks and what the
 runtime workflow execution actually requires. Each gap explains the execution flow involved, the
 failure pattern it produces, and a concrete fix.
@@ -78,6 +84,7 @@ Temporal activities, under different context, with credentials re-resolved from 
 | [G12](#g12--heartbeat-timeout-not-exercised-at-preflight) | Insufficient Coverage | Preflight timeout is 55 s; runtime heartbeat window is 120 s — slow queries invisible | Medium |
 | [G13](#g13--worker-eviction-path-not-exercised-at-preflight) | Insufficient Coverage | `asyncio.CancelledError` (worker eviction) handled in activities but not in preflight | Low |
 | [G14](#g14--sdr-agent-liveness-not-re-validated-before-temporal-dispatch) | Temporal Gap | SDR agent may go offline between preflight and workflow submission | Medium |
+| [G15](#g15--initiating-user-account-status-not-validated-before-workflow-start) | Permission Gap | Disabled IdP/Keycloak user runs the full extraction pipeline before failing at publish | **Critical** |
 
 ---
 
@@ -919,10 +926,156 @@ if err != nil || len(pollers.GetPollers()) == 0 {
 
 ---
 
+### G15 — Initiating user account status not validated before workflow start
+
+**Category:** Permission Gap
+**Severity:** Critical
+**Confirmed by:** Production incident — datavant.atlan.com (2026-05-13)
+**Heracles file:** `handler/workflow.go` (pre-submission gate, missing),
+`handler/credential.go` (auth middleware)
+
+#### What happened (production incident)
+
+```
+Temporal workflow: 9ef985fd-8216-4be…/019e2012-1574-7a63-9b17-4a5e1800bddb
+Failure phase:     publish-app activity
+Error:             "user disabled"
+Root cause:        triggering user's account was disabled in Keycloak
+                   (confirmed by Mustafa T)
+Resources wasted:  full extraction + query-parsing pipeline completed before
+                   the publish phase attempted to act on behalf of the user
+```
+
+The workflow ran through:
+1. **Extract** — connected to the source system, pulled schemas/tables/columns (compute + time)
+2. **Query parsing** — parsed and normalized query history (compute + time)
+3. **Publish** — attempted to write assets to Atlan on behalf of the triggering user → `"user disabled"` → workflow failed
+
+All of steps 1 and 2 were wasted. The failure was predictable at T+0 if user account status had
+been checked before the workflow was submitted.
+
+#### Why this is a preflight gap, not just a publish bug
+
+The "user disabled" error is not a publish-layer implementation flaw — it is an identity
+precondition that is knowable before any workflow work begins. Heracles holds the authenticated
+session of the triggering user; Keycloak is queryable from Heracles before workflow submission.
+
+The same failure pattern applies to any user who:
+- Has been offboarded between credential setup and workflow run
+- Has had their Keycloak account suspended (e.g., 90-day inactivity policy)
+- Has had their Atlan role revoked, removing publish permission
+
+In all cases, the extraction pipeline runs to completion and the cost is entirely sunk before the
+failure surfaces.
+
+#### The full gap: publish permission is never pre-validated
+
+Beyond the account-status check, the broader gap is that **publish-phase permissions are never
+validated at preflight time**. The publish activity requires the triggering user to have:
+
+- An active, non-disabled IdP (Keycloak) account
+- An Atlan role with write access to the target connection and its assets
+- A valid, non-expired Atlan session token at publish time (temporal gap — see G8)
+
+None of these are checked during preflight. Preflight only validates source-system connectivity
+and permissions, not Atlan-side permissions for the publish phase.
+
+#### The fix: two-layer guard
+
+**Layer 1 — Heracles: user account status check before workflow submission**
+
+Add a Keycloak user-status check in `handler/workflow.go` before dispatching to AE. Heracles
+already has a Keycloak client (`gocloak` used in auth flows):
+
+```go
+// handler/workflow.go — processAutomationEngineWorkflow, before GetManifest
+
+userInfo, err := h.keycloakClient.GetUserInfo(ctx, accessToken, realm)
+if err != nil {
+    return ctx.JSON(http.StatusUnauthorized, map[string]interface{}{
+        "success": false,
+        "message": "Unable to verify user account status — cannot start workflow",
+    })
+}
+
+// GetUserInfo returns nil sub/name for disabled users on some Keycloak configs;
+// a direct GetUser call gives the explicit Enabled field
+user, err := h.keycloakClient.GetUserByID(ctx, adminToken, realm, userID)
+if err != nil || (user.Enabled != nil && !*user.Enabled) {
+    return ctx.JSON(http.StatusForbidden, map[string]interface{}{
+        "success": false,
+        "message": fmt.Sprintf(
+            "User account is disabled — contact your administrator to re-enable "+
+            "the account before running workflows (user: %s)", userID,
+        ),
+    })
+}
+```
+
+This gate fires before any Temporal work is dispatched — zero extraction cost for a disabled user.
+
+**Layer 2 — SDK: Atlan publish-permission preflight check**
+
+Add a `PublishPermissionCheck` to the SDK that the connector can call during preflight to
+validate the triggering user has write access to the target Atlan connection:
+
+```python
+# application_sdk/handler/checks.py
+
+async def check_atlan_publish_permission(
+    atlan_client, connection_qualified_name: str
+) -> PreflightCheck:
+    """
+    Verify the triggering user can write assets to the target Atlan connection.
+    Catches disabled accounts, revoked roles, and permission gaps before
+    the extraction pipeline runs.
+    """
+    try:
+        # Attempt a dry-run permission check — read the connection object
+        # and verify the user has the ENTITY_UPDATE permission on it
+        conn = await atlan_client.asset.get_by_qualified_name(
+            qualified_name=connection_qualified_name,
+            asset_type=Connection,
+        )
+        if conn is None:
+            return PreflightCheck(
+                name="AtlanPublishPermission",
+                passed=False,
+                message=(
+                    f"Connection '{connection_qualified_name}' not found in Atlan. "
+                    "Verify the connection exists and the user has access to it."
+                ),
+            )
+        return PreflightCheck(name="AtlanPublishPermission", passed=True)
+    except AtlanError as exc:
+        # 403 → permission denied; 401 → user disabled / token invalid
+        return PreflightCheck(
+            name="AtlanPublishPermission",
+            passed=False,
+            message=(
+                f"Cannot verify publish permission for '{connection_qualified_name}': {exc}. "
+                "Check that the user account is active and has the required Atlan role."
+            ),
+        )
+```
+
+#### Why Layer 1 (Heracles gate) must ship first
+
+The Layer 1 Heracles gate is synchronous and costs one Keycloak API call — it prevents all
+wasted extraction work with minimal implementation effort. Layer 2 (SDK publish-permission check)
+adds coverage for role/permission issues but requires the connector to wire up an Atlan client
+in preflight, which is a larger change.
+
+**Immediate priority:** Ship the Heracles user-status gate in the workflow submission path.
+This alone would have prevented the datavant production incident.
+
+---
+
 ## Prioritized Fix Roadmap
 
 | Priority | Gap | Effort | Impact |
 |----------|-----|--------|--------|
+| **P0** | **G15 — Disabled IdP user runs full pipeline (production incident)** | **~20 lines Go (Heracles)** | **Eliminates all wasted extraction cost for disabled users** |
 | P0 | G2 — PARTIAL status flattened (in HYP-829) | 1 line | Unblocks partial-access workflows immediately |
 | P1 | G7 — `timeout_seconds` enforcement (in HYP-829) | ~5 lines SDK | Prevents infinite hangs in HTTP path |
 | P1 | G1 — `DefaultHandler` warning | 2 lines | Surfaces silent no-op checks in every log stream |
