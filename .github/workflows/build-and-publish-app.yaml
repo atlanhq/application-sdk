@@ -564,11 +564,11 @@ jobs:
 
           echo "Publishing ${APP_NAME} (${IMAGE_TAG}) to marketplace..."
 
-          RESPONSE=$(curl -sf -X POST \
+          RESPONSE=$(curl -sS --fail-with-body -X POST \
             "${BASE_URL}/api/service/marketplace/publish" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${APP_PUBLISH_TOKEN}" \
-            -d "$BODY")
+            -d "$BODY") || { echo "Publish failed: $RESPONSE"; exit 1; }
 
           echo "$RESPONSE" | python3 -c "
           import json, sys
