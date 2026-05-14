@@ -17,7 +17,7 @@ only side effect is in-memory mutation of stub objects.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -32,7 +32,7 @@ from application_sdk.transformers.atlas import AtlasTransformer
 class _FakeDataFrame:
     """A minimal stand-in for `daft.DataFrame` exposing iter_rows()."""
 
-    def __init__(self, rows: List[Dict[str, Any]]):
+    def __init__(self, rows: list[dict[str, Any]]):
         self._rows = rows
 
     def iter_rows(self):  # pragma: no cover - generator protocol trivial
@@ -115,22 +115,47 @@ def test_transform_row_lowercase_typename_is_normalized(
     transformer: AtlasTransformer,
 ):
     # Ensures `typename.upper()` converts "database" to a known key.
-    result = transformer.transform_row(
-        "database",
-        {
-            "database_name": "DB",
-        },
-        "wf",
-        "run",
-        connection_name="conn",
-        connection_qualified_name="default/snowflake/1728518400",
+    # Enrichment pulls last-sync values from the SDK's execution +
+    # correlation contexts (BLDX-1229).  Set them explicitly so the
+    # assertions below don't depend on ambient process state.
+    from application_sdk.observability import (
+        CorrelationContext,
+        ExecutionContext,
+        set_correlation_context,
+        set_execution_context,
     )
+
+    set_execution_context(
+        ExecutionContext(
+            execution_type="workflow",
+            workflow_id="dbt-AMBSvQPJ",
+            workflow_run_id="3d4aa53e-f47a-4d2b-b120-79db652ff759",
+        )
+    )
+    set_correlation_context(CorrelationContext(correlation_id="corr-xyz"))
+
+    try:
+        result = transformer.transform_row(
+            "database",
+            {
+                "database_name": "DB",
+            },
+            "wf",
+            "run",
+            connection_name="conn",
+            connection_qualified_name="default/snowflake/1728518400",
+        )
+    finally:
+        set_execution_context(ExecutionContext())
+        set_correlation_context(CorrelationContext())
+
     assert result is not None
     assert result["typeName"] == "Database"
-    # Confirm enrichment metadata propagated.
+    # Confirm enrichment metadata propagated and now reads from context,
+    # not from the legacy ``workflow_id`` / ``workflow_run_id`` args.
     assert result["attributes"]["tenantId"] == "default"
-    assert result["attributes"]["lastSyncWorkflowName"] == "wf"
-    assert result["attributes"]["lastSyncRun"] == "run"
+    assert result["attributes"]["lastSyncWorkflowName"] == "dbt-AMBSvQPJ"
+    assert result["attributes"]["lastSyncRun"] == "corr-xyz"
 
 
 def test_transform_row_overrides_entity_class_definitions(

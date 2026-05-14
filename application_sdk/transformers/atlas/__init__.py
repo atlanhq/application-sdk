@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, Optional, Type
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
+from application_sdk.transformers.common.last_sync import resolve_last_sync_details
 from application_sdk.transformers.common.utils import process_text
 
 logger = get_logger(__name__)
@@ -66,7 +67,7 @@ class AtlasTransformer(TransformerInterface):
         self.current_epoch = kwargs.get("current_epoch", "0")
         self.connector_name = connector_name
         self.tenant_id = tenant_id
-        self.entity_class_definitions: Dict[str, Type[Any]] = {
+        self.entity_class_definitions: dict[str, type[Any]] = {
             "DATABASE": Database,
             "SCHEMA": Schema,
             "TABLE": Table,
@@ -81,12 +82,12 @@ class AtlasTransformer(TransformerInterface):
     def transform_metadata(
         self,
         typename: str,
-        dataframe: "daft.DataFrame",
+        dataframe: daft.DataFrame,
         workflow_id: str,
         workflow_run_id: str,
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
-        **kwargs: Dict[str, Any],
-    ) -> "daft.DataFrame":
+        entity_class_definitions: dict[str, type[Any]] | None = None,
+        **kwargs: dict[str, Any],
+    ) -> daft.DataFrame:
         self.entity_class_definitions = (
             entity_class_definitions or self.entity_class_definitions
         )
@@ -128,12 +129,12 @@ class AtlasTransformer(TransformerInterface):
     def transform_row(
         self,
         typename: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         workflow_id: str,
         workflow_run_id: str,
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
+        entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: Any,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Transform metadata into an Atlas entity.
 
         This method transforms the provided metadata into an Atlas entity based on
@@ -202,8 +203,8 @@ class AtlasTransformer(TransformerInterface):
         self,
         workflow_id: str,
         workflow_run_id: str,
-        data: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
         """Enrich an entity with additional metadata.
 
         This method adds workflow metadata and other attributes to the entity.
@@ -223,11 +224,27 @@ class AtlasTransformer(TransformerInterface):
 
         attributes["status"] = EntityStatus.ACTIVE
         attributes["tenant_id"] = self.tenant_id
-        attributes["last_sync_workflow_name"] = workflow_id
-        attributes["last_sync_run"] = workflow_run_id
-        attributes["last_sync_run_at"] = int(
-            datetime.now(timezone.utc).timestamp() * 1000
-        )
+        # In production the Temporal interceptor populates execution +
+        # correlation context, so the resolver returns the AE-assigned
+        # workflow id slug and end-to-end correlation id — the values
+        # operators actually see in the UI.  The ``workflow_id`` /
+        # ``workflow_run_id`` args carry the *current* (often child)
+        # workflow's Temporal ids, which is what older v2 connectors and
+        # test fixtures pass; treat them as fallbacks only — used when the
+        # context isn't set (CLI tools, unit tests without Temporal).
+        # See BLDX-1229.
+        last_sync = resolve_last_sync_details()
+        if not last_sync.workflow_name and not last_sync.run:
+            # Pure-fallback path.  Expected in tests; in a Temporal worker
+            # this means the interceptor is bypassed and we're about to
+            # stamp the buggy child-wf id again — surface it so the drift
+            # is visible.
+            logger.debug(
+                "Last-sync enrichment using legacy args (execution context empty)"
+            )
+        attributes["last_sync_workflow_name"] = last_sync.workflow_name or workflow_id
+        attributes["last_sync_run"] = last_sync.run or workflow_run_id
+        attributes["last_sync_run_at"] = last_sync.run_at_ms
         attributes["connection_name"] = data.get("connection_name", "")
         attributes["connector_name"] = AtlanConnectorType.get_connector_name(
             data.get("connection_qualified_name", "")
