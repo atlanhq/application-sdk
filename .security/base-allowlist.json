@@ -365,9 +365,9 @@
     "added_by": "security-claw"
   },
   "CVE-2026-25537": {
-    "package": "atlan-mysql-app base image (Trivy OS advisory — package layer not resolved)",
+    "package": "atlan-mysql-app + atlan-teradata-app base image (Trivy OS advisory — package layer not resolved)",
     "severity": "HIGH",
-    "reason": "Release-time scan on atlan-mysql-app:main-a4a722e — Trivy reported CVE with no associated package name. Likely base image OS advisory with no fix available. See SEC-1518.",
+    "reason": "Release-time scan on atlan-mysql-app:main-a4a722e and atlan-teradata-app:main-b773746 — Trivy reported CVE with no associated package name. Likely base image OS advisory with no fix available. See SEC-1518, SEC-1519.",
     "expires": "2026-06-13",
     "added_by": "security-claw"
   },
