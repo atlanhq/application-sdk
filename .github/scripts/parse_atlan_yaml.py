@@ -158,9 +158,7 @@ def _validate_env_overrides(deploy_val: Any) -> None:
         _err("deploy.env_overrides must be a mapping of channel-or-tenant → env vars")
     for key, env in overrides.items():
         if not isinstance(key, str) or not key:
-            _err(
-                f"deploy.env_overrides keys must be non-empty strings; " f"got {key!r}"
-            )
+            _err(f"deploy.env_overrides keys must be non-empty strings; got {key!r}")
         if not isinstance(env, dict):
             _err(
                 f"deploy.env_overrides.{key} must be a mapping of env vars; "
