@@ -344,3 +344,28 @@ class TestDownloadDirectory:
         # Only 1 real file — sidecar should not appear in file_count or on disk
         assert dl.ref.file_count == 1
         assert not (dest / "data.txt.sha256").exists()
+
+    async def test_path_traversal_in_listed_key_rejected(self, store, tmp_path) -> None:
+        """A listed key containing ``..`` must not write outside dest_dir.
+
+        obstore rejects ``..`` keys on put, so we patch ``list_keys`` to plant
+        a hostile listing and assert the containment guard fires before any
+        write happens (issue #1694).
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from application_sdk.storage.errors import StorageError
+
+        dest = tmp_path / "dest"
+        canary = tmp_path / "canary.txt"
+        # Trailing slash in storage_path puts download() straight into prefix
+        # mode, so only the prefix listing is consulted.
+        with (
+            patch(
+                "application_sdk.storage.batch.list_keys",
+                new=AsyncMock(return_value=["p/safe/../../canary.txt"]),
+            ),
+            pytest.raises(StorageError, match="Path traversal"),
+        ):
+            await download("p/", str(dest), store=store)
+        assert not canary.exists()

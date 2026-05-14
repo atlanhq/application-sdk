@@ -68,7 +68,6 @@ from application_sdk.handler.contracts import (
     HandlerCredential,
     MetadataInput,
     PreflightInput,
-    PreflightStatus,
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
@@ -638,21 +637,49 @@ def create_app_handler_service(
                 )
                 # Build v2-compatible response: each check becomes a top-level
                 # key in data so the frontend can iterate check names directly.
-                # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
+                # v2 format: {"authenticationCheck": {"success": true,
+                # "successMessage": "...", "failureMessage": "..."}, ...}.
+                #
+                # The SageV2 widget at
+                # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
+                # renders ``checkResult.success ? successMessage :
+                # failureMessage`` with no fallback to ``message``, so omitting
+                # those fields leaves the detail panel blank on a failed check
+                # (DBBI-665, WARE-1250). ``message`` is retained so any
+                # consumer already reading the v3 field keeps working.
+                #
+                # This finishes the third sub-mismatch from BLDX-901; PR #1228
+                # converted ``checks`` → camelCase keys and ``passed`` →
+                # ``success`` but left the message-field rename.
                 v2_data: dict[str, Any] = {}
                 for check in result.checks:
                     # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
                     key = check.name[0].lower() + check.name[1:]
+                    msg = check.message or ""
                     v2_data[key] = {
                         "success": check.passed,
-                        "message": check.message or "",
+                        "message": msg,
+                        "successMessage": msg if check.passed else "",
+                        "failureMessage": "" if check.passed else msg,
                     }
+                # Envelope ``success`` reports whether preflight executed at
+                # all, not whether every check passed — per-check pass/fail
+                # belongs in ``data.<check>.success``. The SageV2 widget at
+                # SageV2.vue:249 short-circuits on ``!response.success`` and
+                # skips the per-check render loop entirely, so collapsing
+                # envelope success to ``status == READY`` (the previous
+                # behaviour) made every PARTIAL/NOT_READY response surface
+                # as "Check failed" with a blank "Hide details" panel
+                # (DBBI-665). Tying envelope success to "any check ran"
+                # keeps it false when the handler produced no checks (a
+                # genuine preflight-system failure) and lets the widget
+                # render per-check rows otherwise.
                 return JSONResponse(
                     content=_wrap_response(
                         v2_data,
                         message=result.message
                         or f"Preflight check {result.status.value}",
-                        success=result.status == PreflightStatus.READY,
+                        success=len(result.checks) > 0,
                     )
                 )
             except HandlerError as e:

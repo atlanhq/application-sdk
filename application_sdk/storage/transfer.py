@@ -21,7 +21,7 @@ import asyncio
 import hashlib
 import os
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
@@ -351,6 +351,7 @@ async def download(
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
+        _safe_join_under,
         normalize_key,
     )
 
@@ -421,8 +422,8 @@ async def download(
         transferred_count = 0
         for key in data_keys:
             rel = key.removeprefix(strip)
-            # S3 keys use forward slashes; convert to OS-native path for local filesystem
-            local_file = dest_dir / Path(*PurePosixPath(rel.lstrip("/")).parts)
+            # Reject keys whose resolved path escapes dest_dir (e.g. via ".." segments).
+            local_file = _safe_join_under(dest_dir, rel)
             ok, _ = await _download_one(
                 resolved, key, local_file, skip_if_exists=skip_if_exists
             )

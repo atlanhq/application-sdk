@@ -1,0 +1,18 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: eventstore
+spec:
+  type: bindings.localstorage
+  version: v1
+  # SDK extract/transform activities publish lifecycle events to this
+  # binding. Without the component, Dapr returns 500 on every publish,
+  # which the SDK currently surfaces as a workflow activity failure
+  # (see _temporal/interceptors/events.py). For SDR e2e tests we point
+  # the binding at the same in-container scratch path the objectstore
+  # uses — events get written to local disk and tossed with the
+  # compose stack on teardown.
+  ignoreErrors: true
+  metadata:
+  - name: rootPath
+    value: /tmp/atlan-eventstore

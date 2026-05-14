@@ -42,7 +42,7 @@ import logging
 import math
 import os
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import obstore
@@ -114,6 +114,36 @@ def normalize_key(key: str) -> str:
     normalized = normalized.replace("\\", "/").replace(os.sep, "/").strip("/")
     # os.path.relpath resolves the staging root itself to "."; treat as store root.
     return "" if normalized == "." else normalized
+
+
+def _safe_join_under(root: Path | str, rel: str) -> Path:
+    """Join *rel* under *root* and reject path-traversal escapes.
+
+    S3-style keys use POSIX separators, so *rel* is split with
+    :class:`~pathlib.PurePosixPath` before being joined to *root*. The
+    candidate path is then resolved and compared against the resolved
+    *root*; anything that escapes (``..`` segments, symlinks pointing
+    outside, etc.) is rejected before the caller writes to disk.
+
+    Args:
+        root: Local destination directory.
+        rel: Relative path derived from an object-store key.
+
+    Returns:
+        Resolved absolute :class:`~pathlib.Path` guaranteed to be inside
+        *root*.
+
+    Raises:
+        StorageError: If *rel* resolves outside *root*.
+    """
+    from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+
+    resolved_root = Path(root).resolve()
+    parts = PurePosixPath(rel.lstrip("/")).parts
+    candidate = (resolved_root / Path(*parts)).resolve() if parts else resolved_root
+    if not candidate.is_relative_to(resolved_root):
+        raise StorageError(f"Path traversal detected in key: {rel!r}")
+    return candidate
 
 
 def _normalize_listing_prefix(prefix: str, normalize: bool) -> str:
