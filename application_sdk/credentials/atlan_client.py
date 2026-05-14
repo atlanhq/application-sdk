@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 _VALIDATED_ASYNC_CLIENT_KEY = "validated_async_atlan_client"
 
 
-def create_async_atlan_client(cred: "Credential") -> "object":
+def create_async_atlan_client(cred: Credential) -> object:
     """Create an AsyncAtlanClient from a resolved Atlan credential.
 
     Args:
@@ -28,7 +28,7 @@ def create_async_atlan_client(cred: "Credential") -> "object":
         An ``AsyncAtlanClient`` instance configured for the given credential.
 
     Raises:
-        TypeError: If ``cred`` is not a supported Atlan credential type.
+        AtlanCredentialTypeError: If ``cred`` is not a supported Atlan credential type.
     """
     from pyatlan_v9.client.aio import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
         AsyncAtlanClient,
@@ -56,10 +56,11 @@ def create_async_atlan_client(cred: "Credential") -> "object":
             oauth_client_id=cred.client_id,
             oauth_client_secret=cred.client_secret,
         )
-    raise TypeError(
-        f"Unsupported Atlan credential type: {type(cred).__name__}. "
-        "Expected AtlanApiToken or AtlanOAuthClient."
+    from application_sdk.credentials.errors import (  # noqa: PLC0415
+        AtlanCredentialTypeError,
     )
+
+    raise AtlanCredentialTypeError()
 
 
 class AtlanClientMixin:
@@ -75,8 +76,8 @@ class AtlanClientMixin:
     """
 
     async def get_or_create_async_atlan_client(
-        self, credential: "CredentialRef"
-    ) -> "object":
+        self, credential: CredentialRef
+    ) -> object:
         """Return a cached AsyncAtlanClient for the given credential ref.
 
         Lookup order:

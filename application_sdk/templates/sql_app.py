@@ -416,19 +416,31 @@ class SqlApp(App):
         self, record: dict[str, Any], connection_qn: str
     ) -> Asset | dict[str, Any]:
         """Map a raw schema record to a pyatlan_v9 Asset. Override in subclass."""
-        raise NotImplementedError("Override map_schema() in your SqlApp subclass")
+        from application_sdk.templates.sql_app_errors import (  # noqa: PLC0415
+            MapSchemaUnimplementedError,
+        )
+
+        raise MapSchemaUnimplementedError()
 
     def map_table(
         self, record: dict[str, Any], connection_qn: str
     ) -> Asset | dict[str, Any]:
         """Map a raw table record to a pyatlan_v9 Asset. Override in subclass."""
-        raise NotImplementedError("Override map_table() in your SqlApp subclass")
+        from application_sdk.templates.sql_app_errors import (  # noqa: PLC0415
+            MapTableUnimplementedError,
+        )
+
+        raise MapTableUnimplementedError()
 
     def map_column(
         self, record: dict[str, Any], connection_qn: str
     ) -> Asset | dict[str, Any]:
         """Map a raw column record to a pyatlan_v9 Asset. Override in subclass."""
-        raise NotImplementedError("Override map_column() in your SqlApp subclass")
+        from application_sdk.templates.sql_app_errors import (  # noqa: PLC0415
+            MapColumnUnimplementedError,
+        )
+
+        raise MapColumnUnimplementedError()
 
     def map_procedure(
         self, record: dict[str, Any], connection_qn: str
@@ -436,9 +448,13 @@ class SqlApp(App):
         """Map a raw procedure record to a pyatlan_v9 Asset. Override in
         subclass if your connector emits procedures via the
         ``transform_procedures()`` task. Without an override the task
-        raises ``NotImplementedError`` rather than ``AttributeError``.
+        raises ``MapProcedureUnimplementedError`` rather than ``AttributeError``.
         """
-        raise NotImplementedError("Override map_procedure() in your SqlApp subclass")
+        from application_sdk.templates.sql_app_errors import (  # noqa: PLC0415
+            MapProcedureUnimplementedError,
+        )
+
+        raise MapProcedureUnimplementedError()
 
     # =====================================================================
     # run() — default orchestration
@@ -557,7 +573,11 @@ class SqlApp(App):
         ``build_task_input``. So here we just consume that ref.
         """
         if self.sql_client_class is None:
-            raise ValueError("sql_client_class must be set on the SqlApp subclass")
+            from application_sdk.templates.sql_app_errors import (  # noqa: PLC0415
+                SqlClientClassNotSetError,
+            )
+
+            raise SqlClientClassNotSetError()
 
         client = self.sql_client_class()
         creds: dict[str, Any] = {}
