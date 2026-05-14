@@ -225,6 +225,7 @@ jobs:
                   except json.JSONDecodeError:
                       pass
           value = json.dumps(form_files) if form_files else ""
+          print(f"[app_configs] found {len(form_files)} files: {list(form_files.keys())}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
               print(f"app_configs={value}", file=fh)
           PYEOF2
