@@ -4,48 +4,50 @@ Stamps the three asset attributes that identify *which* run last touched an
 asset (``lastSyncRun``, ``lastSyncWorkflowName``, ``lastSyncRunAt``).  Before
 this primitive, every connector hand-rolled these values, usually from
 ``input.workflow_id`` and ``ctx.workflow_run_id`` — both of which resolve to
-the *current* (often child) workflow's Temporal id, not the AE-assigned
+the *current* (often child) workflow's Temporal id, not the AE-dispatched
 workflow that owns the end-to-end run.  The result on assets looked like::
 
-    "lastSyncWorkflowName": "<uuid>-process",   # child wf id, not clickable
-    "lastSyncRun":          "<temporal-run-uuid>"  # internal id, not in UI
+    "lastSyncWorkflowName": "<uuid>-extract",   # child wf id, not clickable to AE
+    "lastSyncRun":          "<temporal-run-uuid>"  # internal id, not propagated
 
-The fields are meant for operator debugging (jumping from an asset back to the
-run that produced it).  The right identifiers are the ones the Atlan UI shows
-on the workflow runs page — i.e. the AE-assigned workflow id slug
-(``<connector>-<short>``) plus the correlation id that ties the full
-end-to-end run (extract + publish) together.  Both are available in the
-SDK's execution / correlation context — the AE id is the *topmost* workflow
-id (``workflow.info().parent.workflow_id`` for child workflows the connector
-spawns internally, otherwise ``workflow.info().workflow_id``), and the
-correlation id is propagated through Temporal headers + memo by the
-correlation interceptor.
+The primitive resolves the values from the SDK's execution + correlation
+context, which the Temporal interceptor already populates:
 
-The primitive resolves both automatically so callers don't need to know about
-workflow id de-referencing.  Explicit overrides are accepted for non-Temporal
-callers (tests, batch tools).
+* ``lastSyncWorkflowName`` ← the **AE-dispatched workflow's Temporal id**,
+  picked up via ``parent_workflow_id`` when a connector workflow is running
+  inside an AE-spawned child (``workflow.info().parent``); otherwise the
+  top-level ``workflow_id``.  This is a run-unique UUID (e.g.
+  ``4b9eade4-de53-4b69-9010-2446e0a8f85c``) — clickable from an asset back
+  to that exact AE run's history in Temporal UI for debugging.
+* ``lastSyncRun`` ← the correlation id that ties the full end-to-end run
+  (extract + publish) together; propagated through Temporal headers + memo
+  by the correlation interceptor.
+* ``lastSyncRunAt`` ← the current UTC epoch in milliseconds.
+
+The primitive resolves these automatically so callers don't need to know
+about workflow id de-referencing.  Explicit overrides are accepted for
+non-Temporal callers (tests, batch tools).
 
 Trade-offs to be aware of:
 
-* ``lastSyncRun`` defaults to the SDK correlation id, which spans the full
-  end-to-end run (extract + publish) but is *not* the same string the Atlan
-  UI uses in the runs-page URL (Temporal's ``run_id``).  Callers that want
-  UI-clickthrough semantics should pass ``run=<temporal_run_id>`` explicitly
-  — the default favours end-to-end correlation per the BLDX-1229 discussion.
-* ``workflow_name`` resolves to ``parent_workflow_id or workflow_id`` — i.e.
-  one level of parent walk-up.  This covers connectors that spawn a single
-  layer of child workflows (the common shape today).  For deeper nesting
-  the resolver would return an intermediate child's id, not the AE top.
-  If multi-level nesting becomes a thing, propagate the AE id via Temporal
-  memo (mirroring how the correlation interceptor handles ``correlation_id``
-  in ``execution/_temporal/interceptors/log.py``) and read it here.
-* ``workflow_name`` is the AE-assigned *slug* (e.g. ``dbt-AMBSvQPJ``), not a
-  human-readable connection name.  The slug is connection-stable (one slug
-  per Atlan connection, regardless of how many times the run fires) which
-  satisfies the operational use case raised on BLDX-1229.  If teams later
-  need the friendly connection name, AE would need to plumb it through as
-  a distinct input field; for now, callers can pass
-  ``workflow_name=<connection_name>`` explicitly to override.
+* ``lastSyncRun`` defaults to the SDK correlation id (end-to-end span across
+  extract + publish) rather than the Temporal ``run_id`` that appears in the
+  Atlan UI's runs-page URL.  Callers that want UI-clickthrough semantics
+  should pass ``run=<temporal_run_id>`` explicitly.
+* ``workflow_name`` returns the **AE Temporal workflow_id** — a run-unique
+  UUID — *not* the Atlan UI's workflow slug (the ``<connector>-<short>``
+  string in URLs like ``…/workflows/profile/dbt-AMBSvQPJ/…``).  The UI slug
+  isn't plumbed through to the SDK today.  Connection identity is already
+  carried on assets via ``connectionName`` / ``connectionQualifiedName``
+  (separate fields, not ``lastSyncWorkflowName``).  Callers who want the UI
+  slug or a friendly connection name in this field can pass
+  ``workflow_name=<value>`` explicitly.
+* The resolver walks **one level** of ``info.parent``.  This covers
+  connectors that spawn a single layer of child workflows below the AE
+  parent (the common shape today).  Deeper nesting would need the AE id
+  propagated via Temporal memo (mirroring how the correlation interceptor
+  handles ``correlation_id`` in
+  ``execution/_temporal/interceptors/log.py``).
 
 See BLDX-1229 for the design discussion.
 """

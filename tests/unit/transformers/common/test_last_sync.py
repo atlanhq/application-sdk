@@ -54,43 +54,53 @@ def test_resolve_empty_context_returns_empty_strings_and_current_epoch():
 
 
 def test_resolve_top_level_workflow_uses_workflow_id():
-    """Top-level workflow → no parent → workflow_name == workflow_id."""
+    """Top-level workflow → no parent → workflow_name == workflow_id.
+
+    Fixture uses a realistic AE Temporal workflow_id (a UUID, run-unique).
+    """
     set_execution_context(
         ExecutionContext(
             execution_type="workflow",
-            workflow_id="dbt-AMBSvQPJ",
-            workflow_run_id="run-uuid-1",
+            workflow_id="4b9eade4-de53-4b69-9010-2446e0a8f85c",
+            workflow_run_id="019e2498-87d6-7d99-b345-e00a6dfa8fe2",
         )
     )
-    set_correlation_context(CorrelationContext(correlation_id="corr-1"))
+    set_correlation_context(
+        CorrelationContext(correlation_id="d637c39c-81a0-48b5-bf36-312108e4615c")
+    )
 
     details = resolve_last_sync_details()
-    assert details.workflow_name == "dbt-AMBSvQPJ"
-    assert details.run == "corr-1"
+    assert details.workflow_name == "4b9eade4-de53-4b69-9010-2446e0a8f85c"
+    assert details.run == "d637c39c-81a0-48b5-bf36-312108e4615c"
 
 
 def test_resolve_child_workflow_prefers_parent_workflow_id():
     """Child workflow → ``parent_workflow_id`` wins over ``workflow_id``.
 
-    This is the exact bug Chetan hit in the BLDX-1229 thread: from inside
-    a connector's child workflow, ``input.workflow_id`` (= the child's
-    Temporal id, ``<uuid>-process``) was being written to assets instead
-    of the AE-assigned slug.  The resolver picks the topmost id.
+    Fixture mirrors the BLDX-1229 scenario observed against a real BigQuery
+    extract run on a dev tenant: the connector activity runs inside an
+    AE-spawned child workflow whose Temporal id is ``<correlation>-extract``;
+    the parent is the AE workflow whose id is a fresh UUID per AE run.  The
+    v2 pattern (stamp ``input.workflow_id``) produced the child id on assets,
+    so operators could not click back to the AE run from an asset.  The
+    resolver instead reads ``parent_workflow_id`` and stamps the AE id.
     """
     set_execution_context(
         ExecutionContext(
             execution_type="workflow",
-            workflow_id="64b1330d-4635-4d9d-99c1-1ee2c78105ea-process",
-            workflow_run_id="019dd951-76a9-7125-aa42-86f0bbe36f6a",
-            parent_workflow_id="dbt-AMBSvQPJ",
-            parent_run_id="3d4aa53e-f47a-4d2b-b120-79db652ff759",
+            workflow_id="d637c39c-81a0-48b5-bf36-312108e4615c-extract",
+            workflow_run_id="019e2499-c758-7869-9e37-8a50f1d2315c",
+            parent_workflow_id="4b9eade4-de53-4b69-9010-2446e0a8f85c",
+            parent_run_id="019e2498-87d6-7d99-b345-e00a6dfa8fe2",
         )
     )
-    set_correlation_context(CorrelationContext(correlation_id="corr-2"))
+    set_correlation_context(
+        CorrelationContext(correlation_id="d637c39c-81a0-48b5-bf36-312108e4615c")
+    )
 
     details = resolve_last_sync_details()
-    assert details.workflow_name == "dbt-AMBSvQPJ"
-    assert details.run == "corr-2"
+    assert details.workflow_name == "4b9eade4-de53-4b69-9010-2446e0a8f85c"
+    assert details.run == "d637c39c-81a0-48b5-bf36-312108e4615c"
 
 
 def test_resolve_explicit_overrides_beat_context():
@@ -178,10 +188,12 @@ def test_bulk_applies_same_values_to_every_asset():
     """Every asset in the batch carries identical lastSync* values — the
     resolver runs once, not per asset, so the timestamp is stable across
     the batch."""
+    ae_wf_id = "4b9eade4-de53-4b69-9010-2446e0a8f85c"
+    corr_id = "d637c39c-81a0-48b5-bf36-312108e4615c"
     set_execution_context(
-        ExecutionContext(execution_type="workflow", workflow_id="dbt-XYZ")
+        ExecutionContext(execution_type="workflow", workflow_id=ae_wf_id)
     )
-    set_correlation_context(CorrelationContext(correlation_id="corr-batch"))
+    set_correlation_context(CorrelationContext(correlation_id=corr_id))
 
     assets = [{"typeName": "Table"}, {"typeName": "Column"}, {"typeName": "Schema"}]
     out = set_last_sync_details_bulk(assets)
@@ -189,8 +201,8 @@ def test_bulk_applies_same_values_to_every_asset():
     assert len(out) == 3
     first_run_at = out[0]["attributes"][LAST_SYNC_RUN_AT]
     for asset in out:
-        assert asset["attributes"][LAST_SYNC_RUN] == "corr-batch"
-        assert asset["attributes"][LAST_SYNC_WORKFLOW_NAME] == "dbt-XYZ"
+        assert asset["attributes"][LAST_SYNC_RUN] == corr_id
+        assert asset["attributes"][LAST_SYNC_WORKFLOW_NAME] == ae_wf_id
         # Same timestamp across the whole batch — proves the resolver
         # didn't fire per asset.
         assert asset["attributes"][LAST_SYNC_RUN_AT] == first_run_at

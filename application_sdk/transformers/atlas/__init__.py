@@ -23,6 +23,12 @@ from application_sdk.transformers.common.utils import process_text
 
 logger = get_logger(__name__)
 
+# Module-level sentinel so the legacy-args fallback warning fires once per
+# process (not once per asset).  In production this surfaces a missing
+# Temporal interceptor or a non-Temporal entry path; in tests the legacy
+# fixtures fire it once, which keeps the test log readable.
+_LEGACY_LAST_SYNC_WARNED: bool = False
+
 
 class AtlasTransformer(TransformerInterface):
     """Transformer for converting metadata into Atlas entities.
@@ -225,9 +231,8 @@ class AtlasTransformer(TransformerInterface):
         attributes["status"] = EntityStatus.ACTIVE
         attributes["tenant_id"] = self.tenant_id
         # In production the Temporal interceptor populates execution +
-        # correlation context, so the resolver returns the AE-assigned
-        # workflow id slug and end-to-end correlation id — the values
-        # operators actually see in the UI.  The ``workflow_id`` /
+        # correlation context, so the resolver returns the AE Temporal
+        # workflow id and end-to-end correlation id.  The ``workflow_id`` /
         # ``workflow_run_id`` args carry the *current* (often child)
         # workflow's Temporal ids, which is what older v2 connectors and
         # test fixtures pass; treat them as fallbacks only — used when the
@@ -235,13 +240,23 @@ class AtlasTransformer(TransformerInterface):
         # See BLDX-1229.
         last_sync = resolve_last_sync_details()
         if not last_sync.workflow_name and not last_sync.run:
-            # Pure-fallback path.  Expected in tests; in a Temporal worker
-            # this means the interceptor is bypassed and we're about to
-            # stamp the buggy child-wf id again — surface it so the drift
-            # is visible.
-            logger.debug(
-                "Last-sync enrichment using legacy args (execution context empty)"
-            )
+            # Pure-fallback path: about to write whatever the caller passed
+            # in the legacy args.  In a Temporal worker this means the
+            # interceptor never ran (regression or non-Temporal entry path)
+            # and we're about to stamp the v2 child-wf id again.  Warn once
+            # per process so the drift is visible; the sentinel keeps test
+            # logs sane even though tests exercise this path many times.
+            global _LEGACY_LAST_SYNC_WARNED
+            if not _LEGACY_LAST_SYNC_WARNED:
+                _LEGACY_LAST_SYNC_WARNED = True
+                logger.warning(
+                    "AtlasTransformer falling back to legacy workflow_id / "
+                    "workflow_run_id args for last-sync enrichment because the "
+                    "SDK execution / correlation context is empty. In a Temporal "
+                    "worker this indicates the SDK's interceptors are not "
+                    "registered; assets will carry the child workflow's Temporal "
+                    "id instead of the AE workflow id (BLDX-1229)."
+                )
         attributes["last_sync_workflow_name"] = last_sync.workflow_name or workflow_id
         attributes["last_sync_run"] = last_sync.run or workflow_run_id
         attributes["last_sync_run_at"] = last_sync.run_at_ms

@@ -111,13 +111,25 @@ def test_transform_row_creator_failure_returns_none(transformer: AtlasTransforme
     assert result is None
 
 
-def test_transform_row_lowercase_typename_is_normalized(
-    transformer: AtlasTransformer,
-):
-    # Ensures `typename.upper()` converts "database" to a known key.
-    # Enrichment pulls last-sync values from the SDK's execution +
-    # correlation contexts (BLDX-1229).  Set them explicitly so the
-    # assertions below don't depend on ambient process state.
+# Realistic identifiers captured from an AE-dispatched BigQuery extract run
+# on a dev tenant — used by the context-driven last-sync tests below to
+# anchor assertions to real Temporal id shapes (UUIDs), not invented strings.
+_AE_WORKFLOW_ID = "4b9eade4-de53-4b69-9010-2446e0a8f85c"
+_AE_RUN_ID = "019e2498-87d6-7d99-b345-e00a6dfa8fe2"
+_CHILD_WORKFLOW_ID = "d637c39c-81a0-48b5-bf36-312108e4615c-extract"
+_CHILD_RUN_ID = "019e2499-c758-7869-9e37-8a50f1d2315c"
+_CORRELATION_ID = "d637c39c-81a0-48b5-bf36-312108e4615c"
+
+
+@pytest.fixture
+def ae_child_context():
+    """Populate execution + correlation context as if running inside an
+    AE-spawned child workflow (the production shape per BLDX-1229).
+
+    Mirrors a real run captured against a BigQuery extract: the connector
+    activity sees ``workflow_id = <correlation>-extract`` (child wf id) and
+    ``parent_workflow_id = <AE uuid>`` (the AE-dispatched workflow's id).
+    """
     from application_sdk.observability import (
         CorrelationContext,
         ExecutionContext,
@@ -128,34 +140,129 @@ def test_transform_row_lowercase_typename_is_normalized(
     set_execution_context(
         ExecutionContext(
             execution_type="workflow",
-            workflow_id="dbt-AMBSvQPJ",
-            workflow_run_id="3d4aa53e-f47a-4d2b-b120-79db652ff759",
+            workflow_id=_CHILD_WORKFLOW_ID,
+            workflow_run_id=_CHILD_RUN_ID,
+            parent_workflow_id=_AE_WORKFLOW_ID,
+            parent_run_id=_AE_RUN_ID,
         )
     )
-    set_correlation_context(CorrelationContext(correlation_id="corr-xyz"))
-
+    set_correlation_context(CorrelationContext(correlation_id=_CORRELATION_ID))
     try:
-        result = transformer.transform_row(
-            "database",
-            {
-                "database_name": "DB",
-            },
-            "wf",
-            "run",
-            connection_name="conn",
-            connection_qualified_name="default/snowflake/1728518400",
-        )
+        yield
     finally:
         set_execution_context(ExecutionContext())
         set_correlation_context(CorrelationContext())
 
+
+def test_transform_row_lowercase_typename_is_normalized(
+    transformer: AtlasTransformer,
+    ae_child_context,
+):
+    # Ensures `typename.upper()` converts "database" to a known key, and
+    # confirms that last-sync enrichment reads from the AE-child execution
+    # context populated by the ``ae_child_context`` fixture — not from the
+    # legacy ``workflow_id`` / ``workflow_run_id`` args (which are ignored
+    # whenever the context is populated; BLDX-1229).
+    result = transformer.transform_row(
+        "database",
+        {
+            "database_name": "DB",
+        },
+        "ignored-legacy-wf-id",
+        "ignored-legacy-run-id",
+        connection_name="conn",
+        connection_qualified_name="default/snowflake/1728518400",
+    )
+
     assert result is not None
     assert result["typeName"] == "Database"
-    # Confirm enrichment metadata propagated and now reads from context,
-    # not from the legacy ``workflow_id`` / ``workflow_run_id`` args.
     assert result["attributes"]["tenantId"] == "default"
-    assert result["attributes"]["lastSyncWorkflowName"] == "dbt-AMBSvQPJ"
-    assert result["attributes"]["lastSyncRun"] == "corr-xyz"
+    assert result["attributes"]["lastSyncWorkflowName"] == _AE_WORKFLOW_ID
+    assert result["attributes"]["lastSyncRun"] == _CORRELATION_ID
+
+
+# ---------------------------------------------------------------------------
+# Last-sync context propagation across entity types (BLDX-1229)
+#
+# Anchors the new production behavior at the AtlasTransformer level for the
+# three most common SQL entity types.  Before BLDX-1229, AtlasTransformer
+# stamped the explicit ``workflow_id`` / ``workflow_run_id`` args directly
+# onto assets — which in production resolved to the child workflow's
+# Temporal id and run id (the buggy values described in the ticket).  The
+# tests below set realistic AE-parent context and confirm the AE workflow
+# id + correlation id reach the asset, regardless of what the caller passes
+# as the legacy args.
+# ---------------------------------------------------------------------------
+
+
+def test_transform_row_table_uses_ae_workflow_id_from_context(
+    transformer: AtlasTransformer,
+    ae_child_context,
+):
+    result = transformer.transform_row(
+        "TABLE",
+        {
+            "table_name": "CUSTOMERS",
+            "table_schema": "PUBLIC",
+            "table_catalog": "DB",
+            "table_kind": "BASE TABLE",
+        },
+        "ignored-legacy-wf-id",
+        "ignored-legacy-run-id",
+        connection_name="conn",
+        connection_qualified_name="default/snowflake/1728518400",
+    )
+
+    assert result is not None
+    assert result["attributes"]["lastSyncWorkflowName"] == _AE_WORKFLOW_ID
+    assert result["attributes"]["lastSyncRun"] == _CORRELATION_ID
+
+
+def test_transform_row_column_uses_ae_workflow_id_from_context(
+    transformer: AtlasTransformer,
+    ae_child_context,
+):
+    result = transformer.transform_row(
+        "COLUMN",
+        {
+            "column_name": "CUSTOMER_ID",
+            "table_name": "CUSTOMERS",
+            "table_schema": "PUBLIC",
+            "table_catalog": "DB",
+            "table_kind": "BASE TABLE",
+            "data_type": "NUMBER",
+            "ordinal_position": 1,
+        },
+        "ignored-legacy-wf-id",
+        "ignored-legacy-run-id",
+        connection_name="conn",
+        connection_qualified_name="default/snowflake/1728518400",
+    )
+
+    assert result is not None
+    assert result["attributes"]["lastSyncWorkflowName"] == _AE_WORKFLOW_ID
+    assert result["attributes"]["lastSyncRun"] == _CORRELATION_ID
+
+
+def test_transform_row_schema_uses_ae_workflow_id_from_context(
+    transformer: AtlasTransformer,
+    ae_child_context,
+):
+    result = transformer.transform_row(
+        "SCHEMA",
+        {
+            "schema_name": "PUBLIC",
+            "catalog_name": "DB",
+        },
+        "ignored-legacy-wf-id",
+        "ignored-legacy-run-id",
+        connection_name="conn",
+        connection_qualified_name="default/snowflake/1728518400",
+    )
+
+    assert result is not None
+    assert result["attributes"]["lastSyncWorkflowName"] == _AE_WORKFLOW_ID
+    assert result["attributes"]["lastSyncRun"] == _CORRELATION_ID
 
 
 def test_transform_row_overrides_entity_class_definitions(
