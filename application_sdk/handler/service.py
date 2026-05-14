@@ -63,7 +63,6 @@ from application_sdk.handler.contracts import (
     HandlerCredential,
     MetadataInput,
     PreflightInput,
-    PreflightStatus,
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
@@ -658,12 +657,24 @@ def create_app_handler_service(
                         "successMessage": msg if check.passed else "",
                         "failureMessage": "" if check.passed else msg,
                     }
+                # Envelope ``success`` reports whether preflight executed at
+                # all, not whether every check passed — per-check pass/fail
+                # belongs in ``data.<check>.success``. The SageV2 widget at
+                # SageV2.vue:249 short-circuits on ``!response.success`` and
+                # skips the per-check render loop entirely, so collapsing
+                # envelope success to ``status == READY`` (the previous
+                # behaviour) made every PARTIAL/NOT_READY response surface
+                # as "Check failed" with a blank "Hide details" panel
+                # (DBBI-665). Tying envelope success to "any check ran"
+                # keeps it false when the handler produced no checks (a
+                # genuine preflight-system failure) and lets the widget
+                # render per-check rows otherwise.
                 return JSONResponse(
                     content=_wrap_response(
                         v2_data,
                         message=result.message
                         or f"Preflight check {result.status.value}",
-                        success=result.status == PreflightStatus.READY,
+                        success=len(result.checks) > 0,
                     )
                 )
             except HandlerError as e:
