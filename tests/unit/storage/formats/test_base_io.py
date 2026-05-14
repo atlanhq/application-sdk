@@ -194,15 +194,22 @@ class TestConvertToDataframe:
         assert list(result["a"]) == [1, 2]
 
     def test_unsupported_type_raises_typeerror(self) -> None:
+        from application_sdk.storage.formats._format_errors import (
+            UnsupportedDataTypeError,
+        )
+
         writer = _StubWriter(dataframe_type=DataframeType.pandas)
-        with pytest.raises(TypeError, match="Unsupported data type"):
+        with pytest.raises(UnsupportedDataTypeError) as exc_info:
             writer._convert_to_dataframe(42)
+        assert exc_info.value.code == "INVALID_INPUT_FORMAT_DATA_TYPE"
 
     def test_pandas_input_with_daft_type_without_daft_raises(self) -> None:
         """Exercises inline ``import daft`` ImportError fallback."""
         import builtins
 
         import pandas as pd
+
+        from application_sdk.storage.formats._format_errors import DaftNotInstalledError
 
         writer = _StubWriter(dataframe_type=DataframeType.daft)
         df = pd.DataFrame({"a": [1]})
@@ -215,12 +222,15 @@ class TestConvertToDataframe:
             return original_import(name, *args, **kwargs)
 
         with patch.object(builtins, "__import__", side_effect=_raise_for_daft):
-            with pytest.raises(TypeError, match="daft is not installed"):
+            with pytest.raises(DaftNotInstalledError) as exc_info:
                 writer._convert_to_dataframe(df)
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAFT"
 
     def test_dict_input_with_daft_type_without_daft_raises(self) -> None:
         """Inline ``import daft`` ImportError on dict→daft conversion path."""
         import builtins
+
+        from application_sdk.storage.formats._format_errors import DaftNotInstalledError
 
         writer = _StubWriter(dataframe_type=DataframeType.daft)
         original_import = builtins.__import__
@@ -231,8 +241,9 @@ class TestConvertToDataframe:
             return original_import(name, *args, **kwargs)
 
         with patch.object(builtins, "__import__", side_effect=_raise_for_daft):
-            with pytest.raises(TypeError, match="Dict and list inputs require daft"):
+            with pytest.raises(DaftNotInstalledError) as exc_info:
                 writer._convert_to_dataframe({"a": 1})
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAFT"
 
 
 # ---------------------------------------------------------------------------
@@ -243,18 +254,26 @@ class TestConvertToDataframe:
 class TestWriterWrite:
     @pytest.mark.asyncio
     async def test_write_to_closed_writer_raises(self) -> None:
+        from application_sdk.storage.formats._format_errors import WriterClosedError
+
         writer = _StubWriter()
         writer._is_closed = True
-        with pytest.raises(ValueError, match="closed writer"):
+        with pytest.raises(WriterClosedError) as exc_info:
             await writer.write({"a": 1})
+        assert exc_info.value.code == "PRECONDITION_FORMAT_WRITER_CLOSED"
 
     @pytest.mark.asyncio
     async def test_write_unsupported_dtype_raises(self) -> None:
+        from application_sdk.storage.formats._format_errors import (
+            UnsupportedDataframeTypeError,
+        )
+
         writer = _StubWriter()
         # Replace with an arbitrary value the dispatcher does not understand.
         writer.dataframe_type = "unknown"
-        with pytest.raises(ValueError, match="Unsupported dataframe_type"):
+        with pytest.raises(UnsupportedDataframeTypeError) as exc_info:
             await writer.write({"a": 1})
+        assert exc_info.value.code == "UNIMPLEMENTED_FORMAT_DATAFRAME_TYPE"
 
     @pytest.mark.asyncio
     async def test_write_pandas_calls_internal_method(self) -> None:
@@ -289,25 +308,33 @@ class TestWriterWrite:
 class TestWriteBatches:
     @pytest.mark.asyncio
     async def test_write_batches_to_closed_writer_raises(self) -> None:
+        from application_sdk.storage.formats._format_errors import WriterClosedError
+
         writer = _StubWriter()
         writer._is_closed = True
 
         async def _gen() -> AsyncGenerator[Any, None]:  # pragma: no cover
             yield None
 
-        with pytest.raises(ValueError, match="closed writer"):
+        with pytest.raises(WriterClosedError) as exc_info:
             await writer.write_batches(_gen())
+        assert exc_info.value.code == "PRECONDITION_FORMAT_WRITER_CLOSED"
 
     @pytest.mark.asyncio
     async def test_write_batches_unsupported_dtype_raises(self) -> None:
+        from application_sdk.storage.formats._format_errors import (
+            UnsupportedDataframeTypeError,
+        )
+
         writer = _StubWriter()
         writer.dataframe_type = "weird"
 
         def _gen():
             yield None
 
-        with pytest.raises(ValueError, match="Unsupported dataframe_type"):
+        with pytest.raises(UnsupportedDataframeTypeError) as exc_info:
             await writer.write_batches(_gen())
+        assert exc_info.value.code == "UNIMPLEMENTED_FORMAT_DATAFRAME_TYPE"
 
     @pytest.mark.asyncio
     async def test_batched_dataframe_rewrap_on_failure(self) -> None:

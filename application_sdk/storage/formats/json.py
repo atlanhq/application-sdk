@@ -99,10 +99,11 @@ class JsonFileReader(Reader):
 
         # Validate that single file path and file_names are not both specified
         if path.endswith(self.extension) and file_names:
-            raise ValueError(
-                f"Cannot specify both a single file path ('{path}') and file_names filter. "
-                f"Either provide a directory path with file_names, or specify the exact file path without file_names."
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                SingleFilePathWithFileNamesError,
             )
+
+            raise SingleFilePathWithFileNamesError(path=path)
 
         # Initialise the Reader base class so `_is_closed` and
         # `_downloaded_files` are per-instance state (not shared via the old
@@ -124,14 +125,22 @@ class JsonFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot read from a closed reader")
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                ReaderClosedError,
+            )
+
+            raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
         elif self.dataframe_type == DataframeType.daft:
             return await self._get_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     def read_batches(
         self,
@@ -146,14 +155,22 @@ class JsonFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot read from a closed reader")
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                ReaderClosedError,
+            )
+
+            raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
         elif self.dataframe_type == DataframeType.daft:
             return self._get_batched_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     async def _get_batched_dataframe(
         self,
@@ -343,7 +360,11 @@ class JsonFileWriter(Writer):
         self._statistics = None
 
         if not self.path:
-            raise ValueError("path is required")
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatPathRequiredError,
+            )
+
+            raise FormatPathRequiredError()
 
         if typename:
             self.path = os.path.join(self.path, typename)

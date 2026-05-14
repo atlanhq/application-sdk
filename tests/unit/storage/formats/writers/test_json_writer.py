@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import patch
 
 import pandas as pd
@@ -28,7 +28,7 @@ def base_output_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(config=json_output_config_strategy)
 @pytest.mark.asyncio
-async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
+async def test_init(base_output_path: str, config: dict[str, Any]) -> None:
     # Create a safe output path by joining base_output_path with config's output_path
     safe_path = str(Path(base_output_path) / config["output_path"])
     json_output = JsonFileWriter(  # type: ignore
@@ -128,9 +128,12 @@ async def test_write_error(base_output_path: str) -> None:
         total_record_count=0,
         chunk_start=None,
     )
+    from application_sdk.storage.formats._format_errors import UnsupportedDataTypeError
+
     invalid_df = "not_a_dataframe"
-    with pytest.raises(TypeError, match="Unsupported data type: str"):
+    with pytest.raises(UnsupportedDataTypeError) as exc_info:
         await json_output.write(invalid_df)  # type: ignore
+    assert exc_info.value.code == "INVALID_INPUT_FORMAT_DATA_TYPE"
     # Verify counts remain unchanged after error
     assert json_output.chunk_count == 0
     assert json_output.total_record_count == 0

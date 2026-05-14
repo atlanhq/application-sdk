@@ -35,6 +35,10 @@ from prometheus_client import (
 from prometheus_client.exposition import default_handler
 from prometheus_client.parser import text_string_to_metric_families
 
+from application_sdk.observability._pushgateway_errors import (
+    PushGatewayJobRequiredError,
+    PushGatewayUrlRequiredError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 #: Regex extracting ``push_time_seconds{labels} value`` lines from a
@@ -154,9 +158,9 @@ class PushGatewayClient:
         task_queue: str = "",
     ) -> None:
         if not url:
-            raise ValueError("PushGatewayClient requires a non-empty url")
+            raise PushGatewayUrlRequiredError()
         if not job:
-            raise ValueError("PushGatewayClient requires a non-empty job")
+            raise PushGatewayJobRequiredError()
         self._url = url
         self._job = job
         self._grouping_key = grouping_key or _default_grouping_key(task_queue)

@@ -18,6 +18,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from application_sdk.app._base_errors import (
+    SecretStoreNotConfiguredError,
+    StateStoreNotConfiguredError,
+)
 from application_sdk.app.context import (
     AppContext,
     AppMetadata,
@@ -149,14 +153,16 @@ class TestAppContextStateStore:
     @pytest.mark.asyncio
     async def test_save_state_without_store_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No state store configured"):
+        with pytest.raises(StateStoreNotConfiguredError) as exc_info:
             await ctx.save_state("k", {})
+        assert exc_info.value.message == "No state store configured"
 
     @pytest.mark.asyncio
     async def test_load_state_without_store_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No state store configured"):
+        with pytest.raises(StateStoreNotConfiguredError) as exc_info:
             await ctx.load_state("k")
+        assert exc_info.value.message == "No state store configured"
 
 
 # ---------------------------------------------------------------------------
@@ -175,8 +181,9 @@ class TestAppContextSecretStore:
     @pytest.mark.asyncio
     async def test_get_secret_without_store_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No secret store configured"):
+        with pytest.raises(SecretStoreNotConfiguredError) as exc_info:
             await ctx.get_secret("anything")
+        assert exc_info.value.message == "No secret store configured"
 
     @pytest.mark.asyncio
     async def test_get_secret_optional_returns_none_when_no_store(self) -> None:
@@ -227,16 +234,18 @@ class TestAppContextCredentialResolution:
         cred_store = MockCredentialStore()
         ref = cred_store.add_basic("svc", username="u", password="p")
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No secret store configured"):
+        with pytest.raises(SecretStoreNotConfiguredError) as exc_info:
             await ctx.resolve_credential(ref)
+        assert exc_info.value.message == "No secret store configured"
 
     @pytest.mark.asyncio
     async def test_resolve_credential_raw_without_store_raises(self) -> None:
         cred_store = MockCredentialStore()
         ref = cred_store.add_basic("svc", username="u", password="p")
         ctx = AppContext(app_name="a", app_version="1")
-        with pytest.raises(RuntimeError, match="No secret store configured"):
+        with pytest.raises(SecretStoreNotConfiguredError) as exc_info:
             await ctx.resolve_credential_raw(ref)
+        assert exc_info.value.message == "No secret store configured"
 
 
 # ---------------------------------------------------------------------------
@@ -478,13 +487,13 @@ class TestModuleHelpers:
 
     def test_is_atlan_logger_duck_type(self) -> None:
         class Atlan:
-            def process(self):  # noqa: D401
+            def process(self):
                 return None
 
             logger_name = "x"
 
         class NotAtlan:
-            def process(self):  # noqa: D401
+            def process(self):
                 return None
 
         assert _is_atlan_logger(Atlan()) is True
@@ -671,7 +680,7 @@ class TestTaskExecutionContextRunInThread:
         ``application_sdk.execution.heartbeat`` without updating ``context.py``,
         this assertion fails fast with a clear error.
         """
-        from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
+        from application_sdk.execution.heartbeat import run_in_thread
 
         assert callable(run_in_thread)
 

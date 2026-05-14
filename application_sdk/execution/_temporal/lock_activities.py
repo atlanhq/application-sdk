@@ -6,12 +6,14 @@ deadlock timeout.
 """
 
 import random
-from typing import Any, Dict
+from typing import Any
 
 from temporalio import activity
 
 from application_sdk.clients.redis import RedisClientAsync
 from application_sdk.common.error_codes import ActivityError
+from application_sdk.errors import AppError
+from application_sdk.execution._temporal._lock_errors import LockAcquisitionError
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -24,7 +26,7 @@ async def acquire_distributed_lock(
     max_locks: int,
     ttl_seconds: int = 100,
     owner_id: str = "default_owner",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Acquire a distributed lock with retry logic.
 
     Args:
@@ -66,12 +68,10 @@ async def acquire_distributed_lock(
                     "owner_id": owner_id,
                 }
 
-            raise ActivityError(
-                f"{ActivityError.LOCK_ACQUISITION_ERROR}: Lock not acquired for {resource_id}, will retry after some time"
-            )
+            raise LockAcquisitionError()
     except Exception as e:
         # Redis connection or operation failed - propagate as activity error
-        if isinstance(e, ActivityError):
+        if isinstance(e, (ActivityError, AppError)):
             raise
         raise ApplicationError(
             f"Redis error during lock acquisition for {resource_id}",

@@ -20,6 +20,10 @@ import obstore as obs
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
+from application_sdk.app._base_errors import (
+    AbstractRunNotImplementedError,
+    ObjectStoreNotConfiguredError,
+)
 from application_sdk.app.context import (
     AppContext,
     TaskExecutionContext,
@@ -397,7 +401,7 @@ class PersistentStateAccessor:
             value: State data to save.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         await self._app.context.save_state(key, value)
 
@@ -411,7 +415,7 @@ class PersistentStateAccessor:
             The saved state or None if not found.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         return await self._app.context.load_state(key)
 
@@ -897,9 +901,7 @@ class App(ABC):
         Returns:
             The typed output dataclass.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement run() or define @entrypoint methods."
-        )
+        raise AbstractRunNotImplementedError(app_class=type(self).__name__)
 
     def continue_with(self, input: Input) -> Never:
         """Restart this App with new input, preserving correlation context.
@@ -983,10 +985,7 @@ class App(ABC):
 
         store = self.context.storage
         if store is None:
-            raise RuntimeError(
-                "No object store configured. "
-                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
-            )
+            raise ObjectStoreNotConfiguredError()
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
@@ -1044,10 +1043,7 @@ class App(ABC):
 
         store = self.context.storage
         if store is None:
-            raise RuntimeError(
-                "No object store configured. "
-                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
-            )
+            raise ObjectStoreNotConfiguredError()
 
         # Resolve storage_path: explicit field takes precedence over ref.storage_path
         storage_path = input.storage_path

@@ -16,25 +16,26 @@ These tests:
 * Cover ``_test_connection`` happy-path and every error class.
 * Cover both context managers, including the ``__exit__`` branch where no
   event loop is running.
-* Document one suspected bug (re-wrap of internal ``ClientError``) as a
-  SKIP — source is not modified.
 
 All Azure SDK / Dapr / heartbeat collaborators are mocked. No real I/O.
 """
 
 import asyncio
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from azure.core.exceptions import AzureError, ClientAuthenticationError
 
+from application_sdk.clients.azure._azure_errors import (
+    AzureClientAuthError,
+    AzureInputValidationError,
+)
 from application_sdk.clients.azure.client import (
     AzureClient,
     HealthStatus,
     ServiceHealth,
 )
-from application_sdk.common.error_codes import ClientError
 
 # ---------------------------------------------------------------------------
 # Inline-import contract
@@ -106,9 +107,9 @@ class TestInfrastructureSymbolContract:
                 "application_sdk.infrastructure.DaprCredentialVault",
                 return_value=fake_vault,
             ),
+            pytest.raises(AzureClientAuthError),
         ):
-            with pytest.raises(ClientError):
-                await client.load()
+            await client.load()
         fake_dapr.close.assert_awaited_once()
 
 
@@ -144,7 +145,7 @@ class TestInit:
 # ---------------------------------------------------------------------------
 
 
-def _direct_credentials() -> Dict[str, Any]:
+def _direct_credentials() -> dict[str, Any]:
     return {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
 
 
@@ -228,50 +229,50 @@ class TestLoadErrorMapping:
         loaded_client.auth_provider.create_credential = AsyncMock(
             side_effect=ClientAuthenticationError("bad creds")
         )
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AzureClientAuthError) as ei:
             await loaded_client.load()
-        assert "ATLAN-CLIENT-401-00" in str(ei.value)
+        assert ei.value.code == "AUTH_AZURE_CLIENT"
 
     async def test_azure_error_maps_to_auth_code(self, loaded_client):
         loaded_client.auth_provider.create_credential = AsyncMock(
             side_effect=AzureError("svc down")
         )
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AzureClientAuthError) as ei:
             await loaded_client.load()
-        assert "ATLAN-CLIENT-401-00" in str(ei.value)
+        assert ei.value.code == "AUTH_AZURE_CLIENT"
 
     async def test_value_error_maps_to_input_validation(self, loaded_client):
         loaded_client.auth_provider.create_credential = AsyncMock(
             side_effect=ValueError("bad input")
         )
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AzureInputValidationError) as ei:
             await loaded_client.load()
-        assert "ATLAN-CLIENT-403-01" in str(ei.value)
+        assert ei.value.code == "INVALID_INPUT_AZURE_PARAMETERS"
         assert "Invalid parameters" in str(ei.value)
 
     async def test_type_error_maps_to_input_validation(self, loaded_client):
         loaded_client.auth_provider.create_credential = AsyncMock(
             side_effect=TypeError("bad type")
         )
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AzureInputValidationError) as ei:
             await loaded_client.load()
-        assert "ATLAN-CLIENT-403-01" in str(ei.value)
+        assert ei.value.code == "INVALID_INPUT_AZURE_PARAMETERS"
         assert "Invalid parameter types" in str(ei.value)
 
     async def test_generic_exception_maps_to_unexpected(self, loaded_client):
         loaded_client.auth_provider.create_credential = AsyncMock(
             side_effect=RuntimeError("?!?!")
         )
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AzureClientAuthError) as ei:
             await loaded_client.load()
-        assert "ATLAN-CLIENT-401-00" in str(ei.value)
+        assert ei.value.code == "AUTH_AZURE_CLIENT"
         assert "Unexpected error" in str(ei.value)
 
     async def test_load_failure_does_not_set_connection_health(self, loaded_client):
         loaded_client.auth_provider.create_credential = AsyncMock(
             side_effect=RuntimeError("nope")
         )
-        with pytest.raises(ClientError):
+        with pytest.raises(AzureClientAuthError):
             await loaded_client.load()
         assert loaded_client._connection_health is False
 
@@ -279,13 +280,15 @@ class TestLoadErrorMapping:
         loaded_client.auth_provider.create_credential = AsyncMock(
             return_value=MagicMock()
         )
-        with patch(
-            "application_sdk.clients.azure.client.run_in_thread",
-            new=AsyncMock(side_effect=ClientAuthenticationError("test failed")),
+        with (
+            patch(
+                "application_sdk.clients.azure.client.run_in_thread",
+                new=AsyncMock(side_effect=ClientAuthenticationError("test failed")),
+            ),
+            pytest.raises(AzureClientAuthError) as ei,
         ):
-            with pytest.raises(ClientError) as ei:
-                await loaded_client.load()
-        assert "ATLAN-CLIENT-401-00" in str(ei.value)
+            await loaded_client.load()
+        assert ei.value.code == "AUTH_AZURE_CLIENT"
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +300,10 @@ class TestTestConnection:
     async def test_no_credential_raises_client_error(self):
         client = AzureClient()
         client.credential = None
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AzureClientAuthError) as ei:
             await client._test_connection()
-        # AUTH_CREDENTIALS_ERROR — 401-04
-        assert "ATLAN-CLIENT-401-04" in str(ei.value)
+        assert ei.value.code == "AUTH_AZURE_CLIENT"
+        assert "No credential available" in str(ei.value)
 
     async def test_success_path_calls_run_in_thread_with_endpoint(self):
         from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
@@ -321,46 +324,54 @@ class TestTestConnection:
     async def test_client_authentication_error_mapped(self):
         client = AzureClient()
         client.credential = MagicMock()
-        with patch(
-            "application_sdk.clients.azure.client.run_in_thread",
-            new=AsyncMock(side_effect=ClientAuthenticationError("bad")),
+        with (
+            patch(
+                "application_sdk.clients.azure.client.run_in_thread",
+                new=AsyncMock(side_effect=ClientAuthenticationError("bad")),
+            ),
+            pytest.raises(AzureClientAuthError) as ei,
         ):
-            with pytest.raises(ClientError) as ei:
-                await client._test_connection()
-        assert "ATLAN-CLIENT-401-00" in str(ei.value)
+            await client._test_connection()
+        assert ei.value.code == "AUTH_AZURE_CLIENT"
 
     async def test_azure_error_mapped(self):
         client = AzureClient()
         client.credential = MagicMock()
-        with patch(
-            "application_sdk.clients.azure.client.run_in_thread",
-            new=AsyncMock(side_effect=AzureError("down")),
+        with (
+            patch(
+                "application_sdk.clients.azure.client.run_in_thread",
+                new=AsyncMock(side_effect=AzureError("down")),
+            ),
+            pytest.raises(AzureClientAuthError) as ei,
         ):
-            with pytest.raises(ClientError) as ei:
-                await client._test_connection()
-        assert "ATLAN-CLIENT-401-00" in str(ei.value)
+            await client._test_connection()
+        assert ei.value.code == "AUTH_AZURE_CLIENT"
 
     async def test_value_error_mapped(self):
         client = AzureClient()
         client.credential = MagicMock()
-        with patch(
-            "application_sdk.clients.azure.client.run_in_thread",
-            new=AsyncMock(side_effect=ValueError("nope")),
+        with (
+            patch(
+                "application_sdk.clients.azure.client.run_in_thread",
+                new=AsyncMock(side_effect=ValueError("nope")),
+            ),
+            pytest.raises(AzureInputValidationError) as ei,
         ):
-            with pytest.raises(ClientError) as ei:
-                await client._test_connection()
-        assert "ATLAN-CLIENT-403-01" in str(ei.value)
+            await client._test_connection()
+        assert ei.value.code == "INVALID_INPUT_AZURE_PARAMETERS"
 
     async def test_unexpected_error_mapped(self):
         client = AzureClient()
         client.credential = MagicMock()
-        with patch(
-            "application_sdk.clients.azure.client.run_in_thread",
-            new=AsyncMock(side_effect=RuntimeError("?!?!")),
+        with (
+            patch(
+                "application_sdk.clients.azure.client.run_in_thread",
+                new=AsyncMock(side_effect=RuntimeError("?!?!")),
+            ),
+            pytest.raises(AzureClientAuthError) as ei,
         ):
-            with pytest.raises(ClientError) as ei:
-                await client._test_connection()
-        assert "ATLAN-CLIENT-401-00" in str(ei.value)
+            await client._test_connection()
+        assert ei.value.code == "AUTH_AZURE_CLIENT"
 
 
 # ---------------------------------------------------------------------------

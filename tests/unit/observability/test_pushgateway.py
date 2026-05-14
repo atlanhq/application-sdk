@@ -106,12 +106,22 @@ class TestTemporalCoreCollector:
 
 class TestPushGatewayClientInit:
     def test_empty_url_raises(self):
-        with pytest.raises(ValueError, match="url"):
+        from application_sdk.observability._pushgateway_errors import (
+            PushGatewayUrlRequiredError,
+        )
+
+        with pytest.raises(PushGatewayUrlRequiredError) as exc_info:
             PushGatewayClient(url="", job="job")
+        assert exc_info.value.code == "INVALID_INPUT_PUSHGATEWAY_URL"
 
     def test_empty_job_raises(self):
-        with pytest.raises(ValueError, match="job"):
+        from application_sdk.observability._pushgateway_errors import (
+            PushGatewayJobRequiredError,
+        )
+
+        with pytest.raises(PushGatewayJobRequiredError) as exc_info:
             PushGatewayClient(url="http://localhost:9091", job="")
+        assert exc_info.value.code == "INVALID_INPUT_PUSHGATEWAY_JOB"
 
     def test_default_grouping_key_excludes_task_queue_to_avoid_label_conflict(self):
         # task_queue is intentionally absent from the default grouping key:

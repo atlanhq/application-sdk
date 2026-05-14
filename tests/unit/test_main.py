@@ -12,6 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk._main_errors import (
+    DaprNotDetectedError,
+    MissingAppModuleError,
+    MultiAppModuleError,
+    UnknownModeError,
+)
 from application_sdk.main import (
     AppConfig,
     _create_infrastructure,
@@ -157,8 +163,9 @@ class TestAppConfigFromArgsAndEnv:
         monkeypatch.delenv("ATLAN_APP_MODULE", raising=False)
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")
         args = self._make_args(mode="worker")
-        with pytest.raises(ValueError, match="App module is required"):
+        with pytest.raises(MissingAppModuleError) as exc_info:
             AppConfig.from_args_and_env(args)
+        assert exc_info.value.code == "INVALID_INPUT_APP_MODULE_MISSING"
 
     def test_app_module_parsed_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")
@@ -335,8 +342,10 @@ class TestRunMain:
 
     def test_unknown_mode_raises_value_error(self) -> None:
         config = AppConfig(mode="invalid", app_module="pkg:App")
-        with pytest.raises(ValueError, match="Unknown mode"):
+        with pytest.raises(UnknownModeError) as exc_info:
             run_main(config)
+        assert exc_info.value.code == "INVALID_INPUT_MODE"
+        assert exc_info.value.received_mode == "invalid"
 
     def test_worker_mode_calls_asyncio_run(self) -> None:
         config = AppConfig(mode="worker", app_module="pkg:App")
@@ -593,8 +602,10 @@ class TestAppConfigCommaRejection:
             log_level=None,
             service_name=None,
         )
-        with pytest.raises(ValueError, match="comma"):
+        with pytest.raises(MultiAppModuleError) as exc_info:
             AppConfig.from_args_and_env(args)
+        assert exc_info.value.code == "INVALID_INPUT_APP_MODULE_COMMA"
+        assert exc_info.value.app_module == "pkg:AppA,pkg:AppB"
 
     def test_post_init_derives_task_queue(self) -> None:
         """__post_init__ derives task_queue from app_module when missing."""
@@ -613,10 +624,11 @@ class TestCreateInfrastructureNoDapr:
     async def test_raises_runtime_error_when_no_dapr_port(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Without DAPR_HTTP_PORT, _create_infrastructure must raise RuntimeError."""
+        """Without DAPR_HTTP_PORT, _create_infrastructure must raise DaprNotDetectedError."""
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
-        with pytest.raises(RuntimeError, match="Dapr sidecar not detected"):
+        with pytest.raises(DaprNotDetectedError) as exc_info:
             await _create_infrastructure()
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAPR_SIDECAR"
 
 
 # --------------------------------------------------------------------------- #

@@ -183,12 +183,15 @@ class TestUploadStorageSubdir:
     async def test_storage_subdir_path_traversal_rejected(
         self, store, tmp_path
     ) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         f = tmp_path / "data.txt"
         f.write_bytes(b"x")
-        with pytest.raises(ValueError, match="path traversal"):
+        with pytest.raises(UnsafeUploadPathError) as exc_info:
             await upload(
                 str(f), store=store, _app_prefix="run/123", storage_subdir="../../etc"
             )
+        assert exc_info.value.code == "INVALID_INPUT_UPLOAD_PATH_UNSAFE"
 
 
 class TestUploadSensitivePathBlocking:
@@ -196,44 +199,58 @@ class TestUploadSensitivePathBlocking:
 
     @pytest.mark.skipif(_IS_WINDOWS, reason="Unix-only sensitive paths")
     async def test_etc_blocked(self, store) -> None:
-        with pytest.raises(ValueError, match="sensitive system path"):
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        with pytest.raises(UnsafeUploadPathError):
             await upload("/etc/passwd", store=store)
 
     @pytest.mark.skipif(_IS_WINDOWS, reason="Unix-only sensitive paths")
     async def test_proc_blocked(self, store) -> None:
-        with pytest.raises(ValueError, match="sensitive system path"):
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        with pytest.raises(UnsafeUploadPathError):
             await upload("/proc/self/environ", store=store)
 
     async def test_aws_dir_blocked(self, store, tmp_path) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         aws_dir = tmp_path / ".aws"
         aws_dir.mkdir()
         creds = aws_dir / "credentials"
         creds.write_bytes(b"secret")
-        with pytest.raises(ValueError, match="sensitive directory"):
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(creds), store=store)
 
     async def test_ssh_dir_blocked(self, store, tmp_path) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         ssh_dir = tmp_path / ".ssh"
         ssh_dir.mkdir()
         key = ssh_dir / "id_rsa"
         key.write_bytes(b"private-key")
-        with pytest.raises(ValueError, match="sensitive directory"):
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(key), store=store)
 
     async def test_env_file_blocked(self, store, tmp_path) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         env_file = tmp_path / ".env"
         env_file.write_bytes(b"SECRET=value")
-        with pytest.raises(ValueError, match="sensitive file"):
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(env_file), store=store)
 
     async def test_env_local_file_blocked(self, store, tmp_path) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         env_file = tmp_path / ".env.local"
         env_file.write_bytes(b"SECRET=value")
-        with pytest.raises(ValueError, match="sensitive file"):
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(env_file), store=store)
 
     async def test_path_traversal_blocked(self, store, tmp_path) -> None:
-        with pytest.raises(ValueError, match="Path traversal"):
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(tmp_path / ".." / "etc" / "passwd"), store=store)
 
     async def test_normal_path_allowed(self, store, tmp_path) -> None:
@@ -262,7 +279,9 @@ class TestUploadSensitivePathBlocking:
         monkeypatch.setenv(
             "ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "custom_secrets,.credentials"
         )
-        with pytest.raises(ValueError, match="ATLAN_UPLOAD_FILE_BLOCKED_PATHS"):
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(secret), store=store)
 
 

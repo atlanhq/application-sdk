@@ -128,12 +128,15 @@ class TestAWSUtils:
             operation_name="AssumeRole",
         )
 
-        with pytest.raises(Exception, match="Failed to assume role"):
+        from application_sdk.common._aws_utils_errors import AwsAssumeRoleError
+
+        with pytest.raises(AwsAssumeRoleError) as exc_info:
             generate_aws_rds_token_with_iam_role(
                 role_arn="arn:aws:iam::123456789012:role/test-role",
                 host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
                 user="test_user",
             )
+        assert exc_info.value.code == "PERMISSION_AWS_ROLE"
 
     @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_user_error(self, mock_client):

@@ -943,8 +943,13 @@ class TestParquetFileWriterConsolidation:
         parquet_output = ParquetFileWriter(path=base_output_path)
 
         # Should raise error when no temp folder path is set
-        with pytest.raises(ValueError, match="No temp folder path available"):
+        from application_sdk.storage.formats._format_errors import (
+            TempFolderPathMissingError,
+        )
+
+        with pytest.raises(TempFolderPathMissingError) as exc_info:
             await parquet_output._write_chunk_to_temp_folder(sample_dataframe)
+        assert exc_info.value.code == "INTERNAL_FORMAT_TEMP_FOLDER_PATH_MISSING"
 
     @pytest.mark.asyncio
     async def test_consolidate_current_folder(

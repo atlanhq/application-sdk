@@ -640,10 +640,11 @@ async def fetch(
 
         infra = get_infrastructure()
         if infra is None or infra.storage is None:
-            raise RuntimeError(
-                "fetch(): no object store available — pass store= explicitly "
-                "or call from inside a Temporal activity."
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                ObjectStoreNotProvidedError,
             )
+
+            raise ObjectStoreNotProvidedError()
         store = infra.storage
 
     return await materialize_file_reference(store, ref)

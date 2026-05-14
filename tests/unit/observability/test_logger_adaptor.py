@@ -1564,8 +1564,13 @@ class TestProcessRecord:
     def test_unsupported_type_raises_value_error(
         self, logger_adapter: AtlanLoggerAdapter
     ):
-        with pytest.raises(ValueError):
+        from application_sdk.observability._logger_adaptor_errors import (
+            UnsupportedLogRecordError,
+        )
+
+        with pytest.raises(UnsupportedLogRecordError) as exc_info:
             logger_adapter.process_record(12345)
+        assert exc_info.value.code == "INTERNAL_LOGGER_UNSUPPORTED_RECORD_FORMAT"
 
     def test_loguru_like_record_is_normalized(self, logger_adapter: AtlanLoggerAdapter):
         msg = mock.MagicMock()

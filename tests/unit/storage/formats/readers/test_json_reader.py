@@ -1,12 +1,11 @@
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.common.error_codes import IOError as SDKIOError
 from application_sdk.common.types import DataframeType
 from application_sdk.storage.formats.json import JsonFileReader
 from application_sdk.storage.formats.utils import _download_files
@@ -27,7 +26,7 @@ settings.load_profile("json_input_tests")
 
 
 @given(config=json_input_config_strategy)
-def test_init(config: Dict[str, Any]) -> None:
+def test_init(config: dict[str, Any]) -> None:
     json_input = JsonFileReader(
         path=config["path"],
         file_names=config["file_names"],
@@ -38,9 +37,14 @@ def test_init(config: Dict[str, Any]) -> None:
 
 
 def test_init_single_file_with_file_names_raises_error() -> None:
-    """Test that JsonFileReader raises ValueError when single file path is combined with file_names."""
-    with pytest.raises(ValueError, match="Cannot specify both a single file path"):
+    """Test that JsonFileReader raises when single file path is combined with file_names."""
+    from application_sdk.storage.formats._format_errors import (
+        SingleFilePathWithFileNamesError,
+    )
+
+    with pytest.raises(SingleFilePathWithFileNamesError) as exc_info:
         JsonFileReader(path="/data/test.json", file_names=["other.json"])
+    assert exc_info.value.code == "INVALID_INPUT_FORMAT_SINGLE_PATH_WITH_FILE_NAMES"
 
 
 @pytest.mark.asyncio
@@ -141,7 +145,9 @@ async def test_download_file_not_invoked_when_file_present() -> None:
 
 @pytest.mark.asyncio
 async def test_download_file_error_propagation() -> None:
-    """Ensure errors during download are surfaced as application_sdk IOError."""
+    """Ensure errors during download are surfaced as ObjectStoreDownloadError."""
+    from application_sdk.storage.formats._format_errors import ObjectStoreDownloadError
+
     path = "/local"
     file_names = ["bad.json"]
 
@@ -163,8 +169,9 @@ async def test_download_file_error_propagation() -> None:
             path=path, file_names=file_names, dataframe_type=DataframeType.daft
         )
 
-        with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
+        with pytest.raises(ObjectStoreDownloadError) as exc_info:
             await _download_files(json_input.path, ".json", json_input.file_names)
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_DOWNLOAD"
 
 
 # ---------------------------------------------------------------------------
@@ -182,12 +189,12 @@ def _install_dummy_pandas(monkeypatch):
     dummy_pandas = types.ModuleType("pandas")
     call_log: list[dict] = []
 
-    def read_json(path, chunksize=None, lines=None):  # noqa: D401, ANN001
+    def read_json(path, chunksize=None, lines=None):
         call_log.append({"path": path, "chunksize": chunksize, "lines": lines})
         # Return two synthetic chunks for iteration
         return [f"chunk1-{os.path.basename(path)}", f"chunk2-{os.path.basename(path)}"]
 
-    def concat(objs, ignore_index=None):  # noqa: D401, ANN001
+    def concat(objs, ignore_index=None):
         return "combined:" + ",".join(objs)
 
     dummy_pandas.read_json = read_json  # type: ignore[attr-defined]
@@ -208,7 +215,7 @@ async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
     expected_chunksize = 5
     call_log = _install_dummy_pandas(monkeypatch)
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return [os.path.join(path, fn) for fn in file_names] if file_names else []
 
     # Mock the base Input class method since JsonFileReader calls super()._download_files()
@@ -247,7 +254,7 @@ async def test_read_batches_empty_file_list(monkeypatch) -> None:
 
     call_log = _install_dummy_pandas(monkeypatch)
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return []
 
     # Mock the base Input class method since JsonFileReader calls super()._download_files()
@@ -274,14 +281,14 @@ async def test_read_batches_empty_file_list(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _install_dummy_daft(monkeypatch):  # noqa: D401, ANN001
+def _install_dummy_daft(monkeypatch):
     import sys
     import types
 
     dummy_daft = types.ModuleType("daft")
     call_log: list[dict] = []
 
-    def read_json(path, _chunk_size=None):  # noqa: D401, ANN001
+    def read_json(path, _chunk_size=None):
         call_log.append({"path": path, "_chunk_size": _chunk_size})
         return f"daft_df:{path}"
 
@@ -298,7 +305,7 @@ async def test_read(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return (
             [os.path.join(path, fn).replace(os.path.sep, "/") for fn in file_names]
             if file_names
@@ -333,7 +340,7 @@ async def test_read_no_files(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return []  # Return empty list when no files found
 
     # Mock the base Input class method since JsonFileReader calls super()._download_files()
@@ -360,7 +367,7 @@ async def test_read_batches(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return [os.path.join(path, fn) for fn in file_names] if file_names else []
 
     # Mock the base Input class method since JsonFileReader calls super()._download_files()
@@ -404,7 +411,7 @@ async def test_context_manager_calls_close(monkeypatch) -> None:
     """Verify that using async with calls close() on exit."""
     _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return [os.path.join(path, fn) for fn in file_names] if file_names else []
 
     monkeypatch.setattr(
@@ -448,7 +455,7 @@ async def test_read_after_close_raises_error(monkeypatch) -> None:
     """Verify that reading after close raises ValueError."""
     _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return [os.path.join(path, fn) for fn in file_names] if file_names else []
 
     monkeypatch.setattr(
@@ -470,13 +477,18 @@ async def test_read_after_close_raises_error(monkeypatch) -> None:
     await reader.close()
 
     # Read should raise after close
-    with pytest.raises(ValueError, match="Cannot read from a closed reader"):
+    from application_sdk.storage.formats._format_errors import ReaderClosedError
+
+    with pytest.raises(ReaderClosedError) as exc_info:
         await reader.read()
+    assert exc_info.value.code == "PRECONDITION_FORMAT_READER_CLOSED"
 
 
 @pytest.mark.asyncio
 async def test_read_batches_after_close_raises_error() -> None:
-    """Verify that read_batches after close raises ValueError."""
+    """Verify that read_batches after close raises ReaderClosedError."""
+    from application_sdk.storage.formats._format_errors import ReaderClosedError
+
     path = "/data"
     reader = JsonFileReader(path=path, dataframe_type=DataframeType.pandas)
 
@@ -484,8 +496,9 @@ async def test_read_batches_after_close_raises_error() -> None:
     await reader.close()
 
     # read_batches should raise after close
-    with pytest.raises(ValueError, match="Cannot read from a closed reader"):
+    with pytest.raises(ReaderClosedError) as exc_info:
         reader.read_batches()
+    assert exc_info.value.code == "PRECONDITION_FORMAT_READER_CLOSED"
 
 
 @pytest.mark.asyncio
@@ -504,7 +517,7 @@ async def test_cleanup_on_close_false_retains_files(monkeypatch) -> None:
 
     downloaded_files = ["/tmp/downloaded/file1.json", "/tmp/downloaded/file2.json"]
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return downloaded_files
 
     monkeypatch.setattr(
@@ -549,7 +562,7 @@ async def test_cleanup_on_close_true_cleans_files(monkeypatch) -> None:
 
     downloaded_files = ["/tmp/downloaded/file1.json", "/tmp/downloaded/file2.json"]
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return downloaded_files
 
     monkeypatch.setattr(
@@ -595,7 +608,7 @@ async def test_downloaded_files_tracked_on_read(monkeypatch) -> None:
 
     downloaded_files = ["/tmp/downloaded/file1.json"]
 
-    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):
         return downloaded_files
 
     monkeypatch.setattr(

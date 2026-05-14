@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+from application_sdk.app._base_errors import SecretStoreNotConfiguredError
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -95,10 +96,10 @@ class HandlerContext:
             The secret value.
 
         Raises:
-            RuntimeError: If no secret store is configured.
+            SecretStoreNotConfiguredError: If no secret store is configured.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
+            raise SecretStoreNotConfiguredError()
         return await self._secret_store.get(name)
 
     async def get_secret_optional(self, name: str) -> str | None:

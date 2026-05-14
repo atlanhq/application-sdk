@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
+from application_sdk.common._aws_utils_errors import AwsAssumeRoleError
 from application_sdk.constants import AWS_SESSION_NAME
 
 if TYPE_CHECKING:
@@ -84,7 +85,7 @@ def generate_aws_rds_token_with_iam_role(
         return token
 
     except ClientError as e:
-        raise Exception(f"Failed to assume role: {str(e)}") from e
+        raise AwsAssumeRoleError(cause=e) from e
 
 
 def generate_aws_rds_token_with_iam_user(
@@ -122,10 +123,10 @@ def generate_aws_rds_token_with_iam_user(
         )
         return token
     except Exception as e:
-        raise Exception(f"Failed to get user credentials: {str(e)}") from e
+        raise Exception(f"Failed to get user credentials: {e!s}") from e
 
 
-def get_cluster_identifier(aws_client) -> Optional[str]:
+def get_cluster_identifier(aws_client) -> str | None:
     """
     Retrieve the cluster identifier from AWS Redshift clusters.
 
@@ -149,7 +150,7 @@ def get_cluster_identifier(aws_client) -> Optional[str]:
     return None
 
 
-def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
+def create_aws_session(credentials: dict[str, Any]) -> boto3.Session:
     """
     Create a boto3 session with AWS credentials.
 
@@ -175,8 +176,8 @@ def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
 
 
 def get_cluster_credentials(
-    aws_client, credentials: Dict[str, Any], extra: Dict[str, Any]
-) -> Dict[str, str]:
+    aws_client, credentials: dict[str, Any], extra: dict[str, Any]
+) -> dict[str, str]:
     """
     Retrieve cluster credentials using IAM authentication.
 
@@ -200,8 +201,8 @@ def get_cluster_credentials(
 def create_aws_client(
     service: str,
     region: str,
-    session: Optional[boto3.Session] = None,
-    temp_credentials: Optional[Dict[str, str]] = None,
+    session: boto3.Session | None = None,
+    temp_credentials: dict[str, str] | None = None,
     use_default_credentials: bool = False,
 ) -> Any:
     """
@@ -300,14 +301,14 @@ def create_aws_client(
             return boto3.client(service, region_name=region)  # type: ignore
 
     except Exception as e:
-        raise Exception(f"Failed to create {service} client: {str(e)}") from e
+        raise Exception(f"Failed to create {service} client: {e!s}") from e
 
 
 def create_engine_url(
     drivername: str,
-    credentials: Dict[str, Any],
-    cluster_credentials: Dict[str, str],
-    extra: Dict[str, Any],
+    credentials: dict[str, Any],
+    cluster_credentials: dict[str, str],
+    extra: dict[str, Any],
 ) -> URL:
     """
     Create SQLAlchemy engine URL for Redshift connection.
