@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.9.0
-source-sha:    8e034cef779d05f5e7a00c73ccf8daf4cda120db
-source-date:   2026-05-13T19:24:34+01:00
+source-sha:    aec6dd3cea87c9f5cd907b8bd8d6dc7d88f6c2d6
+source-date:   2026-05-14T15:02:36+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -287,7 +287,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `normalize_filters`
 
 - **Import:** `from application_sdk.common import normalize_filters`
-- **Signature:** `normalize_filters(filter_dict: Dict[str, List[str] | str], is_include: bool)`
+- **Signature:** `normalize_filters(filter_dict: dict[str, list[str] | str], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -301,7 +301,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `prepare_query`
 
 - **Import:** `from application_sdk.common import prepare_query`
-- **Signature:** `prepare_query(query: Optional[str], ...)`
+- **Signature:** `prepare_query(query: str | None, ...)`
 - **Summary:** Prepare a SQL query by applying include/exclude filters.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
