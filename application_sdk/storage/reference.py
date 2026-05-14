@@ -353,6 +353,7 @@ async def materialize_file_reference(
         StorageNotFoundError,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _safe_join_under,
         download_file,
         download_file_chunked,
         get_file_size,
@@ -529,8 +530,9 @@ async def materialize_file_reference(
         async def _download_one(key: str) -> bool:
             """Download one file from the prefix. Returns True if skipped (cache hit)."""
             rel = key.removeprefix(prefix)
-            dest = os.path.join(local_directory, rel)
-            dest_path = Path(dest)
+            # Reject keys whose resolved path escapes local_directory.
+            dest_path = _safe_join_under(local_directory, rel)
+            dest = str(dest_path)
             dest_sidecar = Path(dest + ".sha256")
             dest_path.parent.mkdir(parents=True, exist_ok=True)
 
