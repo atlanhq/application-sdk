@@ -29,6 +29,7 @@ from application_sdk.storage.ops import (
     _list_items,
     _normalize_listing_prefix,
     _resolve_store,
+    _safe_join_under,
     download_file,
     normalize_key,
     upload_file,
@@ -230,8 +231,8 @@ async def download_prefix(
 
     keys = await list_keys(prefix, store, suffix=suffix, normalize=normalize)
     local = Path(local_dir)
-    # S3 keys use forward slashes; convert to OS-native path for local filesystem
-    destinations = [str(local / Path(*PurePosixPath(key).parts)) for key in keys]
+    # Reject keys whose resolved path escapes local_dir (e.g. via ".." segments).
+    destinations = [str(_safe_join_under(local, key)) for key in keys]
 
     sem = asyncio.Semaphore(max_concurrency)
 

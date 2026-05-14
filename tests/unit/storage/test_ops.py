@@ -793,3 +793,41 @@ async def test_upload_file_does_not_delete_when_retain_local_copy_true(
         )
     assert isinstance(digest, str)
     assert f.exists()
+
+
+# ---------------------------------------------------------------------------
+# _safe_join_under — containment guard for prefix downloads (issue #1694)
+# ---------------------------------------------------------------------------
+
+
+class TestSafeJoinUnder:
+    def test_simple_key_resolves_inside_root(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        result = _safe_join_under(tmp_path, "sub/file.txt")
+        assert result == (tmp_path / "sub" / "file.txt").resolve()
+        assert result.is_relative_to(tmp_path.resolve())
+
+    def test_leading_slash_stripped(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        result = _safe_join_under(tmp_path, "/a/b.txt")
+        assert result == (tmp_path / "a" / "b.txt").resolve()
+
+    def test_parent_traversal_rejected(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        with pytest.raises(StorageError, match="Path traversal"):
+            _safe_join_under(tmp_path, "../escape.txt")
+
+    def test_mixed_traversal_rejected(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        with pytest.raises(StorageError, match="Path traversal"):
+            _safe_join_under(tmp_path, "safe/../../escape.txt")
+
+    def test_empty_rel_returns_root(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        result = _safe_join_under(tmp_path, "")
+        assert result == tmp_path.resolve()

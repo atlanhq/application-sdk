@@ -261,10 +261,13 @@ def test_invalid_yaml_rejected(tmp_path, monkeypatch):
 
 # ── deploy.env_overrides validation ─────────────────────────────────────────
 #
-# GM resolves ``env_overrides`` at catalog-read time (global-marketplace's
-# core/release/config_resolver.py) and is intentionally lenient — a typo'd
-# channel name silently no-ops. CI is the only place that catches it, so
-# these tests pin the rules.
+# GM interprets ``env_overrides`` keys in two tiers: ``beta`` / ``staging``
+# are channel-tier, anything else is a tenant-name match against
+# ``horizon_tenants.name``. The SDK validator can only enforce the shape of
+# the block (mapping of non-empty-string → mapping); it can't enforce the
+# allowlist of channel names because non-channel keys are valid tenant
+# entries. A typo'd ``staing`` is treated as a tenant name here and falls
+# through to the channel tier at runtime in GM.
 
 
 def _with_overrides(overrides):
@@ -288,28 +291,33 @@ def test_env_overrides_with_valid_channels_accepted(tmp_path, monkeypatch):
     assert "env_overrides" in out["deploy_config"]
 
 
-def test_env_overrides_unknown_channel_rejected(tmp_path, monkeypatch):
+def test_env_overrides_with_tenant_name_accepted(tmp_path, monkeypatch):
+    # Tenant names are valid keys — checked by tenant_name match at GM
+    # runtime, not at SDK validation time.
     monkeypatch.chdir(tmp_path)
-    # Common typo — 'staing' instead of 'staging'.
+    _write(
+        tmp_path,
+        _with_overrides(
+            {
+                "beta": {"OTEL_ENVIRONMENT": "beta"},
+                "tenant-xyz": {"OTEL_ENVIRONMENT": "xyz-only"},
+            }
+        ),
+    )
+    out = parse_atlan_yaml.parse()
+    assert "env_overrides" in out["deploy_config"]
+    assert "tenant-xyz" in out["deploy_config"]
+
+
+def test_env_overrides_unknown_key_accepted_as_tenant_name(tmp_path, monkeypatch):
+    # A typo'd 'staing' is now treated as a tenant name and accepted by
+    # SDK validation. It will silently no-op at GM runtime since no live
+    # tenant matches it. Trade-off vs the previous strict allowlist: lost
+    # typo detection, gained tenant-name support.
+    monkeypatch.chdir(tmp_path)
     _write(tmp_path, _with_overrides({"staing": {"OTEL_ENVIRONMENT": "staging"}}))
-    with pytest.raises(AtlanYamlError, match="unknown channel"):
-        parse_atlan_yaml.parse()
-
-
-def test_env_overrides_all_channel_rejected(tmp_path, monkeypatch):
-    # 'all' is GA — base config IS the GA config — an entry here would
-    # never take effect at runtime, so fail fast.
-    monkeypatch.chdir(tmp_path)
-    _write(tmp_path, _with_overrides({"all": {"OTEL_ENVIRONMENT": "production"}}))
-    with pytest.raises(AtlanYamlError, match="unknown channel"):
-        parse_atlan_yaml.parse()
-
-
-def test_env_overrides_specific_channel_rejected(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    _write(tmp_path, _with_overrides({"specific": {"X": "y"}}))
-    with pytest.raises(AtlanYamlError, match="unknown channel"):
-        parse_atlan_yaml.parse()
+    out = parse_atlan_yaml.parse()
+    assert "env_overrides" in out["deploy_config"]
 
 
 def test_env_overrides_not_a_mapping_rejected(tmp_path, monkeypatch):
@@ -326,8 +334,16 @@ def test_env_overrides_channel_value_not_a_mapping_rejected(tmp_path, monkeypatc
         parse_atlan_yaml.parse()
 
 
+def test_env_overrides_tenant_value_not_a_mapping_rejected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, _with_overrides({"tenant-xyz": ["not", "a", "mapping"]}))
+    with pytest.raises(
+        AtlanYamlError, match="env_overrides.tenant-xyz must be a mapping"
+    ):
+        parse_atlan_yaml.parse()
+
+
 def test_env_overrides_absent_is_fine(tmp_path, monkeypatch):
-    # Backwards compat: apps without env_overrides parse cleanly.
     monkeypatch.chdir(tmp_path)
     _write(
         tmp_path,
@@ -338,7 +354,6 @@ def test_env_overrides_absent_is_fine(tmp_path, monkeypatch):
 
 
 def test_env_overrides_with_no_deploy_block_is_fine(tmp_path, monkeypatch):
-    # No deploy block at all — _validate_env_overrides is a no-op.
     monkeypatch.chdir(tmp_path)
     _write(tmp_path, {"name": "x", "app_id": "1"})
     out = parse_atlan_yaml.parse()
