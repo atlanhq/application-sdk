@@ -107,11 +107,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          # A non-empty release_tag means the caller is the SDK's own
-          # tag-and-release.yaml, which only fires after a release-labelled
-          # PR merges to main. The ref will be refs/tags/v* but the build
-          # is legitimately from main — skip the gate.
-          if [ -n "${RELEASE_TAG}" ]; then
+          # Strip any trailing CR/LF that GitHub expression evaluation can inject.
+          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
+          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
+
+          # Bypass the main-branch gate only when the ref is actually the
+          # matching tag ref. Checking release_tag alone is insufficient:
+          # a caller could pass any non-empty value from a feature branch
+          # to skip the channel='all' protection.
+          if [ -n "${RELEASE_TAG}" ] && [ "${REF}" = "refs/tags/${RELEASE_TAG}" ]; then
             echo "Tagged release (${RELEASE_TAG}) — main-branch gate skipped."
             exit 0
           fi
