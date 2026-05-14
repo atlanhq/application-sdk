@@ -8,7 +8,7 @@
 > extraction and query-parsing pipeline, then failed at the publish phase with `"user disabled"`.
 > Mustafa T confirmed the triggering user's account was disabled in Keycloak. The entire extract
 > cost was wasted because no check validated IdP account status before the workflow started.
-> This is documented as **G15** below.
+> This is documented as **G6** below.
 
 ---
 
@@ -81,9 +81,9 @@ UI / API caller
 | [G1](#g1--defaulthandler-returns-ready-with-no-checks) | Platform | `DefaultHandler.preflight_check()` returns READY silently — zero checks performed | High |
 | [G2](#g2--partial-status-collapses-to-successfalse) | Platform | `PARTIAL` status maps to `success=false`, blocking workflows that have partial access | High |
 | [G3](#g3--source-system-permission-validation-missing) | Permission | Connectivity check passes but actual read grants on source tables are never verified | High |
-| [G7](#g7--timeout_seconds-accepted-but-never-enforced) | Platform | `timeout_seconds` in `PreflightInput` is silently ignored — preflight can hang forever | Medium |
-| [G10](#g10--automation-engine-path-has-no-preflight-call) | Platform | AE workflow submission path never calls preflight — API-driven runs bypass it entirely | High |
-| [G15](#g15--user-account-status-and-publish-permission-never-validated) | Permission | Disabled IdP user or missing Atlan publish permission discovered only after full extraction runs | **Critical** |
+| [G4](#g4--timeout_seconds-accepted-but-never-enforced) | Platform | `timeout_seconds` in `PreflightInput` is silently ignored — preflight can hang forever | Medium |
+| [G5](#g5--automation-engine-path-has-no-preflight-call) | Platform | AE workflow submission path never calls preflight — API-driven runs bypass it entirely | High |
+| [G6](#g6--user-account-status-and-publish-permission-never-validated) | Permission | Disabled IdP user or missing Atlan publish permission discovered only after full extraction runs | **Critical** |
 
 ---
 
@@ -247,7 +247,7 @@ async def check_information_schema_access(client) -> PreflightCheck:
 
 ---
 
-### G7 — `timeout_seconds` accepted but never enforced
+### G4 — `timeout_seconds` accepted but never enforced
 
 **Group:** Platform
 **Severity:** Medium
@@ -289,7 +289,7 @@ a silent hang.
 
 ---
 
-### G10 — Automation Engine path has no preflight call
+### G5 — Automation Engine path has no preflight call
 
 **Group:** Platform
 **Severity:** High
@@ -344,7 +344,7 @@ if status, _ := preflightResult["status"].(string); status == "NOT_READY" {
 
 ---
 
-### G15 — User account status and publish permission never validated
+### G6 — User account status and publish permission never validated
 
 **Group:** Permission
 **Severity:** Critical
@@ -463,12 +463,12 @@ async def check_atlan_publish_permission(
 
 | Priority | Gap | Owner | Effort | Impact |
 |----------|-----|-------|--------|--------|
-| **P0** | **G15 Layer 1 — Keycloak user-status gate** | Heracles | ~15 lines Go | Prevents all wasted extraction for disabled users — production incident |
+| **P0** | **G6 Layer 1 — Keycloak user-status gate** | Heracles | ~15 lines Go | Prevents all wasted extraction for disabled users — production incident |
 | P0 | G2 — PARTIAL flattened to failure | SDK | 1 line | Unblocks workflows with partial source access |
-| P1 | G15 Layer 2 — Atlan publish-permission check | SDK | ~25 lines | Catches revoked roles before extraction runs |
+| P1 | G6 Layer 2 — Atlan publish-permission check | SDK | ~25 lines | Catches revoked roles before extraction runs |
 | P1 | G3 — Source `information_schema` permission check | SDK | ~25 lines | Catches missing read grants on source |
-| P1 | G7 — `timeout_seconds` enforcement | SDK | ~8 lines | Prevents silent preflight hangs |
-| P2 | G10 — AE path preflight gate | Heracles | ~20 lines Go | Fixes API-driven and stale-config bypass |
+| P1 | G4 — `timeout_seconds` enforcement | SDK | ~8 lines | Prevents silent preflight hangs |
+| P2 | G5 — AE path preflight gate | Heracles | ~20 lines Go | Fixes API-driven and stale-config bypass |
 | P3 | G1 — `DefaultHandler` warning | SDK | 2 lines | Surfaces silent no-op checks in logs |
 
 ---
