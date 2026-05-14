@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.9.0
-source-sha:    aec6dd3cea87c9f5cd907b8bd8d6dc7d88f6c2d6
-source-date:   2026-05-14T15:02:36+01:00
+source-sha:    eac991e2c4f1fa4b1009144b9f9a9b5a4477f638
+source-date:   2026-05-14T22:03:07+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -739,7 +739,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `create_async_atlan_client`
 
 - **Import:** `from application_sdk.credentials import create_async_atlan_client`
-- **Signature:** `create_async_atlan_client(cred: 'Credential')`
+- **Signature:** `create_async_atlan_client(cred: Credential)`
 - **Summary:** Create an AsyncAtlanClient from a resolved Atlan credential.
 - **Defined in:** `application_sdk/credentials/atlan_client.py`
 
