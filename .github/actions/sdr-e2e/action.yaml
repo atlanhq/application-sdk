@@ -89,6 +89,28 @@ inputs:
       ref) action.yaml itself.
     required: false
     default: ""
+  components-dir:
+    description: |
+      App-level directory holding additional Dapr component YAMLs to
+      stack on top of the SDK defaults. Defaults to `$SDR_CONFIG_DIR/components`
+      so single-pipeline apps need no override. Multi-pipeline apps
+      (e.g. mysql-app's separate SDR + full-DAG stacks living in one
+      .github/e2e/ dir) override this from their caller workflow to
+      point at the per-pipeline overrides directory (e.g.
+      `.github/e2e/e2e-full-components`).
+    required: false
+    default: ""
+  compose-overlay:
+    description: |
+      App-level docker-compose overlay to stack on top of the
+      configurator output + SDK CI defaults. Defaults to
+      `$SDR_CONFIG_DIR/docker-compose.ci.yml`. Override from a caller
+      workflow when the pipeline needs a different compose layer
+      (e.g. mysql-app's `.github/e2e/e2e-full-docker-compose.yaml`
+      which propagates AWS_* env vars to the worker and sets a unique
+      agent-name so the worker registers on its own Temporal queue).
+    required: false
+    default: ""
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -330,11 +352,19 @@ runs:
       shell: bash
       env:
         SDK_COMPONENTS: ${{ steps.action_root.outputs.path }}/components
+        APP_COMPONENTS: ${{ inputs.components-dir }}
       run: |
         cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
-        if [ -d "$SDR_CONFIG_DIR/components" ] && [ -n "$(ls -A "$SDR_CONFIG_DIR/components" 2>/dev/null)" ]; then
-          echo "Applying app-level component overrides"
-          cp "$SDR_CONFIG_DIR/components"/*.yaml ci-deploy/components/
+        # Resolve effective overrides directory: explicit input wins,
+        # otherwise fall back to $SDR_CONFIG_DIR/components convention.
+        if [ -n "${APP_COMPONENTS}" ]; then
+          OVERRIDE_DIR="${APP_COMPONENTS}"
+        else
+          OVERRIDE_DIR="$SDR_CONFIG_DIR/components"
+        fi
+        if [ -d "${OVERRIDE_DIR}" ] && [ -n "$(ls -A "${OVERRIDE_DIR}" 2>/dev/null)" ]; then
+          echo "Applying app-level component overrides from ${OVERRIDE_DIR}"
+          cp "${OVERRIDE_DIR}"/*.yaml ci-deploy/components/
         fi
 
     - name: Build compose -f chain
@@ -342,12 +372,20 @@ runs:
       shell: bash
       env:
         SDK_COMPOSE: ${{ steps.action_root.outputs.path }}/docker-compose.ci.yml
+        APP_COMPOSE: ${{ inputs.compose-overlay }}
       run: |
         # Order: configurator-generated base → SDK CI overrides → optional app layer.
         FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
-        if [ -f "$SDR_CONFIG_DIR/docker-compose.ci.yml" ]; then
-          echo "Adding app-level compose layer"
-          FILES+=("-f" "$SDR_CONFIG_DIR/docker-compose.ci.yml")
+        # Resolve effective compose overlay: explicit input wins,
+        # otherwise fall back to $SDR_CONFIG_DIR/docker-compose.ci.yml convention.
+        if [ -n "${APP_COMPOSE}" ]; then
+          OVERLAY="${APP_COMPOSE}"
+        else
+          OVERLAY="$SDR_CONFIG_DIR/docker-compose.ci.yml"
+        fi
+        if [ -f "${OVERLAY}" ]; then
+          echo "Adding app-level compose layer from ${OVERLAY}"
+          FILES+=("-f" "${OVERLAY}")
         fi
         # Persist the array as a single space-joined string (compose -f flags
         # are simple paths, no whitespace issues).
