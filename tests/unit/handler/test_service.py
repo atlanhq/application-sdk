@@ -423,6 +423,140 @@ class TestPreflightEndpoint:
         assert response.status_code == 200
         assert received == [{}]
 
+    # ------------------------------------------------------------------
+    # Per-check v2-shape fields (DBBI-665 / WARE-1250 / finishes BLDX-901)
+    # ------------------------------------------------------------------
+    #
+    # The SageV2 widget at
+    # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
+    # renders ``checkResult.success ? successMessage : failureMessage`` with
+    # no fallback to ``message``. PR #1228 (BLDX-901) finished two of the
+    # three sub-mismatches but dropped this rename; these tests pin the
+    # finished shape so it does not regress again.
+
+    def test_preflight_check_emits_v2_success_fields(self) -> None:
+        """A passing check carries the message in successMessage; failureMessage is empty."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.READY,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=True,
+                            message="API version 3.17 is supported",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+        entry = body["data"]["apiVersion"]
+        assert entry["success"] is True
+        assert entry["message"] == "API version 3.17 is supported"
+        assert entry["successMessage"] == "API version 3.17 is supported"
+        assert entry["failureMessage"] == ""
+
+    def test_preflight_check_emits_v2_failure_fields(self) -> None:
+        """A failing check carries the message in failureMessage; successMessage is empty.
+
+        This is the DBBI-665 / IEEE case — without ``failureMessage`` the
+        SageV2 widget renders an empty "Hide details" panel even though the
+        handler set a real message on the check.
+        """
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="Metadata GraphQL API returned no sites",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+        entry = body["data"]["metadataAPI"]
+        assert entry["success"] is False
+        assert entry["message"] == "Metadata GraphQL API returned no sites"
+        assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
+        assert entry["successMessage"] == ""
+
+    def test_preflight_check_multiple_checks_v2_fields_per_check(self) -> None:
+        """Mixed pass/fail set — each check entry carries its own v2 fields."""
+
+        class _ThreeChecks(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.PARTIAL,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=True,
+                            message="API version 3.17 is supported",
+                        ),
+                        PreflightCheck(
+                            name="viewCapability",
+                            passed=True,
+                            message="Projects accessible — 5 project(s) found",
+                        ),
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="Metadata GraphQL API returned 404",
+                        ),
+                    ],
+                )
+
+        client = _make_client(handler=_ThreeChecks())
+        data = client.post("/workflows/v1/check", json={"credentials": []}).json()[
+            "data"
+        ]
+
+        assert data["apiVersion"]["successMessage"].startswith("API version")
+        assert data["apiVersion"]["failureMessage"] == ""
+        assert data["viewCapability"]["successMessage"].startswith("Projects")
+        assert data["viewCapability"]["failureMessage"] == ""
+        assert data["metadataAPI"]["failureMessage"] == (
+            "Metadata GraphQL API returned 404"
+        )
+        assert data["metadataAPI"]["successMessage"] == ""
+        # ``message`` is preserved on every entry for any v3-shape consumer.
+        for name in ("apiVersion", "viewCapability", "metadataAPI"):
+            assert data[name]["message"]
+
+    def test_preflight_check_empty_message_yields_empty_v2_fields(self) -> None:
+        """A check with no message yields empty strings in all message fields."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[PreflightCheck(name="connectivity", passed=False)],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        entry = client.post("/workflows/v1/check", json={"credentials": []}).json()[
+            "data"
+        ]["connectivity"]
+        assert entry["success"] is False
+        assert entry["message"] == ""
+        assert entry["successMessage"] == ""
+        assert entry["failureMessage"] == ""
+
 
 class TestMetadataEndpoint:
     """Tests for POST /workflows/v1/metadata."""

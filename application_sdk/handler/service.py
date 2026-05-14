@@ -633,14 +633,30 @@ def create_app_handler_service(
                 )
                 # Build v2-compatible response: each check becomes a top-level
                 # key in data so the frontend can iterate check names directly.
-                # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
+                # v2 format: {"authenticationCheck": {"success": true,
+                # "successMessage": "...", "failureMessage": "..."}, ...}.
+                #
+                # The SageV2 widget at
+                # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
+                # renders ``checkResult.success ? successMessage :
+                # failureMessage`` with no fallback to ``message``, so omitting
+                # those fields leaves the detail panel blank on a failed check
+                # (DBBI-665, WARE-1250). ``message`` is retained so any
+                # consumer already reading the v3 field keeps working.
+                #
+                # This finishes the third sub-mismatch from BLDX-901; PR #1228
+                # converted ``checks`` → camelCase keys and ``passed`` →
+                # ``success`` but left the message-field rename.
                 v2_data: dict[str, Any] = {}
                 for check in result.checks:
                     # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
                     key = check.name[0].lower() + check.name[1:]
+                    msg = check.message or ""
                     v2_data[key] = {
                         "success": check.passed,
-                        "message": check.message or "",
+                        "message": msg,
+                        "successMessage": msg if check.passed else "",
+                        "failureMessage": "" if check.passed else msg,
                     }
                 return JSONResponse(
                     content=_wrap_response(
