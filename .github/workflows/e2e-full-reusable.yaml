@@ -180,12 +180,7 @@ jobs:
           fi
           echo "Using agent-name=$(grep '^name=' "$GITHUB_OUTPUT" | cut -d= -f2)"
 
-      # TODO: switch to @main once BLDX-1254 lands on the SDK default
-      # branch. Branch-pin so the reusable workflow consumes the same
-      # SDR composite action revision as the rest of the PR (e.g. the
-      # `components-dir` / `compose-overlay` / `application-sdk-ref`
-      # inputs that don't exist on @main yet).
-      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@aryaman/bldx-1254-sdr-cross-repo-trigger
+      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
         with:
           app-name: ${{ inputs.app-name }}
           app-image-name: ${{ inputs.app-image-name }}
