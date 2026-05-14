@@ -103,8 +103,22 @@ jobs:
           REF: ${{ inputs.ref || github.ref }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+
+          # Strip any trailing CR/LF that GitHub expression evaluation can inject.
+          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
+          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
+
+          # Bypass the main-branch gate only when the ref is actually the
+          # matching tag ref. Checking release_tag alone is insufficient:
+          # a caller could pass any non-empty value from a feature branch
+          # to skip the channel='all' protection.
+          if [ -n "${RELEASE_TAG}" ] && [ "${REF}" = "refs/tags/${RELEASE_TAG}" ]; then
+            echo "Tagged release (${RELEASE_TAG}) — main-branch gate skipped."
+            exit 0
+          fi
 
           # Mirror the channel-resolution rules used at publish time:
           #   tenants  -> specific  (skip gate)
@@ -128,9 +142,8 @@ jobs:
           # Accept both the short ('main') and qualified ('refs/heads/main')
           # forms. Anything else falls through to the reject arm, including:
           #   - feature branches (refs/heads/feat-foo, feat/foo, …)
-          #   - tag refs (refs/tags/v1.2.3) — by design: tag-triggered builds
-          #     should not auto-publish to all tenants; cut a release from
-          #     main and let the push-trigger run instead.
+          #   - bare tag refs without release_tag (release_tag is handled above;
+          #     bare tags without it are rejected)
           case "${REF}" in
             main|refs/heads/main)
               echo "Channel 'all' on main — proceeding."
@@ -173,6 +186,7 @@ jobs:
       app_id:           ${{ steps.manifest.outputs.app_id }}
       dockerfile:       ${{ steps.manifest.outputs.dockerfile }}
       enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
+      release_model:    ${{ steps.manifest.outputs.release_model }}
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
       entrypoints: ${{ steps.manifest.outputs.entrypoints }}
@@ -507,10 +521,42 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_MODEL: ${{ needs.prepare.outputs.release_model }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           GITHUB_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
+
+          # Strip CR/LF that GitHub expression evaluation can inject.
+          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
+          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
+          RELEASE_MODEL="${RELEASE_MODEL//$'\r'/}"
+          RELEASE_MODEL="${RELEASE_MODEL//$'\n'/}"
+
+          # Versioned-release gate: apps that opt in via release_model=versioned
+          # must supply an explicit release_tag for any channel='all' publish.
+          # Merge-to-main builds the image (already in GHCR) but does not publish
+          # to all tenants — only a GitHub Release (which sets release_tag) does.
+          # Tenant-targeted and non-all-channel publishes are unrestricted.
+          EFFECTIVE_CHANNEL="${CHANNEL:-all}"
+          EFFECTIVE_CHANNEL="${EFFECTIVE_CHANNEL,,}"
+          if [ "${RELEASE_MODEL}" = "versioned" ] && [ -z "${RELEASE_TAG}" ] && [ -z "${TENANTS}" ] && [ "${EFFECTIVE_CHANNEL}" = "all" ]; then
+            echo "::error title=Publish blocked::App declares release_model=versioned — publishing to channel='all' requires an explicit release tag. The image is already in GHCR; cut a GitHub Release from main to publish to all tenants."
+            {
+              echo "### Publish blocked — versioned release required"
+              echo ""
+              echo "This app has \`release_model: versioned\` in \`atlan.yaml\`."
+              echo "Publishing to the **all** channel requires an explicit GitHub Release."
+              echo ""
+              echo "| Field | Value |"
+              echo "|-------|-------|"
+              echo "| Built image | \`${GHCR_IMAGE}\` |"
+              echo "| Channel | \`${EFFECTIVE_CHANNEL}\` |"
+              echo ""
+              echo "**Next step:** create a GitHub Release from \`main\` — the image above is already built and ready."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
 
           # Resolve triggering actor to email; fall back to GitHub username
           GH_EMAIL=$(gh api "users/${GITHUB_ACTOR}" --jq '.email // empty' 2>/dev/null || true)

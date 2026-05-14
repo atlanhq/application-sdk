@@ -253,3 +253,27 @@ class TestParse:
         yaml_file = _write(tmp_path, "atlan.yaml", MINIMAL_YAML)
         result = parse(str(yaml_file), str(tmp_path / "missing.lock"))
         assert result["deploy_config"] == ""
+
+    def test_release_model_defaults_to_cd(self, tmp_path: Path) -> None:
+        yaml_file = _write(tmp_path, "atlan.yaml", MINIMAL_YAML)
+        result = parse(str(yaml_file), str(tmp_path / "missing.lock"))
+        assert result["release_model"] == "cd"
+
+    def test_release_model_versioned(self, tmp_path: Path) -> None:
+        yaml_file = _write(
+            tmp_path, "atlan.yaml", MINIMAL_YAML + "release_model: versioned\n"
+        )
+        result = parse(str(yaml_file), str(tmp_path / "missing.lock"))
+        assert result["release_model"] == "versioned"
+
+    def test_release_model_cd_explicit(self, tmp_path: Path) -> None:
+        yaml_file = _write(tmp_path, "atlan.yaml", MINIMAL_YAML + "release_model: cd\n")
+        result = parse(str(yaml_file), str(tmp_path / "missing.lock"))
+        assert result["release_model"] == "cd"
+
+    def test_release_model_invalid_raises(self, tmp_path: Path) -> None:
+        yaml_file = _write(
+            tmp_path, "atlan.yaml", MINIMAL_YAML + "release_model: rolling\n"
+        )
+        with pytest.raises(AtlanYamlError, match="Unsupported release_model"):
+            parse(str(yaml_file), str(tmp_path / "missing.lock"))
