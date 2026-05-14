@@ -19,10 +19,13 @@ description: |
   - Providing a secrets-bundle script at the configured path that writes
     /app/secrets/credentials.json (the canonical SDR test secrets path)
 
-  Optional caller-side overrides on top of SDK defaults:
-  - .github/e2e/components/*.yaml — additional or replacement Dapr components
-  - .github/e2e/docker-compose.ci.yml — additional compose layer
-  - .github/e2e/test-config.yaml.tmpl — replacement configurator input
+  Optional caller-side overrides on top of SDK defaults (paths under
+  .github/sdr-e2e/ for new adopters; .github/e2e/ is also accepted for
+  backward compatibility):
+  - <sdr-config-dir>/components/*.yaml — additional or replacement Dapr components
+  - <sdr-config-dir>/docker-compose.ci.yml — additional compose layer
+  - <sdr-config-dir>/test-config.yaml.tmpl — replacement configurator input
+  - <sdr-config-dir>/app.yaml — configurator input (legacy: app.yaml at repo root)
 
 inputs:
   app-name:
@@ -40,14 +43,29 @@ inputs:
     description: Pytest target directory containing the SDR test suite.
     required: false
     default: tests/sdr/
+  report-title:
+    description: |
+      Short label used in the PR-comment / step-summary report title and
+      the PR comment marker. When empty (the default), the action derives
+      a title from `test-path`:
+        tests/sdr/        → "SDR Integration Tests (testcontainer)"
+        tests/full_dag/   → "E2E Full Tests (system apps)"
+        tests/<other>/    → "<other> Tests" (with hyphens/underscores
+                            replaced by spaces and the first letter
+                            uppercased).
+      Override to a literal label if the auto-derived one doesn't fit.
+    required: false
+    default: ""
   secrets-script:
     description: |
       Path (relative to repo root) to a bash or python script that writes
-      .github/e2e/secrets/credentials.json from job-level env vars. The
-      script is invoked once before the SDR container starts. Must produce
-      a JSON file the local.file Dapr secret store can read.
+      <sdr-config-dir>/secrets/credentials.json from job-level env vars
+      (where <sdr-config-dir> is .github/sdr-e2e or .github/e2e, whichever
+      the app uses). The script is invoked once before the SDR container
+      starts. Must produce a JSON file the local.file Dapr secret store
+      can read.
     required: false
-    default: .github/e2e/make-secrets.sh
+    default: .github/sdr-e2e/make-secrets.sh
   container-health-timeout-seconds:
     description: |
       How long to wait for the SDR container's /server/health endpoint to
@@ -59,7 +77,18 @@ inputs:
     description: Extra arguments appended to the pytest invocation.
     required: false
     default: ""
-
+  application-sdk-ref:
+    description: |
+      Optional application-sdk commit SHA / ref. When supplied, the
+      action re-pins atlan-application-sdk in the caller's pyproject.toml
+      to this ref before building the Docker image and again after
+      setup-deps (which re-checks-out the workspace). Used by cross-repo
+      dispatches from apps-sdk PRs so SDK changes are exercised end-to-end
+      — Docker image, host pytest runtime, and (because the caller
+      already invokes the action via a local-path checkout of this same
+      ref) action.yaml itself.
+    required: false
+    default: ""
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -81,23 +110,130 @@ runs:
         username: ${{ github.actor }}
         password: ${{ github.token }}
 
+    # Cross-repo dispatch from apps-sdk PRs hands us a specific SDK ref;
+    # rewrite the [tool.uv.sources] entry so the Docker build's COPY +
+    # uv sync resolves atlan-application-sdk to that ref. Repeated again
+    # below after setup-deps re-checks-out the workspace (which wipes
+    # this edit) so the host pytest runtime also picks up the ref.
+    #
+    # The Docker build runs `uv sync --locked` which requires uv.lock and
+    # pyproject.toml to be consistent. The repin only modifies
+    # pyproject.toml, so install uv inline and run `uv lock` before the
+    # Docker build to keep them aligned. setup-uv@v5 (which installs uv
+    # the "official" way) isn't available here because the composite
+    # action can't invoke another action mid-sequence with conditional
+    # `uses:` — curl install is the simplest fallback that doesn't pin a
+    # specific runner image.
+    # Stash the entire action directory to /tmp before setup-deps'
+    # actions/checkout wipes the workspace. When this action is invoked
+    # as a LOCAL action (uses: ./.application-sdk/.github/actions/sdr-e2e),
+    # ${{ github.action_path }} sits inside the workspace and is wiped
+    # along with everything else. Post-setup steps that reference the
+    # repin script, test-config template, Dapr component overlays, or
+    # the compose overlay must fall back to /tmp/sdr-e2e/ — those
+    # references are guarded by env vars (SDR_E2E_ROOT_*) resolved
+    # immediately after setup-deps.
+    - name: Stash action assets
+      shell: bash
+      run: |
+        rm -rf /tmp/sdr-e2e
+        cp -R "${{ github.action_path }}" /tmp/sdr-e2e
+        chmod +x /tmp/sdr-e2e/repin-application-sdk.sh || true
+
+    - name: Pin application-sdk to dispatched ref (pre-build)
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: |
+        ${{ github.action_path }}/repin-application-sdk.sh
+        if ! command -v uv >/dev/null 2>&1; then
+          echo "Installing uv for the pre-build re-lock..."
+          curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        fi
+        uv lock
+
+    # Buildx is required for the GHA cache backend below. Set up once
+    # per run, before the image build that uses `cache-from/cache-to`.
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
     # Image build runs before setup-deps so the workspace is still pristine —
     # no host .venv yet, so the Dockerfile's COPY . . won't pull in a
     # host-built virtualenv whose Python symlinks point outside the image.
+    #
+    # `cache-from/cache-to: type=gha` plugs buildx into GitHub Actions'
+    # cache backend so the expensive `uv sync` layer (~2 min on a cold
+    # build) is reused across PR pushes. `mode=max` saves intermediate
+    # stages too, which matters here because the Dockerfile has a
+    # separate dependency-install layer ahead of the source copy.
+    # `scope:` is keyed on the connector so two repos sharing this
+    # action don't collide caches.
     - name: Build and push PR image
       id: build
       shell: bash
       run: |
         SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
         IMAGE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
-        docker build -t "${IMAGE}" .
-        docker push "${IMAGE}"
+        # --push pushes to GHCR; compose pulls from there at run-time
+        # (atlan-configurator wires app_image into the generated
+        # compose file as a pull target). --load would conflict with
+        # --push under the standard buildx driver, and we don't need
+        # the image in the local daemon since compose handles the pull.
+        docker buildx build \
+          --tag "${IMAGE}" \
+          --push \
+          --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}" \
+          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}" \
+          .
         echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
     # Must run before atlan-configurator generates ci-deploy/ — setup-deps
     # uses actions/checkout internally which would wipe generated files.
     - name: Setup Python and dependencies
       uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.0.0
+
+    # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
+    # it again so the host pytest runtime resolves the dispatched SDK
+    # (the BaseSDRIntegrationTest, agent contracts, etc.). Followed by
+    # an explicit uv sync so the lockfile reflects the new pin.
+    #
+    # Important: when this action is invoked as a LOCAL action (uses:
+    # ./.application-sdk/.github/actions/sdr-e2e), setup-deps' inner
+    # actions/checkout wipes the entire workspace — including
+    # ${{ github.action_path }}/repin-application-sdk.sh itself, so we
+    # can't reference it again here. The "stash repin script" step
+    # below copies the script to /tmp before setup-deps runs; this step
+    # exec's from the stash.
+    # Resolve the action-asset root after setup-deps. When invoked as a
+    # local action the workspace (and ${{ github.action_path }}) has been
+    # wiped — fall back to the /tmp stash that the "Stash action assets"
+    # step populated before setup-deps ran. Exported as a step output so
+    # downstream steps can reference it as ${{ steps.action_root.outputs.path }}.
+    - name: Resolve action-asset root
+      id: action_root
+      shell: bash
+      run: |
+        if [ -d "${{ github.action_path }}" ] && [ -f "${{ github.action_path }}/test-config.yaml.tmpl" ]; then
+          ROOT="${{ github.action_path }}"
+        else
+          ROOT="/tmp/sdr-e2e"
+        fi
+        echo "Using SDR action assets from: $ROOT"
+        echo "path=$ROOT" >> "$GITHUB_OUTPUT"
+
+    - name: Pin application-sdk to dispatched ref (post-setup)
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+      run: |
+        "$SDR_E2E_ROOT/repin-application-sdk.sh"
+        uv lock
+        uv sync --all-extras --all-groups
 
     - name: Download atlan-configurator
       shell: bash
@@ -107,22 +243,55 @@ runs:
         mv docker-compose-generator/generate atlan-configurator
         chmod +x atlan-configurator
 
+    # Locate the SDR-specific config directory and app.yaml. Adopter apps
+    # historically used .github/e2e/ at the root alongside app.yaml; the new
+    # convention is to namespace everything under .github/sdr-e2e/ (and move
+    # app.yaml inside it) so connector repos don't get cluttered with
+    # SDR-only files at the root. We accept both layouts so adopters can
+    # migrate at their own pace.
+    - name: Resolve SDR config paths
+      shell: bash
+      run: |
+        if [ -d .github/sdr-e2e ]; then
+          DIR=.github/sdr-e2e
+        elif [ -d .github/e2e ]; then
+          DIR=.github/e2e
+        else
+          echo "::error::No SDR config dir found (.github/sdr-e2e or .github/e2e)."
+          exit 1
+        fi
+        if [ -f "$DIR/app.yaml" ]; then
+          APP_YAML="$DIR/app.yaml"
+        elif [ -f app.yaml ]; then
+          APP_YAML=app.yaml
+        else
+          echo "::error::No app.yaml found at $DIR/app.yaml or repo root. See the SDR onboarding skill for the minimal three-line shape."
+          exit 1
+        fi
+        echo "Using SDR config dir: $DIR"
+        echo "Using app.yaml at:    $APP_YAML"
+        {
+          echo "SDR_CONFIG_DIR=$DIR"
+          echo "APP_YAML_PATH=$APP_YAML"
+        } >> "$GITHUB_ENV"
+
     - name: Resolve app.yaml
       shell: bash
       env:
+        APP_NAME: ${{ inputs.app-name }}
         APP_IMAGE: ${{ steps.build.outputs.image }}
-      run: envsubst < app.yaml > app-resolved.yaml
+      run: envsubst < "$APP_YAML_PATH" > app-resolved.yaml
 
     # Use the app's test-config template if it overrides the SDK default.
     - name: Resolve test-config.yaml
       shell: bash
       env:
         CI_RUN_SUFFIX: ${{ github.run_id }}
-        SDK_TMPL: ${{ github.action_path }}/test-config.yaml.tmpl
+        SDK_TMPL: ${{ steps.action_root.outputs.path }}/test-config.yaml.tmpl
       run: |
-        if [ -f .github/e2e/test-config.yaml.tmpl ]; then
+        if [ -f "$SDR_CONFIG_DIR/test-config.yaml.tmpl" ]; then
           echo "Using app-level test-config.yaml.tmpl override"
-          envsubst < .github/e2e/test-config.yaml.tmpl > test-config.yaml
+          envsubst < "$SDR_CONFIG_DIR/test-config.yaml.tmpl" > test-config.yaml
         else
           echo "Using SDK default test-config.yaml.tmpl"
           envsubst < "${SDK_TMPL}" > test-config.yaml
@@ -140,18 +309,18 @@ runs:
     - name: Generate secrets bundle
       shell: bash
       run: |
-        mkdir -p .github/e2e/secrets
+        mkdir -p "$SDR_CONFIG_DIR/secrets"
         SCRIPT="${{ inputs.secrets-script }}"
         if [ ! -f "${SCRIPT}" ]; then
-          echo "::error::secrets-script not found at ${SCRIPT}. Provide one that writes .github/e2e/secrets/credentials.json from env vars."
+          echo "::error::secrets-script not found at ${SCRIPT}. Provide one that writes ${SDR_CONFIG_DIR}/secrets/credentials.json from env vars."
           exit 1
         fi
         case "${SCRIPT}" in
           *.py) python3 "${SCRIPT}" ;;
           *)    bash "${SCRIPT}" ;;
         esac
-        if [ ! -f .github/e2e/secrets/credentials.json ]; then
-          echo "::error::secrets-script ran but did not produce .github/e2e/secrets/credentials.json"
+        if [ ! -f "$SDR_CONFIG_DIR/secrets/credentials.json" ]; then
+          echo "::error::secrets-script ran but did not produce ${SDR_CONFIG_DIR}/secrets/credentials.json"
           exit 1
         fi
 
@@ -160,25 +329,25 @@ runs:
     - name: Override CI Dapr components
       shell: bash
       env:
-        SDK_COMPONENTS: ${{ github.action_path }}/components
+        SDK_COMPONENTS: ${{ steps.action_root.outputs.path }}/components
       run: |
         cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
-        if [ -d .github/e2e/components ] && [ -n "$(ls -A .github/e2e/components 2>/dev/null)" ]; then
+        if [ -d "$SDR_CONFIG_DIR/components" ] && [ -n "$(ls -A "$SDR_CONFIG_DIR/components" 2>/dev/null)" ]; then
           echo "Applying app-level component overrides"
-          cp .github/e2e/components/*.yaml ci-deploy/components/
+          cp "$SDR_CONFIG_DIR/components"/*.yaml ci-deploy/components/
         fi
 
     - name: Build compose -f chain
       id: compose_files
       shell: bash
       env:
-        SDK_COMPOSE: ${{ github.action_path }}/docker-compose.ci.yml
+        SDK_COMPOSE: ${{ steps.action_root.outputs.path }}/docker-compose.ci.yml
       run: |
         # Order: configurator-generated base → SDK CI overrides → optional app layer.
         FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
-        if [ -f .github/e2e/docker-compose.ci.yml ]; then
+        if [ -f "$SDR_CONFIG_DIR/docker-compose.ci.yml" ]; then
           echo "Adding app-level compose layer"
-          FILES+=("-f" ".github/e2e/docker-compose.ci.yml")
+          FILES+=("-f" "$SDR_CONFIG_DIR/docker-compose.ci.yml")
         fi
         # Persist the array as a single space-joined string (compose -f flags
         # are simple paths, no whitespace issues).
@@ -354,6 +523,8 @@ runs:
       env:
         OUTCOME: ${{ steps.tests.outcome }}
         APP_NAME: ${{ inputs.app-name }}
+        REPORT_TITLE_OVERRIDE: ${{ inputs.report-title }}
+        TEST_PATH: ${{ inputs.test-path }}
       run: |
         uv run python3 - <<'PYEOF'
         import os, re, xml.etree.ElementTree as ET
@@ -362,6 +533,26 @@ runs:
         outcome  = os.environ.get("OUTCOME", "unknown")
         app_name = os.environ.get("APP_NAME", "app")
         icon     = "✅" if outcome == "success" else "❌"
+
+        # Title is either explicit (via `report-title` input) or derived
+        # from the pytest target path. Keeps the report self-labelling
+        # when the action is reused across different suites in the same
+        # repo (e.g. tier-3 sdr-integration-tests vs e2e-full).
+        def _title_from_test_path(path: str) -> str:
+            specials = {
+                "sdr": "SDR Integration Tests (testcontainer)",
+                "full_dag": "E2E Full Tests (system apps)",
+            }
+            seg = path.strip("/").split("/")[-1] if path else ""
+            if seg in specials:
+                return specials[seg]
+            if not seg:
+                return "Tests"
+            return seg.replace("-", " ").replace("_", " ").title() + " Tests"
+
+        report_title = os.environ.get("REPORT_TITLE_OVERRIDE") or (
+            _title_from_test_path(os.environ.get("TEST_PATH", ""))
+        )
 
         totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0, "time": 0.0}
         scenarios: list[tuple[str, str, str, float, str]] = []
@@ -408,7 +599,7 @@ runs:
 
         summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
         with open(summary_path, "w") as f:
-            f.write(f"## {icon} SDR Integration Tests — {app_name}\n\n")
+            f.write(f"## {icon} {report_title} — {app_name}\n\n")
 
             if totals["tests"]:
                 f.write("### Test results\n\n")
@@ -445,6 +636,363 @@ runs:
         mkdir -p results
         docker compose ${{ steps.compose_files.outputs.files }} logs >> results/sdr-container.log 2>&1 || true
 
+    - name: Tear down SDR container
+      if: always()
+      shell: bash
+      run: docker compose ${{ steps.compose_files.outputs.files }} down -v
+
+    # Scrape the connector container log for per-workflow extract /
+    # transform counts. The SDK's SqlApp logs lines like
+    #
+    #     correlation_id=<uuid> ... - Extracted <entity>: N raw records
+    #     correlation_id=<uuid> ... - Transformed <entity>: N records
+    #
+    # one per entity per workflow scenario. We group by correlation_id so
+    # multi-workflow scenarios show separately, and try to attach each
+    # group to the workflow_id observed in the same correlation block —
+    # which lets the PR comment link directly into the tenant Temporal UI.
+    - name: Compute asset extraction summary
+      id: asset_summary
+      # Always runs (no pull_request gate): the workflow_dispatch path
+      # used by apps-sdk cross-repo dispatch also needs the summary
+      # markdown so the rendered pr-comment-body.md captures asset +
+      # lineage tables for the SDK PR's sticky.
+      if: always()
+      shell: bash
+      env:
+        CI_TENANT_DOMAIN: ${{ env.CI_TENANT_DOMAIN }}
+      run: |
+        uv run python3 - <<'PYEOF'
+        import os
+        import re
+        import secrets
+        from collections import defaultdict
+        from pathlib import Path
+
+        log_path = Path("results/sdr-container.log")
+        if not log_path.exists():
+            print("No container log; skipping asset summary.")
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write("markdown=\n")
+            raise SystemExit
+
+        text = log_path.read_text(errors="replace")
+
+        # correlation_id=<uuid>  ...  Extracted <entity>: N raw records
+        extract_re = re.compile(
+            r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?"
+            r"Extracted (?P<entity>[A-Za-z0-9_-]+): (?P<n>\d+) raw records"
+        )
+        transform_re = re.compile(
+            r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?"
+            r"Transformed (?P<entity>[A-Za-z0-9_-]+): (?P<n>\d+) records"
+        )
+        # Match workflow_id + run_id emitted under the same correlation
+        # block — usually from the handler/service "Starting workflow"
+        # log. The Atlan Temporal proxy at
+        # /api/temporal/namespaces/default/workflows/<wf>/<run>/history
+        # rejects requests missing the run_id (just /workflows/<wf>/history
+        # 404s), so we capture both and only link when we have the pair.
+        wf_re = re.compile(
+            r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?workflow_id=(?P<wf>[\w-]+)"
+        )
+        run_re = re.compile(
+            r"correlation_id=(?P<cid>[0-9a-f-]+)[^\n]*?run_id=(?P<run>[\w-]+)"
+        )
+
+        cids: list[str] = []  # insertion-ordered for deterministic table order
+        extracted: dict[str, dict[str, int]] = defaultdict(dict)
+        transformed: dict[str, dict[str, int]] = defaultdict(dict)
+        wf_id_by_cid: dict[str, str] = {}
+        run_id_by_cid: dict[str, str] = {}
+
+        def _seen(cid: str) -> None:
+            if cid not in cids:
+                cids.append(cid)
+
+        for m in extract_re.finditer(text):
+            cid = m.group("cid")
+            _seen(cid)
+            extracted[cid][m.group("entity")] = int(m.group("n"))
+        for m in transform_re.finditer(text):
+            cid = m.group("cid")
+            _seen(cid)
+            transformed[cid][m.group("entity")] = int(m.group("n"))
+        for m in wf_re.finditer(text):
+            cid = m.group("cid")
+            wf_id_by_cid.setdefault(cid, m.group("wf"))
+        for m in run_re.finditer(text):
+            cid = m.group("cid")
+            run_id_by_cid.setdefault(cid, m.group("run"))
+
+        # Drop correlation groups that produced no asset rows (handler-level
+        # auth / preflight scenarios run through the same scenario runner
+        # but never emit extract/transform lines).
+        cids = [c for c in cids if extracted.get(c) or transformed.get(c)]
+
+        if not cids:
+            print("No extract/transform lines in container log.")
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write("markdown=\n")
+            raise SystemExit
+
+        tenant = os.environ.get("CI_TENANT_DOMAIN", "")
+        lines: list[str] = ["### Extracted + transformed assets", ""]
+        for idx, cid in enumerate(cids, start=1):
+            wf = wf_id_by_cid.get(cid, "")
+            run = run_id_by_cid.get(cid, "")
+            header = f"**Workflow run {idx}**"
+            if wf and run and tenant:
+                wf_url = (
+                    f"https://{tenant}/api/temporal/namespaces/default"
+                    f"/workflows/{wf}/{run}/history"
+                )
+                header += f" — [{wf}]({wf_url})"
+            elif wf:
+                # Workflow id without a run id — show the id verbatim but
+                # don't emit a clickable link; the proxy 404s on
+                # /workflows/<wf>/history without the run id.
+                header += f" — `{wf}`"
+            lines.append(header)
+            lines.append("")
+            lines.append("| Entity | Extracted | Transformed |")
+            lines.append("|--------|-----------|-------------|")
+            entities = sorted(set(extracted[cid]) | set(transformed[cid]))
+            for entity in entities:
+                ext = extracted[cid].get(entity)
+                tr = transformed[cid].get(entity)
+                ext_s = "—" if ext is None else str(ext)
+                tr_s = "—" if tr is None else str(tr)
+                lines.append(f"| {entity} | {ext_s} | {tr_s} |")
+            lines.append("")
+
+        # Full-DAG runs append two Atlas-side sections mirroring the
+        # Atlan workflow-center UI cards (Assets / Lineage coverage):
+        #   "Atlas inventory under <qn>: {<typeName>: <count>, ...}"
+        #   "Lineage inventory under <qn>: {<typeName>: <count>, ...} lineage_present=<bool>"
+        # SDR runs never emit these lines, so the sections are added
+        # only when matches are found — keeps the SDR comment unchanged.
+        import ast
+
+        def _safe_dict(literal: str) -> dict[str, int]:
+            try:
+                value = ast.literal_eval(literal)
+            except (ValueError, SyntaxError):
+                return {}
+            return value if isinstance(value, dict) else {}
+
+        def _render_section(title: str, qn: str, counts: dict[str, int]) -> list[str]:
+            total = sum(counts.values())
+            section = [f"### {title}", "", f"**Connection:** `{qn}`", "", f"**Total:** {total}", ""]
+            if counts:
+                section.append("| Type | Count |")
+                section.append("|------|-------|")
+                for type_name in sorted(counts):
+                    section.append(f"| {type_name} | {counts[type_name]} |")
+                section.append("")
+            return section
+
+        test_log = Path("results/sdr-test-output.txt")
+        if test_log.exists():
+            test_text = test_log.read_text(errors="replace")
+            assets_re = re.compile(
+                r"Atlas inventory under (?P<qn>\S+):\s+(?P<counts>\{.*?\})"
+            )
+            lineage_re = re.compile(
+                r"Lineage inventory under (?P<qn>\S+):\s+(?P<counts>\{.*?\})\s+lineage_present=(?P<lin>True|False)"
+            )
+            # Take the last match in case retries logged earlier ones.
+            assets_match = next(iter(list(assets_re.finditer(test_text))[::-1]), None)
+            lineage_match = next(iter(list(lineage_re.finditer(test_text))[::-1]), None)
+            if assets_match:
+                lines.extend(_render_section(
+                    "Assets in Atlas",
+                    assets_match.group("qn"),
+                    _safe_dict(assets_match.group("counts")),
+                ))
+            if lineage_match:
+                lineage_counts = _safe_dict(lineage_match.group("counts"))
+                lines.extend(_render_section(
+                    "Lineage coverage",
+                    lineage_match.group("qn"),
+                    lineage_counts,
+                ))
+                if lineage_match.group("lin") == "False" and sum(lineage_counts.values()) == 0:
+                    lines.append("> No lineage assets observed — waived when the seed dataset has no view-derived lineage.")
+                    lines.append("")
+
+        markdown = "\n".join(lines)
+        delim = "EOF_ASSETS_" + secrets.token_hex(8)
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"markdown<<{delim}\n{markdown}\n{delim}\n")
+        print(markdown)
+        PYEOF
+
+    # Delete any prior SDR comment (matched by sticky marker) and post a
+    # fresh one. Using github-script + a sticky HTML-comment marker instead
+    # of mshick/add-pr-comment's edit-in-place behaviour: re-runs land as
+    # new comments at the bottom of the conversation rather than silently
+    # mutating an old one, which makes "what's the latest run" obvious.
+    - name: Render PR comment + post (when on a PR)
+      if: always()
+      uses: actions/github-script@v7
+      env:
+        APP_NAME: ${{ inputs.app-name }}
+        OUTCOME: ${{ steps.tests.outcome }}
+        SUMMARY: ${{ steps.tests.outputs.summary }}
+        WF_LINKS: ${{ steps.wf_links.outputs.links }}
+        ASSET_SUMMARY: ${{ steps.asset_summary.outputs.markdown }}
+        REPORT_TITLE_OVERRIDE: ${{ inputs.report-title }}
+        TEST_PATH: ${{ inputs.test-path }}
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const appName = process.env.APP_NAME;
+          const outcome = process.env.OUTCOME;
+          const summary = process.env.SUMMARY || 'No summary';
+          const wfLinks = process.env.WF_LINKS || '';
+          const assetSummary = process.env.ASSET_SUMMARY || '';
+
+          // Derive a self-describing title from test-path unless the caller
+          // overrode it explicitly. Mirrors the python helper in the
+          // step-summary step so both report surfaces stay aligned.
+          const titleFromTestPath = (path) => {
+            const specials = {
+              "sdr": "SDR Integration Tests (testcontainer)",
+              "full_dag": "E2E Full Tests (system apps)",
+            };
+            const seg = (path || "").replace(/\/+$/, "").split("/").pop() || "";
+            if (seg in specials) return specials[seg];
+            if (!seg) return "Tests";
+            return seg.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()) + " Tests";
+          };
+          const reportTitle = process.env.REPORT_TITLE_OVERRIDE
+            || titleFromTestPath(process.env.TEST_PATH);
+          // Sticky marker uses a slug of the title so different suites
+          // running on the same PR keep their own comments instead of
+          // overwriting each other.
+          const stickySlug = reportTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+          const sticky = `<!-- ${stickySlug}:${appName} -->`;
+          const status = outcome === 'success' ? 'Passed ✅' : 'Failed ❌';
+          const runLink = `[${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+          const linksLine = wfLinks ? `\n**Temporal workflows:** ${wfLinks}\n` : '';
+          // assetSummary is the multiline markdown table block produced by
+          // the "Compute asset extraction summary" step. Empty string when
+          // no workflow scenarios ran (auth/preflight only).
+          const assetBlock = assetSummary ? `\n${assetSummary}\n` : '';
+
+          // Validation bullets + stack/re-run footer are pipeline-specific.
+          // SDR exercises auth/preflight/extract against a hermetic
+          // testcontainer DB; Full-DAG additionally drives publish,
+          // query-intelligence, lineage-app and lineage-publish system
+          // apps on a live tenant and asserts asset counts + lineage in
+          // Atlas. Keep the surface narrow per pipeline so reviewers
+          // don't get a misleading "this also validates X" claim.
+          const SDR_TITLE = "SDR Integration Tests (testcontainer)";
+          const FULL_DAG_TITLE = "E2E Full Tests (system apps)";
+
+          const validatesByPipeline = {
+            [SDR_TITLE]: [
+              `- **Credential resolution from secret store** — workflow \`username\`/\`password\` resolved via the Dapr \`local.file\` secret store using \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.`,
+              `- **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly`,
+              `- **Preflight** — connectivity, schema/table checks; bad credentials fail correctly`,
+              `- **Workflow** — full extraction run on the test instance, polled to \`COMPLETED\` on the tenant's Temporal cluster`,
+            ],
+            [FULL_DAG_TITLE]: [
+              `- **Connector extract + transform** — workflow polled to \`COMPLETED\` on the tenant's Temporal cluster; asset JSON written to the tenant object store`,
+              `- **System apps DAG** — \`publish\` → \`query-intelligence\` → \`lineage-app\` → \`lineage-publish\` all reach \`Succeeded\` on their respective task queues`,
+              `- **Connection materialised in Atlas** — \`/api/meta/entity\` resolves the Connection QN that the workflow published`,
+              `- **Asset counts in Atlas** — per-typeName descendant counts meet the connector's \`expected_min_asset_counts\` floor (Database, Schema, Table, View, Column, …)`,
+              `- **Lineage in Atlas** — at least one \`Process\` / \`ColumnProcess\` asset under the Connection QN (waived when the seed dataset has no view definitions)`,
+              `- **Agent + connection contract** — \`agent_spec\` / \`connection_spec\` accepted by AE workflow + version create endpoints; credentials resolved via \`AgentCredentialSpec\``,
+            ],
+          };
+          const validates = validatesByPipeline[reportTitle] || validatesByPipeline[SDR_TITLE];
+
+          const stackByPipeline = {
+            [SDR_TITLE]: `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, Temporal worker on CI tenant.`,
+            [FULL_DAG_TITLE]: `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, worker registered with the CI tenant's Temporal + the live publish/qi/lineage system apps.`,
+          };
+          const stackLine = stackByPipeline[reportTitle] || stackByPipeline[SDR_TITLE];
+
+          const rerunHintByPipeline = {
+            [SDR_TITLE]: `Push a new commit, or re-run from the Actions tab.`,
+            [FULL_DAG_TITLE]: `Remove and re-add the \`e2e-full\` label, or re-run from the Actions tab.`,
+          };
+          const rerunHint = rerunHintByPipeline[reportTitle] || rerunHintByPipeline[SDR_TITLE];
+
+          const body = [
+            sticky,
+            `## 🧪 ${reportTitle} — ${appName}`,
+            ``,
+            `**Status:** ${status}`,
+            `**Summary:** \`${summary}\``,
+            `**Run:** ${runLink}`,
+            linksLine,
+            assetBlock,
+            `### What this validates`,
+            ...validates,
+            ``,
+            stackLine,
+            ``,
+            `<details><summary>Re-run</summary>`,
+            ``,
+            rerunHint,
+            `</details>`,
+          ].join('\n');
+
+          // Always serialise the rendered body to the results artifact
+          // so the cross-repo dispatch caller (apps-sdk side) can post
+          // an identical sticky on its own PR. The artifact upload step
+          // further down packages results/ as-is.
+          const fs = require('fs');
+          fs.mkdirSync('results', { recursive: true });
+          fs.writeFileSync('results/pr-comment-body.md', body);
+
+          // Only post a comment when we're on a pull_request event with
+          // a `context.issue.number` to target — workflow_dispatch runs
+          // (used by the apps-sdk cross-repo path) skip the API call and
+          // rely on the artifact above being consumed by the caller.
+          if (context.eventName !== 'pull_request' || !context.issue.number) {
+            core.info('Not a pull_request event with a PR number — skipping comment post; body persisted to results/pr-comment-body.md for the cross-repo caller to reuse.');
+            return;
+          }
+
+          // Sticky update: find an existing comment carrying our marker
+          // and patch its body in-place, otherwise create a fresh one.
+          // Earlier iterations did delete+create, which re-pushed the
+          // PR thread on every retry and pinged subscribers each time.
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            per_page: 100,
+          });
+          const existing = comments.find(c => c.body && c.body.includes(sticky));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+      continue-on-error: true
+
+    # Artifact upload deliberately runs AFTER the comment-render step
+    # so results/pr-comment-body.md (written by that step) ships with
+    # the rest of the suite output. apps-sdk's e2e-apps composite
+    # downloads this same artifact and posts the body verbatim on the
+    # SDK PR (only the sticky marker line differs), so both PRs see
+    # the same rendered report.
     - name: Upload test results
       if: always()
       uses: actions/upload-artifact@v4
@@ -453,99 +1001,25 @@ runs:
         path: results/
         retention-days: 14
 
-    - name: Tear down SDR container
+    # No explicit `createCommitStatus` step: the workflow job already
+    # surfaces a check_run on the PR (e.g. `E2E Full Tests (system
+    # apps)` or `SDR Integration Tests (testcontainer)`). Posting an
+    # additional commit status duplicates that signal under a separate
+    # `sdr-e2e-tests` row and, when two callers share this composite,
+    # they overwrite each other on the same head SHA.
+
+    # GH Actions re-reads ${{ github.action_path }}/action.yaml when
+    # running each step's `post:` hook. When this composite is invoked
+    # as a LOCAL action (`uses: ./.application-sdk/.github/actions/sdr-e2e`),
+    # setup-deps' inner actions/checkout earlier in the run wiped that
+    # path. Restore it from the /tmp/sdr-e2e stash so post-hooks find
+    # the action manifest (otherwise the job fails after a green
+    # test run with "Can't find 'action.yml' under ...").
+    - name: Restore action assets for post-hooks
       if: always()
       shell: bash
-      run: docker compose ${{ steps.compose_files.outputs.files }} down -v
-
-    # Delete any prior SDR comment (matched by sticky marker) and post a
-    # fresh one. Using github-script + a sticky HTML-comment marker instead
-    # of mshick/add-pr-comment's edit-in-place behaviour: re-runs land as
-    # new comments at the bottom of the conversation rather than silently
-    # mutating an old one, which makes "what's the latest run" obvious.
-    - name: Post PR comment
-      if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@v7
-      env:
-        APP_NAME: ${{ inputs.app-name }}
-        OUTCOME: ${{ steps.tests.outcome }}
-        SUMMARY: ${{ steps.tests.outputs.summary }}
-        WF_LINKS: ${{ steps.wf_links.outputs.links }}
-      with:
-        github-token: ${{ github.token }}
-        script: |
-          const appName = process.env.APP_NAME;
-          const outcome = process.env.OUTCOME;
-          const summary = process.env.SUMMARY || 'No summary';
-          const wfLinks = process.env.WF_LINKS || '';
-
-          const sticky = `<!-- sdr-integration-tests:${appName} -->`;
-          const status = outcome === 'success' ? 'Passed ✅' : 'Failed ❌';
-          const runLink = `[${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
-          const linksLine = wfLinks ? `\n**Temporal workflows:** ${wfLinks}\n` : '';
-
-          const body = [
-            sticky,
-            `## SDR Integration Tests — ${appName}`,
-            ``,
-            `**Status:** ${status}`,
-            `**Summary:** \`${summary}\``,
-            `**Run:** ${runLink}`,
-            linksLine,
-            `### What this validates`,
-            `- **Credential resolution from secret store** — workflow \`username\`/\`password\` resolved via the Dapr \`local.file\` secret store using \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.`,
-            `- **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly`,
-            `- **Preflight** — connectivity, schema/table checks; bad credentials fail correctly`,
-            `- **Workflow** — full extraction run on the test instance, polled to \`COMPLETED\` on the tenant's Temporal cluster`,
-            ``,
-            `> Stack: atlan-configurator generated compose, Dapr sidecar embedded, Temporal worker on CI tenant.`,
-            ``,
-            `<details><summary>Re-run</summary>`,
-            ``,
-            `Remove and re-add the \`sdr-e2e-test\` label, or re-run from the Actions tab.`,
-            `</details>`,
-          ].join('\n');
-
-          // Find prior comments tagged with our sticky marker and delete them.
-          const comments = await github.paginate(github.rest.issues.listComments, {
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-            per_page: 100,
-          });
-          for (const c of comments) {
-            if (c.body && c.body.includes(sticky)) {
-              await github.rest.issues.deleteComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: c.id,
-              });
-            }
-          }
-
-          await github.rest.issues.createComment({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-            body,
-          });
-      continue-on-error: true
-
-    - name: Set commit status
-      if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{ github.token }}
-        script: |
-          const state = '${{ steps.tests.outcome }}' === 'success' ? 'success' : 'failure';
-          const ctx   = 'sdr-e2e-tests';
-          await github.rest.repos.createCommitStatus({
-            owner: context.repo.owner,
-            repo:  context.repo.repo,
-            sha:   context.payload.pull_request.head.sha,
-            state,
-            target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            description: state === 'success' ? `${ctx} passed` : `${ctx} failed`,
-            context: ctx,
-          });
-      continue-on-error: true
+      run: |
+        if [ ! -f "${{ github.action_path }}/action.yaml" ] && [ -d /tmp/sdr-e2e ]; then
+          mkdir -p "${{ github.action_path }}"
+          cp -R /tmp/sdr-e2e/. "${{ github.action_path }}/"
+        fi
