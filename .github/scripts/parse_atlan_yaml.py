@@ -15,6 +15,7 @@ Outputs (single-line, append-safe):
     build_tag          ``build_tag`` (only ``v1`` supported today)
     dockerfile         ``dockerfile`` (default ``./Dockerfile``)
     enable_sdr         ``true``/``false`` from ``self_deployed_runtime``
+    release_model      ``cd`` (default) or ``versioned`` — controls publish-to-all gating
     sdk_version        atlan-application-sdk version pinned in uv.lock (or empty)
     entrypoints  JSON-encoded list (single line) or empty string
     deploy_config      YAML-dumped ``deploy:`` block (multiline; heredoc'd by caller)
@@ -41,6 +42,9 @@ _KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 
 # Closed type set. Mirrors core.version.model.EntrypointPackageType in GM.
 _ALLOWED_TYPES = {"connector", "miner", "orchestrator", "utility", "custom"}
+
+# Allowed values for the release_model field.
+_ALLOWED_RELEASE_MODELS = {"cd", "versioned"}
 
 # Channel keys that GM's catalog read interprets as channel-tier overrides.
 # Any other key is interpreted as a tenant-name-tier override (matched against
@@ -215,6 +219,7 @@ def parse(
     build_tag = d.get("build_tag", "v1")
     dockerfile = d.get("dockerfile", "./Dockerfile")
     enable_sdr = "true" if d.get("self_deployed_runtime", False) else "false"
+    release_model = d.get("release_model", "cd")
 
     if not app_name:
         _err('atlan.yaml is missing required "name" field')
@@ -222,6 +227,12 @@ def parse(
     if build_tag != "v1":
         _err(
             f"Unsupported build_tag {build_tag!r}. Only 'v1' is supported by this template version."
+        )
+
+    if release_model not in _ALLOWED_RELEASE_MODELS:
+        _err(
+            f"Unsupported release_model {release_model!r}. "
+            f"Must be one of: {sorted(_ALLOWED_RELEASE_MODELS)}."
         )
 
     deploy_val = d.get("deploy")
@@ -241,6 +252,7 @@ def parse(
         "build_tag": build_tag,
         "dockerfile": dockerfile,
         "enable_sdr": enable_sdr,
+        "release_model": release_model,
         "sdk_version": sdk_version,
         "entrypoints": entrypoints,
         "deploy_config": deploy_config,
@@ -281,6 +293,7 @@ def main() -> None:
     print(f"App ID: {outputs['app_id']}")
     print(f"Dockerfile: {outputs['dockerfile']}")
     print(f"SDR: {outputs['enable_sdr']}")
+    print(f"Release model: {outputs['release_model']}")
     print(f"SDK version: {outputs['sdk_version'] or '(not pinned)'}")
     print(
         "Entrypoint packages: "
