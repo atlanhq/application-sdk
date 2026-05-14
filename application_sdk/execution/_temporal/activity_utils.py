@@ -71,22 +71,22 @@ def get_workflow_id() -> str:
         The workflow ID of the current activity.
 
     Raises:
-        Exception: If called outside an activity context, or if the
+        WorkflowIdError: If called outside an activity context, or if the
             workflow ID cannot be retrieved.
     """
+    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+        WorkflowIdError,
+    )
+
     try:
         wf_id = activity.info().workflow_id
-        if wf_id is None:
-            raise ValueError(
-                "workflow_id unavailable outside a workflow-backed activity"
-            )
-        return wf_id
-    except Exception as e:
-        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-            WorkflowIdError,
+    except Exception as exc:
+        raise WorkflowIdError(cause=exc) from exc
+    if wf_id is None:
+        raise WorkflowIdError(
+            message="workflow_id unavailable outside a workflow-backed activity"
         )
-
-        raise WorkflowIdError(cause=e) from e
+    return wf_id
 
 
 def get_workflow_run_id() -> str:
@@ -104,19 +104,19 @@ def get_workflow_run_id() -> str:
     run ID (e.g. cleanup of artifacts written under the current
     attempt's prefix).
     """
+    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+        WorkflowRunIdError,
+    )
+
     try:
         wf_run_id = activity.info().workflow_run_id
-        if wf_run_id is None:
-            raise ValueError(
-                "workflow_run_id unavailable outside a workflow-backed activity"
-            )
-        return wf_run_id
-    except Exception as e:
-        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-            WorkflowRunIdError,
+    except Exception as exc:
+        raise WorkflowRunIdError(cause=exc) from exc
+    if wf_run_id is None:
+        raise WorkflowRunIdError(
+            message="workflow_run_id unavailable outside a workflow-backed activity"
         )
-
-        raise WorkflowRunIdError(cause=e) from e
+    return wf_run_id
 
 
 def build_output_path() -> str:

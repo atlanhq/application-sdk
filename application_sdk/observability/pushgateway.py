@@ -79,7 +79,11 @@ class TemporalCoreCollector:
                 return
             yield from text_string_to_metric_families(resp.text)
         except Exception:
-            # Silent — a transient Temporal core hiccup must not poison the push.
+            # Best-effort — a transient Temporal core hiccup must not poison the push.
+            logger.debug(
+                "Temporal-core metric scrape failed; skipping this cycle",
+                exc_info=True,
+            )
             return
 
 
