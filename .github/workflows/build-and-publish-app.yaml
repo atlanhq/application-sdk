@@ -103,8 +103,18 @@ jobs:
           REF: ${{ inputs.ref || github.ref }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+
+          # A non-empty release_tag means the caller is the SDK's own
+          # tag-and-release.yaml, which only fires after a release-labelled
+          # PR merges to main. The ref will be refs/tags/v* but the build
+          # is legitimately from main — skip the gate.
+          if [ -n "${RELEASE_TAG}" ]; then
+            echo "Tagged release (${RELEASE_TAG}) — main-branch gate skipped."
+            exit 0
+          fi
 
           # Mirror the channel-resolution rules used at publish time:
           #   tenants  -> specific  (skip gate)
@@ -128,9 +138,8 @@ jobs:
           # Accept both the short ('main') and qualified ('refs/heads/main')
           # forms. Anything else falls through to the reject arm, including:
           #   - feature branches (refs/heads/feat-foo, feat/foo, …)
-          #   - tag refs (refs/tags/v1.2.3) — by design: tag-triggered builds
-          #     should not auto-publish to all tenants; cut a release from
-          #     main and let the push-trigger run instead.
+          #   - bare tag refs (refs/tags/v1.2.3) without a release_tag input
+          #     (release_tag is handled above; bare tags without it are rejected)
           case "${REF}" in
             main|refs/heads/main)
               echo "Channel 'all' on main — proceeding."
