@@ -349,5 +349,12 @@
     "reason": "Base image — Rust dependency in Dapr runtime. Fix available in 0.103.13; awaiting SDK base image rebuild with updated Dapr.",
     "expires": "2026-06-08",
     "added_by": "TechyMT"
+  },
+  "SNYK-CHAINGUARDLATEST-DAPR117-16630656": {
+    "package": "dapr-1.17",
+    "severity": "HIGH",
+    "reason": "Base image — Chainguard Wolfi dapr-1.17@1.17.5-r0. Fix available at 1.17.6-r3; awaiting SDK base image rebuild with updated dapr-1.17 package.",
+    "expires": "2026-08-12",
+    "added_by": "swata.dash"
   }
 }
