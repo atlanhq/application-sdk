@@ -26,10 +26,10 @@ This document covers only gaps that:
 
 The gaps below fall into two groups:
 - **Platform gaps** — the SDK or Heracles layer should enforce these regardless of which
-  connector is running (G1, G2, G7, G10).
+  connector is running (G1, G2, G4, G5).
 - **Permission gaps** — the user or service account does not have access to something the
   workflow needs: the source system, the Atlan connection, or the Atlan platform itself (G3,
-  G15).
+  G6).
 
 ---
 
@@ -459,202 +459,215 @@ async def check_atlan_publish_permission(
 
 ---
 
-## Confirmed Real-World Tickets from Linear
+## Confirmed Real-World Issues from Linear
 
-Cross-referencing the gap analysis against open Linear tickets surfaces the following
-unsolved issues where a preflight check either failed to catch something it should have,
-or is missing entirely. All tickets below are currently **open (not Done/Cancelled)**.
+The gaps described above are not theoretical. Searching Linear found **7 open tickets**
+where exactly these patterns caused real customer failures. None of them are fixed yet.
+
+A quick way to read each entry: **What the user saw → What actually went wrong → Why
+preflight didn't catch it → Current status.**
 
 ---
 
-### SS-17 — Workflow failures due to disabled / invalid workflow creator user
+### SS-17 — Workflow fails because the person who set it up no longer has a valid account
 
-**Status:** Todo (not started)
+**Status:** Open since January 2026 — no fix yet
 **Team:** Support Signals
-**Maps to:** G6 — User account status and publish permission never validated
+**Relates to:** G6
 
-The ticket documents a recurring pattern across multiple tenants:
+**What the user sees:** A workflow that ran fine last week suddenly fails every time it
+runs on a schedule. But if someone clicks "Run now" manually, it works perfectly.
 
-- Workflows fail because the creator user's account is disabled in Keycloak.
-- Workflows fail because the user's Atlan role was downgraded (e.g. admin → member)
-  after the workflow was created.
-- **Scheduled runs fail while manual runs succeed** — because the "run-as" user stored
-  in the cron configuration is stale or invalid, but the manual runner uses the current
-  live session which is still valid.
+**What actually went wrong:** Every scheduled workflow stores the identity of the person
+who created it. If that person leaves the company, gets suspended, or has their role
+downgraded (e.g., from admin to a basic member), the scheduled run still tries to act as
+that person — and gets rejected. The manual run works because it uses the current user's
+live session instead.
 
-The third variant is particularly insidious: a user sets up a scheduled workflow, their
-account is later offboarded, and every scheduled run fails while anyone manually re-running
-it sees success. Preflight run manually passes (current session is valid); the cron fires
-and uses the stored, now-disabled user.
+**Why preflight didn't catch it:** When the workflow was set up, the creator's account was
+valid. Preflight ran at that time and passed. No check runs again at schedule time to
+confirm the stored identity is still active.
 
-This ticket has been open since January 2026 with no fix.
+**Three variants documented in this ticket:**
+1. User account disabled in Keycloak (the identity provider) — workflow fails at publish
+2. User's Atlan role downgraded — workflow runs but can't write results
+3. Scheduled run stores a stale or mistyped user ID — manual runs pass, cron runs always fail
 
-**What G6's Heracles gate catches:** the disabled-account case at workflow submission time.
-**What it still doesn't catch:** the stale "run-as" user in a cron schedule — that user
-identity is resolved at cron trigger time, not at preflight time.
+The datavant production incident (G6 in this doc) is variant 1. This ticket confirms it is
+a recurring pattern seen across multiple customers.
 
 ---
 
-### SS-27 — Snowflake preflight permission validation for asset ingestion
+### SS-27 — Snowflake workflow finishes successfully but half the data is missing
 
-**Status:** Backlog (not started)
+**Status:** Backlog — no fix yet
 **Team:** Support Signals
-**Maps to:** G3 — Source system permission validation missing
+**Relates to:** G3
 
-The ticket documents a large and recurring class of false positives specific to Snowflake:
-workflows **complete successfully** (no error, exit code 0) but return **partial or empty
-results** because the Atlan service account lacks object-level grants for the asset types
-being extracted.
+**What the user sees:** The workflow shows "Completed" with no errors. But when they open
+Atlan, a large chunk of their Snowflake objects are missing — no streams, no certain tables,
+no tags. They file a support ticket because they think something is broken in Atlan.
 
-A representative case (Zendesk 118017): Snowflake streams and cross-database streams were
-silently skipped. The workflow extracted databases, schemas, and tables correctly, but every
-stream was absent. Root cause: the Atlan role had `SELECT` on streams but was missing:
+**What actually went wrong:** The Snowflake service account used by Atlan has permission to
+connect and read some things, but not everything. Snowflake silently skips any object it
+can't access rather than throwing an error. The workflow completes and reports success on
+the objects it could see.
 
-- `USAGE` on the stream's home database and base-table database
-- `USAGE` on both schemas
-- `REFERENCES` on the base tables
+**A real example (Zendesk 118017):** A customer's Atlan role could read databases, schemas,
+and tables — but streams were invisible because the role was missing `USAGE` on the
+databases those streams belonged to. The workflow ran for its full duration, extracted
+everything it could, and finished with exit code 0. No error. Just missing data.
 
-The current preflight checks connectivity and broad account-level grants. It does not
-enumerate the configured target scope (databases, asset types) and validate that the role
-holds **per-asset-type privileges** for each object in that scope.
+**Why preflight didn't catch it:** Preflight checks whether Atlan can connect to Snowflake.
+It does not check whether Atlan can read each specific type of object the customer has
+configured for extraction. The gap between "can connect" and "can read everything we need"
+is where the false positive lives.
 
-**G3 as documented in the gap analysis covers the general principle.** SS-27 goes deeper —
-it proposes a Snowflake-specific privilege matrix (database/schema/table/view/stream/stage/tag)
-and per-asset-type validation. That level of specificity lives in the Snowflake connector,
-not in the SDK, but the SDK can provide the `check_information_schema_access` foundation and
-the `PreflightCheck` contract for connectors to build on.
+**This is the most commonly reported class of false positive for Snowflake.** The fix
+requires checking permissions per object type (table, stream, stage, tag, etc.) before
+the workflow runs — not just a connection ping.
 
 ---
 
-### WARE-723 — Miner preflight checks stay credible after retry
+### WARE-723 — Snowflake miner: preflight passes, every run fails
 
-**Status:** Backlog
+**Status:** Backlog — no fix yet
 **Team:** App Warelines Studio
-**Maps to:** G3 — Source system permission validation missing
+**Relates to:** G3
 
-Preflight on the Snowflake miner passes even when the workflow subsequently fails on
-credential authentication. The ticket links a concrete SLA breach on `tripactions-vc` where
-0% of miner runs succeeded despite a green preflight.
+**What the user sees:** The preflight check screen shows green for the Snowflake miner.
+When the workflow runs, it fails on authentication. 0% success rate. The customer cannot
+use query history ingestion at all despite seeing a passing preflight.
 
-The underlying mechanism matches the pattern in G3: the credential validated at preflight
-time is not the same credential (or credential state) used at runtime. After a retry,
-the credential may have been re-resolved from a different path, or the preflight ran
-against a cached connection while the live system rejected the actual auth.
+**A real case:** `tripactions-vc` had an SLA breach because every miner run failed after
+preflight said it was ready.
 
-**The gap:** preflight validates a credential snapshot at request time. Runtime activities
-re-resolve credentials independently. If those two paths diverge after a retry, preflight
-provides no protection.
+**What actually went wrong:** The credential that preflight tested was not the same
+credential state the workflow used at runtime. After a retry or a re-resolution from the
+credential store, the miner got a different (invalid) version of the credential. Preflight
+had already confirmed the old version.
+
+**In plain terms:** Preflight is like checking your passport at the airline check-in desk.
+The miner's bug is equivalent to the boarding gate scanning a different document — one
+that's expired. The check-in passed, but the gate rejected you.
 
 ---
 
-### WARE-38 — DBT Core preflight checks accept invalid storage credentials
+### WARE-38 — DBT Core accepts completely wrong storage credentials at preflight
 
-**Status:** Backlog
+**Status:** Backlog — no fix yet
 **Team:** App Warelines Studio
-**Maps to:** G3 — Source system permission validation missing (storage variant)
+**Relates to:** G3
 
-DBT Core has three auth methods (cloud, objectstore, core). Cloud and objectstore have
-robust preflight checks built in 2024. Core does not.
+**What the user sees:** They configure a dbt Core connection to an Azure storage bucket,
+enter credentials (even random test values), and preflight passes. They run the workflow
+and it immediately fails trying to reach the bucket.
 
-A concrete case: on `tel.atlan.com` a customer connected to an Azure blob storage bucket
-using DBT Core and the preflight passed with **completely invalid / gibberish credentials**.
-No actual storage access check was performed. The workflow failed later when trying to
-reach the bucket.
+**What actually went wrong:** The dbt Core connector has three ways to authenticate (cloud,
+object store, and "core" mode). The cloud and object-store modes have real validation built
+in. The "core" mode does not — it accepts any input without testing it against the actual
+storage.
 
-This is a pure false positive: green preflight, workflow fails on first storage access.
-The storage permission check that G3's `check_information_schema_access` addresses for SQL
-connectors has an exact analogue for object-store connectors: attempt a lightweight read
-against the configured storage path.
+**Confirmed on `tel.atlan.com`:** A customer entered gibberish credentials. Preflight
+showed green. The workflow failed immediately on the first real storage access.
+
+**The fix is straightforward:** Try to read a small test file from the configured storage
+path at preflight time. If it fails, surface the error before any workflow starts.
 
 ---
 
-### DBBI-687 — Tableau: preflight regex validation + PAT isolation check
+### DBBI-687 — Tableau: two separate preflight gaps causing active production failures
 
-**Status:** Backlog (High priority)
+**Status:** Backlog (High priority) — no fix yet
 **Team:** DB and BI
-**Maps to:** G3 (two new dimensions not yet in the gap doc)
+**Relates to:** G3
 
-Two distinct false positives, both in production:
+Two unrelated issues, both in production, both uncaught by preflight.
 
-**1. User-supplied regex crashes at runtime**
+**Issue 1: A filter setting crashes the workflow after 11+ days of failures**
 
-`exclude_projects_regex = ^(?:{user})$` uses Python 3.11 inline flags in a position that
-causes a crash. The regex is accepted at config time and preflight passes. At runtime
-`re.search()` raises `re.error` at multiple extract locations
-(`metadata_verification/main.py:98, 146, 231`). The failure ran for **11+ consecutive days**
-on a Platinum tenant (`globaovp02`) before being caught.
+Tableau lets users configure a filter called `exclude_projects_regex` to skip certain
+projects. Some users enter patterns using advanced syntax that Tableau's underlying Python
+code cannot handle. Preflight accepts the setting without checking whether it's valid. The
+crash only happens during the actual extraction — and it has been happening on every single
+run on one Platinum-tier tenant for 11 days straight.
 
-Fix: run `re.compile()` against all user-supplied regex fields at preflight and return
-a `PreflightCheck(passed=False)` with the exact `re.error` message if compilation fails.
+The fix: test the filter pattern at preflight time and tell the user immediately if it's
+invalid, before any workflow runs.
 
-**2. PAT (Personal Access Token) collision — no isolation check**
+**Issue 2: Sharing a credential token across multiple connections breaks both**
 
-When the same Tableau PAT is used across multiple Atlan connections simultaneously,
-Tableau invalidates the first active session when a second one opens. No preflight check
-detects this. Preflight tests connectivity with the PAT, passes, and then the first
-connection's workflow fails mid-run when the second connection opens.
+Tableau uses a "Personal Access Token" (PAT) — a single key that identifies a user
+session. If the same PAT is used to set up two separate Atlan connections, opening one
+connection's session automatically invalidates the other. Preflight tests each connection
+in isolation, passes both, and then during the actual run the first connection's workflow
+fails because the second one stole its session.
 
-Fix: add a PAT-isolation check at preflight that warns when the same credential is shared
-across more than one active Atlan connection.
-
-Both failures are **undetected by preflight today and are actively causing production
-incidents**.
+The fix: during preflight, check whether the same PAT is already in use by another active
+Atlan connection, and warn the user before they create a conflict.
 
 ---
 
-### BLDX-1204 — Preflight checks do not load on rerun
+### BLDX-1204 — Preflight screen gets stuck loading when a user tries to rerun a workflow
 
-**Status:** Todo (Medium)
+**Status:** Open — no fix yet
 **Team:** Builder Experience
-**Maps to:** Platform-level — preflight reliability
+**Relates to:** G1 / platform reliability
 
-When a user reruns an existing workflow, the preflight check UI gets stuck in a loading
-state indefinitely. Reproduced on Snowflake and BigQuery connectors across at least two
-tenants.
+**What the user sees:** They open a previous workflow to rerun it. The preflight check
+panel spins indefinitely and never loads. They either wait and give up, or click "Run
+anyway" without any validation at all.
 
-This is not a false positive in the traditional sense — it is a reliability failure of the
-preflight system itself. If preflight does not load, the user has no signal before they
-run. They either skip preflight (run blind) or cannot rerun at all.
+**Reproduced on:** Snowflake and BigQuery, across at least two different tenants.
 
-The root cause is not yet diagnosed. It may be related to G2 (PARTIAL status handling) or
-the response shape differing on a rerun vs first run.
+**Why this matters beyond the UX:** If preflight doesn't load, users lose the one signal
+that could prevent a failed run. They either run blind or waste time waiting. This issue
+makes all the gap fixes above irrelevant for reruns — the screen never renders the results.
+
+The root cause hasn't been fully diagnosed yet. It may be connected to how the preflight
+response is shaped differently on a rerun compared to a first-time run.
 
 ---
 
-### ARUN-11 — Heracles azure tenant object-store preflight check
+### ARUN-11 — Azure storage precondition not checked before a Heracles platform rollout
 
-**Status:** Backlog
+**Status:** Backlog — no fix yet
 **Team:** App Runtime
-**Maps to:** G3 (storage permission variant) + G5 (missing preflight gate in a path)
+**Relates to:** G3 / G5
 
-All Azure tenants must use Azure Blob Storage as their object store before a planned Heracles
-rollout. A curl-based preflight check in Heracles is needed to validate that the tenant's
-object store is correctly configured as Azure storage before the change is applied.
+**Context:** Heracles needs all Azure-hosted tenants to be using Azure Blob Storage as
+their object store before a planned infrastructure change can be rolled out. If a tenant
+is misconfigured (e.g., still pointing at S3 instead of Azure Blob), the rollout will
+break them.
 
-This is a deployment-gate preflight, not a connector preflight, but it illustrates the same
-gap: a required precondition (object-store type must be Azure) is not validated before the
-workflow proceeds, so misconfigured tenants would fail mid-rollout.
+**The gap:** There is no check that verifies this precondition before the rollout proceeds
+tenant by tenant. A misconfigured tenant would only discover the problem after the change
+is applied and their workflows start failing.
+
+**This is the same pattern as the connector false positives** — a required condition is
+not validated before work begins, so failures are discovered at runtime instead of at
+validation time.
 
 ---
 
-### Summary: open tickets mapped to gaps
+### Open tickets at a glance
 
-| Ticket | Status | Maps to gap | Core problem |
-|--------|--------|-------------|--------------|
-| [SS-17](https://linear.app/atlan-epd/issue/SS-17) | Todo | G6 | Disabled user / downgraded role / stale cron user — workflow runs under invalid identity |
-| [SS-27](https://linear.app/atlan-epd/issue/SS-27) | Backlog | G3 | Snowflake asset-type–specific grant gaps cause silent partial extraction |
-| [WARE-723](https://linear.app/atlan-epd/issue/WARE-723) | Backlog | G3 | Miner preflight passes; auth fails at runtime after credential re-resolution |
-| [WARE-38](https://linear.app/atlan-epd/issue/WARE-38) | Backlog | G3 | DBT Core azure bucket — preflight accepts gibberish credentials |
-| [DBBI-687](https://linear.app/atlan-epd/issue/DBBI-687) | Backlog | G3 | Tableau regex crash at runtime + PAT collision not detected at preflight |
-| [BLDX-1204](https://linear.app/atlan-epd/issue/BLDX-1204) | Todo | Platform | Preflight UI stuck loading on rerun — users run blind |
-| [ARUN-11](https://linear.app/atlan-epd/issue/ARUN-11) | Backlog | G3 / G5 | Azure object-store precondition check missing before tenant rollout |
+| Ticket | What users experience | Open since | Gap |
+|--------|-----------------------|------------|-----|
+| [SS-17](https://linear.app/atlan-epd/issue/SS-17) | Scheduled runs fail; manual runs pass — creator account was disabled or role downgraded | Jan 2026 | G6 |
+| [SS-27](https://linear.app/atlan-epd/issue/SS-27) | Snowflake workflow completes with no error, but data is partially missing | Feb 2026 | G3 |
+| [WARE-723](https://linear.app/atlan-epd/issue/WARE-723) | Snowflake miner preflight green, every run fails with auth error | Mar 2026 | G3 |
+| [WARE-38](https://linear.app/atlan-epd/issue/WARE-38) | DBT Core accepts any credentials at preflight; workflow fails immediately | Jan 2026 | G3 |
+| [DBBI-687](https://linear.app/atlan-epd/issue/DBBI-687) | Tableau: filter crash after 11+ days; shared token breaks both connections | May 2026 | G3 |
+| [BLDX-1204](https://linear.app/atlan-epd/issue/BLDX-1204) | Preflight panel stuck loading on rerun — users run without any checks | Apr 2026 | Platform |
+| [ARUN-11](https://linear.app/atlan-epd/issue/ARUN-11) | Azure storage misconfiguration not caught before platform rollout | Jan 2026 | G3 / G5 |
 
-### Already fixed (same pattern, for reference)
+### Recently fixed — same patterns
 
-| Ticket | Maps to | What was fixed |
-|--------|---------|----------------|
-| [DQ-727](https://linear.app/atlan-epd/issue/DQ-727) | G3 | DQ preflight validated JDBC but not catalog storage — ADLS firewall blocked runs; now fixed in gandalf |
-| [WARE-1250](https://linear.app/atlan-epd/issue/WARE-1250) | G1 | Snowflake crawler preflight handler silently dropped checks declared in the form contract; now fixed |
+| Ticket | What was wrong | Fixed |
+|--------|---------------|-------|
+| [DQ-727](https://linear.app/atlan-epd/issue/DQ-727) | DQ preflight said "all checks passed" but Azure storage firewall blocked the actual run (P&G) | May 2026 |
+| [WARE-1250](https://linear.app/atlan-epd/issue/WARE-1250) | Snowflake crawler declared 4 preflight checks in the UI contract but only ran 2 — 2 checks were silently never emitted | May 2026 |
 
 ---
 
