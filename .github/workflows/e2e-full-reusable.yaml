@@ -31,7 +31,12 @@ name: e2e-full-reusable
 #   - Tenant + OAuth + API-key env wiring.
 #   - The `Resolve agent-name` step that handles the run-id default.
 #   - The SDR composite action invocation with full-DAG defaults
-#     (test-path, components-dir, compose-overlay, secrets-script).
+#     (test-path, secrets-script).
+#
+# Connector-level Dapr component / compose overrides live under the
+# connector's $SDR_CONFIG_DIR (`.github/sdr-e2e/` or fallback
+# `.github/e2e/`); the SDR composite picks them up by convention,
+# no inputs to thread through.
 #
 # Caller overrides any of the input defaults when their layout differs.
 
@@ -51,22 +56,6 @@ on:
         required: false
         type: string
         default: tests/full_dag/
-      components-dir:
-        description: |
-          Path (relative to the caller repo root) to the Dapr component
-          overrides — typically the OAuth-via-blobstorage objectstore
-          binding. Default matches the convention this repo's apps
-          follow; override if your app stores them elsewhere.
-        required: false
-        type: string
-        default: .github/e2e/e2e-full-components
-      compose-overlay:
-        description: |
-          Path to the docker-compose overlay that brings up the sibling
-          DB and wires ATLAN_AUTH_* env into the worker.
-        required: false
-        type: string
-        default: .github/e2e/e2e-full-docker-compose.yaml
       secrets-script:
         description: |
           Path to the script that writes the local-secret-store bundle
@@ -186,8 +175,6 @@ jobs:
           app-image-name: ${{ inputs.app-image-name }}
           test-path: ${{ inputs.test-path }}
           secrets-script: ${{ inputs.secrets-script }}
-          components-dir: ${{ inputs.components-dir }}
-          compose-overlay: ${{ inputs.compose-overlay }}
           # Bump the container-health wait because the worker has to
           # establish the Temporal connection with TLS + auth before
           # /server/health turns green.

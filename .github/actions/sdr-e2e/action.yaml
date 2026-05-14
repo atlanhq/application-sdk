@@ -19,10 +19,13 @@ description: |
   - Providing a secrets-bundle script at the configured path that writes
     /app/secrets/credentials.json (the canonical SDR test secrets path)
 
-  Optional caller-side overrides on top of SDK defaults:
-  - .github/e2e/components/*.yaml — additional or replacement Dapr components
-  - .github/e2e/docker-compose.ci.yml — additional compose layer
-  - .github/e2e/test-config.yaml.tmpl — replacement configurator input
+  Optional caller-side overrides on top of SDK defaults (paths under
+  .github/sdr-e2e/ for new adopters; .github/e2e/ is also accepted for
+  backward compatibility):
+  - <sdr-config-dir>/components/*.yaml — additional or replacement Dapr components
+  - <sdr-config-dir>/docker-compose.ci.yml — additional compose layer
+  - <sdr-config-dir>/test-config.yaml.tmpl — replacement configurator input
+  - <sdr-config-dir>/app.yaml — configurator input (legacy: app.yaml at repo root)
 
 inputs:
   app-name:
@@ -56,11 +59,13 @@ inputs:
   secrets-script:
     description: |
       Path (relative to repo root) to a bash or python script that writes
-      .github/e2e/secrets/credentials.json from job-level env vars. The
-      script is invoked once before the SDR container starts. Must produce
-      a JSON file the local.file Dapr secret store can read.
+      <sdr-config-dir>/secrets/credentials.json from job-level env vars
+      (where <sdr-config-dir> is .github/sdr-e2e or .github/e2e, whichever
+      the app uses). The script is invoked once before the SDR container
+      starts. Must produce a JSON file the local.file Dapr secret store
+      can read.
     required: false
-    default: .github/e2e/make-secrets.sh
+    default: .github/sdr-e2e/make-secrets.sh
   container-health-timeout-seconds:
     description: |
       How long to wait for the SDR container's /server/health endpoint to
@@ -84,28 +89,6 @@ inputs:
       ref) action.yaml itself.
     required: false
     default: ""
-  components-dir:
-    description: |
-      Directory (relative to repo root) holding app-level Dapr component
-      overrides that are copied OVER the SDK defaults after configurator
-      generation. Per-tier directories let a connector run multiple test
-      stacks side-by-side — e.g. tier-3 uses the default
-      `.github/e2e/components` (localstorage objectstore for hermetic
-      runs), tier-4 sets `.github/e2e/tier-4-components` (S3 binding
-      pointing at the tenant bucket so publish/qi/lineage can read what
-      extract wrote).
-    required: false
-    default: .github/e2e/components
-  compose-overlay:
-    description: |
-      Path (relative to repo root) to an app-level docker-compose overlay
-      that stacks on top of the configurator output + SDK CI defaults.
-      Default fits tier-3 (`docker-compose.ci.yml` — sibling DB with
-      seed). Tier-4 overrides with its own overlay that propagates
-      AWS_* env vars to the worker for the S3 binding + sets a unique
-      agent-name so the worker registers on its own Temporal queue.
-    required: false
-    default: .github/e2e/docker-compose.ci.yml
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -260,31 +243,44 @@ runs:
         mv docker-compose-generator/generate atlan-configurator
         chmod +x atlan-configurator
 
-    # atlan-configurator's --app input needs a distinct schema (app_name +
-    # app_image at minimum). Connector repos' atlan.yaml is for the k8s
-    # helm deploy and uses a different shape ('name' not 'app_name', no
-    # image field). Generate a configurator-shaped file inline from
-    # known-good defaults; callers can override via
-    # .github/e2e/app-config.yaml.tmpl if a connector needs more fields
-    # (proxy config, extra env, etc.).
-    - name: Resolve app-config for atlan-configurator
+    # Locate the SDR-specific config directory and app.yaml. Adopter apps
+    # historically used .github/e2e/ at the root alongside app.yaml; the new
+    # convention is to namespace everything under .github/sdr-e2e/ (and move
+    # app.yaml inside it) so connector repos don't get cluttered with
+    # SDR-only files at the root. We accept both layouts so adopters can
+    # migrate at their own pace.
+    - name: Resolve SDR config paths
+      shell: bash
+      run: |
+        if [ -d .github/sdr-e2e ]; then
+          DIR=.github/sdr-e2e
+        elif [ -d .github/e2e ]; then
+          DIR=.github/e2e
+        else
+          echo "::error::No SDR config dir found (.github/sdr-e2e or .github/e2e)."
+          exit 1
+        fi
+        if [ -f "$DIR/app.yaml" ]; then
+          APP_YAML="$DIR/app.yaml"
+        elif [ -f app.yaml ]; then
+          APP_YAML=app.yaml
+        else
+          echo "::error::No app.yaml found at $DIR/app.yaml or repo root. See the SDR onboarding skill for the minimal three-line shape."
+          exit 1
+        fi
+        echo "Using SDR config dir: $DIR"
+        echo "Using app.yaml at:    $APP_YAML"
+        {
+          echo "SDR_CONFIG_DIR=$DIR"
+          echo "APP_YAML_PATH=$APP_YAML"
+        } >> "$GITHUB_ENV"
+
+    - name: Resolve app.yaml
       shell: bash
       env:
         APP_NAME: ${{ inputs.app-name }}
         APP_IMAGE: ${{ steps.build.outputs.image }}
-      run: |
-        if [ -f .github/e2e/app-config.yaml.tmpl ]; then
-          echo "Using app-level app-config.yaml.tmpl override"
-          envsubst < .github/e2e/app-config.yaml.tmpl > app-resolved.yaml
-        else
-          echo "Generating default app-config from action inputs"
-          cat > app-resolved.yaml <<EOF
-        app_name: ${APP_NAME}
-        app_image: ${APP_IMAGE}
-        EOF
-        fi
-        echo "--- app-resolved.yaml ---"
-        cat app-resolved.yaml
+      run: envsubst < "$APP_YAML_PATH" > app-resolved.yaml
 
     # Use the app's test-config template if it overrides the SDK default.
     - name: Resolve test-config.yaml
@@ -293,9 +289,9 @@ runs:
         CI_RUN_SUFFIX: ${{ github.run_id }}
         SDK_TMPL: ${{ steps.action_root.outputs.path }}/test-config.yaml.tmpl
       run: |
-        if [ -f .github/e2e/test-config.yaml.tmpl ]; then
+        if [ -f "$SDR_CONFIG_DIR/test-config.yaml.tmpl" ]; then
           echo "Using app-level test-config.yaml.tmpl override"
-          envsubst < .github/e2e/test-config.yaml.tmpl > test-config.yaml
+          envsubst < "$SDR_CONFIG_DIR/test-config.yaml.tmpl" > test-config.yaml
         else
           echo "Using SDK default test-config.yaml.tmpl"
           envsubst < "${SDK_TMPL}" > test-config.yaml
@@ -313,18 +309,18 @@ runs:
     - name: Generate secrets bundle
       shell: bash
       run: |
-        mkdir -p .github/e2e/secrets
+        mkdir -p "$SDR_CONFIG_DIR/secrets"
         SCRIPT="${{ inputs.secrets-script }}"
         if [ ! -f "${SCRIPT}" ]; then
-          echo "::error::secrets-script not found at ${SCRIPT}. Provide one that writes .github/e2e/secrets/credentials.json from env vars."
+          echo "::error::secrets-script not found at ${SCRIPT}. Provide one that writes ${SDR_CONFIG_DIR}/secrets/credentials.json from env vars."
           exit 1
         fi
         case "${SCRIPT}" in
           *.py) python3 "${SCRIPT}" ;;
           *)    bash "${SCRIPT}" ;;
         esac
-        if [ ! -f .github/e2e/secrets/credentials.json ]; then
-          echo "::error::secrets-script ran but did not produce .github/e2e/secrets/credentials.json"
+        if [ ! -f "$SDR_CONFIG_DIR/secrets/credentials.json" ]; then
+          echo "::error::secrets-script ran but did not produce ${SDR_CONFIG_DIR}/secrets/credentials.json"
           exit 1
         fi
 
@@ -334,12 +330,11 @@ runs:
       shell: bash
       env:
         SDK_COMPONENTS: ${{ steps.action_root.outputs.path }}/components
-        APP_COMPONENTS: ${{ inputs.components-dir }}
       run: |
         cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
-        if [ -d "${APP_COMPONENTS}" ] && [ -n "$(ls -A "${APP_COMPONENTS}" 2>/dev/null)" ]; then
-          echo "Applying app-level component overrides from ${APP_COMPONENTS}"
-          cp "${APP_COMPONENTS}"/*.yaml ci-deploy/components/
+        if [ -d "$SDR_CONFIG_DIR/components" ] && [ -n "$(ls -A "$SDR_CONFIG_DIR/components" 2>/dev/null)" ]; then
+          echo "Applying app-level component overrides"
+          cp "$SDR_CONFIG_DIR/components"/*.yaml ci-deploy/components/
         fi
 
     - name: Build compose -f chain
@@ -347,13 +342,12 @@ runs:
       shell: bash
       env:
         SDK_COMPOSE: ${{ steps.action_root.outputs.path }}/docker-compose.ci.yml
-        APP_COMPOSE: ${{ inputs.compose-overlay }}
       run: |
         # Order: configurator-generated base → SDK CI overrides → optional app layer.
         FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
-        if [ -f "${APP_COMPOSE}" ]; then
-          echo "Adding app-level compose layer from ${APP_COMPOSE}"
-          FILES+=("-f" "${APP_COMPOSE}")
+        if [ -f "$SDR_CONFIG_DIR/docker-compose.ci.yml" ]; then
+          echo "Adding app-level compose layer"
+          FILES+=("-f" "$SDR_CONFIG_DIR/docker-compose.ci.yml")
         fi
         # Persist the array as a single space-joined string (compose -f flags
         # are simple paths, no whitespace issues).
