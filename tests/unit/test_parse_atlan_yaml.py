@@ -257,3 +257,89 @@ def test_invalid_yaml_rejected(tmp_path, monkeypatch):
     (tmp_path / "atlan.yaml").write_text("name: x\n  bad: : indent\n  - unclosed")
     with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
+
+
+# ── deploy.env_overrides validation ─────────────────────────────────────────
+#
+# GM resolves ``env_overrides`` at catalog-read time (global-marketplace's
+# core/release/config_resolver.py) and is intentionally lenient — a typo'd
+# channel name silently no-ops. CI is the only place that catches it, so
+# these tests pin the rules.
+
+
+def _with_overrides(overrides):
+    return {
+        "name": "x",
+        "app_id": "1",
+        "deploy": {
+            "env": {"OTEL_ENVIRONMENT": "production"},
+            "env_overrides": overrides,
+        },
+    }
+
+
+def test_env_overrides_with_valid_channels_accepted(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(
+        tmp_path,
+        _with_overrides({"beta": {"OTEL_ENVIRONMENT": "beta"}, "staging": {"X": "y"}}),
+    )
+    out = parse_atlan_yaml.parse()
+    assert "env_overrides" in out["deploy_config"]
+
+
+def test_env_overrides_unknown_channel_rejected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    # Common typo — 'staing' instead of 'staging'.
+    _write(tmp_path, _with_overrides({"staing": {"OTEL_ENVIRONMENT": "staging"}}))
+    with pytest.raises(AtlanYamlError, match="unknown channel"):
+        parse_atlan_yaml.parse()
+
+
+def test_env_overrides_all_channel_rejected(tmp_path, monkeypatch):
+    # 'all' is GA — base config IS the GA config — an entry here would
+    # never take effect at runtime, so fail fast.
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, _with_overrides({"all": {"OTEL_ENVIRONMENT": "production"}}))
+    with pytest.raises(AtlanYamlError, match="unknown channel"):
+        parse_atlan_yaml.parse()
+
+
+def test_env_overrides_specific_channel_rejected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, _with_overrides({"specific": {"X": "y"}}))
+    with pytest.raises(AtlanYamlError, match="unknown channel"):
+        parse_atlan_yaml.parse()
+
+
+def test_env_overrides_not_a_mapping_rejected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, _with_overrides(["beta", "staging"]))
+    with pytest.raises(AtlanYamlError, match="env_overrides must be a mapping"):
+        parse_atlan_yaml.parse()
+
+
+def test_env_overrides_channel_value_not_a_mapping_rejected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, _with_overrides({"beta": "not-a-mapping"}))
+    with pytest.raises(AtlanYamlError, match="env_overrides.beta must be a mapping"):
+        parse_atlan_yaml.parse()
+
+
+def test_env_overrides_absent_is_fine(tmp_path, monkeypatch):
+    # Backwards compat: apps without env_overrides parse cleanly.
+    monkeypatch.chdir(tmp_path)
+    _write(
+        tmp_path,
+        {"name": "x", "app_id": "1", "deploy": {"env": {"X": "y"}}},
+    )
+    out = parse_atlan_yaml.parse()
+    assert "env_overrides" not in out["deploy_config"]
+
+
+def test_env_overrides_with_no_deploy_block_is_fine(tmp_path, monkeypatch):
+    # No deploy block at all — _validate_env_overrides is a no-op.
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, {"name": "x", "app_id": "1"})
+    out = parse_atlan_yaml.parse()
+    assert out["deploy_config"] == ""
