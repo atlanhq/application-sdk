@@ -363,6 +363,34 @@ class TestMaterializeFileReference:
         # Cleanup
         Path(result.local_path).joinpath("x.txt").unlink(missing_ok=True)
 
+    async def test_directory_materialize_path_traversal_rejected(
+        self, store, tmp_path
+    ) -> None:
+        """A listed key containing ``..`` must not write outside *local_path*.
+
+        obstore rejects ``..`` keys on put, so we patch ``list_keys`` to plant
+        a hostile listing and assert the containment guard fires before any
+        write happens (issue #1694).
+        """
+        from unittest.mock import AsyncMock
+
+        local_dir = tmp_path / "out"
+        canary = tmp_path / "canary.txt"
+        ref = FileReference(
+            local_path=str(local_dir),
+            is_durable=True,
+            storage_path="dirkey",
+        )
+        with (
+            patch(
+                "application_sdk.storage.batch.list_keys",
+                new=AsyncMock(return_value=["dirkey/../../canary.txt"]),
+            ),
+            pytest.raises(StorageError, match="Path traversal"),
+        ):
+            await materialize_file_reference(store, ref)
+        assert not canary.exists()
+
 
 # ---------------------------------------------------------------------------
 # Sidecar fetch error handling (best-effort)
