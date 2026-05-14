@@ -19,10 +19,13 @@ description: |
   - Providing a secrets-bundle script at the configured path that writes
     /app/secrets/credentials.json (the canonical SDR test secrets path)
 
-  Optional caller-side overrides on top of SDK defaults:
-  - .github/e2e/components/*.yaml — additional or replacement Dapr components
-  - .github/e2e/docker-compose.ci.yml — additional compose layer
-  - .github/e2e/test-config.yaml.tmpl — replacement configurator input
+  Optional caller-side overrides on top of SDK defaults (paths under
+  .github/sdr-e2e/ for new adopters; .github/e2e/ is also accepted for
+  backward compatibility):
+  - <sdr-config-dir>/components/*.yaml — additional or replacement Dapr components
+  - <sdr-config-dir>/docker-compose.ci.yml — additional compose layer
+  - <sdr-config-dir>/test-config.yaml.tmpl — replacement configurator input
+  - <sdr-config-dir>/app.yaml — configurator input (legacy: app.yaml at repo root)
 
 inputs:
   app-name:
@@ -43,11 +46,13 @@ inputs:
   secrets-script:
     description: |
       Path (relative to repo root) to a bash or python script that writes
-      .github/e2e/secrets/credentials.json from job-level env vars. The
-      script is invoked once before the SDR container starts. Must produce
-      a JSON file the local.file Dapr secret store can read.
+      <sdr-config-dir>/secrets/credentials.json from job-level env vars
+      (where <sdr-config-dir> is .github/sdr-e2e or .github/e2e, whichever
+      the app uses). The script is invoked once before the SDR container
+      starts. Must produce a JSON file the local.file Dapr secret store
+      can read.
     required: false
-    default: .github/e2e/make-secrets.sh
+    default: .github/sdr-e2e/make-secrets.sh
   container-health-timeout-seconds:
     description: |
       How long to wait for the SDR container's /server/health endpoint to
@@ -107,11 +112,43 @@ runs:
         mv docker-compose-generator/generate atlan-configurator
         chmod +x atlan-configurator
 
+    # Locate the SDR-specific config directory and app.yaml. Adopter apps
+    # historically used .github/e2e/ at the root alongside app.yaml; the new
+    # convention is to namespace everything under .github/sdr-e2e/ (and move
+    # app.yaml inside it) so connector repos don't get cluttered with
+    # SDR-only files at the root. We accept both layouts so adopters can
+    # migrate at their own pace.
+    - name: Resolve SDR config paths
+      shell: bash
+      run: |
+        if [ -d .github/sdr-e2e ]; then
+          DIR=.github/sdr-e2e
+        elif [ -d .github/e2e ]; then
+          DIR=.github/e2e
+        else
+          echo "::error::No SDR config dir found (.github/sdr-e2e or .github/e2e)."
+          exit 1
+        fi
+        if [ -f "$DIR/app.yaml" ]; then
+          APP_YAML="$DIR/app.yaml"
+        elif [ -f app.yaml ]; then
+          APP_YAML=app.yaml
+        else
+          echo "::error::No app.yaml found at $DIR/app.yaml or repo root. See the SDR onboarding skill for the minimal three-line shape."
+          exit 1
+        fi
+        echo "Using SDR config dir: $DIR"
+        echo "Using app.yaml at:    $APP_YAML"
+        {
+          echo "SDR_CONFIG_DIR=$DIR"
+          echo "APP_YAML_PATH=$APP_YAML"
+        } >> "$GITHUB_ENV"
+
     - name: Resolve app.yaml
       shell: bash
       env:
         APP_IMAGE: ${{ steps.build.outputs.image }}
-      run: envsubst < app.yaml > app-resolved.yaml
+      run: envsubst < "$APP_YAML_PATH" > app-resolved.yaml
 
     # Use the app's test-config template if it overrides the SDK default.
     - name: Resolve test-config.yaml
@@ -120,9 +157,9 @@ runs:
         CI_RUN_SUFFIX: ${{ github.run_id }}
         SDK_TMPL: ${{ github.action_path }}/test-config.yaml.tmpl
       run: |
-        if [ -f .github/e2e/test-config.yaml.tmpl ]; then
+        if [ -f "$SDR_CONFIG_DIR/test-config.yaml.tmpl" ]; then
           echo "Using app-level test-config.yaml.tmpl override"
-          envsubst < .github/e2e/test-config.yaml.tmpl > test-config.yaml
+          envsubst < "$SDR_CONFIG_DIR/test-config.yaml.tmpl" > test-config.yaml
         else
           echo "Using SDK default test-config.yaml.tmpl"
           envsubst < "${SDK_TMPL}" > test-config.yaml
@@ -140,18 +177,18 @@ runs:
     - name: Generate secrets bundle
       shell: bash
       run: |
-        mkdir -p .github/e2e/secrets
+        mkdir -p "$SDR_CONFIG_DIR/secrets"
         SCRIPT="${{ inputs.secrets-script }}"
         if [ ! -f "${SCRIPT}" ]; then
-          echo "::error::secrets-script not found at ${SCRIPT}. Provide one that writes .github/e2e/secrets/credentials.json from env vars."
+          echo "::error::secrets-script not found at ${SCRIPT}. Provide one that writes ${SDR_CONFIG_DIR}/secrets/credentials.json from env vars."
           exit 1
         fi
         case "${SCRIPT}" in
           *.py) python3 "${SCRIPT}" ;;
           *)    bash "${SCRIPT}" ;;
         esac
-        if [ ! -f .github/e2e/secrets/credentials.json ]; then
-          echo "::error::secrets-script ran but did not produce .github/e2e/secrets/credentials.json"
+        if [ ! -f "$SDR_CONFIG_DIR/secrets/credentials.json" ]; then
+          echo "::error::secrets-script ran but did not produce ${SDR_CONFIG_DIR}/secrets/credentials.json"
           exit 1
         fi
 
@@ -163,9 +200,9 @@ runs:
         SDK_COMPONENTS: ${{ github.action_path }}/components
       run: |
         cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
-        if [ -d .github/e2e/components ] && [ -n "$(ls -A .github/e2e/components 2>/dev/null)" ]; then
+        if [ -d "$SDR_CONFIG_DIR/components" ] && [ -n "$(ls -A "$SDR_CONFIG_DIR/components" 2>/dev/null)" ]; then
           echo "Applying app-level component overrides"
-          cp .github/e2e/components/*.yaml ci-deploy/components/
+          cp "$SDR_CONFIG_DIR/components"/*.yaml ci-deploy/components/
         fi
 
     - name: Build compose -f chain
@@ -176,9 +213,9 @@ runs:
       run: |
         # Order: configurator-generated base → SDK CI overrides → optional app layer.
         FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
-        if [ -f .github/e2e/docker-compose.ci.yml ]; then
+        if [ -f "$SDR_CONFIG_DIR/docker-compose.ci.yml" ]; then
           echo "Adding app-level compose layer"
-          FILES+=("-f" ".github/e2e/docker-compose.ci.yml")
+          FILES+=("-f" "$SDR_CONFIG_DIR/docker-compose.ci.yml")
         fi
         # Persist the array as a single space-joined string (compose -f flags
         # are simple paths, no whitespace issues).
