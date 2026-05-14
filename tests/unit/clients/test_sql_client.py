@@ -995,7 +995,9 @@ async def test_get_results_rejects_non_dataframe(sql_client: BaseSQLClient):
 
 
 @pytest.mark.asyncio
-async def test_get_batched_results_wraps_errors_via_rewrap(sql_client: BaseSQLClient):
+async def test_get_batched_results_raises_sql_pandas_result_error(
+    sql_client: BaseSQLClient,
+):
     """Any failure in the read path must be raised as SqlPandasResultError."""
     sql_client.engine = MagicMock()
     with (

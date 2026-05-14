@@ -11,9 +11,7 @@ Functions:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Set
-
-from application_sdk.common.exc_utils import rewrap
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import duckdb
@@ -28,7 +26,7 @@ logger = get_logger(__name__)
 
 def get_backfill_tables(
     current_transformed_dir: Path, previous_current_state_dir: Path | None
-) -> Set[str] | None:
+) -> set[str] | None:
     """Use DuckDB to compare current tables vs previous current-state.
 
     Returns qualified names of tables that need backfilling
@@ -131,7 +129,11 @@ def _load_tables_to_duckdb(
         if table_dir.exists():
             json_files = [f.resolve() for f in table_dir.glob("*.json")]
     except OSError as e:
-        raise rewrap(e, f"Failed to scan JSON files (base_dir={base_dir})") from e
+        from application_sdk.common.incremental._incremental_errors import (  # noqa: PLC0415
+            JsonScanError,
+        )
+
+        raise JsonScanError(base_dir=str(base_dir), cause=e) from e
 
     if not json_files:
         conn.execute(f"""

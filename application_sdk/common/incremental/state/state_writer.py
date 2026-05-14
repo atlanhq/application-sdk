@@ -27,11 +27,10 @@ High-level orchestration:
 
 import os
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional, Set
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
@@ -76,8 +75,8 @@ class CurrentStateResult:
     current_state_dir: Path
     current_state_s3_prefix: str
     total_files: int
-    incremental_diff_dir: Optional[Path] = None
-    incremental_diff_s3_prefix: Optional[str] = None
+    incremental_diff_dir: Path | None = None
+    incremental_diff_s3_prefix: str | None = None
     incremental_diff_files: int = 0
 
 
@@ -126,7 +125,7 @@ async def prepare_previous_state(
     current_state_available: bool,
     current_state_dir: Path,
     application_name: str = "",
-) -> Optional[Path]:
+) -> Path | None:
     """Download previous state to a temporary location for comparison.
 
     When previous state exists, downloads it to a temporary directory
@@ -181,14 +180,18 @@ async def prepare_previous_state(
     except Exception as e:
         if previous_state_temp_dir.exists():
             shutil.rmtree(previous_state_temp_dir)
-        raise rewrap(e, "Failed to download previous state") from e
+        from application_sdk.common.incremental._incremental_errors import (  # noqa: PLC0415
+            StateDownloadError,
+        )
+
+        raise StateDownloadError(cause=e) from e
 
 
 def copy_non_column_entities(
     transformed_dir: Path,
     current_state_dir: Path,
     copy_workers: int = 4,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Copy non-column entity files from transformed to current-state.
 
     Copies table, schema, and database entity JSON files from the current
@@ -207,7 +210,7 @@ def copy_non_column_entities(
         >>> counts = copy_non_column_entities(transformed_dir, state_dir)
         >>> print(f"Copied {counts['table']} table files")
     """
-    copy_counts: Dict[str, int] = {}
+    copy_counts: dict[str, int] = {}
 
     for entity_type in [EntityType.TABLE, EntityType.SCHEMA, EntityType.DATABASE]:
         entity_dir = transformed_dir.joinpath(entity_type.value)
@@ -292,7 +295,7 @@ async def upload_current_state(
     return current_state_s3_prefix
 
 
-def cleanup_previous_state(previous_state_dir: Optional[Path]) -> None:
+def cleanup_previous_state(previous_state_dir: Path | None) -> None:
     """Clean up temporary previous state directory.
 
     Removes the temporary directory used for storing previous state
@@ -335,15 +338,14 @@ def prepare_current_state_directory(current_state_dir: Path) -> None:
 async def create_current_state_snapshot(
     connection_qualified_name: str,
     transformed_dir: Path,
-    previous_state_dir: Optional[Path],
+    previous_state_dir: Path | None,
     current_state_dir: Path,
     s3_prefix: str,
     run_id: str,
     application_name: str = "",
     copy_workers: int = 4,
-    get_backfill_tables_fn: Optional[
-        Callable[[Path, Optional[Path]], Optional[Set[str]]]
-    ] = None,
+    get_backfill_tables_fn: Callable[[Path, Path | None], set[str] | None]
+    | None = None,
 ) -> CurrentStateResult:
     """Create lightweight current-state snapshot with diff and deletion detection.
 

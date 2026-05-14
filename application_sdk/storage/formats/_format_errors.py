@@ -142,3 +142,39 @@ class ReplacePrefixEmptyError(InvalidInputError):
     code: ClassVar[str] = "INVALID_INPUT_FORMAT_REPLACE_PREFIX_EMPTY"
     message: str = "replace_prefix=True requires a non-empty object-store prefix"
     field: str | None = "path"
+
+
+@dataclass(kw_only=True)
+class FormatReadError(InternalError):
+    """An unexpected error occurred while reading from a format reader."""
+
+    code: ClassVar[str] = "INTERNAL_FORMAT_READ"
+    message: str = "Error reading data"
+    component: str | None = None
+
+
+@dataclass(kw_only=True)
+class FormatWriteError(InternalError):
+    """An unexpected error occurred while writing via a format writer."""
+
+    code: ClassVar[str] = "INTERNAL_FORMAT_WRITE"
+    message: str = "Error writing dataframe"
+    component: str | None = None
+
+
+@dataclass(kw_only=True)
+class FormatCloseError(InternalError):
+    """An unexpected error occurred while closing a format writer."""
+
+    code: ClassVar[str] = "INTERNAL_FORMAT_CLOSE"
+    message: str = "Error closing writer"
+    component: str | None = None
+
+
+@dataclass(kw_only=True)
+class FormatStatisticsWriteError(InternalError):
+    """An unexpected error occurred while writing format statistics."""
+
+    code: ClassVar[str] = "INTERNAL_FORMAT_STATISTICS_WRITE"
+    message: str = "Error writing statistics"
+    component: str | None = None

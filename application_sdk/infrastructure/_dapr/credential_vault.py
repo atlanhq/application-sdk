@@ -221,10 +221,6 @@ class DaprCredentialVault:
         Returns ``{}`` in local-environment deployments to avoid secret store
         dependency during development.
         """
-        # Deferred import: circular dependency
-        from application_sdk.common.exc_utils import (  # noqa: PLC0415 — circular: common.exc_utils imports observability
-            rewrap,
-        )
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
             DEPLOYMENT_NAME,
             LOCAL_ENVIRONMENT,
@@ -238,7 +234,11 @@ class DaprCredentialVault:
             result = await self._client.get_secret(store_name=store, key=secret_key)
             return process_secret_data(result)
         except Exception as e:
-            raise rewrap(e, "Failed to fetch secret (component=%s)" % store) from e
+            from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415
+                SecretFetchError,
+            )
+
+            raise SecretFetchError(component=store, cause=e) from e
 
     def _get_local_secret(self, secret_key: str) -> dict[str, Any]:
         """Read secret from the local secrets file for development.

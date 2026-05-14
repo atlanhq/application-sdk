@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any, Union, cast
 
 import orjson
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.contracts.types import FileReference
@@ -477,7 +476,11 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
         except Exception as e:
-            raise rewrap(e, "Error writing batched dataframe") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatWriteError,
+            )
+
+            raise FormatWriteError(cause=e) from e
 
     async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
         """Write a pandas DataFrame to Parquet files and upload to object store.
@@ -591,7 +594,11 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_daft_dataframe(dataframe)
         except Exception as e:
-            raise rewrap(e, "Error writing batched daft dataframe") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatWriteError,
+            )
+
+            raise FormatWriteError(cause=e) from e
 
     @abstractmethod
     async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):
@@ -716,7 +723,11 @@ class Writer(ABC):
             return self._result
 
         except Exception as e:
-            raise rewrap(e, "Error closing writer") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatCloseError,
+            )
+
+            raise FormatCloseError(cause=e) from e
 
     def _build_file_reference(self) -> "FileReference | None":
         """Return an ephemeral FileReference for the writer's output directory.
@@ -835,4 +846,8 @@ class Writer(ABC):
 
             return statistics
         except Exception as e:
-            raise rewrap(e, "Error writing statistics") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatStatisticsWriteError,
+            )
+
+            raise FormatStatisticsWriteError(cause=e) from e

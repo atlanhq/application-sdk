@@ -33,11 +33,11 @@
 """
 
 import os
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from temporalio import activity
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     APPLICATION_NAME,
     TEMPORARY_PATH,
@@ -82,7 +82,11 @@ def get_workflow_id() -> str:
             )
         return wf_id
     except Exception as e:
-        raise rewrap(e, "Failed to get workflow id") from e
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkflowIdError,
+        )
+
+        raise WorkflowIdError(cause=e) from e
 
 
 def get_workflow_run_id() -> str:
@@ -108,7 +112,11 @@ def get_workflow_run_id() -> str:
             )
         return wf_run_id
     except Exception as e:
-        raise rewrap(e, "Failed to get workflow run id") from e
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkflowRunIdError,
+        )
+
+        raise WorkflowRunIdError(cause=e) from e
 
 
 def build_output_path() -> str:

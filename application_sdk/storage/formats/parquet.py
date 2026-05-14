@@ -5,7 +5,6 @@ import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from typing import TYPE_CHECKING, Union, cast
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.contracts.types import FileReference
@@ -223,7 +222,11 @@ class ParquetFileReader(Reader):
                 ignore_index=True,
             )
         except Exception as e:
-            raise rewrap(e, "Error reading data from parquet file(s)") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_batched_dataframe(
         self,
@@ -284,7 +287,11 @@ class ParquetFileReader(Reader):
                 for i in range(0, len(df), self.chunk_size):
                     yield df.iloc[i : i + self.chunk_size]  # type: ignore
         except Exception as e:
-            raise rewrap(e, "Error reading data from parquet file(s) in batches") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_daft_dataframe(self) -> "daft.DataFrame":
         """Read data from parquet file(s) and return as daft DataFrame.
@@ -331,7 +338,11 @@ class ParquetFileReader(Reader):
             # Use the discovered/downloaded files directly
             return daft.read_parquet(parquet_files)
         except Exception as e:
-            raise rewrap(e, "Error reading data from parquet file(s) using daft") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # type: ignore
         """Get batched daft dataframe from parquet file(s).

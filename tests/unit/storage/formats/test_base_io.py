@@ -6,10 +6,10 @@ Targets uncovered branches:
 - Writer._convert_to_dataframe pandas / dict / list / daft / unsupported branches,
   including the daft ImportError fallbacks.
 - Writer.write closed / unsupported ``dataframe_type`` errors.
-- Writer._write_batched_dataframe rewrap on exception.
+- Writer._write_batched_dataframe raises FormatWriteError on exception.
 - Writer._upload_file delegation and ``retain_local_copy`` propagation.
 - Writer._flush_buffer failure path (records error metric, re-raises).
-- Writer.close idempotent + rewrap on finalise failure.
+- Writer.close idempotent + raises FormatCloseError on finalise failure.
 
 All disk I/O outside ``tmp_path`` is mocked; no real obstore traffic; no real
 threads or loops beyond pytest-asyncio.
@@ -337,9 +337,11 @@ class TestWriteBatches:
         assert exc_info.value.code == "UNIMPLEMENTED_FORMAT_DATAFRAME_TYPE"
 
     @pytest.mark.asyncio
-    async def test_batched_dataframe_rewrap_on_failure(self) -> None:
+    async def test_batched_dataframe_raises_format_write_error(self) -> None:
+        from application_sdk.storage.formats._format_errors import FormatWriteError
+
         writer = _StubWriter()
-        # _write_dataframe raises during iteration → rewrapped into RewrappedException.
+        # _write_dataframe raises during iteration → wrapped into FormatWriteError.
         with patch.object(
             writer,
             "_write_dataframe",
@@ -352,9 +354,9 @@ class TestWriteBatches:
 
                 yield pd.DataFrame({"a": [1]})
 
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(FormatWriteError) as excinfo:
                 await writer.write_batches(_gen())
-        assert "Error writing batched dataframe" in str(excinfo.value)
+        assert excinfo.value.code == "INTERNAL_FORMAT_WRITE"
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +452,7 @@ class TestFlushBuffer:
 
 
 # ---------------------------------------------------------------------------
-# Writer.close — idempotent + rewrap
+# Writer.close — idempotent + FormatCloseError
 # ---------------------------------------------------------------------------
 
 
@@ -487,7 +489,9 @@ class TestWriterClose:
         assert result.files is None
 
     @pytest.mark.asyncio
-    async def test_close_rewraps_finalize_failure(self) -> None:
+    async def test_close_raises_format_close_error_on_finalize_failure(self) -> None:
+        from application_sdk.storage.formats._format_errors import FormatCloseError
+
         writer = _StubWriter()
         with (
             patch.object(
@@ -496,10 +500,10 @@ class TestWriterClose:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("flush fail"),
             ),
-            pytest.raises(Exception) as excinfo,
+            pytest.raises(FormatCloseError) as excinfo,
         ):
             await writer.close()
-        assert "Error closing writer" in str(excinfo.value)
+        assert excinfo.value.code == "INTERNAL_FORMAT_CLOSE"
 
     @pytest.mark.asyncio
     async def test_close_writes_statistics_and_marks_closed(self, tmp_path) -> None:

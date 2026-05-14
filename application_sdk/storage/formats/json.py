@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     import daft
     import pandas as pd
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.storage.formats import Reader, Writer
 
 logger = get_logger(__name__)
@@ -196,7 +195,11 @@ class JsonFileReader(Reader):
                 for chunk in json_reader_obj:
                     yield chunk
         except Exception as e:
-            raise rewrap(e, "Error reading batched data from JSON") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_dataframe(self) -> "pd.DataFrame":
         """Read the data from the JSON files and return as a single pandas dataframe."""
@@ -217,7 +220,11 @@ class JsonFileReader(Reader):
             )
 
         except Exception as e:
-            raise rewrap(e, "Error reading data from JSON") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_batched_daft_dataframe(
         self,
@@ -238,7 +245,11 @@ class JsonFileReader(Reader):
             for json_file in json_files:
                 yield daft.read_json(json_file, _chunk_size=self.chunk_size)
         except Exception as e:
-            raise rewrap(e, "Error reading batched data from JSON using daft") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_daft_dataframe(self) -> "daft.DataFrame":
         """Read the data from the JSON files and return as a single daft dataframe."""
@@ -256,7 +267,11 @@ class JsonFileReader(Reader):
             # Use the discovered/downloaded files directly
             return daft.read_json(json_files)
         except Exception as e:
-            raise rewrap(e, "Error reading data from JSON using daft") from e
+            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
 
 class JsonFileWriter(Writer):
