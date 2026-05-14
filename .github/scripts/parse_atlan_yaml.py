@@ -42,10 +42,11 @@ _KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 # Closed type set. Mirrors core.version.model.EntrypointPackageType in GM.
 _ALLOWED_TYPES = {"connector", "miner", "orchestrator", "utility", "custom"}
 
-# Channels for which ``deploy.env_overrides.<channel>`` actually takes
-# effect at GM's catalog read. Mirrors ``_OVERRIDABLE_CHANNELS`` in
-# ``core/release/config_resolver.py`` in global-marketplace. Bumping this
-# set is a coordinated change with GM.
+# Channel keys that GM's catalog read interprets as channel-tier overrides.
+# Any other key is interpreted as a tenant-name-tier override (matched against
+# horizon_tenants.name at runtime). We keep this constant for diagnostics —
+# the validator no longer rejects non-channel keys, since tenant-name entries
+# are a supported atlan.yaml shape.
 _OVERRIDABLE_CHANNELS = {"beta", "staging"}
 
 # Required keys for each entrypoints entry. description and icon_url
@@ -133,19 +134,20 @@ def _validate_entrypoints(wp_val: Any) -> str:
 def _validate_env_overrides(deploy_val: Any) -> None:
     """Validate ``deploy.env_overrides`` shape, if present.
 
-    GM's resolver is intentionally lenient (silent no-op on malformed input)
-    so a typo'd channel name would ship the base config to that channel with
-    no signal to the developer. We fail CI fast instead.
+    GM's resolver interprets ``env_overrides`` keys in two tiers: ``beta`` /
+    ``staging`` are channel-tier; anything else is a tenant-name match
+    against ``horizon_tenants.name``. We can only validate the shape here —
+    the SDK doesn't know the live tenant list, so we don't reject unknown
+    keys (a typo'd ``staing`` is silently a tenant name as far as the SDK
+    is concerned, and falls through to the channel tier on GM at runtime).
 
     Allowed shape::
 
         deploy:
           env_overrides:
-            beta:    {KEY: value, ...}
-            staging: {KEY: value, ...}
-
-    Only channels in ``_OVERRIDABLE_CHANNELS`` are accepted; bumping that set
-    is a coordinated change with GM's ``config_resolver._OVERRIDABLE_CHANNELS``.
+            beta:        {KEY: value, ...}
+            staging:     {KEY: value, ...}
+            tenant-xyz:  {KEY: value, ...}     # any string key = tenant name
     """
     if not isinstance(deploy_val, dict):
         return
@@ -153,17 +155,13 @@ def _validate_env_overrides(deploy_val: Any) -> None:
     if overrides is None:
         return
     if not isinstance(overrides, dict):
-        _err("deploy.env_overrides must be a mapping of channel → env vars")
-    unknown = set(overrides.keys()) - _OVERRIDABLE_CHANNELS
-    if unknown:
-        _err(
-            f"deploy.env_overrides has unknown channel(s) {sorted(unknown)}; "
-            f"allowed: {sorted(_OVERRIDABLE_CHANNELS)}"
-        )
-    for channel, env in overrides.items():
+        _err("deploy.env_overrides must be a mapping of channel-or-tenant → env vars")
+    for key, env in overrides.items():
+        if not isinstance(key, str) or not key:
+            _err(f"deploy.env_overrides keys must be non-empty strings; got {key!r}")
         if not isinstance(env, dict):
             _err(
-                f"deploy.env_overrides.{channel} must be a mapping of env vars; "
+                f"deploy.env_overrides.{key} must be a mapping of env vars; "
                 f"got {type(env).__name__}"
             )
 
