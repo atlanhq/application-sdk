@@ -5,7 +5,6 @@ from unittest.mock import mock_open, patch
 
 import pytest
 
-from application_sdk.common._sql_filters_errors import InvalidSqlFilterError
 from application_sdk.common.error_codes import CommonError
 from application_sdk.common.sql_filters import (
     extract_database_names_from_regex_common,
@@ -15,6 +14,7 @@ from application_sdk.common.sql_filters import (
     prepare_query,
     read_sql_files,
 )
+from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 
 
 class TestPrepareQuery:

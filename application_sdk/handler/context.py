@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from application_sdk.app._base_errors import SecretStoreNotConfiguredError
+from application_sdk.app.base_errors import SecretStoreNotConfiguredError
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:

@@ -180,7 +180,7 @@ async def prepare_previous_state(
     except Exception as e:
         if previous_state_temp_dir.exists():
             shutil.rmtree(previous_state_temp_dir)
-        from application_sdk.common.incremental._incremental_errors import (  # noqa: PLC0415
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
             StateDownloadError,
         )
 

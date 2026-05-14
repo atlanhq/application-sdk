@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from application_sdk.app._base_errors import (
+from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
     StateStoreNotConfiguredError,
 )

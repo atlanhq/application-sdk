@@ -13,6 +13,13 @@ from application_sdk.common.aws_utils import (
     get_cluster_identifier,
     get_region_name_from_hostname,
 )
+from application_sdk.common.aws_utils_errors import (
+    AwsClientCreationError,
+    AwsCredentialSourceConflictError,
+    AwsCredentialSourceMissingError,
+    AwsRdsTokenError,
+    AwsRegionNotFoundError,
+)
 
 
 class TestAWSUtils:
@@ -27,7 +34,7 @@ class TestAWSUtils:
     def test_get_region_name_from_hostname_invalid(self):
         """Test extracting region from invalid hostname."""
         hostname = "invalid.hostname.com"
-        with pytest.raises(ValueError, match="Could not find valid AWS region"):
+        with pytest.raises(AwsRegionNotFoundError):
             get_region_name_from_hostname(hostname)
 
     @patch("boto3.client")
@@ -128,7 +135,7 @@ class TestAWSUtils:
             operation_name="AssumeRole",
         )
 
-        from application_sdk.common._aws_utils_errors import AwsAssumeRoleError
+        from application_sdk.common.aws_utils_errors import AwsAssumeRoleError
 
         with pytest.raises(AwsAssumeRoleError) as exc_info:
             generate_aws_rds_token_with_iam_role(
@@ -143,7 +150,7 @@ class TestAWSUtils:
         """Test error handling in RDS token generation with IAM user."""
         mock_client.side_effect = Exception("AWS service error")
 
-        with pytest.raises(Exception, match="Failed to get user credentials"):
+        with pytest.raises(AwsRdsTokenError):
             generate_aws_rds_token_with_iam_user(
                 aws_access_key_id="test_key",
                 aws_secret_access_key="test_secret",
@@ -322,9 +329,7 @@ class TestAWSUtils:
 
     def test_create_aws_client_no_credentials(self):
         """Test creating AWS client with no credentials provided."""
-        with pytest.raises(
-            ValueError, match="At least one credential source must be provided"
-        ):
+        with pytest.raises(AwsCredentialSourceMissingError):
             create_aws_client(service="s3", region="us-east-1")
 
     def test_create_aws_client_multiple_credentials(self):
@@ -336,9 +341,7 @@ class TestAWSUtils:
             "SessionToken": "temp_token",
         }
 
-        with pytest.raises(
-            ValueError, match="Only one credential source should be provided at a time"
-        ):
+        with pytest.raises(AwsCredentialSourceConflictError):
             create_aws_client(
                 service="s3",
                 region="us-east-1",
@@ -351,7 +354,7 @@ class TestAWSUtils:
         with patch("boto3.client") as mock_client:
             mock_client.side_effect = Exception("AWS service error")
 
-            with pytest.raises(Exception, match="Failed to create s3 client"):
+            with pytest.raises(AwsClientCreationError):
                 create_aws_client(
                     service="s3", region="us-east-1", use_default_credentials=True
                 )

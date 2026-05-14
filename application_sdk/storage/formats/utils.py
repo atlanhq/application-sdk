@@ -178,7 +178,7 @@ async def _download_files(
             )
             return downloaded_paths
         else:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 ObjectStoreReadError,
             )
 
@@ -187,7 +187,7 @@ async def _download_files(
             )
 
     except Exception as e:
-        from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
             ObjectStoreDownloadError,
         )
 
@@ -221,7 +221,7 @@ def estimate_dataframe_record_size(
     elif file_extension == PARQUET_FILE_EXTENSION:
         sample_file = sample.to_parquet(index=False, compression="snappy")
     else:
-        from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
             UnsupportedFileExtensionError,
         )
 

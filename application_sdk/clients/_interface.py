@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from application_sdk.clients._sql_errors import AbstractClientLoadError
+from application_sdk.clients.sql_errors import AbstractClientLoadError
 
 
 class ClientInterface(ABC):

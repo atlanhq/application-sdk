@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.clients._sql_errors import SqlPandasResultError
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import AsyncBaseSQLClient
+from application_sdk.clients.sql_errors import SqlPandasResultError
 
 
 @pytest.fixture

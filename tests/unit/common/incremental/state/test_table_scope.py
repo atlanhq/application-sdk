@@ -263,7 +263,7 @@ class TestGetCurrentTableScope:
                 (transformed / "table" / "chunk-0.json").write_text(
                     json.dumps(_table("db/s/t1", "CREATED"))
                 )
-                from application_sdk.common.incremental._incremental_errors import (
+                from application_sdk.common.incremental.incremental_errors import (
                     TableScopeLoadError,
                 )
 

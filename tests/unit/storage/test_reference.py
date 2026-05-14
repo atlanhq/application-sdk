@@ -134,7 +134,7 @@ class TestPersistFileReference:
         assert a_side.decode().strip() == _hash_bytes(b"a")
 
     async def test_retained_tier_requires_run_prefix(self, store, tmp_path) -> None:
-        from application_sdk.contracts._types_errors import RunPrefixRequiredError
+        from application_sdk.contracts.types_errors import RunPrefixRequiredError
 
         f = tmp_path / "data.bin"
         f.write_bytes(b"x")

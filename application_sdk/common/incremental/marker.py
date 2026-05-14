@@ -218,7 +218,7 @@ async def persist_marker_to_storage(
             "Marker uploaded to S3: key=%s value=%s", marker_s3_key, marker_value
         )
     except Exception as e:
-        from application_sdk.common.incremental._incremental_errors import (  # noqa: PLC0415
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
             MarkerUploadError,
         )
 

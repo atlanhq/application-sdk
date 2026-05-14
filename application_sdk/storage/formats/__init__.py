@@ -191,7 +191,7 @@ class Reader(ABC):
             NotImplementedError: If the method is not implemented.
             ValueError: If the reader has been closed.
         """
-        from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
             AbstractFormatReaderError,
         )
 
@@ -208,7 +208,7 @@ class Reader(ABC):
             NotImplementedError: If the method is not implemented.
             ValueError: If the reader has been closed.
         """
-        from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
             AbstractFormatReaderError,
         )
 
@@ -319,7 +319,7 @@ class Writer(ABC):
 
                     return daft.from_pandas(data)
                 except ImportError:
-                    from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                    from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                         DaftNotInstalledError,
                     )
 
@@ -358,7 +358,7 @@ class Writer(ABC):
                                 columnar_data[key].append(value)
                     return daft.from_pydict(columnar_data)
                 except ImportError:
-                    from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                    from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                         DaftNotInstalledError,
                     )
 
@@ -366,7 +366,7 @@ class Writer(ABC):
             # For pandas dataframe_type, convert to pandas DataFrame
             return pd.DataFrame([data] if isinstance(data, dict) else data)
 
-        from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
             UnsupportedDataTypeError,
         )
 
@@ -393,7 +393,7 @@ class Writer(ABC):
             TypeError: If data type is not supported.
         """
         if self._is_closed:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 WriterClosedError,
             )
 
@@ -407,7 +407,7 @@ class Writer(ABC):
         elif self.dataframe_type == DataframeType.daft:
             await self._write_daft_dataframe(dataframe, **kwargs)
         else:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 UnsupportedDataframeTypeError,
             )
 
@@ -429,7 +429,7 @@ class Writer(ABC):
             ValueError: If the writer has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 WriterClosedError,
             )
 
@@ -440,7 +440,7 @@ class Writer(ABC):
         elif self.dataframe_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
         else:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 UnsupportedDataframeTypeError,
             )
 
@@ -476,7 +476,7 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
         except Exception as e:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatWriteError,
             )
 
@@ -594,7 +594,7 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_daft_dataframe(dataframe)
         except Exception as e:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatWriteError,
             )
 
@@ -702,7 +702,7 @@ class Writer(ABC):
             # Write statistics to file and object store
             statistics_dict = await self._write_statistics(typename)
             if not statistics_dict:
-                from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+                from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                     MissingStatisticsError,
                 )
 
@@ -723,7 +723,7 @@ class Writer(ABC):
             return self._result
 
         except Exception as e:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatCloseError,
             )
 
@@ -846,7 +846,7 @@ class Writer(ABC):
 
             return statistics
         except Exception as e:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatStatisticsWriteError,
             )
 

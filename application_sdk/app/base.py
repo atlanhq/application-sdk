@@ -20,7 +20,7 @@ import obstore as obs
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
-from application_sdk.app._base_errors import (
+from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
     ObjectStoreNotConfiguredError,
 )

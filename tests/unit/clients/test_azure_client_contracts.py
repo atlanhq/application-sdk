@@ -27,7 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from azure.core.exceptions import AzureError, ClientAuthenticationError
 
-from application_sdk.clients.azure._azure_errors import (
+from application_sdk.clients.azure.azure_errors import (
     AzureClientAuthError,
     AzureInputValidationError,
 )

@@ -11,7 +11,7 @@ from httpx._types import (
 )
 
 from application_sdk.clients._interface import ClientInterface
-from application_sdk.clients._sql_errors import AbstractClientLoadError
+from application_sdk.clients.sql_errors import AbstractClientLoadError
 from application_sdk.clients.ssl_utils import get_ssl_context
 from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
 from application_sdk.observability.logger_adaptor import get_logger

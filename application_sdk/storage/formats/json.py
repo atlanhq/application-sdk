@@ -98,7 +98,7 @@ class JsonFileReader(Reader):
 
         # Validate that single file path and file_names are not both specified
         if path.endswith(self.extension) and file_names:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 SingleFilePathWithFileNamesError,
             )
 
@@ -124,7 +124,7 @@ class JsonFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 ReaderClosedError,
             )
 
@@ -135,7 +135,7 @@ class JsonFileReader(Reader):
         elif self.dataframe_type == DataframeType.daft:
             return await self._get_daft_dataframe()
         else:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 UnsupportedDataframeTypeError,
             )
 
@@ -154,7 +154,7 @@ class JsonFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 ReaderClosedError,
             )
 
@@ -165,7 +165,7 @@ class JsonFileReader(Reader):
         elif self.dataframe_type == DataframeType.daft:
             return self._get_batched_daft_dataframe()
         else:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 UnsupportedDataframeTypeError,
             )
 
@@ -195,7 +195,7 @@ class JsonFileReader(Reader):
                 for chunk in json_reader_obj:
                     yield chunk
         except Exception as e:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
             )
 
@@ -220,7 +220,7 @@ class JsonFileReader(Reader):
             )
 
         except Exception as e:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
             )
 
@@ -245,7 +245,7 @@ class JsonFileReader(Reader):
             for json_file in json_files:
                 yield daft.read_json(json_file, _chunk_size=self.chunk_size)
         except Exception as e:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
             )
 
@@ -267,7 +267,7 @@ class JsonFileReader(Reader):
             # Use the discovered/downloaded files directly
             return daft.read_json(json_files)
         except Exception as e:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
             )
 
@@ -375,7 +375,7 @@ class JsonFileWriter(Writer):
         self._statistics = None
 
         if not self.path:
-            from application_sdk.storage.formats._format_errors import (  # noqa: PLC0415
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatPathRequiredError,
             )
 

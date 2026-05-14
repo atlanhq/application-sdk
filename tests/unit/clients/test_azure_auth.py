@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from azure.core.exceptions import ClientAuthenticationError
 
-from application_sdk.clients.azure._azure_errors import (
+from application_sdk.clients.azure.auth import AzureAuthProvider
+from application_sdk.clients.azure.azure_errors import (
     AzureCredentialError,
     AzureCredentialParseError,
     AzureCredentialTypeError,
 )
-from application_sdk.clients.azure.auth import AzureAuthProvider
 
 
 class TestAzureAuthProvider:

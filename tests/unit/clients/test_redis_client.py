@@ -5,16 +5,16 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from redis.exceptions import ConnectionError, RedisError, TimeoutError
 
-from application_sdk.clients._redis_errors import (
-    RedisConfigError,
-    RedisConnectionError,
-    RedisProtocolError,
-    RedisTimeoutError,
-)
 from application_sdk.clients.redis import (
     LockReleaseResult,
     RedisClient,
     RedisClientAsync,
+)
+from application_sdk.clients.redis_errors import (
+    RedisConfigError,
+    RedisConnectionError,
+    RedisProtocolError,
+    RedisTimeoutError,
 )
 
 

@@ -14,6 +14,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionTaskInput,
 )
 from application_sdk.templates.sql_app import SqlApp
+from application_sdk.templates.sql_app_errors import MapDatabaseUnimplementedError
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -291,7 +292,7 @@ class TestAssetMapperStubs:
 
     def test_base_map_database_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(MapDatabaseUnimplementedError):
             base.map_database({}, "conn/qn")
 
     def test_base_map_schema_raises(self):

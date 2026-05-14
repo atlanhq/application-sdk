@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Any, Union, cast
 from urllib.parse import quote_plus
 
 from application_sdk.clients._interface import ClientInterface
-from application_sdk.clients._sql_errors import (
+from application_sdk.clients.models import DatabaseConfig
+from application_sdk.clients.sql_errors import (
     EngineNotInitializedError,
     InvalidSqlEngineTypeError,
     MissingSqlParamError,
@@ -25,7 +26,6 @@ from application_sdk.clients._sql_errors import (
     SqlPandasResultError,
     UnsupportedSqlCursorError,
 )
-from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql_typecasters import install_tolerant_text_decoder_hook
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,

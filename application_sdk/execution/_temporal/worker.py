@@ -360,10 +360,15 @@ def create_worker(
         type(i).__name__ for i in (interceptors or []) if isinstance(i, _builtin_types)
     ]
     if _duplicates:
-        raise ValueError(
-            f"create_worker(interceptors=...) contains {_duplicates}, but the SDK "
-            "now adds LogInterceptor / MetricsInterceptor / TraceInterceptor "
-            "automatically. Remove them from your `interceptors` list."
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkerInterceptorDuplicateError,
+        )
+
+        raise WorkerInterceptorDuplicateError(
+            message=f"Duplicate interceptor types: {_duplicates}. The SDK adds "
+            "LogInterceptor / MetricsInterceptor / TraceInterceptor automatically. "
+            "Remove them from your `interceptors` list.",
+            field="interceptors",
         )
 
     all_interceptors: list[TemporalInterceptor] = [

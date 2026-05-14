@@ -943,7 +943,7 @@ class TestParquetFileWriterConsolidation:
         parquet_output = ParquetFileWriter(path=base_output_path)
 
         # Should raise error when no temp folder path is set
-        from application_sdk.storage.formats._format_errors import (
+        from application_sdk.storage.formats.format_errors import (
             TempFolderPathMissingError,
         )
 

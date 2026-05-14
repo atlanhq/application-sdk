@@ -122,7 +122,9 @@ def _orjson_default(obj: Any) -> Any:
         return float(obj)
     if isinstance(obj, (bytes, bytearray)):
         return obj.decode("utf-8", errors="replace")
-    raise TypeError(f"Object of type {type(obj).__name__} is not JSON-serializable")
+    raise TypeError(  # orjson default= protocol requires TypeError to signal non-serializable
+        f"Object of type {type(obj).__name__} is not JSON-serializable"
+    )
 
 
 class SqlApp(App):
@@ -404,7 +406,11 @@ class SqlApp(App):
         self, record: dict[str, Any], connection_qn: str
     ) -> Asset | dict[str, Any]:
         """Map a raw database record to a pyatlan_v9 Asset. Override in subclass."""
-        raise NotImplementedError("Override map_database() in your SqlApp subclass")
+        from application_sdk.templates.sql_app_errors import (  # noqa: PLC0415
+            MapDatabaseUnimplementedError,
+        )
+
+        raise MapDatabaseUnimplementedError()
 
     def map_schema(
         self, record: dict[str, Any], connection_qn: str
@@ -618,6 +624,10 @@ class SqlApp(App):
         try:
             return CredentialRef.resolve(input)
         except (ValueError, TypeError):
+            logger.warning(
+                "CredentialRef.resolve failed; falling back to legacy_credential_ref or None",
+                exc_info=True,
+            )
             if input.credential_guid:
                 return legacy_credential_ref(input.credential_guid)
             return None

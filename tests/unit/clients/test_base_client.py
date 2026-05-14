@@ -6,8 +6,8 @@ import pytest
 from httpx import Headers
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.clients._sql_errors import AbstractClientLoadError
 from application_sdk.clients.base import BaseClient
+from application_sdk.clients.sql_errors import AbstractClientLoadError
 from application_sdk.testing.hypothesis.strategies.clients.sql import (
     sql_credentials_strategy,
 )

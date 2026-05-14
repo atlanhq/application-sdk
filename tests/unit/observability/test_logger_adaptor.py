@@ -1564,7 +1564,7 @@ class TestProcessRecord:
     def test_unsupported_type_raises_value_error(
         self, logger_adapter: AtlanLoggerAdapter
     ):
-        from application_sdk.observability._logger_adaptor_errors import (
+        from application_sdk.observability.logger_adaptor_errors import (
             UnsupportedLogRecordError,
         )
 

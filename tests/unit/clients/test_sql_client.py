@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.clients._sql_errors import (
+from application_sdk.clients.models import DatabaseConfig
+from application_sdk.clients.sql import AsyncBaseSQLClient, BaseSQLClient
+from application_sdk.clients.sql_errors import (
     EngineNotInitializedError,
     InvalidSqlEngineTypeError,
     MissingSqlParamError,
@@ -16,8 +18,6 @@ from application_sdk.clients._sql_errors import (
     SqlPandasResultError,
     UnsupportedSqlCursorError,
 )
-from application_sdk.clients.models import DatabaseConfig
-from application_sdk.clients.sql import AsyncBaseSQLClient, BaseSQLClient
 from application_sdk.testing.hypothesis.strategies.clients.sql import (
     sql_credentials_strategy,
     sqlalchemy_connect_args_strategy,

@@ -43,6 +43,10 @@ def get_backfill_tables(
         logger.info("No previous state available - returning None (should be full run)")
         return None
 
+    from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+        ColumnBatchInputError,
+    )
+
     try:
         with DuckDBConnectionManager() as conn_manager:
             conn = conn_manager.connection
@@ -56,9 +60,7 @@ def get_backfill_tables(
             )
 
             if current_tables is None or current_tables == 0:
-                raise ValueError(
-                    "No transformed tables found for finding backfill tables"
-                )
+                raise ColumnBatchInputError()
 
             if previous_tables is None or previous_tables == 0:
                 logger.warning(
@@ -99,7 +101,7 @@ def get_backfill_tables(
 
             return backfill_qns
 
-    except ValueError:
+    except ColumnBatchInputError:
         logger.warning(
             "Backfill analysis: legitimate skip (no transformed tables); "
             "returning None",
@@ -129,7 +131,7 @@ def _load_tables_to_duckdb(
         if table_dir.exists():
             json_files = [f.resolve() for f in table_dir.glob("*.json")]
     except OSError as e:
-        from application_sdk.common.incremental._incremental_errors import (  # noqa: PLC0415
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
             JsonScanError,
         )
 

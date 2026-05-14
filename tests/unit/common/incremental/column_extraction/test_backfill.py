@@ -305,7 +305,7 @@ class TestLoadTablesToDuckDB:
 
     def test_oserror_during_glob_raises_json_scan_error(self):
         """OSError when scanning JSON files is raised as JsonScanError."""
-        from application_sdk.common.incremental._incremental_errors import JsonScanError
+        from application_sdk.common.incremental.incremental_errors import JsonScanError
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "base"

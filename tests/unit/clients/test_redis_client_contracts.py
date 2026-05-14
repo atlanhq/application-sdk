@@ -26,22 +26,22 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from application_sdk.clients._redis_errors import RedisConfigError
-from application_sdk.clients._redis_errors import (
-    RedisConnectionError as AppRedisConnectionError,
-)
-from application_sdk.clients._redis_errors import (
-    RedisProtocolError as AppRedisProtocolError,
-)
-from application_sdk.clients._redis_errors import (
-    RedisTimeoutError as AppRedisTimeoutError,
-)
 from application_sdk.clients.redis import (
     BaseRedisClient,
     LockReleaseResult,
     RedisClient,
     RedisClientAsync,
     _handle_redis_error,
+)
+from application_sdk.clients.redis_errors import RedisConfigError
+from application_sdk.clients.redis_errors import (
+    RedisConnectionError as AppRedisConnectionError,
+)
+from application_sdk.clients.redis_errors import (
+    RedisProtocolError as AppRedisProtocolError,
+)
+from application_sdk.clients.redis_errors import (
+    RedisTimeoutError as AppRedisTimeoutError,
 )
 
 # ---------------------------------------------------------------------------

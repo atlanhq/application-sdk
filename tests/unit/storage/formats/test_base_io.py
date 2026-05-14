@@ -194,7 +194,7 @@ class TestConvertToDataframe:
         assert list(result["a"]) == [1, 2]
 
     def test_unsupported_type_raises_typeerror(self) -> None:
-        from application_sdk.storage.formats._format_errors import (
+        from application_sdk.storage.formats.format_errors import (
             UnsupportedDataTypeError,
         )
 
@@ -209,7 +209,7 @@ class TestConvertToDataframe:
 
         import pandas as pd
 
-        from application_sdk.storage.formats._format_errors import DaftNotInstalledError
+        from application_sdk.storage.formats.format_errors import DaftNotInstalledError
 
         writer = _StubWriter(dataframe_type=DataframeType.daft)
         df = pd.DataFrame({"a": [1]})
@@ -230,7 +230,7 @@ class TestConvertToDataframe:
         """Inline ``import daft`` ImportError on dict→daft conversion path."""
         import builtins
 
-        from application_sdk.storage.formats._format_errors import DaftNotInstalledError
+        from application_sdk.storage.formats.format_errors import DaftNotInstalledError
 
         writer = _StubWriter(dataframe_type=DataframeType.daft)
         original_import = builtins.__import__
@@ -254,7 +254,7 @@ class TestConvertToDataframe:
 class TestWriterWrite:
     @pytest.mark.asyncio
     async def test_write_to_closed_writer_raises(self) -> None:
-        from application_sdk.storage.formats._format_errors import WriterClosedError
+        from application_sdk.storage.formats.format_errors import WriterClosedError
 
         writer = _StubWriter()
         writer._is_closed = True
@@ -264,7 +264,7 @@ class TestWriterWrite:
 
     @pytest.mark.asyncio
     async def test_write_unsupported_dtype_raises(self) -> None:
-        from application_sdk.storage.formats._format_errors import (
+        from application_sdk.storage.formats.format_errors import (
             UnsupportedDataframeTypeError,
         )
 
@@ -308,7 +308,7 @@ class TestWriterWrite:
 class TestWriteBatches:
     @pytest.mark.asyncio
     async def test_write_batches_to_closed_writer_raises(self) -> None:
-        from application_sdk.storage.formats._format_errors import WriterClosedError
+        from application_sdk.storage.formats.format_errors import WriterClosedError
 
         writer = _StubWriter()
         writer._is_closed = True
@@ -322,7 +322,7 @@ class TestWriteBatches:
 
     @pytest.mark.asyncio
     async def test_write_batches_unsupported_dtype_raises(self) -> None:
-        from application_sdk.storage.formats._format_errors import (
+        from application_sdk.storage.formats.format_errors import (
             UnsupportedDataframeTypeError,
         )
 
@@ -338,7 +338,7 @@ class TestWriteBatches:
 
     @pytest.mark.asyncio
     async def test_batched_dataframe_raises_format_write_error(self) -> None:
-        from application_sdk.storage.formats._format_errors import FormatWriteError
+        from application_sdk.storage.formats.format_errors import FormatWriteError
 
         writer = _StubWriter()
         # _write_dataframe raises during iteration → wrapped into FormatWriteError.
@@ -490,7 +490,7 @@ class TestWriterClose:
 
     @pytest.mark.asyncio
     async def test_close_raises_format_close_error_on_finalize_failure(self) -> None:
-        from application_sdk.storage.formats._format_errors import FormatCloseError
+        from application_sdk.storage.formats.format_errors import FormatCloseError
 
         writer = _StubWriter()
         with (

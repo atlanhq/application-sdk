@@ -38,7 +38,7 @@ def test_init(config: dict[str, Any]) -> None:
 
 def test_init_single_file_with_file_names_raises_error() -> None:
     """Test that JsonFileReader raises when single file path is combined with file_names."""
-    from application_sdk.storage.formats._format_errors import (
+    from application_sdk.storage.formats.format_errors import (
         SingleFilePathWithFileNamesError,
     )
 
@@ -146,7 +146,7 @@ async def test_download_file_not_invoked_when_file_present() -> None:
 @pytest.mark.asyncio
 async def test_download_file_error_propagation() -> None:
     """Ensure errors during download are surfaced as ObjectStoreDownloadError."""
-    from application_sdk.storage.formats._format_errors import ObjectStoreDownloadError
+    from application_sdk.storage.formats.format_errors import ObjectStoreDownloadError
 
     path = "/local"
     file_names = ["bad.json"]
@@ -477,7 +477,7 @@ async def test_read_after_close_raises_error(monkeypatch) -> None:
     await reader.close()
 
     # Read should raise after close
-    from application_sdk.storage.formats._format_errors import ReaderClosedError
+    from application_sdk.storage.formats.format_errors import ReaderClosedError
 
     with pytest.raises(ReaderClosedError) as exc_info:
         await reader.read()
@@ -487,7 +487,7 @@ async def test_read_after_close_raises_error(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_read_batches_after_close_raises_error() -> None:
     """Verify that read_batches after close raises ReaderClosedError."""
-    from application_sdk.storage.formats._format_errors import ReaderClosedError
+    from application_sdk.storage.formats.format_errors import ReaderClosedError
 
     path = "/data"
     reader = JsonFileReader(path=path, dataframe_type=DataframeType.pandas)

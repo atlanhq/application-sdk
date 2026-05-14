@@ -192,7 +192,7 @@ def get_current_table_scope(
 
     except Exception as e:
         close_scope(scope)
-        from application_sdk.common.incremental._incremental_errors import (  # noqa: PLC0415
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
             TableScopeLoadError,
         )
 

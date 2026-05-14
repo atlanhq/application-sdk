@@ -9,7 +9,7 @@ from uuid import uuid4
 from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
 
-from application_sdk.app._base_errors import (
+from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
     StateStoreNotConfiguredError,
 )

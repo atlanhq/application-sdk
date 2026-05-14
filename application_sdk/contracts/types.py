@@ -21,7 +21,7 @@ from typing import Annotated, Any, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from application_sdk.contracts._types_errors import RunPrefixRequiredError
+from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
 
 T = TypeVar("T")

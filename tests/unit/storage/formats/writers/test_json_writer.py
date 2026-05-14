@@ -128,7 +128,7 @@ async def test_write_error(base_output_path: str) -> None:
         total_record_count=0,
         chunk_start=None,
     )
-    from application_sdk.storage.formats._format_errors import UnsupportedDataTypeError
+    from application_sdk.storage.formats.format_errors import UnsupportedDataTypeError
 
     invalid_df = "not_a_dataframe"
     with pytest.raises(UnsupportedDataTypeError) as exc_info:

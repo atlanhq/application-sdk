@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import textwrap
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from pyatlan.model.enums import AtlanConnectorType
@@ -15,6 +15,15 @@ from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.common.utils import (
     flatten_yaml_columns,
     get_yaml_query_template_path_mappings,
+)
+from application_sdk.transformers.query.errors import (
+    BuildStructLevelRequiredError as BuildStructLevelRequiredError,
+)
+from application_sdk.transformers.query.errors import (
+    BuildStructPrefixRequiredError as BuildStructPrefixRequiredError,
+)
+from application_sdk.transformers.query.errors import (
+    SqlTransformNotRegisteredError as SqlTransformNotRegisteredError,
 )
 
 logger = get_logger(__name__)
@@ -47,7 +56,7 @@ class QueryBasedTransformer(TransformerInterface):
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
         self.connector_name = connector_name
         self.tenant_id = tenant_id
-        self.entity_class_definitions: Dict[str, str] = (
+        self.entity_class_definitions: dict[str, str] = (
             get_yaml_query_template_path_mappings(
                 assets=[
                     "TABLE",
@@ -74,7 +83,7 @@ class QueryBasedTransformer(TransformerInterface):
         return column_name
 
     def convert_to_sql_expression(
-        self, column: Dict[str, str], is_literal: bool = False
+        self, column: dict[str, str], is_literal: bool = False
     ) -> str:
         """Process a single column definition into a SQL column expression.
 
@@ -91,10 +100,10 @@ class QueryBasedTransformer(TransformerInterface):
 
     def get_sql_column_expressions(
         self,
-        sql_template: Dict[str, Any],
+        sql_template: dict[str, Any],
         dataframe: daft.DataFrame,
-        default_attributes: Dict[str, Any],
-    ) -> Tuple[List[str], Optional[List[Dict[str, str]]]]:
+        default_attributes: dict[str, Any],
+    ) -> tuple[list[str], list[dict[str, str]] | None]:
         """Get the columns and literal columns for the SQL query.
 
         Args:
@@ -105,8 +114,8 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             A list of column expressions for the SQL query
         """
-        columns: List[str] = []
-        literal_columns: List[Dict[str, str]] = []
+        columns: list[str] = []
+        literal_columns: list[dict[str, str]] = []
         column_names = dataframe.column_names + list(default_attributes.keys())
 
         # Add the columns from the SQL template to the columns list only if they are present in the dataframe
@@ -118,17 +127,11 @@ class QueryBasedTransformer(TransformerInterface):
             # - name: attributes.qualifiedName
             #   source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
             #   source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
-            if column.get("source_columns") and (
-                all(col in column_names for col in column["source_columns"])
+            if (
+                column.get("source_columns")
+                and (all(col in column_names for col in column["source_columns"]))
+                or column["source_query"] in column_names
             ):
-                columns.append(self.convert_to_sql_expression(column))
-
-            # Else if the column has a source_query attribute and the source_query is present in the dataframe,
-            # then add the column to the columns list
-            # E.g
-            # - name: attributes.tableName
-            #   source_query: table_name
-            elif column["source_query"] in column_names:
                 columns.append(self.convert_to_sql_expression(column))
 
             # Else if the column has a string literal, then add the column to the literal_columns list
@@ -159,8 +162,8 @@ class QueryBasedTransformer(TransformerInterface):
         self,
         yaml_path: str,
         dataframe: daft.DataFrame,
-        default_attributes: Dict[str, Any],
-    ) -> Tuple[str, Optional[List[Dict[str, str]]]]:
+        default_attributes: dict[str, Any],
+    ) -> tuple[str, list[dict[str, str]] | None]:
         """
         Generate a SQL query from a YAML template and a DataFrame.
 
@@ -193,7 +196,7 @@ class QueryBasedTransformer(TransformerInterface):
         """)
         return sql_query, literal_columns or None
 
-    def _build_struct(self, level: dict, prefix: str = "") -> Optional[daft.Expression]:
+    def _build_struct(self, level: dict, prefix: str = "") -> daft.Expression | None:
         """
         Recursively build nested struct expressions.
 
@@ -207,11 +210,11 @@ class QueryBasedTransformer(TransformerInterface):
 
         # Check if level is None
         if level is None:
-            raise ValueError("level cannot be None in _build_struct")
+            raise BuildStructLevelRequiredError()
 
         # Check if prefix is None
         if prefix is None:
-            raise ValueError("prefix cannot be None in _build_struct")
+            raise BuildStructPrefixRequiredError()
 
         import daft  # noqa: PLC0415 — optional dep: daft
         from daft.functions import to_struct, when  # noqa: PLC0415 — optional dep: daft
@@ -354,10 +357,10 @@ class QueryBasedTransformer(TransformerInterface):
         dataframe: daft.DataFrame,
         workflow_id: str,
         workflow_run_id: str,
-        connection_qualified_name: Optional[str] = None,
-        connection_name: Optional[str] = None,
-        entity_sql_template_path: Optional[str] = None,
-    ) -> Tuple[daft.DataFrame, str]:
+        connection_qualified_name: str | None = None,
+        connection_name: str | None = None,
+        entity_sql_template_path: str | None = None,
+    ) -> tuple[daft.DataFrame, str]:
         """
         Prepare the entity SQL template and the default attributes for the DataFrame.
 
@@ -380,9 +383,7 @@ class QueryBasedTransformer(TransformerInterface):
             "tenant_id": daft.lit(self.tenant_id),
             "last_sync_workflow_name": daft.lit(workflow_id),
             "last_sync_run": daft.lit(workflow_run_id),
-            "last_sync_run_at": daft.lit(
-                int(datetime.now(timezone.utc).timestamp() * 1000)
-            ),
+            "last_sync_run_at": daft.lit(int(datetime.now(UTC).timestamp() * 1000)),
             "connector_name": daft.lit(
                 AtlanConnectorType.get_connector_name(connection_qualified_name)
             ),
@@ -416,9 +417,9 @@ class QueryBasedTransformer(TransformerInterface):
         dataframe: daft.DataFrame,
         workflow_id: str,
         workflow_run_id: str,
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
+        entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: Any,
-    ) -> Optional[daft.DataFrame]:
+    ) -> daft.DataFrame | None:
         """Transform records using SQL executed through Daft"""
         if dataframe.count_rows() == 0:
             return None
@@ -430,7 +431,9 @@ class QueryBasedTransformer(TransformerInterface):
         )
         entity_sql_template_path = self.entity_class_definitions.get(typename)
         if not entity_sql_template_path:
-            raise ValueError(f"No SQL transformation registered for {typename}")
+            raise SqlTransformNotRegisteredError(
+                message=f"No SQL transformation registered for {typename}"
+            )
 
         # prepare the SQL to run on the dataframe and the default attributes
         dataframe, entity_sql_template = self.prepare_template_and_attributes(

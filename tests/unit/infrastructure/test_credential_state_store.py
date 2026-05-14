@@ -57,7 +57,7 @@ class TestDaprRequiredStartup:
         """_create_infrastructure raises when DAPR_HTTP_PORT not set."""
         import pytest
 
-        from application_sdk._main_errors import DaprNotDetectedError
+        from application_sdk.main_errors import DaprNotDetectedError
 
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
@@ -69,7 +69,7 @@ class TestDaprRequiredStartup:
 
     async def test_error_message_includes_poe_command(self, monkeypatch):
         """Error message tells developer how to fix it."""
-        from application_sdk._main_errors import DaprNotDetectedError
+        from application_sdk.main_errors import DaprNotDetectedError
 
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 

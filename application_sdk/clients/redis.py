@@ -7,7 +7,7 @@ import redis
 import redis.asyncio as async_redis
 from redis.exceptions import ConnectionError, RedisError, TimeoutError
 
-from application_sdk.clients._redis_errors import (
+from application_sdk.clients.redis_errors import (
     RedisConfigError,
     RedisConnectionError,
     RedisProtocolError,

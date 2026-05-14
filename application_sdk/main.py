@@ -33,12 +33,6 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from application_sdk._main_errors import (
-    DaprNotDetectedError,
-    MissingAppModuleError,
-    MultiAppModuleError,
-    UnknownModeError,
-)
 from application_sdk.discovery import (
     DiscoveryError,
     load_app_class,
@@ -46,6 +40,12 @@ from application_sdk.discovery import (
     validate_app_class,
 )
 from application_sdk.errors import AppError
+from application_sdk.main_errors import (
+    DaprNotDetectedError,
+    MissingAppModuleError,
+    MultiAppModuleError,
+    UnknownModeError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Enable faulthandler so C-level crashes dump a traceback to stderr.

@@ -12,12 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk._main_errors import (
-    DaprNotDetectedError,
-    MissingAppModuleError,
-    MultiAppModuleError,
-    UnknownModeError,
-)
 from application_sdk.main import (
     AppConfig,
     _create_infrastructure,
@@ -35,6 +29,12 @@ from application_sdk.main import (
     run_handler_mode,
     run_main,
     run_worker_mode,
+)
+from application_sdk.main_errors import (
+    DaprNotDetectedError,
+    MissingAppModuleError,
+    MultiAppModuleError,
+    UnknownModeError,
 )
 
 

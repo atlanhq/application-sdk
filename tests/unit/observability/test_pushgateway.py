@@ -106,7 +106,7 @@ class TestTemporalCoreCollector:
 
 class TestPushGatewayClientInit:
     def test_empty_url_raises(self):
-        from application_sdk.observability._pushgateway_errors import (
+        from application_sdk.observability.pushgateway_errors import (
             PushGatewayUrlRequiredError,
         )
 
@@ -115,7 +115,7 @@ class TestPushGatewayClientInit:
         assert exc_info.value.code == "INVALID_INPUT_PUSHGATEWAY_URL"
 
     def test_empty_job_raises(self):
-        from application_sdk.observability._pushgateway_errors import (
+        from application_sdk.observability.pushgateway_errors import (
             PushGatewayJobRequiredError,
         )
 

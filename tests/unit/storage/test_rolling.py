@@ -70,9 +70,7 @@ class TestRollingFileWriterInit:
         assert os.path.isdir(writer.output_dir)
 
     def test_rejects_empty_base_path(self) -> None:
-        from application_sdk.storage._rolling_errors import (
-            InvalidRollingFileWriterError,
-        )
+        from application_sdk.storage.rolling_errors import InvalidRollingFileWriterError
 
         flush_fn, _ = _make_flush_fn()
         with pytest.raises(InvalidRollingFileWriterError) as exc_info:
@@ -81,9 +79,7 @@ class TestRollingFileWriterInit:
         assert exc_info.value.field == "base_path"
 
     def test_rejects_extension_without_leading_dot(self, base: str) -> None:
-        from application_sdk.storage._rolling_errors import (
-            InvalidRollingFileWriterError,
-        )
+        from application_sdk.storage.rolling_errors import InvalidRollingFileWriterError
 
         flush_fn, _ = _make_flush_fn()
         with pytest.raises(InvalidRollingFileWriterError) as exc_info:
@@ -91,7 +87,7 @@ class TestRollingFileWriterInit:
         assert exc_info.value.field == "extension"
 
     def test_rejects_non_positive_interval(self, base: str) -> None:
-        from application_sdk.storage._rolling_errors import InvalidRolloverPolicyError
+        from application_sdk.storage.rolling_errors import InvalidRolloverPolicyError
 
         flush_fn, _ = _make_flush_fn()
         with pytest.raises(InvalidRolloverPolicyError) as exc_info:
@@ -130,7 +126,7 @@ class TestRollingFileWriterFlush:
         flush_fn, _ = _make_flush_fn()
         writer = RollingFileWriter(base, ".json", flush_fn)
         await writer.close()
-        from application_sdk.storage._rolling_errors import RollingWriterClosedError
+        from application_sdk.storage.rolling_errors import RollingWriterClosedError
 
         with pytest.raises(RollingWriterClosedError):
             await writer.append({"id": 1})
@@ -367,7 +363,7 @@ class TestTimePolicy:
         assert policy.should_roll(_state(chunk_start=start)) is False
 
     def test_rejects_non_positive_interval(self) -> None:
-        from application_sdk.storage._rolling_errors import InvalidRolloverPolicyError
+        from application_sdk.storage.rolling_errors import InvalidRolloverPolicyError
 
         with pytest.raises(InvalidRolloverPolicyError) as exc_info:
             TimePolicy(interval_seconds=0)
@@ -388,7 +384,7 @@ class TestSizePolicy:
         assert policy.should_roll(_state(buffered_bytes=0)) is False
 
     def test_rejects_non_positive(self) -> None:
-        from application_sdk.storage._rolling_errors import InvalidRolloverPolicyError
+        from application_sdk.storage.rolling_errors import InvalidRolloverPolicyError
 
         with pytest.raises(InvalidRolloverPolicyError) as exc_info:
             SizePolicy(max_bytes=0)
@@ -409,7 +405,7 @@ class TestCountPolicy:
         assert policy.should_roll(_state(buffered_records=0)) is False
 
     def test_rejects_non_positive(self) -> None:
-        from application_sdk.storage._rolling_errors import InvalidRolloverPolicyError
+        from application_sdk.storage.rolling_errors import InvalidRolloverPolicyError
 
         with pytest.raises(InvalidRolloverPolicyError) as exc_info:
             CountPolicy(max_records=0)
@@ -446,7 +442,7 @@ class TestAnyOfPolicy:
         )
 
     def test_rejects_empty_policy_list(self) -> None:
-        from application_sdk.storage._rolling_errors import InvalidRolloverPolicyError
+        from application_sdk.storage.rolling_errors import InvalidRolloverPolicyError
 
         with pytest.raises(InvalidRolloverPolicyError) as exc_info:
             AnyOfPolicy()
@@ -528,7 +524,7 @@ class TestRollingFileWriterDefaults:
         assert writer.rollover_policy is custom
 
     def test_rejects_non_positive_max_buffer_bytes(self, base: str) -> None:
-        from application_sdk.storage._rolling_errors import InvalidRolloverPolicyError
+        from application_sdk.storage.rolling_errors import InvalidRolloverPolicyError
 
         flush_fn, _ = _make_flush_fn()
         with pytest.raises(InvalidRolloverPolicyError) as exc_info:
@@ -536,7 +532,7 @@ class TestRollingFileWriterDefaults:
         assert exc_info.value.field == "max_buffer_bytes"
 
     def test_rejects_non_positive_max_buffer_records(self, base: str) -> None:
-        from application_sdk.storage._rolling_errors import InvalidRolloverPolicyError
+        from application_sdk.storage.rolling_errors import InvalidRolloverPolicyError
 
         flush_fn, _ = _make_flush_fn()
         with pytest.raises(InvalidRolloverPolicyError) as exc_info:

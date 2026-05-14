@@ -11,8 +11,8 @@ import os
 import re
 from typing import Any
 
-from application_sdk.common._sql_filters_errors import InvalidSqlFilterError
 from application_sdk.common.error_codes import CommonError
+from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 

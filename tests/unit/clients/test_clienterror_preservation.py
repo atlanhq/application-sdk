@@ -14,12 +14,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.clients._redis_errors import (
+from application_sdk.clients.azure.azure_errors import AzureClientAuthError
+from application_sdk.clients.redis_errors import (
     RedisConnectionError,
     RedisProtocolError,
 )
-from application_sdk.clients._sql_errors import SqlClientAuthFailedError
-from application_sdk.clients.azure._azure_errors import AzureClientAuthError
+from application_sdk.clients.sql_errors import SqlClientAuthFailedError
 
 # ---------------------------------------------------------------------------
 # BLDX-1180 — async SQL load() raises SqlClientAuthFailedError, not ValueError

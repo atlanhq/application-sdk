@@ -738,7 +738,7 @@ class TestRunStub:
         class _NoRun(App):
             pass
 
-        from application_sdk.app._base_errors import AbstractRunNotImplementedError
+        from application_sdk.app.base_errors import AbstractRunNotImplementedError
 
         with pytest.raises(AbstractRunNotImplementedError) as exc_info:
             await _NoRun().run(_BLDXInput())

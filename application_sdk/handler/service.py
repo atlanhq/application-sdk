@@ -54,11 +54,6 @@ from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
-from application_sdk.handler._service_errors import (
-    InvalidConfigIdError,
-    InvalidConfigTypeError,
-    TempPathEscapeError,
-)
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -71,6 +66,11 @@ from application_sdk.handler.contracts import (
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
+from application_sdk.handler.service_errors import (
+    InvalidConfigIdError,
+    InvalidConfigTypeError,
+    TempPathEscapeError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)

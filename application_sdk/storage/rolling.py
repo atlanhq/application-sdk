@@ -77,7 +77,7 @@ from typing import Any, Generic, TypeVar
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage._rolling_errors import (
+from application_sdk.storage.rolling_errors import (
     InvalidRollingFileWriterError,
     InvalidRolloverPolicyError,
     RollingWriterClosedError,

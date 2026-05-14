@@ -65,7 +65,7 @@ from azure.identity import ClientSecretCredential
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
-from application_sdk.clients.azure._azure_errors import (
+from application_sdk.clients.azure.azure_errors import (
     AzureCredentialError,
     AzureCredentialParseError,
     AzureCredentialTypeError,
