@@ -492,8 +492,6 @@ CONN_QN = "default/snowflake/1728518400"
 
 def test_enrich_uses_remarks_first_for_description(transformer: AtlasTransformer):
     enriched = transformer._enrich_entity_with_metadata(
-        "wf",
-        "run",
         {
             "remarks": "<p>hello</p>",
             "comment": "ignored",
@@ -508,8 +506,6 @@ def test_enrich_falls_back_to_comment_when_remarks_absent(
     transformer: AtlasTransformer,
 ):
     enriched = transformer._enrich_entity_with_metadata(
-        "wf",
-        "run",
         {"comment": "  hi  there  ", "connection_qualified_name": CONN_QN},
     )
     # process_text collapses whitespace
@@ -520,7 +516,7 @@ def test_enrich_no_remarks_no_comment_no_description_key(
     transformer: AtlasTransformer,
 ):
     enriched = transformer._enrich_entity_with_metadata(
-        "wf", "run", {"connection_qualified_name": CONN_QN}
+        {"connection_qualified_name": CONN_QN}
     )
     assert "description" not in enriched["attributes"]
 
@@ -529,8 +525,6 @@ def test_enrich_propagates_source_owner_and_source_id(
     transformer: AtlasTransformer,
 ):
     enriched = transformer._enrich_entity_with_metadata(
-        "wf",
-        "run",
         {
             "source_owner": "alice",
             "source_id": "abc-123",
@@ -545,8 +539,6 @@ def test_enrich_converts_created_and_last_altered_timestamps(
     transformer: AtlasTransformer,
 ):
     enriched = transformer._enrich_entity_with_metadata(
-        "wf",
-        "run",
         {
             "created": 1_700_000_000_000,
             "last_altered": 1_700_000_500_000,
@@ -557,17 +549,19 @@ def test_enrich_converts_created_and_last_altered_timestamps(
     assert isinstance(enriched["attributes"]["source_updated_at"], datetime)
 
 
-def test_enrich_sets_workflow_metadata(transformer: AtlasTransformer):
+def test_enrich_does_not_stamp_last_sync_fields(transformer: AtlasTransformer):
+    """After BLDX-1229 the enrichment step intentionally no longer touches
+    ``last_sync_*``.  Stamping happens after entity construction on the
+    typed pyatlan ``Asset`` via :func:`set_last_sync_details_on_asset`, so
+    the single Asset-based primitive owns those fields end-to-end.
+    """
     enriched = transformer._enrich_entity_with_metadata(
-        "wf-id",
-        "run-id",
         {"connection_name": "myconn", "connection_qualified_name": CONN_QN},
     )
     attrs = enriched["attributes"]
-    assert attrs["last_sync_workflow_name"] == "wf-id"
-    assert attrs["last_sync_run"] == "run-id"
+    assert "last_sync_workflow_name" not in attrs
+    assert "last_sync_run" not in attrs
+    assert "last_sync_run_at" not in attrs
+    # Other enrichment still works.
     assert attrs["connection_name"] == "myconn"
     assert attrs["tenant_id"] == "default"
-    # last_sync_run_at should be epoch ms (int, > 0)
-    assert isinstance(attrs["last_sync_run_at"], int)
-    assert attrs["last_sync_run_at"] > 0
