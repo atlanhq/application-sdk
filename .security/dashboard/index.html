@@ -198,6 +198,8 @@
             </div>
             <div id="trendChart" style="min-height:200px;position:relative;"></div>
         </div>
+        <!-- Recent regressions: shows which repos introduced new CVE IDs to the org-wide union over a configurable window. Always rendered — green when clean, red when regression. -->
+        <div class="card" id="trendRegressions" style="margin-bottom:16px"></div>
         <!-- Top movers -->
         <div class="grid-2" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
             <div class="card"><div class="card-title">Biggest Improvements <span id="trendImprovedCount" style="color:#b0b3c6;font-weight:500"></span></div><div id="trendImproved" style="max-height:340px;overflow-y:auto"></div></div>
@@ -221,7 +223,7 @@
             </div>
             <div style="overflow-x:auto">
                 <table id="trendTable"><thead><tr>
-                    <th style="width:40px">#</th><th data-ts="repo">Repo</th><th data-ts="sdk">SDK Version</th><th data-ts="app">App CVEs</th><th data-ts="base">Base CVEs</th><th data-ts="now">Total CVEs</th><th data-ts="old" id="thCompare">7d ago</th><th data-ts="delta">Change</th><th>Status</th>
+                    <th style="width:40px">#</th><th data-ts="repo">Repo</th><th data-ts="sdk">SDK Version</th><th data-ts="scanned">Last Scan</th><th data-ts="app">App CVEs</th><th data-ts="base">Base CVEs</th><th data-ts="now">Total CVEs</th><th data-ts="old" id="thCompare">7d ago</th><th data-ts="delta">Change</th><th>Status</th>
                 </tr></thead><tbody id="trendTableBody"></tbody></table>
             </div>
         </div>
@@ -267,6 +269,26 @@
 let D={repos:{},generated_at:''},VM={},sortCol='severity',sortDir='asc';
 const pct=(n,t)=>t>0?Math.round(n/t*100):0;
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+// Repos classified as platform/system apps (utilities, internal tooling).
+// Anything NOT in this set is treated as a connector app by default. New
+// onboardings auto-fall to "connector"; to reclassify, add the repo's short
+// name (the part after `atlanhq/`) here.
+const SYSTEM_REPOS=new Set([
+    "atlan-api-token-connection-admin-app",
+    "atlan-app-template",
+    "atlan-asset-term-link-app",
+    "atlan-auth-app",
+    "atlan-conversational-ai-app",
+    "atlan-duplicate-detector-app",
+    "atlan-lineage-app",
+    "atlan-metadata-propagator-app",
+    "atlan-openlineage-app",
+    "atlan-user-export-app",
+    "atlan-user-offboarding-app",
+    "lineage-builder-app",
+]);
+const isSystemRepo=r=>SYSTEM_REPOS.has(r.split('/').pop());
 
 function animateCount(el,target){let cur=0;const step=Math.max(1,Math.ceil(target/30));const timer=setInterval(()=>{cur+=step;if(cur>=target){cur=target;clearInterval(timer);}el.textContent=cur;},30);}
 
@@ -707,12 +729,33 @@ function renderTrends(){
     const tipNewApprox=`Approx count of new CVEs in the last ${days} day${days===1?'':'s'}. Exact number coming once we have a few more days of data.`;
     const tipNewUnique=`New CVEs that appeared since ${windowLabel}.`;
 
+    // Unique CVEs contributed by each repo category. Same CVE in multiple
+    // repos within a category is counted once; a CVE shared across categories
+    // is counted on both sides (so the two values can sum to MORE than the
+    // total unique CVEs).
+    const systemUnique=new Set();
+    const connectorUnique=new Set();
+    repos.forEach(r=>{
+        const target=isSystemRepo(r)?systemUnique:connectorUnique;
+        (D.repos[r].vulnerabilities||[]).forEach(v=>{if(v.id)target.add(v.id);});
+    });
+    const systemRepoCount=repos.filter(isSystemRepo).length;
+    const connectorRepoCount=repos.length-systemRepoCount;
+    const sharedUnique=new Set([...systemUnique].filter(id=>connectorUnique.has(id)));
+    // Partition the org's unique CVE union into three disjoint buckets so the
+    // three numbers sum exactly to the headline Unique CVEs count.
+    const systemOnly=systemUnique.size-sharedUnique.size;
+    const connectorOnly=connectorUnique.size-sharedUnique.size;
+    const tipSystemCves=`Unique CVEs that ONLY appear in system / platform repos (${systemRepoCount}). These need system-team action; not shared with any connector.`;
+    const tipConnectorCves=`Unique CVEs that ONLY appear in connector repos (${connectorRepoCount}). These are connector-specific.`;
+    const tipSharedCves=`CVEs present in BOTH system and connector repos — typically base-image CVEs. Fixing one of these cleans both categories at once; highest-leverage target. System-only + Connector-only + Shared = total unique CVEs.`;
+
     document.getElementById('trendSnapshot').innerHTML=`
         <div class="stat" style="cursor:help" title="${esc(tipReposScanned)}"><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128230;</div><div class="stat-value">${repos.length}</div><div class="stat-label">Repos Scanned</div></div>
         <div class="stat" style="cursor:help" title="${esc(tipTodayUnique)}"><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128202;</div><div class="stat-value">${totalToday}</div><div class="stat-label">Unique CVEs Today</div></div>
-        <div class="stat" style="cursor:help" title="${esc(deltaIsApprox?tipDeltaApprox:tipDeltaUnique)}"><div class="stat-icon" style="background:${deltaIconBg};color:${deltaIconColor}">&#128200;</div><div class="stat-value"><span class="trend-delta ${deltaClass}">${deltaValue}</span></div><div class="stat-label">vs ${labels[days]||days+'d ago'}${baselineNote}</div></div>
-        <div class="stat" style="cursor:help" title="${esc(deltaIsApprox?tipFixedApprox:tipFixedUnique)}"><div class="stat-icon" style="background:#f0fdf4;color:#22c55e">&#10004;&#65039;</div><div class="stat-value" style="color:#22c55e">${fixedValue}</div><div class="stat-label">Fixed (${days}d)</div></div>
-        <div class="stat" style="cursor:help" title="${esc(deltaIsApprox?tipNewApprox:tipNewUnique)}"><div class="stat-icon" style="background:#fef2f2;color:#ef4444">&#10060;</div><div class="stat-value" style="color:#ef4444">${newValue}</div><div class="stat-label">New (${days}d)</div></div>`;
+        <div class="stat" style="cursor:help" title="${esc(tipSystemCves)}"><div class="stat-icon" style="background:#eef2ff;color:#4f46e5">&#9881;&#65039;</div><div class="stat-value">${systemOnly}</div><div class="stat-label">System-only <span style="color:#b0b3c6;font-weight:500">(${systemRepoCount})</span></div></div>
+        <div class="stat" style="cursor:help" title="${esc(tipConnectorCves)}"><div class="stat-icon" style="background:#fff7ed;color:#ea580c">&#128268;</div><div class="stat-value">${connectorOnly}</div><div class="stat-label">Connector-only <span style="color:#b0b3c6;font-weight:500">(${connectorRepoCount})</span></div></div>
+        <div class="stat" style="cursor:help" title="${esc(tipSharedCves)}"><div class="stat-icon" style="background:#f0fdf4;color:#16a34a">&#128279;</div><div class="stat-value">${sharedUnique.size}</div><div class="stat-label">Shared <span style="color:#b0b3c6;font-weight:500">(both)</span></div></div>`;
 
     // Section 2: Stacked area chart
     // For each date, compute "state of the org as of that date": every in-scope repo
@@ -843,7 +886,8 @@ function renderTrends(){
         return{repo:r,sdk:D.repos[r].sdk_version||'?',now,
             old:oldStart,delta:now-oldStart,                 // window-start basis (used by table & regressions)
             peak,improvementDelta:now-peak,                  // peak basis (used by improvements)
-            app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0};
+            app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0,
+            scanned:D.repos[r].scanned_at||''};
     });
 
     // "Newly onboarded" = a repo whose ONLY history entry is today's scan. This is a
@@ -900,7 +944,7 @@ function renderTrends(){
     document.querySelectorAll('#trendTable th[data-ts]').forEach(th=>{
         const isActive=th.dataset.ts===ts.col;
         const arrow=isActive?(ts.dir==='asc'?' ▲':' ▼'):'';
-        const baseLabels={repo:'Repo',sdk:'SDK Version',app:'App CVEs',base:'Base CVEs',now:'Total CVEs',delta:'Change'};
+        const baseLabels={repo:'Repo',sdk:'SDK Version',scanned:'Last Scan',app:'App CVEs',base:'Base CVEs',now:'Total CVEs',delta:'Change'};
         if(th.id==='thCompare')return; // compare label is dynamic, handled separately
         if(baseLabels[th.dataset.ts]!==undefined)th.innerHTML=baseLabels[th.dataset.ts]+arrow;
         th.style.cursor='pointer';th.style.userSelect='none';
@@ -916,16 +960,28 @@ function renderTrends(){
         thOld.textContent=(labels[days]||days+'d ago')+(isActive?(ts.dir==='asc'?' ▲':' ▼'):'');
     }
     document.getElementById('trendTableCount').textContent=`(${sorted.length} repo${sorted.length===1?'':'s'})`;
+    // Format an ISO scanned_at into "Xd ago" with a freshness colour. Scans older
+    // than 7 days get an amber tint so stale data is visually obvious.
+    const fmtScanned=(iso)=>{
+        if(!iso)return{label:'—',color:'#8c8fa3',title:''};
+        const t=Date.parse(iso);if(isNaN(t))return{label:'—',color:'#8c8fa3',title:iso};
+        const days=Math.floor((Date.now()-t)/86400000);
+        const label=days<=0?'today':days===1?'1d ago':`${days}d ago`;
+        const color=days>=14?'#ef4444':days>=7?'#ea580c':'#8c8fa3';
+        return{label,color,title:new Date(t).toISOString().slice(0,10)};
+    };
     document.getElementById('trendTableBody').innerHTML=sorted.map((r,i)=>{
         const cls=r.delta>0?'up':r.delta<0?'down':'flat';
         const arrow=r.delta>0?'&#9650;':r.delta<0?'&#9660;':'&#8212;';
         const status=r.now===0?'Clean':r.delta<0?'Improving':r.delta>0?'Degraded':'Stable';
         const statusColor=r.now===0?'#22c55e':r.delta<0?'#22c55e':r.delta>0?'#ef4444':'#8c8fa3';
         const isV3=r.sdk.startsWith('3')||r.sdk.includes('v3')||r.sdk.includes('refactor-v3');
+        const scan=fmtScanned(r.scanned);
         return`<tr>
             <td style="color:#b0b3c6;font-weight:600">${i+1}</td>
             <td><span class="repo-tag">${esc(r.repo.split('/').pop())}</span></td>
             <td><span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'}">${esc(r.sdk)}</span></td>
+            <td title="${esc(scan.title)}" style="color:${scan.color};font-size:11px">${scan.label}</td>
             <td>${r.app}</td>
             <td>${r.base}</td>
             <td><strong>${r.now}</strong></td>
@@ -934,6 +990,109 @@ function renderTrends(){
             <td><span style="color:${statusColor};font-weight:600;font-size:11px">${status}</span></td>
         </tr>`;
     }).join('');
+
+    renderRegressions();
+}
+
+// Compare today's org-wide unique CVE union against the snapshot N days back
+// and surface which repos introduced the new CVE IDs. The window is the same
+// one used by the chart (fTrendWindow). Always rendered — green confirmation
+// when clean, red warning when there's a regression.
+function renderRegressions(){
+    const el=document.getElementById('trendRegressions');
+    const today=new Date().toISOString().slice(0,10);
+    const repos=Object.keys(D.repos);
+    if(!repos.length){el.innerHTML='';return;}
+
+    // Pick the prior date as (today − window). The chart's window selector is
+    // the source of truth so the two views stay in sync.
+    const windowDays=parseInt(document.getElementById('fTrendWindow')?.value||'7',10);
+    const cutoff=new Date();cutoff.setDate(cutoff.getDate()-windowDays);
+    const cutoffStr=cutoff.toISOString().slice(0,10);
+
+    // Today: live state per repo.
+    const repoToday={};const todayIds=new Set();
+    repos.forEach(r=>{
+        const s=new Set();
+        (D.repos[r].vulnerabilities||[]).forEach(v=>{if(v.id){s.add(v.id);todayIds.add(v.id);}});
+        repoToday[r]=s;
+    });
+
+    // Prior: most recent snapshot at-or-before cutoffStr per repo. Use the
+    // new-schema `ids` field if present; for old-schema entries fall back to
+    // current state so those repos don't get falsely blamed for pre-existing
+    // CVEs (matches the chart logic).
+    const repoPrior={};const priorIds=new Set();
+    repos.forEach(r=>{
+        const h=(historyData[r]||[]).filter(e=>e.date<=cutoffStr).slice().sort((a,b)=>a.date.localeCompare(b.date));
+        const s=new Set();
+        if(h.length){
+            const last=h[h.length-1];
+            if(Array.isArray(last.ids)){
+                last.ids.forEach(id=>{s.add(id);priorIds.add(id);});
+            }else{
+                (D.repos[r].vulnerabilities||[]).forEach(v=>{if(v.id){s.add(v.id);priorIds.add(v.id);}});
+            }
+        }
+        repoPrior[r]=s;
+    });
+
+    // New = today's union minus prior union.
+    const newIds=[...todayIds].filter(id=>!priorIds.has(id));
+    const labels={1:'yesterday',3:'3 days ago',7:'7 days ago',14:'14 days ago',30:'30 days ago'};
+    const sinceLabel=labels[windowDays]||`${windowDays} days ago`;
+
+    if(!newIds.length){
+        el.style.borderLeft='3px solid #22c55e';
+        el.innerHTML=`
+            <div class="card-title" style="color:#22c55e;display:flex;align-items:center">
+                ✓ No new unique CVEs since ${sinceLabel}
+                <span style="color:#b0b3c6;font-weight:500;font-size:10px;text-transform:none;letter-spacing:0;margin-left:8px">org-wide unique CVE union is stable or shrinking</span>
+            </div>`;
+        return;
+    }
+
+    // Pull severity/source metadata for badges.
+    const cveMeta={};
+    repos.forEach(r=>(D.repos[r].vulnerabilities||[]).forEach(v=>{
+        if(v.id&&!cveMeta[v.id])cveMeta[v.id]={sev:v.severity||'',src:v.source_type||'app',pkg:v.package||''};
+    }));
+
+    // Group each new CVE by repos that have it today AND didn't have it prior.
+    const byRepo={};
+    newIds.forEach(id=>{
+        repos.forEach(r=>{
+            if(repoToday[r].has(id)&&!repoPrior[r].has(id)){
+                (byRepo[r]=byRepo[r]||[]).push(id);
+            }
+        });
+    });
+    const sorted=Object.entries(byRepo).sort((a,b)=>b[1].length-a[1].length);
+
+    const cveBadges=(ids)=>ids.slice(0,4).map(id=>{
+        const m=cveMeta[id]||{};
+        const sevColor=m.sev==='CRITICAL'?'#ef4444':m.sev==='HIGH'?'#f97316':'#8c8fa3';
+        return `<span style="font-family:monospace;font-size:10px;color:${sevColor}" title="${esc(m.pkg)}">${esc(id)}</span>`;
+    }).join(', ')+(ids.length>4?` <span style="color:#8c8fa3">+${ids.length-4} more</span>`:'');
+
+    el.style.borderLeft='3px solid #ef4444';
+    el.innerHTML=`
+        <div class="card-title" style="color:#ef4444;display:flex;align-items:center">
+            ⚠️ +${newIds.length} unique CVE${newIds.length===1?'':'s'} since ${sinceLabel}
+            <span style="color:#b0b3c6;font-weight:500;font-size:10px;text-transform:none;letter-spacing:0;margin-left:8px">repos that introduced new CVE IDs to the org-wide union</span>
+        </div>
+        ${sorted.map(([r,ids])=>{
+            const sdk=D.repos[r].sdk_version||'?';
+            const isV3=sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3');
+            const sdkStyle=isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c';
+            return `<div style="display:flex;align-items:center;padding:8px 4px;border-bottom:1px solid #f0f0f5;gap:14px">
+                <span class="repo-tag">${esc(r.split('/').pop())}</span>
+                <span class="badge" style="${sdkStyle}">${esc(sdk)}</span>
+                <span style="color:#ef4444;font-weight:600;min-width:32px">+${ids.length}</span>
+                <span style="flex:1;font-size:11px">${cveBadges(ids)}</span>
+            </div>`;
+        }).join('')}
+    `;
 }
 
 function exportTrendCSV(){
@@ -942,7 +1101,7 @@ function exportTrendCSV(){
     const repos=sdkFilter==='all'?allRepos:allRepos.filter(r=>(D.repos[r].sdk_version||'')==sdkFilter);
     const days=parseInt(document.getElementById('fTrendDays').value);
     const cutoff=new Date();cutoff.setDate(cutoff.getDate()-days);const cutoffStr=cutoff.toISOString().slice(0,10);
-    let csv='Repo,SDK,Total Today,App CVEs,Base CVEs,Compare Period,Change,Status\n';
+    let csv='Repo,SDK,Last Scan,Total Today,App CVEs,Base CVEs,Compare Period,Change,Status\n';
     repos.forEach(r=>{
         const d=D.repos[r];
         const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
@@ -950,11 +1109,13 @@ function exportTrendCSV(){
         const old=(all.length?(before.length?before[before.length-1].total:all[0].total):d.total)||0;
         const delta=(d.total||0)-old;
         const status=(d.total||0)===0?'Clean':delta<0?'Improving':delta>0?'Degraded':'Stable';
-        csv+=`${r.split('/').pop()},${d.sdk_version||'?'},${d.total||0},${d.app_count||0},${d.base_image_count||0},${old},${delta},${status}\n`;
+        const scanDate=(d.scanned_at||'').slice(0,10);
+        csv+=`${r.split('/').pop()},${d.sdk_version||'?'},${scanDate},${d.total||0},${d.app_count||0},${d.base_image_count||0},${old},${delta},${status}\n`;
     });
     const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);
     const a=document.createElement('a');a.href=url;a.download='vulnerability-trends.csv';a.click();URL.revokeObjectURL(url);
 }
+
 
 async function init(){await load();await loadHistory();renderTrends();}
 init();

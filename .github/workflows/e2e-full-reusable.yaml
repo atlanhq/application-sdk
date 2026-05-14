@@ -31,12 +31,16 @@ name: e2e-full-reusable
 #   - Tenant + OAuth + API-key env wiring.
 #   - The `Resolve agent-name` step that handles the run-id default.
 #   - The SDR composite action invocation with full-DAG defaults
-#     (test-path, secrets-script).
+#     (test-path, secrets-script, components-dir, compose-overlay).
 #
-# Connector-level Dapr component / compose overrides live under the
-# connector's $SDR_CONFIG_DIR (`.github/sdr-e2e/` or fallback
-# `.github/e2e/`); the SDR composite picks them up by convention,
-# no inputs to thread through.
+# `components-dir` + `compose-overlay` are explicit here because the
+# full-DAG pipeline lives alongside the SDR (testcontainer) pipeline
+# in connector repos — both share `$SDR_CONFIG_DIR` but need
+# different component sets + compose overlays (full-DAG uses an S3
+# OAuth objectstore + a worker container that registers under a
+# dynamic agent-name, SDR uses localstorage + a hermetic sibling DB).
+# Passing the per-pipeline paths through bypasses the convention
+# fallback that would otherwise pick up the SDR files.
 #
 # Caller overrides any of the input defaults when their layout differs.
 
@@ -63,6 +67,25 @@ on:
         required: false
         type: string
         default: .github/e2e/make-secrets-e2e-full.py
+      components-dir:
+        description: |
+          App-level Dapr component overrides for the full-DAG stack
+          (e.g. S3 binding via the tenant's blobstorage proxy).
+          Default matches the convention this repo's apps follow —
+          a sibling directory in `.github/e2e/` so SDR and full-DAG
+          don't share the same overrides set.
+        required: false
+        type: string
+        default: .github/e2e/e2e-full-components
+      compose-overlay:
+        description: |
+          docker-compose overlay for the full-DAG stack. Propagates
+          AWS_* env vars to the worker for the S3 binding and sets a
+          unique agent-name so the worker registers on the harness's
+          dynamic Temporal queue.
+        required: false
+        type: string
+        default: .github/e2e/e2e-full-docker-compose.yaml
       timeout-minutes:
         description: |
           GH job timeout. Must always be > ae_poll_timeout_seconds +
@@ -175,6 +198,8 @@ jobs:
           app-image-name: ${{ inputs.app-image-name }}
           test-path: ${{ inputs.test-path }}
           secrets-script: ${{ inputs.secrets-script }}
+          components-dir: ${{ inputs.components-dir }}
+          compose-overlay: ${{ inputs.compose-overlay }}
           # Bump the container-health wait because the worker has to
           # establish the Temporal connection with TLS + auth before
           # /server/health turns green.

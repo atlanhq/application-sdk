@@ -9,6 +9,7 @@ from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
 
 from application_sdk.constants import (
+    ENABLE_OBSERVABILITY_STORE_SINK,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
     METRICS_FILE_NAME,
@@ -127,9 +128,19 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             # ``* on(instance) group_left(...)`` join. See the cardinality
             # rationale in observability/utils.py:METRIC_ENRICHMENT_KEYS.
             self._prometheus_reader = EnrichedPrometheusMetricReader(resource=resource)
+            readers = [self._prometheus_reader]
+
+            if ENABLE_OBSERVABILITY_STORE_SINK:
+                from application_sdk.observability._objectstore_metric_reader import (  # noqa: PLC0415 — cold path
+                    create_objectstore_metric_reader,
+                )
+
+                self._objectstore_reader = create_objectstore_metric_reader()
+                readers.append(self._objectstore_reader)
+
             self.meter_provider = MeterProvider(
                 resource=resource,
-                metric_readers=[self._prometheus_reader],
+                metric_readers=readers,
             )
             metrics.set_meter_provider(self.meter_provider)
             self.meter = self.meter_provider.get_meter(SERVICE_NAME)
