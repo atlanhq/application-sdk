@@ -1,5 +1,36 @@
 # Changelog
 
+## v3.9.0 (May 12, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.8.0...v3.9.0
+
+### Features
+
+- port signal-over-noise from awesome-ai (#1719) (by @Garavitey in [3756697](https://github.com/atlanhq/application-sdk/commit/3756697))
+
+### Bug Fixes
+
+- flush SegmentClient queue on SIGTERM (BLDX-1260) (#1723) (by @cmgrote in [1ff0297](https://github.com/atlanhq/application-sdk/commit/1ff0297))
+
+
+## v3.8.0 (May 11, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.7.0...v3.8.0
+
+### Features
+
+- add SqlApp consolidated SQL template [BLDX-968] (#1589) (by @Aryamanz29 in [dd61012](https://github.com/atlanhq/application-sdk/commit/dd61012))
+- flatten failure.category/audience/code onto ended logs (#1706) (by @anuj-atlan in [aecdede](https://github.com/atlanhq/application-sdk/commit/aecdede))
+
+### Bug Fixes
+
+- skip None values in OTEL attribute build instead of stringifying (#1697) (by @saig214 in [c3385a4](https://github.com/atlanhq/application-sdk/commit/c3385a4))
+- allowlist 5 HIGH CVEs blocking publish-app security gate (py3-pip-wheel, Twisted, rustls-webpki) (#1702) (by @TechyMT in [c96bfc0](https://github.com/atlanhq/application-sdk/commit/c96bfc0))
+- avoid handler metrics Temporal proxy traceback (#1705) (by @fyzanshaik-atlan in [deadd6e](https://github.com/atlanhq/application-sdk/commit/deadd6e))
+- replace os.path.exists guards in JsonFileWriter with buffer-size checks to prevent silent upload skip (#1655) (by @swataswayam-14 in [e9ea907](https://github.com/atlanhq/application-sdk/commit/e9ea907))
+- skip vpa.maxAllowed clamp rule when updateMode=Off (#1712) (by @anuj-atlan in [3c61a11](https://github.com/atlanhq/application-sdk/commit/3c61a11))
+
+
 ## v3.7.0 (May 07, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.6.1...v3.7.0

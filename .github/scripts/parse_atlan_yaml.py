@@ -42,6 +42,12 @@ _KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 # Closed type set. Mirrors core.version.model.EntrypointPackageType in GM.
 _ALLOWED_TYPES = {"connector", "miner", "orchestrator", "utility", "custom"}
 
+# Channels for which ``deploy.env_overrides.<channel>`` actually takes
+# effect at GM's catalog read. Mirrors ``_OVERRIDABLE_CHANNELS`` in
+# ``core/release/config_resolver.py`` in global-marketplace. Bumping this
+# set is a coordinated change with GM.
+_OVERRIDABLE_CHANNELS = {"beta", "staging"}
+
 # Required keys for each entrypoints entry. description and icon_url
 # are optional (default empty string on GM side).
 # generated_dir is auto-derived from name (Option B: name == folder) so it is
@@ -124,6 +130,44 @@ def _validate_entrypoints(wp_val: Any) -> str:
     return json.dumps(wp_val, separators=(",", ":"))
 
 
+def _validate_env_overrides(deploy_val: Any) -> None:
+    """Validate ``deploy.env_overrides`` shape, if present.
+
+    GM's resolver is intentionally lenient (silent no-op on malformed input)
+    so a typo'd channel name would ship the base config to that channel with
+    no signal to the developer. We fail CI fast instead.
+
+    Allowed shape::
+
+        deploy:
+          env_overrides:
+            beta:    {KEY: value, ...}
+            staging: {KEY: value, ...}
+
+    Only channels in ``_OVERRIDABLE_CHANNELS`` are accepted; bumping that set
+    is a coordinated change with GM's ``config_resolver._OVERRIDABLE_CHANNELS``.
+    """
+    if not isinstance(deploy_val, dict):
+        return
+    overrides = deploy_val.get("env_overrides")
+    if overrides is None:
+        return
+    if not isinstance(overrides, dict):
+        _err("deploy.env_overrides must be a mapping of channel → env vars")
+    unknown = set(overrides.keys()) - _OVERRIDABLE_CHANNELS
+    if unknown:
+        _err(
+            f"deploy.env_overrides has unknown channel(s) {sorted(unknown)}; "
+            f"allowed: {sorted(_OVERRIDABLE_CHANNELS)}"
+        )
+    for channel, env in overrides.items():
+        if not isinstance(env, dict):
+            _err(
+                f"deploy.env_overrides.{channel} must be a mapping of env vars; "
+                f"got {type(env).__name__}"
+            )
+
+
 def _read_sdk_version_from_uv_lock(path: str = "uv.lock") -> str:
     """Best-effort read of the locked atlan-application-sdk version.
 
@@ -183,6 +227,7 @@ def parse(
         )
 
     deploy_val = d.get("deploy")
+    _validate_env_overrides(deploy_val)
     deploy_config = (
         yaml.dump(deploy_val, default_flow_style=False)
         if deploy_val is not None

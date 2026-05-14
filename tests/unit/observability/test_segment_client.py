@@ -505,7 +505,7 @@ class TestProcessQueue:
         # flushes the in-flight batch.
         call_count = {"n": 0}
 
-        async def _fake_wait_for(coro, timeout):  # noqa: ARG001
+        async def _fake_wait_for(coro, timeout):
             call_count["n"] += 1
             # Make sure we don't leak the inner queue.get coroutine.
             try:
@@ -545,74 +545,184 @@ class TestClose:
         # Must not raise; nothing to close.
         client.close()
 
-    def test_close_cancels_task_and_joins_thread(self):
+    def test_close_cancels_task_then_joins_thread(self):
+        """close() must signal cancellation then join the thread.
+
+        The httpx client is now closed inside run_worker's finally block, so
+        close() must NOT call run_until_complete or run_coroutine_threadsafe —
+        that would race against the CancelledError handler's final batch send.
+        """
         client = _enabled_client_no_thread()
-        # Set up fake worker task / loop / client.
         fake_loop = mock.MagicMock()
-        fake_loop.is_running.return_value = False  # use run_until_complete branch
-
-        # Capture and close the coroutine to avoid "never awaited" warnings.
-        consumed = {"called": False}
-
-        def _consume(coro):
-            consumed["called"] = True
-            try:
-                coro.close()
-            except Exception:  # noqa: S110 — closing dead test-scaffold coroutine; nothing to log
-                pass
-
-        fake_loop.run_until_complete.side_effect = _consume
         client._loop = fake_loop
         fake_task = mock.MagicMock()
         fake_task.done.return_value = False
         client._worker_task = fake_task
-        client._client = mock.AsyncMock()
         fake_thread = mock.MagicMock()
         fake_thread.is_alive.return_value = True
         client._worker_thread = fake_thread
 
         client.close()
 
-        # call_soon_threadsafe should have been invoked with the cancel callable.
+        # 1. Cancellation must be signalled via call_soon_threadsafe.
         fake_loop.call_soon_threadsafe.assert_called_once()
-        cancel_arg = fake_loop.call_soon_threadsafe.call_args.args[0]
-        assert cancel_arg is fake_task.cancel
-        # run_until_complete called with our close coroutine (not running branch).
-        assert consumed["called"] is True
-        # Thread join called with timeout.
+        assert fake_loop.call_soon_threadsafe.call_args.args[0] is fake_task.cancel
+        # 2. Thread join must be called (with the 10 s timeout).
         fake_thread.join.assert_called_once()
+        join_timeout = (
+            fake_thread.join.call_args.kwargs.get("timeout")
+            or fake_thread.join.call_args.args[0]
+        )
+        assert join_timeout == 10.0
+        # 3. close() must NOT touch the httpx client directly — that's run_worker's job.
+        fake_loop.run_until_complete.assert_not_called()
+        fake_loop.run_coroutine_threadsafe.assert_not_called()
 
-    def test_close_running_loop_uses_run_coroutine_threadsafe(self):
+    def test_close_already_done_task_skips_cancel(self):
+        """If the worker task is already done, call_soon_threadsafe is skipped."""
+        client = _enabled_client_no_thread()
+        fake_loop = mock.MagicMock()
+        client._loop = fake_loop
+        fake_task = mock.MagicMock()
+        fake_task.done.return_value = True  # already finished
+        client._worker_task = fake_task
+        client._worker_thread = None
+
+        client.close()
+
+        fake_loop.call_soon_threadsafe.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _flush_queue — async, drains queue and sends batch
+# ---------------------------------------------------------------------------
+
+
+class TestFlushQueue:
+    @pytest.mark.timeout(2)
+    async def test_no_queue_or_client_early_return(self):
+        client = _enabled_client_no_thread()
+        client._queue = None
+        client._client = None
+        await client._flush_queue()  # must not raise
+
+    @pytest.mark.timeout(2)
+    async def test_empty_queue_sends_nothing(self):
+        client = _enabled_client_no_thread()
+        client._queue = asyncio.Queue()
+        client._client = mock.AsyncMock()
+        with mock.patch.object(client, "_send_batch_to_segment") as msend:
+            await client._flush_queue()
+        msend.assert_not_called()
+
+    @pytest.mark.timeout(2)
+    async def test_drains_all_pending_records(self):
+        client = _enabled_client_no_thread()
+        client._queue = asyncio.Queue()
+        records = [_make_record(name=f"m{i}") for i in range(3)]
+        for r in records:
+            await client._queue.put(r)
+        client._client = mock.AsyncMock()
+
+        sent: list[list] = []
+
+        async def _capture(batch):
+            sent.append(list(batch))
+
+        with mock.patch.object(client, "_send_batch_to_segment", side_effect=_capture):
+            await client._flush_queue()
+
+        assert len(sent) == 1
+        assert sent[0] == records
+        assert client._queue.empty()
+
+
+# ---------------------------------------------------------------------------
+# flush() — async public interface, bridges to worker loop
+# ---------------------------------------------------------------------------
+
+
+class TestFlush:
+    @pytest.mark.timeout(2)
+    async def test_flush_disabled_is_noop(self):
+        client = _disabled_client()
+        await client.flush()  # must not raise
+
+    @pytest.mark.timeout(2)
+    async def test_flush_no_loop_is_noop(self):
+        client = _enabled_client_no_thread()
+        client._loop = None
+        await client.flush()  # must not raise
+
+    @pytest.mark.timeout(2)
+    async def test_flush_loop_not_running_is_noop(self):
+        client = _enabled_client_no_thread()
+        fake_loop = mock.MagicMock()
+        fake_loop.is_running.return_value = False
+        client._loop = fake_loop
+        client._queue = asyncio.Queue()
+        with mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun:
+            await client.flush()
+        mrun.assert_not_called()
+
+    @pytest.mark.timeout(2)
+    async def test_flush_schedules_flush_queue_on_worker_loop(self):
+        """flush() must schedule _flush_queue on the worker loop and await it."""
+        import concurrent.futures
+
         client = _enabled_client_no_thread()
         fake_loop = mock.MagicMock()
         fake_loop.is_running.return_value = True
         client._loop = fake_loop
-        fake_task = mock.MagicMock()
-        fake_task.done.return_value = False
-        client._worker_task = fake_task
-        client._client = mock.AsyncMock()
-        client._worker_thread = None  # skip the join branch
+        client._queue = asyncio.Queue()
 
-        fake_future = mock.MagicMock()
-        # Simulate a successful result within timeout.
-        fake_future.result.return_value = None
+        # Use a real concurrent.futures.Future that's already resolved so
+        # asyncio.wrap_future completes immediately.
+        cf_future: concurrent.futures.Future = concurrent.futures.Future()
+        cf_future.set_result(None)
 
-        captured = {}
+        captured: dict = {}
 
-        def _capture(coro, loop):  # noqa: ARG001
-            # Close the coroutine to avoid "never awaited" warnings.
-            try:
-                coro.close()
-            except Exception:  # noqa: S110 — closing dead test-scaffold coroutine; nothing to log
-                pass
-            captured["called"] = True
-            return fake_future
+        def _capture(coro, loop):
+            captured["coro"] = coro
+            captured["loop"] = loop
+            return cf_future
 
         with mock.patch.object(
-            sc_module.asyncio,
-            "run_coroutine_threadsafe",
-            side_effect=_capture,
+            sc_module.asyncio, "run_coroutine_threadsafe", side_effect=_capture
         ):
-            client.close()
-        assert captured.get("called") is True
-        fake_future.result.assert_called_once()
+            await client.flush()
+
+        assert captured.get("loop") is fake_loop
+        # The coroutine handed off should be _flush_queue's coroutine object.
+        assert hasattr(captured.get("coro"), "close")
+        captured["coro"].close()
+
+    @pytest.mark.timeout(2)
+    async def test_flush_times_out_and_cancels_future(self):
+        """flush() cancels the concurrent future and logs warning on timeout."""
+        import concurrent.futures
+
+        client = _enabled_client_no_thread()
+        fake_loop = mock.MagicMock()
+        fake_loop.is_running.return_value = True
+        client._loop = fake_loop
+        client._queue = asyncio.Queue()
+
+        cf_future: concurrent.futures.Future = concurrent.futures.Future()
+
+        def _stub(coro, loop):
+            coro.close()  # prevent "coroutine was never awaited" warning
+            return cf_future
+
+        with (
+            mock.patch.object(
+                sc_module.asyncio, "run_coroutine_threadsafe", side_effect=_stub
+            ),
+            mock.patch.object(
+                sc_module.asyncio, "wait_for", side_effect=asyncio.TimeoutError
+            ),
+        ):
+            await client.flush()  # must not raise
+
+        assert cf_future.cancelled()
