@@ -16,7 +16,7 @@ import asyncio
 import gzip
 import logging
 import os
-import threading
+import posixpath
 from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -190,12 +190,13 @@ def _write_ndjson_gz(records: Sequence[dict[str, Any]], path: str) -> None:
             f.write(orjson.dumps(record) + b"\n")
 
 
-def _upload_sync(local_path: str, remote_key: str) -> None:
+def _upload_sync(local_path: str, remote_key: str, timeout_s: float) -> None:
     """Upload *local_path* to object stores, bridging async→sync.
 
     Called from the ``PeriodicExportingMetricReader`` background thread,
     which is not an asyncio thread.  We use ``asyncio.run()`` to drive
-    the async ``upload_file`` from a synchronous context.
+    the async ``upload_file`` from a synchronous context.  The upload is
+    bounded by ``timeout_s`` so a hanging store never blocks the reader.
     """
 
     async def _upload() -> None:
@@ -216,7 +217,10 @@ def _upload_sync(local_path: str, remote_key: str) -> None:
                     "ObjectStore metric upload to upstream store failed", exc_info=True
                 )
 
-    asyncio.run(_upload())
+    try:
+        asyncio.run(asyncio.wait_for(_upload(), timeout=timeout_s))
+    except TimeoutError:
+        logger.warning("ObjectStore metric upload timed out after %.1fs", timeout_s)
 
 
 class ObjectStoreMetricExporter(MetricExporter):
@@ -236,7 +240,6 @@ class ObjectStoreMetricExporter(MetricExporter):
             },
         )
         self._data_dir = data_dir or get_observability_dir()
-        self._lock = threading.Lock()
 
     def export(
         self,
@@ -267,7 +270,7 @@ class ObjectStoreMetricExporter(MetricExporter):
             )
             local_path = os.path.join(local_dir, filename)
 
-            remote_key = os.path.join(
+            remote_key = posixpath.join(
                 _S3_PREFIX,
                 f"year={now.year}",
                 f"month={now.month:02d}",
@@ -279,7 +282,7 @@ class ObjectStoreMetricExporter(MetricExporter):
             _write_ndjson_gz(records, local_path)
 
             try:
-                _upload_sync(local_path, remote_key)
+                _upload_sync(local_path, remote_key, timeout_millis / 1000.0)
             finally:
                 # Always clean up local file
                 try:
