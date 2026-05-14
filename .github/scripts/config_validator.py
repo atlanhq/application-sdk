@@ -10,8 +10,10 @@ Rules enforced:
   3. vpa.maxAllowed.memory  <= 27Gi (binary, = 27 * 1024^3 bytes).
   4. requests.cpu           <= 7 cores.
   5. requests.memory        <= 27Gi.
-  6. When vpa.enabled=true: requests.{cpu,memory} <= effective vpa.maxAllowed
-     (chart defaults cpu=2000m, memory=18Gi when not declared).
+  6. When vpa.enabled=true AND updateMode != "Off": requests.{cpu,memory}
+     <= effective vpa.maxAllowed (chart defaults cpu=2000m, memory=18Gi
+     when not declared). Skipped in updateMode=Off — VPA only emits
+     recommendations there and doesn't clamp admission.
   7. requests <= limits per resource.
   8. vpa.minAllowed         <= vpa.maxAllowed per resource.
   9. keda.minReplicaCount   <= keda.maxReplicaCount.
@@ -339,11 +341,30 @@ def _resolve_effective_vpa_max(
     parsed: dict[tuple[str, str], int | None],
     vpa_enabled: bool | None,
 ) -> tuple[int | None, int | None]:
-    """Effective vpa.maxAllowed (cpu_milli, mem_bytes), or (None, None) when vpa disabled.
-    Falls back to DEFAULT_VPA_MAX_* when maxAllowed not declared."""
+    """Effective vpa.maxAllowed (cpu_milli, mem_bytes), or (None, None) when
+    VPA does not clamp requests at admission.
+
+    VPA clamps requests only in updateMode `Initial`, `Recreate`, or `Auto`.
+    In `Off` mode VPA emits recommendations but doesn't apply them — initial
+    requests above maxAllowed deploy as-is. Skip the requests<=vpa.maxAllowed
+    rule in that case. Same when vpa.enabled is false/missing.
+
+    Falls back to DEFAULT_VPA_MAX_* when maxAllowed not declared.
+    """
     if vpa_enabled is not True:
         return None, None
     vpa = cfg.get("vpa") or {}
+    # Match VPA enum case-insensitively. K8s VPA accepts only the canonical
+    # casings (Off/Initial/Recreate/Auto), but app owners typing `off` should
+    # not get a misleading clamp violation — the chart's schema rejects bad
+    # casings later anyway. Also accept bool False: PyYAML's YAML 1.1 loader
+    # coerces unquoted `off` / `no` to False — common gotcha.
+    update_mode = vpa.get("updateMode")
+    is_off = update_mode is False or (
+        isinstance(update_mode, str) and update_mode.strip().lower() == "off"
+    )
+    if is_off:
+        return None, None
     max_allowed = vpa.get("maxAllowed") or {}
     cpu_milli: int | None = (
         parsed.get(("cpu", "maxAllowed"))

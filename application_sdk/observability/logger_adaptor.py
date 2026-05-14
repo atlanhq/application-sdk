@@ -127,9 +127,14 @@ _KNOWN_EXTRA_KEYS = frozenset(
 _PREFIXES_PASSTHROUGH = (
     "atlan.",  # SDK convention: atlan.correlation_id and similar dotted keys
     "exception.",  # OTel semconv: exception.type/message/stacktrace
+    "failure.",  # SDK convention: failure.category/audience/code from AppError
     "otel.",  # OTel semconv: otel.status_code
     "temporal.",  # SDK convention: temporal.workflow.id, etc.
     "tenant.",
+    "workflow_run.",  # AE convention: workflow_run.terminated / workflow_run.node
+    # events emitted from AutomationEngineWorkflow's finally block,
+    # carrying typed FailureDetails (category, code, audience,
+    # retryable, evidence) projected from the cause chain.
 )
 
 

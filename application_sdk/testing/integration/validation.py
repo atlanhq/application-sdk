@@ -32,9 +32,6 @@ from glob import glob
 from typing import Any, Dict, List
 
 import orjson
-import pandas as pd
-import pandera.extensions as extensions
-from pandera.io import from_yaml  # pyright: ignore[reportPrivateImportUsage]
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -44,34 +41,51 @@ logger = get_logger(__name__)
 # =============================================================================
 # Custom Pandera Check Methods
 # =============================================================================
+#
+# pandera + pandas are heavy optional deps. Importing them at module load
+# time forces every consumer of application_sdk.testing.integration to
+# install them, which then chains into SDR test modules that don't use
+# pandera at all (pytest.importorskip catches the resulting ImportError
+# and silently skips all tests — see BLDX-1254). Defer the imports and
+# the check-method registration to the first validate_with_pandera()
+# call instead.
+
+_pandera_check_method_registered = False
 
 
-@extensions.register_check_method(statistics=["expected_record_count"])  # pyright: ignore[reportPrivateImportUsage]
-def check_record_count_ge(df: pd.DataFrame, *, expected_record_count: int) -> bool:
-    """Validate that a DataFrame has at least the expected number of records.
+def _ensure_pandera_check_methods_registered() -> None:
+    """Register custom pandera check methods on first use.
 
-    This is registered as a custom pandera check method that can be used
-    in YAML schema files:
-
-        checks:
-          check_record_count_ge:
-            expected_record_count: 10
-
-    Args:
-        df: The DataFrame to validate.
-        expected_record_count: Minimum expected row count.
-
-    Returns:
-        bool: True if the record count is sufficient.
-
-    Raises:
-        ValueError: If the record count is below the expected minimum.
+    pandera.extensions.register_check_method is idempotent-safe (each
+    method name registers once); the module-level boolean is purely to
+    avoid the import-once-per-call overhead.
     """
-    if df.shape[0] >= expected_record_count:
-        return True
-    raise ValueError(
-        f"Expected record count >= {expected_record_count}, got: {df.shape[0]}"
-    )
+    global _pandera_check_method_registered
+    if _pandera_check_method_registered:
+        return
+
+    import pandera.extensions as extensions  # noqa: PLC0415
+
+    @extensions.register_check_method(statistics=["expected_record_count"])  # pyright: ignore[reportPrivateImportUsage]
+    def check_record_count_ge(df: Any, *, expected_record_count: int) -> bool:
+        """Validate that a DataFrame has at least the expected number of records.
+
+        Registered as a custom pandera check usable from YAML schema files::
+
+            checks:
+              check_record_count_ge:
+                expected_record_count: 10
+
+        Raises:
+            ValueError: If the record count is below the expected minimum.
+        """
+        if df.shape[0] >= expected_record_count:
+            return True
+        raise ValueError(
+            f"Expected record count >= {expected_record_count}, got: {df.shape[0]}"
+        )
+
+    _pandera_check_method_registered = True
 
 
 # =============================================================================
@@ -79,11 +93,14 @@ def check_record_count_ge(df: pd.DataFrame, *, expected_record_count: int) -> bo
 # =============================================================================
 
 
-def get_normalised_dataframe(extracted_file_path: str) -> pd.DataFrame:
+def get_normalised_dataframe(extracted_file_path: str) -> Any:
     """Read extracted output files and normalize into a DataFrame.
 
     Supports JSON (line-delimited) and Parquet files. All files in the
     directory tree are merged into a single DataFrame.
+
+    pandas is imported lazily — see the note in
+    :func:`_ensure_pandera_check_methods_registered`.
 
     Args:
         extracted_file_path: Directory containing extracted output files.
@@ -94,6 +111,8 @@ def get_normalised_dataframe(extracted_file_path: str) -> pd.DataFrame:
     Raises:
         FileNotFoundError: If no data files are found.
     """
+    import pandas as pd  # noqa: PLC0415
+
     data: List[Dict[str, Any]] = []
 
     # Search for JSON and parquet files
@@ -185,6 +204,16 @@ def validate_with_pandera(
     """
     if not os.path.exists(schema_base_path):
         raise FileNotFoundError(f"Schema base path not found: {schema_base_path}")
+
+    # Lazy import — keeps the module importable without pandera installed
+    # (see module docstring + _ensure_pandera_check_methods_registered).
+    # Import from pandera.io.pandas_io (the canonical export path) so
+    # pyright doesn't flag reportPrivateImportUsage on pandera.io.
+    from pandera.io.pandas_io import (  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+        from_yaml,
+    )
+
+    _ensure_pandera_check_methods_registered()
 
     schema_files = get_schema_file_paths(schema_base_path)
     results: List[Dict[str, Any]] = []

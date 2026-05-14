@@ -55,7 +55,12 @@ from application_sdk.storage.errors import (
     StorageError,
     StorageNotFoundError,
 )
-from application_sdk.storage.ops import _list_items, download_file, upload_file
+from application_sdk.storage.ops import (
+    _list_items,
+    _safe_join_under,
+    download_file,
+    upload_file,
+)
 
 # Lazy import: direct get_logger() at module load would create a circular
 # dependency (observability -> storage -> cloud -> observability).
@@ -249,7 +254,6 @@ class CloudStore:
                 + (f" (filter: {suffix_filter})" if suffix_filter else "")
             )
 
-        resolved_output = output.resolve()
         sem = asyncio.Semaphore(max_concurrency)
 
         async def _dl(obj_key: str) -> Path:
@@ -259,10 +263,8 @@ class CloudStore:
                     if list_prefix and obj_key.startswith(list_prefix)
                     else Path(obj_key).name
                 )
-                local_path = (output / rel).resolve()
-                # Prevent path traversal from malicious remote keys
-                if not local_path.is_relative_to(resolved_output):
-                    raise StorageError(f"Path traversal detected in key: {obj_key!r}")
+                # Reject keys whose resolved path escapes output (e.g. via ".." segments).
+                local_path = _safe_join_under(output, rel)
                 await download_file(
                     obj_key, local_path, store=self._store, normalize=False
                 )

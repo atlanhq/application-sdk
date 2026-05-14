@@ -26,6 +26,7 @@ from uuid import uuid4
 
 from temporalio import activity, workflow
 from temporalio.converter import default as default_converter
+from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 from temporalio.worker import (
     ActivityInboundInterceptor,
     ExecuteActivityInput,
@@ -38,6 +39,8 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
+from application_sdk.errors.base import AppError
+from application_sdk.errors.wire import FailureDetails
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -55,6 +58,46 @@ if TYPE_CHECKING:
     from temporalio.api.common.v1 import Payload
 
 logger = get_logger(__name__)
+
+
+def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
+    """Flatten SDK error classification onto OTel attributes for ERROR logs.
+
+    Walks ``__cause__`` and ``__context__`` looking for either:
+      * an :class:`application_sdk.errors.base.AppError` (raised directly), or
+      * a ``temporalio.exceptions.ApplicationError`` whose first ``details``
+        entry is a :class:`application_sdk.errors.wire.FailureDetails` (the
+        shape emitted by the SDK's activity wrapper for ``AppError`` subclasses).
+
+    Returns ``{"failure.category", "failure.audience", "failure.code"}`` —
+    OTel attribute keys that ride the ``failure.`` passthrough prefix in
+    ``logger_adaptor``. Empty dict when no SDK classification is recoverable
+    (e.g. raw ``ValueError`` or non-SDK exception); callers append the result
+    to ``ended_attrs`` unconditionally and the log line simply omits the keys.
+    """
+    if exc is None:
+        return {}
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, AppError):
+            return {
+                "failure.category": current.category.value,
+                "failure.audience": type(current).audience.value,
+                "failure.code": current.code,
+            }
+        if isinstance(current, _TemporalApplicationError):
+            for detail in getattr(current, "details", None) or ():
+                if isinstance(detail, FailureDetails):
+                    return {
+                        "failure.category": detail.category.value,
+                        "failure.audience": detail.audience.value,
+                        "failure.code": detail.code,
+                    }
+        current = current.__cause__ or current.__context__
+    return {}
+
 
 _HEADER_CORRELATION_ID = "x-correlation-id"
 # Legacy header used by the AE's older interceptor — kept for compatibility
@@ -222,10 +265,12 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         start_ns = time.monotonic_ns()
         status = "OK"
+        exc_caught: BaseException | None = None
         try:
             return await self.next.execute_workflow(input)
-        except Exception:
+        except Exception as e:
             status = "ERROR"
+            exc_caught = e
             raise
         finally:
             duration_ms = round((time.monotonic_ns() - start_ns) / 1_000_000, 1)
@@ -236,6 +281,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             }
             try:
                 if status == "ERROR":
+                    ended_attrs.update(_extract_failure_attrs(exc_caught))
                     logger.error("workflow.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("workflow.ended", **ended_attrs)
@@ -326,10 +372,12 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
 
         start_ns = time.monotonic_ns()
         status = "OK"
+        exc_caught: BaseException | None = None
         try:
             return await self.next.execute_activity(input)
-        except BaseException:
+        except BaseException as e:
             status = "ERROR"
+            exc_caught = e
             raise
         finally:
             duration_ms = round((time.monotonic_ns() - start_ns) / 1_000_000, 1)
@@ -340,6 +388,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
             }
             try:
                 if status == "ERROR":
+                    ended_attrs.update(_extract_failure_attrs(exc_caught))
                     logger.error("activity.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("activity.ended", **ended_attrs)

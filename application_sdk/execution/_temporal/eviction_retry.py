@@ -1,7 +1,7 @@
 """Per-activity eviction-retry loop for SDK-generated workflows.
 
 Wraps a single ``workflow.execute_activity`` call so that when the activity
-fails with ``WorkerEvictedError`` — i.e. the worker pod was terminated by
+wrapper raises ``ApplicationError(type=WORKER_EVICTED_TYPE)`` — i.e. the worker pod was terminated by
 SIGTERM mid-execution (KEDA scale-down, VPA eviction, spot reclaim, node
 drain, rolling deploy) — the workflow re-dispatches the activity as a fresh
 attempt without burning the application-error retry budget configured on the

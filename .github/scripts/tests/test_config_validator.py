@@ -278,6 +278,77 @@ resources:
         rules = {v.rule for v in exc.value.violations}
         assert "requests_exceeds_vpa_max_cpu" in rules
 
+    def test_update_mode_off_skips_clamp_rule(self):
+        # VPA updateMode=Off → recommendations only, no admission clamp.
+        # Same request that fires the rule with default mode must pass here.
+        validate_config("""
+vpa:
+  enabled: true
+  updateMode: "Off"
+resources:
+  requests: {cpu: 3,    memory: 500Mi}
+  limits:   {cpu: 3,    memory: 1Gi}
+""")
+
+    def test_update_mode_off_case_insensitive(self):
+        # Lowercase `off` also opts out — chart's schema rejects bad casing
+        # downstream; here we mirror app-owner intent.
+        validate_config("""
+vpa:
+  enabled: true
+  updateMode: off
+resources:
+  requests: {cpu: 3,    memory: 500Mi}
+  limits:   {cpu: 3,    memory: 1Gi}
+""")
+
+    def test_update_mode_auto_still_clamps(self):
+        # Sanity: updateMode=Auto must still fire the rule.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("""
+vpa:
+  enabled: true
+  updateMode: "Auto"
+resources:
+  requests: {cpu: 3,    memory: 500Mi}
+  limits:   {cpu: 3,    memory: 1Gi}
+""")
+        rules = {v.rule for v in exc.value.violations}
+        assert "requests_exceeds_vpa_max_cpu" in rules
+
+    def test_update_mode_initial_still_clamps(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("""
+vpa:
+  enabled: true
+  updateMode: "Initial"
+resources:
+  requests: {cpu: 3,    memory: 500Mi}
+  limits:   {cpu: 3,    memory: 1Gi}
+""")
+        rules = {v.rule for v in exc.value.violations}
+        assert "requests_exceeds_vpa_max_cpu" in rules
+
+    def test_update_mode_off_split_resources_also_skipped(self):
+        # workerResources / serverResources path under split must also honour
+        # the Off opt-out — this is the exact scenario from prod.
+        validate_config(
+            """
+splitDeploymentEnabled: true
+temporalWorkerDeployment: {enabled: true}
+vpa:
+  enabled: true
+  updateMode: "Off"
+resources:
+  requests: {cpu: 100m, memory: 500Mi}
+  limits:   {cpu: 1,    memory: 1Gi}
+workerResources:
+  requests: {cpu: 3,    memory: 500Mi}
+  limits:   {cpu: 3,    memory: 1Gi}
+""",
+            sdk_version="3.6.0",
+        )
+
     def test_memory_request_above_default_max(self):
         with pytest.raises(ConfigValidationError) as exc:
             validate_config("""
