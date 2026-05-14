@@ -558,6 +558,18 @@ jobs:
           if created_by:
               body["created_by"] = created_by
 
+          import pathlib
+          generated_dir = pathlib.Path("app/generated")
+          if generated_dir.is_dir():
+              form_files = {}
+              for f in sorted(generated_dir.rglob("*.json")):
+                  try:
+                      form_files[f.name] = json.loads(f.read_text())
+                  except json.JSONDecodeError:
+                      pass
+              if form_files:
+                  body["app_configs"] = json.dumps(form_files)
+
           print(json.dumps(body))
           PYEOF
           )
