@@ -1,0 +1,116 @@
+/// Unit test: AdvancedJDBCUrlGroup emits top-level auth panes (HYP-1251).
+///
+/// When `credentialUrlGroup` (AdvancedJDBCUrlGroup) is used with
+/// `credentialAuthOptions`, the credential configmap must emit auth
+/// panes (basic, ldap, etc.) at the top level with `hidden: true`.
+/// These serve as merge targets for the frontend agent widget's
+/// `agentConfigEntries` overrides. Without them, the deep merge
+/// creates orphaned top-level entries with no ui metadata.
+amends "pkl:test"
+
+import "../src/NativeApp.pkl"
+import "../src/Config.pkl"
+import "../src/Connectors.pkl"
+
+/// Minimal JDBC-URL app with two auth types — exercises the exact
+/// code path in `generateCredentialConfig()` that emits top-level
+/// auth panes alongside `connectBy` + `jdbcUrl`.
+local jdbcApp = (NativeApp) {
+  name = "jdbc-auth-test"
+  displayName = "JDBC Auth Pane Test"
+  connector = Connectors.TERADATA
+  workflowType = "JDBCAuthTestWorkflow"
+  icon = "https://example.com/icon.svg"
+
+  credentialUrlGroup = new NativeApp.AdvancedJDBCUrlGroup {
+    protocol = ""
+    urlAddonBefore = "driver://"
+    hostField = new NativeApp.FieldSpec {
+      name = "host"
+      displayName = "Host"
+      placeholder = "host.example.com"
+      feedback = true
+    }
+    portField = new NativeApp.FieldSpec {
+      name = "port"
+      fieldType = "number"
+      displayName = "Port"
+      placeholder = "1025"
+      defaultValue = "1025"
+      required = false
+    }
+  }
+
+  credentialAuthOptions {
+    ["basic"] = new NativeApp.JDBCUrlAuthOption {
+      label = "Basic"
+      nestedLabel = "Basic"
+      urlPartMapping = new NativeApp.UrlPartMapping {
+        hostname = "host"
+        searchParams {
+          ["PORT"] = new NativeApp.UrlRef { field = "port" }
+        }
+      }
+      fields {
+        new NativeApp.FieldSpec { name = "username"; displayName = "Username" }
+        new NativeApp.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+    ["ldap"] = new NativeApp.JDBCUrlAuthOption {
+      label = "LDAP"
+      nestedLabel = "LDAP"
+      urlPartMapping = new NativeApp.UrlPartMapping {
+        hostname = "host"
+        searchParams {
+          ["PORT"] = new NativeApp.UrlRef { field = "port" }
+          ["LOGMECH"] = new NativeApp.UrlLiteral { value = "LDAP" }
+        }
+      }
+      fields {
+        new NativeApp.FieldSpec { name = "username"; displayName = "Username" }
+        new NativeApp.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+  }
+
+  uiConfig {
+    tasks {
+      ["Credential"] {
+        inputs {
+          ["credential-guid"] = new Config.CredentialInput {
+            title = ""
+            credType = "atlan-connectors-jdbc-auth-test"
+            placeholderText = "Credential Guid"
+          }
+        }
+      }
+    }
+  }
+}
+
+local credentialJson: String = jdbcApp.output.files["atlan-connectors-jdbc-auth-test.json"].text
+
+facts {
+  ["JDBC-URL credential configmap contains AdvancedJDBCUrlGroup and connectBy"] {
+    credentialJson.contains("\"AdvancedJDBCUrlGroup\"")
+    credentialJson.contains("\"connectBy\"")
+    credentialJson.contains("\"jdbcUrl\"")
+  }
+
+  ["Top-level auth panes emitted as hidden merge targets (HYP-1251)"] {
+    // Both auth panes must exist at the top level for agent widget merges
+    credentialJson.contains("\"basic\"")
+    credentialJson.contains("\"ldap\"")
+    // They must be hidden (visible versions live inside jdbcUrl.properties)
+    credentialJson.contains("\"hidden\": true")
+    credentialJson.contains("\"widget\": \"nested\"")
+    credentialJson.contains("\"nestedValue\": false")
+  }
+
+  ["Auth panes also exist inside jdbcUrl.properties"] {
+    // The AdvancedJDBCUrlGroup widget renders from these nested versions
+    credentialJson.contains("\"auth-type\"")
+    credentialJson.contains("\"Username\"")
+    credentialJson.contains("\"Password\"")
+  }
+}

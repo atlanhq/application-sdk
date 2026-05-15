@@ -1296,43 +1296,47 @@ class TestRunCombinedMode:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.fixture
+def _stub_embedded_daemons():
+    """Replace the daprd + Temporal context managers with no-ops.
+
+    ``run_dev_combined`` unconditionally wraps its body in ``embedded_dapr``
+    and ``embedded_runtime``; without this stub each unit test would try to
+    download daprd from the internet and spawn subprocesses. We swap in
+    minimal async context managers that yield the dataclasses the body
+    expects but do no actual work.
+    """
+    from contextlib import asynccontextmanager
+
+    from application_sdk.dev._dapr import EmbeddedDapr
+    from application_sdk.dev._embedded import EmbeddedRuntime
+
+    @asynccontextmanager
+    async def _fake_dapr(**_kwargs):
+        yield EmbeddedDapr(
+            http_port=3500, grpc_port=50001, components_dir="/tmp/fake-components"
+        )
+
+    @asynccontextmanager
+    async def _fake_runtime(**_kwargs):
+        yield EmbeddedRuntime(host="127.0.0.1:7233", namespace="default")
+
+    # ``run_dev_combined`` does ``from application_sdk.dev import embedded_dapr,
+    # embedded_runtime`` lazily inside the function body, so patch them on the
+    # source module — not on ``application_sdk.main``.
+    with (
+        patch("application_sdk.dev.embedded_dapr", _fake_dapr),
+        patch("application_sdk.dev.embedded_runtime", _fake_runtime),
+    ):
+        yield
+
+
 class TestRunDevCombined:
     """Behavioral tests for run_dev_combined()."""
 
-    async def test_sets_default_dapr_ports(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Defaults DAPR_HTTP_PORT/DAPR_GRPC_PORT for dev convenience."""
-        monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
-        monkeypatch.delenv("DAPR_GRPC_PORT", raising=False)
-        app_class = _fake_app_class()
-        with (
-            patch(
-                "application_sdk.main._create_infrastructure",
-                new_callable=AsyncMock,
-                return_value=MagicMock(),
-            ),
-            patch("application_sdk.infrastructure.context.set_infrastructure"),
-            patch(
-                "application_sdk.main.run_combined_mode",
-                new_callable=AsyncMock,
-            ) as mock_run_combined,
-        ):
-            await run_dev_combined(app_class, host="127.0.0.1", port=9999)
-        import os
-
-        assert os.environ.get("DAPR_HTTP_PORT") == "3500"
-        assert os.environ.get("DAPR_GRPC_PORT") == "50001"
-        mock_run_combined.assert_awaited_once()
-        # config passed must reflect dev settings
-        cfg = mock_run_combined.await_args.args[0]
-        assert cfg.mode == "combined"
-        assert cfg.handler_host == "127.0.0.1"
-        assert cfg.handler_port == 9999
-        # Dev should not start prometheus by default (port collision)
-        assert cfg.enable_temporal_core_metrics is False
-        # Dev uses ephemeral health port to avoid collision
-        assert cfg.health_port == 0
+    @pytest.fixture(autouse=True)
+    def _stub_daemons(self, _stub_embedded_daemons):
+        """Stub the embedded daprd + Temporal context managers for every test in this class."""
 
     async def test_credentials_path_schedules_provision_task(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1521,6 +1525,10 @@ class TestLogDaprComponentsSafeMetaBranch:
 
 class TestRunDevCombinedProvisioning:
     """Exercise the inner _provision_and_start coroutine in the credentials path."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_daemons(self, _stub_embedded_daemons):
+        """Stub the embedded daprd + Temporal context managers for every test in this class."""
 
     async def test_provision_and_start_posts_creds_and_workflow(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

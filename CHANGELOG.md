@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.11.0 (May 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.10.0...v3.11.0
+
+### Features
+
+- include sdk_version in EventMetadata (#1760) (by @vaibhavatlan in [059873e](https://github.com/atlanhq/application-sdk/commit/059873e))
+- add local_dev_mode for zero-install local app development (#1759) (by @vaibhavatlan in [f77e0c7](https://github.com/atlanhq/application-sdk/commit/f77e0c7))
+
+### Bug Fixes
+
+- tighten release_tag bypass and add release_model opt-in for versioned releases (#1757) (by @cmgrote in [14aa2e5](https://github.com/atlanhq/application-sdk/commit/14aa2e5))
+- emit top-level hidden auth panes for JDBC-URL agent merge (HYP-1251) (#1761) (by @prateek11rai in [6e1a8e6](https://github.com/atlanhq/application-sdk/commit/6e1a8e6))
+- fix Windows example CI and Capability Manifest Drift on release PRs (#1766) (by @cmgrote in [763785a](https://github.com/atlanhq/application-sdk/commit/763785a))
+
+
 ## v3.10.0 (May 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.9.0...v3.10.0
