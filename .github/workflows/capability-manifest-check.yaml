@@ -55,8 +55,10 @@ jobs:
       # Release PRs only touch version/lockfile artefacts — no manifest check needed.
       - name: Detect release PR
         id: ctx
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          if [[ "${{ github.event.pull_request.head.ref }}" == bump-version* ]]; then
+          if [[ "$HEAD_REF" == bump-version* ]]; then
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "Release PR — capability manifest check is a noop."
           else
