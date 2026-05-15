@@ -42,10 +42,14 @@ runs:
 
     - name: Run unit tests with coverage
       shell: bash
+      # xml and html honor pyproject.toml's [tool.coverage.report].fail_under
+      # too, so we pin those subcommands to --fail-under=0 to ensure artifacts
+      # are always generated. The actual threshold gate is the final
+      # `coverage report` step — its CLI flag overrides pyproject.toml.
       run: |
         uv run coverage run -m pytest tests/unit -v
-        uv run coverage xml
-        uv run coverage html
+        uv run coverage xml --fail-under=0
+        uv run coverage html --fail-under=0
         uv run coverage report --fail-under=${{ inputs.fail-under }}
 
     - name: Comment coverage on PR
