@@ -66,8 +66,16 @@ runs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        $script=iwr -useb https://raw.githubusercontent.com/dapr/cli/master/install/install.ps1; $block=[ScriptBlock]::Create($script); invoke-command -ScriptBlock $block -ArgumentList 1.17.1, "$env:USERPROFILE\.dapr\bin\"
-        $env:Path += ";$env:USERPROFILE\.dapr\bin\"
+        # Direct download — avoids install.ps1's GitHub API lookup, which hits the
+        # 60 req/hr unauthenticated rate limit on shared runner IPs.
+        $CliVersion = "1.17.1"
+        $CliZip = "$env:TEMP\dapr_cli.zip"
+        Invoke-WebRequest -Uri "https://github.com/dapr/cli/releases/download/v$CliVersion/dapr_windows_amd64.zip" -OutFile $CliZip
+        $InstallDir = "$env:USERPROFILE\.dapr\bin"
+        New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+        Expand-Archive -Path $CliZip -DestinationPath $InstallDir -Force
+        Remove-Item $CliZip
+        $env:Path += ";$InstallDir"
         dapr init --runtime-version ${{ steps.dapr-version.outputs.version }} --slim
 
     - name: Install Temporal CLI
