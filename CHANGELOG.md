@@ -1,5 +1,47 @@
 # Changelog
 
+## v3.11.0 (May 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.10.0...v3.11.0
+
+### Features
+
+- include sdk_version in EventMetadata (#1760) (by @vaibhavatlan in [059873e](https://github.com/atlanhq/application-sdk/commit/059873e))
+- add local_dev_mode for zero-install local app development (#1759) (by @vaibhavatlan in [f77e0c7](https://github.com/atlanhq/application-sdk/commit/f77e0c7))
+
+### Bug Fixes
+
+- tighten release_tag bypass and add release_model opt-in for versioned releases (#1757) (by @cmgrote in [14aa2e5](https://github.com/atlanhq/application-sdk/commit/14aa2e5))
+- emit top-level hidden auth panes for JDBC-URL agent merge (HYP-1251) (#1761) (by @prateek11rai in [6e1a8e6](https://github.com/atlanhq/application-sdk/commit/6e1a8e6))
+- fix Windows example CI and Capability Manifest Drift on release PRs (#1766) (by @cmgrote in [763785a](https://github.com/atlanhq/application-sdk/commit/763785a))
+
+
+## v3.10.0 (May 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.9.0...v3.10.0
+
+### Features
+
+- migrate ParquetFileWriter uploads to FileReference for SHA-256 dedup and parallel uploads (#1691) (by @vaibhavatlan in [03fdd99](https://github.com/atlanhq/application-sdk/commit/03fdd99))
+- add audit-consumers skill with major-version filter (#1733) (by @cmgrote in [1f45199](https://github.com/atlanhq/application-sdk/commit/1f45199))
+- extend audit-consumers with tool.uv.sources version detection and triage (#1734) (by @cmgrote in [7750c39](https://github.com/atlanhq/application-sdk/commit/7750c39))
+- sync ADR-0013 and common.md with WorkerEvictedError and cause_repr reality (#1735) (by @cmgrote in [008955e](https://github.com/atlanhq/application-sdk/commit/008955e))
+- add typed-error prescription to signal-over-noise (#1736) (by @cmgrote in [8213113](https://github.com/atlanhq/application-sdk/commit/8213113))
+- add SDR cross-repo trigger for connector PRs [BLDX-1254] (#1710) (by @Aryamanz29 in [ef78e62](https://github.com/atlanhq/application-sdk/commit/ef78e62))
+- add ObjectStore metric exporter for OTel instruments (#1722) (by @Garavitey in [2039cff](https://github.com/atlanhq/application-sdk/commit/2039cff))
+- canonical reference for connector SDR + full-DAG E2E pipelines (#1753) (by @Aryamanz29 in [9745175](https://github.com/atlanhq/application-sdk/commit/9745175))
+- add set-last-sync-details primitive (BLDX-1229) (#1741) (by @vaibhavatlan in [e064c49](https://github.com/atlanhq/application-sdk/commit/e064c49))
+
+### Bug Fixes
+
+- stop downstream jobs cascade-skipping when validate-channel skips (#1728) (by @adityachoudhury-cloud in [b8bea1e](https://github.com/atlanhq/application-sdk/commit/b8bea1e))
+- evolve signal-over-noise typed-error prescription (#1738) (by @cmgrote in [2c74752](https://github.com/atlanhq/application-sdk/commit/2c74752))
+- add test assertion migration rules to typed-error prescription (#1739) (by @cmgrote in [581ff40](https://github.com/atlanhq/application-sdk/commit/581ff40))
+- align preflight response shape with SageV2 widget (BLDX-901 follow-up, DBBI-665) (#1744) (by @Rittick-SRoy in [5f7ea87](https://github.com/atlanhq/application-sdk/commit/5f7ea87))
+- guard prefix downloads against path-traversal keys (BLDX-1270) (#1748) (by @vaibhavatlan in [115b8ac](https://github.com/atlanhq/application-sdk/commit/115b8ac))
+- re-add components-dir + compose-overlay overrides for multi-pipeline connectors (#1752) (by @Aryamanz29 in [57c69bc](https://github.com/atlanhq/application-sdk/commit/57c69bc))
+
+
 ## v3.9.0 (May 12, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.8.0...v3.9.0

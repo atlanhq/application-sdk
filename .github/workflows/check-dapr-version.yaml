@@ -1,0 +1,159 @@
+name: Check Dapr Version
+
+# Watches Dapr's GitHub releases for new stable versions and opens a PR to
+# bump ``__dapr_version`` in ``application_sdk/version.py`` whenever the
+# upstream latest drifts from our pin.
+#
+# Runs on a schedule (Mondays at 09:00 UTC) and on manual dispatch.
+# Only the latest non-prerelease counts — ``releases/latest`` already
+# filters out RCs / betas.
+
+on:
+  schedule:
+    # ┌─ minute (0-59)
+    # │  ┌─ hour (0-23, UTC)
+    # │  │  ┌─ day of month
+    # │  │  │ ┌─ month
+    # │  │  │ │ ┌─ day of week (0 = Sun)
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-dapr-version
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Compare pinned daprd against upstream latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read pinned daprd version
+        id: pinned
+        run: |
+          set -euo pipefail
+          ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+          if [[ -z "$ver" ]]; then
+            echo "::error::Failed to parse __dapr_version from application_sdk/version.py"
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch latest Dapr stable release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # ``releases/latest`` returns the most recent non-prerelease tag.
+          tag=$(gh api repos/dapr/dapr/releases/latest --jq '.tag_name')
+          if [[ -z "$tag" ]]; then
+            echo "::error::Could not resolve latest Dapr release"
+            exit 1
+          fi
+          # Strip the leading ``v`` so the value matches the bare semver we pin.
+          ver="${tag#v}"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Compare
+        id: compare
+        run: |
+          set -euo pipefail
+          pinned="${{ steps.pinned.outputs.version }}"
+          latest="${{ steps.upstream.outputs.version }}"
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [[ "$pinned" == "$latest" ]]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::daprd pin is up to date ($pinned)"
+          else
+            echo "match=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::daprd pin $pinned is behind upstream $latest"
+          fi
+
+      - name: Bump version.py
+        if: steps.compare.outputs.match == 'false'
+        run: |
+          set -euo pipefail
+          pinned="${{ steps.compare.outputs.pinned }}"
+          latest="${{ steps.compare.outputs.latest }}"
+          sed -i "s/^__dapr_version: str = \"${pinned}\"$/__dapr_version: str = \"${latest}\"/" \
+            application_sdk/version.py
+          # Confirm exactly one line changed; bail if sed missed.
+          new=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+          if [[ "$new" != "$latest" ]]; then
+            echo "::error::sed did not rewrite version.py as expected (got '$new', want '$latest')"
+            exit 1
+          fi
+
+      - name: Open PR if drift detected
+        if: steps.compare.outputs.match == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          set -euo pipefail
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
+          latest="${{ steps.compare.outputs.latest }}"
+          pinned="${{ steps.compare.outputs.pinned }}"
+          branch="chore/bump-daprd-${latest}"
+
+          # Branch is per-version so re-runs against the same upstream
+          # version land back on the existing PR rather than churning a new
+          # one each scheduled tick.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            git fetch origin "$branch"
+            git checkout "$branch"
+          else
+            git checkout -b "$branch"
+          fi
+
+          git add application_sdk/version.py
+          if git diff --cached --quiet; then
+            echo "::notice::No actual change to commit; PR may already be up to date."
+            exit 0
+          fi
+
+          git commit -m "chore(deps): bump daprd pin to ${latest}"
+          git push origin "$branch" --force-with-lease
+
+          existing=$(gh pr list \
+            --head "$branch" \
+            --base "${{ github.ref_name }}" \
+            --state open \
+            --json number \
+            --jq '.[0].number')
+
+          if [[ -n "$existing" ]]; then
+            echo "::notice::PR #${existing} already open for ${branch}; commit pushed."
+            exit 0
+          fi
+
+          gh pr create \
+            --base "${{ github.ref_name }}" \
+            --title "chore(deps): bump daprd pin to ${latest}" \
+            --label "dependencies" \
+            --body "Dapr just released **v${latest}**.
+
+          | | version |
+          |---|---|
+          | Current pin | \`${pinned}\` |
+          | Upstream latest | \`${latest}\` |
+
+          This PR bumps \`__dapr_version\` in [\`application_sdk/version.py\`](application_sdk/version.py) so:
+
+          - The embedded local-dev daprd (via \`application_sdk.dev.embedded_dapr\`) downloads the new release on first use.
+          - CI workflows (\`scale-tests.yaml\`, \`e2e-examples\`) pass the new version to \`dapr init --runtime-version\`.
+
+          Release notes: https://github.com/dapr/dapr/releases/tag/v${latest}
+
+          Opened automatically by [\`.github/workflows/check-dapr-version.yaml\`](.github/workflows/check-dapr-version.yaml)."

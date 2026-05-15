@@ -2250,6 +2250,14 @@ local function generateCredentialConfig(): Mapping<String, Any> =
       when (credentialUrlGroup != null && credentialAuthOptions != null) {
         ["connectBy"] = renderConnectByRadio(credentialUrlGroup!!)
         ["jdbcUrl"] = renderJdbcUrlField(credentialUrlGroup!!, credentialAuthOptions!!)
+        // Agent merge targets: the agent widget's agentConfigEntries overrides
+        // target top-level auth panes (basic, ldap, etc.). In JDBC-URL mode
+        // these live inside jdbcUrl.properties, so without top-level copies
+        // the merge creates orphaned entries with no ui metadata → empty boxes.
+        // These hidden copies ensure the merge inherits correct ui (HYP-1251).
+        for (k, opt in credentialAuthOptions!!) {
+          [k] = renderJdbcAuthOption(opt)
+        }
       }
       // Plain auth-type flow (non-JDBC): auth-type radio + nested panes
       when (credentialUrlGroup == null && credentialAuthOptions != null) {

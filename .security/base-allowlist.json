@@ -21,6 +21,13 @@
     "expires": "2026-05-24",
     "added_by": "mananjain99"
   },
+  "CVE-2026-33814": {
+    "package": "stdlib / dapr-daprd-1.17",
+    "severity": "HIGH",
+    "reason": "Base image — Dapr runtime dependency (Go stdlib used by daprd binary)",
+    "expires": "2026-06-13",
+    "added_by": "mananjain99"
+  },
   "SNYK-GOLANG-GITHUBCOMGOJOSEGOJOSEV4-15875221": {
     "package": "github.com/go-jose/go-jose/v4",
     "severity": "HIGH",

@@ -56,12 +56,22 @@ jobs:
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
 
       - name: Update version.py
+        # In-place edit the ``__version__`` line only. The previous block
+        # truncated the file and re-emitted a fixed 5-line template, which
+        # wiped out anything else living alongside ``__version__`` (the
+        # ``__dapr_version`` pin, its docstring, and any future SDK-internal
+        # constants). A targeted ``sed`` keeps the bump working while
+        # preserving everything around it.
         run: |
-          echo '"""' > application_sdk/version.py
-          echo 'Version information for the application_sdk package.' >> application_sdk/version.py
-          echo '"""' >> application_sdk/version.py
-          echo '' >> application_sdk/version.py
-          echo '__version__ = "${{ env.NEW_VERSION }}"' >> application_sdk/version.py
+          set -euo pipefail
+          sed -i 's/^__version__ = .*/__version__ = "${{ env.NEW_VERSION }}"/' application_sdk/version.py
+          # Confirm exactly one line changed; bail if the constant moved or
+          # was renamed, so a silent miss doesn't ship a broken bump.
+          new=$(grep '^__version__' application_sdk/version.py | cut -d'"' -f2)
+          if [[ "$new" != "${{ env.NEW_VERSION }}" ]]; then
+            echo "::error::sed did not rewrite __version__ as expected (got '$new', want '${{ env.NEW_VERSION }}')"
+            exit 1
+          fi
 
       - name: Generate changelog
         id: changelog
