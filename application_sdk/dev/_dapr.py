@@ -32,11 +32,19 @@ from pathlib import Path
 from application_sdk.version import __dapr_version as _DAPRD_VERSION
 
 logger = logging.getLogger(__name__)
-_DAPRD_RELEASE_URL = (
-    "https://github.com/dapr/dapr/releases/download/v{version}/daprd_{os}_{arch}.tar.gz"
+_DAPRD_RELEASE_BASE = (
+    "https://github.com/dapr/dapr/releases/download/v{version}/daprd_{os}_{arch}"
 )
-_DAPRD_BINARY_NAME = "daprd"
 _CACHE_DIR = Path.home() / ".cache" / "atlan-sdk" / "dapr" / _DAPRD_VERSION
+
+
+def _daprd_binary_name() -> str:
+    return "daprd.exe" if platform.system().lower() == "windows" else "daprd"
+
+
+def _daprd_archive_ext() -> str:
+    # Windows releases use .zip; Linux/macOS use .tar.gz
+    return ".zip" if platform.system().lower() == "windows" else ".tar.gz"
 
 
 @dataclass(frozen=True)
@@ -68,34 +76,51 @@ def _platform_tuple() -> tuple[str, str]:
 def _download_daprd(target: Path) -> None:
     """Download + extract the ``daprd`` binary into *target*."""
     os_name, arch = _platform_tuple()
-    url = _DAPRD_RELEASE_URL.format(version=_DAPRD_VERSION, os=os_name, arch=arch)
+    ext = _daprd_archive_ext()
+    binary_name = _daprd_binary_name()
+    url = (
+        _DAPRD_RELEASE_BASE.format(version=_DAPRD_VERSION, os=os_name, arch=arch) + ext
+    )
     logger.info("Downloading daprd v%s for %s/%s …", _DAPRD_VERSION, os_name, arch)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
-        try:
-            urllib.request.urlretrieve(url, tmp.name)
-            with tarfile.open(tmp.name, "r:gz") as tar:
+    # Use mkstemp + immediate close so the file handle is released before
+    # urlretrieve opens it — NamedTemporaryFile on Windows keeps an exclusive
+    # lock that prevents urlretrieve from opening the same path ([WinError 32]).
+    tmp_fd, tmp_name = tempfile.mkstemp(suffix=ext)
+    os.close(tmp_fd)
+    try:
+        urllib.request.urlretrieve(url, tmp_name)
+        if ext == ".zip":
+            import zipfile  # noqa: PLC0415 — Windows-only cold path
+
+            with zipfile.ZipFile(tmp_name) as zf:
                 member = next(
-                    (
-                        m
-                        for m in tar.getmembers()
-                        if m.name.endswith(_DAPRD_BINARY_NAME)
-                    ),
+                    (m for m in zf.namelist() if m.endswith(binary_name)),
+                    None,
+                )
+                if member is None:
+                    raise RuntimeError(f"daprd binary not found in archive at {url}")
+                with zf.open(member) as src, target.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        else:
+            with tarfile.open(tmp_name, "r:gz") as tar:
+                member = next(
+                    (m for m in tar.getmembers() if m.name.endswith(binary_name)),
                     None,
                 )
                 if member is None:
                     raise RuntimeError(f"daprd binary not found in archive at {url}")
                 with tar.extractfile(member) as src, target.open("wb") as dst:  # type: ignore[arg-type]
                     shutil.copyfileobj(src, dst)
-        finally:
-            Path(tmp.name).unlink(missing_ok=True)
+    finally:
+        Path(tmp_name).unlink(missing_ok=True)
     target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     logger.info("daprd cached at %s", target)
 
 
 def _ensure_daprd_binary() -> Path:
     """Return path to the daprd binary, downloading if absent."""
-    binary = _CACHE_DIR / _DAPRD_BINARY_NAME
+    binary = _CACHE_DIR / _daprd_binary_name()
     if not binary.exists():
         _download_daprd(binary)
     return binary

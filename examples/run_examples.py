@@ -247,17 +247,21 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
     # alongside a running Temporal worker.  WindowsSelectorEventLoopPolicy
     # switches to the select()-based SelectorEventLoop, matching the
     # epoll/kqueue behaviour on Linux/macOS and letting uvicorn start cleanly.
+    #
+    # When DAPR_HTTP_PORT is already set (CI: external daprd + Temporal already
+    # running), skip embedded startup and connect to those directly via
+    # run_combined_mode.  Otherwise use run_dev_combined which auto-downloads
+    # and boots its own embedded daprd + Temporal dev server.
     launcher = (
-        "import sys, importlib.util, asyncio\n"
+        "import sys, importlib.util, asyncio, os\n"
         "if sys.platform == 'win32':\n"
         "    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n"
         "sys.path.insert(0, '.')\n"
         f"sys.path.insert(0, {_examples_dir!r})\n"
         f"spec = importlib.util.spec_from_file_location({example.module!r}, {_module_path!r})\n"
-        f"mod = importlib.util.module_from_spec(spec)\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
         f"sys.modules[{example.module!r}] = mod\n"
         "spec.loader.exec_module(mod)\n"
-        "from application_sdk.main import run_dev_combined\n"
         "from application_sdk.app import App as _App\n"
         "_app_cls = next(\n"
         "    (v for v in vars(mod).values()\n"
@@ -267,7 +271,13 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
         ")\n"
         "if _app_cls is None:\n"
         f"    raise RuntimeError('No App subclass found in {example.module}')\n"
-        "asyncio.run(run_dev_combined(_app_cls))\n"
+        "if os.environ.get('DAPR_HTTP_PORT'):\n"
+        "    from application_sdk.main import _build_dev_config, run_combined_mode\n"
+        "    _m = f'{_app_cls.__module__}:{_app_cls.__name__}'\n"
+        "    asyncio.run(run_combined_mode(_build_dev_config(_m)))\n"
+        "else:\n"
+        "    from application_sdk.main import run_dev_combined\n"
+        "    asyncio.run(run_dev_combined(_app_cls))\n"
     )
     proc = subprocess.Popen(
         [sys.executable, "-u", "-c", launcher],
