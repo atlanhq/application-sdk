@@ -1189,23 +1189,31 @@ async def run_dev_combined(
     example_input: dict[str, Any] | None = None,
     host: str | None = None,
     port: int | None = None,
-    temporal_host: str | None = None,
+    temporal_host: str | None = None,  # deprecated — ignored, kept for back-compat
     temporal_namespace: str | None = None,
     task_queue: str | None = None,
 ) -> None:
     """Run worker + handler in a single process for local development.
 
-    Dev-friendly wrapper around ``run_combined_mode()`` that accepts a
-    Python class and keyword arguments directly. Use it in ``run_dev.py``
-    scripts; production containers use ``run_combined_mode()`` via CLI flags.
+    Boots an **in-process workflow runtime** and uses **in-process backends**
+    for state, secrets, and object storage — no Temporal CLI, no Dapr
+    sidecar, no Redis required. The customer's only prerequisite is
+    Python + ``uv``.
 
-    All five connection-shaped kwargs (``host``, ``port``, ``temporal_host``,
-    ``temporal_namespace``, ``task_queue``) follow the same precedence as the
-    CLI path — ``explicit kwarg → env var → AppConfig default`` — because
-    they are resolved by :func:`_build_dev_config` which routes through
-    :meth:`AppConfig.from_args_and_env`. CI-stack overrides like
-    ``ATLAN_HANDLER_PORT`` or ``ATLAN_TASK_QUEUE`` work without any per-connector
-    ``os.environ.get(...)`` boilerplate at the call site.
+    Use this in ``run_dev.py`` scripts; production containers use
+    ``run_combined_mode()`` via CLI flags, which goes through Dapr.
+
+    All four connection-shaped kwargs (``host``, ``port``,
+    ``temporal_namespace``, ``task_queue``) follow the same precedence as
+    the CLI path — ``explicit kwarg → env var → AppConfig default`` —
+    because they are resolved by :func:`_build_dev_config` which routes
+    through :meth:`AppConfig.from_args_and_env`. CI-stack overrides like
+    ``ATLAN_HANDLER_PORT`` or ``ATLAN_TASK_QUEUE`` work without any
+    per-connector ``os.environ.get(...)`` boilerplate at the call site.
+
+    ``temporal_host`` is still accepted for backward compatibility but is
+    ignored — the SDK always boots its own in-process workflow runtime in
+    this mode. Passing it emits a :class:`DeprecationWarning`.
 
     Args:
         app_class: The App class to serve (must already be imported).
@@ -1223,8 +1231,6 @@ async def run_dev_combined(
             ``ATLAN_APP_HTTP_HOST`` → ``"127.0.0.1"``.
         port: Handler HTTP port. Default precedence: kwarg →
             ``ATLAN_HANDLER_PORT`` → ``ATLAN_APP_HTTP_PORT`` → ``8000``.
-        temporal_host: Temporal server address. Default precedence: kwarg →
-            ``ATLAN_TEMPORAL_HOST`` → ``"localhost:7233"``.
         temporal_namespace: Temporal namespace. Default precedence: kwarg →
             ``ATLAN_TEMPORAL_NAMESPACE`` → ``ATLAN_WORKFLOW_NAMESPACE`` →
             ``"default"``.
@@ -1238,24 +1244,77 @@ async def run_dev_combined(
 
         asyncio.run(run_dev_combined(
             MyApp,
-            credentials={
-                "host": "localhost", "port": "5432", "authType": "basic",
-                "username": "admin", "password": "secret",
-                "extra": {"database": "mydb"},
-            },
             example_input={
-                "connection": {"connection_name": "test", "connection_qualified_name": "default/app/1234"},
+                "connection": {"connection_name": "test"},
             },
         ))
     """
-    import json as _json  # noqa: PLC0415 — cold path: lazy load to keep import-time cost low
+    # Local dev is unconditional: boot an in-process Temporal *and* an
+    # embedded ``daprd`` so the entire infrastructure code path is the same
+    # one production uses. Both daemons are auto-downloaded and managed by
+    # the SDK — the customer's host stays clean.
+    from application_sdk.dev import embedded_dapr, embedded_runtime  # noqa: PLC0415
 
-    # Dev-friendly: ensure Dapr ports are set. poe start-deps launches Dapr
-    # on the default ports but in a background process, so the env vars aren't
-    # exported to the dev's shell. Default to standard Dapr ports so devs
-    # don't need to manually export them or add them to .env.
-    os.environ.setdefault("DAPR_HTTP_PORT", "3500")
-    os.environ.setdefault("DAPR_GRPC_PORT", "50001")
+    if temporal_host is not None:
+        import warnings  # noqa: PLC0415 — cold path: deprecation warning only
+
+        warnings.warn(
+            "`temporal_host` is deprecated and ignored: `run_dev_combined` now "
+            "always boots an in-process workflow runtime. To target an external "
+            "Temporal cluster, use `run_combined_mode(config)` directly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
+
+    # ``embedded_dapr`` sets ``DAPR_HTTP_PORT`` / ``DAPR_GRPC_PORT`` /
+    # ``DAPR_COMPONENTS_PATH`` itself, so the existing Dapr code path in
+    # ``_create_infrastructure`` and the observability sink see the right
+    # values from the moment daprd is spawning (avoiding races during the
+    # ~3s startup window).
+    # ``embedded_dapr`` first so ``DAPR_COMPONENTS_PATH`` is set before any
+    # observability flush cycle fires during the ~5s ``embedded_runtime``
+    # cold-start window. Otherwise the periodic flush would race with daprd
+    # startup and log spurious "objectstore upload failed" warnings.
+    async with (
+        embedded_dapr(app_id=app_name) as _dapr,
+        embedded_runtime(namespace=temporal_namespace or "default") as _rt,
+    ):
+        del _dapr  # env-side-effect is sufficient; the dataclass is just for tests
+        await _run_dev_combined_inner(
+            app_class=app_class,
+            credential_stores=credential_stores,
+            credentials=credentials,
+            example_input=example_input,
+            host=host,
+            port=port,
+            temporal_host=_rt.host,
+            temporal_namespace=_rt.namespace,
+            task_queue=task_queue,
+        )
+
+
+async def _run_dev_combined_inner(
+    *,
+    app_class: type[App],
+    credential_stores: Mapping[str, SecretStore] | None,
+    credentials: dict[str, Any] | None,
+    example_input: dict[str, Any] | None,
+    host: str | None,
+    port: int | None,
+    temporal_host: str,
+    temporal_namespace: str,
+    task_queue: str | None,
+) -> None:
+    """Body of ``run_dev_combined`` — runs against fully-resolved connection details.
+
+    Accepts ``host`` / ``port`` / ``task_queue`` as ``None`` and lets
+    ``_build_dev_config`` apply the same defaults the CLI path uses (env
+    vars → AppConfig fields). ``temporal_host`` and ``temporal_namespace``
+    always arrive populated from the embedded runtime.
+    """
+    import json as _json  # noqa: PLC0415
 
     app_module = f"{app_class.__module__}:{app_class.__name__}"
 
@@ -1268,7 +1327,10 @@ async def run_dev_combined(
         task_queue=task_queue,
     )
 
-    # Create infrastructure early so run_combined_mode uses it directly.
+    # Build infrastructure via the standard Dapr path. ``run_dev_combined``
+    # has already started an embedded ``daprd`` (via ``embedded_dapr``) and
+    # exported ``DAPR_HTTP_PORT`` + ``DAPR_COMPONENTS_PATH``, so this goes
+    # through identical code as production / SDR / CI.
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         set_infrastructure,
     )

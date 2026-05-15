@@ -76,17 +76,27 @@ class AtlanObservability(Generic[T], ABC):
     _upstream_store: ClassVar["ObjectStore | None"] = None
 
     @classmethod
+    def _components_dir(cls) -> str:
+        # Honour ``DAPR_COMPONENTS_PATH`` so the embedded-Dapr local-dev path
+        # finds the auto-generated component YAMLs in the temp dir.
+        return os.environ.get("DAPR_COMPONENTS_PATH", "./components")
+
+    @classmethod
     def _get_deployment_store(cls):
         if cls._deployment_store is None:
             cls._deployment_store = create_store_from_binding(
-                DEPLOYMENT_OBJECT_STORE_NAME
+                DEPLOYMENT_OBJECT_STORE_NAME,
+                components_dir=cls._components_dir(),
             )
         return cls._deployment_store
 
     @classmethod
     def _get_upstream_store(cls):
         if cls._upstream_store is None:
-            cls._upstream_store = create_store_from_binding(UPSTREAM_OBJECT_STORE_NAME)
+            cls._upstream_store = create_store_from_binding(
+                UPSTREAM_OBJECT_STORE_NAME,
+                components_dir=cls._components_dir(),
+            )
         return cls._upstream_store
 
     def __init__(
