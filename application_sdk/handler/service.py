@@ -54,6 +54,8 @@ from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+from application_sdk.errors import AppError
+from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -74,6 +76,27 @@ from application_sdk.handler.service_errors import (
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+_CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
+    FailureCategory.AUTH: 401,
+    FailureCategory.PERMISSION: 403,
+    FailureCategory.NOT_FOUND: 404,
+    FailureCategory.ALREADY_EXISTS: 409,
+    FailureCategory.INVALID_INPUT: 400,
+    FailureCategory.PRECONDITION: 412,
+    FailureCategory.RATE_LIMITED: 429,
+    FailureCategory.TIMEOUT: 504,
+    FailureCategory.DEPENDENCY_UNAVAILABLE: 503,
+    FailureCategory.RESOURCE_EXHAUSTED: 503,
+    FailureCategory.DATA_INTEGRITY: 500,
+    FailureCategory.INTERNAL: 500,
+    FailureCategory.UNIMPLEMENTED: 501,
+    FailureCategory.CANCELLED: 499,  # client-closed-request (nginx convention)
+}
+
+
+def _app_error_to_http_status(exc: AppError) -> int:
+    return _CATEGORY_TO_HTTP.get(exc.category, 500)
 
 
 def _record_proxy_failure(
@@ -587,6 +610,11 @@ def create_app_handler_service(
                     ),
                 )
             except HandlerError as e:
+                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+                # AppError subclass caught here first so http_status is preserved.
+                # Remove once all connector subclasses raise typed AppError leaves.
+                # Tracked alongside the Handler abstract-method contract migration.
+                # See typed-error-prescription.md §5 (HandlerError row).
                 logger.error(
                     "Auth test failed for app %s (request %s): %s",
                     app_name,
@@ -595,6 +623,19 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                # Forward-looking: typed AppError leaves from connectors that raise
+                # non-HandlerError typed errors (already migrated).
+                logger.error(
+                    "Auth test failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=str(e)
+                ) from None
             except Exception as e:
                 logger.error(
                     "Auth test failed unexpectedly for app %s (request %s): %s",
@@ -683,6 +724,11 @@ def create_app_handler_service(
                     )
                 )
             except HandlerError as e:
+                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+                # AppError subclass caught here first so http_status is preserved.
+                # Remove once all connector subclasses raise typed AppError leaves.
+                # Tracked alongside the Handler abstract-method contract migration.
+                # See typed-error-prescription.md §5 (HandlerError row).
                 logger.error(
                     "Preflight check failed for app %s (request %s): %s",
                     app_name,
@@ -691,6 +737,19 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                # Forward-looking: typed AppError leaves from connectors that raise
+                # non-HandlerError typed errors (already migrated).
+                logger.error(
+                    "Preflight check failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=str(e)
+                ) from None
             except Exception as e:
                 logger.error(
                     "Preflight check failed unexpectedly for app %s (request %s): %s",
@@ -741,6 +800,11 @@ def create_app_handler_service(
                 # frontend filter widgets to render empty dropdowns
                 return JSONResponse(content=_wrap_response(data))
             except HandlerError as e:
+                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+                # AppError subclass caught here first so http_status is preserved.
+                # Remove once all connector subclasses raise typed AppError leaves.
+                # Tracked alongside the Handler abstract-method contract migration.
+                # See typed-error-prescription.md §5 (HandlerError row).
                 logger.error(
                     "Metadata fetch failed for app %s (request %s): %s",
                     app_name,
@@ -749,6 +813,19 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                # Forward-looking: typed AppError leaves from connectors that raise
+                # non-HandlerError typed errors (already migrated).
+                logger.error(
+                    "Metadata fetch failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=str(e)
+                ) from None
             except Exception as e:
                 logger.error(
                     "Metadata fetch failed unexpectedly for app %s (request %s): %s",
@@ -1473,6 +1550,9 @@ def create_app_handler_service(
         try:
             body = await request.json()
         except Exception:
+            # Log details server-side; the HTTPException intentionally hides the
+            # parse internals from the client (avoid leaking file/line/offset).
+            logger.warning("Failed to parse JSON request body", exc_info=True)
             raise HTTPException(status_code=400, detail="Invalid JSON body") from None
 
         try:

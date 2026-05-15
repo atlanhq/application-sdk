@@ -111,6 +111,10 @@ class DaprCredentialVault:
             try:
                 credential_source = _CredentialSource(credential_source_str)
             except ValueError:
+                logger.warning(
+                    "Unknown credentialSource=%r; defaulting to DIRECT",
+                    credential_source_str,
+                )
                 credential_source = _CredentialSource.DIRECT
 
             secret_path = credential_config.get("secret-path")

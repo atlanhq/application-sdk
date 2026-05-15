@@ -34,12 +34,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from application_sdk.discovery import (
-    DiscoveryError,
     load_app_class,
     load_handler_class,
     validate_app_class,
 )
-from application_sdk.errors import AppError
+from application_sdk.errors import AppError, InvalidInputError
 from application_sdk.main_errors import (
     DaprNotDetectedError,
     MissingAppModuleError,
@@ -1478,7 +1477,7 @@ def main() -> NoReturn:
 
     try:
         run_main(config)
-    except DiscoveryError:
+    except InvalidInputError:
         logger.error("Discovery error", exc_info=True)
         sys.exit(1)
     except KeyboardInterrupt:
