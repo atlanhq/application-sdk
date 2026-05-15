@@ -1,0 +1,71 @@
+name: Unit Tests for Atlan Connector Apps
+
+description: |
+  Runs unit tests for an Atlan connector app (atlan-*-app repository).
+
+  Reusable across every connector built on atlan-application-sdk v3+. The
+  connector repo's workflow `uses:` this action; per-app variation is limited
+  to the `python-version` and `fail-under` inputs.
+
+  Steps:
+  - Sets up Python + uv via `setup-deps` (which also checks out the caller repo).
+  - Runs `pytest tests/unit/` with coverage.
+  - Enforces a minimum coverage threshold (`fail-under`) via `coverage report`.
+  - Comments the coverage delta on the PR.
+
+  Does NOT upload coverage to S3 — that wiring is per-app and stays in the
+  caller's workflow if desired.
+
+inputs:
+  github-token:
+    required: true
+    description: GitHub token used to comment coverage results on the PR.
+  python-version:
+    required: false
+    description: Python version to use.
+    default: "3.11"
+  fail-under:
+    required: false
+    description: |
+      Minimum coverage percentage to enforce on the final `coverage report`
+      step. CLI flag overrides `[tool.coverage.report].fail_under` in the
+      consumer's pyproject.toml.
+    default: "60"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python, uv, and dependencies
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Run unit tests with coverage
+      shell: bash
+      # xml/html subcommands ALSO honor pyproject.toml's
+      # [tool.coverage.report].fail_under. Pin them to --fail-under=0 so
+      # artifact generation never short-circuits the run. The actual
+      # threshold gate is the final `coverage report` step — its CLI flag
+      # overrides pyproject.toml on that step.
+      run: |
+        uv run coverage run -m pytest tests/unit -v
+        uv run coverage xml --fail-under=0
+        uv run coverage html --fail-under=0
+        uv run coverage report --fail-under=${{ inputs.fail-under }}
+
+    - name: Comment coverage on PR
+      if: github.event_name == 'pull_request'
+      uses: orgoro/coverage@3f13a558c5af7376496aa4848bf0224aead366ac # v3.2
+      with:
+        coverageFile: coverage.xml
+        token: ${{ inputs.github-token }}
+
+    - name: Upload coverage artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: unit-test-coverage
+        path: |
+          coverage.xml
+          htmlcov/
+        retention-days: 14

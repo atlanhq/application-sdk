@@ -1,0 +1,151 @@
+name: Integration Tests for Atlan Connector Apps
+
+description: |
+  Runs integration tests for an Atlan connector app (atlan-*-app repository).
+
+  Reusable across every connector built on atlan-application-sdk v3+. The
+  connector's workflow `uses:` this action; per-app variation is limited to:
+  - `app-name` input — the connector's ATLAN_APPLICATION_NAME (e.g., athena, postgres)
+  - The caller's job-level `env:` block — where TEST_<CONNECTOR>_* env vars
+    are wired from `secrets.*`. These are inherited by the action's steps.
+
+  The integration framework itself lives at
+  `application_sdk.testing.integration` (merged in PR #1233; forward-ported
+  to v3). Connectors pin a tagged SDK release (e.g., v3.7.0) and this action
+  just runs pytest against the installed package.
+
+  Steps:
+  - Sets up Python + uv via `setup-deps` (which also checks out the caller repo).
+  - Installs Dapr CLI + Temporal CLI.
+  - Starts Dapr + Temporal (`poe start-deps`).
+  - Starts the connector app server (`python main.py`) and waits for health.
+  - Runs `pytest tests/integration/` with pytest-xdist for in-process parallelism.
+  - Uploads junit XML + raw test output as artifacts.
+  - Cleans up app server + Dapr/Temporal.
+
+  pytest-xdist is installed transiently via `uv run --with pytest-xdist` so the
+  caller does not need to declare it as a dependency.
+
+inputs:
+  app-name:
+    required: true
+    description: |
+      The connector app name. Used as ATLAN_APPLICATION_NAME for the
+      running app server. Must match the connector's pyproject.toml
+      `tool.poe.tasks.start-app` ATLAN_APPLICATION_NAME (e.g., athena, postgres).
+  python-version:
+    required: false
+    description: Python version to use.
+    default: "3.11"
+  pytest-args:
+    required: false
+    description: |
+      Extra arguments passed to pytest after the integration-tests path.
+      Default parallelises tests across xdist workers; override to dial worker
+      count or change distribution strategy.
+    default: "-n auto --dist=load --tb=short"
+  app-port:
+    required: false
+    description: HTTP port the connector app server listens on.
+    default: "8000"
+  health-check-timeout-seconds:
+    required: false
+    description: How long to wait for the app server to become healthy.
+    default: "60"
+  dapr-version:
+    required: false
+    description: Dapr runtime version to install.
+    default: "1.16.2"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python, uv, and dependencies
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Dapr CLI
+      shell: bash
+      run: |
+        DAPR_VERSION="${{ inputs.dapr-version }}"
+        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
+        tar -xzf /tmp/dapr.tar.gz -C /tmp
+        sudo mv /tmp/dapr /usr/local/bin/
+        chmod +x /usr/local/bin/dapr
+        dapr init --runtime-version "${DAPR_VERSION}" --slim
+
+    - name: Install Temporal CLI
+      shell: bash
+      run: curl -sSf https://temporal.download/cli.sh | sh
+
+    - name: Add Dapr and Temporal to PATH
+      shell: bash
+      run: |
+        echo "$HOME/.dapr/bin" >> "$GITHUB_PATH"
+        echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
+
+    - name: Download Dapr components
+      shell: bash
+      run: uv run poe download-components
+
+    - name: Start Dapr + Temporal
+      shell: bash
+      run: |
+        uv run poe start-deps
+        sleep 5
+
+    - name: Start app server
+      shell: bash
+      env:
+        ATLAN_LOCAL_DEVELOPMENT: "true"
+        ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+      run: |
+        uv run python main.py &
+        for i in $(seq 1 ${{ inputs.health-check-timeout-seconds }}); do
+          if curl -sf "http://localhost:${{ inputs.app-port }}/server/health" > /dev/null 2>&1; then
+            echo "App server ready after ${i}s"
+            break
+          fi
+          if [ "$i" -eq ${{ inputs.health-check-timeout-seconds }} ]; then
+            echo "::error::App server failed to start within ${{ inputs.health-check-timeout-seconds }}s"
+            exit 1
+          fi
+          sleep 1
+        done
+
+    - name: Run integration tests (parallel via pytest-xdist)
+      id: tests
+      shell: bash
+      env:
+        ATLAN_LOCAL_DEVELOPMENT: "true"
+        ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+      # NOTE: TEST_<CONNECTOR>_* env vars are NOT declared here. They're
+      # provided by the caller's job-level env block (which has access to
+      # `secrets.*`) and inherited by this composite-action step.
+      run: |
+        mkdir -p results
+        set +e
+        uv run --with pytest-xdist pytest tests/integration/ -v \
+          ${{ inputs.pytest-args }} \
+          --junit-xml=results/test-results.xml \
+          2>&1 | tee results/test-output.txt
+        TEST_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
+        exit "$TEST_EXIT_CODE"
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-results
+        path: results/
+        retention-days: 14
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: |
+        kill $(lsof -t -i :${{ inputs.app-port }}) 2>/dev/null || true
+        uv run poe stop-deps || true
