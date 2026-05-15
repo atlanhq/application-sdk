@@ -41,12 +41,26 @@ runs:
   steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+    # Read the pinned daprd version from the SDK's single source of truth
+    # (application_sdk/version.py — ``__dapr_version``). Keeps CI in lockstep
+    # with the version the embedded local-dev sidecar downloads.
+    - name: Resolve pinned daprd version
+      id: dapr-version
+      shell: bash
+      run: |
+        ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+        if [[ -z "$ver" ]]; then
+          echo "::error::Failed to parse __dapr_version from application_sdk/version.py"
+          exit 1
+        fi
+        echo "version=$ver" >> "$GITHUB_OUTPUT"
+
     - name: Install Dapr CLI (Linux/macOS)
       if: runner.os != 'Windows'
       shell: bash
       run: |
         wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.17.1
-        dapr init --runtime-version 1.17.3 --slim
+        dapr init --runtime-version ${{ steps.dapr-version.outputs.version }} --slim
 
     - name: Install Dapr CLI (Windows)
       if: runner.os == 'Windows'
@@ -54,7 +68,7 @@ runs:
       run: |
         $script=iwr -useb https://raw.githubusercontent.com/dapr/cli/master/install/install.ps1; $block=[ScriptBlock]::Create($script); invoke-command -ScriptBlock $block -ArgumentList 1.17.1, "$env:USERPROFILE\.dapr\bin\"
         $env:Path += ";$env:USERPROFILE\.dapr\bin\"
-        dapr init --runtime-version 1.17.3 --slim
+        dapr init --runtime-version ${{ steps.dapr-version.outputs.version }} --slim
 
     - name: Install Temporal CLI
       uses: temporalio/setup-temporal@6d04211d9dfbd5cb2493a4a6637b2ad784a60ccc # v0
