@@ -134,10 +134,16 @@ class SQLAppE2EFullTest(BaseFullDAGE2ETest):
         )
         guid = client.role_cache.get_id_for_name("$admin")
         if guid is None:
-            raise RuntimeError(
-                "pyatlan role_cache could not resolve `$admin` role GUID "
-                f"against {os.environ['ATLAN_BASE_URL']} — Connection "
-                "would land with empty adminRoles and the back-side "
-                "direct-fetch probe would 403."
+            from application_sdk.testing.full_dag._errors import (  # noqa: PLC0415
+                AdminRoleNotResolvedError,
+            )
+
+            raise AdminRoleNotResolvedError(
+                message=(
+                    "pyatlan role_cache could not resolve `$admin` role GUID "
+                    f"against {os.environ['ATLAN_BASE_URL']} — Connection "
+                    "would land with empty adminRoles and the back-side "
+                    "direct-fetch probe would 403."
+                )
             )
         return guid

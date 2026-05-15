@@ -18,6 +18,24 @@ class LockAcquisitionError(DependencyUnavailableError):
 
 
 @dataclass(kw_only=True)
+class MaxLocksInvalidError(InvalidInputError):
+    """``max_locks`` parameter is <= 0."""
+
+    code: ClassVar[str] = "INVALID_INPUT_MAX_LOCKS"
+    message: str = "max_locks must be greater than 0"
+    field: str | None = "max_locks"
+    constraint: str | None = "positive_integer"
+
+
+@dataclass(kw_only=True)
+class RedisLockError(DependencyUnavailableError):
+    """Redis connection or operation failed during lock acquisition."""
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_REDIS_LOCK"
+    service: str | None = "redis"
+
+
+@dataclass(kw_only=True)
 class MissingScheduleToCloseTimeoutError(InvalidInputError):
     """Activity decorated with @needs_lock was called without schedule_to_close_timeout."""
 

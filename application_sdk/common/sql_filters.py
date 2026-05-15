@@ -11,7 +11,6 @@ import os
 import re
 from typing import Any
 
-from application_sdk.common.error_codes import CommonError
 from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -200,11 +199,11 @@ def prepare_query(
                 exclude_empty_tables=exclude_empty_tables,
                 exclude_views=exclude_views,
             )
-    except (CommonError, AppError) as e:
+    except AppError as e:
         error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
         logger.error(
             "Error preparing query: error_code=%s error_message=%s",
-            CommonError.QUERY_PREPARATION_ERROR.code,
+            e.code,
             error_message,
             exc_info=True,
         )

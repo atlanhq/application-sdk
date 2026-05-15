@@ -5,7 +5,6 @@ from unittest.mock import mock_open, patch
 
 import pytest
 
-from application_sdk.common.error_codes import CommonError
 from application_sdk.common.sql_filters import (
     extract_database_names_from_regex_common,
     normalize_filters,
@@ -80,7 +79,7 @@ class TestPrepareQuery:
             result = prepare_query(query, workflow_args)
             mock_logger.error.assert_called_once_with(
                 "Error preparing query: error_code=%s error_message=%s",
-                CommonError.QUERY_PREPARATION_ERROR.code,
+                "INVALID_INPUT_SQL_FILTER_JSON",
                 "Invalid filter JSON",
                 exc_info=True,
             )

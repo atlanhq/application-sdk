@@ -248,11 +248,11 @@ class CredentialRef(BaseModel, frozen=True):
                 credential_guid=guid,
             )
 
-        raise ValueError(
-            "workflow_args has no routable credential source: need either "
-            "extraction_method='agent' with a non-empty agent_json, "
-            "or a non-empty credential_guid"
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — credentials/__init__.py loads sibling modules
+            CredentialRoutingError,
         )
+
+        raise CredentialRoutingError()
 
 
 # ---------------------------------------------------------------------------

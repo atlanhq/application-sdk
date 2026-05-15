@@ -45,6 +45,11 @@ from typing import Any
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.full_dag._errors import (
+    AtlanApiHttpError,
+    AtlanApiResponseInvariantError,
+    AtlanApiTimeoutError,
+)
 
 logger = get_logger(__name__)
 
@@ -303,8 +308,9 @@ class AEWorkflowClient:
                 data = body.get("data") if isinstance(body.get("data"), dict) else body
                 slug = data.get("slug") if isinstance(data, dict) else None
                 if not slug:
-                    raise RuntimeError(
-                        f"create_workflow returned no slug\nresponse={body!r}"
+                    raise AtlanApiResponseInvariantError(
+                        message=f"create_workflow returned no slug\nresponse={body!r}",
+                        expectation="slug present in create_workflow response",
                     )
                 if attempt > 1:
                     logger.info("create_workflow succeeded on attempt %d", attempt)
@@ -322,7 +328,10 @@ class AEWorkflowClient:
                 continue
             break
         status, body = last
-        raise RuntimeError(f"create_workflow failed: HTTP {status}\nresponse={body!r}")
+        raise AtlanApiHttpError(
+            message=f"create_workflow failed: HTTP {status}\nresponse={body!r}",
+            target=f"POST /automation/api/v1/workflows HTTP {status}",
+        )
 
     def create_version(
         self,
@@ -380,7 +389,10 @@ class AEWorkflowClient:
             if attempt < retries:
                 time.sleep(retry_sleep_seconds)
         status, body = last
-        raise RuntimeError(f"create_version failed: HTTP {status}\nresponse={body!r}")
+        raise AtlanApiHttpError(
+            message=f"create_version failed: HTTP {status}\nresponse={body!r}",
+            target=f"POST /automation/api/v1/workflows/.../versions HTTP {status}",
+        )
 
     def publish_version(
         self,
@@ -428,8 +440,9 @@ class AEWorkflowClient:
             )
             if attempt < retries:
                 time.sleep(retry_sleep_seconds)
-        raise RuntimeError(
-            f"publish_version failed after {retries} attempts: {last_body!r}"
+        raise AtlanApiHttpError(
+            message=f"publish_version failed after {retries} attempts: {last_body!r}",
+            target="POST /automation/api/v1/workflows/.../versions/.../publish",
         )
 
     def submit_workflow(
@@ -471,7 +484,10 @@ class AEWorkflowClient:
                     if attempt > 1:
                         logger.info("AE submit succeeded on attempt %d", attempt)
                     return run_id
-                raise RuntimeError(f"AE submit returned no run_id\nresponse={body!r}")
+                raise AtlanApiResponseInvariantError(
+                    message=f"AE submit returned no run_id\nresponse={body!r}",
+                    expectation="run_id present in submit response",
+                )
             if status >= 500 and attempt <= retries:
                 logger.warning(
                     "AE submit attempt %d/%d: HTTP %d (retrying in %ds) body=%r",
@@ -485,7 +501,10 @@ class AEWorkflowClient:
                 continue
             break
         status, body = last
-        raise RuntimeError(f"AE submit failed: HTTP {status}\nresponse={body!r}")
+        raise AtlanApiHttpError(
+            message=f"AE submit failed: HTTP {status}\nresponse={body!r}",
+            target=f"POST /api/service/package-workflows?submit=true HTTP {status}",
+        )
 
     def get_native_status(self, run_id: str) -> DAGRunResult:
         """GET ``/api/service/package-workflows/native-status/<run_id>``.
@@ -499,8 +518,9 @@ class AEWorkflowClient:
             "?execution_mode=automation-engine",
         )
         if status >= 300 or not isinstance(body, dict):
-            raise RuntimeError(
-                f"native-status failed: HTTP {status}\nresponse={body!r}"
+            raise AtlanApiHttpError(
+                message=f"native-status failed: HTTP {status}\nresponse={body!r}",
+                target=f"GET /api/service/package-workflows/native-status HTTP {status}",
             )
         nodes_raw = body.get("dag_nodes") or {}
         nodes = [
@@ -601,8 +621,9 @@ class AEWorkflowClient:
         # "timed out after Xs".
         if last_result is not None:
             return last_result
-        raise RuntimeError(
-            f"native-status timed out after {timeout_seconds}s with no response"
+        raise AtlanApiTimeoutError(
+            message=f"native-status timed out after {timeout_seconds}s with no response",
+            timeout_seconds=float(timeout_seconds),
         )
 
     def connection_exists_in_atlas_via_search(self, qualified_name: str) -> bool:
