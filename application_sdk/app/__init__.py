@@ -24,6 +24,7 @@ Usage::
 from application_sdk.app.base import App, AppError, NonRetryableError, RetryableError
 from application_sdk.app.context import AppContext
 from application_sdk.app.entrypoint import EntryPointMetadata, entrypoint
+from application_sdk.app.preflight import PublishPreflightMixin
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata, task
 from application_sdk.contracts.base import Input, Output
@@ -41,6 +42,7 @@ __all__ = [
     "Input",
     "NonRetryableError",
     "Output",
+    "PublishPreflightMixin",
     "RetryPolicy",
     "RetryableError",
     "TaskMetadata",

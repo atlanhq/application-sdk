@@ -6,6 +6,10 @@ creating FastAPI applications.
 """
 
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
+from application_sdk.handler.checks import (
+    check_atlan_publish_permission,
+    check_user_enabled,
+)
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -31,10 +35,6 @@ from application_sdk.handler.service import (
 )
 
 __all__ = [
-    "Handler",
-    "DefaultHandler",
-    "HandlerError",
-    "HandlerContext",
     "ApiMetadataObject",
     "ApiMetadataOutput",
     "AuthInput",
@@ -42,7 +42,11 @@ __all__ = [
     "AuthStatus",
     "BaseConnectionConfig",
     "BaseMetadataConfig",
+    "DefaultHandler",
+    "Handler",
+    "HandlerContext",
     "HandlerCredential",
+    "HandlerError",
     "MetadataInput",
     "MetadataOutput",
     "PreflightCheck",
@@ -51,6 +55,8 @@ __all__ = [
     "PreflightStatus",
     "SqlMetadataObject",
     "SqlMetadataOutput",
+    "check_atlan_publish_permission",
+    "check_user_enabled",
     "create_app_handler_service",
     "run_app_handler_service",
 ]
