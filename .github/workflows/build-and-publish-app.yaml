@@ -545,19 +545,19 @@ jobs:
           RELEASE_MODEL="${RELEASE_MODEL//$'\r'/}"
           RELEASE_MODEL="${RELEASE_MODEL//$'\n'/}"
 
-          # Versioned-release gate: apps that opt in via release_model=versioned
+          # Semver-release gate: apps that opt in via release_model=semver
           # must supply an explicit release_tag for any channel='all' publish.
           # Merge-to-main builds the image (already in GHCR) but does not publish
           # to all tenants — only a GitHub Release (which sets release_tag) does.
           # Tenant-targeted and non-all-channel publishes are unrestricted.
           EFFECTIVE_CHANNEL="${CHANNEL:-all}"
           EFFECTIVE_CHANNEL="${EFFECTIVE_CHANNEL,,}"
-          if [ "${RELEASE_MODEL}" = "versioned" ] && [ -z "${RELEASE_TAG}" ] && [ -z "${TENANTS}" ] && [ "${EFFECTIVE_CHANNEL}" = "all" ]; then
-            echo "::error title=Publish blocked::App declares release_model=versioned — publishing to channel='all' requires an explicit release tag. The image is already in GHCR; cut a GitHub Release from main to publish to all tenants."
+          if [ "${RELEASE_MODEL}" = "semver" ] && [ -z "${RELEASE_TAG}" ] && [ -z "${TENANTS}" ] && [ "${EFFECTIVE_CHANNEL}" = "all" ]; then
+            echo "::error title=Publish blocked::App declares release_model=semver — publishing to channel='all' requires an explicit release tag. The image is already in GHCR; cut a GitHub Release from main to publish to all tenants."
             {
-              echo "### Publish blocked — versioned release required"
+              echo "### Publish blocked — semver release required"
               echo ""
-              echo "This app has \`release_model: versioned\` in \`atlan.yaml\`."
+              echo "This app has \`release_model: semver\` in \`atlan.yaml\`."
               echo "Publishing to the **all** channel requires an explicit GitHub Release."
               echo ""
               echo "| Field | Value |"
@@ -618,7 +618,7 @@ jobs:
           # branch-sha tag regardless of whether release_tag is set.
           release_model = os.environ.get("RELEASE_MODEL", "").strip()
           ghcr_image = os.environ["GHCR_IMAGE"]
-          if release_tag and release_model == "versioned":
+          if release_tag and release_model == "semver":
               image_base = ghcr_image.rsplit(":", 1)[0]
               version_tag = release_tag.lstrip("v")  # match release ladder: v0.3.0 → 0.3.0
               image = f"{image_base}:{version_tag}"
@@ -657,6 +657,9 @@ jobs:
           created_by = os.environ.get("CREATED_BY", "").strip()
           if created_by:
               body["created_by"] = created_by
+
+          if release_model:
+              body["release_model"] = release_model
 
           print(json.dumps(body))
           PYEOF
