@@ -558,9 +558,19 @@ jobs:
             exit 1
           fi
 
-          # Resolve triggering actor to email; fall back to GitHub username
-          GH_EMAIL=$(gh api "users/${GITHUB_ACTOR}" --jq '.email // empty' 2>/dev/null || true)
-          export CREATED_BY="${GH_EMAIL:-${GITHUB_ACTOR}}"
+          # Resolve the PR author for this commit (works for squash, merge, and
+          # rebase strategies). For push-to-main builds, github.triggering_actor
+          # is whoever clicked "Merge" — not the PR author — which surfaces the
+          # wrong person as "Created by:" in the GM Slack approval message.
+          #
+          # The /commits/{sha}/pulls endpoint returns any PRs associated with
+          # the commit. Empty result (manual workflow_dispatch, direct push,
+          # feature-branch build) → fall back to triggering_actor.
+          PR_AUTHOR=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+              --jq '.[0].user.login // empty' 2>/dev/null || true)
+          ACTOR="${PR_AUTHOR:-${GITHUB_ACTOR}}"
+          GH_EMAIL=$(gh api "users/${ACTOR}" --jq '.email // empty' 2>/dev/null || true)
+          export CREATED_BY="${GH_EMAIL:-${ACTOR}}"
 
           # Build JSON payload matching the CLI's registerInMarketplace format
           BODY=$(python3 - <<'PYEOF'
