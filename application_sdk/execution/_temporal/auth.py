@@ -94,9 +94,11 @@ class TemporalAuthManager:
         try:
             access_token = await self._get_token_service().get_token(force_refresh=True)
         except Exception as exc:
-            raise RuntimeError(
-                f"Failed to acquire initial Temporal auth token: {exc}"
-            ) from exc
+            from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+                TemporalAuthTokenAcquireError,
+            )
+
+            raise TemporalAuthTokenAcquireError(cause=exc) from exc
 
         expires_at = self._get_token_service().current_expires_at
         logger.info(
@@ -173,8 +175,12 @@ class TemporalAuthManager:
         if self.config.base_url:
             base = self.config.base_url.rstrip("/")
             return f"{base}/auth/realms/default/protocol/openid-connect/token"
-        raise ValueError(
-            "Either token_url or base_url must be set in TemporalAuthConfig"
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            TemporalAuthConfigError,
+        )
+
+        raise TemporalAuthConfigError(
+            message="Either token_url or base_url must be set", field="token_url"
         )
 
     async def _refresh_loop(self, client: Client) -> None:
@@ -196,7 +202,7 @@ class TemporalAuthManager:
                 )
                 break
             except TimeoutError:
-                pass
+                pass  # wait_for timeout means sleep duration elapsed; continue loop
 
             try:
                 await self._do_refresh(client)
@@ -213,7 +219,7 @@ class TemporalAuthManager:
                     )
                     break
                 except TimeoutError:
-                    pass
+                    pass  # wait_for timeout means retry sleep elapsed; continue loop
 
         logger.info("Token refresh loop exiting")
 

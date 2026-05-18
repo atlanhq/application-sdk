@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import logging
 import os
 import posixpath
 from collections.abc import Sequence
@@ -40,16 +39,15 @@ from application_sdk.constants import (
     ENABLE_OBSERVABILITY_STORE_SINK,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import OBSERVABILITY_S3_PREFIX_MAP
 from application_sdk.observability.utils import get_observability_dir
-from application_sdk.storage import upload_file
-from application_sdk.storage.binding import create_store_from_binding
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.metrics.export import HistogramDataPoint, NumberDataPoint
     from opentelemetry.sdk.resources import Resource
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 #: S3 prefix for OTel-sourced Prometheus metrics.  Kept separate from the
 #: ``metrics/`` prefix used by ``record_metric()`` data so consumers can
@@ -200,6 +198,13 @@ def _upload_sync(local_path: str, remote_key: str, timeout_s: float) -> None:
     """
 
     async def _upload() -> None:
+        from application_sdk.storage import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            upload_file,
+        )
+        from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            create_store_from_binding,
+        )
+
         try:
             store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
             await upload_file(remote_key, local_path, store=store)
@@ -220,7 +225,9 @@ def _upload_sync(local_path: str, remote_key: str, timeout_s: float) -> None:
     try:
         asyncio.run(asyncio.wait_for(_upload(), timeout=timeout_s))
     except TimeoutError:
-        logger.warning("ObjectStore metric upload timed out after %.1fs", timeout_s)
+        logger.warning(
+            "ObjectStore metric upload timed out after %.1fs", timeout_s, exc_info=True
+        )
 
 
 class ObjectStoreMetricExporter(MetricExporter):
@@ -288,7 +295,7 @@ class ObjectStoreMetricExporter(MetricExporter):
                 try:
                     os.unlink(local_path)
                 except OSError:
-                    pass
+                    pass  # best-effort local-file cleanup; never block metric export
 
         except Exception:
             logger.warning("ObjectStore metric export failed", exc_info=True)

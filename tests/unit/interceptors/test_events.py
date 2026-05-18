@@ -335,6 +335,29 @@ class TestEnrichEventMetadata:
         assert enriched.metadata.attempt == 2
         assert enriched.metadata.workflow_state == WorkflowStates.RUNNING.value
 
+    def test_sdk_version_defaults_to_installed_version(self) -> None:
+        """EventMetadata.sdk_version must always be populated with the running
+        SDK version — independent of ATLAN_SDK_VERSION env injection."""
+        from application_sdk.contracts.events import EventMetadata
+        from application_sdk.version import __version__ as sdk_version
+
+        # Default constructor — no enrichment needed for this field.
+        assert EventMetadata().sdk_version == sdk_version
+        # Constructed via the base Event default_factory path.
+        event = self._make_event()
+        assert event.metadata.sdk_version == sdk_version
+        # Enrichment must not clobber it.
+        with (
+            mock.patch.object(
+                events_module.workflow, "info", side_effect=RuntimeError("no ctx")
+            ),
+            mock.patch.object(
+                events_module.activity, "info", side_effect=RuntimeError("no ctx")
+            ),
+        ):
+            enriched = _enrich_event_metadata(event)
+        assert enriched.metadata.sdk_version == sdk_version
+
 
 class TestSendLifecycleEventToSegment:
     """Tests for _send_lifecycle_event_to_segment."""
@@ -594,9 +617,9 @@ class TestEventWorkflowInboundInterceptor:
             mock.patch.object(
                 events_module.workflow, "execute_activity", new=execute_activity
             ),
+            pytest.raises(ValueError, match="boom"),
         ):
-            with pytest.raises(ValueError, match="boom"):
-                await interceptor.execute_workflow(mock.MagicMock())
+            await interceptor.execute_workflow(mock.MagicMock())
 
         # start + end emitted even on failure
         assert execute_activity.await_count == 2

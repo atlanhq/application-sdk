@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.9.0
-source-sha:    8e034cef779d05f5e7a00c73ccf8daf4cda120db
-source-date:   2026-05-13T19:24:34+01:00
+sdk-version:   3.11.0
+source-sha:    62c758aef4585dd2ebaa8587d9d5c25464001e41
+source-date:   2026-05-18T10:26:02+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 16 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 17 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
@@ -103,6 +103,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Import:** `from application_sdk.app import Output`
 - **Signature:** `class Output`
 - **Summary:** Base class for all output contracts (Apps and tasks).
+- **Defined in:** `application_sdk/contracts/base.py`
+
+#### `OutputStatus`
+
+- **Import:** `from application_sdk.app import OutputStatus`
+- **Signature:** `class OutputStatus`
+- **Summary:** Standard run-result status used on :class:`Output`.
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `RetryableError`
@@ -287,7 +294,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `normalize_filters`
 
 - **Import:** `from application_sdk.common import normalize_filters`
-- **Signature:** `normalize_filters(filter_dict: Dict[str, List[str] | str], is_include: bool)`
+- **Signature:** `normalize_filters(filter_dict: dict[str, list[str] | str], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -301,7 +308,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `prepare_query`
 
 - **Import:** `from application_sdk.common import prepare_query`
-- **Signature:** `prepare_query(query: Optional[str], ...)`
+- **Signature:** `prepare_query(query: str | None, ...)`
 - **Summary:** Prepare a SQL query by applying include/exclude filters.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -739,8 +746,8 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `create_async_atlan_client`
 
 - **Import:** `from application_sdk.credentials import create_async_atlan_client`
-- **Signature:** `create_async_atlan_client(cred: 'Credential')`
-- **Summary:** Create an AsyncAtlanClient from a resolved Atlan credential.
+- **Signature:** `create_async_atlan_client(cred: Credential, *, extra_headers: dict[str, str] | None = None)`
+- **Summary:** Create a pyatlan_v9 AsyncAtlanClient from a resolved Atlan credential.
 - **Defined in:** `application_sdk/credentials/atlan_client.py`
 
 #### `expand_dotted_keys`
@@ -2204,6 +2211,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import Output`
 - **Summary:** Base class for all output contracts (Apps and tasks).
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
   - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
   - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
 - **Defined in:** `application_sdk/contracts/base.py`

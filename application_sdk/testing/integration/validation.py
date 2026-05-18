@@ -29,7 +29,7 @@ Usage:
 
 import os
 from glob import glob
-from typing import Any, Dict, List
+from typing import Any
 
 import orjson
 
@@ -64,7 +64,7 @@ def _ensure_pandera_check_methods_registered() -> None:
     if _pandera_check_method_registered:
         return
 
-    import pandera.extensions as extensions  # noqa: PLC0415
+    from pandera import extensions  # noqa: PLC0415
 
     @extensions.register_check_method(statistics=["expected_record_count"])  # pyright: ignore[reportPrivateImportUsage]
     def check_record_count_ge(df: Any, *, expected_record_count: int) -> bool:
@@ -81,8 +81,14 @@ def _ensure_pandera_check_methods_registered() -> None:
         """
         if df.shape[0] >= expected_record_count:
             return True
-        raise ValueError(
-            f"Expected record count >= {expected_record_count}, got: {df.shape[0]}"
+        from application_sdk.testing.integration._errors import (  # noqa: PLC0415
+            ValidationInputError,
+        )
+
+        raise ValidationInputError(
+            message=f"Expected record count >= {expected_record_count}, got: {df.shape[0]}",
+            constraint=f">={expected_record_count}",
+            value_summary=str(df.shape[0]),
         )
 
     _pandera_check_method_registered = True
@@ -113,7 +119,7 @@ def get_normalised_dataframe(extracted_file_path: str) -> Any:
     """
     import pandas as pd  # noqa: PLC0415
 
-    data: List[Dict[str, Any]] = []
+    data: list[dict[str, Any]] = []
 
     # Search for JSON and parquet files
     json_files = glob(f"{extracted_file_path}/**/*.json", recursive=True)
@@ -136,7 +142,7 @@ def get_normalised_dataframe(extracted_file_path: str) -> Any:
     return pd.json_normalize(data)
 
 
-def get_schema_file_paths(schema_base_path: str) -> List[str]:
+def get_schema_file_paths(schema_base_path: str) -> list[str]:
     """Find all pandera YAML schema files in the given directory.
 
     Recursively searches for .yaml and .yml files.
@@ -170,7 +176,7 @@ def validate_with_pandera(
     schema_base_path: str,
     extracted_output_path: str,
     subdirectory: str = "transformed",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Validate extracted output against pandera YAML schemas.
 
     For each schema file found under `schema_base_path`, the validator:
@@ -216,7 +222,7 @@ def validate_with_pandera(
     _ensure_pandera_check_methods_registered()
 
     schema_files = get_schema_file_paths(schema_base_path)
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     output_base = (
         os.path.join(extracted_output_path, subdirectory)
@@ -248,7 +254,7 @@ def validate_with_pandera(
 
         extracted_file_path = os.path.join(output_base, extracted_path_suffix)
 
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "schema_file": schema_file,
             "entity": entity,
             "success": False,
@@ -293,7 +299,7 @@ def validate_with_pandera(
     return results
 
 
-def format_validation_report(results: List[Dict[str, Any]]) -> str:
+def format_validation_report(results: list[dict[str, Any]]) -> str:
     """Format pandera validation results into a human-readable report.
 
     Args:

@@ -439,46 +439,44 @@ class TestTransferLogging:
     """
 
     async def test_upload_emits_success_log_with_metrics(
-        self, store, tmp_path, caplog
+        self, store, tmp_path, loguru_capture
     ) -> None:
         f = tmp_path / "p.bin"
         f.write_bytes(b"x" * (256 * 1024))
-        with caplog.at_level("INFO", logger="application_sdk.storage.ops"):
-            await upload_file("metrics/up.bin", f, store)
+        await upload_file("metrics/up.bin", f, store)
 
-        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
-        outcome_events = [r for r in events if r.__dict__.get("outcome") == "success"]
+        events = [r for r in loguru_capture if r["extra"].get("storage_op")]
+        outcome_events = [r for r in events if r["extra"].get("outcome") == "success"]
         assert outcome_events, (
             "expected at least one structured 'success' upload event; "
-            f"got events: {[r.message for r in events]}"
+            f"got events: {[r['message'] for r in events]}"
         )
         evt = outcome_events[-1]
-        assert evt.__dict__.get("storage_op") == "upload"
-        assert evt.__dict__.get("size_bytes") == 256 * 1024
-        assert evt.__dict__.get("elapsed_ms") is not None
-        assert evt.__dict__.get("store_path") == "metrics/up.bin"
+        assert evt["extra"].get("storage_op") == "upload"
+        assert evt["extra"].get("size_bytes") == 256 * 1024
+        assert evt["extra"].get("elapsed_ms") is not None
+        assert evt["extra"].get("store_path") == "metrics/up.bin"
 
     async def test_download_emits_failure_log_with_error_class(
-        self, store, tmp_path, caplog
+        self, store, tmp_path, loguru_capture
     ) -> None:
-        with caplog.at_level("WARNING", logger="application_sdk.storage.ops"):
-            with pytest.raises(StorageNotFoundError):
-                await download_file("no/such/key.bin", tmp_path / "out.bin", store)
+        with pytest.raises(StorageNotFoundError):
+            await download_file("no/such/key.bin", tmp_path / "out.bin", store)
 
-        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
-        failure_events = [r for r in events if r.__dict__.get("outcome") == "failure"]
+        events = [r for r in loguru_capture if r["extra"].get("storage_op")]
+        failure_events = [r for r in events if r["extra"].get("outcome") == "failure"]
         assert failure_events, (
             "expected at least one structured 'failure' download event; "
-            f"got events: {[r.message for r in events]}"
+            f"got events: {[r['message'] for r in events]}"
         )
         evt = failure_events[-1]
-        assert evt.__dict__.get("storage_op") == "download"
-        assert evt.__dict__.get("error_class") is not None
+        assert evt["extra"].get("storage_op") == "download"
+        assert evt["extra"].get("error_class") is not None
         # Not-found should be classified explicitly.
-        assert evt.__dict__.get("error_class") in {
+        assert evt["extra"].get("error_class") in {
             "StorageNotFoundError",
             "FileNotFoundError",
-        } or "NotFound" in evt.__dict__.get("error_class", "")
+        } or "NotFound" in evt["extra"].get("error_class", "")
 
 
 # ---------------------------------------------------------------------------
