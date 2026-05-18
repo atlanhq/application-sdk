@@ -42,7 +42,10 @@ class SampleInput(Input):
 class SampleOutput(Output):
     """Output from the sample workflow."""
 
-    status: str = "completed"
+    # The example pre-dates BLDX-1244's standard Output.status (OutputStatus
+    # enum). New connectors should rely on the inherited enum default; this
+    # example keeps the str override for illustrative continuity.
+    status: str = "completed"  # type: ignore[assignment]
 
 
 class CustomHandler(Handler):

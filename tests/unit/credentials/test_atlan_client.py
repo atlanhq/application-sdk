@@ -1,4 +1,10 @@
-"""Unit tests for create_async_atlan_client and AtlanClientMixin."""
+"""Unit tests for create_async_atlan_client + AtlanClientMixin.
+
+The SDK exposes only the v9 + async pyatlan factory — the canonical
+shape we recommend for app code. Callers that need a sync client or
+the classic pyatlan surface (FluentSearch, role_cache, …) construct
+those directly from pyatlan.
+"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,11 +14,13 @@ from application_sdk.credentials.atlan import AtlanApiToken, AtlanOAuthClient
 from application_sdk.credentials.atlan_client import (
     _VALIDATED_ASYNC_CLIENT_KEY,
     AtlanClientMixin,
+    _app_request_headers,
     create_async_atlan_client,
 )
 from application_sdk.credentials.errors import AtlanCredentialTypeError
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
+from application_sdk.version import __version__ as _SDK_VERSION
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -42,7 +50,7 @@ def _make_mixin_app(app_state: MagicMock, resolved_cred=None) -> AtlanClientMixi
 
 
 # ---------------------------------------------------------------------------
-# create_async_atlan_client — factory function
+# create_async_atlan_client — pyatlan_v9 async factory
 # ---------------------------------------------------------------------------
 
 
@@ -184,3 +192,198 @@ class TestAtlanClientMixinValidatedClientReuse:
 
         assert result is mock_validated_client
         mixin.context.resolve_credential.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# _app_request_headers — header derivation from AppContext (BLDX-1246)
+# ---------------------------------------------------------------------------
+
+
+class TestAppRequestHeaders:
+    def test_full_context_emits_all_three_headers(self) -> None:
+        # Happy path: AppContext exposes both app_name and app_version → we
+        # emit the trio of x-atlan-app-* headers the gateway uses for
+        # per-app observability.
+        ctx = MagicMock()
+        ctx.app_name = "mysql"
+        ctx.app_version = "0.7.21"
+
+        headers = _app_request_headers(ctx)
+
+        assert headers == {
+            "x-atlan-app-name": "mysql",
+            "x-atlan-app-version": "0.7.21",
+            "x-atlan-app-sdk-version": _SDK_VERSION,
+        }
+
+    def test_none_context_emits_only_sdk_version(self) -> None:
+        # Ad-hoc client creation (e.g. tests, scripts) — no context attached.
+        # SDK version stays so the call is still attributable to application_sdk.
+        headers = _app_request_headers(None)
+
+        assert headers == {"x-atlan-app-sdk-version": _SDK_VERSION}
+
+    def test_partial_context_skips_missing_fields(self) -> None:
+        # Test doubles or partially-constructed contexts may not have
+        # app_version yet. Skip silently rather than stamping empty strings.
+        ctx = MagicMock(spec=[])
+        ctx.app_name = "mysql"
+        # No app_version attribute set
+
+        headers = _app_request_headers(ctx)
+
+        assert headers["x-atlan-app-name"] == "mysql"
+        assert headers["x-atlan-app-sdk-version"] == _SDK_VERSION
+        assert "x-atlan-app-version" not in headers
+
+    def test_blank_values_skipped(self) -> None:
+        # Empty-string app_name/app_version: don't pollute headers with empties.
+        ctx = MagicMock()
+        ctx.app_name = ""
+        ctx.app_version = ""
+
+        headers = _app_request_headers(ctx)
+
+        assert headers == {"x-atlan-app-sdk-version": _SDK_VERSION}
+
+
+# ---------------------------------------------------------------------------
+# Header-injection contract on the factory (BLDX-1246)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateAsyncAtlanClientHeaders:
+    def test_extra_headers_calls_update_headers(self) -> None:
+        cred = AtlanApiToken(token="tok", base_url="https://t.atlan.com")
+        mock_client = MagicMock()
+        headers = {"x-atlan-app-name": "mysql", "x-atlan-app-version": "0.7.21"}
+
+        with patch("pyatlan_v9.client.aio.AsyncAtlanClient", return_value=mock_client):
+            result = create_async_atlan_client(cred, extra_headers=headers)
+
+        assert result is mock_client
+        mock_client.update_headers.assert_called_once_with(headers)
+
+    def test_no_headers_does_not_call_update_headers(self) -> None:
+        # Default invocation (no caller-supplied headers) should not touch
+        # the pyatlan session — keeps existing test fixtures working.
+        cred = AtlanApiToken(token="tok", base_url="https://t.atlan.com")
+        mock_client = MagicMock()
+
+        with patch("pyatlan_v9.client.aio.AsyncAtlanClient", return_value=mock_client):
+            create_async_atlan_client(cred)
+
+        mock_client.update_headers.assert_not_called()
+
+    def test_oauth_credential_with_headers(self) -> None:
+        # OAuth path must also stamp the headers post-construction.
+        cred = AtlanOAuthClient(
+            client_id="cid",
+            client_secret="secret",
+            token_url="https://t.atlan.com/auth/realms/default/protocol/openid-connect/token",
+            base_url="https://t.atlan.com",
+        )
+        mock_client = MagicMock()
+        headers = {"x-atlan-app-name": "postgres"}
+
+        with patch("pyatlan_v9.client.aio.AsyncAtlanClient", return_value=mock_client):
+            create_async_atlan_client(cred, extra_headers=headers)
+
+        mock_client.update_headers.assert_called_once_with(headers)
+
+    def test_update_headers_failure_does_not_break_client_creation(self) -> None:
+        # Header attachment is best-effort. If update_headers raises (pyatlan
+        # rename / hot-fix scenario), we still return the working client —
+        # losing observability headers beats refusing to construct a client.
+        cred = AtlanApiToken(token="tok", base_url="https://t.atlan.com")
+        mock_client = MagicMock()
+        mock_client.update_headers.side_effect = RuntimeError("transient")
+
+        with patch("pyatlan_v9.client.aio.AsyncAtlanClient", return_value=mock_client):
+            result = create_async_atlan_client(
+                cred, extra_headers={"x-atlan-app-name": "mysql"}
+            )
+
+        assert result is mock_client
+
+
+# ---------------------------------------------------------------------------
+# AtlanClientMixin — passes derived headers (BLDX-1246)
+# ---------------------------------------------------------------------------
+
+
+class TestAtlanClientMixinHeaders:
+    @pytest.mark.asyncio
+    async def test_mixin_passes_context_derived_headers(self) -> None:
+        # Verify the mixin sources app_name / app_version from the AppContext
+        # and forwards them through to the factory on cache-miss creation.
+        cred_ref = CredentialRef(name="my-atlan", credential_type="atlan_api_token")
+        resolved = AtlanApiToken(token="tok", base_url="https://t.atlan.com")
+
+        app_state = _make_app_state()
+        mixin = _make_mixin_app(app_state, resolved_cred=resolved)
+        # _make_mixin_app uses AsyncMock for context; pin the attrs the
+        # production code reads.
+        mixin.context.app_name = "mysql"  # type: ignore[attr-defined]
+        mixin.context.app_version = "0.7.21"  # type: ignore[attr-defined]
+
+        mock_client = MagicMock()
+        with patch(
+            "application_sdk.credentials.atlan_client.create_async_atlan_client",
+            return_value=mock_client,
+        ) as factory:
+            await mixin.get_or_create_async_atlan_client(cred_ref)
+
+        # factory called once with cred + extra_headers
+        assert factory.call_count == 1
+        kwargs = factory.call_args.kwargs
+        assert kwargs["extra_headers"] == {
+            "x-atlan-app-name": "mysql",
+            "x-atlan-app-version": "0.7.21",
+            "x-atlan-app-sdk-version": _SDK_VERSION,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Real-client integration — verify pyatlan_v9 actually accepts our headers
+# (BLDX-1246). Offline; no network. Catches upstream renames the mocked
+# tests can't detect.
+# ---------------------------------------------------------------------------
+
+
+class TestPyatlanV9ClientHeaderContractRealClient:
+    """Construct an actual pyatlan_v9 client and inspect its session."""
+
+    def test_async_client_headers_actually_present_on_session(self) -> None:
+        cred = AtlanApiToken(token="tok", base_url="https://t.atlan.com")
+
+        client = create_async_atlan_client(
+            cred,
+            extra_headers={
+                "x-atlan-app-name": "mysql",
+                "x-atlan-app-version": "0.7.21",
+                "x-atlan-app-sdk-version": "3.10.1",
+            },
+        )
+
+        # AsyncAtlanClient.update_headers writes into self._async_session.headers
+        # (verified via inspect.getsource of the vendored pyatlan_v9 wheel).
+        # If that internal attribute is ever renamed, this test catches it.
+        session_headers = getattr(client, "_async_session", None)
+        assert session_headers is not None, (
+            "pyatlan_v9 AsyncAtlanClient no longer exposes _async_session — "
+            "header injection contract has changed; investigate before merge."
+        )
+        h = session_headers.headers
+        assert h.get("x-atlan-app-name") == "mysql"
+        assert h.get("x-atlan-app-version") == "0.7.21"
+        assert h.get("x-atlan-app-sdk-version") == "3.10.1"
+
+    def test_async_client_without_extra_headers_still_constructs(self) -> None:
+        # No-headers path: the client must construct cleanly.
+        cred = AtlanApiToken(token="tok", base_url="https://t.atlan.com")
+        client = create_async_atlan_client(cred)
+
+        # update_headers is a method on the real client — confirm the
+        # contract our _apply_app_headers helper checks for is present.
+        assert callable(getattr(client, "update_headers", None))

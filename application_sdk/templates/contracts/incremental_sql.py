@@ -304,7 +304,11 @@ class ExecuteColumnBatchOutput(Output):
 
     batch_index: int = 0
     records: int = 0
-    status: str = ""
+    # Pre-dates BLDX-1244's standard Output.status (``OutputStatus`` enum)
+    # and uses domain-specific values ("not_found", "success") that aren't
+    # part of the enum vocabulary. Keep the str override for backward-compat;
+    # the misc ignore acknowledges the deliberate field-type narrowing.
+    status: str = ""  # type: ignore[assignment]
 
 
 # =============================================================================
