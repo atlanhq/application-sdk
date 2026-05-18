@@ -256,7 +256,8 @@ def _log_storage_event(
     if error_class is not None:
         extra["error_class"] = error_class
     msg = f"storage.{op} {outcome} path={store_path}"
-    # All keys in extra are in _KNOWN_EXTRA_KEYS and reach OTLP as indexed attrs.
+    # Keys are bound into loguru record["extra"] and promoted to OTLP indexed
+    # attributes by _build_extra_dict in logger_adaptor (all are in _KNOWN_EXTRA_KEYS).
     logger.log(level, msg, **extra)
 
 

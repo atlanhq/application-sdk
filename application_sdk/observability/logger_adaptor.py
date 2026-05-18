@@ -378,16 +378,16 @@ class _LazyLoggerProxy:
         except Exception:
             logging.error("Error in lazy critical logging", exc_info=True)
 
-    def log(self, level: int, msg: str, **kwargs: Any) -> None:
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
         """Dispatch to the named level method matching stdlib integer *level*."""
         if level >= logging.ERROR:
-            self.error(msg, **kwargs)
+            self.error(msg, *args, **kwargs)
         elif level >= logging.WARNING:
-            self.warning(msg, **kwargs)
+            self.warning(msg, *args, **kwargs)
         elif level >= logging.INFO:
-            self.info(msg, **kwargs)
+            self.info(msg, *args, **kwargs)
         else:
-            self.debug(msg, **kwargs)
+            self.debug(msg, *args, **kwargs)
 
 
 class AtlanLoggerAdapter(AtlanObservability[Any]):
