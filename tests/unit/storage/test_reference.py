@@ -134,11 +134,14 @@ class TestPersistFileReference:
         assert a_side.decode().strip() == _hash_bytes(b"a")
 
     async def test_retained_tier_requires_run_prefix(self, store, tmp_path) -> None:
+        from application_sdk.contracts.types_errors import RunPrefixRequiredError
+
         f = tmp_path / "data.bin"
         f.write_bytes(b"x")
         ref = FileReference(local_path=str(f), tier=StorageTier.RETAINED)
-        with pytest.raises(ValueError):
+        with pytest.raises(RunPrefixRequiredError) as exc_info:
             await persist_file_reference(store, ref)
+        assert exc_info.value.code == "INVALID_INPUT_RUN_PREFIX_REQUIRED"
 
     async def test_retained_tier_with_output_path(self, store, tmp_path) -> None:
         f = tmp_path / "data.bin"

@@ -3,6 +3,10 @@
 import pytest
 from pydantic import ValidationError
 
+from application_sdk.credentials.errors import (
+    CredentialResolvableTypeError,
+    CredentialRoutingError,
+)
 from application_sdk.credentials.ref import (
     CredentialRef,
     CredentialResolvable,
@@ -183,11 +187,11 @@ class TestCredentialRefResolve:
             extraction_method="direct",
             credential_guid="",
         )
-        with pytest.raises(ValueError, match="No routable credential source"):
+        with pytest.raises(CredentialRoutingError):
             CredentialRef.resolve(inp)
 
-    def test_resolve_non_resolvable_raises_type_error(self):
-        with pytest.raises(TypeError, match="Expected a CredentialResolvable"):
+    def test_resolve_non_resolvable_raises(self):
+        with pytest.raises(CredentialResolvableTypeError):
             CredentialRef.resolve("not-a-model")  # type: ignore[arg-type]
 
     def test_resolve_agent_with_empty_spec_and_guid_falls_through(self):
@@ -197,5 +201,5 @@ class TestCredentialRefResolve:
             extraction_method="agent",
             credential_guid="abc-123",
         )
-        with pytest.raises(ValueError, match="No routable credential source"):
+        with pytest.raises(CredentialRoutingError):
             CredentialRef.resolve(inp)

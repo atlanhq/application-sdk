@@ -49,6 +49,14 @@ from application_sdk.errors.leaves import InvalidInputError
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+@dataclass(kw_only=True)
+class UnresolvableEntrypointAnnotationsError(InvalidInputError):
+    """Entry point has string annotations that cannot be resolved at decoration time."""
+
+    code: ClassVar[str] = "INVALID_INPUT_ENTRYPOINT_UNRESOLVABLE_ANNOTATIONS"
+    field: str | None = "annotations"
+
+
 class EntryPointContractError(InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
@@ -136,14 +144,16 @@ def _validate_entrypoint_signature(
 
     try:
         hints = get_type_hints(fn)
-    except Exception:
+    except NameError:
         raw: dict[str, Any] = getattr(fn, "__annotations__", {})
         unresolvable = [k for k, v in raw.items() if isinstance(v, str)]
         if unresolvable:
-            raise EntryPointContractError(
-                f"Entry point '{fn_name}' has unresolvable annotations for {unresolvable}. "
-                "This usually happens when 'from __future__ import annotations' is "
-                "used alongside Input/Output types that are not defined at module level."
+            raise UnresolvableEntrypointAnnotationsError(
+                message=(
+                    f"Entry point '{fn_name}' has unresolvable annotations for {unresolvable}. "
+                    "This usually happens when 'from __future__ import annotations' is "
+                    "used alongside Input/Output types that are not defined at module level."
+                ),
             ) from None
         hints = raw
 

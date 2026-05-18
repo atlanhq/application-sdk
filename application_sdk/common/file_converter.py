@@ -1,6 +1,5 @@
 from collections import namedtuple
 from enum import Enum
-from typing import List, Optional
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -40,8 +39,8 @@ class ConvertFile(Enum):
 
 
 async def convert_data_files(
-    input_file_paths: List[str], output_file_type: FileType
-) -> List[str]:
+    input_file_paths: list[str], output_file_type: FileType
+) -> list[str]:
     """
     Convert the input files to the specified file type
     Args:
@@ -56,7 +55,13 @@ async def convert_data_files(
     convert_file = ConvertFile(f"{input_file_type}_to_{output_file_type.value}")
     converter_func = file_converter_registry.registry.get(convert_file)
     if converter_func is None:
-        raise ValueError(f"No converter found for file type: {convert_file}")
+        from application_sdk.common.errors import (  # noqa: PLC0415
+            FileConverterNotFoundError,
+        )
+
+        raise FileConverterNotFoundError(
+            message=f"No converter found for file type: {convert_file}"
+        )
     converted_files = []
     for file in input_file_paths:
         converted_file = converter_func(file)
@@ -68,7 +73,7 @@ async def convert_data_files(
 
 # Add the main logic here to convert the files here
 @file_converter_registry.add(ConvertFile.JSON_TO_PARQUET)
-def convert_json_to_parquet(file_path: str) -> Optional[str]:
+def convert_json_to_parquet(file_path: str) -> str | None:
     """Convert the downloaded files from json to parquet"""
     try:
         import pandas as pd  # noqa: PLC0415 — optional dep: pandas
@@ -85,7 +90,7 @@ def convert_json_to_parquet(file_path: str) -> Optional[str]:
 
 
 @file_converter_registry.add(ConvertFile.PARQUET_TO_JSON)
-def convert_parquet_to_json(file_path: str) -> Optional[str]:
+def convert_parquet_to_json(file_path: str) -> str | None:
     """Convert the downloaded files from parquet to json"""
     try:
         import pandas as pd  # noqa: PLC0415 — optional dep: pandas

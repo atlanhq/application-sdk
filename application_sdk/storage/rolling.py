@@ -77,6 +77,11 @@ from typing import Any, Generic, TypeVar
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage.rolling_errors import (
+    InvalidRollingFileWriterError,
+    InvalidRolloverPolicyError,
+    RollingWriterClosedError,
+)
 
 logger = get_logger(__name__)
 
@@ -153,8 +158,8 @@ class TimePolicy(RolloverPolicy):
 
     def __init__(self, interval_seconds: float) -> None:
         if interval_seconds <= 0:
-            raise ValueError(
-                "TimePolicy.interval_seconds must be > 0; got " f"{interval_seconds}"
+            raise InvalidRolloverPolicyError(
+                field="interval_seconds", received_value=str(interval_seconds)
             )
         self.interval_seconds = interval_seconds
 
@@ -175,7 +180,9 @@ class SizePolicy(RolloverPolicy):
 
     def __init__(self, max_bytes: int) -> None:
         if max_bytes <= 0:
-            raise ValueError(f"SizePolicy.max_bytes must be > 0; got {max_bytes}")
+            raise InvalidRolloverPolicyError(
+                field="max_bytes", received_value=str(max_bytes)
+            )
         self.max_bytes = max_bytes
 
     def should_roll(self, state: BufferState) -> bool:
@@ -192,7 +199,9 @@ class CountPolicy(RolloverPolicy):
 
     def __init__(self, max_records: int) -> None:
         if max_records <= 0:
-            raise ValueError(f"CountPolicy.max_records must be > 0; got {max_records}")
+            raise InvalidRolloverPolicyError(
+                field="max_records", received_value=str(max_records)
+            )
         self.max_records = max_records
 
     def should_roll(self, state: BufferState) -> bool:
@@ -208,7 +217,7 @@ class AnyOfPolicy(RolloverPolicy):
 
     def __init__(self, *policies: RolloverPolicy) -> None:
         if not policies:
-            raise ValueError("AnyOfPolicy requires at least one policy")
+            raise InvalidRolloverPolicyError(field="policies")
         self.policies = policies
 
     def should_roll(self, state: BufferState) -> bool:
@@ -350,9 +359,11 @@ class RollingFileWriter(Generic[T]):
         scoped_subdir_name: str | None = None,
     ) -> None:
         if not base_path:
-            raise ValueError("base_path is required")
+            raise InvalidRollingFileWriterError(field="base_path")
         if not extension.startswith("."):
-            raise ValueError(f"extension must start with '.', got {extension!r}")
+            raise InvalidRollingFileWriterError(
+                field="extension", received_value=extension
+            )
 
         self.output_dir = os.path.join(
             base_path,
@@ -393,7 +404,7 @@ class RollingFileWriter(Generic[T]):
         Thread-safe within a single event loop via an internal asyncio Lock.
         """
         if self._closed:
-            raise RuntimeError("Cannot append to a closed RollingFileWriter")
+            raise RollingWriterClosedError()
 
         async with self._lock:
             if self._chunk_start_monotonic is None:
@@ -526,16 +537,16 @@ def _resolve_rollover_policy(
     # messages match what the caller actually passed (the policy classes'
     # internal field names would be confusing here).
     if chunk_interval_seconds <= 0:
-        raise ValueError(
-            f"chunk_interval_seconds must be > 0; got {chunk_interval_seconds}"
+        raise InvalidRolloverPolicyError(
+            field="chunk_interval_seconds", received_value=str(chunk_interval_seconds)
         )
     if max_buffer_bytes is not None and max_buffer_bytes <= 0:
-        raise ValueError(
-            f"max_buffer_bytes must be > 0 or None; got {max_buffer_bytes}"
+        raise InvalidRolloverPolicyError(
+            field="max_buffer_bytes", received_value=str(max_buffer_bytes)
         )
     if max_buffer_records is not None and max_buffer_records <= 0:
-        raise ValueError(
-            f"max_buffer_records must be > 0 or None; got {max_buffer_records}"
+        raise InvalidRolloverPolicyError(
+            field="max_buffer_records", received_value=str(max_buffer_records)
         )
 
     policies: list[RolloverPolicy] = [TimePolicy(chunk_interval_seconds)]

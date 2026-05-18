@@ -18,7 +18,8 @@ Example:
     >>> actual_creds_again = creds.evaluate()  # Returns cached value
 """
 
-from typing import Any, Callable, Generic, TypeVar
+from collections.abc import Callable
+from typing import Any, Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -48,7 +49,9 @@ class Lazy(Generic[T]):
             fn: A callable that takes no arguments and returns the value.
         """
         if not callable(fn):
-            raise TypeError("Lazy wrapper requires a callable")
+            raise TypeError(
+                "Lazy wrapper requires a callable"
+            )  # stdlib-interop: __init__ arg-check pattern
         self._fn = fn
         self._cached: T = None  # type: ignore
         self._evaluated: bool = False

@@ -36,6 +36,10 @@ from prometheus_client.exposition import default_handler
 from prometheus_client.parser import text_string_to_metric_families
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.pushgateway_errors import (
+    PushGatewayJobRequiredError,
+    PushGatewayUrlRequiredError,
+)
 
 #: Regex extracting ``push_time_seconds{labels} value`` lines from a
 #: Pushgateway ``/metrics`` response. The Pushgateway emits one such series
@@ -75,7 +79,11 @@ class TemporalCoreCollector:
                 return
             yield from text_string_to_metric_families(resp.text)
         except Exception:
-            # Silent — a transient Temporal core hiccup must not poison the push.
+            # Best-effort — a transient Temporal core hiccup must not poison the push.
+            logger.debug(
+                "Temporal-core metric scrape failed; skipping this cycle",
+                exc_info=True,
+            )
             return
 
 
@@ -154,9 +162,9 @@ class PushGatewayClient:
         task_queue: str = "",
     ) -> None:
         if not url:
-            raise ValueError("PushGatewayClient requires a non-empty url")
+            raise PushGatewayUrlRequiredError()
         if not job:
-            raise ValueError("PushGatewayClient requires a non-empty job")
+            raise PushGatewayJobRequiredError()
         self._url = url
         self._job = job
         self._grouping_key = grouping_key or _default_grouping_key(task_queue)

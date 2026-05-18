@@ -236,6 +236,7 @@ async def persist_file_reference(
                 storage_path=prefix,
                 local_path=ref.local_path,
                 error_type=type(exc).__name__,
+                exc_info=True,
             )
             raise
 
@@ -289,6 +290,7 @@ async def persist_file_reference(
                 local_path=ref.local_path,
                 error_type=type(exc).__name__,
                 bytes_uploaded=0,
+                exc_info=True,
             )
             raise
 
@@ -485,6 +487,7 @@ async def materialize_file_reference(
                 storage_path=ref.storage_path,
                 error_type=type(exc).__name__,
                 bytes_transferred_before_failure=0,
+                exc_info=True,
             )
             raise
 
@@ -580,6 +583,7 @@ async def materialize_file_reference(
                 storage_path=ref.storage_path,
                 error_type=type(exc).__name__,
                 bytes_transferred_before_failure=0,
+                exc_info=True,
             )
             raise
 
@@ -642,10 +646,11 @@ async def fetch(
 
         infra = get_infrastructure()
         if infra is None or infra.storage is None:
-            raise RuntimeError(
-                "fetch(): no object store available — pass store= explicitly "
-                "or call from inside a Temporal activity."
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                ObjectStoreNotProvidedError,
             )
+
+            raise ObjectStoreNotProvidedError()
         store = infra.storage
 
     return await materialize_file_reference(store, ref)

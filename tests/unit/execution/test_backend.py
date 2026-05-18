@@ -21,6 +21,12 @@ import pytest
 # These tests intentionally import a private Temporal backend module because
 # they verify internal client/runtime wiring that is not exposed publicly.
 from application_sdk.execution._temporal import backend as backend_module
+from application_sdk.execution._temporal._backend_errors import (
+    MtlsConfigError,
+    TemporalConnectError,
+    TlsCertFileNotFoundError,
+    UnknownEntryPointError,
+)
 from application_sdk.execution._temporal.backend import (
     TemporalExecutorBackend,
     _build_tls_config,
@@ -134,7 +140,7 @@ class TestTemporalExecutorBackendExecute:
         backend = TemporalExecutorBackend(client=client)
         app_cls = _make_app_cls(name="noeps", entry_points={"a": mock.MagicMock()})
         ctx = mock.MagicMock(app_name="noeps", correlation_id="c")
-        with pytest.raises(ValueError, match="Unknown entry point"):
+        with pytest.raises(UnknownEntryPointError):
             await backend.execute(
                 app_cls,
                 _make_input_data(),
@@ -243,21 +249,21 @@ class TestBuildTlsConfig:
         assert cfg.server_root_ca_cert == b"-----CA-----"
 
     def test_raises_when_root_ca_missing(self, tmp_path: Any) -> None:
-        with pytest.raises(FileNotFoundError, match="root CA"):
+        with pytest.raises(TlsCertFileNotFoundError):
             _build_tls_config(server_root_ca_cert_path=str(tmp_path / "missing.pem"))
 
     def test_raises_when_client_cert_without_key(self, tmp_path: Any) -> None:
-        with pytest.raises(ValueError, match="mTLS requires both"):
+        with pytest.raises(MtlsConfigError):
             _build_tls_config(client_cert_path=str(tmp_path / "client.pem"))
 
     def test_raises_when_client_key_without_cert(self, tmp_path: Any) -> None:
-        with pytest.raises(ValueError, match="mTLS requires both"):
+        with pytest.raises(MtlsConfigError):
             _build_tls_config(client_private_key_path=str(tmp_path / "key.pem"))
 
     def test_raises_when_client_cert_missing(self, tmp_path: Any) -> None:
         key = tmp_path / "k.pem"
         key.write_bytes(b"key")
-        with pytest.raises(FileNotFoundError, match="client cert"):
+        with pytest.raises(TlsCertFileNotFoundError):
             _build_tls_config(
                 client_cert_path=str(tmp_path / "missing-cert.pem"),
                 client_private_key_path=str(key),
@@ -266,7 +272,7 @@ class TestBuildTlsConfig:
     def test_raises_when_client_key_missing(self, tmp_path: Any) -> None:
         cert = tmp_path / "c.pem"
         cert.write_bytes(b"cert")
-        with pytest.raises(FileNotFoundError, match="client private key"):
+        with pytest.raises(TlsCertFileNotFoundError):
             _build_tls_config(
                 client_cert_path=str(cert),
                 client_private_key_path=str(tmp_path / "missing-key.pem"),
@@ -455,7 +461,7 @@ class TestCreateTemporalClient:
             mock.patch.object(backend_module.Client, "connect", new=connect_mock),
             mock.patch.object(backend_module.asyncio, "sleep", new=mock.AsyncMock()),
         ):
-            with pytest.raises(RuntimeError, match="Failed to connect to Temporal"):
+            with pytest.raises(TemporalConnectError):
                 await create_temporal_client(
                     connect_max_attempts=2,
                     connect_retry_delay_seconds=0.0,

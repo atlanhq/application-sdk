@@ -46,7 +46,14 @@ def _coerce_filter_value(v: Any) -> FilterMap | str:
 
 
 def _validate_filter_no_sql_injection(v: FilterMap | str) -> FilterMap | str:
-    """Block single quotes in filter values to prevent SQL injection."""
+    """Block single quotes in filter values to prevent SQL injection.
+
+    stdlib-interop: raises ValueError because callers wrap this in
+    Pydantic ``@field_validator``, which requires ValueError to surface as
+    ``ValidationError``. Do not migrate to ``InvalidInputError`` — Pydantic
+    only treats ValueError / AssertionError / PydanticCustomError as
+    validation failures.
+    """
     if isinstance(v, str):
         if "'" in v:
             msg = f"Single quotes not allowed in filter value: {v}"

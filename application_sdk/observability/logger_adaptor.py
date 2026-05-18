@@ -32,6 +32,9 @@ from application_sdk.constants import (
     SERVICE_NAME,
 )
 from application_sdk.observability.context import correlation_context, request_context
+from application_sdk.observability.logger_adaptor_errors import (
+    UnsupportedLogRecordError,
+)
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.utils import (
     build_otel_resource,
@@ -610,7 +613,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         if isinstance(record, dict):
             return record
 
-        raise ValueError(f"Unsupported record format: {type(record)}")
+        raise UnsupportedLogRecordError(observed_type=type(record).__name__)
 
     def export_record(self, record: Any) -> None:
         """Export a log record to external systems.

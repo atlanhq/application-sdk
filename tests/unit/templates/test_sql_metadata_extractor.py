@@ -1081,8 +1081,11 @@ class TestRunOrchestration:
             await SqlMetadataExtractor.run(ext, inp)
         mock_legacy.assert_called_once_with("legacy-guid")
 
-    async def test_run_rewraps_exceptions(self) -> None:
+    async def test_run_raises_sql_metadata_extraction_error(self) -> None:
         from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+        from application_sdk.templates._template_errors import (
+            SqlMetadataExtractionError,
+        )
         from application_sdk.templates.contracts.sql_metadata import ExtractionInput
         from application_sdk.templates.sql_metadata_extractor import (
             SqlMetadataExtractor,
@@ -1096,8 +1099,9 @@ class TestRunOrchestration:
                 attributes=ConnectionAttributes(qualified_name="qn", name="n")
             ),
         )
-        with pytest.raises(Exception):
+        with pytest.raises(SqlMetadataExtractionError) as excinfo:
             await SqlMetadataExtractor.run(ext, inp)
+        assert excinfo.value.code == "INTERNAL_SQL_METADATA_EXTRACTION"
 
     async def test_run_handles_no_connection(self) -> None:
         from application_sdk.templates.contracts.sql_metadata import ExtractionInput

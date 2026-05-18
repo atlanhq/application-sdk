@@ -146,27 +146,31 @@ def _parse_blocked_paths() -> list[str]:
 
 def _validate_upload_path(path: Path) -> None:
     """Block uploads from sensitive system paths, credential dirs, and env files."""
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        UnsafeUploadPathError,
+    )
+
     if ".." in path.parts:
-        raise ValueError(f"Path traversal detected in upload path: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
     resolved = path.resolve()
     resolved_str = str(resolved)
 
     if resolved_str.startswith(_SENSITIVE_SYSTEM_PREFIXES):
-        raise ValueError(f"Upload from sensitive system path blocked: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
     if any(part in _SENSITIVE_DIR_NAMES for part in resolved.parts):
-        raise ValueError(f"Upload from sensitive directory blocked: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
     if resolved.is_file() and resolved.name.startswith(_SENSITIVE_FILE_PREFIXES):
-        raise ValueError(f"Upload of sensitive file blocked: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
     # User-defined blocked paths via ATLAN_UPLOAD_FILE_BLOCKED_PATHS (comma-separated).
     # Each entry is matched as a substring against the full resolved path.
     # e.g. ATLAN_UPLOAD_FILE_BLOCKED_PATHS="/custom/secrets/,.vault,.credentials"
     user_blocked = _parse_blocked_paths()
     if any(pattern in resolved_str for pattern in user_blocked):
-        raise ValueError(f"Upload blocked by ATLAN_UPLOAD_FILE_BLOCKED_PATHS: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
 
 async def upload(
@@ -230,9 +234,11 @@ async def upload(
             or ".." in PurePosixPath(cleaned).parts
             or "\x00" in storage_subdir
         ):
-            raise ValueError(
-                f"storage_subdir must not contain path traversal segments: {storage_subdir!r}"
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                UnsafeUploadPathError,
             )
+
+            raise UnsafeUploadPathError(unsafe_path=storage_subdir)
         storage_subdir = cleaned
 
     if src.is_file():
