@@ -15,7 +15,7 @@ Outputs (single-line, append-safe):
     build_tag          ``build_tag`` (only ``v1`` supported today)
     dockerfile         ``dockerfile`` (default ``./Dockerfile``)
     enable_sdr         ``true``/``false`` from ``self_deployed_runtime``
-    release_model      ``cd`` (default) or ``versioned`` — controls publish-to-all gating
+    release_model      ``cd`` (default) or ``semver`` — controls publish-to-all gating
     sdk_version        atlan-application-sdk version pinned in uv.lock (or empty)
     entrypoints  JSON-encoded list (single line) or empty string
     deploy_config      YAML-dumped ``deploy:`` block (multiline; heredoc'd by caller)
@@ -44,7 +44,8 @@ _KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 _ALLOWED_TYPES = {"connector", "miner", "orchestrator", "utility", "custom"}
 
 # Allowed values for the release_model field.
-_ALLOWED_RELEASE_MODELS = {"cd", "versioned"}
+# "versioned" is a deprecated alias for "semver" — normalised on read.
+_ALLOWED_RELEASE_MODELS = {"cd", "semver", "versioned"}
 
 # Channel keys that GM's catalog read interprets as channel-tier overrides.
 # Any other key is interpreted as a tenant-name-tier override (matched against
@@ -220,6 +221,9 @@ def parse(
     dockerfile = d.get("dockerfile", "./Dockerfile")
     enable_sdr = "true" if d.get("self_deployed_runtime", False) else "false"
     release_model = d.get("release_model", "cd")
+    # Normalise deprecated alias so downstream CI always sees "semver".
+    if release_model == "versioned":
+        release_model = "semver"
 
     if not app_name:
         _err('atlan.yaml is missing required "name" field')
