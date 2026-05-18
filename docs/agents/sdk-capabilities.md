@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.11.0
-source-sha:    11a8c861924c0b6d68a6e4ca9d76e9c477824af4
-source-date:   2026-05-15T20:54:14+01:00
+source-sha:    430c1611fe13c2a7e7535b3634a0eb3712bd0476
+source-date:   2026-05-18T13:33:16+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 16 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 17 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
@@ -103,6 +103,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Import:** `from application_sdk.app import Output`
 - **Signature:** `class Output`
 - **Summary:** Base class for all output contracts (Apps and tasks).
+- **Defined in:** `application_sdk/contracts/base.py`
+
+#### `OutputStatus`
+
+- **Import:** `from application_sdk.app import OutputStatus`
+- **Signature:** `class OutputStatus`
+- **Summary:** Standard run-result status used on :class:`Output`.
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `RetryableError`
@@ -2204,6 +2211,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import Output`
 - **Summary:** Base class for all output contracts (Apps and tasks).
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
   - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
   - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
 - **Defined in:** `application_sdk/contracts/base.py`
