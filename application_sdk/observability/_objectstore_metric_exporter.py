@@ -21,15 +21,22 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import orjson
-from opentelemetry.sdk.metrics.export import (
-    AggregationTemporality,
-    Gauge,
+from opentelemetry.sdk.metrics import (
+    Counter,
     Histogram,
+    ObservableCounter,
+    ObservableUpDownCounter,
+    UpDownCounter,
+)
+from opentelemetry.sdk.metrics.export import AggregationTemporality
+from opentelemetry.sdk.metrics.export import Gauge as GaugeData
+from opentelemetry.sdk.metrics.export import Histogram as HistogramData
+from opentelemetry.sdk.metrics.export import (
     MetricExporter,
     MetricExportResult,
     MetricsData,
-    Sum,
 )
+from opentelemetry.sdk.metrics.export import Sum as SumData
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -137,7 +144,7 @@ def _serialize_metrics_data(metrics_data: MetricsData | None) -> list[dict[str, 
         for sm in rm.scope_metrics:
             for metric in sm.metrics:
                 data = metric.data
-                if isinstance(data, Sum):
+                if isinstance(data, SumData):
                     temp = _temporality_name(data.aggregation_temporality)
                     for dp in data.data_points:
                         records.append(
@@ -152,7 +159,7 @@ def _serialize_metrics_data(metrics_data: MetricsData | None) -> list[dict[str, 
                                 aggregation_temporality=temp,
                             )
                         )
-                elif isinstance(data, Gauge):
+                elif isinstance(data, GaugeData):
                     for dp in data.data_points:
                         records.append(
                             _number_record(
@@ -164,7 +171,7 @@ def _serialize_metrics_data(metrics_data: MetricsData | None) -> list[dict[str, 
                                 res_attrs,
                             )
                         )
-                elif isinstance(data, Histogram):
+                elif isinstance(data, HistogramData):
                     temp = _temporality_name(data.aggregation_temporality)
                     for dp in data.data_points:
                         records.append(
@@ -241,9 +248,11 @@ class ObjectStoreMetricExporter(MetricExporter):
     def __init__(self, *, data_dir: str | None = None) -> None:
         super().__init__(
             preferred_temporality={
-                Sum: AggregationTemporality.DELTA,
+                Counter: AggregationTemporality.DELTA,
+                UpDownCounter: AggregationTemporality.DELTA,
+                ObservableCounter: AggregationTemporality.DELTA,
+                ObservableUpDownCounter: AggregationTemporality.DELTA,
                 Histogram: AggregationTemporality.DELTA,
-                Gauge: AggregationTemporality.CUMULATIVE,
             },
         )
         self._data_dir = data_dir or get_observability_dir()
