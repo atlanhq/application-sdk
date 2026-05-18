@@ -34,10 +34,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from application_sdk.discovery import (
-    DiscoveryError,
     load_app_class,
     load_handler_class,
     validate_app_class,
+)
+from application_sdk.errors import AppError, InvalidInputError
+from application_sdk.main_errors import (
+    DaprNotDetectedError,
+    MissingAppModuleError,
+    MultiAppModuleError,
+    UnknownModeError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -208,18 +214,12 @@ class AppConfig:
 
         app_module_raw = args.app or _env("ATLAN_APP_MODULE")
         if not app_module_raw:
-            raise ValueError(
-                "App module is required. Use --app or set ATLAN_APP_MODULE."
-            )
+            raise MissingAppModuleError()
 
         app_module = app_module_raw.strip()
 
         if "," in app_module:
-            raise ValueError(
-                f"ATLAN_APP_MODULE contains a comma: {app_module!r}. "
-                "The multi-app pattern is not supported in v3. "
-                "Define multiple @entrypoint methods on a single App subclass instead."
-            )
+            raise MultiAppModuleError(app_module=app_module)
 
         service_name = (
             getattr(args, "service_name", None)
@@ -508,12 +508,7 @@ async def _create_infrastructure(
             _dapr_client=dapr_client,
         )
     else:
-        # No Dapr sidecar — require it for all modes
-        raise RuntimeError(
-            "Dapr sidecar not detected (DAPR_HTTP_PORT not set). "
-            "Run 'poe start-deps' to start local Dapr + Temporal, "
-            "or set DAPR_HTTP_PORT if running daprd manually."
-        )
+        raise DaprNotDetectedError()
 
 
 def _derive_service_name(app_module: str) -> str:
@@ -561,6 +556,7 @@ def _env_int(key: str, default: int = 0) -> int:
             key,
             val,
             default,
+            exc_info=True,
         )
         return default
 
@@ -1446,9 +1442,7 @@ def run_main(config: AppConfig) -> None:
     elif config.mode == "combined":
         asyncio.run(run_combined_mode(config))
     else:
-        raise ValueError(
-            f"Unknown mode: {config.mode!r}. Must be 'worker', 'handler', or 'combined'."
-        )
+        raise UnknownModeError(received_mode=config.mode)
 
 
 def parse_args() -> argparse.Namespace:
@@ -1533,7 +1527,7 @@ def main() -> NoReturn:
 
     try:
         config = AppConfig.from_args_and_env(args)
-    except ValueError:
+    except (ValueError, AppError):
         logger.error("Configuration error", exc_info=True)
         sys.exit(1)
 
@@ -1546,7 +1540,7 @@ def main() -> NoReturn:
 
     try:
         run_main(config)
-    except DiscoveryError:
+    except InvalidInputError:
         logger.error("Discovery error", exc_info=True)
         sys.exit(1)
     except KeyboardInterrupt:

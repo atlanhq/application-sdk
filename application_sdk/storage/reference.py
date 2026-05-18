@@ -192,6 +192,12 @@ async def persist_file_reference(
 
     local = Path(ref.local_path)
 
+    # Structured kwargs in the logger calls below are intentional: every key used
+    # (storage_path, local_path, file_count, file_size_bytes, bytes_uploaded,
+    # bytes_transferred_before_failure, sha256, tier, error_type, duration_ms) is
+    # in _KNOWN_EXTRA_KEYS (logger_adaptor.py "FileReference transfers", lines 106-126).
+    # _build_extra_dict promotes them to top-level OTLP attributes — indexed columns in
+    # Grafana+ClickHouse. Do not rewrite to %-style; that would lose the promotion.
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
         prefix = _make_storage_prefix(ref, output_path=output_path)
@@ -236,6 +242,7 @@ async def persist_file_reference(
                 storage_path=prefix,
                 local_path=ref.local_path,
                 error_type=type(exc).__name__,
+                exc_info=True,
             )
             raise
 
@@ -289,6 +296,7 @@ async def persist_file_reference(
                 local_path=ref.local_path,
                 error_type=type(exc).__name__,
                 bytes_uploaded=0,
+                exc_info=True,
             )
             raise
 
@@ -366,6 +374,13 @@ async def materialize_file_reference(
     all_keys = await list_keys(ref.storage_path, store)
     data_keys = [k for k in all_keys if not k.endswith(".sha256")]
 
+    # Structured kwargs in the logger calls below are intentional: every key used
+    # (storage_path, local_path, file_size_bytes, bytes_downloaded,
+    # bytes_transferred_before_failure, sha256, tier, file_count, files_skipped,
+    # files_downloaded, chunks_total, is_cache_hit, error_type, duration_ms) is
+    # in _KNOWN_EXTRA_KEYS (logger_adaptor.py "FileReference transfers", lines 106-126).
+    # _build_extra_dict promotes them to top-level OTLP attributes — indexed columns in
+    # Grafana+ClickHouse. Do not rewrite to %-style; that would lose the promotion.
     if not data_keys:
         # ── Single file ────────────────────────────────────────────────────
 
@@ -485,6 +500,7 @@ async def materialize_file_reference(
                 storage_path=ref.storage_path,
                 error_type=type(exc).__name__,
                 bytes_transferred_before_failure=0,
+                exc_info=True,
             )
             raise
 
@@ -580,6 +596,7 @@ async def materialize_file_reference(
                 storage_path=ref.storage_path,
                 error_type=type(exc).__name__,
                 bytes_transferred_before_failure=0,
+                exc_info=True,
             )
             raise
 
@@ -642,10 +659,11 @@ async def fetch(
 
         infra = get_infrastructure()
         if infra is None or infra.storage is None:
-            raise RuntimeError(
-                "fetch(): no object store available — pass store= explicitly "
-                "or call from inside a Temporal activity."
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                ObjectStoreNotProvidedError,
             )
+
+            raise ObjectStoreNotProvidedError()
         store = infra.storage
 
     return await materialize_file_reference(store, ref)

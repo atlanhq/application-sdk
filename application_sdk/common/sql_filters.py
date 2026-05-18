@@ -9,9 +9,10 @@ import glob
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any
 
-from application_sdk.common.error_codes import CommonError
+from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
+from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -39,7 +40,7 @@ def extract_database_names_from_regex_common(
         if normalized_regex == ".*":
             return "'.*'"
 
-        database_names: Set[str] = set()
+        database_names: set[str] = set()
         patterns = normalized_regex.split("|")
 
         for pattern in patterns:
@@ -116,11 +117,11 @@ def transform_posix_regex(regex_pattern: str) -> str:
 
 
 def prepare_query(
-    query: Optional[str],
-    workflow_args: Dict[str, Any],
-    temp_table_regex_sql: Optional[str] = "",
-    use_posix_regex: Optional[bool] = False,
-) -> Optional[str]:
+    query: str | None,
+    workflow_args: dict[str, Any],
+    temp_table_regex_sql: str | None = "",
+    use_posix_regex: bool | None = False,
+) -> str | None:
     """Prepare a SQL query by applying include/exclude filters.
 
     Modifies the provided SQL query using filters and settings defined in
@@ -198,11 +199,11 @@ def prepare_query(
                 exclude_empty_tables=exclude_empty_tables,
                 exclude_views=exclude_views,
             )
-    except CommonError as e:
+    except AppError as e:
         error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
         logger.error(
             "Error preparing query: error_code=%s error_message=%s",
-            CommonError.QUERY_PREPARATION_ERROR.code,
+            e.code,
             error_message,
             exc_info=True,
         )
@@ -211,7 +212,7 @@ def prepare_query(
 
 async def get_database_names(
     sql_client, workflow_args, fetch_database_sql
-) -> Optional[List[str]]:
+) -> list[str] | None:
     """Get database names from include-filter or by running a SQL query.
 
     Args:
@@ -246,8 +247,8 @@ async def get_database_names(
 
 
 def parse_filter_input(
-    filter_input: Union[str, Dict[str, Any], None],
-) -> Dict[str, Any]:
+    filter_input: str | dict[str, Any] | None,
+) -> dict[str, Any]:
     """Robustly parse filter input from various formats.
 
     Args:
@@ -266,12 +267,12 @@ def parse_filter_input(
         try:
             return json.loads(filter_input)
         except json.JSONDecodeError as e:
-            raise CommonError(f"Invalid filter JSON: {str(e)}") from e
+            raise InvalidSqlFilterError(cause=e) from e
 
 
 def prepare_filters(
     include_filter_str: str, exclude_filter_str: str
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Prepare include/exclude filters for SQL queries.
 
     Args:
@@ -305,8 +306,8 @@ def prepare_filters(
 
 
 def normalize_filters(
-    filter_dict: Dict[str, List[str] | str], is_include: bool
-) -> List[str]:
+    filter_dict: dict[str, list[str] | str], is_include: bool
+) -> list[str]:
     """Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 
     Each emitted pattern is anchored with ``^`` and ``$`` so that callers
@@ -330,7 +331,7 @@ def normalize_filters(
     Returns:
         List of anchored regex segments suitable for joining with ``|``.
     """
-    normalized_filter_list: List[str] = []
+    normalized_filter_list: list[str] = []
     for filtered_db, filtered_schemas in filter_dict.items():
         db = filtered_db.strip("^$")
 
@@ -348,7 +349,7 @@ def normalize_filters(
 
 def read_sql_files(
     queries_prefix: str = f"{os.path.dirname(os.path.abspath(__file__))}/queries",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Read all SQL files from a directory and return as a name→content mapping.
 
     Args:
@@ -357,12 +358,12 @@ def read_sql_files(
     Returns:
         Dictionary mapping SQL file names (uppercase, without extension) to contents.
     """
-    sql_files: List[str] = glob.glob(
+    sql_files: list[str] = glob.glob(
         os.path.join(queries_prefix, "**/*.sql"),
         recursive=True,
     )
 
-    result: Dict[str, str] = {}
+    result: dict[str, str] = {}
     for file in sql_files:
         with open(file, encoding="utf-8") as f:
             result[os.path.basename(file).upper().replace(".SQL", "")] = (

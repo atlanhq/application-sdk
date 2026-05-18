@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 import orjson
 import pytest
 
+from application_sdk.infrastructure._dapr._dapr_errors import (
+    DaprListKeysUnsupportedError,
+)
 from application_sdk.infrastructure._dapr.client import (
     DaprBinding,
     DaprPubSub,
@@ -89,7 +92,7 @@ class TestDaprStateStore:
             await self.store.delete("k1")
 
     async def test_list_keys_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(DaprListKeysUnsupportedError):
             await self.store.list_keys()
 
 

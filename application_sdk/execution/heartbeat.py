@@ -143,7 +143,7 @@ async def auto_heartbeat_loop(
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
             break
         except TimeoutError:
-            pass
+            pass  # wait_for timeout means heartbeat interval elapsed; continue
 
         actual_elapsed = time.monotonic() - loop_start
         if actual_elapsed > interval_seconds + warning_threshold:

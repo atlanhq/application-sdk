@@ -10,6 +10,7 @@ from __future__ import annotations
 import orjson
 import pytest
 
+from application_sdk.testing.full_dag._errors import AgentSpecRequiredError
 from application_sdk.testing.full_dag.payload import (
     AgentSpec,
     ConnectionSpec,
@@ -106,7 +107,7 @@ def test_agent_mode_payload_includes_agent_json() -> None:
 
 
 def test_agent_mode_without_agent_spec_raises() -> None:
-    with pytest.raises(ValueError, match="agent mode requires"):
+    with pytest.raises(AgentSpecRequiredError, match="Agent mode requires"):
         build_ae_payload(
             run_id=1,
             mode=RunMode.AGENT,

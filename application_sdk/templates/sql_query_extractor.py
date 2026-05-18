@@ -23,7 +23,6 @@ import warnings
 from typing import Any, ClassVar
 
 from application_sdk.app.task import task
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.credentials import legacy_credential_ref
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
@@ -153,6 +152,8 @@ class SqlQueryExtractor(BaseMetadataExtractor):
             )
 
         except Exception as e:
-            raise rewrap(
-                e, f"SQL query extraction failed (workflow_id={workflow_id})"
-            ) from e
+            from application_sdk.templates._template_errors import (  # noqa: PLC0415
+                SqlQueryExtractionError,
+            )
+
+            raise SqlQueryExtractionError(workflow_id=str(workflow_id), cause=e) from e

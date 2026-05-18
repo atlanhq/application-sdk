@@ -2,9 +2,8 @@ import glob
 import os
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
-from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import list_keys as _list_keys
@@ -25,8 +24,8 @@ logger = get_logger(__name__)
 def find_local_files_by_extension(
     path: str,
     extension: str,
-    file_names: Optional[List[str]] = None,
-) -> List[str]:
+    file_names: list[str] | None = None,
+) -> list[str]:
     """Find local files at the specified local path, optionally filtering by file names.
 
     Args:
@@ -91,8 +90,8 @@ def find_local_files_by_extension(
 async def _download_files(
     path: str,
     file_extension: str,
-    file_names: Optional[List[str]] = None,
-) -> List[str]:
+    file_names: list[str] | None = None,
+) -> list[str]:
     """Download files from object store if not available locally.
 
     Uses SHA-256 sidecar integrity checking (via transfer._download_one) for
@@ -112,7 +111,7 @@ async def _download_files(
     from pathlib import Path as _Path  # noqa: PLC0415 — stdlib pathlib; lazy use only
 
     # Step 1: Check if files exist locally
-    local_files: List[str] = find_local_files_by_extension(
+    local_files: list[str] = find_local_files_by_extension(
         path, file_extension, file_names
     )
     if local_files:
@@ -133,7 +132,7 @@ async def _download_files(
 
     try:
         resolved = _resolve_store(None)
-        downloaded_paths: List[str] = []
+        downloaded_paths: list[str] = []
 
         # Use a unique download directory per invocation to prevent race
         # conditions when multiple activities download files concurrently
@@ -179,14 +178,23 @@ async def _download_files(
             )
             return downloaded_paths
         else:
-            raise IOError(
-                f"{IOError.OBJECT_STORE_READ_ERROR}: Downloaded from object store but no {file_extension} files found"
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                ObjectStoreReadError,
+            )
+
+            raise ObjectStoreReadError(
+                file_extension=file_extension,
             )
 
     except Exception as e:
-        raise IOError(
-            f"{IOError.OBJECT_STORE_DOWNLOAD_ERROR}: No {file_extension} files found locally at '{path}' and failed to download from object store. "
-            f"Error: {str(e)}"
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+            ObjectStoreDownloadError,
+        )
+
+        raise ObjectStoreDownloadError(
+            path=path,
+            file_extension=file_extension,
+            cause=e,
         ) from e
 
 
@@ -213,7 +221,11 @@ def estimate_dataframe_record_size(
     elif file_extension == PARQUET_FILE_EXTENSION:
         sample_file = sample.to_parquet(index=False, compression="snappy")
     else:
-        raise ValueError(f"Unsupported file extension: {file_extension}")
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+            UnsupportedFileExtensionError,
+        )
+
+        raise UnsupportedFileExtensionError(observed_extension=file_extension)
 
     if sample_file is not None:
         # Parquet samples are already snappy-compressed above, so use the
@@ -225,10 +237,10 @@ def estimate_dataframe_record_size(
 
 
 def path_gen(
-    chunk_count: Optional[int] = None,
+    chunk_count: int | None = None,
     chunk_part: int = 0,
-    start_marker: Optional[str] = None,
-    end_marker: Optional[str] = None,
+    start_marker: str | None = None,
+    end_marker: str | None = None,
     extension: str = ".json",
 ) -> str:
     """Generate a file path for a chunk.
@@ -248,15 +260,15 @@ def path_gen(
 
     # For regular chunking - include chunk count
     if chunk_count is None:
-        return f"{str(chunk_part)}{extension}"
+        return f"{chunk_part!s}{extension}"
     else:
-        return f"chunk-{str(chunk_count)}-part{str(chunk_part)}{extension}"
+        return f"chunk-{chunk_count!s}-part{chunk_part!s}{extension}"
 
 
 def process_null_fields(
     obj: Any,
-    preserve_fields: Optional[List[str]] = None,
-    null_to_empty_dict_fields: Optional[List[str]] = None,
+    preserve_fields: list[str] | None = None,
+    null_to_empty_dict_fields: list[str] | None = None,
 ) -> Any:
     """
     By default the method removes null values from dictionaries and lists.
@@ -310,7 +322,7 @@ def convert_datetime_to_epoch(data: Any) -> Any:
     return data
 
 
-def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
+def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:
     """Check if a DataFrame is empty.
 
     This function determines whether a DataFrame has any rows, supporting both

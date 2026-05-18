@@ -14,6 +14,13 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionTaskInput,
 )
 from application_sdk.templates.sql_app import SqlApp
+from application_sdk.templates.sql_app_errors import (
+    MapColumnUnimplementedError,
+    MapDatabaseUnimplementedError,
+    MapProcedureUnimplementedError,
+    MapSchemaUnimplementedError,
+    MapTableUnimplementedError,
+)
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -291,27 +298,27 @@ class TestAssetMapperStubs:
 
     def test_base_map_database_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(MapDatabaseUnimplementedError):
             base.map_database({}, "conn/qn")
 
     def test_base_map_schema_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(MapSchemaUnimplementedError):
             base.map_schema({}, "conn/qn")
 
     def test_base_map_table_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(MapTableUnimplementedError):
             base.map_table({}, "conn/qn")
 
     def test_base_map_column_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(MapColumnUnimplementedError):
             base.map_column({}, "conn/qn")
 
     def test_base_map_procedure_raises(self):
         base = SqlApp()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(MapProcedureUnimplementedError):
             base.map_procedure({}, "conn/qn")
 
     def test_subclass_mappers_work(self, app):

@@ -16,10 +16,19 @@ class methods. No threads, no asyncio, no HTTP, no file I/O.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
+from application_sdk.transformers.atlas.errors import (
+    TransformColumnError,
+    TransformDatabaseError,
+    TransformFunctionError,
+    TransformProcedureError,
+    TransformSchemaError,
+    TransformTableError,
+    TransformTagAttachmentError,
+)
 from application_sdk.transformers.atlas.sql import (
     Column,
     Database,
@@ -39,7 +48,7 @@ CONN = "default/snowflake/1728518400"
 
 
 def test_procedure_missing_field_raises_value_error():
-    with pytest.raises(ValueError, match="Procedure name"):
+    with pytest.raises(TransformProcedureError):
         Procedure.get_attributes({})
 
 
@@ -64,7 +73,7 @@ def test_procedure_uses_default_sub_type_when_procedure_type_absent():
 
 
 def test_database_non_string_name_raises():
-    with pytest.raises(ValueError, match="Database name"):
+    with pytest.raises(TransformDatabaseError):
         Database.get_attributes(
             {"database_name": 123, "connection_qualified_name": CONN}
         )
@@ -99,7 +108,7 @@ def test_schema_managed_access_and_catalog_id_populated():
 
 
 def test_schema_missing_required_raises():
-    with pytest.raises(ValueError, match="Schema name"):
+    with pytest.raises(TransformSchemaError):
         Schema.get_attributes({"connection_qualified_name": CONN})
 
 
@@ -108,7 +117,7 @@ def test_schema_missing_required_raises():
 # ---------------------------------------------------------------------------
 
 
-def _table_base() -> Dict[str, Any]:
+def _table_base() -> dict[str, Any]:
     return {
         "table_name": "T",
         "table_schema": "S",
@@ -217,7 +226,7 @@ def test_table_collects_optional_custom_attributes():
 
 
 def test_table_missing_required_field_raises():
-    with pytest.raises(ValueError, match="Table name"):
+    with pytest.raises(TransformTableError):
         Table.get_attributes({})
 
 
@@ -226,7 +235,7 @@ def test_table_missing_required_field_raises():
 # ---------------------------------------------------------------------------
 
 
-def _column_base() -> Dict[str, Any]:
+def _column_base() -> dict[str, Any]:
     return {
         "column_name": "C",
         "table_catalog": "DB",
@@ -239,7 +248,7 @@ def _column_base() -> Dict[str, Any]:
 
 
 def test_column_missing_required_raises():
-    with pytest.raises(ValueError, match="Column name"):
+    with pytest.raises(TransformColumnError):
         Column.get_attributes({})
 
 
@@ -329,7 +338,7 @@ def test_column_primary_foreign_nullable_partition_flags():
 # ---------------------------------------------------------------------------
 
 
-def _function_base() -> Dict[str, Any]:
+def _function_base() -> dict[str, Any]:
     return {
         "function_name": "FN",
         "argument_signature": "(a INT, b INT)",
@@ -344,7 +353,7 @@ def _function_base() -> Dict[str, Any]:
 
 
 def test_function_missing_required_raises():
-    with pytest.raises(ValueError, match="Function name"):
+    with pytest.raises(TransformFunctionError):
         Function.get_attributes({})
 
 
@@ -403,7 +412,7 @@ def test_function_creator_with_explicit_connection_qualified_name():
 # ---------------------------------------------------------------------------
 
 
-def _tag_base() -> Dict[str, Any]:
+def _tag_base() -> dict[str, Any]:
     return {
         "tag_name": "PII",
         "tag_database": "TAGDB",
@@ -415,7 +424,7 @@ def _tag_base() -> Dict[str, Any]:
 
 
 def test_tag_attachment_missing_field_caught_by_broad_except_returns_value_error():
-    with pytest.raises(ValueError, match="Error creating TagAttachment Entity"):
+    with pytest.raises(TransformTagAttachmentError):
         TagAttachment.get_attributes({})
 
 
@@ -561,5 +570,5 @@ def test_bug_function_argument_signature_without_parens_corrupts_arguments():
     obj["argument_signature"] = "AB"
     # Fix raises ValueError on malformed input rather than silently
     # producing a one-char field "B".
-    with pytest.raises(ValueError, match="Malformed argument_signature"):
+    with pytest.raises(TransformFunctionError):
         Function.get_attributes(obj)

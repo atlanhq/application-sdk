@@ -14,6 +14,10 @@ from typing import Any
 import pytest
 
 from application_sdk.testing.full_dag import BaseFullDAGE2ETest, RunMode
+from application_sdk.testing.full_dag._errors import (
+    ManifestDagMissingError,
+    ManifestFileNotFoundError,
+)
 from application_sdk.testing.full_dag.payload import AgentSpec, DatabaseSpec
 
 # Minimum-viable manifest mirroring the mysql-app shape with `{app_name}`
@@ -398,7 +402,7 @@ def test_seed_dag_missing_manifest_raises_clear_error(
     instance = cls()
     instance.setup_method()
 
-    with pytest.raises(RuntimeError, match="Manifest file not found"):
+    with pytest.raises(ManifestFileNotFoundError, match="Manifest file not found"):
         instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
 
 
@@ -413,7 +417,7 @@ def test_seed_dag_malformed_manifest_raises_clear_error(
     instance = cls()
     instance.setup_method()
 
-    with pytest.raises(RuntimeError, match="no top-level `dag` object"):
+    with pytest.raises(ManifestDagMissingError, match="no top-level `dag` object"):
         instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
 
 

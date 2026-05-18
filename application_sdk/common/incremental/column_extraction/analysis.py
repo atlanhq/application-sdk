@@ -8,9 +8,7 @@ their incremental state (CREATED, UPDATED, or BACKFILL).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Set, Tuple
-
-from application_sdk.common.exc_utils import rewrap
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from daft import DataFrame
@@ -21,7 +19,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-def get_transformed_dir(workflow_args: Dict[str, Any]) -> Path:
+def get_transformed_dir(workflow_args: dict[str, Any]) -> Path:
     """Return current run's transformed directory.
 
     Caller must ensure files are downloaded from S3 before calling this.
@@ -58,8 +56,8 @@ def get_transformed_dir(workflow_args: Dict[str, Any]) -> Path:
 
 def get_tables_needing_column_extraction(
     transformed_dir: Path,
-    backfill_qualified_names: Set[str] | None = None,
-) -> Tuple[DataFrame, int, int, int]:
+    backfill_qualified_names: set[str] | None = None,
+) -> tuple[DataFrame, int, int, int]:
     """Get Daft DataFrame of tables needing column extraction.
 
     All filtering and categorization is done within Daft's lazy evaluation.
@@ -120,7 +118,7 @@ def get_tables_needing_column_extraction(
             daft.col("table_id").count().alias("cnt")
         )
 
-        state_map: Dict[str, int] = {}
+        state_map: dict[str, int] = {}
         for row in state_counts_df.iter_rows():
             state_map[row["incremental_state"]] = row["cnt"]
 
@@ -187,4 +185,8 @@ def get_tables_needing_column_extraction(
         return filtered_df, changed_count, backfill_count, no_change_count
 
     except Exception as e:
-        raise rewrap(e, "Daft table analysis failed") from e
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+            DaftAnalysisError,
+        )
+
+        raise DaftAnalysisError(cause=e) from e

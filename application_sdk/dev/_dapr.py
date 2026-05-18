@@ -12,7 +12,6 @@ production while requiring nothing on the host beyond Python and ``uv``.
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import platform
 import shutil
@@ -26,12 +25,20 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from application_sdk.dev._dapr_errors import (
+    DaprdBinaryMissingError,
+    DaprReadinessTimeoutError,
+    UnsupportedArchitectureError,
+    UnsupportedOsError,
+)
+
 # Single source of truth for the daprd pin lives in ``application_sdk.version``
 # (see the ``__dapr_version`` constant). CI workflows grep the same file so
 # the literal version string lives in exactly one place.
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.version import __dapr_version as _DAPRD_VERSION
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 _DAPRD_RELEASE_BASE = (
     "https://github.com/dapr/dapr/releases/download/v{version}/daprd_{os}_{arch}"
 )
@@ -65,11 +72,9 @@ def _platform_tuple() -> tuple[str, str]:
     elif machine in ("arm64", "aarch64"):
         arch = "arm64"
     else:
-        raise RuntimeError(
-            f"Unsupported architecture for embedded Dapr: {platform.machine()!r}"
-        )
+        raise UnsupportedArchitectureError(architecture=platform.machine())
     if system not in ("darwin", "linux", "windows"):
-        raise RuntimeError(f"Unsupported OS for embedded Dapr: {platform.system()!r}")
+        raise UnsupportedOsError(os_name=platform.system())
     return system, arch
 
 
@@ -99,7 +104,7 @@ def _download_daprd(target: Path) -> None:
                     None,
                 )
                 if member is None:
-                    raise RuntimeError(f"daprd binary not found in archive at {url}")
+                    raise DaprdBinaryMissingError(archive_url=url, archive_format="zip")
                 with zf.open(member) as src, target.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
         else:
@@ -109,7 +114,7 @@ def _download_daprd(target: Path) -> None:
                     None,
                 )
                 if member is None:
-                    raise RuntimeError(f"daprd binary not found in archive at {url}")
+                    raise DaprdBinaryMissingError(archive_url=url, archive_format="tar")
                 with tar.extractfile(member) as src, target.open("wb") as dst:  # type: ignore[arg-type]
                     shutil.copyfileobj(src, dst)
     finally:
@@ -217,7 +222,7 @@ async def _wait_for_dapr_ready(http_port: int, timeout_s: float = 30.0) -> None:
             except Exception:  # noqa: BLE001, S110 — readiness loop
                 pass
             await asyncio.sleep(0.25)
-    raise RuntimeError(f"Embedded Dapr did not become ready within {timeout_s}s")
+    raise DaprReadinessTimeoutError(timeout_seconds=float(timeout_s))
 
 
 @asynccontextmanager
