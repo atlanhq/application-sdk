@@ -132,6 +132,42 @@ T = TypeVar("T")
 
 
 # =============================================================================
+# Output status enum
+# =============================================================================
+
+
+class OutputStatus(SerializableEnum):
+    """Standard run-result status used on :class:`Output`.
+
+    Set on every Output by default to :data:`OutputStatus.SUCCESS` so the
+    field is non-breaking for existing connectors — subclasses can leave
+    it alone if their run is unambiguously a pass, or set it to
+    ``PARTIAL_SUCCESS`` / ``FAILURE`` when they want to surface a
+    coarser-grained outcome alongside whatever domain-specific result
+    fields they already return.
+
+    Why an enum (vs. a free string): downstream consumers
+    (notifications, retries, billing, post-run wiring) all need a
+    closed vocabulary to switch on. A free string would let connectors
+    invent ad-hoc states (``"ok"``, ``"warn"``, ``"degraded"``) that
+    nothing else can interpret reliably. Additive evolution stays
+    available — new statuses get added to this enum, the default
+    stays ``SUCCESS``, so existing returners stay correct.
+
+    Members:
+        SUCCESS:          The run completed successfully.
+        PARTIAL_SUCCESS:  The run completed with some non-fatal issues
+                          (e.g. some entities were skipped due to
+                          permissions, but the rest succeeded).
+        FAILURE:          The run failed.
+    """
+
+    SUCCESS = "success"
+    PARTIAL_SUCCESS = "partial_success"
+    FAILURE = "failure"
+
+
+# =============================================================================
 # Base Contract Classes
 # =============================================================================
 
@@ -390,7 +426,8 @@ class Output(BaseModel):
         class ExtractOutput(Output):
             records_extracted: int
             checkpoint_path: str
-            status: str = "completed"
+            # ``status`` is inherited from Output and defaults to SUCCESS;
+            # set it explicitly only to signal partial-success / failure.
 
     Structured outputs:
         The SDK's OutputInterceptor automatically populates ``metrics`` and
@@ -400,6 +437,13 @@ class Output(BaseModel):
     """
 
     model_config = ConfigDict()
+
+    status: OutputStatus = OutputStatus.SUCCESS
+    """Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+    ``SUCCESS`` so the field is additive-only for connectors that don't
+    override it. Set to ``PARTIAL_SUCCESS`` when some entities were
+    skipped or degraded but the run produced usable output; set to
+    ``FAILURE`` when the run did not produce usable output."""
 
     metrics: dict[str, Any] | None = None
     """Metrics collected by the OutputInterceptor (e.g. assets-extracted).
