@@ -5,10 +5,10 @@ description: >
   specification. Discovers consumer repos via `gh search code`, applies one or more named
   checks per repo (grep patterns anchored to SDK symbol usage), and produces a markdown
   report — including a coverage table listing every analyzed repo with its outcome
-  (no-usage / no-findings / has-findings). Use when proposing an SDK breaking change,
-  removing a deprecated symbol, or proactively measuring the blast radius of a refactor
-  before merging.
-argument-hint: "[--spec <path>] [--report <path>] [--sdk-major <N>]"
+  (no-usage / no-findings / has-findings). Optionally raises migration PRs against consumer
+  repos with confirmed findings. Use when proposing an SDK breaking change, removing a
+  deprecated symbol, or proactively measuring the blast radius of a refactor before merging.
+argument-hint: "[--spec <path>] [--report <path>] [--sdk-major <N>] [--sdk-release <ref>] [--raise-prs] [--dry-run]"
 mandatory_triggers:
   - "/audit-consumers"
   - "audit application_sdk consumers"
@@ -18,19 +18,35 @@ optional_triggers:
   - "blast radius of this SDK change"
   - "who uses this SDK symbol"
   - "which apps would break if"
+  - "raise migration PRs"
+  - "auto-fix consumers"
 owner: connector-platform-team
-last_updated: "2026-05-13"
+last_updated: "2026-05-15"
 staleness_days: 90
 inputs:
   - spec: "path to a check-spec markdown file, OR inline natural-language description from the invoker"
   - report: "output path for the report markdown (default: <repo-root>/<slug>-consumer-audit.md)"
+  - sdk-major: "integer target major version; repos on other majors are skipped"
+  - sdk-release: "the application_sdk release/PR/SHA this audit targets (e.g. v4.0.0, application_sdk#1234). If absent, Phase 0 prompts for it."
+  - raise-prs: "optional flag — after Phase C, clone each analyzed-has-findings repo, apply fixes, verify, and open a ready-for-review PR. If absent and findings exist, the user is prompted interactively after Phase C."
+  - dry-run: "optional flag (with --raise-prs) — run Phase E through E6 (generate + verify) but stop before push and PR creation"
 outputs:
   - markdown report at the specified path
   - inline executive summary (top findings) in chat
+  - "when PR-raising is enabled: per-repo PR URLs in chat, plus a final summary table"
 gates:
-  - "Never modify consumer repos — read-only clone/API access only."
+  - "Consumer repos are read-only unless --raise-prs is set (or the user accepts the post-Phase-C prompt). When PR-raising is enabled, fixes are applied on branch sdk-audit/<spec-slug> and pushed to open a ready-for-review PR — never to main, never force-pushed."
   - "Coverage table must list every candidate repo from Phase A, even when no findings."
-  - "The only file written is the report — no edits to application_sdk source."
+  - "The only file written in the SDK repo is the report — no edits to application_sdk source."
+  - "When PR-raising is enabled, only confirmed findings drive auto-fixes. needs_review findings become PR-body TODOs. false_positive findings are skipped."
+  - "Commits MUST follow Conventional Commits and MUST NOT include Co-Authored-By lines (per application-sdk CLAUDE.md). PR body MAY include the 🤖 Claude Code footer."
+  - "Never include customer/tenant/run-ID strings in commit messages, code, or PR bodies (per application-sdk CLAUDE.md)."
+references:
+  - references/spec-format.md    # check-spec format, fix: block syntax, triage overrides
+  - references/fix-generation.md # E4a deterministic + E4b LLM-fallback + diff rejection rules
+  - references/pr-templates.md   # PR body template, commit message template, branch naming
+  - references/failure-modes.md  # failure table, manifest.json schema, end-of-phase summary
+  - references/examples.md       # worked check-spec examples (with and without fix: blocks)
 ---
 
 # Skill: `/audit-consumers`
@@ -40,21 +56,29 @@ check specification across each consumer, and produces a markdown report that ac
 every candidate repo — including those with no relevant usage — so the audit is demonstrably
 holistic.
 
+Optionally raises ready-for-review migration PRs against each consumer with confirmed findings,
+with fixes applied (deterministically from a `fix:` block in the spec, or LLM-generated from
+the prose `recommendation:`).
+
 **Typical use cases:**
 - "Which apps still import deprecated symbol `X` that we are removing in v4.0?"
 - "Who catches exceptions from `BaseSQLClient.load()` narrowly, by class or message string?"
 - "Which consumers pin the SDK to a version before feature `Y` shipped?"
 - "What is the blast radius if we change the signature of `ObjectStore.upload_file()`?"
+- "Raise migration PRs against all consumers that will break when we ship PR #1234."
 
 ---
 
 ## Invocation
 
 ```
-/audit-consumers                          # prompts for a spec inline
-/audit-consumers --spec ./my-spec.md     # reads spec from file
-/audit-consumers --report ./out.md       # custom report path
-/audit-consumers --sdk-major 3           # explicitly set the target major version
+/audit-consumers                                  # prompts for a spec inline
+/audit-consumers --spec ./my-spec.md             # reads spec from file
+/audit-consumers --report ./out.md               # custom report path
+/audit-consumers --sdk-major 3                   # explicitly set the target major version
+/audit-consumers --sdk-release v4.0.0            # target SDK release for PR bodies
+/audit-consumers --raise-prs                     # run Phase E and open PRs after Phase C
+/audit-consumers --raise-prs --dry-run           # Phase E through E6 only — no push, no PR
 ```
 
 Argument parsing (left-to-right, first match wins):
@@ -63,6 +87,10 @@ Argument parsing (left-to-right, first match wins):
   where `<slug>` is the spec title lowercased, spaces replaced with hyphens
 - `--sdk-major <N>` — integer target major version to audit against; repos pinned to other
   majors are recorded as `skipped-major-mismatch` without file analysis (see Phase 0b)
+- `--sdk-release <ref>` — free-form string naming the SDK release (version tag, PR URL, or
+  commit SHA); used in the report and PR bodies; if absent, Phase 0 prompts for it
+- `--raise-prs` — after Phase C, enter Phase E (generate and raise migration PRs)
+- `--dry-run` — used with `--raise-prs`; runs through Phase E6 but does not push or create PRs
 
 ---
 
@@ -75,53 +103,40 @@ anchor pattern and at least one named check. If malformed, report the exact prob
 structured spec by echoing it back in the format below for confirmation.
 
 > **Gate:** confirm the spec with the user before running any GitHub queries. This is the
-> **only** interactive step — once the spec is locked, Phases A–C run to completion without
-> further prompts.
+> **only** interactive step before Phase C — once the spec is locked, Phases A–C run to
+> completion without further prompts.
 
-### Check-spec format
-
-The spec is a markdown document with this structure. Store it in chat if entered inline; save
-to the path given by `--spec` if a file was provided.
+The check-spec format is defined in `references/spec-format.md`. The short form for Phase 0
+confirmation:
 
 ```markdown
-# Check spec — <Short title, used as the slug for the report filename>
+# Check spec — <Short title (becomes the report filename slug)>
 
 ## Context
-<1–3 sentences: why this audit exists, what SDK change or question prompted it.>
+<Why this audit exists and what SDK change prompted it.>
+
+## target_release
+<Version tag, PR number, or "pre-release". Prompted here if --sdk-release was not passed.>
 
 ## Anchors
-
-Files in a consumer repo are "in scope" only if they match at least one anchor. Anchors are
-typically SDK imports or the name of the class/symbol under review. Every check with
-`require_anchor: true` is only run against files that match an anchor.
-
-- pattern: `from application_sdk\.<module> import`   # regex, applied with rg -P
-- pattern: `BaseSQLClient`
+- pattern: `<regex>`
 
 ## Checks
-
-Each check is a named risk class with one or more grep patterns.
-
 ### check: R1 — <Name>
 - impact: definite-break | silent-break | review
-- require_anchor: true | false
 - patterns:
-  - `<regex 1>`   # regex, applied with rg -nP against anchored files
-  - `<regex 2>`
-- recommendation: <one-line suggested fix printed next to each hit in the report>
-
-### check: R2 — <Name>
-- impact: silent-break
-- require_anchor: false
-- patterns:
-  - `"<literal string fragment>"`
-- recommendation: …
+  - `<regex>`
+- recommendation: <one-line fix>
+- fix:           # optional — see references/spec-format.md
+  - pattern_index: 0
+    replace_regex: `…`
+  add_import: `from …`
 ```
 
-**Impact levels:**
-- `definite-break` — the pattern will cause an exception/error at runtime after the SDK change
-- `silent-break` — the pattern silently produces wrong results (e.g., string match fails)
-- `review` — broad catch or comment that warrants a human look but may not break
+**Additional validation when `--raise-prs` is set:**
+Every `fix:` block is validated before Phase A runs. See `references/spec-format.md` for
+the validation rules. Failures are reported with the exact check ID and field; stop before
+Phase A.
 
 ---
 
@@ -229,7 +244,6 @@ def compatible_majors(pin, target: int):
             if m:
                 n = int(m.group(1))
                 return {n}, f"branch {branch}"
-            # Any other branch (master, develop, feature/…) — unknown major
             return None, f"branch {branch}"
 
         if rev:
@@ -249,18 +263,14 @@ def compatible_majors(pin, target: int):
         return {target}, display
     if pin == "main":
         return {target}, display
-    # release/vN branch
     m = re.match(r"release/v(\d+)", pin)
     if m:
         return {int(m.group(1))}, display
-    # Git tag: vN.M.P
     m = re.match(r"v(\d+)\.", pin)
     if m:
         return {int(m.group(1))}, display
-    # Commit hash marker — unknown major
     if pin.startswith("rev:"):
         return None, display
-    # PEP 440 specifier
     first = pin.split(",")[0].strip()
     op_m = re.match(r"^([=!<>~^]+)", first)
     operator = op_m.group(1) if op_m else ""
@@ -277,7 +287,7 @@ def compatible_majors(pin, target: int):
         if upper > lower:
             return set(range(lower, upper)), display
         else:
-            return {lower}, display   # same-major minor/patch constraint
+            return {lower}, display
     return set(range(lower, target + 1)), display
 ```
 
@@ -343,9 +353,6 @@ list, add it and log a warning:
   dependency uses a non-standard declaration format.
 ```
 
-This guards against `gh search code` truncation, indexing lag, or repos whose only SDK
-reference is in a non-Python file.
-
 **Record every repo in the final candidate list verbatim.** The Phase C coverage table must
 account for every entry, even ones that turn out to have no SDK usage at all.
 
@@ -378,7 +385,7 @@ src_block = re.search(
 )
 if src_block:
     for line in src_block.group(1).splitlines():
-        line = line.split("#", 1)[0].strip()   # drop comments; skip blanks
+        line = line.split("#", 1)[0].strip()
         if not line:
             continue
         m = re.match(
@@ -394,22 +401,19 @@ if src_block:
                     kv.group(2) if kv.group(2) is not None
                     else (kv.group(3) == "true")
                 )
-            break   # first uncommented match wins; ignore commented alternatives
+            break
 
 # --- Stage 2: [project].dependencies or requirements.txt (fallback) ---
 project_pin = None
 if uv_source is None and text:
-    # look for the SDK dep inside the [project] or [project.dependencies] block
     m = re.search(
         r'["\']atlan[-_]application[-_]sdk[^"\']*["\']', text, re.IGNORECASE
     )
     if m:
-        # extract the version specifier portion, e.g. ">=3.0.0,<4.0.0"
         ver = re.search(r'((?:[><=!~^,\s\d\.\*]+)+)', m.group().split("[")[0].split('"')[-1])
         project_pin = ver.group(1).strip() if ver else None
 
 if uv_source is None and project_pin is None and not text:
-    # Try requirements.txt
     req = subprocess.run(
         ["gh", "api", f"repos/atlanhq/{repo}/contents/requirements.txt",
          "--jq", ".content"],
@@ -426,27 +430,13 @@ majors, pin_display = compatible_majors(pin, target_major)
 
 **Key rules for the two-stage parse:**
 - `[tool.uv.sources]` overrides `[project].dependencies` — when an entry for the SDK is
-  found in the sources table, use it exclusively. The deps entry typically carries no
-  version specifier when a source override is present.
+  found in the sources table, use it exclusively.
 - Match the SDK package under either `atlan-application-sdk` or `application-sdk`
   (case-insensitive, hyphen or underscore).
-- Commented-out lines (common for keeping an editable-path fallback around) are stripped
-  before matching — only the active, uncommented source is used.
-- `pin_display` (from `compatible_majors`) is what goes in the Coverage table's SDK pin
-  column. For dict-form pins it is a short human-readable string (`tag v3.7.0`,
-  `branch release/v2`, `rev 91e9c4a9`, `editable ../application-sdk`); for string-form
-  pins it is the verbatim pin string.
+- Commented-out lines are stripped before matching — only the active, uncommented source is used.
+- `pin_display` is what goes in the Coverage table's SDK pin column.
 
-Apply the gate decisions from Phase 0b after calling `compatible_majors`:
-
-- **Set contains `target_major`** → proceed to Step 2.
-- **Set is non-empty but excludes `target_major`** → status `skipped-major-mismatch`.
-  Record `pin_display` and the compatible-majors set. **Stop.**
-- **`None` + dict-form pin** → status `skipped-pin-source-unknown`. Record `pin_display`
-  and `?` for compatible majors. **Stop.**
-- **`None` + string-form pin** → status `analyzed-pin-unknown`. Proceed conservatively.
-- **Both API calls fail** → status `analyzed-error` with the error message. Never
-  silently drop.
+Apply the gate decisions from Phase 0b after calling `compatible_majors`.
 
 ### Step 2 — Anchor check (cheap, via GitHub API)
 
@@ -454,12 +444,8 @@ Apply the gate decisions from Phase 0b after calling `compatible_majors`:
 gh search code "<anchor>" --repo atlanhq/<repo> --json path,textMatches --limit 20
 ```
 
-Run this for each anchor pattern in the spec. If all return empty → this repo has no
-anchor-matched files. Record status `analyzed-no-usage`, add to coverage table, continue to
-the next repo.
-
-If `gh api` fails (private repo, rate limit, 404) → record status `analyzed-error` with the
-error message. Never silently drop.
+Run this for each anchor pattern in the spec. If all return empty → status `analyzed-no-usage`.
+If `gh api` fails → status `analyzed-error`. Never silently drop.
 
 ### Step 3 — Fetch anchored files
 
@@ -484,19 +470,18 @@ For each check in the spec, against each fetched file:
 rg -nP '<pattern>' /tmp/audit-file.py
 ```
 
-Record every hit as an extended record (implemented in the same Python helper that parses `rg` output — read the file once, slice around each match):
+Record every hit as an extended record:
 
 ```
 (file_path, line_number, matched_line, check_id,
  context_before,      # 3 source lines preceding the match
  context_after,       # 3 source lines following the match
  enclosing_symbol,    # nearest def/class header above the match, if any
- try_body_excerpt)    # for `except …` patterns: the lines between `try:` and the matched
+ try_body_excerpt)    # for `except …` patterns: lines between `try:` and the matched
                       # `except` (best-effort); empty string otherwise
 ```
 
-For hits where `require_anchor: false`, run the patterns against all Python files in the repo, not just
-anchored ones (requires a clone or a separate `gh search code` call per pattern).
+For hits where `require_anchor: false`, run the patterns against all Python files in the repo.
 
 ### Step 4b — Triage each finding
 
@@ -504,9 +489,9 @@ For each captured hit, assign a `triage` field and a one-line `triage_reason`:
 
 | Value | Meaning |
 |---|---|
-| `confirmed`      | The hit represents real exposure to the SDK change being audited. |
-| `false_positive` | The pattern matched, but the code is not exposed to the SDK change (see heuristics). |
-| `needs_review`   | Insufficient signal in the captured context — flag for human review. |
+| `confirmed`      | Real exposure to the SDK change being audited. |
+| `false_positive` | Pattern matched, but code is not exposed to the SDK change. |
+| `needs_review`   | Insufficient signal — flag for human review. |
 
 #### Default heuristics (conservative — when in doubt, return `needs_review`)
 
@@ -514,58 +499,40 @@ For each captured hit, assign a `triage` field and a one-line `triage_reason`:
 - `false_positive` if `try_body_excerpt` contains none of the spec's anchor patterns AND
   contains at least one of: `urllib`, `urlparse`, `os.path`, `int(`, `float(`,
   `json.loads`, `CredentialRef`, `re.compile`, `datetime.`, `uuid.`, `Decimal(`,
-  `pathlib.`, `yaml.safe_load`, `Enum(`. These are standard sources of
-  `ValueError`/`KeyError` unrelated to the SDK.
-- `confirmed` if `try_body_excerpt` contains an anchor pattern (e.g. the class/symbol
-  named in the spec) or a method call on a variable typed as the SDK class.
+  `pathlib.`, `yaml.safe_load`, `Enum(`.
+- `confirmed` if `try_body_excerpt` contains an anchor pattern or a method call on a
+  variable typed as the SDK class.
 - `needs_review` otherwise.
 
 **For literal message-string patterns (silent-break checks):**
 - `false_positive` if the match is inside a `"""..."""` docstring, a `#` comment, or a
-  regex literal assigned to a variable whose surrounding code does not invoke `str(e)`,
-  `e.args[0]`, `.message`, `re.search`, `re.match`, or string `in` against an exception.
-- `confirmed` otherwise — message-string inspection rarely produces FPs.
+  regex literal whose surrounding code does not invoke `str(e)`, `e.args[0]`, `.message`,
+  `re.search`, `re.match`, or string `in` against an exception.
+- `confirmed` otherwise.
 
 **For broad-catch patterns (review checks):**
-- `false_positive` if `try_body_excerpt` contains only the consumer's own `raise <X>(...)`
-  statement (catching to add context to a self-raise, not to inspect an SDK error).
+- `false_positive` if `try_body_excerpt` contains only the consumer's own `raise <X>(...)`.
 - `confirmed` if `try_body_excerpt` calls an SDK anchor method.
-- `needs_review` otherwise — broad catches are intrinsically ambiguous.
+- `needs_review` otherwise.
 
-#### Spec-supplied heuristics (optional override)
-
-A check spec MAY include a `triage:` block for project-specific FP signals. Spec heuristics
-are evaluated **before** the defaults; defaults only fire when the spec rules are silent.
-
-```markdown
-### check: R1 — Narrow catch of old exception types
-…
-- triage:
-    false_positive_if_try_body_contains:
-      - `urllib\.parse`
-      - `CredentialRef\.resolve`
-    confirmed_if_try_body_contains:
-      - `\.run_query\s*\(`
-      - `\.load\s*\(`
-```
+Spec-supplied `triage:` overrides are evaluated before these defaults. See `references/spec-format.md`.
 
 #### Surfacing the triage outcome
 
 - Per-repo findings (Phase C) MUST list every hit, annotated inline:
   `[confirmed]`, `[false_positive — <reason>]`, or `[needs_review — <reason>]`.
-- `false_positive` hits do NOT count toward the action summary or the executive-summary
-  "Repos needing action" metric — but they are still listed so reviewers can challenge
-  a triage call without re-running the audit.
+- `false_positive` hits do NOT count toward the action summary metrics — but are listed
+  so reviewers can challenge a triage call.
 
 ### Step 5 — Classify status
 
 | Status | Condition |
 |---|---|
 | `analyzed-no-usage` | major-match; no anchor match anywhere in the repo |
-| `analyzed-no-findings` | major-match; anchor present, zero check hits — OR all hits classified `false_positive` (note `(N hits, all FPs)` in the coverage table) |
-| `analyzed-has-findings` | major-match; at least one `confirmed` or `needs_review` check hit after Step 4b triage |
+| `analyzed-no-findings` | major-match; anchor present, zero check hits — OR all hits `false_positive` |
+| `analyzed-has-findings` | major-match; at least one `confirmed` or `needs_review` hit after triage |
 | `skipped-major-mismatch` | pin parsed; compatible majors do not include `target_major` |
-| `skipped-pin-source-unknown` | `[tool.uv.sources]` pins to a rev hash or non-`release/vN`/non-`main` branch; major undetermined — skip analysis, record the rev/branch verbatim |
+| `skipped-pin-source-unknown` | `[tool.uv.sources]` pins to rev hash or non-`release/vN`/non-`main` branch |
 | `analyzed-pin-unknown` | string-form pin missing or unparseable; analyzed conservatively |
 | `analyzed-error` | GitHub API call failed (log the error) |
 
@@ -581,6 +548,7 @@ Write the report to the path specified by `--report` (or the default slug-based 
 # <Spec title> — Consumer Audit
 
 **Audit date:** <ISO date>
+**Target SDK release:** <spec.target_release>
 **Audited by:** automated gh search + per-file content inspection
 
 ---
@@ -599,14 +567,7 @@ Write the report to the path specified by `--report` (or the default slug-based 
 | <check_id> confirmed hits (<impact>) | N across M repos |
 | … | … |
 
-<2–3 sentence narrative: what matters, what's safe, what needs action. Note the FP filter
-ratio if non-trivial (e.g. ">50% of R1 hits were false positives — narrow `except ValueError`
-on non-SDK code such as URL parsing"). Include a note like: "Skipped N repos pinned to other
-majors — those will be re-audited when they migrate to v<target_major>." When the "uv source
-pin — major undetermined" count is non-zero, note: "N repos pinned via `[tool.uv.sources]`
-to a specific rev or non-`release/vX` branch — major version cannot be derived without
-checking out the pinned ref, so they are listed in Coverage with their rev/branch and
-excluded from analysis.">
+<2–3 sentence narrative.>
 
 ---
 
@@ -617,18 +578,6 @@ excluded from analysis.">
 ---
 
 ## Coverage — every repo we looked at
-
-Every candidate repo from Phase A is listed here regardless of outcome. Repos are sorted
-alphabetically. `analyzed-error` rows include the error so follow-up is possible.
-
-**Column notes:**
-- **SDK pin** — for `[project].dependencies` / `requirements.txt` entries, the verbatim
-  version specifier (e.g. `>=3.0.0,<4.0.0`). For `[tool.uv.sources]` entries, the
-  `pin_display` string from `compatible_majors()` (e.g. `tag v3.7.0`, `branch release/v2`,
-  `rev 91e9c4a9`, `editable ../application-sdk`). This lets a reviewer re-derive the major
-  decision without re-fetching the file.
-- **Compatible majors** — the set derived from the pin. `?` means major undetermined
-  (`skipped-pin-source-unknown` or `analyzed-pin-unknown`).
 
 | Repo | SDK pin | Compatible majors | Status |
 |---|---|---|---|
@@ -644,21 +593,9 @@ alphabetically. `analyzed-error` rows include the error so follow-up is possible
 
 ## Action summary — repos that need a migration PR
 
-Only repos with at least one `confirmed` or `needs_review` finding appear here.
-False-positive-only repos are excluded (see Coverage table for full traceability).
-Sorted by priority descending, then by repo name.
-
 | Repo | SDK pin | Definite breaks | Silent breaks | Review items | Needs review | Fix sites | Priority | Recommended action |
 |---|---|---|---|---|---|---|---|---|
-| atlanhq/<repo-a> | `>=3.0.0,<4.0.0` | 3 | 1 | 0 | 0 | `clients/foo.py:42`, `clients/foo.py:108`, `handlers/bar.py:17` (+1 more) | P0 | Catch `AuthError` instead of `ClientError`; replace `SQL_CLIENT_AUTH_ERROR` string match with `isinstance(e, SqlClientAuthFailedError)`. |
-| atlanhq/<repo-b> | `>=3.5.0,<4`     | 0 | 0 | 2 | 1 | `app/init.py:88`, `app/init.py:140`, `tests/test_conn.py:24` | P2 | Review broad `except Exception` blocks near SDK calls; confirm whether they re-raise legacy types. |
-
-**Column definitions:**
-- **Definite breaks / Silent breaks / Review items** — count of `confirmed` findings at each impact level.
-- **Needs review** — count of `needs_review` findings (any impact level).
-- **Fix sites** — file:line list, capped at 6; if more, append `(+N more)`.
-- **Priority** — P0: ≥1 confirmed definite-break. P1: ≥1 confirmed silent-break, 0 definite-breaks. P2: review-only or `needs_review`-only.
-- **Recommended action** — the `recommendation:` lines from each check that produced a confirmed hit, deduplicated and joined with `; `.
+| atlanhq/<repo-a> | `>=3.0.0,<4.0.0` | 3 | 1 | 0 | 0 | `clients/foo.py:42`, … | P0 | Catch `AppError` instead of `ClientError`; … |
 
 ---
 
@@ -681,19 +618,171 @@ Sorted by priority descending, then by repo name.
 
 ## Repos added from connector-map cross-check
 
-<List any repos that were added from the connector-map but were absent from gh search results,
-with the gap warning. Omit this section if there were no gaps.>
+<List any repos added from the connector-map but absent from gh search results.
+Omit this section if there were no gaps.>
 ```
+
+### Post-Phase-C interactive prompt (when `--raise-prs` was not set)
+
+After writing the report and printing the inline chat summary, if ALL of the following hold:
+- `--raise-prs` was **not** set at invocation
+- `--dry-run` was **not** set
+- At least one repo has status `analyzed-has-findings` with at least one `confirmed` hit
+
+Then prompt:
+
+> "Audit found <N> repos with confirmed findings. Raise migration PRs against these
+> consumers now? (yes/no)"
+
+A `yes` answer enters Phase E exactly as if `--raise-prs` had been set at invocation.
+A `no` answer continues to Phase D (or exits).
 
 ### Inline summary in chat
 
-After writing the report, print to chat:
+After writing the report, always print to chat:
 
 1. The executive summary table.
 2. The Action summary table (only confirmed/needs-review repos).
 3. The top 3–5 highest-impact **confirmed** hits (definite-break first, then silent-break,
    then review), with file:line and recommendation inline.
 4. The report file path.
+
+---
+
+## Phase E — Generate and raise migration PRs
+
+Runs after Phase C when `--raise-prs` is set or the user accepts the post-Phase-C prompt.
+Only operates on repos with status `analyzed-has-findings` and at least one `confirmed` hit.
+`needs_review` findings become PR-body TODOs; `false_positive` findings are skipped.
+`analyzed-pin-unknown`, `skipped-major-mismatch`, and `skipped-pin-source-unknown` repos
+are excluded entirely.
+
+For `fix:` block syntax see `references/spec-format.md`.
+For LLM prompt template and diff rejection rules see `references/fix-generation.md`.
+For PR body, commit message, and branch naming see `references/pr-templates.md`.
+For failure modes, `manifest.json` schema, and end-of-phase summary see `references/failure-modes.md`.
+
+### E0 — Pre-flight
+
+1. Run `gh auth status`. If it fails: print the error, instruct `gh auth login --scopes repo`,
+   exit Phase E (report is already written). Do not proceed.
+2. Compute the branch slug from the spec title (lowercase, spaces → hyphens, trim to ≤30 chars).
+   Branch name = `sdk-audit/<spec-slug>`.
+3. Build the target repo list: filter Phase B results to `analyzed-has-findings` + ≥1
+   `confirmed` hit; sort by Action Summary priority (P0→P2), then alphabetically.
+4. Create `/tmp/audit-fix/<spec-slug>/` and write `manifest.json` (session recovery state).
+5. If `--dry-run`: print `[Phase E] DRY-RUN MODE — generating and verifying fixes, but no push and no PR.`
+6. If all checks have `impact: review` only: warn and ask `"Continue anyway? (yes/no)"`.
+7. Print: `[Phase E] Pre-flight OK · Branch: sdk-audit/<spec-slug> · Repos: N (P0: X, P1: Y, P2: Z)`
+
+### E1 — Per-repo write-access check
+
+```bash
+gh api repos/atlanhq/<repo> --jq '{archived, push: .permissions.push, default_branch}'
+```
+
+- `archived: true` → state `skipped`, reason `repo archived`
+- `push: false` → state `skipped`, reason `no push permission for <gh-user>`
+- Otherwise: stash `default_branch` for use as the PR base; proceed to E2
+
+### E2 — Per-repo idempotency check
+
+```bash
+gh pr list --repo atlanhq/<repo> --head sdk-audit/<spec-slug> --state open --json number,url
+```
+
+- No results → proceed to E3
+- Open PR found → state `pr_open`, `pr_url=<existing>`. Print: `[Phase E] atlanhq/<repo>: PR already open: <url> — skipping`
+
+### E3 — Per-repo clone and prepare branch
+
+```bash
+mkdir -p /tmp/audit-fix/<spec-slug>/<repo>
+git clone --depth 50 git@github.com:atlanhq/<repo>.git /tmp/audit-fix/<spec-slug>/<repo>
+cd /tmp/audit-fix/<spec-slug>/<repo>
+git checkout -b sdk-audit/<spec-slug> origin/<default_branch>
+```
+
+Depth 50 (not 1) — cheap on disk; gives reviewers blame context. If the local directory
+already exists (prior interrupted run), delete and re-clone — E2 already gates the remote.
+
+### E4 — Per-repo generate fixes
+
+For each confirmed hit, grouped by file, processed in **descending line order** (so byte
+offsets stay valid as lines are modified):
+
+- If the hit's check has a matching `fix:` entry → **E4a deterministic path**
+- Otherwise → **E4b LLM fallback path**
+
+After all hits in a file are processed, apply `add_import(s)` for any check that produced
+at least one applied fix in that file.
+
+Full algorithm detail: `references/fix-generation.md`.
+
+### E5 — Per-repo verify
+
+```bash
+CHANGED=$(git diff --name-only --diff-filter=AM origin/<default_branch>... -- '*.py')
+python -m py_compile $CHANGED
+command -v ruff >/dev/null && ruff check $CHANGED || echo "ruff: not installed, skipped"
+```
+
+- `py_compile` fails → state `failed`; roll back the patched files
+  (`git checkout origin/<default_branch> -- <file>` for each); do NOT proceed to E6/E7.
+- `ruff check` fails → proceed; capture verbatim output for the PR body Verification block.
+
+### E6 — Per-repo diff preview and confirmation
+
+Print:
+- Files changed + per-file hit counts (patched / unresolved)
+- Verification status (py_compile + ruff)
+- List of unresolved hits (those that will appear as PR-body TODOs)
+- `git diff --stat` followed by `git diff` (capped at 200 lines)
+
+If `--dry-run`: print `[Phase E] DRY-RUN — stopping here. No push, no PR.` and move to the
+next repo.
+
+Otherwise prompt:
+```
+Open a PR for atlanhq/<repo>?  (yes / skip / all)
+  yes  — open the PR now (ready for review)
+  skip — discard the branch, move on to the next repo
+  all  — open this and auto-confirm every remaining repo in this session
+```
+
+Accepted inputs: `yes|y|skip|s|all|a`. On `all`: persist `auto_confirm_remaining: true` in
+`manifest.json` and skip the prompt for subsequent repos. On `skip`: discard the local clone,
+record state `skipped`.
+
+### E7 — Per-repo commit, push, open PR
+
+```bash
+git add -A
+git commit -m "$(cat <<'EOF'
+<commit message — see references/pr-templates.md>
+EOF
+)"
+
+git push -u origin sdk-audit/<spec-slug>
+
+gh pr create \
+  --repo atlanhq/<repo> \
+  --base <default_branch> \
+  --head sdk-audit/<spec-slug> \
+  --title "<commit message subject line>" \
+  --label "sdk-migration" \
+  --body "$(cat <<'EOF'
+<PR body — see references/pr-templates.md>
+EOF
+)"
+```
+
+The `sdk-migration` label is applied if it exists; `--label` failure is ignored (do not
+try to create it). Print: `[Phase E] atlanhq/<repo>: PR opened → <url>`
+
+Update `manifest.json` with state `pr_open` and `pr_url`.
+
+After all repos: print the end-of-phase summary from `references/failure-modes.md`.
 
 ---
 
@@ -704,19 +793,16 @@ These steps are offered but NOT run automatically. Invoke them by asking:
 
 ### D1 — Spot-check via GitHub URLs
 
-For each `needs_review` finding, and for a sample of `false_positive` findings (to verify
-the triage logic is correct), construct the direct link:
+For each `needs_review` finding, and for a sample of `false_positive` findings, construct
+the direct link:
 ```
 https://github.com/atlanhq/<repo>/blob/<default-branch>/<path>#L<line>
 ```
-Open in browser or present as a list. Lets the reviewer confirm the triage classification
-is accurate — e.g. that a `false_positive` tagged hit truly does not call an SDK method,
-or that a `needs_review` hit warrants confirmation/dismissal.
 
 ### D2 — Behaviour simulation
 
-For checks with `impact: silent-break` (e.g., message-string inspection), demonstrate that
-the old match would fail against a newly typed error:
+For checks with `impact: silent-break`, demonstrate that the old match would fail against a
+newly typed error:
 
 ```python
 from application_sdk.errors.<module> import <NewErrorType>
@@ -724,71 +810,10 @@ e = <NewErrorType>(...)
 assert "<old_fragment>" not in str(e), f"Still matches: {str(e)!r}"
 ```
 
-Only run when explicitly requested — not all specs involve exception message changes.
+Only run when explicitly requested.
 
 ---
 
-## Appendix — Check-spec examples
+## Appendix
 
-### Example A: deprecated symbol removal
-
-```markdown
-# Check spec — ObjectStore.upload (legacy sync method removed in v4.0)
-
-## Context
-application_sdk v4.0 removes `ObjectStore.upload()` (sync). All callers must migrate to
-`ObjectStore.upload_file()` (async). Audit before the removal PR merges.
-
-## Anchors
-- pattern: `from application_sdk\.storage`
-- pattern: `ObjectStore`
-
-## Checks
-
-### check: R1 — Direct call to .upload()
-- impact: definite-break
-- require_anchor: true
-- patterns:
-  - `\.upload\s*\(`
-- recommendation: replace `.upload(key, path)` with `await .upload_file(key, path)`
-```
-
-### Example B: exception type change
-
-```markdown
-# Check spec — BaseSQLClient error-type changes (PR #1234)
-
-## Context
-PR #1234 replaces ValueError/ClientError raises in BaseSQLClient with typed AppError subclasses.
-Consumers catching by old type will silently stop receiving the error.
-
-## Anchors
-- pattern: `BaseSQLClient`
-- pattern: `AsyncBaseSQLClient`
-- pattern: `from application_sdk\.clients\.sql`
-
-## Checks
-
-### check: R1 — Narrow catch of old exception types
-- impact: definite-break
-- require_anchor: true
-- patterns:
-  - `except\s+(ValueError|ClientError|CommonError)\b`
-- recommendation: update to catch the new typed error (e.g. `AuthError`, `InternalError`) or `AppError`
-
-### check: R2 — Message-string inspection
-- impact: silent-break
-- require_anchor: false
-- patterns:
-  - `"DB_CONFIG is not configured"`
-  - `SQL_CLIENT_AUTH_ERROR`
-  - `CREDENTIALS_PARSE_ERROR`
-- recommendation: switch to isinstance check against the new typed error class
-
-### check: R3 — Broad except Exception near SDK calls
-- impact: review
-- require_anchor: true
-- patterns:
-  - `except\s+(Exception|BaseException)\b`
-- recommendation: review whether the handler re-raises as a legacy type or inspects the message
-```
+For worked check-spec examples (with and without `fix:` blocks), see `references/examples.md`.
