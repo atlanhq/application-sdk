@@ -290,6 +290,12 @@ class DaprCredentialVault:
                             continue
                         collected[k] = v
             except Exception as e:
+                logger.debug(
+                    "Secret resolution failed for '%s' (value=%s)",
+                    label,
+                    value,
+                    exc_info=True,
+                )
                 failed_lookups.append("  '%s' → '%s': %s" % (label, value, e))
 
         for field, value in credential_config.items():
