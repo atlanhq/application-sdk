@@ -38,6 +38,14 @@ _USE_DEFAULT = object()
 TaskMethod = Callable[..., Any]
 
 
+@dataclass(kw_only=True)
+class UnresolvableTaskAnnotationsError(InvalidInputError):
+    """Task has string annotations that cannot be resolved at decoration time."""
+
+    code: ClassVar[str] = "INVALID_INPUT_TASK_UNRESOLVABLE_ANNOTATIONS"
+    field: str | None = "annotations"
+
+
 class TaskContractError(InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
@@ -163,16 +171,18 @@ def _validate_task_signature(
     # If the annotations are strings that cannot be resolved, raise a clear error.
     try:
         hints = get_type_hints(fn)
-    except Exception:
+    except NameError:
         raw: dict[str, Any] = getattr(fn, "__annotations__", {})
         unresolvable = [k for k, v in raw.items() if isinstance(v, str)]
         if unresolvable:
-            raise TaskContractError(
-                f"Task '{fn_name}' has unresolvable annotations for {unresolvable}. "
-                "This usually happens when 'from __future__ import annotations' is "
-                "used alongside Input/Output types that are not defined at module "
-                "level. Move the type definitions to module scope (before the App "
-                "class) or remove 'from __future__ import annotations'."
+            raise UnresolvableTaskAnnotationsError(
+                message=(
+                    f"Task '{fn_name}' has unresolvable annotations for {unresolvable}. "
+                    "This usually happens when 'from __future__ import annotations' is "
+                    "used alongside Input/Output types that are not defined at module "
+                    "level. Move the type definitions to module scope (before the App "
+                    "class) or remove 'from __future__ import annotations'."
+                ),
             ) from None
         hints = raw
 

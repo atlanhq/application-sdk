@@ -174,10 +174,11 @@ def _resolve_store(store: ObjectStore | None) -> ObjectStore:
 
     infra = get_infrastructure()
     if infra is None or infra.storage is None:
-        raise RuntimeError(
-            "No ObjectStore provided and no infrastructure storage is configured. "
-            "Pass store= explicitly or call set_infrastructure() with a storage store."
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            ObjectStoreNotProvidedError,
         )
+
+        raise ObjectStoreNotProvidedError()
     return infra.storage
 
 

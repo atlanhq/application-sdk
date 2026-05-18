@@ -10,7 +10,12 @@ from application_sdk.clients.redis import (
     RedisClient,
     RedisClientAsync,
 )
-from application_sdk.common.error_codes import ClientError
+from application_sdk.clients.redis_errors import (
+    RedisConfigError,
+    RedisConnectionError,
+    RedisProtocolError,
+    RedisTimeoutError,
+)
 
 
 class TestRedisClientConfiguration:
@@ -32,17 +37,17 @@ class TestRedisClientConfiguration:
     @patch("application_sdk.clients.redis.REDIS_PASSWORD", None)
     def test_missing_password_raises_error_sync(self):
         """Test sync initialization fails without password."""
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisConfigError) as exc_info:
             RedisClient()
-        assert "ATLAN-CLIENT-403-00" in str(exc_info.value)
+        assert exc_info.value.code == "PRECONDITION_REDIS_CONFIG"
 
     @patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False)
     @patch("application_sdk.clients.redis.REDIS_PASSWORD", None)
     def test_missing_password_raises_error_async(self):
         """Test async initialization fails without password."""
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisConfigError) as exc_info:
             RedisClientAsync()
-        assert "ATLAN-CLIENT-403-00" in str(exc_info.value)
+        assert exc_info.value.code == "PRECONDITION_REDIS_CONFIG"
 
     @patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False)
     @patch("application_sdk.clients.redis.REDIS_PASSWORD", "password")
@@ -150,9 +155,9 @@ class TestSyncRedisClientLockOperations:
         """Test lock acquisition error handling."""
         redis_client.redis_client.set.side_effect = ConnectionError("Connection failed")
 
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisConnectionError) as exc_info:
             redis_client._acquire_lock("resource", "owner", 60)
-        assert "ATLAN-CLIENT-503-00" in str(exc_info.value)
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
 
     def test_release_lock_success(self, redis_client):
         """Test successful lock release."""
@@ -185,9 +190,9 @@ class TestSyncRedisClientLockOperations:
         """Test lock release error handling."""
         redis_client.redis_client.eval.side_effect = TimeoutError("Timeout")
 
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisTimeoutError) as exc_info:
             redis_client._release_lock("resource", "owner")
-        assert "ATLAN-CLIENT-408-00" in str(exc_info.value)
+        assert exc_info.value.code == "TIMEOUT_REDIS"
 
     def test_complete_lock_cycle(self, redis_client):
         """Test complete acquire -> release cycle."""
@@ -244,9 +249,9 @@ class TestAsyncRedisClientLockOperations:
         """Test lock acquisition error handling."""
         redis_client.redis_client.set.side_effect = ConnectionError("Connection failed")
 
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisConnectionError) as exc_info:
             await redis_client._acquire_lock("resource", "owner", 60)
-        assert "ATLAN-CLIENT-503-00" in str(exc_info.value)
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
 
     async def test_release_lock_success(self, redis_client):
         """Test successful lock release."""
@@ -279,9 +284,9 @@ class TestAsyncRedisClientLockOperations:
         """Test lock release error handling."""
         redis_client.redis_client.eval.side_effect = TimeoutError("Timeout")
 
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisTimeoutError) as exc_info:
             await redis_client._release_lock("resource", "owner")
-        assert "ATLAN-CLIENT-408-00" in str(exc_info.value)
+        assert exc_info.value.code == "TIMEOUT_REDIS"
 
     async def test_complete_lock_cycle(self, redis_client):
         """Test complete acquire -> release cycle."""
@@ -306,37 +311,37 @@ class TestRedisErrorHandling:
         """Test handling of Redis connection errors."""
         from application_sdk.clients.redis import _handle_redis_error
 
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisConnectionError) as exc_info:
             _handle_redis_error(ConnectionError("Connection failed"))
-        assert "ATLAN-CLIENT-503-00" in str(exc_info.value)
-        assert "Connection failed" in str(exc_info.value)
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
+        assert isinstance(exc_info.value.cause, ConnectionError)
 
     def test_handle_timeout_error(self):
         """Test handling of Redis timeout errors."""
         from application_sdk.clients.redis import _handle_redis_error
 
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisTimeoutError) as exc_info:
             _handle_redis_error(TimeoutError("Operation timed out"))
-        assert "ATLAN-CLIENT-408-00" in str(exc_info.value)
-        assert "Operation timed out" in str(exc_info.value)
+        assert exc_info.value.code == "TIMEOUT_REDIS"
+        assert isinstance(exc_info.value.cause, TimeoutError)
 
     def test_handle_redis_protocol_error(self):
         """Test handling of Redis protocol errors."""
         from application_sdk.clients.redis import _handle_redis_error
 
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisProtocolError) as exc_info:
             _handle_redis_error(RedisError("Protocol error"))
-        assert "ATLAN-CLIENT-502-00" in str(exc_info.value)
-        assert "Protocol error" in str(exc_info.value)
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_REDIS_PROTOCOL"
+        assert isinstance(exc_info.value.cause, RedisError)
 
     def test_handle_generic_error(self):
         """Test handling of generic errors."""
         from application_sdk.clients.redis import _handle_redis_error
 
-        with pytest.raises(ClientError) as exc_info:
+        with pytest.raises(RedisConnectionError) as exc_info:
             _handle_redis_error(ValueError("Some other error"))
-        assert "ATLAN-CLIENT-503-00" in str(exc_info.value)
-        assert "Some other error" in str(exc_info.value)
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
+        assert isinstance(exc_info.value.cause, ValueError)
 
 
 class TestLockReleaseResultEnum:

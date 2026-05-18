@@ -52,7 +52,7 @@ class _DictLikeConfigBase(BaseModel):
                 return getattr(self, name)
         if self.model_extra and key in self.model_extra:
             return self.model_extra[key]
-        raise KeyError(key)
+        raise KeyError(key)  # stdlib-interop: __getitem__ protocol requires KeyError
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dict-style accessor with default — mirrors ``dict.get``."""

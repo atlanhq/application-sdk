@@ -22,6 +22,10 @@ from application_sdk.dev._dapr import (
     _write_components,
     embedded_dapr,
 )
+from application_sdk.dev._dapr_errors import (
+    UnsupportedArchitectureError,
+    UnsupportedOsError,
+)
 
 
 class TestPlatformTuple:
@@ -51,7 +55,7 @@ class TestPlatformTuple:
         with (
             patch("platform.system", return_value="Linux"),
             patch("platform.machine", return_value="riscv64"),
-            pytest.raises(RuntimeError, match="Unsupported architecture"),
+            pytest.raises(UnsupportedArchitectureError),
         ):
             _platform_tuple()
 
@@ -59,7 +63,7 @@ class TestPlatformTuple:
         with (
             patch("platform.system", return_value="FreeBSD"),
             patch("platform.machine", return_value="amd64"),
-            pytest.raises(RuntimeError, match="Unsupported OS"),
+            pytest.raises(UnsupportedOsError),
         ):
             _platform_tuple()
 

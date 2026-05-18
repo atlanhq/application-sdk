@@ -46,7 +46,7 @@ class UploadInput(Input):
         if v is not None:
             cleaned = v.strip("/")
             if not cleaned or ".." in PurePosixPath(cleaned).parts or "\x00" in v:
-                raise ValueError(
+                raise ValueError(  # stdlib-interop: pydantic field_validator requires ValueError
                     f"storage_subdir must not contain path traversal segments: {v!r}"
                 )
         return v

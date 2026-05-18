@@ -53,10 +53,9 @@ import asyncio
 import os
 import warnings
 from abc import abstractmethod
-from typing import Any, ClassVar, List, Optional
+from typing import Any, ClassVar
 
 from application_sdk.app.task import task
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts.incremental_sql import (
     ExecuteColumnBatchInput,
@@ -133,8 +132,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             ``None`` means fall back to full SQL.
     """
 
-    incremental_table_sql: ClassVar[Optional[str]] = None
-    incremental_column_sql: ClassVar[Optional[str]] = None
+    incremental_table_sql: ClassVar[str | None] = None
+    incremental_column_sql: ClassVar[str | None] = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -263,7 +262,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     @abstractmethod
     def build_incremental_column_sql(
         self,
-        table_ids: List[str],
+        table_ids: list[str],
         ctx: IncrementalRunContext,
     ) -> str:
         """Build the SQL query string for extracting columns for a batch of tables.
@@ -296,7 +295,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     def resolve_database_placeholders(
         self,
         sql: str,
-        input: FetchTablesIncrementalInput,  # noqa: A002
+        input: FetchTablesIncrementalInput,
     ) -> str:
         """Replace database-specific placeholders in SQL templates.
 
@@ -674,7 +673,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     async def execute_column_sql(
         self,
         sql: str,
-        input: ExecuteColumnBatchInput,  # noqa: A002
+        input: ExecuteColumnBatchInput,
         ctx: IncrementalRunContext,
     ) -> int:
         """Execute a column SQL query and return the record count.
@@ -773,7 +772,11 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             )
 
         except Exception as e:
-            raise rewrap(e, "Failed to write current-state") from e
+            from application_sdk.templates._template_errors import (  # noqa: PLC0415
+                IncrementalStateWriteError,
+            )
+
+            raise IncrementalStateWriteError(cause=e) from e
         finally:
             cleanup_previous_state(previous_state_dir)
 

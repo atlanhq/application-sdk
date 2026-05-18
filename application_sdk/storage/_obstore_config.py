@@ -42,17 +42,16 @@ without changing the outcome (see BLDX-1155 review thread).
 
 from __future__ import annotations
 
-import logging
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # obstore TypedDicts — not importable at runtime.
     from obstore.store import ClientConfig, RetryConfig
 
-# Stdlib logger to avoid the storage → observability → storage circular
-# import that bites the rest of this package.
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 _DEFAULT_TIMEOUT = "90s"
 _DEFAULT_CONNECT_TIMEOUT = "30s"
@@ -73,6 +72,9 @@ def _default_user_agent() -> str:
 
         return f"atlan-application-sdk/{__version__}"
     except Exception:  # pragma: no cover — defensive
+        logger.warning(
+            "Failed to derive User-Agent from version; using fallback", exc_info=True
+        )
         return "atlan-application-sdk"
 
 
@@ -124,6 +126,7 @@ def obstore_retry_config() -> RetryConfig | None:
             logger.warning(
                 "Invalid ATLAN_OBSTORE_RETRY_MAX_RETRIES=%r — using obstore default",
                 raw_max,
+                exc_info=True,
             )
 
     raw_timeout = os.getenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS")
@@ -134,6 +137,7 @@ def obstore_retry_config() -> RetryConfig | None:
             logger.warning(
                 "Invalid ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS=%r — using obstore default",
                 raw_timeout,
+                exc_info=True,
             )
 
     return cfg or None
@@ -152,15 +156,11 @@ def log_obstore_config(
     layer at obstore's default 10×3 min retry budget. Surfacing what's
     configured up front prevents that confusion next time.
     """
-    extra: dict[str, Any] = {
-        "obstore_provider": provider,
-        "obstore_client_options": dict(client_options) if client_options else {},
-        "obstore_retry_config": dict(retry_config) if retry_config else {},
-    }
     logger.info(
         "obstore configured for %s: client=%s retry=%s",
         provider,
-        extra["obstore_client_options"],
-        extra["obstore_retry_config"] or "default(max_retries=10, retry_timeout=3m)",
-        extra=extra,
+        dict(client_options) if client_options else {},
+        dict(retry_config)
+        if retry_config
+        else "default(max_retries=10, retry_timeout=3m)",
     )

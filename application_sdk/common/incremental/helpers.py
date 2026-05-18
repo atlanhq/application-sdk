@@ -13,9 +13,8 @@ import os
 import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -47,18 +46,24 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
         The connection ID (epoch number) as a string
 
     Raises:
-        ValueError: If the qualified name doesn't have the expected format
+        ConnectionQualifiedNameEmptyError: If the qualified name is empty.
+        ConnectionQualifiedNameFormatError: If the qualified name doesn't have the expected format.
     """
     if not connection_qualified_name:
-        raise ValueError("connection_qualified_name cannot be empty")
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+            ConnectionQualifiedNameEmptyError,
+        )
+
+        raise ConnectionQualifiedNameEmptyError()
 
     parts = connection_qualified_name.split("/")
 
     if len(parts) < 3:
-        raise ValueError(
-            f"Could not extract epoch ID from connection_qualified_name: '{connection_qualified_name}'. "
-            f"Expected format: 'tenant/connector/epoch'"
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+            ConnectionQualifiedNameFormatError,
         )
+
+        raise ConnectionQualifiedNameFormatError()
 
     connection_id = parts[-1]
 
@@ -89,10 +94,14 @@ def get_persistent_s3_prefix(
         S3 key prefix like 'persistent-artifacts/apps/oracle/connection/1764230875'
 
     Raises:
-        ValueError: If connection_qualified_name is not provided
+        ConnectionQualifiedNameMissingError: If connection_qualified_name is not provided.
     """
     if not connection_qualified_name:
-        raise ValueError("connection_qualified_name is required")
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+            ConnectionQualifiedNameMissingError,
+        )
+
+        raise ConnectionQualifiedNameMissingError()
 
     connection_id = extract_epoch_id_from_qualified_name(connection_qualified_name)
 
@@ -165,7 +174,7 @@ def prepone_marker_timestamp(marker: str, hours: float) -> str:
         '2025-01-15T07:30:00Z'
     """
     # Parse the timestamp
-    dt = datetime.strptime(marker, MARKER_TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+    dt = datetime.strptime(marker, MARKER_TIMESTAMP_FORMAT).replace(tzinfo=UTC)
 
     # Move back by specified hours
     adjusted = dt - timedelta(hours=hours)
@@ -180,7 +189,7 @@ def prepone_marker_timestamp(marker: str, hours: float) -> str:
 async def download_marker_from_s3(
     connection_qualified_name: str,
     application_name: str = "",
-) -> Optional[str]:
+) -> str | None:
     """Download marker.txt from S3 and return its content, or None if not found.
 
     Args:

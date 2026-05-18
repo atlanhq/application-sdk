@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.11.0
-source-sha:    7bf8373fc0ec7c691ee1a3c8b1f1c6ab57b3e3c6
-source-date:   2026-05-18T13:50:39+05:30
+source-sha:    62c758aef4585dd2ebaa8587d9d5c25464001e41
+source-date:   2026-05-18T10:26:02+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -294,7 +294,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `normalize_filters`
 
 - **Import:** `from application_sdk.common import normalize_filters`
-- **Signature:** `normalize_filters(filter_dict: Dict[str, List[str] | str], is_include: bool)`
+- **Signature:** `normalize_filters(filter_dict: dict[str, list[str] | str], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -308,7 +308,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `prepare_query`
 
 - **Import:** `from application_sdk.common import prepare_query`
-- **Signature:** `prepare_query(query: Optional[str], ...)`
+- **Signature:** `prepare_query(query: str | None, ...)`
 - **Summary:** Prepare a SQL query by applying include/exclude filters.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -746,7 +746,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `create_async_atlan_client`
 
 - **Import:** `from application_sdk.credentials import create_async_atlan_client`
-- **Signature:** `create_async_atlan_client(cred: 'Credential', *, extra_headers: dict[str, str] | None = None)`
+- **Signature:** `create_async_atlan_client(cred: Credential, *, extra_headers: dict[str, str] | None = None)`
 - **Summary:** Create a pyatlan_v9 AsyncAtlanClient from a resolved Atlan credential.
 - **Defined in:** `application_sdk/credentials/atlan_client.py`
 

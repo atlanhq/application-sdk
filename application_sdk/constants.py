@@ -52,6 +52,7 @@ Example:
 """
 
 import os
+import warnings
 from enum import Enum
 
 import httpx
@@ -294,6 +295,10 @@ def _load_worker_eviction_max_retries() -> int:
     try:
         value = int(raw)
     except ValueError:
+        warnings.warn(
+            f"ATLAN_WORKER_EVICTION_MAX_RETRIES={raw!r} is not a valid integer; falling back to 3",
+            stacklevel=2,
+        )
         return 3
     return max(0, value)
 

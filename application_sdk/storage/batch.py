@@ -341,4 +341,4 @@ async def upload_file_from_bytes(
         try:
             os.unlink(tmp_path)
         except OSError:
-            pass
+            pass  # tmp file unlink failed; best-effort cleanup, not fatal

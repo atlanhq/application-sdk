@@ -10,6 +10,10 @@ from typing import Any
 
 import pytest
 
+from application_sdk.testing.full_dag._errors import (
+    AtlanApiHttpError,
+    AtlanApiResponseInvariantError,
+)
 from application_sdk.testing.full_dag.client import (
     AEWorkflowClient,
     DAGNodeStatus,
@@ -22,7 +26,7 @@ def _make_client(monkeypatch: pytest.MonkeyPatch, responses: list[tuple[int, Any
     client = AEWorkflowClient("https://tenant.example.com/", "fake-token")
     queue = list(responses)
 
-    def fake_request(method, path, *, body=None, timeout=30):  # noqa: ARG001
+    def fake_request(method, path, *, body=None, timeout=30):
         if not queue:
             raise AssertionError("More HTTP calls than queued responses")
         return queue.pop(0)
@@ -49,13 +53,13 @@ def test_submit_workflow_raises_on_missing_run_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, _ = _make_client(monkeypatch, [(200, {"data": {}})])
-    with pytest.raises(RuntimeError, match="no run_id"):
+    with pytest.raises(AtlanApiResponseInvariantError, match="no run_id"):
         client.submit_workflow({})
 
 
 def test_submit_workflow_raises_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = _make_client(monkeypatch, [(401, "Unauthorized")])
-    with pytest.raises(RuntimeError, match="HTTP 401"):
+    with pytest.raises(AtlanApiHttpError, match="HTTP 401"):
         client.submit_workflow({})
 
 

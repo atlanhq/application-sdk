@@ -225,7 +225,9 @@ def _upload_sync(local_path: str, remote_key: str, timeout_s: float) -> None:
     try:
         asyncio.run(asyncio.wait_for(_upload(), timeout=timeout_s))
     except TimeoutError:
-        logger.warning("ObjectStore metric upload timed out after %.1fs", timeout_s)
+        logger.warning(
+            "ObjectStore metric upload timed out after %.1fs", timeout_s, exc_info=True
+        )
 
 
 class ObjectStoreMetricExporter(MetricExporter):
@@ -293,7 +295,7 @@ class ObjectStoreMetricExporter(MetricExporter):
                 try:
                     os.unlink(local_path)
                 except OSError:
-                    pass
+                    pass  # best-effort local-file cleanup; never block metric export
 
         except Exception:
             logger.warning("ObjectStore metric export failed", exc_info=True)

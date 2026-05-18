@@ -138,11 +138,11 @@ class TemporalExecutorBackend:
             app_cls._app_metadata.entry_points.get(entry_point) if entry_point else None
         )
         if entry_point is not None and ep_meta is None:
-            available = list(app_cls._app_metadata.entry_points)
-            raise ValueError(
-                f"Unknown entry point '{entry_point}' for app '{app_cls._app_name}'. "
-                f"Available: {available}"
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                UnknownEntryPointError,
             )
+
+            raise UnknownEntryPointError(resource_identifier=entry_point)
         output_type = (
             ep_meta.output_type
             if ep_meta is not None
@@ -241,34 +241,41 @@ def _build_tls_config(
     if server_root_ca_cert_path:
         path = Path(server_root_ca_cert_path)
         if not path.exists():
-            raise FileNotFoundError(
-                f"TLS root CA cert file not found: {server_root_ca_cert_path}"
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                TlsCertFileNotFoundError,
             )
+
+            raise TlsCertFileNotFoundError(field="server_root_ca_cert")
         server_root_ca_cert = path.read_bytes()
         logger.info("Loaded TLS root CA cert: %s", server_root_ca_cert_path)
 
     has_cert = bool(client_cert_path)
     has_key = bool(client_private_key_path)
     if has_cert != has_key:
-        raise ValueError(
-            "mTLS requires both client cert and client private key. "
-            f"Got cert={client_cert_path!r}, key={client_private_key_path!r}"
+        from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+            MtlsConfigError,
         )
+
+        raise MtlsConfigError()
 
     if client_cert_path:
         path = Path(client_cert_path)
         if not path.exists():
-            raise FileNotFoundError(
-                f"TLS client cert file not found: {client_cert_path}"
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                TlsCertFileNotFoundError,
             )
+
+            raise TlsCertFileNotFoundError(field="client_cert")
         client_cert = path.read_bytes()
 
     if client_private_key_path:
         path = Path(client_private_key_path)
         if not path.exists():
-            raise FileNotFoundError(
-                f"TLS client private key file not found: {client_private_key_path}"
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                TlsCertFileNotFoundError,
             )
+
+            raise TlsCertFileNotFoundError(field="client_private_key")
         client_private_key = path.read_bytes()
 
     return TLSConfig(
@@ -411,6 +418,8 @@ async def create_temporal_client(
                     exc_info=True,
                 )
 
-    raise RuntimeError(
-        f"Failed to connect to Temporal at {host!r} after {connect_max_attempts} attempts"
-    ) from last_exc
+    from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+        TemporalConnectError,
+    )
+
+    raise TemporalConnectError(target=host, cause=last_exc) from last_exc

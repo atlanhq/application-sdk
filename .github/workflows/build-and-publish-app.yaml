@@ -190,6 +190,7 @@ jobs:
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
       entrypoints: ${{ steps.manifest.outputs.entrypoints }}
+      app_configs:  ${{ steps.app_configs.outputs.app_configs }}
       branch:           ${{ steps.tags.outputs.branch }}
       image_tag:        ${{ steps.tags.outputs.image_tag }}
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
@@ -223,6 +224,25 @@ jobs:
         # .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py for rules.
         # Unit-tested in tests/test_parse_atlan_yaml.py in the SDK repo.
         run: python3 .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py
+
+      - name: Read app/generated/ for app_configs
+        id: app_configs
+        run: |
+          python3 - <<'PYEOF2'
+          import json, pathlib, os
+          generated_dir = pathlib.Path("app/generated")
+          form_files = {}
+          if generated_dir.is_dir():
+              for f in sorted(generated_dir.rglob("*.json")):
+                  try:
+                      form_files[str(f.relative_to(generated_dir))] = json.loads(f.read_text())
+                  except json.JSONDecodeError as exc:
+                      print(f"::warning file={f}::Skipping malformed JSON: {exc}")
+          value = json.dumps(form_files) if form_files else ""
+          print(f"[app_configs] found {len(form_files)} files: {list(form_files.keys())}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              print(f"app_configs={value}", file=fh)
+          PYEOF2
 
       - name: Validate atlan.yaml deploy config
         # Run platform guardrail rules on the deploy block before image build.
@@ -533,6 +553,7 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          APP_CONFIGS: ${{ needs.prepare.outputs.app_configs }}
           RELEASE_MODEL: ${{ needs.prepare.outputs.release_model }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           GITHUB_ACTOR: ${{ github.triggering_actor }}
@@ -657,6 +678,10 @@ jobs:
           created_by = os.environ.get("CREATED_BY", "").strip()
           if created_by:
               body["created_by"] = created_by
+
+          app_configs = os.environ.get("APP_CONFIGS", "").strip()
+          if app_configs:
+              body["app_configs"] = json.loads(app_configs)
 
           if release_model:
               body["release_model"] = release_model
