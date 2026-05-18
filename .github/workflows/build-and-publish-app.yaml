@@ -578,14 +578,25 @@ jobs:
           BODY=$(python3 - <<'PYEOF'
           import json, os
 
-          # Prefer release_tag (e.g. 0.2.0) over commit SHA for the GM version.
+          # Prefer release_tag (e.g. v0.3.0) over commit SHA for the GM version.
           # Backward compatible: apps that don't pass release_tag get SHA as before.
           release_tag = os.environ.get("RELEASE_TAG", "").strip()
           version = release_tag if release_tag else os.environ["IMAGE_TAG"]
 
+          # For release builds, send the semver-tagged image (e.g. :v0.3.0)
+          # rather than the immutable branch-sha tag (e.g. :refs-tags-v0.3.0-abc1234).
+          # The semver tag is already pushed to GHCR as part of the release ladder.
+          # The GM's semver gate validates the image tag, so it must be plain semver.
+          ghcr_image = os.environ["GHCR_IMAGE"]
+          if release_tag:
+              image_base = ghcr_image.rsplit(":", 1)[0]
+              image = f"{image_base}:{release_tag}"
+          else:
+              image = ghcr_image
+
           body = {
               "app_id": os.environ["APP_ID"],
-              "image": os.environ["GHCR_IMAGE"],
+              "image": image,
               "version": version,
               "branch": os.environ["BRANCH"],
               "repo": os.environ["REPO_URL"],
