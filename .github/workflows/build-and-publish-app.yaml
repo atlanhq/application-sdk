@@ -273,6 +273,18 @@ jobs:
           fi
 
           BRANCH=$(echo "$REF" | sed 's|refs/heads/||' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
+
+          # Release builds arrive with ref=refs/tags/v*, producing a slug like
+          # refs-tags-v0.3.0. The GM API requires the image tag to start with
+          # 'main' for channel=all publishes. Override to 'main' — the release
+          # tag was cut from main by tag-and-release.yaml, so this is correct.
+          RELEASE_TAG_EARLY="${{ inputs.release_tag }}"
+          RELEASE_TAG_EARLY="${RELEASE_TAG_EARLY//$'\r'/}"
+          RELEASE_TAG_EARLY="${RELEASE_TAG_EARLY//$'\n'/}"
+          if [ -n "${RELEASE_TAG_EARLY}" ] && [ "${REF}" = "refs/tags/${RELEASE_TAG_EARLY}" ]; then
+            BRANCH="main"
+          fi
+
           IMAGE_TAG="${SHA:0:7}"
 
           GHCR_BASE="ghcr.io/atlanhq/${REPO}"
