@@ -1448,7 +1448,7 @@ def create_app_handler_service(
             try:
                 os.unlink(safe_tmp_path)
             except FileNotFoundError:
-                pass
+                pass  # temp file already removed — nothing to clean up
 
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         response_obj = FileUploadResponse(
@@ -1789,7 +1789,7 @@ def create_app_handler_service(
                 try:
                     os.unlink(tmp_path)
                 except OSError:
-                    pass
+                    pass  # temp file unlink failed; best-effort cleanup, not fatal
 
         # Write non-sensitive fields to object storage
         non_sensitive["credentialSource"] = non_sensitive.get(

@@ -259,7 +259,7 @@ class PushGatewayClient:
                         self._stopped.wait(), timeout=self._interval_s
                     )
                 except TimeoutError:
-                    pass
+                    pass  # wait_for timeout means push interval elapsed; continue loop
                 if self._stopped.is_set():
                     return
                 try:

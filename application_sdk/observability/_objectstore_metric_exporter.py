@@ -290,7 +290,7 @@ class ObjectStoreMetricExporter(MetricExporter):
                 try:
                     os.unlink(local_path)
                 except OSError:
-                    pass
+                    pass  # best-effort local-file cleanup; never block metric export
 
         except Exception:
             logger.warning("ObjectStore metric export failed", exc_info=True)

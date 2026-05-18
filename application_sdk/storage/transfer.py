@@ -394,7 +394,7 @@ async def download(
                 try:
                     dest.unlink(missing_ok=True)
                 except OSError:
-                    pass
+                    pass  # best-effort cleanup of partial download; re-raise follows
             raise
         ref = FileReference(
             local_path=str(dest),

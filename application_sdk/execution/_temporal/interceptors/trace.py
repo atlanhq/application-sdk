@@ -56,7 +56,8 @@ class TraceInterceptor(Interceptor):
                 logger.warning(
                     "ATLAN_ENABLE_OTLP_TRACES=true but "
                     "temporalio.contrib.opentelemetry is not installed; "
-                    "tracing disabled"
+                    "tracing disabled",
+                    exc_info=True,
                 )
 
     def workflow_interceptor_class(

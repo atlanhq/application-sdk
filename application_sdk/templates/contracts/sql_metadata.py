@@ -118,7 +118,7 @@ class ExtractionInput(Input):
             try:
                 data = {**data, "connection": orjson.loads(raw_conn)}
             except (orjson.JSONDecodeError, ValueError):
-                pass
+                pass  # connection field isn't JSON — leave as-is for Pydantic to handle
 
         field_names = set(cls.model_fields)
         updates: dict[str, Any] = {}

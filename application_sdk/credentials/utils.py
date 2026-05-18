@@ -135,7 +135,7 @@ async def resolve_credential_file(
         if isinstance(parsed, dict) and ("key" in parsed or "fileKey" in parsed):
             return await download_file_from_upload_response(value)
     except (orjson.JSONDecodeError, TypeError):
-        pass
+        pass  # not JSON / not bytes-like — fall through to next check
 
     # 2. Customer's DEPLOYMENT object store — explicit objectstore:// prefix.
     #    Intended for non-secret companion files (krb5.conf, public CA certs)

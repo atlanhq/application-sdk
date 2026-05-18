@@ -202,7 +202,7 @@ class TemporalAuthManager:
                 )
                 break
             except TimeoutError:
-                pass
+                pass  # wait_for timeout means sleep duration elapsed; continue loop
 
             try:
                 await self._do_refresh(client)
@@ -219,7 +219,7 @@ class TemporalAuthManager:
                     )
                     break
                 except TimeoutError:
-                    pass
+                    pass  # wait_for timeout means retry sleep elapsed; continue loop
 
         logger.info("Token refresh loop exiting")
 
