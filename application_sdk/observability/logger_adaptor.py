@@ -378,6 +378,17 @@ class _LazyLoggerProxy:
         except Exception:
             logging.error("Error in lazy critical logging", exc_info=True)
 
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Dispatch to the named level method matching stdlib integer *level*."""
+        if level >= logging.ERROR:
+            self.error(msg, *args, **kwargs)
+        elif level >= logging.WARNING:
+            self.warning(msg, *args, **kwargs)
+        elif level >= logging.INFO:
+            self.info(msg, *args, **kwargs)
+        else:
+            self.debug(msg, *args, **kwargs)
+
 
 class AtlanLoggerAdapter(AtlanObservability[Any]):
     """A custom logger adapter for Atlan that extends AtlanObservability.
@@ -880,6 +891,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         except Exception:
             logging.error("Error in critical logging", exc_info=True)
             self._sync_flush()
+
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Dispatch to the named level method matching stdlib integer *level*.
+
+        Accepts the same stdlib ``logging.DEBUG`` / ``logging.INFO`` /
+        ``logging.WARNING`` / ``logging.ERROR`` integer constants so callers
+        can vary the level at runtime without building a dispatch table
+        themselves.
+        """
+        if level >= logging.ERROR:
+            self.error(msg, *args, **kwargs)
+        elif level >= logging.WARNING:
+            self.warning(msg, *args, **kwargs)
+        elif level >= logging.INFO:
+            self.info(msg, *args, **kwargs)
+        else:
+            self.debug(msg, *args, **kwargs)
 
     def opt(
         self, *, lazy: bool = False, **loguru_opt_kwargs: Any

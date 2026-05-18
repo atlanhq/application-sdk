@@ -66,9 +66,9 @@ if TYPE_CHECKING:
 
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
-# stdlib logger: cannot use get_logger here due to circular import
-# (observability -> storage -> batch -> ops -> observability)
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 def normalize_key(key: str) -> str:
@@ -256,7 +256,9 @@ def _log_storage_event(
     if error_class is not None:
         extra["error_class"] = error_class
     msg = f"storage.{op} {outcome} path={store_path}"
-    logger.log(level, msg, extra=extra)  # lgtm[py/clear-text-logging-sensitive-data]
+    # Keys are bound into loguru record["extra"] and promoted to OTLP indexed
+    # attributes by _build_extra_dict in logger_adaptor (all are in _KNOWN_EXTRA_KEYS).
+    logger.log(level, msg, **extra)
 
 
 async def _list_items(
