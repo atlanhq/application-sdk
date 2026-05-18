@@ -42,8 +42,6 @@ from application_sdk.constants import (
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import OBSERVABILITY_S3_PREFIX_MAP
 from application_sdk.observability.utils import get_observability_dir
-from application_sdk.storage import upload_file
-from application_sdk.storage.binding import create_store_from_binding
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.metrics.export import HistogramDataPoint, NumberDataPoint
@@ -200,6 +198,13 @@ def _upload_sync(local_path: str, remote_key: str, timeout_s: float) -> None:
     """
 
     async def _upload() -> None:
+        from application_sdk.storage import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            upload_file,
+        )
+        from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            create_store_from_binding,
+        )
+
         try:
             store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
             await upload_file(remote_key, local_path, store=store)
