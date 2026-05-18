@@ -229,7 +229,7 @@ jobs:
         id: app_configs
         run: |
           python3 - <<'PYEOF2'
-          import json, pathlib, os, sys
+          import json, pathlib, os
           generated_dir = pathlib.Path("app/generated")
           form_files = {}
           if generated_dir.is_dir():
@@ -237,7 +237,7 @@ jobs:
                   try:
                       form_files[str(f.relative_to(generated_dir))] = json.loads(f.read_text())
                   except json.JSONDecodeError as exc:
-                      print(f"::warning file={f}::Skipping malformed JSON: {exc}", file=sys.stderr)
+                      print(f"::warning file={f}::Skipping malformed JSON: {exc}")
           value = json.dumps(form_files) if form_files else ""
           print(f"[app_configs] found {len(form_files)} files: {list(form_files.keys())}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
