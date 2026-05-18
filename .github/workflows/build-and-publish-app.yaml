@@ -65,6 +65,11 @@ on:
         required: false
         type: string
         default: ""
+      unit_tests_check_name:
+        description: "Name of the check run that must succeed before publish proceeds. The app's Tests workflow must produce a check with this exact name for the same SHA. See docs/contracts/unit-tests-gate.md."
+        required: false
+        type: string
+        default: "unit-tests"
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -81,6 +86,7 @@ permissions:
   packages: write
   actions: write
   pull-requests: write
+  checks: read
 
 jobs:
   # ── Job 0: Channel + branch gate ─────────────────────────────────────────────
@@ -169,13 +175,95 @@ jobs:
               ;;
           esac
 
+  # ── Job 0b: Unit-tests gate ──────────────────────────────────────────────────
+  # Block publish unless the app's Tests workflow has reported a successful
+  # check (named by `unit_tests_check_name`, default `unit-tests`) for the
+  # SHA being published. Runs before any build minutes are spent so a failing
+  # test or missing-coverage check surfaces at minute 0 rather than after the
+  # multi-arch build.
+  #
+  # Contract: the consumer app repo MUST contain a workflow that
+  #   1. Triggers on `push` to the branch you publish from (and on
+  #      workflow_dispatch if you dispatch publishes from branches).
+  #   2. Contains a job whose check-run name matches `unit_tests_check_name`.
+  #   3. Enforces coverage (recommended: `coverage report --fail-under=60`).
+  # See docs/standards/unit-tests-gate.md for the full contract and template.
+  #
+  # Only runs when `publish: true` — build-only invocations are unaffected.
+  unit-tests-gate:
+    name: Unit-tests gate
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve SHA and verify required check exists
+        id: verify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Resolve to a concrete SHA regardless of whether the caller passed
+          # a branch name (`feat/foo`), a full ref (`refs/heads/main`), a tag,
+          # or a SHA. The /commits/{ref} endpoint accepts all of these.
+          REF: ${{ inputs.ref || github.sha }}
+          CHECK: ${{ inputs.unit_tests_check_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA=$(gh api "/repos/${REPO}/commits/${REF}" --jq '.sha')
+          echo "Resolved '${REF}' → ${SHA}"
+          count=$(gh api "/repos/${REPO}/commits/${SHA}/check-runs" \
+            --jq "[.check_runs[] | select(.name == \"${CHECK}\")] | length")
+          if [ "${count}" = "0" ]; then
+            {
+              echo "### Publish blocked: '${CHECK}' check missing"
+              echo ""
+              echo "No \`${CHECK}\` check was found for commit \`${SHA}\`."
+              echo ""
+              echo "This repo does not satisfy the publish contract. Required:"
+              echo "1. A workflow file (e.g. \`.github/workflows/tests.yml\`) containing a job that produces a check named \`${CHECK}\`."
+              echo "2. That workflow must trigger on \`push\` to the branch you publish from."
+              echo "3. The job must enforce coverage (recommended: \`coverage report --fail-under=60\`)."
+              echo ""
+              echo "Contract + template: <https://github.com/atlanhq/application-sdk/blob/main/docs/standards/unit-tests-gate.md>"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error title=Publish blocked::No '${CHECK}' check found for SHA ${SHA}. See workflow summary for onboarding instructions."
+            exit 1
+          fi
+          echo "Found ${count} '${CHECK}' check run(s) — waiting for completion."
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for ${{ inputs.unit_tests_check_name }} to complete
+        id: wait
+        uses: fountainhead/action-wait-for-check@5a908a24814494009c4bb27c242ea38c93c593be # v1.2.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checkName: ${{ inputs.unit_tests_check_name }}
+          ref: ${{ steps.verify.outputs.sha }}
+          timeoutSeconds: 1800
+          intervalSeconds: 30
+
+      - name: Block publish if check did not succeed
+        if: steps.wait.outputs.conclusion != 'success'
+        env:
+          CHECK: ${{ inputs.unit_tests_check_name }}
+          CONCLUSION: ${{ steps.wait.outputs.conclusion }}
+          SHA: ${{ steps.verify.outputs.sha }}
+        run: |
+          {
+            echo "### Publish blocked: '${CHECK}' did not succeed"
+            echo ""
+            echo "Check \`${CHECK}\` for \`${SHA}\` concluded as \`${CONCLUSION}\`."
+            echo "Fix the failing tests and push again before publishing."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "::error title=Publish blocked::Check '${CHECK}' for ${SHA} concluded as '${CONCLUSION}'."
+          exit 1
+
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel]
-    # `needs: [validate-channel]` only enforces ordering when that job runs.
-    # When publish=false, validate-channel is skipped via its `if:` — which by
-    # default would propagate "skipped" to dependents. The condition below
-    # explicitly allows prepare to run when validate-channel is skipped OR
+    needs: [validate-channel, unit-tests-gate]
+    # `needs: [validate-channel, unit-tests-gate]` only enforces ordering when
+    # those jobs run. When publish=false, both are skipped via their `if:` —
+    # which by default would propagate "skipped" to dependents. The condition
+    # below explicitly allows prepare to run when those jobs are skipped OR
     # successful, but NOT when it failed.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
