@@ -192,6 +192,12 @@ async def persist_file_reference(
 
     local = Path(ref.local_path)
 
+    # Structured kwargs in the logger calls below are intentional: every key used
+    # (storage_path, local_path, file_count, file_size_bytes, bytes_uploaded,
+    # bytes_transferred_before_failure, sha256, tier, error_type, duration_ms) is
+    # in _KNOWN_EXTRA_KEYS (logger_adaptor.py "FileReference transfers", lines 106-126).
+    # _build_extra_dict promotes them to top-level OTLP attributes — indexed columns in
+    # Grafana+ClickHouse. Do not rewrite to %-style; that would lose the promotion.
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
         prefix = _make_storage_prefix(ref, output_path=output_path)
@@ -368,6 +374,13 @@ async def materialize_file_reference(
     all_keys = await list_keys(ref.storage_path, store)
     data_keys = [k for k in all_keys if not k.endswith(".sha256")]
 
+    # Structured kwargs in the logger calls below are intentional: every key used
+    # (storage_path, local_path, file_size_bytes, bytes_downloaded,
+    # bytes_transferred_before_failure, sha256, tier, file_count, files_skipped,
+    # files_downloaded, chunks_total, is_cache_hit, error_type, duration_ms) is
+    # in _KNOWN_EXTRA_KEYS (logger_adaptor.py "FileReference transfers", lines 106-126).
+    # _build_extra_dict promotes them to top-level OTLP attributes — indexed columns in
+    # Grafana+ClickHouse. Do not rewrite to %-style; that would lose the promotion.
     if not data_keys:
         # ── Single file ────────────────────────────────────────────────────
 
