@@ -17,10 +17,10 @@ pattern that produced the hit.
 
 1. Retrieve the `fix:` entry for `pattern_index`.
 2. Determine the replacement mode from the entry:
-   - `replace:` → literal string substitution on the matched span
-   - `replace_regex:` → `re.sub(compiled_pattern, replacement, matched_line)`
-   - `replace_template:` → `re.sub(compiled_pattern, replacement, matched_line)` where the
-     replacement string may reference `\1`, `\2`, … captured groups
+   - `replace:` → plain string substitution on the matched span; the replacement is treated
+     as a literal (no backref interpretation)
+   - `replace_regex:` → `compiled_pattern.sub(replacement, matched_line)`; the replacement
+     string may reference `\1`, `\2`, … captured groups as in standard `re.sub`
 3. Compile `patterns[pattern_index]` with `re.compile(pattern, re.MULTILINE)`.
 4. Apply the substitution against **only the single captured line** at `line_number` in the
    in-memory copy of the file. Never apply to the whole file in bulk — avoids collateral
@@ -125,9 +125,9 @@ run against the raw diff string before `git apply` is attempted.
 |---|---|---|
 | **Parseable** | Response starts with `---` and `+++` header lines | Treat as ABSTAIN |
 | **In-scope files only** | All `+++ b/<path>` lines in the diff name `<repo-relative path>` only — no other files | Reject + unresolved TODO |
-| **`git apply --check` passes** | `echo "<diff>" \| git apply --check -` exits 0 | Reject + unresolved TODO |
-| **Scope creep** | Total lines added + removed (count `+` and `-` prefixed lines, not `@@` or `---`/`+++`) ≤ 8 | Reject + unresolved TODO (threshold tuneable) |
-| **No mass deletion** | Lines removed ≤ 2 × (context window size) = 2 × 6 = 12 | Reject + unresolved TODO |
+| **`git apply --check` passes** | Write diff to a temp file (`mktemp`); `git apply --check "$DIFF_FILE"` exits 0; delete temp file | Reject + unresolved TODO |
+| **Scope creep** | Lines **added** (count `+` prefixed lines, excluding `+++` headers) ≤ 10 | Reject + unresolved TODO (threshold tuneable) |
+| **No mass deletion** | Lines **removed** (count `-` prefixed lines, excluding `---` headers) ≤ 12 (= 2 × context window of 6) | Reject + unresolved TODO |
 
 When a diff is rejected, the hit is added to the repo's **unresolved-hits list** with the
 rejection reason. These surface as checked-off TODOs in the PR body. Do **not** retry the
@@ -137,12 +137,17 @@ When the response is `ABSTAIN`, add the hit to the unresolved list with reason `
 
 ### Applying a valid diff
 
-After all rejection checks pass:
+After all rejection checks pass, write the diff to a temp file and apply it:
 
 ```bash
-echo "<diff>" | git apply --index -
+DIFF_FILE=$(mktemp /tmp/audit-fix-XXXXXX.patch)
+printf '%s' "$DIFF" > "$DIFF_FILE"
+git apply --index "$DIFF_FILE"
+rm -f "$DIFF_FILE"
 ```
 
-`--index` stages the change immediately. After all hits in the repo are processed, run
+`--index` stages the change immediately. Using a temp file (rather than piping via `echo`)
+avoids shell quoting issues that mangle backslashes and trailing newlines — both of which
+`git apply` is strict about. After all hits in the repo are processed, run
 `git diff --staged --stat` to confirm the change shape is coherent before showing the E6
 diff preview to the user.

@@ -106,8 +106,10 @@ v4.0.0
 - recommendation: replace `.upload(key, path)` with `await .upload_file(key, path)`
 - fix:
   - pattern_index: 0
-    replace: `.upload_file(`
-    # Literal replacement: swaps the method name in the matched span.
+    replace_regex: `.upload_file(`
+    # `replace_regex` is used (not `replace`) because the pattern `\.upload\s*\(`
+    # can match `.upload  (` with arbitrary whitespace before `(`. The replacement
+    # collapses that to `.upload_file(` via re.sub, normalising any whitespace.
     # The `await` keyword must already be present or is the caller's responsibility;
     # if the site lacks `await`, the LLM fallback adds it via recommendation:.
 ```

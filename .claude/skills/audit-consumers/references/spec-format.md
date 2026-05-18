@@ -70,11 +70,9 @@ LLM-driven rewrite using the prose `recommendation:` plus the captured hit conte
 ```yaml
 - fix:
   - pattern_index: 0        # 0-based index into the check's `patterns:` list
-    replace: `<literal>`    # literal string replacement (no backrefs)
+    replace: `<literal>`    # literal string substitution on the matched span (no regex)
     # OR (mutually exclusive):
-    replace_regex: `<str>`  # full-span replacement via re.sub (no backrefs)
-    # OR (mutually exclusive):
-    replace_template: `<str>`  # replacement with \1, \2 backrefs into matched groups
+    replace_regex: `<str>`  # passed as the repl arg to re.sub; \1, \2 backrefs are supported
   add_import: `from application_sdk.errors import AppError`   # optional, check-level
   # OR (for multiple imports):
   add_imports:
@@ -83,8 +81,10 @@ LLM-driven rewrite using the prose `recommendation:` plus the captured hit conte
 ```
 
 **Rules:**
-- `replace`, `replace_regex`, `replace_template` are **mutually exclusive**. Specifying more
-  than one on a single entry is a validation error.
+- `replace` and `replace_regex` are **mutually exclusive**. Specifying both on a single
+  entry is a validation error. `replace` is a plain string substitution (no pattern
+  interpretation); `replace_regex` is passed directly as the `repl` argument to `re.sub`
+  and may contain `\1`, `\2` backrefs into the match groups from `patterns[pattern_index]`.
 - `pattern_index` must be in range `[0, len(patterns)-1]`. Out-of-range is a validation error.
 - Patterns without a matching `pattern_index` in `fix:` use the LLM fallback for their hits.
   A single check can be **mixed-mode** (deterministic for some patterns, LLM for others).
@@ -108,8 +108,8 @@ no point auditing if the fixes are malformed.
 For each `confirmed` hit whose check has a matching `fix:` entry:
 
 1. Compile `patterns[pattern_index]` with `re.compile(pattern, re.MULTILINE)`.
-2. Apply `re.sub(replacement, matched_line)` against the **single captured line at
-   `line_number`** — never the whole file. This avoids collateral matches elsewhere in the
+2. Apply `compiled_pattern.sub(replacement, matched_line)` against the **single captured
+   line at `line_number`** — never the whole file. This avoids collateral matches elsewhere in the
    file that happen to match the same pattern.
 3. If substitution produces zero changes (pattern has drifted from the captured line), demote
    this hit to the LLM fallback path and log a warning:

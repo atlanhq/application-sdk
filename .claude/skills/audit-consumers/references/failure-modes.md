@@ -38,14 +38,19 @@ this file and skips repos already in a terminal state.
 }
 ```
 
-**State machine** (linear — states are write-once, no backwards transitions):
+**State machine** — Phase E writes only three terminal states plus the initial `pending`:
 
 ```
-pending → cloned → patched → verified → pushed → pr_open
-                                                → failed   (push rejected or gh pr create failed)
-       → skipped  (E1: archived/no-push; E2: PR already open; E6: user skipped)
-       → failed   (E5: py_compile failed; E3: clone failed)
+pending → pr_open   (E7: PR created successfully)
+        → skipped   (E1: archived or no push permission; E2: open PR already exists;
+                     E6: user answered "skip" or --dry-run)
+        → failed    (E3: clone failed; E5: py_compile failed;
+                     E7: push rejected or gh pr create failed)
 ```
+
+Intermediate steps (clone, patch, verify) are not persisted as manifest states; only the
+terminal outcome is recorded. The manifest entry for a repo is written once, at the moment
+the repo reaches a terminal state.
 
 ---
 

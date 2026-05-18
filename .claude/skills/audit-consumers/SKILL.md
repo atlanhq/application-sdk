@@ -670,7 +670,11 @@ For failure modes, `manifest.json` schema, and end-of-phase summary see `referen
    Branch name = `sdk-audit/<spec-slug>`.
 3. Build the target repo list: filter Phase B results to `analyzed-has-findings` + ≥1
    `confirmed` hit; sort by Action Summary priority (P0→P2), then alphabetically.
-4. Create `/tmp/audit-fix/<spec-slug>/` and write `manifest.json` (session recovery state).
+4. Create `/tmp/audit-fix/<spec-slug>/` if it doesn't exist. If `manifest.json` already exists,
+   load it and merge: preserve all repo entries already in terminal states (`pr_open`, `skipped`,
+   `failed`) and carry forward `auto_confirm_remaining`; reset any `pending` entries for retry.
+   Write the merged manifest back. This enables crash recovery — re-running resumes from where
+   the interrupted run left off.
 5. If `--dry-run`: print `[Phase E] DRY-RUN MODE — generating and verifying fixes, but no push and no PR.`
 6. If all checks have `impact: review` only: warn and ask `"Continue anyway? (yes/no)"`.
 7. Print: `[Phase E] Pre-flight OK · Branch: sdk-audit/<spec-slug> · Repos: N (P0: X, P1: Y, P2: Z)`
@@ -724,7 +728,7 @@ Full algorithm detail: `references/fix-generation.md`.
 ```bash
 CHANGED=$(git diff --name-only --diff-filter=AM origin/<default_branch>... -- '*.py')
 python -m py_compile $CHANGED
-command -v ruff >/dev/null && ruff check $CHANGED || echo "ruff: not installed, skipped"
+if command -v ruff >/dev/null; then ruff check $CHANGED; else echo "ruff: not installed, skipped"; fi
 ```
 
 - `py_compile` fails → state `failed`; roll back the patched files
