@@ -12,7 +12,6 @@ production while requiring nothing on the host beyond Python and ``uv``.
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import platform
 import shutil
@@ -36,9 +35,10 @@ from application_sdk.dev._dapr_errors import (
 # Single source of truth for the daprd pin lives in ``application_sdk.version``
 # (see the ``__dapr_version`` constant). CI workflows grep the same file so
 # the literal version string lives in exactly one place.
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.version import __dapr_version as _DAPRD_VERSION
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 _DAPRD_RELEASE_BASE = (
     "https://github.com/dapr/dapr/releases/download/v{version}/daprd_{os}_{arch}"
 )

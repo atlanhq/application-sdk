@@ -466,15 +466,13 @@ class RollingFileWriter(Generic[T]):
                 await result
         except Exception:
             logger.error(
-                "RollingFileWriter flush failed",
+                "RollingFileWriter flush failed: chunk_index=%d chunk_path=%s buffered_batches=%d buffered_bytes=%d buffered_records=%d",
+                self._chunk_index,
+                chunk_path,
+                len(self._buffer),
+                self._buffered_bytes,
+                self._buffered_records,
                 exc_info=True,
-                extra={
-                    "chunk_index": self._chunk_index,
-                    "chunk_path": chunk_path,
-                    "buffered_batches": len(self._buffer),
-                    "buffered_bytes": self._buffered_bytes,
-                    "buffered_records": self._buffered_records,
-                },
             )
             raise
 

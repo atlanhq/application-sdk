@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import logging
 import os
 import posixpath
 from collections.abc import Sequence
@@ -40,6 +39,7 @@ from application_sdk.constants import (
     ENABLE_OBSERVABILITY_STORE_SINK,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import OBSERVABILITY_S3_PREFIX_MAP
 from application_sdk.observability.utils import get_observability_dir
 from application_sdk.storage import upload_file
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.metrics.export import HistogramDataPoint, NumberDataPoint
     from opentelemetry.sdk.resources import Resource
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 #: S3 prefix for OTel-sourced Prometheus metrics.  Kept separate from the
 #: ``metrics/`` prefix used by ``record_metric()`` data so consumers can

@@ -195,13 +195,11 @@ class PushGatewayClient:
         self._stopped.clear()
         self._task = asyncio.create_task(self._run(), name="pushgateway-pusher")
         logger.info(
-            "Pushgateway pusher started",
-            extra={
-                "url": self._url,
-                "job": self._job,
-                "interval_s": self._interval_s,
-                "grouping_key": self._grouping_key,
-            },
+            "Pushgateway pusher started: url=%s job=%s interval_s=%s grouping_key=%s",
+            self._url,
+            self._job,
+            self._interval_s,
+            self._grouping_key,
         )
 
     async def push_now(self) -> None:
@@ -374,12 +372,10 @@ class PushGatewayClient:
                 )
                 deleted += 1
                 logger.info(
-                    "Swept stale Pushgateway group",
-                    extra={
-                        "instance": labels.get("instance", "?"),
-                        "stale_for_seconds": round(age, 1),
-                        "job": self._job,
-                    },
+                    "Swept stale Pushgateway group: job=%s instance=%s stale_for_seconds=%.1f",
+                    self._job,
+                    labels.get("instance", "?"),
+                    round(age, 1),
                 )
             except Exception:
                 # Guard 4: per-group soft-fail.
@@ -390,15 +386,13 @@ class PushGatewayClient:
                 )
 
         logger.info(
-            "Pushgateway startup sweep complete",
-            extra={
-                "deleted": deleted,
-                "skipped_self": skipped_self,
-                "skipped_live": skipped_live,
-                "skipped_other_job": skipped_other_job,
-                "job": self._job,
-                "staleness_threshold_seconds": self._sweep_staleness_seconds,
-            },
+            "Pushgateway startup sweep complete: job=%s deleted=%d skipped_self=%d skipped_live=%d skipped_other_job=%d staleness_threshold_seconds=%s",
+            self._job,
+            deleted,
+            skipped_self,
+            skipped_live,
+            skipped_other_job,
+            self._sweep_staleness_seconds,
         )
 
 
