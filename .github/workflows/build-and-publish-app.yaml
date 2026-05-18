@@ -273,6 +273,18 @@ jobs:
           fi
 
           BRANCH=$(echo "$REF" | sed 's|refs/heads/||' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
+
+          # Release builds arrive with ref=refs/tags/v*, producing a slug like
+          # refs-tags-v0.3.0 for the immutable/branch image tags in GHCR.
+          # Override to 'main' so those tags are clean — the release tag was
+          # cut from main by tag-and-release.yaml, so this is semantically correct.
+          RELEASE_TAG_EARLY="${{ inputs.release_tag }}"
+          RELEASE_TAG_EARLY="${RELEASE_TAG_EARLY//$'\r'/}"
+          RELEASE_TAG_EARLY="${RELEASE_TAG_EARLY//$'\n'/}"
+          if [ -n "${RELEASE_TAG_EARLY}" ] && [ "${REF}" = "refs/tags/${RELEASE_TAG_EARLY}" ]; then
+            BRANCH="main"
+          fi
+
           IMAGE_TAG="${SHA:0:7}"
 
           GHCR_BASE="ghcr.io/atlanhq/${REPO}"
@@ -558,22 +570,64 @@ jobs:
             exit 1
           fi
 
-          # Resolve triggering actor to email; fall back to GitHub username
-          GH_EMAIL=$(gh api "users/${GITHUB_ACTOR}" --jq '.email // empty' 2>/dev/null || true)
-          export CREATED_BY="${GH_EMAIL:-${GITHUB_ACTOR}}"
+          # Resolve who to attribute as the release creator.
+          #
+          # For `push` events (the squash/merge-to-main auto-publish flow),
+          # github.triggering_actor is whoever clicked "Merge" — not the PR
+          # author — which surfaces the wrong person as "Created by:" in the
+          # GM Slack approval message. Look up the PR for the merge SHA via
+          # /commits/{sha}/pulls and use its author when available. Falls back
+          # to triggering_actor when there's no associated PR (direct push).
+          #
+          # For every other event (workflow_dispatch, release, schedule, …)
+          # the trigger is an explicit deliberate action — attribute to whoever
+          # initiated it. This preserves the pre-fix behavior for those paths.
+          #
+          # NOTE: `gh api` writes its JSON error body to stdout on non-2xx,
+          # so the assignment must be gated on the exit code — otherwise an
+          # error payload would contaminate PR_AUTHOR and break the fallback.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              PR_AUTHOR=""
+              if RAW=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                           --jq '.[0].user.login // empty' 2>/dev/null); then
+                  PR_AUTHOR="${RAW}"
+              fi
+              ACTOR="${PR_AUTHOR:-${GITHUB_ACTOR}}"
+          else
+              ACTOR="${GITHUB_ACTOR}"
+          fi
+          GH_EMAIL=""
+          if EMAIL_RAW=$(gh api "users/${ACTOR}" --jq '.email // empty' 2>/dev/null); then
+              GH_EMAIL="${EMAIL_RAW}"
+          fi
+          export CREATED_BY="${GH_EMAIL:-${ACTOR}}"
 
           # Build JSON payload matching the CLI's registerInMarketplace format
           BODY=$(python3 - <<'PYEOF'
           import json, os
 
-          # Prefer release_tag (e.g. 0.2.0) over commit SHA for the GM version.
+          # Prefer release_tag (e.g. v0.3.0) over commit SHA for the GM version.
           # Backward compatible: apps that don't pass release_tag get SHA as before.
           release_tag = os.environ.get("RELEASE_TAG", "").strip()
           version = release_tag if release_tag else os.environ["IMAGE_TAG"]
 
+          # Semver apps send the plain version tag (e.g. :0.3.0) as the image
+          # so the GM's semver gate accepts it. The release ladder strips the
+          # leading 'v' (v0.3.0 → 0.3.0), so we do the same here to reference
+          # a tag that actually exists in GHCR. CD apps always send the immutable
+          # branch-sha tag regardless of whether release_tag is set.
+          release_model = os.environ.get("RELEASE_MODEL", "").strip()
+          ghcr_image = os.environ["GHCR_IMAGE"]
+          if release_tag and release_model == "versioned":
+              image_base = ghcr_image.rsplit(":", 1)[0]
+              version_tag = release_tag.lstrip("v")  # match release ladder: v0.3.0 → 0.3.0
+              image = f"{image_base}:{version_tag}"
+          else:
+              image = ghcr_image
+
           body = {
               "app_id": os.environ["APP_ID"],
-              "image": os.environ["GHCR_IMAGE"],
+              "image": image,
               "version": version,
               "branch": os.environ["BRANCH"],
               "repo": os.environ["REPO_URL"],
