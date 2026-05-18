@@ -1,0 +1,200 @@
+name: Publish Contract Toolkit
+
+# Phase B of the contract-toolkit release. Fires when a release PR opened by
+# the Release Contract Toolkit workflow (contract-toolkit-release.yml) is
+# merged into main with the `release:contract-toolkit` label. Builds the PKL
+# package from merged main, publishes it under app-contract-toolkit/ on the
+# gh-pages branch, creates the contract-toolkit-v<version> tag, and creates
+# the GitHub release with the rendered notes.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  pull-requests: read
+
+env:
+  PKG_NAME: app-contract-toolkit
+  PKL_VERSION: "0.27.2"
+  PUBLISH_DIR: app-contract-toolkit
+
+jobs:
+  publish:
+    name: Publish contract toolkit package
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'release:contract-toolkit')
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Install PKL
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+          chmod +x /tmp/pkl
+          sudo mv /tmp/pkl /usr/local/bin/pkl
+
+      - name: Read release version
+        id: meta
+        run: |
+          set -euo pipefail
+          file="contract-toolkit/src/PklProject"
+          version="$(grep -oP 'version\s*=\s*"\K[^"]+' "$file")"
+          if [ -z "$version" ]; then
+            echo "::error::could not parse version from ${file}"
+            exit 1
+          fi
+          tag="contract-toolkit-v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Publishing contract toolkit ${tag} from $(git rev-parse HEAD)"
+
+      - name: Load release body template
+        run: |
+          {
+            echo 'GIT_CLIFF_TEMPLATE<<EOF'
+            cat contract-toolkit/.github/release-notes.tmpl
+            echo EOF
+          } >> "$GITHUB_ENV"
+
+      - name: Render release body
+        uses: orhun/git-cliff-action@c93ef52f3d0ddcdcc9bd5447d98d458a11cd4f72 # v4.7.1
+        with:
+          config: contract-toolkit/cliff.toml
+          args: >-
+            --unreleased
+            --tag ${{ steps.meta.outputs.tag }}
+            --tag-pattern '^contract-toolkit-v[0-9].*'
+            --include-path 'contract-toolkit/**'
+            --github-repo ${{ github.repository }}
+            --strip all
+        env:
+          OUTPUT: /tmp/contract-toolkit-release-notes.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize release body whitespace
+        run: |
+          set -euo pipefail
+          awk '
+            NF { blank=0; print; next }
+            !blank { print; blank=1 }
+          ' /tmp/contract-toolkit-release-notes.md > /tmp/contract-toolkit-release-notes.normalized.md
+          mv /tmp/contract-toolkit-release-notes.normalized.md /tmp/contract-toolkit-release-notes.md
+          sed -i '/./,$!d' /tmp/contract-toolkit-release-notes.md
+
+      - name: Build package
+        run: pkl project package contract-toolkit/src/ --output-path .out/ --skip-publish-check
+
+      - name: Stash built artifacts
+        run: cp -R .out /tmp/contract-toolkit-pkl-out
+
+      - name: Publish package to GitHub Pages branch
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin gh-pages || true
+          git checkout gh-pages 2>/dev/null || git checkout --orphan gh-pages
+          git checkout origin/gh-pages -- . 2>/dev/null || true
+
+          mkdir -p "${PUBLISH_DIR}"
+          cp "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}" "${PUBLISH_DIR}/"
+          cp "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.zip" "${PUBLISH_DIR}/"
+          cp "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.zip.sha256" "${PUBLISH_DIR}/"
+          if [ -f "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.sha256" ]; then
+            cp "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.sha256" "${PUBLISH_DIR}/"
+          fi
+          touch .nojekyll
+
+          git add -A "${PUBLISH_DIR}" .nojekyll
+          git diff --cached --quiet || git commit -m "publish ${PKG_NAME}@${version}"
+          git push origin gh-pages
+
+      - name: Trigger GitHub Pages build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pages_sha="$(git rev-parse HEAD)"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds"
+
+          for attempt in $(seq 1 60); do
+            status="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.status')"
+            commit="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.commit')"
+
+            if [ "$commit" != "$pages_sha" ]; then
+              sleep 5
+              continue
+            fi
+
+            case "$status" in
+              built)
+                exit 0
+                ;;
+              errored)
+                message="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.error.message // "unknown error"')"
+                echo "::error::GitHub Pages build failed: ${message}"
+                exit 1
+                ;;
+            esac
+
+            sleep 5
+          done
+
+          echo "::error::Timed out waiting for GitHub Pages build for ${pages_sha}"
+          exit 1
+
+      - name: Create source tag
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+          merge_sha="${{ steps.meta.outputs.merge_sha }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --tags origin "${tag}" >/dev/null 2>&1; then
+            echo "tag ${tag} already exists on origin; skipping tag push"
+            exit 0
+          fi
+
+          git tag -a "$tag" "$merge_sha" -m "Release contract toolkit $tag"
+          git push origin "$tag"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+          version="${{ steps.meta.outputs.version }}"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release ${tag} already exists; skipping creation"
+            exit 0
+          fi
+
+          notes_flag=(--generate-notes)
+          if [ -s /tmp/contract-toolkit-release-notes.md ]; then
+            notes_flag=(--notes-file /tmp/contract-toolkit-release-notes.md)
+          fi
+
+          gh release create "$tag" \
+            "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.zip" \
+            "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}" \
+            "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.zip.sha256" \
+            "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.sha256" \
+            --title "$tag" \
+            "${notes_flag[@]}"

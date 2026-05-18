@@ -52,7 +52,7 @@ commit_parsers = [
   { message = "^docs", group = "Documentation" },
   { message = "^ci", group = "CI & tooling" },
   # Skip the version-bump commits the release workflow creates so they don't pollute the changelog.
-  { message = "^chore\\(release\\): bump|^chore: bump version|^chore: release v", skip = true },
+  { message = "^chore\\(release\\): bump|^chore: bump version|^chore: release v|^chore\\([^)]+\\): release v", skip = true },
   { message = "^chore: publish|^publish ", skip = true },
   { message = "^chore", group = "Chores" },
   { message = "^refactor|^perf|^style|^test", group = "Other changes" },
