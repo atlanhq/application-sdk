@@ -73,6 +73,9 @@ def _default_user_agent() -> str:
 
         return f"atlan-application-sdk/{__version__}"
     except Exception:  # pragma: no cover — defensive
+        logger.warning(
+            "Failed to derive User-Agent from version; using fallback", exc_info=True
+        )
         return "atlan-application-sdk"
 
 

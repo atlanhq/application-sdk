@@ -113,7 +113,10 @@ class AppWorker:
                 )
             )
         except ValueError:
-            pass
+            logger.debug(
+                "TemporalCoreCollector already registered; skipping",
+                exc_info=True,
+            )
 
         self._pusher = PushGatewayClient(
             url=PROMETHEUS_PUSHGATEWAY_URL,

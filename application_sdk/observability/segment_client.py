@@ -239,7 +239,7 @@ class SegmentClient:
             await asyncio.wait_for(asyncio.wrap_future(future), timeout=10.0)
         except TimeoutError:
             future.cancel()
-            logging.warning("Segment queue flush timed out")
+            logging.warning("Segment queue flush timed out", exc_info=True)
         except Exception:
             logging.warning("Error flushing Segment queue", exc_info=True)
 
