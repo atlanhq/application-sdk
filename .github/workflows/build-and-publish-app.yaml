@@ -558,9 +558,37 @@ jobs:
             exit 1
           fi
 
-          # Resolve triggering actor to email; fall back to GitHub username
-          GH_EMAIL=$(gh api "users/${GITHUB_ACTOR}" --jq '.email // empty' 2>/dev/null || true)
-          export CREATED_BY="${GH_EMAIL:-${GITHUB_ACTOR}}"
+          # Resolve who to attribute as the release creator.
+          #
+          # For `push` events (the squash/merge-to-main auto-publish flow),
+          # github.triggering_actor is whoever clicked "Merge" — not the PR
+          # author — which surfaces the wrong person as "Created by:" in the
+          # GM Slack approval message. Look up the PR for the merge SHA via
+          # /commits/{sha}/pulls and use its author when available. Falls back
+          # to triggering_actor when there's no associated PR (direct push).
+          #
+          # For every other event (workflow_dispatch, release, schedule, …)
+          # the trigger is an explicit deliberate action — attribute to whoever
+          # initiated it. This preserves the pre-fix behavior for those paths.
+          #
+          # NOTE: `gh api` writes its JSON error body to stdout on non-2xx,
+          # so the assignment must be gated on the exit code — otherwise an
+          # error payload would contaminate PR_AUTHOR and break the fallback.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              PR_AUTHOR=""
+              if RAW=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                           --jq '.[0].user.login // empty' 2>/dev/null); then
+                  PR_AUTHOR="${RAW}"
+              fi
+              ACTOR="${PR_AUTHOR:-${GITHUB_ACTOR}}"
+          else
+              ACTOR="${GITHUB_ACTOR}"
+          fi
+          GH_EMAIL=""
+          if EMAIL_RAW=$(gh api "users/${ACTOR}" --jq '.email // empty' 2>/dev/null); then
+              GH_EMAIL="${EMAIL_RAW}"
+          fi
+          export CREATED_BY="${GH_EMAIL:-${ACTOR}}"
 
           # Build JSON payload matching the CLI's registerInMarketplace format
           BODY=$(python3 - <<'PYEOF'
