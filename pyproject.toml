@@ -66,6 +66,17 @@ sql = [
 daft = [
     "daft>=0.7.1,<0.8.0",
 ]
+lakehouse = [
+    "pyiceberg>=0.7.0,<0.9.0",
+]
+lakehouse-sql = [
+    "pyiceberg>=0.7.0,<0.9.0",
+    "duckdb>=1.0.0",
+]
+lakehouse-bulk = [
+    "pyiceberg>=0.7.0,<0.9.0",
+    "daft>=0.7.1,<0.8.0",
+]
 # Incremental extraction: sql + daft + RocksDB state store
 incremental = [
     "pandas>=2.2.3,<3.0.0",
