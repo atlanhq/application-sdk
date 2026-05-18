@@ -333,6 +333,8 @@ class Writer(ABC):
             if isinstance(data, daft.DataFrame):
                 return data
         except ImportError:
+            # Optional dep: daft is not installed — input cannot be a daft
+            # DataFrame, so fall through to the dict/list branches.
             pass
 
         # Convert dict or list of dicts to DataFrame

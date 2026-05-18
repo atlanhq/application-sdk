@@ -114,6 +114,7 @@ class DaprCredentialVault:
                 logger.warning(
                     "Unknown credentialSource=%r; defaulting to DIRECT",
                     credential_source_str,
+                    exc_info=True,
                 )
                 credential_source = _CredentialSource.DIRECT
 

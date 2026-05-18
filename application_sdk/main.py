@@ -556,6 +556,7 @@ def _env_int(key: str, default: int = 0) -> int:
             key,
             val,
             default,
+            exc_info=True,
         )
         return default
 

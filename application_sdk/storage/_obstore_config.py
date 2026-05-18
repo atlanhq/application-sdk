@@ -124,6 +124,7 @@ def obstore_retry_config() -> RetryConfig | None:
             logger.warning(
                 "Invalid ATLAN_OBSTORE_RETRY_MAX_RETRIES=%r — using obstore default",
                 raw_max,
+                exc_info=True,
             )
 
     raw_timeout = os.getenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS")
@@ -134,6 +135,7 @@ def obstore_retry_config() -> RetryConfig | None:
             logger.warning(
                 "Invalid ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS=%r — using obstore default",
                 raw_timeout,
+                exc_info=True,
             )
 
     return cfg or None
