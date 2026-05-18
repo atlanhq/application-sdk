@@ -32,10 +32,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import MaxItems
 from application_sdk.handler.checks import (
     check_atlan_publish_permission,
     check_user_enabled,
@@ -68,13 +69,13 @@ class PreflightInput(Input):
 
 
 @dataclass
-class PreflightOutput(Output):
+class PreflightOutput(Output, allow_unbounded_fields=True):
     """Result of the publish-preflight activity."""
 
     passed: bool = True
     """True when all checks passed; False when at least one check failed."""
 
-    checks: list[dict[str, Any]] = field(default_factory=list)
+    checks: Annotated[list[dict[str, Any]], MaxItems(20)] = field(default_factory=list)
     """Individual check results serialised as dicts for Temporal compatibility."""
 
     message: str = ""
