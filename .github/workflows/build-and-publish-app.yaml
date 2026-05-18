@@ -565,11 +565,21 @@ jobs:
           #
           # The /commits/{sha}/pulls endpoint returns any PRs associated with
           # the commit. Empty result (manual workflow_dispatch, direct push,
-          # feature-branch build) → fall back to triggering_actor.
-          PR_AUTHOR=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-              --jq '.[0].user.login // empty' 2>/dev/null || true)
+          # feature-branch build, or API error) → fall back to triggering_actor.
+          #
+          # NOTE: `gh api` writes its JSON error body to stdout on non-2xx,
+          # so the assignment must be gated on the exit code — otherwise an
+          # error payload would contaminate PR_AUTHOR and break the fallback.
+          PR_AUTHOR=""
+          if RAW=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                       --jq '.[0].user.login // empty' 2>/dev/null); then
+              PR_AUTHOR="${RAW}"
+          fi
           ACTOR="${PR_AUTHOR:-${GITHUB_ACTOR}}"
-          GH_EMAIL=$(gh api "users/${ACTOR}" --jq '.email // empty' 2>/dev/null || true)
+          GH_EMAIL=""
+          if EMAIL_RAW=$(gh api "users/${ACTOR}" --jq '.email // empty' 2>/dev/null); then
+              GH_EMAIL="${EMAIL_RAW}"
+          fi
           export CREATED_BY="${GH_EMAIL:-${ACTOR}}"
 
           # Build JSON payload matching the CLI's registerInMarketplace format
