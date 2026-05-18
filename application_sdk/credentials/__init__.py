@@ -45,9 +45,6 @@ from application_sdk.credentials.atlan import AtlanApiToken, AtlanOAuthClient
 from application_sdk.credentials.atlan_client import (
     AtlanClientMixin,
     create_async_atlan_client,
-    create_async_atlan_client_v9,
-    create_atlan_client,
-    create_atlan_client_v9,
 )
 from application_sdk.credentials.errors import (
     CredentialError,
@@ -124,9 +121,6 @@ __all__ = [
     "OAuthTokenError",
     # Atlan client
     "create_async_atlan_client",
-    "create_async_atlan_client_v9",
-    "create_atlan_client",
-    "create_atlan_client_v9",
     "AtlanClientMixin",
     # Resolver
     "CredentialResolver",
