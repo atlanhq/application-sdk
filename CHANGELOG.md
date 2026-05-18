@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.12.0 (May 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.11.0...v3.12.0
+
+### Features
+
+- contracts - add standard `status` to Output base (BLDX-1244) (#1767) (by @Aryamanz29 in [187b257](https://github.com/atlanhq/application-sdk/commit/187b257))
+- add --raise-prs mode to open migration PRs against consumers (#1771) (by @cmgrote in [a85acf5](https://github.com/atlanhq/application-sdk/commit/a85acf5))
+- credentials - inject x-atlan-app-* headers on pyatlan clients (BLDX-1246) (#1768) (by @Aryamanz29 in [9360d8b](https://github.com/atlanhq/application-sdk/commit/9360d8b))
+
+
 ## v3.11.0 (May 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.10.0...v3.11.0
