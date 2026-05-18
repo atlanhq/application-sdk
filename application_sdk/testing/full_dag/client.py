@@ -575,8 +575,10 @@ class AEWorkflowClient:
                 transient_streak += 1
                 if transient_streak >= max_transient_failures:
                     logger.error(
-                        "native-status failed %d times in a row — giving up",
+                        "native-status failed %d times in a row — giving up: %s",
                         transient_streak,
+                        e,
+                        exc_info=True,
                     )
                     raise
                 logger.warning(
@@ -585,6 +587,7 @@ class AEWorkflowClient:
                     max_transient_failures,
                     e,
                     interval_seconds,
+                    exc_info=True,
                 )
                 time.sleep(interval_seconds)
                 elapsed += interval_seconds
