@@ -31,8 +31,9 @@ Usage::
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
 from typing import Annotated, Any
+
+from pydantic import Field
 
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
@@ -46,13 +47,17 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-@dataclass
-class PreflightInput(Input):
+class PreflightInput(Input):  # type: ignore[call-arg]
     """Minimal input for the publish-preflight activity.
 
     Connectors typically pass their full workflow ``Input`` (which extends
     this class or carries these fields) rather than constructing a separate
     ``PreflightInput``.
+
+    Note: this is a plain Pydantic subclass — do not decorate with
+    ``@dataclass``.  The combination breaks Pydantic's internal
+    ``__pydantic_fields_set__`` initialisation and silently corrupts
+    default_factory handling on fields like ``checks``.
     """
 
     user_id: str = ""
@@ -68,14 +73,17 @@ class PreflightInput(Input):
     """Atlan connection qualifiedName (e.g. ``default/snowflake/1234567890``)."""
 
 
-@dataclass
-class PreflightOutput(Output, allow_unbounded_fields=True):
-    """Result of the publish-preflight activity."""
+class PreflightOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    """Result of the publish-preflight activity.
+
+    Plain Pydantic subclass — see :class:`PreflightInput` for why
+    ``@dataclass`` is intentionally NOT used here.
+    """
 
     passed: bool = True
     """True when all checks passed; False when at least one check failed."""
 
-    checks: Annotated[list[dict[str, Any]], MaxItems(20)] = field(default_factory=list)
+    checks: Annotated[list[dict[str, Any]], MaxItems(20)] = Field(default_factory=list)
     """Individual check results serialised as dicts for Temporal compatibility."""
 
     message: str = ""
