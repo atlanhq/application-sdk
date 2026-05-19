@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.0
-source-sha:    528d7f48c54990992053278dcef2a7488ce0e3ea
-source-date:   2026-05-19T13:19:36+01:00
+source-sha:    acb4f53f5c12535cca0d7cf1a552bb4eb37039c5
+source-date:   2026-05-19T19:48:24+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2816,7 +2816,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for transform tasks.
 - **Fields:**
   - `typename: str` `= ''` — **Deprecated** — kept for backward compatibility with existing
-  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated** — relative parquet file names under
+  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated and unused** — retained on the schema as a no-op
   - `chunk_start: int` `= 0` — **Deprecated** — chunk-offset hint used by the legacy
   - `raw_file: FileReference | None` — Durable singular ``FileReference`` to the matching
   - `raw_dir: FileReference | None` — Durable directory-shaped ``FileReference`` to a raw output
