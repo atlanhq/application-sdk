@@ -124,9 +124,29 @@ class StorageTier(StrEnum):
         return f"{base}/{uuid.uuid4().hex}/"
 
     def _file_ref_base(self, *, run_prefix: str = "", app_name: str = "") -> str:
-        """Return the base prefix under which ``file_refs/{uid}`` paths are stored."""
+        """Return the base prefix under which ``file_refs/{uid}`` paths are stored.
+
+        ``TRANSIENT`` uses *run_prefix* when one is available so that the
+        resulting storage key is tenant-scoped — production deployments
+        (Atlan blob-storage gateway) only permit writes under
+        ``artifacts/`` and ``persistent-artifacts/``. The activity
+        interceptor always supplies *run_prefix* via
+        ``persist_file_refs(..., output_path=build_output_path())``, so
+        in any real Temporal-driven workflow TRANSIENT refs land at
+        ``{run_prefix}/file_refs/{uid}``. The bare-prefix fallback is
+        kept for callers that legitimately have no run context (local
+        scripts, unit tests, ad-hoc utilities) — those run against
+        local stores with no path policy, so the bare prefix is
+        harmless there.
+
+        ``RETAINED`` continues to require *run_prefix*: it's a
+        contract-level invariant that RETAINED refs must be
+        run-scoped because they survive cleanup-at-end-of-run.
+        """
         if self is StorageTier.TRANSIENT:
-            return "file_refs"
+            # Use run-scoped prefix when available; fall back to bare
+            # ``file_refs`` for ad-hoc callers without a run context.
+            return f"{run_prefix}/file_refs" if run_prefix else "file_refs"
         if self is StorageTier.RETAINED:
             if not run_prefix:
                 raise RunPrefixRequiredError()
@@ -225,6 +245,8 @@ class FileReference(BaseModel, frozen=True):
     @staticmethod
     def from_local(
         path: str | Path,
+        *,
+        tier: StorageTier = StorageTier.TRANSIENT,
     ) -> FileReference:
         """Create an ephemeral FileReference from a local filesystem path.
 
@@ -235,10 +257,18 @@ class FileReference(BaseModel, frozen=True):
 
         Args:
             path: Local file or directory path.
+            tier: Storage lifecycle tier. Defaults to
+                :attr:`StorageTier.TRANSIENT` for one-off intermediary
+                files. Pass :attr:`StorageTier.RETAINED` when the ref
+                belongs to a workflow run and must land under the
+                run-scoped ``artifacts/`` prefix (this is what the
+                ``UploadInput`` / ``App.upload`` path uses by default
+                and what the Atlan blob-storage gateway permits in
+                production deployments).
 
         Returns:
             An ephemeral ``FileReference`` (``is_durable=False``) with
-            ``local_path`` set.
+            ``local_path`` and ``tier`` set.
         """
         p = Path(path) if not isinstance(path, Path) else path
         # Best-effort file_count computation. We swallow OSError so the
@@ -253,6 +283,7 @@ class FileReference(BaseModel, frozen=True):
         return FileReference(
             local_path=str(p),
             file_count=file_count,
+            tier=tier,
         )
 
 
