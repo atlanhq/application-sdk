@@ -8,7 +8,9 @@ input/output types.
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional
+import re
+
+from pydantic import field_validator
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.templates.contracts.sql_metadata import (
@@ -20,6 +22,49 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchSchemasOutput,
     FetchTablesOutput,
 )
+
+# BLDX-518: marker_timestamp is substituted into incremental SQL templates
+# via ``str.replace``, so untrusted input could carry SQL escape sequences
+# (the marker is sourced from a persistent file but can also be overridden
+# from the workflow input — see ``FetchIncrementalMarkerInput.existing_marker``).
+#
+# Accept either:
+#   * Empty string — signals "no marker, perform a full extraction".
+#   * ISO-8601 / RFC-3339 timestamp — date + time, optional fractional
+#     seconds, optional timezone offset. ``T`` or space between date and
+#     time is allowed to match the variants different sources emit.
+#
+# Anything else (including SQL escape chars) is rejected by the validator
+# regardless of whether the value came from object storage or a workflow
+# override.
+_ISO_TIMESTAMP_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$"
+)
+
+
+def _validate_marker_timestamp(value: str | None) -> str | None:
+    """Reject marker timestamps that don't match ISO-8601 / empty.
+
+    Empty / None passes through (no marker = full-extraction signal).
+    Anything else must match :data:`_ISO_TIMESTAMP_PATTERN`. Raises
+    ``ValueError`` so Pydantic surfaces it as ``ValidationError``.
+
+    Assumption: all SDK-produced markers are ISO-8601 timestamps or empty
+    strings, so adding this validator to Output contracts
+    (``FetchIncrementalMarkerOutput``, ``UpdateMarkerOutput``) is safe for
+    Temporal workflow replay — no well-formed history entry would be
+    rejected by this constraint.
+    """
+    if value is None or value == "":
+        return value
+    if not _ISO_TIMESTAMP_PATTERN.match(value):
+        raise ValueError(
+            f"marker_timestamp must be empty or an ISO-8601 / RFC-3339 timestamp "
+            f"(got {value!r}). Reject reason: prevents SQL injection via "
+            "templates that substitute the marker into a quoted literal."
+        )
+    return value
+
 
 # =============================================================================
 # IncrementalRunContext — local accumulator, NOT a Temporal payload
@@ -50,7 +95,7 @@ class IncrementalRunContext:
     prepone_marker_timestamp: bool = True
     prepone_marker_hours: int = 3
     # Set by fetch_incremental_marker
-    marker_timestamp: Optional[str] = None
+    marker_timestamp: str | None = None
     next_marker_timestamp: str = ""
     # Set by read_current_state
     current_state_available: bool = False
@@ -161,6 +206,11 @@ class IncrementalTaskInput(ExtractionTaskInput):
     column_chunk_size: int = 100000
     """Number of column records per output chunk file."""
 
+    @field_validator("marker_timestamp", mode="after")
+    @classmethod
+    def _validate_marker(cls, v: str) -> str:
+        return _validate_marker_timestamp(v) or ""
+
 
 # =============================================================================
 # Per-task incremental input types (inherit IncrementalTaskInput)
@@ -200,7 +250,7 @@ class FetchIncrementalMarkerInput(Input):
     application_name: str = ""
     """Application name for S3 path resolution."""
 
-    existing_marker: Optional[str] = None
+    existing_marker: str | None = None
     """Pre-existing marker value (e.g., from a manual workflow override)."""
 
     prepone_enabled: bool = True
@@ -208,6 +258,11 @@ class FetchIncrementalMarkerInput(Input):
 
     prepone_hours: float = 3.0
     """Hours to subtract from the marker when preponing is enabled."""
+
+    @field_validator("existing_marker", mode="after")
+    @classmethod
+    def _validate_existing_marker(cls, v: str | None) -> str | None:
+        return _validate_marker_timestamp(v)
 
 
 class FetchIncrementalMarkerOutput(Output):
@@ -218,6 +273,11 @@ class FetchIncrementalMarkerOutput(Output):
 
     next_marker_timestamp: str = ""
     """New marker timestamp generated for the current run."""
+
+    @field_validator("marker_timestamp", "next_marker_timestamp", mode="after")
+    @classmethod
+    def _validate_marker(cls, v: str) -> str:
+        return _validate_marker_timestamp(v) or ""
 
 
 # =============================================================================
@@ -354,6 +414,11 @@ class UpdateMarkerInput(Input):
     next_marker_timestamp: str = ""
     application_name: str = ""
 
+    @field_validator("next_marker_timestamp", mode="after")
+    @classmethod
+    def _validate_marker(cls, v: str) -> str:
+        return _validate_marker_timestamp(v) or ""
+
 
 class UpdateMarkerOutput(Output):
     """Output from the update_incremental_marker task."""
@@ -361,6 +426,11 @@ class UpdateMarkerOutput(Output):
     marker_written: bool = False
     marker_timestamp: str = ""
     s3_key: str = ""
+
+    @field_validator("marker_timestamp", mode="after")
+    @classmethod
+    def _validate_marker(cls, v: str) -> str:
+        return _validate_marker_timestamp(v) or ""
 
 
 # =============================================================================
