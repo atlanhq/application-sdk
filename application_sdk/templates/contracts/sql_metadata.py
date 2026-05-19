@@ -11,6 +11,10 @@ from typing import Annotated, Any
 import orjson
 from pydantic import Field, field_validator, model_validator
 
+from application_sdk.common.sql_filters import (
+    _SAFE_FILTER_PATTERN,
+    validate_filter_no_sql_injection,
+)
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.credentials.ref import CredentialRef
@@ -25,9 +29,12 @@ FilterMap = Annotated[
     MaxItems(100),
 ]
 
-# Disallow single quotes in temp_table_regex to prevent SQL injection when
-# values are substituted into SQL templates via _prepare_sql (str.replace).
-_SAFE_FILTER_PATTERN = r"^[^']*$"
+# Backward-compatible aliases: the deny-list moved to ``common.sql_filters``
+# in BLDX-518 so the same validation can be applied to raw-dict helper
+# callers (``prepare_query``, ``prepare_filters``, ``get_database_names``)
+# that bypass Pydantic. Keep the underscore-prefixed name re-exported so
+# any in-tree import path remains valid.
+_validate_filter_no_sql_injection = validate_filter_no_sql_injection
 
 
 def _coerce_filter_value(v: Any) -> FilterMap | str:
@@ -42,32 +49,6 @@ def _coerce_filter_value(v: Any) -> FilterMap | str:
         return ""
     if isinstance(v, list):
         return {".*": v}
-    return v
-
-
-def _validate_filter_no_sql_injection(v: FilterMap | str) -> FilterMap | str:
-    """Block single quotes in filter values to prevent SQL injection.
-
-    stdlib-interop: raises ValueError because callers wrap this in
-    Pydantic ``@field_validator``, which requires ValueError to surface as
-    ``ValidationError``. Do not migrate to ``InvalidInputError`` — Pydantic
-    only treats ValueError / AssertionError / PydanticCustomError as
-    validation failures.
-    """
-    if isinstance(v, str):
-        if "'" in v:
-            msg = f"Single quotes not allowed in filter value: {v}"
-            raise ValueError(msg)
-    elif isinstance(v, dict):
-        for key, values in v.items():
-            if "'" in key:
-                msg = f"Single quotes not allowed in filter key: {key}"
-                raise ValueError(msg)
-            if isinstance(values, list):
-                for val in values:
-                    if isinstance(val, str) and "'" in val:
-                        msg = f"Single quotes not allowed in filter value: {val}"
-                        raise ValueError(msg)
     return v
 
 

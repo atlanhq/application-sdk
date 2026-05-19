@@ -59,21 +59,44 @@ class TestFilterCoercion:
 
 
 class TestFilterSQLInjectionGuard:
-    """Single quotes blocked in filter values."""
+    """SQL-unsafe sequences blocked in filter values (BLDX-518 deny-list)."""
 
     def test_single_quote_in_string_rejected(self):
         payload = {"include_filter": "prefix'injection"}
-        with pytest.raises(ValueError, match="Single quotes not allowed"):
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             ExtractionInput.model_validate(payload)
 
     def test_single_quote_in_dict_key_rejected(self):
         payload = {"include_filter": {"db'; DROP TABLE--": ["^public$"]}}
-        with pytest.raises(ValueError, match="Single quotes not allowed"):
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             ExtractionInput.model_validate(payload)
 
     def test_single_quote_in_dict_value_rejected(self):
         payload = {"include_filter": {"^db$": ["schema'; DROP TABLE--"]}}
-        with pytest.raises(ValueError, match="Single quotes not allowed"):
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate(payload)
+
+    def test_semicolon_rejected(self):
+        # Statement separator — would let an attacker stack a second
+        # statement after the filter substitution.
+        payload = {"include_filter": "name; DROP TABLE users"}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence ';'"):
+            ExtractionInput.model_validate(payload)
+
+    def test_line_comment_rejected(self):
+        # SQL line comment eats the rest of the line.
+        payload = {"include_filter": "name-- comment"}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence '--'"):
+            ExtractionInput.model_validate(payload)
+
+    def test_block_comment_open_rejected(self):
+        payload = {"include_filter": "name/* injected */"}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence '/\*'"):
+            ExtractionInput.model_validate(payload)
+
+    def test_null_byte_rejected(self):
+        payload = {"include_filter": "name\x00trailing"}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             ExtractionInput.model_validate(payload)
 
     def test_clean_string_passes(self):
@@ -85,6 +108,14 @@ class TestFilterSQLInjectionGuard:
             {"include_filter": {"^prod$": ["^analytics$"]}}
         )
         assert result.include_filter == {"^prod$": ["^analytics$"]}
+
+    def test_regex_metachars_still_allowed(self):
+        # The deny-list must not over-block legitimate regex syntax —
+        # ``^``, ``$``, ``.``, ``*``, ``+``, ``?``, ``|``, ``()``, ``[]``,
+        # ``\``, ``{}``, and single ``-`` all stay legal.
+        payload = {"include_filter": r"^(prod|stage)_db\.[a-z]+(\.bak)?$"}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == r"^(prod|stage)_db\.[a-z]+(\.bak)?$"
 
 
 class TestExtractionTaskInputFilters:
