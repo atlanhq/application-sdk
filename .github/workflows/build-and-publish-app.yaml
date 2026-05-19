@@ -66,9 +66,10 @@ on:
         type: string
         default: ""
       unit_tests_workflow_file:
-        description: "Filename of the workflow in the caller's repo that runs the app's unit tests (e.g. 'unit-tests.yml', 'tests.yml'). The gate looks for an existing successful run of this workflow on the publish SHA; if none is found, it dispatches the workflow on the publish ref and waits for the new run. The target workflow MUST declare 'workflow_dispatch:' in its 'on:' block. See docs/standards/unit-tests-gate.md."
-        required: true
+        description: "Filename of the workflow in the caller's repo that runs the app's unit tests (e.g. 'unit-tests.yml', 'tests.yml'). When unset (default), the gate is skipped entirely — apps onboard at their pace and existing callers stay unaffected. When set, the gate looks for an existing successful run of this workflow on the publish SHA; if none is found, it dispatches the workflow on the publish ref and waits for the new run. The target workflow MUST declare 'workflow_dispatch:' in its 'on:' block. See docs/standards/unit-tests-gate.md."
+        required: false
         type: string
+        default: ""
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -92,7 +93,8 @@ jobs:
   # 'all'-channel releases reach every production tenant, so they MUST come
   # from the protected `main` branch. Fail here (before the multi-arch build
   # spends ~10 min) when channel=='all' and the build ref is not main.
-  # Only runs when `publish: true` — build-only invocations are unaffected.
+  # Only runs when `publish: true` AND the caller has set
+  # `unit_tests_workflow_file` — apps that have not onboarded skip the gate.
   # Beta, staging, and tenant-targeted publishes are unrestricted.
   validate-channel:
     name: Validate Channel + Branch
@@ -198,10 +200,11 @@ jobs:
   #   3. Run unit tests and exit non-zero on test/coverage failure.
   # See docs/standards/unit-tests-gate.md.
   #
-  # Only runs when `publish: true` — build-only invocations are unaffected.
+  # Only runs when `publish: true` AND the caller has set
+  # `unit_tests_workflow_file` — apps that have not onboarded skip the gate.
   unit-tests-gate:
     name: Unit-tests gate
-    if: inputs.publish
+    if: inputs.publish && inputs.unit_tests_workflow_file != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
