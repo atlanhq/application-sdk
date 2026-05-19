@@ -382,7 +382,11 @@ def build_ae_payload(
         ``/api/service/package-workflows?submit=true``.
     """
     if mode is RunMode.AGENT and agent is None:
-        raise ValueError("agent mode requires an AgentSpec")
+        from application_sdk.testing.full_dag._errors import (  # noqa: PLC0415
+            AgentSpecRequiredError,
+        )
+
+        raise AgentSpecRequiredError()
 
     label_key = f"orchestration.atlan.com/default-{connector_short_name}-{run_id}"
     ae_workflow_name = f"atlan-{connector_short_name}-{run_id}"

@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 _VALIDATED_ASYNC_CLIENT_KEY = "validated_async_atlan_client"
 
 
-def _app_request_headers(context: "AppContext | None") -> dict[str, str]:
+def _app_request_headers(context: AppContext | None) -> dict[str, str]:
     """Return SDK-side ``x-atlan-app-*`` headers for a pyatlan client.
 
     pyatlan_v9 already injects ``x-atlan-agent`` / ``x-atlan-agent-id`` /
@@ -65,7 +65,7 @@ def _app_request_headers(context: "AppContext | None") -> dict[str, str]:
     return headers
 
 
-def _apply_app_headers(client: "AsyncAtlanClient", headers: dict[str, str]) -> None:
+def _apply_app_headers(client: AsyncAtlanClient, headers: dict[str, str]) -> None:
     """Best-effort attach app-identification headers to a pyatlan_v9 client.
 
     :class:`pyatlan_v9.client.aio.AsyncAtlanClient` exposes
@@ -99,10 +99,10 @@ def _apply_app_headers(client: "AsyncAtlanClient", headers: dict[str, str]) -> N
 
 
 def create_async_atlan_client(
-    cred: "Credential",
+    cred: Credential,
     *,
     extra_headers: dict[str, str] | None = None,
-) -> "AsyncAtlanClient":
+) -> AsyncAtlanClient:
     """Create a pyatlan_v9 AsyncAtlanClient from a resolved Atlan credential.
 
     The SDK standardises on the async + v9 pyatlan surface: msgspec-based,
@@ -124,7 +124,7 @@ def create_async_atlan_client(
         given credential.
 
     Raises:
-        TypeError: If ``cred`` is not a supported Atlan credential type.
+        AtlanCredentialTypeError: If ``cred`` is not a supported Atlan credential type.
     """
     from pyatlan_v9.client.aio import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
         AsyncAtlanClient,
@@ -153,10 +153,11 @@ def create_async_atlan_client(
             oauth_client_secret=cred.client_secret,
         )
     else:
-        raise TypeError(
-            f"Unsupported Atlan credential type: {type(cred).__name__}. "
-            "Expected AtlanApiToken or AtlanOAuthClient."
+        from application_sdk.credentials.errors import (  # noqa: PLC0415
+            AtlanCredentialTypeError,
         )
+
+        raise AtlanCredentialTypeError()
 
     if extra_headers:
         _apply_app_headers(client, extra_headers)
@@ -176,8 +177,8 @@ class AtlanClientMixin:
     """
 
     async def get_or_create_async_atlan_client(
-        self, credential: "CredentialRef"
-    ) -> "AsyncAtlanClient":
+        self, credential: CredentialRef
+    ) -> AsyncAtlanClient:
         """Return a cached AsyncAtlanClient for the given credential ref.
 
         Lookup order:

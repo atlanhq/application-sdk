@@ -114,28 +114,28 @@ class TestRetryConfig:
 
 
 class TestLogObstoreConfig:
-    def test_logs_provider_and_options_at_info_level(self, caplog) -> None:
-        with caplog.at_level("INFO", logger="application_sdk.storage._obstore_config"):
+    def test_logs_provider_and_options_at_info_level(self) -> None:
+        with patch("application_sdk.storage._obstore_config.logger") as mock_logger:
             log_obstore_config(
                 "s3",
                 client_options={"timeout": "30m"},
                 retry_config={"max_retries": 5},
             )
-        assert any(
-            r.__dict__.get("obstore_provider") == "s3" for r in caplog.records
-        ), "expected structured 'obstore_provider' field on the log record"
-        assert any(
-            "30m" in r.getMessage() for r in caplog.records
-        ), "expected timeout value to appear in the human-readable message"
+        mock_logger.info.assert_called_once()
+        fmt, *args = mock_logger.info.call_args.args
+        formatted = fmt % tuple(args)
+        assert "s3" in formatted
+        assert "30m" in formatted
 
-    def test_logs_default_label_when_retry_config_is_none(self, caplog) -> None:
-        with caplog.at_level("INFO", logger="application_sdk.storage._obstore_config"):
+    def test_logs_default_label_when_retry_config_is_none(self) -> None:
+        with patch("application_sdk.storage._obstore_config.logger") as mock_logger:
             log_obstore_config("gcs", client_options={}, retry_config=None)
         # The default banner makes the next operator's RCA easier — they can
         # see the actual retry budget without grep'ing obstore source.
-        assert any(
-            "default(max_retries=10" in r.getMessage() for r in caplog.records
-        ), "expected the default-label hint in the log message"
+        mock_logger.info.assert_called_once()
+        fmt, *args = mock_logger.info.call_args.args
+        formatted = fmt % tuple(args)
+        assert "default(max_retries=10" in formatted
 
 
 # ---------------------------------------------------------------------------

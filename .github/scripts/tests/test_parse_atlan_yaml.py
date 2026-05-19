@@ -259,12 +259,20 @@ class TestParse:
         result = parse(str(yaml_file), str(tmp_path / "missing.lock"))
         assert result["release_model"] == "cd"
 
-    def test_release_model_versioned(self, tmp_path: Path) -> None:
+    def test_release_model_semver(self, tmp_path: Path) -> None:
+        yaml_file = _write(
+            tmp_path, "atlan.yaml", MINIMAL_YAML + "release_model: semver\n"
+        )
+        result = parse(str(yaml_file), str(tmp_path / "missing.lock"))
+        assert result["release_model"] == "semver"
+
+    def test_release_model_versioned_alias_normalised(self, tmp_path: Path) -> None:
+        # "versioned" is a deprecated alias — parser normalises it to "semver".
         yaml_file = _write(
             tmp_path, "atlan.yaml", MINIMAL_YAML + "release_model: versioned\n"
         )
         result = parse(str(yaml_file), str(tmp_path / "missing.lock"))
-        assert result["release_model"] == "versioned"
+        assert result["release_model"] == "semver"
 
     def test_release_model_cd_explicit(self, tmp_path: Path) -> None:
         yaml_file = _write(tmp_path, "atlan.yaml", MINIMAL_YAML + "release_model: cd\n")

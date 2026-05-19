@@ -104,11 +104,11 @@ class DaprStateStore:
         Note: Not all Dapr state stores support listing keys.
         This may raise NotImplementedError for some backends.
         """
-        # Dapr doesn't have a native list operation for all stores
-        # This would need to be implemented per-backend
-        raise NotImplementedError(
-            "Key listing is not supported by all Dapr state stores"
+        from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415 — avoid circular import on module load
+            DaprListKeysUnsupportedError,
         )
+
+        raise DaprListKeysUnsupportedError()
 
 
 class DaprSecretStore:

@@ -55,6 +55,12 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.full_dag._errors import (
+    ManifestDagMissingError,
+    ManifestFileNotFoundError,
+    MissingHarnessClassAttrError,
+    MissingHarnessEnvError,
+)
 from application_sdk.testing.full_dag.client import AEWorkflowClient, DAGRunResult
 from application_sdk.testing.full_dag.payload import (
     AgentSpec,
@@ -255,20 +261,23 @@ class BaseFullDAGE2ETest:
             "argo_template_name",
         ):
             if not getattr(type(self), required, ""):
-                raise RuntimeError(
-                    f"{type(self).__name__}: class attribute '{required}' must be set"
+                raise MissingHarnessClassAttrError(
+                    message=f"{type(self).__name__}: class attribute '{required}' must be set",
+                    field=required,
                 )
 
         tenant_url = os.environ.get("ATLAN_BASE_URL", "").rstrip("/")
         api_token = os.environ.get("ATLAN_API_KEY", "")
         if not tenant_url or not api_token:
-            raise RuntimeError(
-                "Full-DAG e2e harness requires ATLAN_BASE_URL + ATLAN_API_KEY. "
-                "ATLAN_API_KEY is mandatory because /automation/api/v1/* (AE "
-                "workflow management) requires the realm-admin resource_access "
-                "role that only the API-key's service account carries — "
-                "verified via direct probe: OAuth returns AE-COMMON-500-01 "
-                "while API key returns 200."
+            raise MissingHarnessEnvError(
+                message=(
+                    "Full-DAG e2e harness requires ATLAN_BASE_URL + ATLAN_API_KEY. "
+                    "ATLAN_API_KEY is mandatory because /automation/api/v1/* (AE "
+                    "workflow management) requires the realm-admin resource_access "
+                    "role that only the API-key's service account carries — "
+                    "verified via direct probe: OAuth returns AE-COMMON-500-01 "
+                    "while API key returns 200."
+                )
             )
 
         # OAuth pair is OPTIONAL and used only for pyatlan asset queries
@@ -321,13 +330,13 @@ class BaseFullDAGE2ETest:
         Tier 5 (direct mode): values are sent verbatim to the prod pod
         as credential overrides; must work as-is.
         """
-        raise NotImplementedError
+        raise NotImplementedError  # stdlib-interop: abstract method — subclass must override
 
     def agent_spec(self) -> AgentSpec | None:
         """Agent identity (tier 4 only). Return None for direct mode."""
         if self.mode is RunMode.DIRECT:
             return None
-        raise NotImplementedError
+        raise NotImplementedError  # stdlib-interop: abstract method — subclass must override for agent mode
 
     def connection_spec(self) -> ConnectionSpec:
         """Where the resulting Atlas Connection will live.
@@ -388,18 +397,21 @@ class BaseFullDAGE2ETest:
         if not path.is_absolute():
             path = Path.cwd() / path
         if not path.is_file():
-            raise RuntimeError(
-                f"Manifest file not found at {path} — set `manifest_path` on "
-                "the test class to the location of the connector's "
-                "manifest.json, or set it to '' to fall back to the "
-                "hand-crafted seed DAG."
+            raise ManifestFileNotFoundError(
+                message=(
+                    f"Manifest file not found at {path} — set `manifest_path` on "
+                    "the test class to the location of the connector's "
+                    "manifest.json, or set it to '' to fall back to the "
+                    "hand-crafted seed DAG."
+                ),
+                resource_identifier=str(path),
             )
         manifest = json.loads(path.read_text())
         dag = manifest.get("dag")
         if not isinstance(dag, dict) or not dag:
-            raise RuntimeError(
-                f"Manifest at {path} has no top-level `dag` object — "
-                "can't use as a seed DAG."
+            raise ManifestDagMissingError(
+                message=f"Manifest at {path} has no top-level `dag` object — can't use as a seed DAG.",
+                location=str(path),
             )
 
         def _sub_queue(node_name: str, raw: str) -> str:

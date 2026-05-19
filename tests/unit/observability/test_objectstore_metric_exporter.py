@@ -6,7 +6,14 @@ import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics import (
+    Counter,
+    Histogram,
+    MeterProvider,
+    ObservableCounter,
+    ObservableUpDownCounter,
+    UpDownCounter,
+)
 from opentelemetry.sdk.metrics.export import (
     AggregationTemporality,
     InMemoryMetricReader,
@@ -16,6 +23,9 @@ from opentelemetry.sdk.resources import Resource
 from application_sdk.observability._objectstore_metric_exporter import (
     ObjectStoreMetricExporter,
     _serialize_metrics_data,
+)
+from application_sdk.observability._objectstore_metric_reader import (
+    create_objectstore_metric_reader,
 )
 
 
@@ -204,8 +214,24 @@ class TestExport:
 class TestExporterTemporality:
     """Verify delta temporality preference."""
 
-    def test_preferred_temporality_is_delta_for_sum(self) -> None:
-        from opentelemetry.sdk.metrics.export import Sum
-
+    def test_preferred_temporality_uses_otel_instrument_classes(self) -> None:
         e = ObjectStoreMetricExporter()
-        assert e._preferred_temporality.get(Sum) == AggregationTemporality.DELTA
+        assert e._preferred_temporality.get(Counter) == AggregationTemporality.DELTA
+        assert e._preferred_temporality.get(UpDownCounter) == (
+            AggregationTemporality.DELTA
+        )
+        assert e._preferred_temporality.get(ObservableCounter) == (
+            AggregationTemporality.DELTA
+        )
+        assert e._preferred_temporality.get(ObservableUpDownCounter) == (
+            AggregationTemporality.DELTA
+        )
+        assert e._preferred_temporality.get(Histogram) == AggregationTemporality.DELTA
+
+    def test_reader_registers_with_real_meter_provider(self) -> None:
+        reader = create_objectstore_metric_reader(export_interval_millis=3_600_000)
+        provider = MeterProvider(metric_readers=[reader])
+        try:
+            assert provider.get_meter("test")
+        finally:
+            provider.shutdown()

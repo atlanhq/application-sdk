@@ -24,8 +24,6 @@ from application_sdk.constants import (
     TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
-from application_sdk.storage import delete, upload_file
-from application_sdk.storage.binding import create_store_from_binding
 
 # --- Path configuration ---
 # Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
@@ -84,6 +82,10 @@ class AtlanObservability(Generic[T], ABC):
     @classmethod
     def _get_deployment_store(cls):
         if cls._deployment_store is None:
+            from application_sdk.storage.binding import (  # noqa: PLC0415
+                create_store_from_binding,
+            )
+
             cls._deployment_store = create_store_from_binding(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=cls._components_dir(),
@@ -93,6 +95,10 @@ class AtlanObservability(Generic[T], ABC):
     @classmethod
     def _get_upstream_store(cls):
         if cls._upstream_store is None:
+            from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+                create_store_from_binding,
+            )
+
             cls._upstream_store = create_store_from_binding(
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=cls._components_dir(),
@@ -278,6 +284,8 @@ class AtlanObservability(Generic[T], ABC):
         """
         if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
             return
+        from application_sdk.storage import upload_file  # noqa: PLC0415
+
         # File I/O is restricted inside Temporal's workflow sandbox — skip the
         # store sink there; records are still exported via OTLP/console.
         try:
@@ -288,7 +296,7 @@ class AtlanObservability(Generic[T], ABC):
             if _wf_unsafe.in_sandbox():
                 return
         except ImportError:
-            pass
+            pass  # optional: workflow sandbox check unavailable outside Temporal worker
         try:
             # Group records by partition using record's own timestamp
             partition_records: dict[str, list[dict[str, Any]]] = {}
@@ -426,6 +434,8 @@ class AtlanObservability(Generic[T], ABC):
         - Syncs changes with object store
         """
         try:
+            from application_sdk.storage import delete  # noqa: PLC0415
+
             # Use local subdir (same as _get_partition_path)
             signal_type = self._get_signal_type()
             local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal_type, f"{_OBS_MODE}/other")

@@ -17,10 +17,9 @@ TableScope helper functions:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, Optional, Set
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.models import EntityType, TableScope
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnection,
@@ -53,7 +52,7 @@ def add_table_to_scope(scope: TableScope, qualified_name: str, state: str) -> No
     scope.table_states[qualified_name] = state
 
 
-def get_table_state(scope: TableScope, qualified_name: str) -> Optional[str]:
+def get_table_state(scope: TableScope, qualified_name: str) -> str | None:
     """Get the incremental state for a table.
 
     Uses RocksDB's key_may_exist() for fast negative lookups when available.
@@ -115,7 +114,7 @@ def close_scope(scope: TableScope) -> None:
 def get_current_table_scope(
     transformed_dir: Path,
     conn: DuckDBConnection = None,
-) -> Optional[TableScope]:
+) -> TableScope | None:
     """Get current table scope within the current run's include/exclude filters.
 
     Args:
@@ -193,7 +192,11 @@ def get_current_table_scope(
 
     except Exception as e:
         close_scope(scope)
-        raise rewrap(e, "Failed to load table scope") from e
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+            TableScopeLoadError,
+        )
+
+        raise TableScopeLoadError(cause=e) from e
 
     return scope
 
@@ -201,7 +204,7 @@ def get_current_table_scope(
 def get_table_qns_from_columns(
     column_dir: Path,
     conn: DuckDBConnection = None,
-) -> Optional[Set[str]]:
+) -> set[str] | None:
     """Extract table qualified names from column files in the given directory.
 
     Args:
