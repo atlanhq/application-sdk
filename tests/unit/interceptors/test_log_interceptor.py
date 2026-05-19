@@ -425,20 +425,44 @@ class TestLogWorkflowInboundInterceptor:
         assert kwargs["failure.audience"] == "USER"
         assert kwargs["failure.code"] == "INVALID_INPUT"
 
-    async def test_generates_new_correlation_id_when_no_headers_no_memo(
+    async def test_derives_correlation_id_from_workflow_id_when_no_headers_no_memo(
         self, interceptor
     ):
+        # Priority 3 (top-level workflow, no memo, no header) must derive the
+        # correlation_id from workflow.info().workflow_id so it stays stable
+        # across replays — uuid4() would mint a fresh value on every replay
+        # and desync logs / outbound headers from the values recorded on the
+        # first run.
         with patch(
             "application_sdk.execution._temporal.interceptors.log.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
-            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.info.return_value = MockWorkflowInfo(workflow_id="wf-stable-42")
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(MockExecuteWorkflowInput(headers={}))
 
-        assert interceptor._correlation_id != ""
-        # Should look like a UUID (36 chars with hyphens)
-        assert len(interceptor._correlation_id) == 36
+        assert interceptor._correlation_id == "wf-stable-42"
+
+    async def test_priority_3_is_stable_across_replays(self, mock_next):
+        # Two fresh interceptor instances simulating two worker pickups of
+        # the same execution (same workflow_id from history) must agree on
+        # the priority-3 correlation_id — once on first run, once on replay.
+        first = _LogWorkflowInboundInterceptor(mock_next)
+        second = _LogWorkflowInboundInterceptor(mock_next)
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.info.return_value = MockWorkflowInfo(workflow_id="wf-stable-99")
+            mock_wf.memo.return_value = {}
+
+            mock_wf.unsafe.is_replaying.return_value = False
+            await first.execute_workflow(MockExecuteWorkflowInput(headers={}))
+
+            mock_wf.unsafe.is_replaying.return_value = True
+            await second.execute_workflow(MockExecuteWorkflowInput(headers={}))
+
+        assert first._correlation_id == second._correlation_id == "wf-stable-99"
 
     async def test_restores_correlation_id_from_memo(self, interceptor):
         with patch(

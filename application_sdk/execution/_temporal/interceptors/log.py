@@ -22,7 +22,6 @@ from __future__ import annotations
 import dataclasses
 import time
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 from temporalio import activity, workflow
 from temporalio.converter import default as default_converter
@@ -217,8 +216,13 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "Failed to read correlation header in workflow", exc_info=True
             )
 
-        # Priority 3: top-level workflow — generate a fresh correlation ID.
-        return str(uuid4())
+        # Priority 3: top-level workflow — derive correlation_id from the
+        # workflow_id. workflow.info().workflow_id is recorded in the
+        # workflow-execution-started history event and is therefore stable
+        # across replays of the same execution, unlike uuid4() which would
+        # mint a fresh value each replay and desync logs / outbound headers
+        # from the values recorded on the first run.
+        return workflow.info().workflow_id or ""
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         # State setup (ContextVars + interceptor-instance attrs) must run on
