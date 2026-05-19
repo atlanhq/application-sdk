@@ -413,7 +413,7 @@ async def upload_file(
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
-        logging.INFO,
+        logging.DEBUG,
         "upload",
         key,
         outcome="success",
@@ -544,7 +544,7 @@ async def download_file(
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
-        logging.INFO,
+        logging.DEBUG,
         "download",
         key,
         outcome="success",
