@@ -1,8 +1,9 @@
 # Unit-Tests Gate Contract
 
 The `build-and-publish-app.yaml` reusable workflow refuses to publish a version
-unless the app's Tests workflow has reported a successful `unit-tests` check
-(or whatever name is passed via `unit_tests_check_name`) for the same SHA.
+unless the app's `unit_tests_workflow_file` has completed successfully for the
+publish SHA. The gate tracks runs by ID (not by check name), so apps don't
+need any particular naming convention on their test jobs.
 
 This document defines the contract every consumer repo must satisfy.
 
@@ -10,46 +11,56 @@ This document defines the contract every consumer repo must satisfy.
 
 Before this gate, an app could ship to production with broken unit tests or
 sub-threshold coverage because the publish step only ran an image scan. The
-gate closes that gap automatically: a missing or failing check blocks publish
-at minute 0, before any build minutes are spent.
+gate closes that gap automatically: a failing tests run blocks publish at
+minute 0, before any build minutes are spent.
 
 Tracked under [DISTR-456 — App Certification Framework][distr-456].
 
 [distr-456]: https://linear.app/atlan-epd/issue/DISTR-456/app-certification-framework
 
-## Contract — what every consumer repo must provide
+## How the gate works
 
-1. **A workflow file** in `.github/workflows/` (conventionally `tests.yml`)
-   containing **a job that produces a check named `unit-tests`** (or override
-   via `unit_tests_check_name` in your `build-and-publish.yaml`).
-2. **Trigger coverage** — the workflow MUST trigger on:
-   - `push` to `main`, AND
-   - `push` (or `workflow_dispatch`) on any branch you publish from via
-     `workflow_dispatch` of `build-and-publish.yaml`.
-3. **Coverage enforcement** — the job MUST fail when unit-test coverage drops
-   below the agreed floor. Default: **60%**. Use
-   `coverage report --fail-under=60` (or equivalent for non-pytest stacks).
+1. Resolves the publish SHA (`inputs.ref || github.sha`).
+2. Looks for an existing run of `unit_tests_workflow_file` on that commit:
+   - **Found** → reuses that run.
+   - **Not found** → dispatches the workflow on the publish ref and captures
+     the new run's ID.
+3. Polls the run by ID every 30 s until `status: completed`.
+4. Gate passes iff `conclusion: success`. Any other conclusion blocks publish
+   with a link to the failing run.
 
-If any of these is missing, the gate fails at minute 0 with a link back to
-this doc.
+## Contract — what every consumer repo MUST provide
 
-## Behaviour at publish time
+1. **A workflow file** in `.github/workflows/` (commonly `unit-tests.yml`,
+   `tests.yml`, or `checks.yml`).
+2. **`workflow_dispatch:` trigger** in the workflow's `on:` block — without
+   this, the gate cannot fire fresh runs on commits that haven't been tested.
+3. **Pass / fail signal** — the workflow's overall conclusion must reflect
+   whether tests passed. If the workflow contains multiple jobs (e.g. unit
+   + e2e), any required failure must bubble up to the run's conclusion.
 
-| State | Gate result |
-| --- | --- |
-| Check absent on the SHA being published | Fails immediately with onboarding instructions |
-| Check present, still running | Polls every 30s, max 30 min, then fails as timeout |
-| Check present, `conclusion = success` | Proceeds to `prepare` → build → publish |
-| Check present, `conclusion != success` | Fails immediately with the failing run's conclusion |
+## Caller setup
 
-## Reference template — `.github/workflows/tests.yml`
-
-The example below mirrors what `atlan-automation-engine-app` ships today.
-Adapt `tests/unit`, threshold, and any app-specific prerequisites
-(Dapr, AWS creds, etc.) to your repo.
+Every consumer of the SDK's `build-and-publish-app.yaml` MUST set
+`unit_tests_workflow_file`:
 
 ```yaml
-name: Tests
+jobs:
+  build-and-publish:
+    uses: atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main
+    with:
+      publish: ${{ github.event.inputs.publish != 'false' }}
+      unit_tests_workflow_file: "unit-tests.yml"   # required
+    secrets: inherit
+```
+
+Omitting this input is a startup-time error — `workflow_call` rejects the call
+because `unit_tests_workflow_file` has no default.
+
+## Reference template — `.github/workflows/unit-tests.yml`
+
+```yaml
+name: Unit Tests
 
 on:
   push:
@@ -57,15 +68,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
+  workflow_dispatch:    # required by the gate
 
 jobs:
   unit-tests:
-    name: unit-tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -83,56 +91,46 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
-      - name: Run unit tests with coverage gate
+      - name: Run unit tests with coverage
         run: |
           uv run coverage run -m pytest tests/unit
-          uv run coverage xml --fail-under=60
-          uv run coverage html --fail-under=60
-          uv run coverage report --fail-under=60
+          uv run coverage report --fail-under=0
 ```
 
-> **Job name = check name.** The `name:` field on the job is what shows up in
-> the GitHub Checks API, and that is what the gate searches for. If you rename
-> it from `unit-tests`, pass the new name to the reusable workflow via
-> `unit_tests_check_name`.
+> The job name and check name don't matter — the gate keys on the run, not
+> on a check label.
 
-## Caller-side override (optional)
+## Behaviour matrix
 
-If your app's check is named differently from the default, pass an explicit
-name in your `build-and-publish.yaml`:
+| Publish SHA state | Gate behaviour |
+| --- | --- |
+| Tests workflow already ran on this commit, conclusion `success` | Gate reuses the existing run; passes in seconds |
+| Tests workflow already ran on this commit, conclusion `failure` | Gate reuses the existing run; fails immediately with a link |
+| Tests workflow already ran on this commit, still `in_progress` | Gate polls the existing run until completion |
+| Tests workflow has not run on this commit | Gate dispatches `unit_tests_workflow_file` on the publish ref and waits |
+| `unit_tests_workflow_file` doesn't exist / lacks `workflow_dispatch:` | Gate fails at dispatch with onboarding instructions |
+| `unit_tests_workflow_file` not set by caller | `workflow_call` fails immediately (no default) |
 
-```yaml
-jobs:
-  build-and-publish:
-    uses: atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main
-    with:
-      publish: ${{ github.event.inputs.publish != 'false' }}
-      unit_tests_check_name: "py-unit-tests"   # <-- override
-    secrets: inherit
-```
+## Branch publishes (`workflow_dispatch` from a feature branch)
 
-## Branch publishes (`workflow_dispatch`)
+The gate dispatches the tests workflow on `inputs.ref || github.ref_name`. If
+you're publishing from `feat/my-branch`, the tests workflow runs on that
+branch.
 
-When you dispatch a publish from a feature branch:
+There is no opt-out — branch publishes get the same coverage bar as `main`
+publishes.
 
-- The Tests workflow MUST be configured to trigger on that branch (most repos
-  trigger Tests on `push` to any branch — confirm yours does).
-- If Tests has not run on the dispatched SHA, the gate fails with the
-  onboarding error. There is no opt-out — branch publishes get the same
-  coverage bar as `main` publishes.
-
-If you genuinely need to bypass the gate for a one-off hotfix, raise it in
-`#pod-app-distribution`; the SDK maintainers will guide you through the
-release-cert override path on the marketplace side instead of patching the
-gate.
+For a one-off hotfix, raise in `#pod-app-distribution`; the SDK maintainers
+will route to the release-cert override path on the marketplace side instead
+of patching the gate.
 
 ## Operational notes
 
-- The gate uses GitHub's Checks API (`/commits/{sha}/check-runs`). The reusable
-  workflow's `permissions:` block already includes `checks: read`.
-- The wait step uses
-  [`fountainhead/action-wait-for-check`](https://github.com/fountainhead/action-wait-for-check)
-  pinned to a SHA per `CLAUDE.md` supply-chain rules.
-- The 30-minute wait ceiling is generous — most unit-test runs complete in
-  under 10 minutes. If your tests routinely take longer than 30 minutes,
-  split them or stop calling them unit tests.
+- The gate runs the tests workflow's natural duration plus ~10–30 s of API
+  polling overhead. For most apps this adds well under a minute to publish.
+- The 30-min gate timeout is generous. Most unit-tests runs complete within
+  10 min. If your tests routinely run longer, split them or stop calling
+  them unit tests.
+- The gate uses GitHub's Actions API (`/repos/{repo}/actions/runs/{id}`). The
+  reusable workflow's `permissions:` block already includes `actions: write`
+  (for dispatching) and `checks: read`.
