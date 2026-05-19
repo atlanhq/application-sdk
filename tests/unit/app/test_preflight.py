@@ -15,10 +15,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from application_sdk.app.preflight import (
-    PreflightOutput,
-    PublishPreflightMixin,
-)
+from application_sdk.app.preflight import PreflightOutput, PublishPreflightMixin
 from application_sdk.contracts.base import Input
 
 # ---------------------------------------------------------------------------

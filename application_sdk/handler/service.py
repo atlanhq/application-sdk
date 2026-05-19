@@ -44,8 +44,9 @@ from uuid import uuid4
 
 import orjson
 import temporalio.service
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException
 from fastapi import Path as PathParam
+from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
@@ -583,7 +584,9 @@ def create_app_handler_service(
         try:
             auth_input = AuthInput.model_validate(body)
         except Exception:
-            raise HTTPException(status_code=422, detail="Invalid auth request body") from None
+            raise HTTPException(
+                status_code=422, detail="Invalid auth request body"
+            ) from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
@@ -660,7 +663,9 @@ def create_app_handler_service(
         try:
             preflight_input = PreflightInput.model_validate(body)
         except Exception:
-            raise HTTPException(status_code=422, detail="Invalid preflight request body") from None
+            raise HTTPException(
+                status_code=422, detail="Invalid preflight request body"
+            ) from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in preflight_input.credentials
@@ -777,7 +782,9 @@ def create_app_handler_service(
         try:
             metadata_input = MetadataInput.model_validate(body)
         except Exception:
-            raise HTTPException(status_code=422, detail="Invalid metadata request body") from None
+            raise HTTPException(
+                status_code=422, detail="Invalid metadata request body"
+            ) from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in metadata_input.credentials

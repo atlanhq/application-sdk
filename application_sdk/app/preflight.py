@@ -116,7 +116,7 @@ async def _get_service_token() -> str:
     )
     from application_sdk.credentials.oauth import OAuthTokenService  # noqa: PLC0415
     from application_sdk.credentials.types import OAuthClientCredential  # noqa: PLC0415
-    from application_sdk.infrastructure.secrets import (
+    from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — cold path
         get_deployment_secret,
     )
 
@@ -181,14 +181,12 @@ class PublishPreflightMixin:
                 error message includes the first failing check's detail so the
                 workflow failure is actionable from the Temporal UI.
         """
-        from application_sdk.errors.leaves import (
+        from application_sdk.errors.leaves import (  # noqa: PLC0415 — cold path
             AppPermissionDeniedError as AppPermissionError,
         )
 
         user_id = getattr(input, "user_id", "") or ""
-        connection_qname = (
-            getattr(input, "connection_qualified_name", "") or ""
-        )
+        connection_qname = getattr(input, "connection_qualified_name", "") or ""
         heracles_url = os.environ.get(
             "ATLAN_INTERNAL_HERACLES_URL",
             os.environ.get("HERACLES_URL", "http://localhost:5201"),
@@ -217,26 +215,26 @@ class PublishPreflightMixin:
             )
 
         token_url = os.environ.get("ATLAN_AUTH_URL", "")
-        client_id_key = os.environ.get("ATLAN_AUTH_CLIENT_ID_KEY", "ATLAN_AUTH_CLIENT_ID")
+        client_id_key = os.environ.get(
+            "ATLAN_AUTH_CLIENT_ID_KEY", "ATLAN_AUTH_CLIENT_ID"
+        )
         client_secret_key = os.environ.get(
             "ATLAN_AUTH_CLIENT_SECRET_KEY", "ATLAN_AUTH_CLIENT_SECRET"
         )
 
-        from application_sdk.infrastructure.secrets import (
+        from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — cold path
             get_deployment_secret,
         )
 
         # Same dual-source pattern as _get_service_token: Dapr secret store
         # when available, env var fallback when not (e.g. on app pods that
         # don't ship the deployment-secret-store Dapr component).
-        client_id = (
-            await get_deployment_secret(client_id_key)
-            or os.environ.get(client_id_key, "")
+        client_id = await get_deployment_secret(client_id_key) or os.environ.get(
+            client_id_key, ""
         )
-        client_secret = (
-            await get_deployment_secret(client_secret_key)
-            or os.environ.get(client_secret_key, "")
-        )
+        client_secret = await get_deployment_secret(
+            client_secret_key
+        ) or os.environ.get(client_secret_key, "")
 
         if connection_qname:
             checks = await check_atlan_publish_permission(
