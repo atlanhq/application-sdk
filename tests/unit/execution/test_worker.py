@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from unittest import mock
 
 import pytest
+from temporalio import workflow
 
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
@@ -59,6 +60,19 @@ class _FilterIn2(Input, allow_unbounded_fields=True):
 @dataclass
 class _FilterOut2(Output, allow_unbounded_fields=True):
     y: str = ""
+
+
+@workflow.defn(name="_ExtraDispatchWorkflow")
+class _ExtraDispatchWorkflow:
+    """Test workflow class registered via ``extra_workflows=``.
+
+    Module-level definition is required: Temporal rejects ``@workflow.defn``
+    on locally-defined classes (it needs a globally-referenceable name).
+    """
+
+    @workflow.run
+    async def run(self, params: dict) -> dict:
+        return {}
 
 
 def _make_mock_client() -> mock.MagicMock:
@@ -371,6 +385,89 @@ class TestCreateWorker:
             create_worker(client, passthrough_modules={"my_custom_module"})
 
         assert len(sandbox_configs) == 1
+
+    def test_extra_workflows_appended_to_registration(self) -> None:
+        """Caller-supplied hand-rolled @workflow.defn classes are appended to
+        the SDK-generated App workflows passed to ``Worker(workflows=...)``."""
+
+        class _ExtraApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["workflows"] = list(kwargs.get("workflows", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, extra_workflows=[_ExtraDispatchWorkflow])
+
+        assert _ExtraDispatchWorkflow in captured["workflows"]
+
+    def test_extra_workflows_none_is_default(self) -> None:
+        """Omitting ``extra_workflows`` leaves the App-generated list unchanged."""
+
+        class _BaselineApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["workflows"] = list(kwargs.get("workflows", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+
+        baseline_count = len(captured["workflows"])
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, extra_workflows=None)
+
+        assert len(captured["workflows"]) == baseline_count
+
+    def test_extra_workflows_empty_sequence_is_noop(self) -> None:
+        """An empty ``extra_workflows`` sequence behaves like ``None``."""
+
+        class _EmptyExtraApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["workflows"] = list(kwargs.get("workflows", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, extra_workflows=[])
+
+        baseline_count = len(captured["workflows"])
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+
+        assert len(captured["workflows"]) == baseline_count
 
 
 class TestAppWorker:
