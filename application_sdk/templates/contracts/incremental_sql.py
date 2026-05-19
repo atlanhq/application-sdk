@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from typing import Optional
 
 from pydantic import field_validator
 
@@ -49,6 +48,12 @@ def _validate_marker_timestamp(value: str | None) -> str | None:
     Empty / None passes through (no marker = full-extraction signal).
     Anything else must match :data:`_ISO_TIMESTAMP_PATTERN`. Raises
     ``ValueError`` so Pydantic surfaces it as ``ValidationError``.
+
+    Assumption: all SDK-produced markers are ISO-8601 timestamps or empty
+    strings, so adding this validator to Output contracts
+    (``FetchIncrementalMarkerOutput``, ``UpdateMarkerOutput``) is safe for
+    Temporal workflow replay — no well-formed history entry would be
+    rejected by this constraint.
     """
     if value is None or value == "":
         return value
@@ -90,7 +95,7 @@ class IncrementalRunContext:
     prepone_marker_timestamp: bool = True
     prepone_marker_hours: int = 3
     # Set by fetch_incremental_marker
-    marker_timestamp: Optional[str] = None
+    marker_timestamp: str | None = None
     next_marker_timestamp: str = ""
     # Set by read_current_state
     current_state_available: bool = False
@@ -245,7 +250,7 @@ class FetchIncrementalMarkerInput(Input):
     application_name: str = ""
     """Application name for S3 path resolution."""
 
-    existing_marker: Optional[str] = None
+    existing_marker: str | None = None
     """Pre-existing marker value (e.g., from a manual workflow override)."""
 
     prepone_enabled: bool = True
@@ -256,7 +261,7 @@ class FetchIncrementalMarkerInput(Input):
 
     @field_validator("existing_marker", mode="after")
     @classmethod
-    def _validate_existing_marker(cls, v: Optional[str]) -> Optional[str]:
+    def _validate_existing_marker(cls, v: str | None) -> str | None:
         return _validate_marker_timestamp(v)
 
 

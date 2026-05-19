@@ -153,7 +153,6 @@ class TestPrepareQueryInjectionGate:
 
 
 class TestGetDatabaseNamesInjectionGate:
-    @pytest.mark.asyncio
     async def test_quote_in_include_filter_raises(self) -> None:
         sql_client = MagicMock()
         sql_client.get_results = AsyncMock()

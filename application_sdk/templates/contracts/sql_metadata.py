@@ -12,7 +12,7 @@ import orjson
 from pydantic import Field, field_validator, model_validator
 
 from application_sdk.common.sql_filters import (
-    _SAFE_FILTER_PATTERN,
+    SAFE_FILTER_PATTERN,
     validate_filter_no_sql_injection,
 )
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
@@ -162,7 +162,7 @@ class ExtractionInput(Input):
     - ``None`` → empty string
     """
 
-    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
     """Regex pattern identifying temporary tables."""
 
     source_tag_prefix: str = ""
@@ -177,6 +177,12 @@ class ExtractionInput(Input):
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
         return _validate_filter_no_sql_injection(v)
+
+    @field_validator("temp_table_regex", mode="after")
+    @classmethod
+    def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
+        validate_filter_no_sql_injection(v)
+        return v
 
 
 class ExtractionOutput(Output, PublishInputMixin):
@@ -215,7 +221,7 @@ class ExtractionTaskInput(Input):
     output_path: str = ""
     exclude_filter: FilterMap | str = Field(default="")
     include_filter: FilterMap | str = Field(default="")
-    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
 
     @field_validator("include_filter", "exclude_filter", mode="before")
@@ -227,6 +233,12 @@ class ExtractionTaskInput(Input):
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
         return _validate_filter_no_sql_injection(v)
+
+    @field_validator("temp_table_regex", mode="after")
+    @classmethod
+    def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
+        validate_filter_no_sql_injection(v)
+        return v
 
 
 class FetchDatabasesInput(ExtractionTaskInput):

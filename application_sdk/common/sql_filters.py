@@ -59,7 +59,8 @@ _FORBIDDEN_FILTER_SEQUENCES: tuple[str, ...] = (
 # the single-character members of ``_FORBIDDEN_FILTER_SEQUENCES``;
 # multi-character sequences (``--``, ``/*``, ``*/``) are caught by the
 # dedicated ``validate_filter_no_sql_injection`` validator below.
-_SAFE_FILTER_PATTERN: str = r"^[^'\";\x00]*$"
+SAFE_FILTER_PATTERN: str = r"^[^'\";\x00]*$"
+_SAFE_FILTER_PATTERN = SAFE_FILTER_PATTERN  # backward-compat alias
 
 
 def validate_filter_no_sql_injection(v: Any) -> Any:
