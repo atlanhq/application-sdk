@@ -66,10 +66,15 @@ on:
         type: string
         default: ""
       unit_tests_check_name:
-        description: "Name of the check run that must succeed before publish proceeds. The app's Tests workflow must produce a check with this exact name for the same SHA. See docs/contracts/unit-tests-gate.md."
+        description: "Name of the check run that must succeed before publish proceeds. The app's Tests workflow must produce a check with this exact name for the same SHA. See docs/standards/unit-tests-gate.md."
         required: false
         type: string
         default: "unit-tests"
+      unit_tests_workflow_file:
+        description: "Filename of the workflow that produces the unit-tests check (e.g. 'unit-tests.yml', 'tests.yml'). When set and no existing check is found for the publish SHA, the gate dispatches this workflow on the publish ref and waits for the resulting check. Requires the target workflow to declare 'workflow_dispatch:' in its on: block. Leave empty for polling-only behaviour (gate fails if no existing check)."
+        required: false
+        type: string
+        default: ""
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -176,18 +181,27 @@ jobs:
           esac
 
   # ── Job 0b: Unit-tests gate ──────────────────────────────────────────────────
-  # Block publish unless the app's Tests workflow has reported a successful
-  # check (named by `unit_tests_check_name`, default `unit-tests`) for the
-  # SHA being published. Runs before any build minutes are spent so a failing
-  # test or missing-coverage check surfaces at minute 0 rather than after the
+  # Block publish unless a check named by `unit_tests_check_name` (default
+  # `unit-tests`) succeeds for the publish SHA. Runs before any build minutes
+  # are spent so a failing test surfaces at minute 0 rather than after the
   # multi-arch build.
   #
-  # Contract: the consumer app repo MUST contain a workflow that
-  #   1. Triggers on `push` to the branch you publish from (and on
-  #      workflow_dispatch if you dispatch publishes from branches).
-  #   2. Contains a job whose check-run name matches `unit_tests_check_name`.
-  #   3. Enforces coverage (recommended: `coverage report --fail-under=60`).
-  # See docs/standards/unit-tests-gate.md for the full contract and template.
+  # Two modes, controlled by whether the caller sets `unit_tests_workflow_file`:
+  #
+  # 1. Polling-only (default) — gate looks for an existing successful check
+  #    on the SHA. If absent, fails fast with onboarding instructions. Use
+  #    when the app's tests workflow is guaranteed to run on every publish
+  #    commit (e.g. triggers on `push: main` and you publish from main).
+  #
+  # 2. Hybrid (when `unit_tests_workflow_file` is set) — gate first looks for
+  #    an existing check; if missing, dispatches the named workflow on the
+  #    publish ref and waits for it. Requires the target workflow to declare
+  #    `workflow_dispatch:` in its `on:` block. Use when publishes may occur
+  #    on commits that haven't been independently tested yet.
+  #
+  # Contract for both modes: the consumer app repo MUST contain a workflow
+  # that produces a check whose name matches `unit_tests_check_name`. See
+  # docs/standards/unit-tests-gate.md for the full contract and template.
   #
   # Only runs when `publish: true` — build-only invocations are unaffected.
   unit-tests-gate:
@@ -196,7 +210,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Resolve SHA and verify required check exists
+      - name: Resolve SHA, look for existing check, dispatch fresh run if missing
         id: verify
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -204,36 +218,70 @@ jobs:
           # a branch name (`feat/foo`), a full ref (`refs/heads/main`), a tag,
           # or a SHA. The /commits/{ref} endpoint accepts all of these.
           REF: ${{ inputs.ref || github.sha }}
+          # For dispatching: gh workflow run accepts a branch / tag name only,
+          # never a bare SHA. Prefer the caller's branch input, then the
+          # calling workflow's branch (`github.ref_name`).
+          DISPATCH_REF: ${{ inputs.ref || github.ref_name }}
           CHECK: ${{ inputs.unit_tests_check_name }}
+          WORKFLOW_FILE: ${{ inputs.unit_tests_workflow_file }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           SHA=$(gh api "/repos/${REPO}/commits/${REF}" --jq '.sha')
           echo "Resolved '${REF}' → ${SHA}"
+
           # Server-side filter via check_name avoids the default per_page=30
-          # truncation (a SHA with many bot / Dependabot check-runs can push the
-          # one we care about onto page 2+, where a naive client-side filter
-          # would never see it).
+          # truncation (a SHA with many bot / Dependabot check-runs can push
+          # the one we care about onto page 2+, where a naive client-side
+          # filter would never see it).
           count=$(gh api "/repos/${REPO}/commits/${SHA}/check-runs?check_name=${CHECK}" \
             --jq '.total_count')
-          if [ "${count}" = "0" ]; then
-            {
-              echo "### Publish blocked: '${CHECK}' check missing"
-              echo ""
-              echo "No \`${CHECK}\` check was found for commit \`${SHA}\`."
-              echo ""
-              echo "This repo does not satisfy the publish contract. Required:"
-              echo "1. A workflow file (e.g. \`.github/workflows/tests.yml\`) containing a job that produces a check named \`${CHECK}\`."
-              echo "2. That workflow must trigger on \`push\` to the branch you publish from."
-              echo "3. The job must enforce coverage (recommended: \`coverage report --fail-under=60\`)."
-              echo ""
-              echo "Contract + template: <https://github.com/atlanhq/application-sdk/blob/main/docs/standards/unit-tests-gate.md>"
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "::error title=Publish blocked::No '${CHECK}' check found for SHA ${SHA}. See workflow summary for onboarding instructions."
-            exit 1
+          if [ "${count}" != "0" ]; then
+            echo "Found ${count} existing '${CHECK}' check run(s) on ${SHA} — waiting for completion."
+            echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+            exit 0
           fi
-          echo "Found ${count} '${CHECK}' check run(s) — waiting for completion."
-          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+
+          # No existing check. Fall back to dispatching the app's tests
+          # workflow on the publish ref, if the caller has wired one up.
+          if [ -n "${WORKFLOW_FILE}" ]; then
+            echo "No existing '${CHECK}' check on ${SHA}. Dispatching '${WORKFLOW_FILE}' on '${DISPATCH_REF}'..."
+            if ! gh workflow run "${WORKFLOW_FILE}" --repo "${REPO}" --ref "${DISPATCH_REF}"; then
+              {
+                echo "### Publish blocked: failed to dispatch '${WORKFLOW_FILE}'"
+                echo ""
+                echo "The unit-tests gate tried to dispatch \`${WORKFLOW_FILE}\` on \`${DISPATCH_REF}\` because no existing \`${CHECK}\` check was found for \`${SHA}\`, but the dispatch failed."
+                echo ""
+                echo "Common causes:"
+                echo "- The workflow does not declare \`workflow_dispatch:\` in its \`on:\` block."
+                echo "- The workflow file does not exist at \`.github/workflows/${WORKFLOW_FILE}\`."
+                echo "- The branch \`${DISPATCH_REF}\` does not exist."
+              } >> "${GITHUB_STEP_SUMMARY}"
+              echo "::error title=Publish blocked::Failed to dispatch '${WORKFLOW_FILE}'. See workflow summary."
+              exit 1
+            fi
+            echo "Dispatched. Waiting ~10s for GitHub to register the run, then handing off to the wait-for-check step."
+            sleep 10
+            echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # Polling-only mode and the check is absent: fail with onboarding
+          # instructions.
+          {
+            echo "### Publish blocked: '${CHECK}' check missing"
+            echo ""
+            echo "No \`${CHECK}\` check was found for commit \`${SHA}\`."
+            echo ""
+            echo "This repo does not satisfy the publish contract. Required:"
+            echo "1. A workflow file (e.g. \`.github/workflows/tests.yml\`) containing a job that produces a check named \`${CHECK}\`."
+            echo "2. That workflow must trigger on \`push\` to the branch you publish from, OR set \`unit_tests_workflow_file\` on the caller and add \`workflow_dispatch:\` to the tests workflow so the gate can fire it on demand."
+            echo "3. The job must enforce coverage (recommended: \`coverage report --fail-under=60\`)."
+            echo ""
+            echo "Contract + template: <https://github.com/atlanhq/application-sdk/blob/main/docs/standards/unit-tests-gate.md>"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "::error title=Publish blocked::No '${CHECK}' check found for SHA ${SHA}. See workflow summary for onboarding instructions."
+          exit 1
 
       - name: Wait for ${{ inputs.unit_tests_check_name }} to complete
         id: wait
