@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.0
-source-sha:    08d9c6bdef909ed20401df5af8d956d23e659d72
-source-date:   2026-05-19T17:52:49+05:30
+source-sha:    528d7f48c54990992053278dcef2a7488ce0e3ea
+source-date:   2026-05-19T13:19:36+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2496,7 +2496,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `output_path: str` `= ''` — Local or object store path for output files.
   - `exclude_filter: FilterMap | str` `= Field(default='')` — Filter for excluding schemas/tables.
   - `include_filter: FilterMap | str` `= Field(default='')` — Filter for including schemas/tables.
-  - `temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern identifying temporary tables.
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern identifying temporary tables.
   - `source_tag_prefix: str` `= ''` — Tag prefix for source-level metadata.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
@@ -2532,7 +2532,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `output_path: str` `= ''`
   - `exclude_filter: FilterMap | str` `= Field(default='')`
   - `include_filter: FilterMap | str` `= Field(default='')`
-  - `temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)]` `= ''`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
   - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
@@ -2580,7 +2580,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `connection_qualified_name: str` `= ''` — Connection qualified name used to locate the persistent marker file.
   - `application_name: str` `= ''` — Application name for S3 path resolution.
-  - `existing_marker: Optional[str]` — Pre-existing marker value (e.g., from a manual workflow override).
+  - `existing_marker: str | None` — Pre-existing marker value (e.g., from a manual workflow override).
   - `prepone_enabled: bool` `= True` — Whether to move the marker back by ``prepone_hours``.
   - `prepone_hours: float` `= 3.0` — Hours to subtract from the marker when preponing is enabled.
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
