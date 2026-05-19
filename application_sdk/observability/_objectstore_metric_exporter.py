@@ -216,17 +216,17 @@ class ObjectStoreMetricExporter(MetricExporter):
         )
         self._data_dir = data_dir or get_observability_dir()
         self._deployment_store: ObjectStore | None = (
-            self._resolve_store(DEPLOYMENT_OBJECT_STORE_NAME, "deployment")
+            self._resolve_store(DEPLOYMENT_OBJECT_STORE_NAME)
             if ENABLE_OBSERVABILITY_STORE_SINK
             else None
         )
         self._upstream_store: ObjectStore | None = (
-            self._resolve_store(UPSTREAM_OBJECT_STORE_NAME, "upstream")
+            self._resolve_store(UPSTREAM_OBJECT_STORE_NAME)
             if ENABLE_OBSERVABILITY_STORE_SINK and ENABLE_ATLAN_UPLOAD
             else None
         )
 
-    def _resolve_store(self, name: str, label: str) -> ObjectStore | None:
+    def _resolve_store(self, name: str) -> ObjectStore | None:
         from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
             create_store_from_binding,
         )
@@ -238,16 +238,14 @@ class ObjectStoreMetricExporter(MetricExporter):
             return create_store_from_binding(name)
         except StorageConfigError:
             logger.warning(
-                "Object store '%s' not configured; %s metric upload disabled",
+                "Object store '%s' not configured; metric upload disabled",
                 name,
-                label,
             )
             return None
         except Exception:
             logger.warning(
-                "Object store '%s' setup failed; %s metric upload disabled",
+                "Object store '%s' setup failed; metric upload disabled",
                 name,
-                label,
                 exc_info=True,
             )
             return None
