@@ -249,9 +249,9 @@ def test_failure_category_http_status(
 def test_every_failure_category_has_http_status() -> None:
     """Guard: adding a new FailureCategory without updating the http_status map raises KeyError."""
     for category in FailureCategory:
-        assert isinstance(category.http_status, int), (
-            f"{category} missing from http_status map"
-        )
+        assert isinstance(
+            category.http_status, int
+        ), f"{category} missing from http_status map"
 
 
 # ---------------------------------------------------------------------------
