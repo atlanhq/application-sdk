@@ -359,38 +359,30 @@ class TestExtractEmitsRawFileReference:
         assert result.raw_file is None
 
 
-class TestTransformInputRawDir:
-    """``TransformInput.raw_dir`` is the recommended replacement for the
-    legacy ``file_names`` / ``chunk_start`` / ``typename`` multi-file
-    batch fields (BLDX-1281). The field is purely additive — existing
-    consumers that read the legacy fields continue to work; new
-    connectors that produce multi-file output should populate
-    ``raw_dir`` with a directory-shaped ``FileReference`` so the
-    activity interceptor handles cross-worker materialisation.
+class TestTransformInputLegacyFields:
+    """Sanity tests for the deprecated-but-retained fields on
+    :class:`TransformInput` (``file_names`` / ``chunk_start`` /
+    ``typename``). They remain on the schema so existing v3 consumers
+    keep deserialising without ``AttributeError``; the SDK itself
+    never populates them.
     """
 
-    def test_raw_dir_defaults_to_none(self) -> None:
-        """raw_dir is optional with a None default — pure addition."""
+    def test_legacy_fields_default_to_no_op_values(self) -> None:
+        """The schema defaults make every legacy read a no-op:
+        ``file_names`` is an empty list (``if input.file_names:`` is
+        falsy) and ``chunk_start`` is ``0``. Pin this so a future
+        change to the defaults can't silently flip dead branches in
+        downstream consumers into live ones.
+        """
         input_ = TransformInput()
-        assert input_.raw_dir is None
+        assert input_.file_names == []
+        assert input_.chunk_start == 0
+        assert input_.typename == ""
 
-    def test_raw_dir_accepts_directory_filereference(self) -> None:
-        """Pin the directory-FileReference shape new connectors should use."""
-        ref = FileReference(
-            local_path="/tmp/raw/columns/",
-            storage_path="s3://bucket/raw/columns/",
-            is_durable=True,
-            file_count=42,
-        )
-        input_ = TransformInput(raw_dir=ref)
-        assert input_.raw_dir is not None
-        assert input_.raw_dir.local_path == "/tmp/raw/columns/"
-        assert input_.raw_dir.is_durable is True
-        assert input_.raw_dir.file_count == 42
-
-    def test_legacy_fields_preserved_when_raw_dir_unset(self) -> None:
-        """Backward-compat: existing v3 consumers reading file_names /
-        chunk_start / typename keep working without populating raw_dir.
+    def test_legacy_fields_accept_caller_supplied_values(self) -> None:
+        """v3 consumers that dispatch via ``typename`` still set it
+        explicitly; ``file_names`` / ``chunk_start`` accept legacy
+        payloads without errors even though the SDK ignores them.
         """
         input_ = TransformInput(
             typename="column",
@@ -400,19 +392,6 @@ class TestTransformInputRawDir:
         assert input_.typename == "column"
         assert input_.file_names == ["batch-0.parquet", "batch-1.parquet"]
         assert input_.chunk_start == 2
-        assert input_.raw_dir is None  # default — coexists with legacy fields
-
-    def test_raw_dir_and_legacy_fields_can_coexist(self) -> None:
-        """During the migration window, a connector may populate both
-        ``raw_dir`` (new) and ``file_names`` (legacy compat) without
-        conflict — useful when an extractor wants to test the new ref
-        path while leaving the legacy reads intact.
-        """
-        ref = FileReference(local_path="/tmp/raw/")
-        input_ = TransformInput(raw_dir=ref, file_names=["a.parquet"], typename="t")
-        assert input_.raw_dir is not None
-        assert input_.file_names == ["a.parquet"]
-        assert input_.typename == "t"
 
 
 class TestTransformConsumesRawFileReference:

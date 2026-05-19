@@ -358,22 +358,17 @@ class ExtractionTaskOutput(Output):
 class TransformInput(ExtractionTaskInput):
     """Input for transform tasks.
 
-    Extends :class:`ExtractionTaskInput` with ``raw_file`` / ``raw_dir``
-    references threaded in by extract tasks via the ``FileReference``
-    interceptor handshake. Two extraction shapes are supported:
-
-    1. **Single-file extraction** (the v3 ``SqlApp`` per-entity flow) —
-       carries ``raw_file`` (a singular ``FileReference``). The activity
-       interceptor auto-materialises it on the transform worker.
-    2. **Multi-file batch extraction** — carries ``raw_dir`` (a
-       directory-shaped ``FileReference``). The interceptor
-       auto-materialises every file under the prefix onto the
-       transform worker with the same SHA-256 sidecar verification.
-       Adopt this for any new connector that needs multi-file output.
+    Extends :class:`ExtractionTaskInput` with the ``raw_file``
+    reference threaded in by extract tasks via the ``FileReference``
+    interceptor handshake. The v3 ``SqlApp`` per-entity flow carries
+    ``raw_file`` (a singular :class:`FileReference`) — the activity
+    interceptor auto-materialises it on the transform worker before
+    the transform activity runs.
 
     Connectors implementing a custom ``transform_data`` (the legacy
-    v2 activity) read either shape; v3's per-entity ``transform_*``
-    tasks consume ``raw_file``.
+    v2 activity) may read ``raw_file`` directly; v3's per-entity
+    ``transform_*`` tasks consume it through the helper
+    ``SqlApp._transform_entity``.
 
     The legacy ``file_names`` field remains on the schema as a no-op
     placeholder — it was never populated by the SDK and reading it
@@ -401,9 +396,11 @@ class TransformInput(ExtractionTaskInput):
     note. Reading or writing this field has no effect on extract /
     transform behaviour.
 
-    **For multi-file extracts use** :attr:`raw_dir` **instead** —
-    it routes through the ``FileReference`` interceptor and gets the
-    same cross-worker fault tolerance ``raw_file`` does.
+    For single-file extracts the SDK threads :attr:`raw_file` (a
+    :class:`FileReference`) through the activity interceptor — that
+    is the modern replacement. If a connector ever needs multi-file
+    extracts, add a directory-shaped ``FileReference`` field on a
+    connector-specific input subclass at that point.
 
     The field will be removed in a future major version once a
     deprecation window has elapsed.
@@ -411,8 +408,9 @@ class TransformInput(ExtractionTaskInput):
 
     chunk_start: int = 0
     """**Deprecated** — chunk-offset hint used by the legacy
-    ``file_names``-based batch flow. New connectors using ``raw_dir``
-    don't need this; iterate the directory contents directly.
+    ``file_names``-based batch flow. The v3 ``SqlApp`` per-entity
+    flow streams a single ``records.json`` per entity, so this hint
+    has no role; iterate raw data through :attr:`raw_file` instead.
     """
 
     raw_file: FileReference | None = None
@@ -428,26 +426,6 @@ class TransformInput(ExtractionTaskInput):
 
     See :class:`ExtractionTaskOutput` for the single-file constraint
     and the upgrade path if multi-file extracts become necessary.
-    """
-
-    raw_dir: FileReference | None = None
-    """Durable directory-shaped ``FileReference`` to a raw output
-    prefix containing multiple files.
-
-    This is the recommended shape for any new multi-file batch
-    extraction flow. The activity interceptor materialises the entire
-    directory onto the transform worker before the activity runs,
-    with per-file SHA-256 sidecar verification (see
-    :mod:`application_sdk.storage.file_ref_sync` for the contract).
-    The transform reads ``input.raw_dir.local_path`` and iterates the
-    files under it the same way a connector would iterate a local
-    directory — no manual ``download_file`` plumbing required.
-
-    Replaces the legacy :attr:`file_names` / :attr:`chunk_start` pair
-    for new connectors. The legacy fields stay on this contract for
-    backward compatibility with existing v3 consumers; they will be
-    removed in a coordinated migration once those consumers adopt
-    ``raw_dir``.
     """
 
 

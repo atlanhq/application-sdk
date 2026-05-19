@@ -2819,7 +2819,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated and unused** — retained on the schema as a no-op
   - `chunk_start: int` `= 0` — **Deprecated** — chunk-offset hint used by the legacy
   - `raw_file: FileReference | None` — Durable singular ``FileReference`` to the matching
-  - `raw_dir: FileReference | None` — Durable directory-shaped ``FileReference`` to a raw output
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `TransformOutput`
