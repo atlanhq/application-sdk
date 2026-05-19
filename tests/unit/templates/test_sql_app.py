@@ -13,6 +13,8 @@ from application_sdk.credentials.ref import CredentialRef
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
+    ExtractionTaskOutput,
+    TransformInput,
     TransformOutput,
 )
 from application_sdk.templates.sql_app import SqlApp
@@ -105,11 +107,15 @@ def app():
 
 
 def _make_task_input(output_path="/tmp/test", **kwargs):
-    """Helper to create ExtractionTaskInput for testing.
+    """Helper to create a task input for testing.
 
-    ``raw_file`` (a ``FileReference | None``) can be passed via kwargs to
-    simulate the run() orchestrator threading a materialised ref into
-    transform inputs (BLDX-1281).
+    Returns a ``TransformInput`` because it's the broader of the two
+    v3 contracts (extends ``ExtractionTaskInput`` with ``raw_file`` plus
+    the legacy v2 ``typename`` / ``file_names`` / ``chunk_start`` fields).
+    The ``extract_*`` activities only read ``ExtractionTaskInput`` fields
+    so the extra ``TransformInput`` attributes are ignored on that side,
+    and the ``transform_*`` activities can read ``input.raw_file``
+    without hitting an ``AttributeError``. ``raw_file`` defaults to None.
     """
     defaults = {
         "workflow_id": "test-wf",
@@ -120,7 +126,7 @@ def _make_task_input(output_path="/tmp/test", **kwargs):
         "temp_table_regex": "",
     }
     defaults.update(kwargs)
-    return ExtractionTaskInput(**defaults)
+    return TransformInput(**defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +478,7 @@ class TestRunThreadsRawFileRefs:
 
         def make_extract(entity: str):
             async def _extract(_input):
-                return TransformOutput(
+                return ExtractionTaskOutput(
                     typename=entity,
                     total_record_count=1,
                     raw_file=refs[entity],
@@ -657,27 +663,50 @@ class TestRunOutputPrefixes:
         return app
 
     def _patch_extract_tasks(self):
-        """Return list of patches that mock all extract_* + transform_* + upload_to_atlan."""
+        """Return list of patches that mock all extract_* + transform_* + upload_to_atlan.
+
+        Use real ``ExtractionTaskOutput`` instances (not MagicMocks) for
+        the extract returns — ``run()`` reads ``.raw_file`` and threads
+        it into ``_build_transform_input`` which Pydantic-validates the
+        ref against ``FileReference``; MagicMock auto-attrs would fail
+        that validation (BLDX-1281).
+        """
         return [
             patch.object(
                 SqlApp,
                 "extract_databases",
-                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+                new=AsyncMock(
+                    return_value=ExtractionTaskOutput(
+                        typename="database", total_record_count=1, raw_file=None
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,
                 "extract_schemas",
-                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+                new=AsyncMock(
+                    return_value=ExtractionTaskOutput(
+                        typename="schema", total_record_count=1, raw_file=None
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,
                 "extract_tables",
-                new=AsyncMock(return_value=MagicMock(total_record_count=2)),
+                new=AsyncMock(
+                    return_value=ExtractionTaskOutput(
+                        typename="table", total_record_count=2, raw_file=None
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,
                 "extract_columns",
-                new=AsyncMock(return_value=MagicMock(total_record_count=10)),
+                new=AsyncMock(
+                    return_value=ExtractionTaskOutput(
+                        typename="column", total_record_count=10, raw_file=None
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,

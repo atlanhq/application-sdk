@@ -237,19 +237,6 @@ class ExtractionTaskInput(Input):
     temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
 
-    raw_file: FileReference | None = None
-    """Reference to the ``raw/<entity>/records.json`` file produced by the
-    matching ``extract_*`` activity.
-
-    Set by ``run()`` when building the per-entity transform input; the
-    ``FileReference`` interceptor materialises the durable ref onto the
-    transform-worker's local filesystem before the activity runs (with
-    SHA-256 sidecar verification — so a transform that lands on a
-    different pod than the extract still sees the file). ``None`` on
-    extract activities; ``None`` is also a valid transform input when
-    extract returned zero rows.
-    """
-
     @field_validator("include_filter", "exclude_filter", mode="before")
     @classmethod
     def _coerce_filter(cls, v: Any) -> FilterMap | str:
@@ -330,41 +317,82 @@ class FetchViewsOutput(Output):
     total_record_count: int = 0
 
 
+class ExtractionTaskOutput(Output):
+    """Output from a per-entity ``extract_*`` task.
+
+    Returned by ``SqlApp._extract_entity`` so the matching ``transform_*``
+    activity can consume the raw file via the ``FileReference`` contract
+    rather than reading from local FS directly.
+
+    Cross-worker contract:
+        ``raw_file`` is an ephemeral ``FileReference`` pointing at the
+        locally-written ``raw/<entity>/records.json``. The activity
+        interceptor auto-uploads it to the object store after the
+        extract activity completes and marks it durable. ``run()`` then
+        threads that durable ref into the matching transform's
+        ``TransformInput`` — the interceptor materialises it onto the
+        transform-worker's local filesystem before the transform
+        activity runs, with SHA-256 sidecar verification (so the
+        transform sees a verified-fresh local copy even when it lands
+        on a different pod than the extract).
+    """
+
+    typename: str = ""
+    total_record_count: int = 0
+    raw_file: FileReference | None = None
+    """``FileReference`` to ``raw/<entity>/records.json``.
+
+    ``None`` when the extract returned zero rows — preserves the
+    'genuine zero-row extract' signal that publish relies on (the
+    matching transform then returns count=0 cleanly without spurious
+    asset archival).
+    """
+
+
 class TransformInput(ExtractionTaskInput):
-    """Input for the transform_data task."""
+    """Input for transform tasks.
+
+    Extends :class:`ExtractionTaskInput` with the ``raw_file`` reference
+    threaded in by ``SqlApp.run()`` from the matching extract's
+    :class:`ExtractionTaskOutput`.
+
+    The legacy v2 ``transform_data`` activity (in
+    :class:`SqlMetadataExtractor`) accepts this same shape via
+    ``typename`` / ``file_names`` / ``chunk_start``; v3's per-entity
+    ``transform_*`` tasks consume ``raw_file`` and ignore the legacy
+    fields.
+    """
 
     typename: str = ""
     file_names: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
     chunk_start: int = 0
+    raw_file: FileReference | None = None
+    """Durable ``FileReference`` to the matching ``raw/<entity>/records.json``.
+
+    Set by ``SqlApp.run()`` from the corresponding ``ExtractionTaskOutput.raw_file``.
+    The activity interceptor downloads (or sidecar-verifies an existing
+    local copy of) the referenced object before the transform activity
+    runs, so ``input.raw_file.local_path`` always points to a fresh local
+    file on whichever worker pod ends up running the transform.
+    """
 
 
 class TransformOutput(Output):
-    """Output from the extract_* / transform_* tasks.
+    """Output from the v3 ``transform_*`` tasks.
 
-    Carries up to two ``FileReference`` fields. Both default to ``None``
-    so existing connectors that return only counts keep working.
-
-    Cross-worker contract:
-        * ``extract_*`` sets ``raw_file`` to an ephemeral ``FileReference``
-          pointing at ``raw/<entity>/records.json``. The interceptor
-          uploads it after the activity finishes and marks it durable.
-        * ``run()`` threads the now-durable ref into the matching
-          ``transform_*`` input. The interceptor downloads it onto the
-          transform-worker's local FS before the activity runs.
-        * ``transform_*`` sets ``transformed_file`` to an ephemeral
-          ``FileReference`` pointing at ``transformed/<entity>/entities.json``.
-          The interceptor uploads it and marks it durable so downstream
-          publish / upload activities can consume it the same way.
+    Carries the transformed asset file as a ``FileReference`` so downstream
+    publish / upload activities consume it via the same auto-materialise
+    contract the framework uses for the extract → transform handshake.
     """
 
     typename: str = ""
     total_record_count: int = 0
     chunk_count: int = 0
-    raw_file: FileReference | None = None
-    """``FileReference`` to ``raw/<entity>/records.json`` — set by extract,
-    auto-uploaded by the interceptor, consumed by the matching transform."""
-
     transformed_file: FileReference | None = None
-    """``FileReference`` to ``transformed/<entity>/entities.json`` — set by
-    transform, auto-uploaded by the interceptor, consumed downstream by
-    publish / upload."""
+    """``FileReference`` to ``transformed/<entity>/entities.json``.
+
+    Ephemeral on return (``is_durable=False``); the activity interceptor
+    auto-uploads it after the transform activity finishes and marks it
+    durable so downstream tasks can consume it without local-FS coupling.
+    ``None`` when the transform processed zero rows.
+    """

@@ -87,6 +87,8 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
     ExtractionTaskInput,
+    ExtractionTaskOutput,
+    TransformInput,
     TransformOutput,
 )
 
@@ -225,7 +227,9 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def extract_databases(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def extract_databases(
+        self, input: ExtractionTaskInput
+    ) -> ExtractionTaskOutput:
         """Stream database/catalog rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="database",
@@ -236,7 +240,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def extract_schemas(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def extract_schemas(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream schema rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="schema",
@@ -247,7 +251,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def extract_tables(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def extract_tables(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream table rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="table",
@@ -258,7 +262,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def extract_columns(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def extract_columns(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream column rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="column",
@@ -269,7 +273,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def extract_views(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def extract_views(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream view rows from SQL into raw JSONL."""
         return await self._extract_entity(
             entity_type="view",
@@ -280,7 +284,9 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def extract_procedures(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def extract_procedures(
+        self, input: ExtractionTaskInput
+    ) -> ExtractionTaskOutput:
         """Stream stored-procedure rows from SQL into raw JSONL.
 
         Writes to the ``extras-procedure`` entity type so the publish-app
@@ -307,7 +313,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def transform_databases(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def transform_databases(self, input: TransformInput) -> TransformOutput:
         """Map raw database records to Atlan assets via ``map_database``."""
         return await self._transform_entity(
             entity_type="database",
@@ -318,7 +324,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def transform_schemas(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def transform_schemas(self, input: TransformInput) -> TransformOutput:
         """Map raw schema records to Atlan assets via ``map_schema``."""
         return await self._transform_entity(
             entity_type="schema",
@@ -329,7 +335,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def transform_tables(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def transform_tables(self, input: TransformInput) -> TransformOutput:
         """Map raw table records to Atlan assets via ``map_table``."""
         return await self._transform_entity(
             entity_type="table",
@@ -340,7 +346,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def transform_columns(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def transform_columns(self, input: TransformInput) -> TransformOutput:
         """Map raw column records to Atlan assets via ``map_column``."""
         return await self._transform_entity(
             entity_type="column",
@@ -351,7 +357,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def transform_views(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def transform_views(self, input: TransformInput) -> TransformOutput:
         """Map raw view records to Atlan assets via ``map_table``.
 
         Views go through ``map_table`` because Atlan models View as a
@@ -367,7 +373,7 @@ class SqlApp(App):
     @task(
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
-    async def transform_procedures(self, input: ExtractionTaskInput) -> TransformOutput:
+    async def transform_procedures(self, input: TransformInput) -> TransformOutput:
         """Map raw procedure records to Atlan assets via ``map_procedure``."""
         return await self._transform_entity(
             entity_type="extras-procedure",
@@ -514,16 +520,16 @@ class SqlApp(App):
         # plumbing inside the transform, the framework does it.
         await asyncio.gather(
             self.transform_databases(
-                self._with_raw_file(task_input, db_result.raw_file)
+                self._build_transform_input(task_input, db_result.raw_file)
             ),
             self.transform_schemas(
-                self._with_raw_file(task_input, schema_result.raw_file)
+                self._build_transform_input(task_input, schema_result.raw_file)
             ),
             self.transform_tables(
-                self._with_raw_file(task_input, table_result.raw_file)
+                self._build_transform_input(task_input, table_result.raw_file)
             ),
             self.transform_columns(
-                self._with_raw_file(task_input, column_result.raw_file)
+                self._build_transform_input(task_input, column_result.raw_file)
             ),
         )
 
@@ -575,20 +581,25 @@ class SqlApp(App):
     # =====================================================================
 
     @staticmethod
-    def _with_raw_file(
+    def _build_transform_input(
         base: ExtractionTaskInput,
         raw_file: FileReference | None,
-    ) -> ExtractionTaskInput:
-        """Return a copy of ``base`` with ``raw_file`` populated.
+    ) -> TransformInput:
+        """Build a ``TransformInput`` from ``base`` carrying ``raw_file``.
 
-        Used by ``run()`` to thread the durable ``FileReference`` returned
-        by each extract activity into the matching transform's input.
-        ``ExtractionTaskInput`` is a Pydantic ``BaseModel``, so
-        ``model_copy(update=…)`` produces a new instance without
-        mutating the shared task input (necessary because run() reuses
-        the same ``task_input`` across multiple transform calls).
+        Called by ``run()`` to thread the durable ``FileReference``
+        returned by each ``extract_*`` activity (as
+        ``ExtractionTaskOutput.raw_file``) into the matching
+        ``transform_*`` activity's input. The resulting ``TransformInput``
+        inherits every field from ``base`` plus the new ``raw_file``
+        ref; the activity interceptor will materialise the ref on
+        whichever worker pod ends up running the transform, with
+        SHA-256 sidecar verification — see ``storage.file_ref_sync``.
         """
-        return base.model_copy(update={"raw_file": raw_file})
+        return TransformInput(
+            **base.model_dump(exclude_none=False),
+            raw_file=raw_file,
+        )
 
     @staticmethod
     def _resolve_output_path(input: ExtractionTaskInput) -> str:
@@ -694,7 +705,7 @@ class SqlApp(App):
         entity_type: str,
         sql_template: str,
         input: ExtractionTaskInput,
-    ) -> TransformOutput:
+    ) -> ExtractionTaskOutput:
         """Stream SQL rows verbatim into ``raw/<entity>/records.json`` JSONL.
 
         1. Open SQL client, render the template with the input filters.
@@ -709,11 +720,11 @@ class SqlApp(App):
         """
         if not sql_template:
             logger.warning("No SQL configured for %s — skipping", entity_type)
-            return TransformOutput(typename=entity_type, total_record_count=0)
+            return ExtractionTaskOutput(typename=entity_type, total_record_count=0)
 
         output_path = self._resolve_output_path(input)
         if not output_path:
-            return TransformOutput(typename=entity_type, total_record_count=0)
+            return ExtractionTaskOutput(typename=entity_type, total_record_count=0)
 
         output_dir = Path(output_path) / "raw" / entity_type
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -738,15 +749,15 @@ class SqlApp(App):
         # Emit a ``FileReference`` so the activity interceptor uploads the
         # raw JSONL to the object store after the extract activity completes
         # and marks the ref durable. ``run()`` then threads this durable ref
-        # into the matching transform's input — the interceptor re-downloads
-        # it onto whichever worker pod picks up the transform (with SHA-256
-        # sidecar verification, so a transform that lands on a different pod
-        # than the extract still sees a verified-fresh local copy). This is
-        # how cross-worker fault tolerance for raw → transform handoff is
-        # provided without any explicit download_file plumbing in the
-        # template (BLDX-1281 / PR #1787).
+        # into the matching transform's ``TransformInput`` — the interceptor
+        # re-downloads it onto whichever worker pod picks up the transform
+        # (with SHA-256 sidecar verification, so a transform that lands on
+        # a different pod than the extract still sees a verified-fresh
+        # local copy). This is how cross-worker fault tolerance for the
+        # raw → transform handoff is provided without any explicit
+        # ``download_file`` plumbing in the template (BLDX-1281).
         raw_ref = FileReference.from_local(output_file) if count > 0 else None
-        return TransformOutput(
+        return ExtractionTaskOutput(
             typename=entity_type,
             total_record_count=count,
             raw_file=raw_ref,
@@ -757,7 +768,7 @@ class SqlApp(App):
         *,
         entity_type: str,
         mapper_fn: _MapperFn,
-        input: ExtractionTaskInput,
+        input: TransformInput,
     ) -> TransformOutput:
         """Read raw JSONL → mapper → transformed JSONL.
 

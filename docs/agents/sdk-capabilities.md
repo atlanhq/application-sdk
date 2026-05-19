@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.0
-source-sha:    5658e73da0c548a6245836344b7fd712e56b26c4
-source-date:   2026-05-19T12:11:28+01:00
+source-sha:    ba367b634bad31b406d3408b5c994720eb8f859d
+source-date:   2026-05-19T17:06:10+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2534,7 +2534,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `include_filter: FilterMap | str` `= Field(default='')`
   - `temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)]` `= ''`
   - `source_tag_prefix: str` `= ''`
-  - `raw_file: FileReference | None` — Reference to the ``raw/<entity>/records.json`` file produced by the
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchColumnsIncrementalInput`
@@ -2814,23 +2813,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `TransformInput`
 
 - **Import:** `from application_sdk.templates.contracts import TransformInput`
-- **Summary:** Input for the transform_data task.
+- **Summary:** Input for transform tasks.
 - **Fields:**
   - `typename: str` `= ''`
   - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)`
   - `chunk_start: int` `= 0`
+  - `raw_file: FileReference | None` — Durable ``FileReference`` to the matching ``raw/<entity>/records.json``.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `TransformOutput`
 
 - **Import:** `from application_sdk.templates.contracts import TransformOutput`
-- **Summary:** Output from the extract_* / transform_* tasks.
+- **Summary:** Output from the v3 ``transform_*`` tasks.
 - **Fields:**
   - `typename: str` `= ''`
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
-  - `raw_file: FileReference | None` — ``FileReference`` to ``raw/<entity>/records.json`` — set by extract,
-  - `transformed_file: FileReference | None` — ``FileReference`` to ``transformed/<entity>/entities.json`` — set by
+  - `transformed_file: FileReference | None` — ``FileReference`` to ``transformed/<entity>/entities.json``.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `UpdateMarkerInput`
