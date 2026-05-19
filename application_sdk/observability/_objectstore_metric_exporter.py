@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import logging
 import os
 import posixpath
 from collections.abc import Sequence
@@ -22,15 +21,22 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import orjson
-from opentelemetry.sdk.metrics.export import (
-    AggregationTemporality,
-    Gauge,
+from opentelemetry.sdk.metrics import (
+    Counter,
     Histogram,
+    ObservableCounter,
+    ObservableUpDownCounter,
+    UpDownCounter,
+)
+from opentelemetry.sdk.metrics.export import AggregationTemporality
+from opentelemetry.sdk.metrics.export import Gauge as GaugeData
+from opentelemetry.sdk.metrics.export import Histogram as HistogramData
+from opentelemetry.sdk.metrics.export import (
     MetricExporter,
     MetricExportResult,
     MetricsData,
-    Sum,
 )
+from opentelemetry.sdk.metrics.export import Sum as SumData
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -40,16 +46,15 @@ from application_sdk.constants import (
     ENABLE_OBSERVABILITY_STORE_SINK,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import OBSERVABILITY_S3_PREFIX_MAP
 from application_sdk.observability.utils import get_observability_dir
-from application_sdk.storage import upload_file
-from application_sdk.storage.binding import create_store_from_binding
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.metrics.export import HistogramDataPoint, NumberDataPoint
     from opentelemetry.sdk.resources import Resource
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 #: S3 prefix for OTel-sourced Prometheus metrics.  Kept separate from the
 #: ``metrics/`` prefix used by ``record_metric()`` data so consumers can
@@ -139,7 +144,7 @@ def _serialize_metrics_data(metrics_data: MetricsData | None) -> list[dict[str, 
         for sm in rm.scope_metrics:
             for metric in sm.metrics:
                 data = metric.data
-                if isinstance(data, Sum):
+                if isinstance(data, SumData):
                     temp = _temporality_name(data.aggregation_temporality)
                     for dp in data.data_points:
                         records.append(
@@ -154,7 +159,7 @@ def _serialize_metrics_data(metrics_data: MetricsData | None) -> list[dict[str, 
                                 aggregation_temporality=temp,
                             )
                         )
-                elif isinstance(data, Gauge):
+                elif isinstance(data, GaugeData):
                     for dp in data.data_points:
                         records.append(
                             _number_record(
@@ -166,7 +171,7 @@ def _serialize_metrics_data(metrics_data: MetricsData | None) -> list[dict[str, 
                                 res_attrs,
                             )
                         )
-                elif isinstance(data, Histogram):
+                elif isinstance(data, HistogramData):
                     temp = _temporality_name(data.aggregation_temporality)
                     for dp in data.data_points:
                         records.append(
@@ -200,6 +205,13 @@ def _upload_sync(local_path: str, remote_key: str, timeout_s: float) -> None:
     """
 
     async def _upload() -> None:
+        from application_sdk.storage import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            upload_file,
+        )
+        from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            create_store_from_binding,
+        )
+
         try:
             store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
             await upload_file(remote_key, local_path, store=store)
@@ -220,7 +232,9 @@ def _upload_sync(local_path: str, remote_key: str, timeout_s: float) -> None:
     try:
         asyncio.run(asyncio.wait_for(_upload(), timeout=timeout_s))
     except TimeoutError:
-        logger.warning("ObjectStore metric upload timed out after %.1fs", timeout_s)
+        logger.warning(
+            "ObjectStore metric upload timed out after %.1fs", timeout_s, exc_info=True
+        )
 
 
 class ObjectStoreMetricExporter(MetricExporter):
@@ -234,9 +248,11 @@ class ObjectStoreMetricExporter(MetricExporter):
     def __init__(self, *, data_dir: str | None = None) -> None:
         super().__init__(
             preferred_temporality={
-                Sum: AggregationTemporality.DELTA,
+                Counter: AggregationTemporality.DELTA,
+                UpDownCounter: AggregationTemporality.DELTA,
+                ObservableCounter: AggregationTemporality.DELTA,
+                ObservableUpDownCounter: AggregationTemporality.DELTA,
                 Histogram: AggregationTemporality.DELTA,
-                Gauge: AggregationTemporality.CUMULATIVE,
             },
         )
         self._data_dir = data_dir or get_observability_dir()
@@ -288,7 +304,7 @@ class ObjectStoreMetricExporter(MetricExporter):
                 try:
                     os.unlink(local_path)
                 except OSError:
-                    pass
+                    pass  # best-effort local-file cleanup; never block metric export
 
         except Exception:
             logger.warning("ObjectStore metric export failed", exc_info=True)

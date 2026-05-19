@@ -1,5 +1,41 @@
 # Changelog
 
+## v3.12.0 (May 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.11.0...v3.12.0
+
+### Features
+
+- contracts - add standard `status` to Output base (BLDX-1244) (#1767) (by @Aryamanz29 in [187b257](https://github.com/atlanhq/application-sdk/commit/187b257))
+- add --raise-prs mode to open migration PRs against consumers (#1771) (by @cmgrote in [a85acf5](https://github.com/atlanhq/application-sdk/commit/a85acf5))
+- credentials - inject x-atlan-app-* headers on pyatlan clients (BLDX-1246) (#1768) (by @Aryamanz29 in [9360d8b](https://github.com/atlanhq/application-sdk/commit/9360d8b))
+- strongly type all errors according to error hierarchy (#1754) (by @cmgrote in [1a3ab11](https://github.com/atlanhq/application-sdk/commit/1a3ab11))
+- publish app/generated/ JSON files as app_configs to GM (#1747) (by @SanilK2108 in [9a46b54](https://github.com/atlanhq/application-sdk/commit/9a46b54))
+
+### Bug Fixes
+
+- resolve created_by from PR author, not triggering_actor (#1772) (by @anurag-atlan in [a44bc1e](https://github.com/atlanhq/application-sdk/commit/a44bc1e))
+- send semver image tag to GM and fix branch slug for release builds (#1776) (by @cmgrote in [bf83d36](https://github.com/atlanhq/application-sdk/commit/bf83d36))
+- rename release_model 'versioned' → 'semver' and include in GM publish payload (#1777) (by @cmgrote in [3ce2a62](https://github.com/atlanhq/application-sdk/commit/3ce2a62))
+- break observability→storage circular import and add logger.log() (#1779) (by @cmgrote in [280aec0](https://github.com/atlanhq/application-sdk/commit/280aec0))
+
+
+## v3.11.0 (May 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.10.0...v3.11.0
+
+### Features
+
+- include sdk_version in EventMetadata (#1760) (by @vaibhavatlan in [059873e](https://github.com/atlanhq/application-sdk/commit/059873e))
+- add local_dev_mode for zero-install local app development (#1759) (by @vaibhavatlan in [f77e0c7](https://github.com/atlanhq/application-sdk/commit/f77e0c7))
+
+### Bug Fixes
+
+- tighten release_tag bypass and add release_model opt-in for versioned releases (#1757) (by @cmgrote in [14aa2e5](https://github.com/atlanhq/application-sdk/commit/14aa2e5))
+- emit top-level hidden auth panes for JDBC-URL agent merge (HYP-1251) (#1761) (by @prateek11rai in [6e1a8e6](https://github.com/atlanhq/application-sdk/commit/6e1a8e6))
+- fix Windows example CI and Capability Manifest Drift on release PRs (#1766) (by @cmgrote in [763785a](https://github.com/atlanhq/application-sdk/commit/763785a))
+
+
 ## v3.10.0 (May 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.9.0...v3.10.0

@@ -30,6 +30,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pandas as pd
 import pytest
 
+from application_sdk.common.errors import FileConverterNotFoundError
 from application_sdk.common.file_converter import (
     ConvertFile,
     FileType,
@@ -137,8 +138,8 @@ class TestConvertDataFiles:
 
         input_files = ["/path/input.json"]
 
-        # Act & Assert - Should raise ValueError with descriptive message
-        with pytest.raises(ValueError, match="No converter found"):
+        # Act & Assert - Should raise FileConverterNotFoundError
+        with pytest.raises(FileConverterNotFoundError):
             await convert_data_files(input_files, FileType.PARQUET)
 
     @pytest.mark.asyncio

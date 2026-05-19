@@ -30,6 +30,12 @@ from application_sdk.main import (
     run_main,
     run_worker_mode,
 )
+from application_sdk.main_errors import (
+    DaprNotDetectedError,
+    MissingAppModuleError,
+    MultiAppModuleError,
+    UnknownModeError,
+)
 
 
 class TestDeriveServiceName:
@@ -157,8 +163,9 @@ class TestAppConfigFromArgsAndEnv:
         monkeypatch.delenv("ATLAN_APP_MODULE", raising=False)
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")
         args = self._make_args(mode="worker")
-        with pytest.raises(ValueError, match="App module is required"):
+        with pytest.raises(MissingAppModuleError) as exc_info:
             AppConfig.from_args_and_env(args)
+        assert exc_info.value.code == "INVALID_INPUT_APP_MODULE_MISSING"
 
     def test_app_module_parsed_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")
@@ -335,8 +342,10 @@ class TestRunMain:
 
     def test_unknown_mode_raises_value_error(self) -> None:
         config = AppConfig(mode="invalid", app_module="pkg:App")
-        with pytest.raises(ValueError, match="Unknown mode"):
+        with pytest.raises(UnknownModeError) as exc_info:
             run_main(config)
+        assert exc_info.value.code == "INVALID_INPUT_MODE"
+        assert exc_info.value.received_mode == "invalid"
 
     def test_worker_mode_calls_asyncio_run(self) -> None:
         config = AppConfig(mode="worker", app_module="pkg:App")
@@ -593,8 +602,10 @@ class TestAppConfigCommaRejection:
             log_level=None,
             service_name=None,
         )
-        with pytest.raises(ValueError, match="comma"):
+        with pytest.raises(MultiAppModuleError) as exc_info:
             AppConfig.from_args_and_env(args)
+        assert exc_info.value.code == "INVALID_INPUT_APP_MODULE_COMMA"
+        assert exc_info.value.app_module == "pkg:AppA,pkg:AppB"
 
     def test_post_init_derives_task_queue(self) -> None:
         """__post_init__ derives task_queue from app_module when missing."""
@@ -613,10 +624,11 @@ class TestCreateInfrastructureNoDapr:
     async def test_raises_runtime_error_when_no_dapr_port(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Without DAPR_HTTP_PORT, _create_infrastructure must raise RuntimeError."""
+        """Without DAPR_HTTP_PORT, _create_infrastructure must raise DaprNotDetectedError."""
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
-        with pytest.raises(RuntimeError, match="Dapr sidecar not detected"):
+        with pytest.raises(DaprNotDetectedError) as exc_info:
             await _create_infrastructure()
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAPR_SIDECAR"
 
 
 # --------------------------------------------------------------------------- #
@@ -1284,43 +1296,47 @@ class TestRunCombinedMode:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.fixture
+def _stub_embedded_daemons():
+    """Replace the daprd + Temporal context managers with no-ops.
+
+    ``run_dev_combined`` unconditionally wraps its body in ``embedded_dapr``
+    and ``embedded_runtime``; without this stub each unit test would try to
+    download daprd from the internet and spawn subprocesses. We swap in
+    minimal async context managers that yield the dataclasses the body
+    expects but do no actual work.
+    """
+    from contextlib import asynccontextmanager
+
+    from application_sdk.dev._dapr import EmbeddedDapr
+    from application_sdk.dev._embedded import EmbeddedRuntime
+
+    @asynccontextmanager
+    async def _fake_dapr(**_kwargs):
+        yield EmbeddedDapr(
+            http_port=3500, grpc_port=50001, components_dir="/tmp/fake-components"
+        )
+
+    @asynccontextmanager
+    async def _fake_runtime(**_kwargs):
+        yield EmbeddedRuntime(host="127.0.0.1:7233", namespace="default")
+
+    # ``run_dev_combined`` does ``from application_sdk.dev import embedded_dapr,
+    # embedded_runtime`` lazily inside the function body, so patch them on the
+    # source module — not on ``application_sdk.main``.
+    with (
+        patch("application_sdk.dev.embedded_dapr", _fake_dapr),
+        patch("application_sdk.dev.embedded_runtime", _fake_runtime),
+    ):
+        yield
+
+
 class TestRunDevCombined:
     """Behavioral tests for run_dev_combined()."""
 
-    async def test_sets_default_dapr_ports(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Defaults DAPR_HTTP_PORT/DAPR_GRPC_PORT for dev convenience."""
-        monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
-        monkeypatch.delenv("DAPR_GRPC_PORT", raising=False)
-        app_class = _fake_app_class()
-        with (
-            patch(
-                "application_sdk.main._create_infrastructure",
-                new_callable=AsyncMock,
-                return_value=MagicMock(),
-            ),
-            patch("application_sdk.infrastructure.context.set_infrastructure"),
-            patch(
-                "application_sdk.main.run_combined_mode",
-                new_callable=AsyncMock,
-            ) as mock_run_combined,
-        ):
-            await run_dev_combined(app_class, host="127.0.0.1", port=9999)
-        import os
-
-        assert os.environ.get("DAPR_HTTP_PORT") == "3500"
-        assert os.environ.get("DAPR_GRPC_PORT") == "50001"
-        mock_run_combined.assert_awaited_once()
-        # config passed must reflect dev settings
-        cfg = mock_run_combined.await_args.args[0]
-        assert cfg.mode == "combined"
-        assert cfg.handler_host == "127.0.0.1"
-        assert cfg.handler_port == 9999
-        # Dev should not start prometheus by default (port collision)
-        assert cfg.enable_temporal_core_metrics is False
-        # Dev uses ephemeral health port to avoid collision
-        assert cfg.health_port == 0
+    @pytest.fixture(autouse=True)
+    def _stub_daemons(self, _stub_embedded_daemons):
+        """Stub the embedded daprd + Temporal context managers for every test in this class."""
 
     async def test_credentials_path_schedules_provision_task(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1509,6 +1525,10 @@ class TestLogDaprComponentsSafeMetaBranch:
 
 class TestRunDevCombinedProvisioning:
     """Exercise the inner _provision_and_start coroutine in the credentials path."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_daemons(self, _stub_embedded_daemons):
+        """Stub the embedded daprd + Temporal context managers for every test in this class."""
 
     async def test_provision_and_start_posts_creds_and_workflow(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

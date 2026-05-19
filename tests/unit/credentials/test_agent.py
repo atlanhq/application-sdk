@@ -24,6 +24,7 @@ from application_sdk.credentials.errors import (
     CredentialError,
     CredentialNotFoundError,
     CredentialParseError,
+    CredentialRoutingError,
 )
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.infrastructure.secrets import SecretStoreError
@@ -895,10 +896,14 @@ class TestCredentialRefFromWorkflowArgs:
 
         from application_sdk.credentials.ref import CredentialRef
 
-        with pytest.raises(ValueError, match="no routable credential source"):
+        with pytest.raises(
+            CredentialRoutingError, match="No routable credential source"
+        ):
             CredentialRef.from_workflow_args({})
 
-        with pytest.raises(ValueError, match="no routable credential source"):
+        with pytest.raises(
+            CredentialRoutingError, match="No routable credential source"
+        ):
             CredentialRef.from_workflow_args(
                 {"extraction_method": "direct", "agent_json": "", "credential_guid": ""}
             )
@@ -908,7 +913,9 @@ class TestCredentialRefFromWorkflowArgs:
 
         from application_sdk.credentials.ref import CredentialRef
 
-        with pytest.raises(ValueError, match="no routable credential source"):
+        with pytest.raises(
+            CredentialRoutingError, match="No routable credential source"
+        ):
             CredentialRef.from_workflow_args(
                 {"extraction_method": "agent", "agent_json": "{}"}
             )

@@ -21,6 +21,7 @@ from typing import Annotated, Any, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
 
 T = TypeVar("T")
@@ -76,9 +77,7 @@ class StorageTier(StrEnum):
             return "file_refs"
         if self is StorageTier.RETAINED:
             if not run_prefix:
-                raise ValueError(
-                    "run_prefix is required when computing upload prefix for RETAINED tier"
-                )
+                raise RunPrefixRequiredError()
             return run_prefix
         # PERSISTENT
         return (
@@ -130,9 +129,7 @@ class StorageTier(StrEnum):
             return "file_refs"
         if self is StorageTier.RETAINED:
             if not run_prefix:
-                raise ValueError(
-                    "run_prefix is required when persisting a RETAINED-tier FileReference"
-                )
+                raise RunPrefixRequiredError()
             return f"{run_prefix}/file_refs"
         # PERSISTENT
         return (

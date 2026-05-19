@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from application_sdk.common.errors import PathEmptyError
 from application_sdk.common.path import convert_to_extended_path
 from application_sdk.constants import WINDOWS_EXTENDED_PATH_PREFIX
 
@@ -12,8 +13,8 @@ class TestConvertToExtendedPath:
     """Test suite for convert_to_extended_path function."""
 
     def test_raises_value_error_for_empty_path(self) -> None:
-        """Test that empty path raises ValueError."""
-        with pytest.raises(ValueError, match="Path cannot be empty"):
+        """Test that empty path raises PathEmptyError."""
+        with pytest.raises(PathEmptyError):
             convert_to_extended_path("")
 
     def test_returns_path_as_is_on_non_windows(self) -> None:

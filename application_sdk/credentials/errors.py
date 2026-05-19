@@ -21,6 +21,42 @@ from application_sdk.errors import (
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
 
+# ---------------------------------------------------------------------------
+# Routing / type-check errors (simple typed leaves — no custom __init__)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(kw_only=True)
+class CredentialResolvableTypeError(InvalidInputError):
+    """source is not a CredentialResolvable (missing extraction_method / agent_json / credential_guid)."""
+
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_RESOLVABLE_TYPE"
+    message: str = "Expected a CredentialResolvable (with extraction_method, agent_json, credential_guid)"
+    field: str | None = "source"
+
+
+@dataclass(kw_only=True)
+class CredentialRoutingError(InvalidInputError):
+    """No routable credential source present in input."""
+
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_ROUTING"
+    message: str = (
+        "No routable credential source: need extraction_method='agent' with a "
+        "non-empty agent_json, or extraction_method='direct' with a non-empty credential_guid"
+    )
+    field: str | None = "extraction_method"
+
+
+@dataclass(kw_only=True)
+class AtlanCredentialTypeError(InvalidInputError):
+    """Credential is not an AtlanApiToken or AtlanOAuthClient."""
+
+    code: ClassVar[str] = "INVALID_INPUT_ATLAN_CREDENTIAL_TYPE"
+    message: str = (
+        "Unsupported Atlan credential type; expected AtlanApiToken or AtlanOAuthClient"
+    )
+    field: str | None = "credential"
+
 
 @dataclass(kw_only=True)
 class CredentialError(AuthError):

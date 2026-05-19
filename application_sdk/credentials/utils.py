@@ -7,7 +7,6 @@ from typing import Any
 
 import orjson
 
-from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import download_file_from_upload_response
 from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME, TEMPORARY_PATH
 from application_sdk.observability import get_logger
@@ -41,8 +40,14 @@ def parse_credentials_extra(credentials: dict[str, Any]) -> dict[str, Any]:
         try:
             return json.loads(extra)
         except json.JSONDecodeError as e:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: Invalid JSON in credentials extra field: {e}"
+            from application_sdk.credentials.errors import (  # noqa: PLC0415
+                CredentialParseError,
+            )
+
+            raise CredentialParseError(
+                message="Invalid JSON in credentials extra field",
+                credential_name="extra",
+                cause=e,
             ) from e
 
     return extra
@@ -130,7 +135,7 @@ async def resolve_credential_file(
         if isinstance(parsed, dict) and ("key" in parsed or "fileKey" in parsed):
             return await download_file_from_upload_response(value)
     except (orjson.JSONDecodeError, TypeError):
-        pass
+        pass  # not JSON / not bytes-like — fall through to next check
 
     # 2. Customer's DEPLOYMENT object store — explicit objectstore:// prefix.
     #    Intended for non-secret companion files (krb5.conf, public CA certs)

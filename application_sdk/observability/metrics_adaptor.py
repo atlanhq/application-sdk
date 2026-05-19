@@ -52,11 +52,13 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     """
 
     _flush_task_started: ClassVar[bool] = False
+    _otel_setup_failed_logged: ClassVar[bool] = False
 
     @classmethod
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation."""
         cls._flush_task_started = False
+        cls._otel_setup_failed_logged = False
 
     def __init__(self):
         """Initialize the metrics adapter with configuration and setup.
@@ -78,6 +80,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         )
 
         # Prometheus is the canonical metrics surface and is always on.
+        self._otel_metrics_enabled = False
         self._setup_otel_metrics()
 
         # Initialize Segment client (enabled automatically if write key is present)
@@ -144,9 +147,14 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             )
             metrics.set_meter_provider(self.meter_provider)
             self.meter = self.meter_provider.get_meter(SERVICE_NAME)
+            self._otel_metrics_enabled = True
+            AtlanMetricsAdapter._otel_setup_failed_logged = False
             logging.info("Prometheus metrics reader enabled")
         except Exception:
-            logging.error("Failed to setup OTel meter provider", exc_info=True)
+            self._otel_metrics_enabled = False
+            if not AtlanMetricsAdapter._otel_setup_failed_logged:
+                logging.error("Failed to setup OTel meter provider", exc_info=True)
+                AtlanMetricsAdapter._otel_setup_failed_logged = True
 
     async def _flush_buffer(self, force=False):
         await super()._flush_buffer(force=force)
@@ -224,6 +232,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If sending fails, logs error and continues
         """
+        if not self._otel_metrics_enabled:
+            return
+
         try:
             otel_attrs: dict[str, str | int | float | bool] = {}
             dropped: list[str] = []

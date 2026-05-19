@@ -490,7 +490,7 @@ class TestExecuteSingleColumnBatchInlineImports:
         batch_file = batches_dir / "batch-0.json"
         batch_file.write_text('["t1", "t2", "t3"]', encoding="utf-8")
 
-        async def fake_execute_column_sql(self, sql, inp, ctx):  # noqa: ARG001
+        async def fake_execute_column_sql(self, sql, inp, ctx):
             return 42
 
         # bind execute_column_sql at instance level
@@ -852,8 +852,12 @@ class TestWriteCurrentStateInlineImports:
         assert out.incremental_diff_path == ""
         assert out.incremental_diff_s3_prefix == ""
 
-    async def test_exception_rewraps_and_cleans_up(self, tmp_path) -> None:
-        """Exception inside try-block is rewrapped; finally still cleans up."""
+    async def test_exception_raises_typed_error_and_cleans_up(self, tmp_path) -> None:
+        """Exception inside try-block raises IncrementalStateWriteError; finally still cleans up."""
+        from application_sdk.templates._template_errors import (
+            IncrementalStateWriteError,
+        )
+
         extractor = _make_extractor()
 
         with (
@@ -881,8 +885,9 @@ class TestWriteCurrentStateInlineImports:
                 new=AsyncMock(return_value=tmp_path / "prev"),
             ),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(IncrementalStateWriteError) as excinfo:
                 await extractor.write_current_state(self._make_input())
+            assert excinfo.value.code == "INTERNAL_INCREMENTAL_STATE_WRITE"
         # cleanup_previous_state runs in finally
         mock_cleanup.assert_called_once()
 
