@@ -65,6 +65,11 @@ on:
         required: false
         type: string
         default: ""
+      unit_tests_workflow_file:
+        description: "Filename of the workflow in the caller's repo that runs the app's unit tests (e.g. 'unit-tests.yml', 'tests.yml'). When unset (default), the gate is skipped entirely — apps onboard at their pace and existing callers stay unaffected. When set, the gate looks for an existing successful run of this workflow on the publish SHA; if none is found, it dispatches the workflow on the publish ref and waits for the new run. The target workflow MUST declare 'workflow_dispatch:' in its 'on:' block. See docs/standards/unit-tests-gate.md."
+        required: false
+        type: string
+        default: ""
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -81,13 +86,15 @@ permissions:
   packages: write
   actions: write
   pull-requests: write
+  checks: read
 
 jobs:
   # ── Job 0: Channel + branch gate ─────────────────────────────────────────────
   # 'all'-channel releases reach every production tenant, so they MUST come
   # from the protected `main` branch. Fail here (before the multi-arch build
   # spends ~10 min) when channel=='all' and the build ref is not main.
-  # Only runs when `publish: true` — build-only invocations are unaffected.
+  # Only runs when `publish: true` AND the caller has set
+  # `unit_tests_workflow_file` — apps that have not onboarded skip the gate.
   # Beta, staging, and tenant-targeted publishes are unrestricted.
   validate-channel:
     name: Validate Channel + Branch
@@ -169,13 +176,183 @@ jobs:
               ;;
           esac
 
+  # ── Job 0b: Unit-tests gate ──────────────────────────────────────────────────
+  # Block publish unless the app's `unit_tests_workflow_file` has completed
+  # successfully for the publish SHA. The gate runs before any build minutes
+  # are spent so a failing test surfaces at minute 0 rather than after the
+  # multi-arch build.
+  #
+  # How it works:
+  #   1. Resolve the publish SHA.
+  #   2. Look for an existing run of `unit_tests_workflow_file` on that
+  #      commit (any conclusion).
+  #   3. If no run exists, dispatch the workflow on the publish ref and
+  #      capture the new run ID.
+  #   4. Poll the run by ID until it completes; gate passes iff conclusion
+  #      is `success`.
+  #
+  # The gate tracks runs by ID, not by check name — so apps don't need any
+  # particular naming convention on their test jobs.
+  #
+  # Contract: the consumer app's `unit_tests_workflow_file` MUST
+  #   1. Exist at `.github/workflows/<filename>`.
+  #   2. Declare `workflow_dispatch:` in its `on:` block.
+  #   3. Run unit tests and exit non-zero on test/coverage failure.
+  # See docs/standards/unit-tests-gate.md.
+  #
+  # Only runs when `publish: true` AND the caller has set
+  # `unit_tests_workflow_file` — apps that have not onboarded skip the gate.
+  unit-tests-gate:
+    name: Unit-tests gate
+    if: inputs.publish && inputs.unit_tests_workflow_file != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve SHA, find or dispatch tests run
+        id: prepare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Resolve to a concrete SHA regardless of whether the caller passed
+          # a branch name (`feat/foo`), a full ref (`refs/heads/main`), a tag,
+          # or a SHA. The /commits/{ref} endpoint accepts all of these.
+          REF: ${{ inputs.ref || github.sha }}
+          # gh workflow run accepts a branch / tag name only, never a bare
+          # SHA. Prefer the caller's ref input, then the calling workflow's
+          # branch name (`github.ref_name`).
+          DISPATCH_REF: ${{ inputs.ref || github.ref_name }}
+          WORKFLOW_FILE: ${{ inputs.unit_tests_workflow_file }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA=$(gh api "/repos/${REPO}/commits/${REF}" --jq '.sha')
+          echo "Resolved '${REF}' → ${SHA}"
+
+          # Look for an existing run of this workflow on this commit. Any
+          # conclusion — the next step will inspect the result.
+          EXISTING=$(gh run list \
+            --repo "${REPO}" \
+            --workflow "${WORKFLOW_FILE}" \
+            --commit "${SHA}" \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+
+          if [ -n "${EXISTING}" ]; then
+            echo "Found existing run ${EXISTING} of '${WORKFLOW_FILE}' on ${SHA} — reusing."
+            echo "run_id=${EXISTING}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # No prior run on this SHA. Dispatch fresh on the publish ref.
+          # `gh workflow run` doesn't return the new run's ID, so capture
+          # it by listing recent dispatches after the trigger.
+          echo "No existing run of '${WORKFLOW_FILE}' on ${SHA}. Dispatching on '${DISPATCH_REF}'..."
+          BEFORE=$(date -u +%FT%TZ)
+          if ! gh workflow run "${WORKFLOW_FILE}" --repo "${REPO}" --ref "${DISPATCH_REF}"; then
+            {
+              echo "### Publish blocked: failed to dispatch '${WORKFLOW_FILE}'"
+              echo ""
+              echo "The gate tried to dispatch \`${WORKFLOW_FILE}\` on \`${DISPATCH_REF}\` for SHA \`${SHA}\` but the dispatch failed."
+              echo ""
+              echo "Common causes:"
+              echo "- The workflow does not declare \`workflow_dispatch:\` in its \`on:\` block."
+              echo "- The file does not exist at \`.github/workflows/${WORKFLOW_FILE}\`."
+              echo "- The branch \`${DISPATCH_REF}\` does not exist."
+              echo ""
+              echo "Contract + template: <https://github.com/atlanhq/application-sdk/blob/main/docs/standards/unit-tests-gate.md>"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error title=Publish blocked::Failed to dispatch '${WORKFLOW_FILE}'. See workflow summary."
+            exit 1
+          fi
+
+          # Poll for up to 60 seconds for the dispatched run to register.
+          # GitHub usually surfaces it within ~5–10s; allow margin for slow
+          # API replication.
+          echo "Dispatched. Polling for the new run to appear..."
+          RUN_ID=""
+          for i in $(seq 1 12); do
+            sleep 5
+            RUN_ID=$(gh run list \
+              --repo "${REPO}" \
+              --workflow "${WORKFLOW_FILE}" \
+              --branch "${DISPATCH_REF}" \
+              --event workflow_dispatch \
+              --created ">${BEFORE}" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if [ -n "${RUN_ID}" ]; then
+              echo "New run registered after ${i} attempt(s): ${RUN_ID}"
+              break
+            fi
+            echo "Attempt ${i}/12 — run not yet visible, retrying..."
+          done
+
+          if [ -z "${RUN_ID}" ]; then
+            echo "::error title=Publish blocked::Dispatched '${WORKFLOW_FILE}' but the new run never registered within 60s."
+            exit 1
+          fi
+
+          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for tests run to complete
+        id: wait
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ steps.prepare.outputs.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "Polling run ${RUN_ID} every 30s (timeout 30m)..."
+          # Loop bound covers the 30-min job timeout. The job-level
+          # timeout-minutes already enforces an outer cap; this inner cap
+          # avoids tight infinite loops if `gh run view` ever returns junk.
+          for i in $(seq 1 70); do
+            RESULT=$(gh run view "${RUN_ID}" --repo "${REPO}" --json status,conclusion,url)
+            STATUS=$(echo "${RESULT}" | jq -r '.status')
+            CONCLUSION=$(echo "${RESULT}" | jq -r '.conclusion // ""')
+            URL=$(echo "${RESULT}" | jq -r '.url')
+            echo "  iteration ${i}: status=${STATUS} conclusion=${CONCLUSION}"
+            if [ "${STATUS}" = "completed" ]; then
+              echo "conclusion=${CONCLUSION}" >> "${GITHUB_OUTPUT}"
+              echo "url=${URL}" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            sleep 25
+          done
+          echo "::error title=Publish blocked::Tests run ${RUN_ID} did not complete within the gate timeout."
+          exit 1
+
+      # TEMPORARY warn-only mode for the rollout window. The follow-up PR
+      # (DISTR-456 enforcement flip) restores `exit 1` so gate failure
+      # blocks publish. While in warn-only mode, the gate runs, the
+      # verdict is annotated on the workflow summary, but publish
+      # proceeds even on test failure.
+      - name: Annotate warning if tests did not succeed (warn-only)
+        if: steps.wait.outputs.conclusion != 'success'
+        env:
+          CONCLUSION: ${{ steps.wait.outputs.conclusion }}
+          URL: ${{ steps.wait.outputs.url }}
+          WORKFLOW_FILE: ${{ inputs.unit_tests_workflow_file }}
+        run: |
+          {
+            echo "### ⚠️ Publish would be blocked once enforcement lands"
+            echo ""
+            echo "Run of \`${WORKFLOW_FILE}\` concluded as \`${CONCLUSION}\`."
+            echo ""
+            echo "Failing run: ${URL}"
+            echo ""
+            echo "**Currently warn-only — publish will proceed.** Once the enforcement-flip PR lands, this state will block publish. Fix the failing tests before then."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "::warning title=Tests failed (warn-only)::${WORKFLOW_FILE} concluded as ${CONCLUSION}. See ${URL}. Publish proceeded; will block once enforcement lands."
+
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel]
-    # `needs: [validate-channel]` only enforces ordering when that job runs.
-    # When publish=false, validate-channel is skipped via its `if:` — which by
-    # default would propagate "skipped" to dependents. The condition below
-    # explicitly allows prepare to run when validate-channel is skipped OR
+    needs: [validate-channel, unit-tests-gate]
+    # `needs: [validate-channel, unit-tests-gate]` only enforces ordering when
+    # those jobs run. When publish=false, both are skipped via their `if:` —
+    # which by default would propagate "skipped" to dependents. The condition
+    # below explicitly allows prepare to run when those jobs are skipped OR
     # successful, but NOT when it failed.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
