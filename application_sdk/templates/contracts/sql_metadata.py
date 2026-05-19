@@ -335,17 +335,30 @@ class ExtractionTaskOutput(Output):
         activity runs, with SHA-256 sidecar verification (so the
         transform sees a verified-fresh local copy even when it lands
         on a different pod than the extract).
+
+    **Single-file contract:** ``raw_file`` is intentionally a *singular*
+    ``FileReference`` — one ``records.json`` per entity per run. The
+    SqlApp template's ``_extract_entity`` writes exactly one JSONL
+    output file in a single streaming pass; no chunking, no
+    partitioning. If a future connector needs multi-file output
+    (chunked extracts for very large entities, partitioned writes),
+    either add a separate ``raw_files: list[FileReference]`` field
+    or switch this to a directory-shaped ``FileReference`` (which the
+    interceptor also supports) — and at that point the field deserves
+    a plural / directory-named alias to match.
     """
 
     typename: str = ""
     total_record_count: int = 0
     raw_file: FileReference | None = None
-    """``FileReference`` to ``raw/<entity>/records.json``.
+    """Singular ``FileReference`` to ``raw/<entity>/records.json``.
 
     ``None`` when the extract returned zero rows — preserves the
     'genuine zero-row extract' signal that publish relies on (the
     matching transform then returns count=0 cleanly without spurious
-    asset archival).
+    asset archival). See the class docstring for the single-file
+    constraint and how to extend it if multi-file extracts become
+    necessary.
     """
 
 
@@ -356,24 +369,55 @@ class TransformInput(ExtractionTaskInput):
     threaded in by ``SqlApp.run()`` from the matching extract's
     :class:`ExtractionTaskOutput`.
 
-    The legacy v2 ``transform_data`` activity (in
-    :class:`SqlMetadataExtractor`) accepts this same shape via
-    ``typename`` / ``file_names`` / ``chunk_start``; v3's per-entity
-    ``transform_*`` tasks consume ``raw_file`` and ignore the legacy
-    fields.
+    Two extraction shapes share this input type today:
+
+    1. **Single-file extraction** (the v3 ``SqlApp`` per-entity flow) —
+       carries ``raw_file`` (a singular ``FileReference``). The activity
+       interceptor auto-materialises it on the transform worker.
+    2. **Multi-file batch extraction** (the v3
+       :class:`IncrementalSqlMetadataExtractor` column-batch flow) —
+       carries ``file_names`` (a list of relative parquet file names
+       under ``input.output_path``) plus ``chunk_start``. These fields
+       are NOT routed through the ``FileReference`` interceptor — the
+       transform implementation owns materialising / reading them. The
+       same cross-worker fault tolerance the ``FileReference`` path
+       gives ``raw_file`` is therefore an open follow-up for the
+       batch path (BLDX follow-up: migrate ``file_names`` to a
+       directory-shaped ``FileReference`` so it auto-materialises too).
+
+    Connectors implementing a custom ``transform_data`` (the legacy
+    v2 activity) read both shapes; v3's per-entity ``transform_*``
+    tasks only consume ``raw_file``.
     """
 
     typename: str = ""
     file_names: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
+    """Relative parquet file names under ``output_path`` (multi-file
+    batch flow). NOT auto-materialised by the activity interceptor —
+    the transform implementation owns reading them, and a transform
+    that lands on a different worker pod than the extract will NOT
+    see them unless the connector code downloads them itself.
+
+    Used today only by the
+    :class:`~application_sdk.templates.incremental_sql_metadata_extractor.IncrementalSqlMetadataExtractor`
+    column-batch path. A follow-up should migrate this to a
+    directory-shaped ``FileReference`` so the same auto-materialise
+    contract applies.
+    """
     chunk_start: int = 0
     raw_file: FileReference | None = None
-    """Durable ``FileReference`` to the matching ``raw/<entity>/records.json``.
+    """Durable singular ``FileReference`` to the matching
+    ``raw/<entity>/records.json``.
 
-    Set by ``SqlApp.run()`` from the corresponding ``ExtractionTaskOutput.raw_file``.
-    The activity interceptor downloads (or sidecar-verifies an existing
-    local copy of) the referenced object before the transform activity
-    runs, so ``input.raw_file.local_path`` always points to a fresh local
-    file on whichever worker pod ends up running the transform.
+    Set by ``SqlApp.run()`` from the corresponding
+    ``ExtractionTaskOutput.raw_file``. The activity interceptor
+    downloads (or sidecar-verifies an existing local copy of) the
+    referenced object before the transform activity runs, so
+    ``input.raw_file.local_path`` always points to a fresh local file
+    on whichever worker pod ends up running the transform.
+
+    See :class:`ExtractionTaskOutput` for the single-file constraint
+    and the upgrade path if multi-file extracts become necessary.
     """
 
 
@@ -389,10 +433,16 @@ class TransformOutput(Output):
     total_record_count: int = 0
     chunk_count: int = 0
     transformed_file: FileReference | None = None
-    """``FileReference`` to ``transformed/<entity>/entities.json``.
+    """Singular ``FileReference`` to ``transformed/<entity>/entities.json``.
 
     Ephemeral on return (``is_durable=False``); the activity interceptor
     auto-uploads it after the transform activity finishes and marks it
     durable so downstream tasks can consume it without local-FS coupling.
     ``None`` when the transform processed zero rows.
+
+    Single-file by construction — ``SqlApp._transform_entity`` writes
+    one ``entities.json`` per entity per run, mirroring the
+    extract-side ``raw_file`` constraint. See
+    :class:`ExtractionTaskOutput` for the multi-file upgrade path if
+    that ever becomes necessary.
     """
