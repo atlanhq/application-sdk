@@ -2,6 +2,16 @@
 
 This reference covers the detailed implementation of the Activities class for incremental extraction.
 
+> **SQL injection note (BLDX-518).** Any value substituted into a SQL
+> template via `str.replace` / f-string must pass through
+> `application_sdk.common.sql_filters.validate_filter_no_sql_injection`
+> first, and the template must wrap the substitution in single quotes
+> (e.g. `WHERE last_modified > '{marker_timestamp}'`). The SDK contracts
+> apply this guard automatically for `marker_timestamp`,
+> `include_filter`, `exclude_filter`, and `temp_table_regex`; if your
+> connector introduces a new substitution placeholder, validate the
+> value yourself before the `replace`.
+
 ## Class Structure
 
 ```python
