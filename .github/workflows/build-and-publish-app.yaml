@@ -210,8 +210,12 @@ jobs:
           set -euo pipefail
           SHA=$(gh api "/repos/${REPO}/commits/${REF}" --jq '.sha')
           echo "Resolved '${REF}' → ${SHA}"
-          count=$(gh api "/repos/${REPO}/commits/${SHA}/check-runs" \
-            --jq "[.check_runs[] | select(.name == \"${CHECK}\")] | length")
+          # Server-side filter via check_name avoids the default per_page=30
+          # truncation (a SHA with many bot / Dependabot check-runs can push the
+          # one we care about onto page 2+, where a naive client-side filter
+          # would never see it).
+          count=$(gh api "/repos/${REPO}/commits/${SHA}/check-runs?check_name=${CHECK}" \
+            --jq '.total_count')
           if [ "${count}" = "0" ]; then
             {
               echo "### Publish blocked: '${CHECK}' check missing"
