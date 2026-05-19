@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.0
-source-sha:    4eafc0f05fd627cd47f3523cec72766beaf5175b
-source-date:   2026-05-19T21:23:19+05:30
+source-sha:    f6d8aa081514133f73996cac57711d10c8451325
+source-date:   2026-05-19T22:50:57+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2534,6 +2534,16 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `include_filter: FilterMap | str` `= Field(default='')`
   - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
   - `source_tag_prefix: str` `= ''`
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
+#### `ExtractionTaskOutput`
+
+- **Import:** `from application_sdk.templates.contracts import ExtractionTaskOutput`
+- **Summary:** Output from a per-entity ``extract_*`` task.
+- **Fields:**
+  - `typename: str` `= ''`
+  - `total_record_count: int` `= 0`
+  - `raw_file: FileReference | None` — ``FileReference`` to the extract's raw output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchColumnsIncrementalInput`

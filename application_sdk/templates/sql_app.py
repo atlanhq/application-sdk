@@ -757,20 +757,17 @@ class SqlApp(App):
         # raw → transform handoff is provided without any explicit
         # ``download_file`` plumbing in the template (BLDX-1281).
         #
-        # Tier=RETAINED matches every other SDK upload path
-        # (``UploadInput``, ``App.upload``, ``base_metadata_extractor``,
-        # ``sql_metadata_extractor``) — the ref lands under the
-        # run-scoped ``<run_prefix>/file_refs/<uuid>.json`` (i.e.
-        # ``artifacts/apps/<app>/workflows/<wf>/<run>/file_refs/...``)
-        # which is the only prefix Atlan's blob-storage gateway
-        # permits writes to in production deployments. The default
-        # ``TRANSIENT`` tier writes to bare ``file_refs/...`` and gets
-        # rejected with 403 ``code 1009 Invalid Path``.
-        raw_ref = (
-            FileReference.from_local(output_file, tier=StorageTier.RETAINED)
-            if count > 0
-            else None
-        )
+        # Default TRANSIENT tier is the right semantic choice here — the
+        # raw file is purely intermediate (extract → transform within
+        # the same run), and ``cleanup_storage`` auto-deletes tracked
+        # TRANSIENT refs at run end. The storage key resolves to
+        # ``<run_prefix>/file_refs/<uuid>.json`` because the activity
+        # interceptor passes ``output_path=build_output_path()`` to
+        # ``persist_file_refs``, and TRANSIENT's ``_file_ref_base`` now
+        # honours that run_prefix (see ``StorageTier._file_ref_base`` —
+        # tenant-scoped path so Atlan's blob-storage gateway permits
+        # the upload in production).
+        raw_ref = FileReference.from_local(output_file) if count > 0 else None
         return ExtractionTaskOutput(
             typename=entity_type,
             total_record_count=count,
@@ -864,9 +861,14 @@ class SqlApp(App):
         # Downstream publish / upload tasks then consume the durable ref
         # via the same materialise contract — no local-FS coupling.
         #
-        # See ``_extract_entity`` for why tier=RETAINED — the bare
-        # ``file_refs/`` prefix used by the default TRANSIENT tier is
-        # rejected (403) by Atlan's blob-storage gateway in production.
+        # Tier = RETAINED here (vs. TRANSIENT on raw_file): the
+        # transform → publish handoff can span an SDR → in-tenant
+        # deployment boundary, so the ref must survive the SDR-side
+        # workflow's auto-cleanup at run end. RETAINED keeps the
+        # object-store key under the run-scoped ``artifacts/`` prefix
+        # but skips ``cleanup_storage``'s tracked-TRANSIENT sweep.
+        # raw_file stays TRANSIENT because both extract and transform
+        # always run in the same deployment — see ``_extract_entity``.
         transformed_ref = (
             FileReference.from_local(output_file, tier=StorageTier.RETAINED)
             if count > 0

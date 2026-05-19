@@ -337,13 +337,13 @@ class TestExtractEmitsRawFileReference:
         )
         assert result.raw_file.is_durable is False
         assert result.raw_file.storage_path is None
-        # Tier must be RETAINED so the interceptor persists under the
-        # run-scoped ``<run_prefix>/file_refs/<uuid>`` prefix (i.e.
-        # ``artifacts/...``). The default TRANSIENT tier writes to a
-        # bare ``file_refs/...`` path that Atlan's blob-storage gateway
-        # rejects with 403 ``code 1009 Invalid Path`` in production —
-        # see ``TestRawFileTierIsRetained`` for the regression context.
-        assert result.raw_file.tier == StorageTier.RETAINED
+        # Tier stays TRANSIENT (the semantically correct choice — the
+        # raw file is an intermediate extract→transform handoff and
+        # gets auto-cleaned at run end by ``cleanup_storage``). The
+        # persist-side path scoping (which is what the production
+        # gateway actually cares about) is pinned by
+        # ``TestRawFilePersistsUnderRunScopedPrefix`` below.
+        assert result.raw_file.tier == StorageTier.TRANSIENT
 
     async def test_extract_with_zero_rows_emits_no_raw_file(self, app, tmp_path):
         """When extract finds no rows, raw_file is None — not a ref to an
@@ -366,75 +366,142 @@ class TestExtractEmitsRawFileReference:
         assert result.raw_file is None
 
 
-class TestRawFileTierIsRetained:
-    """Regression guard: ``_extract_entity`` / ``_transform_entity`` must
-    emit ``FileReference`` objects with ``tier=StorageTier.RETAINED``,
-    not the constructor default of ``TRANSIENT``.
+class TestRawFilePersistsUnderRunScopedPrefix:
+    """Regression guard: when the interceptor persists a ``raw_file`` /
+    ``transformed_file`` emitted by ``_extract_entity`` /
+    ``_transform_entity``, the resulting storage key must be
+    **run-scoped** — i.e. land under ``<run_prefix>/file_refs/<uuid>``,
+    not bare ``file_refs/<uuid>``.
 
-    Why this matters: the interceptor uses ``ref.tier`` to compute the
-    object-store key when it persists the ref after the activity
-    returns:
-
-      * ``RETAINED``   → ``<run_prefix>/file_refs/<uuid>`` (i.e.
-        ``artifacts/apps/<app>/workflows/<wf>/<run>/file_refs/...``)
-      * ``TRANSIENT``  → bare ``file_refs/<uuid>`` (no scoping)
-
-    Atlan's production blob-storage gateway only permits writes under
-    ``artifacts/`` and ``persistent-artifacts/`` — a bare ``file_refs/``
-    upload returns ``403 code 1009 'Invalid Path'``. This isn't
-    caught by the local CI suite because the local Dapr binding
-    (``bindings.localstorage``) has no path policy: every prefix is
+    Why this matters: in production the object store is Atlan's
+    blob-storage gateway, which only permits writes under
+    ``artifacts/`` and ``persistent-artifacts/``. A bare
+    ``file_refs/<uuid>`` upload returns ``403 code 1009 'Invalid Path'``.
+    The local CI suite can't catch this because the local Dapr binding
+    (``bindings.localstorage``) has no path policy — every prefix is
     writable on disk.
 
-    The original incident: every ``extract_*`` activity on a real
-    Atlan tenant failed identically with that 403 on the persist step
-    because the SqlApp template called ``FileReference.from_local(...)``
-    without a tier kwarg, picking up the constructor default. The fix
-    routes both raw_file and transformed_file through RETAINED, matching
-    every other SDK upload path (``UploadInput.tier`` default,
-    ``App.upload``, ``sql_metadata_extractor``, ``base_metadata_extractor``).
+    Per Chris Grote's review on PR #1792, the right tier for the
+    extract→transform handoff is ``TRANSIENT`` (intermediate, auto-
+    cleaned-at-run-end). The fix is therefore NOT to change the tier
+    at the SqlApp callsites, but to make ``StorageTier.TRANSIENT``
+    honour the ``run_prefix`` passed by the activity interceptor's
+    ``persist_file_refs(..., output_path=build_output_path())``. This
+    test exercises the actual persist path to pin the resulting
+    storage key shape — the property the gateway actually evaluates.
 
-    These tests pin that choice so a future refactor can't silently
-    revert it.
+    Original production incident: every ``extract_*`` activity on a
+    real Atlan tenant failed identically with that 403 on the
+    persist step because ``StorageTier.TRANSIENT._file_ref_base()``
+    used to return bare ``"file_refs"`` regardless of run_prefix.
     """
 
-    async def test_extract_raw_file_tier_is_retained_not_transient(self, app, tmp_path):
+    async def test_extract_raw_file_persists_under_run_prefix(self, app, tmp_path):
+        """End-to-end: extract emits a ref, persist resolves the
+        storage key, and the key MUST be run-scoped.
+        """
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
         rows = [{"database_name": "db1"}]
         input_ = _make_task_input(output_path=str(tmp_path))
+        store = create_local_store(tmp_path / "store")
 
         with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
             result = await app.extract_databases(input_)
 
         assert result.raw_file is not None
-        assert result.raw_file.tier == StorageTier.RETAINED, (
-            "extract_* must emit FileReference with tier=RETAINED so the "
-            "interceptor persists under the run-scoped artifacts/ prefix; "
-            "the default TRANSIENT tier writes to bare file_refs/ which "
-            "Atlan's blob-storage gateway rejects with 403 in production."
+
+        # Simulate what the activity interceptor does after extract returns.
+        run_prefix = "artifacts/apps/test-app/workflows/wf-1/run-1"
+        durable = await persist_file_reference(
+            store, result.raw_file, output_path=run_prefix
         )
 
-    async def test_transform_transformed_file_tier_is_retained_not_transient(
+        assert durable.storage_path is not None
+        assert durable.storage_path.startswith(f"{run_prefix}/file_refs/"), (
+            "extract→persist must produce a run-scoped storage key. Got "
+            f"{durable.storage_path!r}; Atlan's blob-storage gateway "
+            "rejects anything outside artifacts/ and persistent-artifacts/ "
+            "with 403 code 1009 'Invalid Path'."
+        )
+
+    async def test_transform_transformed_file_persists_under_run_prefix(
         self, app, tmp_path
     ):
+        """Same guard for the transform → publish handoff."""
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
         _seed_raw(tmp_path, "database", [{"database_name": "remote_db"}])
         input_ = _make_task_input(output_path=str(tmp_path))
+        store = create_local_store(tmp_path / "store")
 
         result = await app.transform_databases(input_)
 
         assert result.transformed_file is not None
-        assert result.transformed_file.tier == StorageTier.RETAINED, (
-            "transform_* must emit FileReference with tier=RETAINED for "
-            "the same reason extract_* does — see the class docstring."
+
+        run_prefix = "artifacts/apps/test-app/workflows/wf-1/run-1"
+        durable = await persist_file_reference(
+            store, result.transformed_file, output_path=run_prefix
         )
+
+        assert durable.storage_path is not None
+        assert durable.storage_path.startswith(f"{run_prefix}/file_refs/"), (
+            "transform→persist must produce a run-scoped storage key. "
+            f"Got {durable.storage_path!r}."
+        )
+
+    async def test_transient_tier_honours_run_prefix(self, tmp_path):
+        """Direct unit test on the contract: TRANSIENT must scope under
+        run_prefix when one is supplied. Guards the
+        ``StorageTier._file_ref_base`` change itself — without this,
+        the SqlApp emission paths above could silently fall back to
+        bare ``file_refs/`` if a future refactor reverts the contract.
+        """
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        f = tmp_path / "x.json"
+        f.write_text("{}")
+        store = create_local_store(tmp_path / "store")
+
+        ref = FileReference.from_local(f)  # default TRANSIENT
+        assert ref.tier == StorageTier.TRANSIENT
+
+        durable = await persist_file_reference(
+            store, ref, output_path="artifacts/apps/test/workflows/wf/run"
+        )
+        assert durable.storage_path is not None
+        assert durable.storage_path.startswith(
+            "artifacts/apps/test/workflows/wf/run/file_refs/"
+        )
+
+    async def test_transient_tier_falls_back_to_bare_prefix_without_run(self, tmp_path):
+        """Without a run_prefix (ad-hoc callers, unit tests, local
+        scripts), TRANSIENT still falls back to bare ``file_refs/`` so
+        the helper stays usable outside a Temporal workflow.
+        """
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        f = tmp_path / "x.json"
+        f.write_text("{}")
+        store = create_local_store(tmp_path / "store")
+
+        ref = FileReference.from_local(f)
+        durable = await persist_file_reference(store, ref)
+        assert durable.storage_path is not None
+        assert durable.storage_path.startswith("file_refs/")
 
     def test_from_local_accepts_tier_kwarg(self, tmp_path):
         """``FileReference.from_local`` accepts an explicit ``tier`` kwarg.
 
-        Guards the helper's signature so the SqlApp callsites
-        (and any downstream consumers that adopt the same pattern)
-        keep compiling. Default is still ``TRANSIENT`` for backward
-        compat with existing callers in ``storage/formats/parquet.py``
-        and ``storage/rolling.py``; pass-through is verified here.
+        Default stays ``TRANSIENT`` for the common task-to-task case;
+        callers can opt into ``RETAINED`` (handoffs that cross
+        deployment boundaries, e.g. SDR → in-tenant publish) or
+        ``PERSISTENT`` (files that must survive across multiple runs).
+        Pass-through verified here.
         """
         f = tmp_path / "x.json"
         f.write_text("{}")
@@ -534,9 +601,13 @@ class TestTransformConsumesRawFileReference:
         )
         assert result.transformed_file.is_durable is False
         assert result.transformed_file.storage_path is None
-        # Tier must be RETAINED — same reasoning as the raw_file emission
-        # in extract_*. See ``TestRawFileTierIsRetained`` for the
-        # production-side incident this guards against.
+        # Tier = RETAINED here because the transform → publish handoff
+        # can span SDR → in-tenant deployments — the ref must survive
+        # the SDR-side workflow's auto-cleanup at run end. Contrast
+        # with raw_file (TRANSIENT): extract and transform always run
+        # in the same deployment, so the intermediate ref is safe to
+        # auto-clean. See ``TestRawFilePersistsUnderRunScopedPrefix``
+        # for the storage-path scoping that both tiers share.
         assert result.transformed_file.tier == StorageTier.RETAINED
 
     async def test_transform_no_input_ref_falls_back_to_legacy_path(
