@@ -181,11 +181,15 @@ class TestLogWorkflowInboundInterceptor:
     def interceptor(self, mock_next):
         return _LogWorkflowInboundInterceptor(mock_next)
 
-    async def test_skips_on_replay(self, interceptor, mock_next):
+    async def test_skips_log_emission_on_replay(self, interceptor, mock_next):
+        # On replay the lifecycle log lines must NOT be emitted (they would
+        # double-count workflow.started / workflow.ended across attempts).
         with patch(
             "application_sdk.execution._temporal.interceptors.log.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = True
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
             ) as mock_logger:
@@ -193,6 +197,95 @@ class TestLogWorkflowInboundInterceptor:
 
         mock_logger.info.assert_not_called()
         mock_logger.error.assert_not_called()
+        # …but ``next.execute_workflow`` must still run so the wrapped workflow
+        # can replay its commands.
+        mock_next.execute_workflow.assert_awaited_once()
+
+    async def test_sets_correlation_id_on_replay_from_header(
+        self, interceptor, mock_next
+    ):
+        # Regression: a worker that picks up an in-flight workflow rebuilds
+        # state under is_replaying() == True. The interceptor must still
+        # resolve correlation_id (here from the header injected by the parent)
+        # and stash it on self so the outbound interceptor can re-inject it
+        # on workflow-issued commands during/after replay.
+        payload = _encode_header("inherited-corr-id")
+        headers = {"x-correlation-id": payload}
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = True
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers=headers)
+            )
+
+        assert interceptor._correlation_id == "inherited-corr-id"
+        ctx = get_correlation_context()
+        assert ctx is not None
+        assert ctx.correlation_id == "inherited-corr-id"
+
+    async def test_sets_correlation_id_on_replay_from_memo(
+        self, interceptor, mock_next
+    ):
+        # Continue-as-new path under replay: correlation_id comes from the
+        # workflow memo and must still land on self / the ContextVar.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = True
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {"correlation_id": "memo-corr-id"}
+            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert interceptor._correlation_id == "memo-corr-id"
+
+    async def test_sets_parent_identity_on_replay(self, interceptor, mock_next):
+        # Outbound activity-header injection relies on self._parent_*; these
+        # must be populated on replay too.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = True
+            mock_wf.info.return_value = MockWorkflowInfo(
+                parent=MockParentInfo(
+                    workflow_id="parent-wf-42", run_id="parent-run-42"
+                )
+            )
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert interceptor._parent_workflow_id == "parent-wf-42"
+        assert interceptor._parent_run_id == "parent-run-42"
+
+    async def test_outbound_injects_header_after_replay_setup(
+        self, interceptor, mock_next
+    ):
+        # End-to-end shape of the bug: after the inbound runs under replay,
+        # the outbound interceptor must still be able to inject the
+        # ``x-correlation-id`` header on a workflow-issued command.
+        payload = _encode_header("inherited-corr-id")
+        headers = {"x-correlation-id": payload}
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = True
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers=headers)
+            )
+
+        outbound = _LogWorkflowOutboundInterceptor(MagicMock(), interceptor)
+        injected = outbound._inject({})
+        assert "x-correlation-id" in injected
+        decoded = default_converter().payload_converter.from_payload(
+            injected["x-correlation-id"], type_hint=str
+        )
+        assert decoded == "inherited-corr-id"
 
     async def test_emits_workflow_started_log(self, interceptor):
         with patch(
