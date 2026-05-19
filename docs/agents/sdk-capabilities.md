@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.0
-source-sha:    2157426b76635450d766321dfc86f30110237398
-source-date:   2026-05-19T04:03:28+05:30
+source-sha:    5658e73da0c548a6245836344b7fd712e56b26c4
+source-date:   2026-05-19T12:11:28+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2534,6 +2534,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `include_filter: FilterMap | str` `= Field(default='')`
   - `temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)]` `= ''`
   - `source_tag_prefix: str` `= ''`
+  - `raw_file: FileReference | None` — Reference to the ``raw/<entity>/records.json`` file produced by the
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchColumnsIncrementalInput`
@@ -2823,11 +2824,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `TransformOutput`
 
 - **Import:** `from application_sdk.templates.contracts import TransformOutput`
-- **Summary:** Output from the transform_data task.
+- **Summary:** Output from the extract_* / transform_* tasks.
 - **Fields:**
   - `typename: str` `= ''`
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
+  - `raw_file: FileReference | None` — ``FileReference`` to ``raw/<entity>/records.json`` — set by extract,
+  - `transformed_file: FileReference | None` — ``FileReference`` to ``transformed/<entity>/entities.json`` — set by
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `UpdateMarkerInput`

@@ -72,6 +72,7 @@ from application_sdk.constants import (
     TEMPORARY_PATH,
     WORKFLOW_OUTPUT_PATH_TEMPLATE,
 )
+from application_sdk.contracts.types import FileReference
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.execution import build_output_path, get_object_store_prefix
@@ -500,11 +501,30 @@ class SqlApp(App):
         )
 
         # ── Phase 2: Transform — raw JSONL → mapper → transformed JSONL ──
+        # Thread each extract's ``raw_file`` ``FileReference`` into the
+        # matching transform's input. The activity interceptor:
+        #   1. uploaded each ephemeral raw_file ref after the extract
+        #      activity completed (now durable, with an object-store
+        #      storage_path);
+        #   2. will download the durable ref onto whichever worker pod
+        #      runs the matching transform (with SHA-256 sidecar
+        #      verification — handles the case where transform lands on
+        #      a different pod than extract).
+        # This is the BLDX-1281 cross-worker fix: no manual download_file
+        # plumbing inside the transform, the framework does it.
         await asyncio.gather(
-            self.transform_databases(task_input),
-            self.transform_schemas(task_input),
-            self.transform_tables(task_input),
-            self.transform_columns(task_input),
+            self.transform_databases(
+                self._with_raw_file(task_input, db_result.raw_file)
+            ),
+            self.transform_schemas(
+                self._with_raw_file(task_input, schema_result.raw_file)
+            ),
+            self.transform_tables(
+                self._with_raw_file(task_input, table_result.raw_file)
+            ),
+            self.transform_columns(
+                self._with_raw_file(task_input, column_result.raw_file)
+            ),
         )
 
         # ── Phase 3: Upload ─────────────────────────────────────────────
@@ -553,6 +573,22 @@ class SqlApp(App):
     # =====================================================================
     # Internal helpers
     # =====================================================================
+
+    @staticmethod
+    def _with_raw_file(
+        base: ExtractionTaskInput,
+        raw_file: FileReference | None,
+    ) -> ExtractionTaskInput:
+        """Return a copy of ``base`` with ``raw_file`` populated.
+
+        Used by ``run()`` to thread the durable ``FileReference`` returned
+        by each extract activity into the matching transform's input.
+        ``ExtractionTaskInput`` is a Pydantic ``BaseModel``, so
+        ``model_copy(update=…)`` produces a new instance without
+        mutating the shared task input (necessary because run() reuses
+        the same ``task_input`` across multiple transform calls).
+        """
+        return base.model_copy(update={"raw_file": raw_file})
 
     @staticmethod
     def _resolve_output_path(input: ExtractionTaskInput) -> str:
@@ -699,7 +735,22 @@ class SqlApp(App):
             await client.close()
 
         logger.info("Extracted %s: %d raw records", entity_type, count)
-        return TransformOutput(typename=entity_type, total_record_count=count)
+        # Emit a ``FileReference`` so the activity interceptor uploads the
+        # raw JSONL to the object store after the extract activity completes
+        # and marks the ref durable. ``run()`` then threads this durable ref
+        # into the matching transform's input — the interceptor re-downloads
+        # it onto whichever worker pod picks up the transform (with SHA-256
+        # sidecar verification, so a transform that lands on a different pod
+        # than the extract still sees a verified-fresh local copy). This is
+        # how cross-worker fault tolerance for raw → transform handoff is
+        # provided without any explicit download_file plumbing in the
+        # template (BLDX-1281 / PR #1787).
+        raw_ref = FileReference.from_local(output_file) if count > 0 else None
+        return TransformOutput(
+            typename=entity_type,
+            total_record_count=count,
+            raw_file=raw_ref,
+        )
 
     async def _transform_entity(
         self,
@@ -710,16 +761,38 @@ class SqlApp(App):
     ) -> TransformOutput:
         """Read raw JSONL → mapper → transformed JSONL.
 
-        Reads ``raw/<entity>/records.json`` line by line, runs each
+        Reads the raw records.json via the ``FileReference`` threaded
+        through from the matching ``extract_*`` activity, runs each
         record through ``mapper_fn``, and writes the resulting Atlan
-        asset to ``transformed/<entity>/entities.json``. If the raw file
-        is missing or empty (extract returned 0 rows), this is a no-op.
+        asset to ``transformed/<entity>/entities.json``.
+
+        Cross-worker contract (BLDX-1281 / PR #1787):
+            ``run()`` populates ``input.raw_file`` with the durable
+            ``FileReference`` returned by the matching extract activity.
+            The activity interceptor materialises that ref onto this
+            worker's local FS BEFORE this method runs (SHA-256 sidecar
+            verification → fresh local copy even if extract and
+            transform landed on different pods). The method below just
+            opens ``input.raw_file.local_path`` directly.
+
+            When ``input.raw_file is None`` (extract returned zero rows
+            or the caller didn't thread a ref), this is a clean no-op
+            returning ``total_record_count=0`` — matches the historical
+            contract that the publish step relies on.
         """
         output_path = self._resolve_output_path(input)
         if not output_path:
             return TransformOutput(typename=entity_type, total_record_count=0)
 
-        raw_file = Path(output_path) / "raw" / entity_type / "records.json"
+        # Resolve the raw file via the threaded FileReference. The
+        # interceptor has already materialised it; we just consume the
+        # local_path. Fall back to the legacy local path lookup so
+        # callers that don't thread a ref (e.g. unit tests that seed
+        # raw files directly under tmp_path) still work.
+        if input.raw_file is not None and input.raw_file.local_path:
+            raw_file = Path(input.raw_file.local_path)
+        else:
+            raw_file = Path(output_path) / "raw" / entity_type / "records.json"
         if not raw_file.exists() or raw_file.stat().st_size == 0:
             return TransformOutput(typename=entity_type, total_record_count=0)
 
@@ -761,4 +834,13 @@ class SqlApp(App):
                 count += 1
 
         logger.info("Transformed %s: %d records", entity_type, count)
-        return TransformOutput(typename=entity_type, total_record_count=count)
+        # Emit a FileReference to entities.json so the activity
+        # interceptor uploads it after the transform activity finishes.
+        # Downstream publish / upload tasks then consume the durable ref
+        # via the same materialise contract — no local-FS coupling.
+        transformed_ref = FileReference.from_local(output_file) if count > 0 else None
+        return TransformOutput(
+            typename=entity_type,
+            total_record_count=count,
+            transformed_file=transformed_ref,
+        )

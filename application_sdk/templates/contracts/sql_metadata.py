@@ -12,7 +12,7 @@ import orjson
 from pydantic import Field, field_validator, model_validator
 
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
-from application_sdk.contracts.types import ConnectionRef, MaxItems
+from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 
@@ -237,6 +237,19 @@ class ExtractionTaskInput(Input):
     temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
 
+    raw_file: FileReference | None = None
+    """Reference to the ``raw/<entity>/records.json`` file produced by the
+    matching ``extract_*`` activity.
+
+    Set by ``run()`` when building the per-entity transform input; the
+    ``FileReference`` interceptor materialises the durable ref onto the
+    transform-worker's local filesystem before the activity runs (with
+    SHA-256 sidecar verification — so a transform that lands on a
+    different pod than the extract still sees the file). ``None`` on
+    extract activities; ``None`` is also a valid transform input when
+    extract returned zero rows.
+    """
+
     @field_validator("include_filter", "exclude_filter", mode="before")
     @classmethod
     def _coerce_filter(cls, v: Any) -> FilterMap | str:
@@ -326,8 +339,32 @@ class TransformInput(ExtractionTaskInput):
 
 
 class TransformOutput(Output):
-    """Output from the transform_data task."""
+    """Output from the extract_* / transform_* tasks.
+
+    Carries up to two ``FileReference`` fields. Both default to ``None``
+    so existing connectors that return only counts keep working.
+
+    Cross-worker contract:
+        * ``extract_*`` sets ``raw_file`` to an ephemeral ``FileReference``
+          pointing at ``raw/<entity>/records.json``. The interceptor
+          uploads it after the activity finishes and marks it durable.
+        * ``run()`` threads the now-durable ref into the matching
+          ``transform_*`` input. The interceptor downloads it onto the
+          transform-worker's local FS before the activity runs.
+        * ``transform_*`` sets ``transformed_file`` to an ephemeral
+          ``FileReference`` pointing at ``transformed/<entity>/entities.json``.
+          The interceptor uploads it and marks it durable so downstream
+          publish / upload activities can consume it the same way.
+    """
 
     typename: str = ""
     total_record_count: int = 0
     chunk_count: int = 0
+    raw_file: FileReference | None = None
+    """``FileReference`` to ``raw/<entity>/records.json`` — set by extract,
+    auto-uploaded by the interceptor, consumed by the matching transform."""
+
+    transformed_file: FileReference | None = None
+    """``FileReference`` to ``transformed/<entity>/entities.json`` — set by
+    transform, auto-uploaded by the interceptor, consumed downstream by
+    publish / upload."""
