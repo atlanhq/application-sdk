@@ -690,7 +690,7 @@ jobs:
   publish:
     name: Publish to Marketplace
     needs: [prepare, merge, security-scan]
-    if: inputs.publish
+    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
