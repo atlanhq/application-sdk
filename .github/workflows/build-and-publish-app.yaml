@@ -323,7 +323,12 @@ jobs:
           echo "::error title=Publish blocked::Tests run ${RUN_ID} did not complete within the gate timeout."
           exit 1
 
-      - name: Block publish if tests did not succeed
+      # TEMPORARY warn-only mode for the rollout window. The follow-up PR
+      # (DISTR-456 enforcement flip) restores `exit 1` so gate failure
+      # blocks publish. While in warn-only mode, the gate runs, the
+      # verdict is annotated on the workflow summary, but publish
+      # proceeds even on test failure.
+      - name: Annotate warning if tests did not succeed (warn-only)
         if: steps.wait.outputs.conclusion != 'success'
         env:
           CONCLUSION: ${{ steps.wait.outputs.conclusion }}
@@ -331,16 +336,15 @@ jobs:
           WORKFLOW_FILE: ${{ inputs.unit_tests_workflow_file }}
         run: |
           {
-            echo "### Publish blocked: tests did not succeed"
+            echo "### ⚠️ Publish would be blocked once enforcement lands"
             echo ""
             echo "Run of \`${WORKFLOW_FILE}\` concluded as \`${CONCLUSION}\`."
             echo ""
             echo "Failing run: ${URL}"
             echo ""
-            echo "Fix the failing tests and push again before publishing."
+            echo "**Currently warn-only — publish will proceed.** Once the enforcement-flip PR lands, this state will block publish. Fix the failing tests before then."
           } >> "${GITHUB_STEP_SUMMARY}"
-          echo "::error title=Publish blocked::${WORKFLOW_FILE} concluded as ${CONCLUSION}. See ${URL}."
-          exit 1
+          echo "::warning title=Tests failed (warn-only)::${WORKFLOW_FILE} concluded as ${CONCLUSION}. See ${URL}. Publish proceeded; will block once enforcement lands."
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
