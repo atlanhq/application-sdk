@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-05-19",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -552,6 +552,94 @@
     "reason": "Base image — Rust dependency in Dapr runtime. Fix available in 0.103.13; awaiting SDK base image rebuild with updated Dapr.",
     "expires": "2026-06-08",
     "added_by": "TechyMT",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-33845": {
+    "package": "libgnutls30",
+    "severity": "CRITICAL",
+    "reason": "python:3.11-slim Debian base — GnuTLS DTLS/TLS library. Requires DTLS server/client role which lineage-builder-app does not implement; Python HTTP only. No Debian fix available.",
+    "expires": "2026-06-03",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42010": {
+    "package": "libgnutls30",
+    "severity": "CRITICAL",
+    "reason": "python:3.11-slim Debian base — GnuTLS DTLS/TLS library. Requires DTLS server/client role which lineage-builder-app does not implement; Python HTTP only. No Debian fix available.",
+    "expires": "2026-06-03",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-33846": {
+    "package": "libgnutls30",
+    "severity": "HIGH",
+    "reason": "python:3.11-slim Debian base — GnuTLS DTLS/TLS library. Requires DTLS server/client role which lineage-builder-app does not implement; Python HTTP only. No Debian fix available.",
+    "expires": "2026-06-18",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-3833": {
+    "package": "libgnutls30",
+    "severity": "HIGH",
+    "reason": "python:3.11-slim Debian base — GnuTLS DTLS/TLS library. Requires DTLS server/client role which lineage-builder-app does not implement; Python HTTP only. No Debian fix available.",
+    "expires": "2026-06-18",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42009": {
+    "package": "libgnutls30",
+    "severity": "HIGH",
+    "reason": "python:3.11-slim Debian base — GnuTLS DTLS/TLS library. Requires DTLS server/client role which lineage-builder-app does not implement; Python HTTP only. No Debian fix available.",
+    "expires": "2026-06-18",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42011": {
+    "package": "libgnutls30",
+    "severity": "HIGH",
+    "reason": "python:3.11-slim Debian base — GnuTLS DTLS/TLS library. Requires DTLS server/client role which lineage-builder-app does not implement; Python HTTP only. No Debian fix available.",
+    "expires": "2026-06-18",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-45186": {
+    "package": "libexpat1",
+    "severity": "HIGH",
+    "reason": "python:3.11-slim Debian base — libexpat XML parsing library. Attribute name collision DoS; indirect/transitive use only, not parsing untrusted XML input directly. No Debian backport yet.",
+    "expires": "2026-06-18",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-4878": {
+    "package": "libcap2",
+    "severity": "HIGH",
+    "reason": "python:3.11-slim Debian base — libcap TOCTOU in capability management. Requires local unprivileged user; mitigated by container runtime isolation. Fix available in 1:2.66-4+deb12u3; allowlisting to unblock release, resolve by rebuilding base image.",
+    "expires": "2026-06-18",
+    "added_by": "security-claw",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
