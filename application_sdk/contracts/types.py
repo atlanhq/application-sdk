@@ -225,6 +225,8 @@ class FileReference(BaseModel, frozen=True):
     @staticmethod
     def from_local(
         path: str | Path,
+        *,
+        tier: StorageTier = StorageTier.TRANSIENT,
     ) -> FileReference:
         """Create an ephemeral FileReference from a local filesystem path.
 
@@ -235,10 +237,18 @@ class FileReference(BaseModel, frozen=True):
 
         Args:
             path: Local file or directory path.
+            tier: Storage lifecycle tier. Defaults to
+                :attr:`StorageTier.TRANSIENT` for one-off intermediary
+                files. Pass :attr:`StorageTier.RETAINED` when the ref
+                belongs to a workflow run and must land under the
+                run-scoped ``artifacts/`` prefix (this is what the
+                ``UploadInput`` / ``App.upload`` path uses by default
+                and what the Atlan blob-storage gateway permits in
+                production deployments).
 
         Returns:
             An ephemeral ``FileReference`` (``is_durable=False``) with
-            ``local_path`` set.
+            ``local_path`` and ``tier`` set.
         """
         p = Path(path) if not isinstance(path, Path) else path
         # Best-effort file_count computation. We swallow OSError so the
@@ -253,6 +263,7 @@ class FileReference(BaseModel, frozen=True):
         return FileReference(
             local_path=str(p),
             file_count=file_count,
+            tier=tier,
         )
 
 
