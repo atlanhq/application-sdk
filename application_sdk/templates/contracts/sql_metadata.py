@@ -365,32 +365,28 @@ class ExtractionTaskOutput(Output):
 class TransformInput(ExtractionTaskInput):
     """Input for transform tasks.
 
-    Extends :class:`ExtractionTaskInput` with the ``raw_file`` /
-    ``raw_dir`` references threaded in by extract tasks via the
-    ``FileReference`` interceptor handshake. Three extraction shapes
-    coexist on this input type:
+    Extends :class:`ExtractionTaskInput` with ``raw_file`` / ``raw_dir``
+    references threaded in by extract tasks via the ``FileReference``
+    interceptor handshake. Two extraction shapes are supported:
 
     1. **Single-file extraction** (the v3 ``SqlApp`` per-entity flow) —
        carries ``raw_file`` (a singular ``FileReference``). The activity
        interceptor auto-materialises it on the transform worker.
-    2. **Multi-file batch extraction (preferred)** — carries ``raw_dir``
-       (a directory-shaped ``FileReference``). The interceptor
+    2. **Multi-file batch extraction** — carries ``raw_dir`` (a
+       directory-shaped ``FileReference``). The interceptor
        auto-materialises every file under the prefix onto the
        transform worker with the same SHA-256 sidecar verification.
        Adopt this for any new connector that needs multi-file output.
-    3. **Multi-file batch extraction (deprecated legacy)** — carries
-       ``file_names`` (a list of relative parquet file names under
-       ``input.output_path``) plus ``chunk_start`` / ``typename``.
-       These fields are NOT routed through the ``FileReference``
-       interceptor — the transform implementation owns materialising
-       / reading them. **New connectors should use ``raw_dir`` instead.**
-       Kept for backward compatibility with existing v3 consumers
-       (``atlan-alloydb-postgres-app``, ``atlan-cloudsql-postgres-app``,
-       ``atlan-mssql-app``, ``atlan-presto-app``, ``atlan-trino-app``).
 
     Connectors implementing a custom ``transform_data`` (the legacy
     v2 activity) read either shape; v3's per-entity ``transform_*``
     tasks consume ``raw_file``.
+
+    The legacy ``file_names`` field remains on the schema as a no-op
+    placeholder — it was never populated by the SDK and reading it
+    has no effect. ``chunk_start`` / ``typename`` are still present
+    for v3 consumers that dispatch by entity. See the field-level
+    docstrings for the deprecation status of each.
     """
 
     typename: str = ""
@@ -401,15 +397,23 @@ class TransformInput(ExtractionTaskInput):
     """
 
     file_names: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
-    """**Deprecated** — relative parquet file names under
-    ``output_path`` (multi-file batch flow). NOT auto-materialised by
-    the activity interceptor — a transform that lands on a different
-    worker pod than the extract will NOT see these files unless the
-    connector downloads them itself.
+    """**Deprecated and unused** — retained on the schema as a no-op
+    placeholder for backward compatibility.
 
-    **New connectors should use** :attr:`raw_dir` **instead** — it
-    routes through the ``FileReference`` interceptor and gets the
+    Originally a multi-file batch hint that pre-dated the
+    ``FileReference`` interceptor. No SDK code path ever populated
+    it on the v3 extract → transform handoff, so any
+    ``if input.file_names:`` read evaluates against the empty default
+    — the branch was a behavioural no-op even before this deprecation
+    note. Reading or writing this field has no effect on extract /
+    transform behaviour.
+
+    **For multi-file extracts use** :attr:`raw_dir` **instead** —
+    it routes through the ``FileReference`` interceptor and gets the
     same cross-worker fault tolerance ``raw_file`` does.
+
+    The field will be removed in a future major version once a
+    deprecation window has elapsed.
     """
 
     chunk_start: int = 0
