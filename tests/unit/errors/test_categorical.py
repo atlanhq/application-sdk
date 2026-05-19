@@ -249,35 +249,42 @@ def test_failure_category_http_status(
 def test_every_failure_category_has_http_status() -> None:
     """Guard: adding a new FailureCategory without updating the http_status map raises KeyError."""
     for category in FailureCategory:
-        assert isinstance(
-            category.http_status, int
-        ), f"{category} missing from http_status map"
+        assert isinstance(category.http_status, int), (
+            f"{category} missing from http_status map"
+        )
 
 
 # ---------------------------------------------------------------------------
-# EC2 — AppError.http_status delegates to its category
+# EC2 — typed AppError leaves carry the right category for HTTP code mapping
+#
+# We do not put a `http_status` property on AppError itself because
+# HandlerError (legacy AppError subclass) already uses `http_status` as an
+# instance attribute set in __init__. A read-only property would shadow that
+# setter. The service layer reads `_CATEGORY_TO_HTTP[exc.category]` via
+# `_app_error_to_http_status` instead — these tests verify the category
+# carries the right code so that lookup returns what we expect.
 # ---------------------------------------------------------------------------
 
 
-def test_app_error_http_status_permission_is_403() -> None:
-    assert AppPermissionDeniedError(message="no access").http_status == 403
+def test_app_permission_denied_error_category_maps_to_403() -> None:
+    assert AppPermissionDeniedError(message="no access").category.http_status == 403
 
 
-def test_app_error_http_status_auth_is_401() -> None:
-    assert AuthError(message="invalid token").http_status == 401
+def test_auth_error_category_maps_to_401() -> None:
+    assert AuthError(message="invalid token").category.http_status == 401
 
 
-def test_app_error_http_status_dependency_unavailable_is_503() -> None:
-    assert DependencyUnavailableError(message="db down").http_status == 503
+def test_dependency_unavailable_error_category_maps_to_503() -> None:
+    assert DependencyUnavailableError(message="db down").category.http_status == 503
 
 
-def test_app_error_http_status_invalid_input_is_422() -> None:
-    assert InvalidInputError(message="bad field").http_status == 422
+def test_invalid_input_error_category_maps_to_422() -> None:
+    assert InvalidInputError(message="bad field").category.http_status == 422
 
 
-def test_app_error_http_status_not_found_is_404() -> None:
-    assert NotFoundError(message="missing resource").http_status == 404
+def test_not_found_error_category_maps_to_404() -> None:
+    assert NotFoundError(message="missing resource").category.http_status == 404
 
 
-def test_app_error_http_status_internal_is_500() -> None:
-    assert InternalError(message="unexpected").http_status == 500
+def test_internal_error_category_maps_to_500() -> None:
+    assert InternalError(message="unexpected").category.http_status == 500

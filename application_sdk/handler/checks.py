@@ -21,6 +21,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+
 def _default_heracles_url() -> str:
     """Resolve the default Heracles URL at call time.
 
@@ -82,9 +83,7 @@ async def _get_impersonation_token(
     if resp.status_code == 403:
         raise ValueError("User is disabled — token exchange rejected (403)")
     if resp.status_code != 200:
-        raise ValueError(
-            f"Token exchange failed {resp.status_code}: {resp.text}"
-        )
+        raise ValueError(f"Token exchange failed {resp.status_code}: {resp.text}")
     token = resp.json().get("access_token")
     if not token:
         raise ValueError(f"Token exchange response missing access_token: {resp.text}")
@@ -248,9 +247,7 @@ async def check_atlan_publish_permission(
 async def _run_user_check(
     heracles_url: str, bearer_token: str, user_id: str
 ) -> PreflightCheck:
-    return await check_user_enabled(
-        user_id, bearer_token, heracles_url=heracles_url
-    )
+    return await check_user_enabled(user_id, bearer_token, heracles_url=heracles_url)
 
 
 async def _run_permission_check(
