@@ -111,7 +111,7 @@ def _make_task_input(output_path="/tmp/test", **kwargs):
 
     Returns a ``TransformInput`` because it's the broader of the two
     v3 contracts (extends ``ExtractionTaskInput`` with ``raw_file`` plus
-    the legacy v2 ``typename`` / ``file_names`` / ``chunk_start`` fields).
+    the legacy v2 ``typename`` / ``chunk_start`` fields).
     The ``extract_*`` activities only read ``ExtractionTaskInput`` fields
     so the extra ``TransformInput`` attributes are ignored on that side,
     and the ``transform_*`` activities can read ``input.raw_file``
@@ -360,17 +360,17 @@ class TestExtractEmitsRawFileReference:
 
 
 class TestTransformInputRawDir:
-    """``TransformInput.raw_dir`` is the recommended replacement for the
-    legacy ``file_names`` / ``chunk_start`` / ``typename`` multi-file
-    batch fields (BLDX-1281). The field is purely additive — existing
-    consumers that read the legacy fields continue to work; new
-    connectors that produce multi-file output should populate
-    ``raw_dir`` with a directory-shaped ``FileReference`` so the
-    activity interceptor handles cross-worker materialisation.
+    """``TransformInput.raw_dir`` is the recommended shape for multi-file
+    extraction (BLDX-1281). It replaces the legacy ``file_names`` field
+    (now removed) and the ``chunk_start`` / ``typename`` pair (still
+    present as deprecated). New connectors that produce multi-file
+    output should populate ``raw_dir`` with a directory-shaped
+    ``FileReference`` so the activity interceptor handles cross-worker
+    materialisation.
     """
 
     def test_raw_dir_defaults_to_none(self) -> None:
-        """raw_dir is optional with a None default — pure addition."""
+        """raw_dir is optional with a None default."""
         input_ = TransformInput()
         assert input_.raw_dir is None
 
@@ -388,31 +388,37 @@ class TestTransformInputRawDir:
         assert input_.raw_dir.is_durable is True
         assert input_.raw_dir.file_count == 42
 
-    def test_legacy_fields_preserved_when_raw_dir_unset(self) -> None:
-        """Backward-compat: existing v3 consumers reading file_names /
-        chunk_start / typename keep working without populating raw_dir.
+    def test_legacy_dispatch_fields_preserved_when_raw_dir_unset(self) -> None:
+        """Backward-compat: existing v3 consumers that dispatch via
+        ``typename`` / ``chunk_start`` keep working without populating
+        ``raw_dir``.
         """
-        input_ = TransformInput(
-            typename="column",
-            file_names=["batch-0.parquet", "batch-1.parquet"],
-            chunk_start=2,
-        )
+        input_ = TransformInput(typename="column", chunk_start=2)
         assert input_.typename == "column"
-        assert input_.file_names == ["batch-0.parquet", "batch-1.parquet"]
         assert input_.chunk_start == 2
         assert input_.raw_dir is None  # default — coexists with legacy fields
 
-    def test_raw_dir_and_legacy_fields_can_coexist(self) -> None:
-        """During the migration window, a connector may populate both
-        ``raw_dir`` (new) and ``file_names`` (legacy compat) without
+    def test_raw_dir_and_legacy_dispatch_fields_can_coexist(self) -> None:
+        """A connector may populate both ``raw_dir`` (new) and the
+        legacy dispatch fields (``typename`` / ``chunk_start``) without
         conflict — useful when an extractor wants to test the new ref
-        path while leaving the legacy reads intact.
+        path while leaving the dispatch reads intact.
         """
         ref = FileReference(local_path="/tmp/raw/")
-        input_ = TransformInput(raw_dir=ref, file_names=["a.parquet"], typename="t")
+        input_ = TransformInput(raw_dir=ref, typename="t", chunk_start=0)
         assert input_.raw_dir is not None
-        assert input_.file_names == ["a.parquet"]
         assert input_.typename == "t"
+        assert input_.chunk_start == 0
+
+    def test_file_names_field_removed(self) -> None:
+        """``file_names`` was dropped — the attribute must no longer
+        exist on the model so any lingering reads in consumers fail
+        loudly instead of silently treating the field as falsy.
+        """
+        input_ = TransformInput()
+        assert "file_names" not in TransformInput.model_fields
+        with pytest.raises(AttributeError):
+            _ = input_.file_names  # type: ignore[attr-defined]
 
 
 class TestTransformConsumesRawFileReference:

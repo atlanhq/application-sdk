@@ -233,20 +233,18 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
         This method is abstract — connectors must implement it.
 
-        **Standard extraction** (``input.file_names`` is empty):
-            Raw data is read from ``{input.output_path}/raw/{input.typename}/``.
-
-        **Incremental column batch extraction** (``input.file_names`` is non-empty):
-            Raw column data from batch execution lives in
-            ``{input.output_path}/raw/`` (no typename subdirectory). Use
-            ``input.file_names`` to read only those specific parquet files.
+        Raw data is read from ``{input.output_path}/raw/{input.typename}/``
+        (or, for new connectors that adopt the ``raw_dir`` shape, from
+        ``input.raw_dir.local_path`` which the activity interceptor
+        auto-materialises on the transform worker with SHA-256 sidecar
+        verification — see :mod:`application_sdk.storage.file_ref_sync`).
 
         Recommended implementation pattern::
 
             @task(timeout_seconds=1800)
             async def transform_data(self, input: TransformInput) -> TransformOutput:
-                if input.file_names:
-                    raw_path = os.path.join(input.output_path, "raw")
+                if input.raw_dir is not None:
+                    raw_path = input.raw_dir.local_path
                 else:
                     raw_path = os.path.join(input.output_path, "raw", input.typename)
                 # ... read from raw_path and write to transformed/ ...

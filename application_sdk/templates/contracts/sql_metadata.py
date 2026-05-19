@@ -365,32 +365,31 @@ class ExtractionTaskOutput(Output):
 class TransformInput(ExtractionTaskInput):
     """Input for transform tasks.
 
-    Extends :class:`ExtractionTaskInput` with the ``raw_file`` /
-    ``raw_dir`` references threaded in by extract tasks via the
-    ``FileReference`` interceptor handshake. Three extraction shapes
-    coexist on this input type:
+    Extends :class:`ExtractionTaskInput` with ``raw_file`` / ``raw_dir``
+    references threaded in by extract tasks via the ``FileReference``
+    interceptor handshake. Two extraction shapes coexist on this input
+    type:
 
     1. **Single-file extraction** (the v3 ``SqlApp`` per-entity flow) —
        carries ``raw_file`` (a singular ``FileReference``). The activity
        interceptor auto-materialises it on the transform worker.
-    2. **Multi-file batch extraction (preferred)** — carries ``raw_dir``
-       (a directory-shaped ``FileReference``). The interceptor
+    2. **Multi-file batch extraction** — carries ``raw_dir`` (a
+       directory-shaped ``FileReference``). The interceptor
        auto-materialises every file under the prefix onto the
        transform worker with the same SHA-256 sidecar verification.
-       Adopt this for any new connector that needs multi-file output.
-    3. **Multi-file batch extraction (deprecated legacy)** — carries
-       ``file_names`` (a list of relative parquet file names under
-       ``input.output_path``) plus ``chunk_start`` / ``typename``.
-       These fields are NOT routed through the ``FileReference``
-       interceptor — the transform implementation owns materialising
-       / reading them. **New connectors should use ``raw_dir`` instead.**
-       Kept for backward compatibility with existing v3 consumers
-       (``atlan-alloydb-postgres-app``, ``atlan-cloudsql-postgres-app``,
-       ``atlan-mssql-app``, ``atlan-presto-app``, ``atlan-trino-app``).
+       This is the recommended shape for any connector that needs
+       multi-file output.
 
     Connectors implementing a custom ``transform_data`` (the legacy
     v2 activity) read either shape; v3's per-entity ``transform_*``
     tasks consume ``raw_file``.
+
+    The legacy ``file_names`` field (a list of relative parquet file
+    names under ``output_path``) was removed — it was not routed
+    through the ``FileReference`` interceptor and had no live readers
+    after the v3 cutover. ``chunk_start`` and ``typename`` are still
+    present for v3 consumers that dispatch by entity but will be
+    removed in a follow-up migration to ``raw_dir``.
     """
 
     typename: str = ""
@@ -400,22 +399,10 @@ class TransformInput(ExtractionTaskInput):
     dedicated dispatch field on a connector-specific input subclass.
     """
 
-    file_names: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
-    """**Deprecated** — relative parquet file names under
-    ``output_path`` (multi-file batch flow). NOT auto-materialised by
-    the activity interceptor — a transform that lands on a different
-    worker pod than the extract will NOT see these files unless the
-    connector downloads them itself.
-
-    **New connectors should use** :attr:`raw_dir` **instead** — it
-    routes through the ``FileReference`` interceptor and gets the
-    same cross-worker fault tolerance ``raw_file`` does.
-    """
-
     chunk_start: int = 0
     """**Deprecated** — chunk-offset hint used by the legacy
-    ``file_names``-based batch flow. New connectors using ``raw_dir``
-    don't need this; iterate the directory contents directly.
+    multi-file batch flow. New connectors using ``raw_dir`` don't
+    need this; iterate the directory contents directly.
     """
 
     raw_file: FileReference | None = None
@@ -445,12 +432,6 @@ class TransformInput(ExtractionTaskInput):
     The transform reads ``input.raw_dir.local_path`` and iterates the
     files under it the same way a connector would iterate a local
     directory — no manual ``download_file`` plumbing required.
-
-    Replaces the legacy :attr:`file_names` / :attr:`chunk_start` pair
-    for new connectors. The legacy fields stay on this contract for
-    backward compatibility with existing v3 consumers; they will be
-    removed in a coordinated migration once those consumers adopt
-    ``raw_dir``.
     """
 
 
