@@ -28,23 +28,23 @@ from application_sdk.templates.contracts.incremental_sql import (
 
 # Canonical valid markers covering every shape the contract permits.
 _VALID_MARKERS = [
-    "",                                  # empty = full-extraction signal
-    "2026-05-18T12:34:56",                # plain ISO, no fractional / tz
-    "2026-05-18T12:34:56Z",               # Zulu
-    "2026-05-18T12:34:56.123456Z",        # microsecond precision
-    "2026-05-18T12:34:56+05:30",          # offset with colon
-    "2026-05-18T12:34:56-0700",           # offset without colon
-    "2026-05-18 12:34:56",                # space separator (PG/MySQL default)
+    "",  # empty = full-extraction signal
+    "2026-05-18T12:34:56",  # plain ISO, no fractional / tz
+    "2026-05-18T12:34:56Z",  # Zulu
+    "2026-05-18T12:34:56.123456Z",  # microsecond precision
+    "2026-05-18T12:34:56+05:30",  # offset with colon
+    "2026-05-18T12:34:56-0700",  # offset without colon
+    "2026-05-18 12:34:56",  # space separator (PG/MySQL default)
 ]
 
 # Malicious / malformed values that must be rejected on every contract.
 _INVALID_MARKERS = [
-    "2026-05-18T12:34:56'; DROP TABLE x",   # SQL injection via marker
-    "not-a-date",                            # malformed
-    "2026/05/18 12:34:56",                   # wrong separator
-    "12:34:56",                              # time only
-    "2026-05-18",                            # date only
-    "2026-05-18T12:34:56' OR '1'='1",        # classic-OR injection
+    "2026-05-18T12:34:56'; DROP TABLE x",  # SQL injection via marker
+    "not-a-date",  # malformed
+    "2026/05/18 12:34:56",  # wrong separator
+    "12:34:56",  # time only
+    "2026-05-18",  # date only
+    "2026-05-18T12:34:56' OR '1'='1",  # classic-OR injection
 ]
 
 
@@ -53,7 +53,9 @@ _INVALID_MARKERS = [
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cls", [FetchTablesIncrementalInput, FetchColumnsIncrementalInput])
+@pytest.mark.parametrize(
+    "cls", [FetchTablesIncrementalInput, FetchColumnsIncrementalInput]
+)
 class TestIncrementalTaskInputMarker:
     @pytest.mark.parametrize("marker", _VALID_MARKERS)
     def test_valid_marker_accepted(self, cls, marker: str) -> None:
@@ -142,9 +144,7 @@ class TestUpdateMarkerContracts:
 
     def test_input_invalid_marker_rejected(self) -> None:
         with pytest.raises(ValueError, match=r"marker_timestamp must be"):
-            UpdateMarkerInput.model_validate(
-                {"next_marker_timestamp": "not-a-date"}
-            )
+            UpdateMarkerInput.model_validate({"next_marker_timestamp": "not-a-date"})
 
     def test_output_invalid_marker_rejected(self) -> None:
         with pytest.raises(ValueError, match=r"marker_timestamp must be"):

@@ -36,13 +36,13 @@ class TestValidateFilterNoSqlInjection:
     @pytest.mark.parametrize(
         "value",
         [
-            "prefix'injection",       # single quote
-            'prefix"injection',       # double quote
-            "name; DROP TABLE x",     # statement separator
-            "name-- comment",         # SQL line comment
-            "name/* block",           # block comment open
-            "name */",                # block comment close
-            "name\x00trailing",       # null byte
+            "prefix'injection",  # single quote
+            'prefix"injection',  # double quote
+            "name; DROP TABLE x",  # statement separator
+            "name-- comment",  # SQL line comment
+            "name/* block",  # block comment open
+            "name */",  # block comment close
+            "name\x00trailing",  # null byte
         ],
     )
     def test_string_with_forbidden_sequence_raises(self, value: str) -> None:
@@ -52,10 +52,10 @@ class TestValidateFilterNoSqlInjection:
     @pytest.mark.parametrize(
         "value",
         [
-            "^prod_.*$",                                       # simple regex
-            r"^(prod|stage)_db\.[a-z]+(\.bak)?$",              # full meta-char set
-            "",                                                # empty
-            "schema_name",                                     # plain identifier
+            "^prod_.*$",  # simple regex
+            r"^(prod|stage)_db\.[a-z]+(\.bak)?$",  # full meta-char set
+            "",  # empty
+            "schema_name",  # plain identifier
         ],
     )
     def test_clean_string_passes(self, value: str) -> None:
@@ -88,9 +88,7 @@ class TestValidateFilterNoSqlInjection:
         # The JSON structural quotes are fine; the single quote inside
         # the actual filter value still fails.
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
-            validate_filter_no_sql_injection(
-                '{"^prod$": ["sch\'; DROP TABLE x"]}'
-            )
+            validate_filter_no_sql_injection('{"^prod$": ["sch\'; DROP TABLE x"]}')
 
     def test_malformed_json_falls_through_to_string_check(self) -> None:
         # Not valid JSON despite the braces — treated as raw regex; the
