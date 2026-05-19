@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
@@ -337,6 +337,13 @@ class TestExtractEmitsRawFileReference:
         )
         assert result.raw_file.is_durable is False
         assert result.raw_file.storage_path is None
+        # Tier must be RETAINED so the interceptor persists under the
+        # run-scoped ``<run_prefix>/file_refs/<uuid>`` prefix (i.e.
+        # ``artifacts/...``). The default TRANSIENT tier writes to a
+        # bare ``file_refs/...`` path that Atlan's blob-storage gateway
+        # rejects with 403 ``code 1009 Invalid Path`` in production —
+        # see ``TestRawFileTierIsRetained`` for the regression context.
+        assert result.raw_file.tier == StorageTier.RETAINED
 
     async def test_extract_with_zero_rows_emits_no_raw_file(self, app, tmp_path):
         """When extract finds no rows, raw_file is None — not a ref to an
@@ -357,6 +364,88 @@ class TestExtractEmitsRawFileReference:
         input_ = _make_task_input()
         result = await app.extract_databases(input_)
         assert result.raw_file is None
+
+
+class TestRawFileTierIsRetained:
+    """Regression guard: ``_extract_entity`` / ``_transform_entity`` must
+    emit ``FileReference`` objects with ``tier=StorageTier.RETAINED``,
+    not the constructor default of ``TRANSIENT``.
+
+    Why this matters: the interceptor uses ``ref.tier`` to compute the
+    object-store key when it persists the ref after the activity
+    returns:
+
+      * ``RETAINED``   → ``<run_prefix>/file_refs/<uuid>`` (i.e.
+        ``artifacts/apps/<app>/workflows/<wf>/<run>/file_refs/...``)
+      * ``TRANSIENT``  → bare ``file_refs/<uuid>`` (no scoping)
+
+    Atlan's production blob-storage gateway only permits writes under
+    ``artifacts/`` and ``persistent-artifacts/`` — a bare ``file_refs/``
+    upload returns ``403 code 1009 'Invalid Path'``. This isn't
+    caught by the local CI suite because the local Dapr binding
+    (``bindings.localstorage``) has no path policy: every prefix is
+    writable on disk.
+
+    The original incident: every ``extract_*`` activity on a real
+    Atlan tenant failed identically with that 403 on the persist step
+    because the SqlApp template called ``FileReference.from_local(...)``
+    without a tier kwarg, picking up the constructor default. The fix
+    routes both raw_file and transformed_file through RETAINED, matching
+    every other SDK upload path (``UploadInput.tier`` default,
+    ``App.upload``, ``sql_metadata_extractor``, ``base_metadata_extractor``).
+
+    These tests pin that choice so a future refactor can't silently
+    revert it.
+    """
+
+    async def test_extract_raw_file_tier_is_retained_not_transient(self, app, tmp_path):
+        rows = [{"database_name": "db1"}]
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
+            result = await app.extract_databases(input_)
+
+        assert result.raw_file is not None
+        assert result.raw_file.tier == StorageTier.RETAINED, (
+            "extract_* must emit FileReference with tier=RETAINED so the "
+            "interceptor persists under the run-scoped artifacts/ prefix; "
+            "the default TRANSIENT tier writes to bare file_refs/ which "
+            "Atlan's blob-storage gateway rejects with 403 in production."
+        )
+
+    async def test_transform_transformed_file_tier_is_retained_not_transient(
+        self, app, tmp_path
+    ):
+        _seed_raw(tmp_path, "database", [{"database_name": "remote_db"}])
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        result = await app.transform_databases(input_)
+
+        assert result.transformed_file is not None
+        assert result.transformed_file.tier == StorageTier.RETAINED, (
+            "transform_* must emit FileReference with tier=RETAINED for "
+            "the same reason extract_* does — see the class docstring."
+        )
+
+    def test_from_local_accepts_tier_kwarg(self, tmp_path):
+        """``FileReference.from_local`` accepts an explicit ``tier`` kwarg.
+
+        Guards the helper's signature so the SqlApp callsites
+        (and any downstream consumers that adopt the same pattern)
+        keep compiling. Default is still ``TRANSIENT`` for backward
+        compat with existing callers in ``storage/formats/parquet.py``
+        and ``storage/rolling.py``; pass-through is verified here.
+        """
+        f = tmp_path / "x.json"
+        f.write_text("{}")
+
+        default_ref = FileReference.from_local(f)
+        retained_ref = FileReference.from_local(f, tier=StorageTier.RETAINED)
+        persistent_ref = FileReference.from_local(f, tier=StorageTier.PERSISTENT)
+
+        assert default_ref.tier == StorageTier.TRANSIENT
+        assert retained_ref.tier == StorageTier.RETAINED
+        assert persistent_ref.tier == StorageTier.PERSISTENT
 
 
 class TestTransformInputLegacyFields:
@@ -445,6 +534,10 @@ class TestTransformConsumesRawFileReference:
         )
         assert result.transformed_file.is_durable is False
         assert result.transformed_file.storage_path is None
+        # Tier must be RETAINED — same reasoning as the raw_file emission
+        # in extract_*. See ``TestRawFileTierIsRetained`` for the
+        # production-side incident this guards against.
+        assert result.transformed_file.tier == StorageTier.RETAINED
 
     async def test_transform_no_input_ref_falls_back_to_legacy_path(
         self, app, tmp_path
