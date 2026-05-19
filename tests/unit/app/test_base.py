@@ -738,8 +738,11 @@ class TestRunStub:
         class _NoRun(App):
             pass
 
-        with pytest.raises(NotImplementedError, match="must implement run"):
+        from application_sdk.app.base_errors import AbstractRunNotImplementedError
+
+        with pytest.raises(AbstractRunNotImplementedError) as exc_info:
             await _NoRun().run(_BLDXInput())
+        assert exc_info.value.code == "UNIMPLEMENTED_APP_RUN"
 
 
 # =============================================================================

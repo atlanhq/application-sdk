@@ -32,7 +32,6 @@ import warnings
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.sql_filters import normalize_filters
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
@@ -470,6 +469,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             )
 
         except Exception as e:
-            raise rewrap(
-                e, f"SQL metadata extraction failed (workflow_id={workflow_id})"
+            from application_sdk.templates._template_errors import (  # noqa: PLC0415
+                SqlMetadataExtractionError,
+            )
+
+            raise SqlMetadataExtractionError(
+                workflow_id=str(workflow_id), cause=e
             ) from e

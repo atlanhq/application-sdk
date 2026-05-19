@@ -212,8 +212,8 @@ def create_activity_from_task(
         except asyncio.CancelledError as e:
             # In Python 3.8+, ``asyncio.CancelledError`` extends ``BaseException``,
             # so it bypasses the ``except Exception`` block below. We must catch
-            # it explicitly to attribute pod-termination cancels to a typed
-            # ``WorkerEvictedError`` and let other cancels propagate as today.
+            # it explicitly to attribute pod-termination cancels to
+            # ``ApplicationError(type=WORKER_EVICTED_TYPE)`` and let other cancels propagate as today.
             #
             # NOTE: converting ``CancelledError`` to a regular exception
             # technically violates asyncio's cancellation protocol — the

@@ -11,6 +11,10 @@ from typing import Annotated, Any
 import orjson
 from pydantic import Field, field_validator, model_validator
 
+from application_sdk.common.sql_filters import (
+    SAFE_FILTER_PATTERN,
+    validate_filter_no_sql_injection,
+)
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.credentials.ref import CredentialRef
@@ -25,9 +29,12 @@ FilterMap = Annotated[
     MaxItems(100),
 ]
 
-# Disallow single quotes in temp_table_regex to prevent SQL injection when
-# values are substituted into SQL templates via _prepare_sql (str.replace).
-_SAFE_FILTER_PATTERN = r"^[^']*$"
+# Backward-compatible aliases: the deny-list moved to ``common.sql_filters``
+# in BLDX-518 so the same validation can be applied to raw-dict helper
+# callers (``prepare_query``, ``prepare_filters``, ``get_database_names``)
+# that bypass Pydantic. Keep the underscore-prefixed name re-exported so
+# any in-tree import path remains valid.
+_validate_filter_no_sql_injection = validate_filter_no_sql_injection
 
 
 def _coerce_filter_value(v: Any) -> FilterMap | str:
@@ -42,25 +49,6 @@ def _coerce_filter_value(v: Any) -> FilterMap | str:
         return ""
     if isinstance(v, list):
         return {".*": v}
-    return v
-
-
-def _validate_filter_no_sql_injection(v: FilterMap | str) -> FilterMap | str:
-    """Block single quotes in filter values to prevent SQL injection."""
-    if isinstance(v, str):
-        if "'" in v:
-            msg = f"Single quotes not allowed in filter value: {v}"
-            raise ValueError(msg)
-    elif isinstance(v, dict):
-        for key, values in v.items():
-            if "'" in key:
-                msg = f"Single quotes not allowed in filter key: {key}"
-                raise ValueError(msg)
-            if isinstance(values, list):
-                for val in values:
-                    if isinstance(val, str) and "'" in val:
-                        msg = f"Single quotes not allowed in filter value: {val}"
-                        raise ValueError(msg)
     return v
 
 
@@ -111,7 +99,7 @@ class ExtractionInput(Input):
             try:
                 data = {**data, "connection": orjson.loads(raw_conn)}
             except (orjson.JSONDecodeError, ValueError):
-                pass
+                pass  # connection field isn't JSON — leave as-is for Pydantic to handle
 
         field_names = set(cls.model_fields)
         updates: dict[str, Any] = {}
@@ -174,7 +162,7 @@ class ExtractionInput(Input):
     - ``None`` → empty string
     """
 
-    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
     """Regex pattern identifying temporary tables."""
 
     source_tag_prefix: str = ""
@@ -189,6 +177,12 @@ class ExtractionInput(Input):
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
         return _validate_filter_no_sql_injection(v)
+
+    @field_validator("temp_table_regex", mode="after")
+    @classmethod
+    def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
+        validate_filter_no_sql_injection(v)
+        return v
 
 
 class ExtractionOutput(Output, PublishInputMixin):
@@ -227,7 +221,7 @@ class ExtractionTaskInput(Input):
     output_path: str = ""
     exclude_filter: FilterMap | str = Field(default="")
     include_filter: FilterMap | str = Field(default="")
-    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
 
     @field_validator("include_filter", "exclude_filter", mode="before")
@@ -239,6 +233,12 @@ class ExtractionTaskInput(Input):
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
         return _validate_filter_no_sql_injection(v)
+
+    @field_validator("temp_table_regex", mode="after")
+    @classmethod
+    def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
+        validate_filter_no_sql_injection(v)
+        return v
 
 
 class FetchDatabasesInput(ExtractionTaskInput):

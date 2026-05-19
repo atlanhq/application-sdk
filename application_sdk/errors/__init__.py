@@ -42,7 +42,6 @@ from application_sdk.errors.leaves import (
     RateLimitedError,
     ResourceExhaustedError,
     UnimplementedError,
-    WorkerEvictedError,
 )
 from application_sdk.errors.wire import FailureDetails
 
@@ -137,7 +136,6 @@ __all__ = [
     "RateLimitedError",
     "ResourceExhaustedError",
     "UnimplementedError",
-    "WorkerEvictedError",
     "WORKER_EVICTED_TYPE",
     # Legacy (deprecated — removed in v4.0)
     "ErrorCode",

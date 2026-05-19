@@ -65,6 +65,11 @@ on:
         required: false
         type: string
         default: ""
+      unit_tests_workflow_file:
+        description: "Filename of the workflow in the caller's repo that runs the app's unit tests (e.g. 'unit-tests.yml', 'tests.yml'). When unset (default), the gate is skipped entirely — apps onboard at their pace and existing callers stay unaffected. When set, the gate looks for an existing successful run of this workflow on the publish SHA; if none is found, it dispatches the workflow on the publish ref and waits for the new run. The target workflow MUST declare 'workflow_dispatch:' in its 'on:' block. See docs/standards/unit-tests-gate.md."
+        required: false
+        type: string
+        default: ""
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -81,13 +86,15 @@ permissions:
   packages: write
   actions: write
   pull-requests: write
+  checks: read
 
 jobs:
   # ── Job 0: Channel + branch gate ─────────────────────────────────────────────
   # 'all'-channel releases reach every production tenant, so they MUST come
   # from the protected `main` branch. Fail here (before the multi-arch build
   # spends ~10 min) when channel=='all' and the build ref is not main.
-  # Only runs when `publish: true` — build-only invocations are unaffected.
+  # Only runs when `publish: true` AND the caller has set
+  # `unit_tests_workflow_file` — apps that have not onboarded skip the gate.
   # Beta, staging, and tenant-targeted publishes are unrestricted.
   validate-channel:
     name: Validate Channel + Branch
@@ -103,8 +110,22 @@ jobs:
           REF: ${{ inputs.ref || github.ref }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+
+          # Strip any trailing CR/LF that GitHub expression evaluation can inject.
+          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
+          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
+
+          # Bypass the main-branch gate only when the ref is actually the
+          # matching tag ref. Checking release_tag alone is insufficient:
+          # a caller could pass any non-empty value from a feature branch
+          # to skip the channel='all' protection.
+          if [ -n "${RELEASE_TAG}" ] && [ "${REF}" = "refs/tags/${RELEASE_TAG}" ]; then
+            echo "Tagged release (${RELEASE_TAG}) — main-branch gate skipped."
+            exit 0
+          fi
 
           # Mirror the channel-resolution rules used at publish time:
           #   tenants  -> specific  (skip gate)
@@ -128,9 +149,8 @@ jobs:
           # Accept both the short ('main') and qualified ('refs/heads/main')
           # forms. Anything else falls through to the reject arm, including:
           #   - feature branches (refs/heads/feat-foo, feat/foo, …)
-          #   - tag refs (refs/tags/v1.2.3) — by design: tag-triggered builds
-          #     should not auto-publish to all tenants; cut a release from
-          #     main and let the push-trigger run instead.
+          #   - bare tag refs without release_tag (release_tag is handled above;
+          #     bare tags without it are rejected)
           case "${REF}" in
             main|refs/heads/main)
               echo "Channel 'all' on main — proceeding."
@@ -156,13 +176,183 @@ jobs:
               ;;
           esac
 
+  # ── Job 0b: Unit-tests gate ──────────────────────────────────────────────────
+  # Block publish unless the app's `unit_tests_workflow_file` has completed
+  # successfully for the publish SHA. The gate runs before any build minutes
+  # are spent so a failing test surfaces at minute 0 rather than after the
+  # multi-arch build.
+  #
+  # How it works:
+  #   1. Resolve the publish SHA.
+  #   2. Look for an existing run of `unit_tests_workflow_file` on that
+  #      commit (any conclusion).
+  #   3. If no run exists, dispatch the workflow on the publish ref and
+  #      capture the new run ID.
+  #   4. Poll the run by ID until it completes; gate passes iff conclusion
+  #      is `success`.
+  #
+  # The gate tracks runs by ID, not by check name — so apps don't need any
+  # particular naming convention on their test jobs.
+  #
+  # Contract: the consumer app's `unit_tests_workflow_file` MUST
+  #   1. Exist at `.github/workflows/<filename>`.
+  #   2. Declare `workflow_dispatch:` in its `on:` block.
+  #   3. Run unit tests and exit non-zero on test/coverage failure.
+  # See docs/standards/unit-tests-gate.md.
+  #
+  # Only runs when `publish: true` AND the caller has set
+  # `unit_tests_workflow_file` — apps that have not onboarded skip the gate.
+  unit-tests-gate:
+    name: Unit-tests gate
+    if: inputs.publish && inputs.unit_tests_workflow_file != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve SHA, find or dispatch tests run
+        id: prepare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Resolve to a concrete SHA regardless of whether the caller passed
+          # a branch name (`feat/foo`), a full ref (`refs/heads/main`), a tag,
+          # or a SHA. The /commits/{ref} endpoint accepts all of these.
+          REF: ${{ inputs.ref || github.sha }}
+          # gh workflow run accepts a branch / tag name only, never a bare
+          # SHA. Prefer the caller's ref input, then the calling workflow's
+          # branch name (`github.ref_name`).
+          DISPATCH_REF: ${{ inputs.ref || github.ref_name }}
+          WORKFLOW_FILE: ${{ inputs.unit_tests_workflow_file }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA=$(gh api "/repos/${REPO}/commits/${REF}" --jq '.sha')
+          echo "Resolved '${REF}' → ${SHA}"
+
+          # Look for an existing run of this workflow on this commit. Any
+          # conclusion — the next step will inspect the result.
+          EXISTING=$(gh run list \
+            --repo "${REPO}" \
+            --workflow "${WORKFLOW_FILE}" \
+            --commit "${SHA}" \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+
+          if [ -n "${EXISTING}" ]; then
+            echo "Found existing run ${EXISTING} of '${WORKFLOW_FILE}' on ${SHA} — reusing."
+            echo "run_id=${EXISTING}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # No prior run on this SHA. Dispatch fresh on the publish ref.
+          # `gh workflow run` doesn't return the new run's ID, so capture
+          # it by listing recent dispatches after the trigger.
+          echo "No existing run of '${WORKFLOW_FILE}' on ${SHA}. Dispatching on '${DISPATCH_REF}'..."
+          BEFORE=$(date -u +%FT%TZ)
+          if ! gh workflow run "${WORKFLOW_FILE}" --repo "${REPO}" --ref "${DISPATCH_REF}"; then
+            {
+              echo "### Publish blocked: failed to dispatch '${WORKFLOW_FILE}'"
+              echo ""
+              echo "The gate tried to dispatch \`${WORKFLOW_FILE}\` on \`${DISPATCH_REF}\` for SHA \`${SHA}\` but the dispatch failed."
+              echo ""
+              echo "Common causes:"
+              echo "- The workflow does not declare \`workflow_dispatch:\` in its \`on:\` block."
+              echo "- The file does not exist at \`.github/workflows/${WORKFLOW_FILE}\`."
+              echo "- The branch \`${DISPATCH_REF}\` does not exist."
+              echo ""
+              echo "Contract + template: <https://github.com/atlanhq/application-sdk/blob/main/docs/standards/unit-tests-gate.md>"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error title=Publish blocked::Failed to dispatch '${WORKFLOW_FILE}'. See workflow summary."
+            exit 1
+          fi
+
+          # Poll for up to 60 seconds for the dispatched run to register.
+          # GitHub usually surfaces it within ~5–10s; allow margin for slow
+          # API replication.
+          echo "Dispatched. Polling for the new run to appear..."
+          RUN_ID=""
+          for i in $(seq 1 12); do
+            sleep 5
+            RUN_ID=$(gh run list \
+              --repo "${REPO}" \
+              --workflow "${WORKFLOW_FILE}" \
+              --branch "${DISPATCH_REF}" \
+              --event workflow_dispatch \
+              --created ">${BEFORE}" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if [ -n "${RUN_ID}" ]; then
+              echo "New run registered after ${i} attempt(s): ${RUN_ID}"
+              break
+            fi
+            echo "Attempt ${i}/12 — run not yet visible, retrying..."
+          done
+
+          if [ -z "${RUN_ID}" ]; then
+            echo "::error title=Publish blocked::Dispatched '${WORKFLOW_FILE}' but the new run never registered within 60s."
+            exit 1
+          fi
+
+          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for tests run to complete
+        id: wait
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ steps.prepare.outputs.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "Polling run ${RUN_ID} every 30s (timeout 30m)..."
+          # Loop bound covers the 30-min job timeout. The job-level
+          # timeout-minutes already enforces an outer cap; this inner cap
+          # avoids tight infinite loops if `gh run view` ever returns junk.
+          for i in $(seq 1 70); do
+            RESULT=$(gh run view "${RUN_ID}" --repo "${REPO}" --json status,conclusion,url)
+            STATUS=$(echo "${RESULT}" | jq -r '.status')
+            CONCLUSION=$(echo "${RESULT}" | jq -r '.conclusion // ""')
+            URL=$(echo "${RESULT}" | jq -r '.url')
+            echo "  iteration ${i}: status=${STATUS} conclusion=${CONCLUSION}"
+            if [ "${STATUS}" = "completed" ]; then
+              echo "conclusion=${CONCLUSION}" >> "${GITHUB_OUTPUT}"
+              echo "url=${URL}" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            sleep 25
+          done
+          echo "::error title=Publish blocked::Tests run ${RUN_ID} did not complete within the gate timeout."
+          exit 1
+
+      # TEMPORARY warn-only mode for the rollout window. The follow-up PR
+      # (DISTR-456 enforcement flip) restores `exit 1` so gate failure
+      # blocks publish. While in warn-only mode, the gate runs, the
+      # verdict is annotated on the workflow summary, but publish
+      # proceeds even on test failure.
+      - name: Annotate warning if tests did not succeed (warn-only)
+        if: steps.wait.outputs.conclusion != 'success'
+        env:
+          CONCLUSION: ${{ steps.wait.outputs.conclusion }}
+          URL: ${{ steps.wait.outputs.url }}
+          WORKFLOW_FILE: ${{ inputs.unit_tests_workflow_file }}
+        run: |
+          {
+            echo "### ⚠️ Publish would be blocked once enforcement lands"
+            echo ""
+            echo "Run of \`${WORKFLOW_FILE}\` concluded as \`${CONCLUSION}\`."
+            echo ""
+            echo "Failing run: ${URL}"
+            echo ""
+            echo "**Currently warn-only — publish will proceed.** Once the enforcement-flip PR lands, this state will block publish. Fix the failing tests before then."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "::warning title=Tests failed (warn-only)::${WORKFLOW_FILE} concluded as ${CONCLUSION}. Publish proceeded; will block once enforcement lands. See: ${URL}"
+
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel]
-    # `needs: [validate-channel]` only enforces ordering when that job runs.
-    # When publish=false, validate-channel is skipped via its `if:` — which by
-    # default would propagate "skipped" to dependents. The condition below
-    # explicitly allows prepare to run when validate-channel is skipped OR
+    needs: [validate-channel, unit-tests-gate]
+    # `needs: [validate-channel, unit-tests-gate]` only enforces ordering when
+    # those jobs run. When publish=false, both are skipped via their `if:` —
+    # which by default would propagate "skipped" to dependents. The condition
+    # below explicitly allows prepare to run when those jobs are skipped OR
     # successful, but NOT when it failed.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
@@ -173,6 +363,7 @@ jobs:
       app_id:           ${{ steps.manifest.outputs.app_id }}
       dockerfile:       ${{ steps.manifest.outputs.dockerfile }}
       enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
+      release_model:    ${{ steps.manifest.outputs.release_model }}
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
       entrypoints: ${{ steps.manifest.outputs.entrypoints }}
@@ -259,6 +450,18 @@ jobs:
           fi
 
           BRANCH=$(echo "$REF" | sed 's|refs/heads/||' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
+
+          # Release builds arrive with ref=refs/tags/v*, producing a slug like
+          # refs-tags-v0.3.0 for the immutable/branch image tags in GHCR.
+          # Override to 'main' so those tags are clean — the release tag was
+          # cut from main by tag-and-release.yaml, so this is semantically correct.
+          RELEASE_TAG_EARLY="${{ inputs.release_tag }}"
+          RELEASE_TAG_EARLY="${RELEASE_TAG_EARLY//$'\r'/}"
+          RELEASE_TAG_EARLY="${RELEASE_TAG_EARLY//$'\n'/}"
+          if [ -n "${RELEASE_TAG_EARLY}" ] && [ "${REF}" = "refs/tags/${RELEASE_TAG_EARLY}" ]; then
+            BRANCH="main"
+          fi
+
           IMAGE_TAG="${SHA:0:7}"
 
           GHCR_BASE="ghcr.io/atlanhq/${REPO}"
@@ -487,7 +690,7 @@ jobs:
   publish:
     name: Publish to Marketplace
     needs: [prepare, merge, security-scan]
-    if: inputs.publish
+    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -507,27 +710,101 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_MODEL: ${{ needs.prepare.outputs.release_model }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           GITHUB_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
 
-          # Resolve triggering actor to email; fall back to GitHub username
-          GH_EMAIL=$(gh api "users/${GITHUB_ACTOR}" --jq '.email // empty' 2>/dev/null || true)
-          export CREATED_BY="${GH_EMAIL:-${GITHUB_ACTOR}}"
+          # Strip CR/LF that GitHub expression evaluation can inject.
+          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
+          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
+          RELEASE_MODEL="${RELEASE_MODEL//$'\r'/}"
+          RELEASE_MODEL="${RELEASE_MODEL//$'\n'/}"
+
+          # Semver-release gate: apps that opt in via release_model=semver
+          # must supply an explicit release_tag for any channel='all' publish.
+          # Merge-to-main builds the image (already in GHCR) but does not publish
+          # to all tenants — only a GitHub Release (which sets release_tag) does.
+          # Tenant-targeted and non-all-channel publishes are unrestricted.
+          EFFECTIVE_CHANNEL="${CHANNEL:-all}"
+          EFFECTIVE_CHANNEL="${EFFECTIVE_CHANNEL,,}"
+          if [ "${RELEASE_MODEL}" = "semver" ] && [ -z "${RELEASE_TAG}" ] && [ -z "${TENANTS}" ] && [ "${EFFECTIVE_CHANNEL}" = "all" ]; then
+            echo "::error title=Publish blocked::App declares release_model=semver — publishing to channel='all' requires an explicit release tag. The image is already in GHCR; cut a GitHub Release from main to publish to all tenants."
+            {
+              echo "### Publish blocked — semver release required"
+              echo ""
+              echo "This app has \`release_model: semver\` in \`atlan.yaml\`."
+              echo "Publishing to the **all** channel requires an explicit GitHub Release."
+              echo ""
+              echo "| Field | Value |"
+              echo "|-------|-------|"
+              echo "| Built image | \`${GHCR_IMAGE}\` |"
+              echo "| Channel | \`${EFFECTIVE_CHANNEL}\` |"
+              echo ""
+              echo "**Next step:** create a GitHub Release from \`main\` — the image above is already built and ready."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+
+          # Resolve who to attribute as the release creator.
+          #
+          # For `push` events (the squash/merge-to-main auto-publish flow),
+          # github.triggering_actor is whoever clicked "Merge" — not the PR
+          # author — which surfaces the wrong person as "Created by:" in the
+          # GM Slack approval message. Look up the PR for the merge SHA via
+          # /commits/{sha}/pulls and use its author when available. Falls back
+          # to triggering_actor when there's no associated PR (direct push).
+          #
+          # For every other event (workflow_dispatch, release, schedule, …)
+          # the trigger is an explicit deliberate action — attribute to whoever
+          # initiated it. This preserves the pre-fix behavior for those paths.
+          #
+          # NOTE: `gh api` writes its JSON error body to stdout on non-2xx,
+          # so the assignment must be gated on the exit code — otherwise an
+          # error payload would contaminate PR_AUTHOR and break the fallback.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              PR_AUTHOR=""
+              if RAW=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                           --jq '.[0].user.login // empty' 2>/dev/null); then
+                  PR_AUTHOR="${RAW}"
+              fi
+              ACTOR="${PR_AUTHOR:-${GITHUB_ACTOR}}"
+          else
+              ACTOR="${GITHUB_ACTOR}"
+          fi
+          GH_EMAIL=""
+          if EMAIL_RAW=$(gh api "users/${ACTOR}" --jq '.email // empty' 2>/dev/null); then
+              GH_EMAIL="${EMAIL_RAW}"
+          fi
+          export CREATED_BY="${GH_EMAIL:-${ACTOR}}"
 
           # Build JSON payload matching the CLI's registerInMarketplace format
           BODY=$(python3 - <<'PYEOF'
           import json, os
 
-          # Prefer release_tag (e.g. 0.2.0) over commit SHA for the GM version.
+          # Prefer release_tag (e.g. v0.3.0) over commit SHA for the GM version.
           # Backward compatible: apps that don't pass release_tag get SHA as before.
           release_tag = os.environ.get("RELEASE_TAG", "").strip()
           version = release_tag if release_tag else os.environ["IMAGE_TAG"]
 
+          # Semver apps send the plain version tag (e.g. :0.3.0) as the image
+          # so the GM's semver gate accepts it. The release ladder strips the
+          # leading 'v' (v0.3.0 → 0.3.0), so we do the same here to reference
+          # a tag that actually exists in GHCR. CD apps always send the immutable
+          # branch-sha tag regardless of whether release_tag is set.
+          release_model = os.environ.get("RELEASE_MODEL", "").strip()
+          ghcr_image = os.environ["GHCR_IMAGE"]
+          if release_tag and release_model == "semver":
+              image_base = ghcr_image.rsplit(":", 1)[0]
+              version_tag = release_tag.lstrip("v")  # match release ladder: v0.3.0 → 0.3.0
+              image = f"{image_base}:{version_tag}"
+          else:
+              image = ghcr_image
+
           body = {
               "app_id": os.environ["APP_ID"],
-              "image": os.environ["GHCR_IMAGE"],
+              "image": image,
               "version": version,
               "branch": os.environ["BRANCH"],
               "repo": os.environ["REPO_URL"],
@@ -558,17 +835,20 @@ jobs:
           if created_by:
               body["created_by"] = created_by
 
+          if release_model:
+              body["release_model"] = release_model
+
           print(json.dumps(body))
           PYEOF
           )
 
           echo "Publishing ${APP_NAME} (${IMAGE_TAG}) to marketplace..."
 
-          RESPONSE=$(curl -sf -X POST \
+          RESPONSE=$(curl -sS --fail-with-body -X POST \
             "${BASE_URL}/api/service/marketplace/publish" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${APP_PUBLISH_TOKEN}" \
-            -d "$BODY")
+            -d "$BODY") || { echo "Publish failed: $RESPONSE"; exit 1; }
 
           echo "$RESPONSE" | python3 -c "
           import json, sys

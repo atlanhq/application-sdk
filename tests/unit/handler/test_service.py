@@ -399,9 +399,12 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["success"] is True
+        # _TestHandler returns no checks, so envelope success is false
+        # (envelope success now means "preflight produced checks" — a handler
+        # that returns zero checks is treated as a preflight-system failure
+        # so the widget falls back to the top-level "Check failed" path).
+        assert body["success"] is False
         # v2 format: data is a dict of check results keyed by camelCase name.
-        # _TestHandler returns no checks, so data is empty.
         assert body["data"] == {}
         assert body["message"] == "ready"
 
@@ -467,6 +470,265 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 200
         assert received == [{}]
+
+    # ------------------------------------------------------------------
+    # Per-check v2-shape fields (DBBI-665 / WARE-1250 / finishes BLDX-901)
+    # ------------------------------------------------------------------
+    #
+    # The SageV2 widget at
+    # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
+    # renders ``checkResult.success ? successMessage : failureMessage`` with
+    # no fallback to ``message``. PR #1228 (BLDX-901) finished two of the
+    # three sub-mismatches but dropped this rename; these tests pin the
+    # finished shape so it does not regress again.
+
+    def test_preflight_check_emits_v2_success_fields(self) -> None:
+        """A passing check carries the message in successMessage; failureMessage is empty."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.READY,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=True,
+                            message="API version 3.17 is supported",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+        entry = body["data"]["apiVersion"]
+        assert entry["success"] is True
+        assert entry["message"] == "API version 3.17 is supported"
+        assert entry["successMessage"] == "API version 3.17 is supported"
+        assert entry["failureMessage"] == ""
+
+    def test_preflight_check_emits_v2_failure_fields(self) -> None:
+        """A failing check carries the message in failureMessage; successMessage is empty.
+
+        This is the DBBI-665 / IEEE case — without ``failureMessage`` the
+        SageV2 widget renders an empty "Hide details" panel even though the
+        handler set a real message on the check.
+        """
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="Metadata GraphQL API returned no sites",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+        entry = body["data"]["metadataAPI"]
+        assert entry["success"] is False
+        assert entry["message"] == "Metadata GraphQL API returned no sites"
+        assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
+        assert entry["successMessage"] == ""
+
+    def test_preflight_check_multiple_checks_v2_fields_per_check(self) -> None:
+        """Mixed pass/fail set — each check entry carries its own v2 fields."""
+
+        class _ThreeChecks(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.PARTIAL,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=True,
+                            message="API version 3.17 is supported",
+                        ),
+                        PreflightCheck(
+                            name="viewCapability",
+                            passed=True,
+                            message="Projects accessible — 5 project(s) found",
+                        ),
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="Metadata GraphQL API returned 404",
+                        ),
+                    ],
+                )
+
+        client = _make_client(handler=_ThreeChecks())
+        data = client.post("/workflows/v1/check", json={"credentials": []}).json()[
+            "data"
+        ]
+
+        assert data["apiVersion"]["successMessage"].startswith("API version")
+        assert data["apiVersion"]["failureMessage"] == ""
+        assert data["viewCapability"]["successMessage"].startswith("Projects")
+        assert data["viewCapability"]["failureMessage"] == ""
+        assert data["metadataAPI"]["failureMessage"] == (
+            "Metadata GraphQL API returned 404"
+        )
+        assert data["metadataAPI"]["successMessage"] == ""
+        # ``message`` is preserved on every entry for any v3-shape consumer.
+        for name in ("apiVersion", "viewCapability", "metadataAPI"):
+            assert data[name]["message"]
+
+    def test_preflight_check_empty_message_yields_empty_v2_fields(self) -> None:
+        """A check with no message yields empty strings in all message fields."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[PreflightCheck(name="connectivity", passed=False)],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        entry = client.post("/workflows/v1/check", json={"credentials": []}).json()[
+            "data"
+        ]["connectivity"]
+        assert entry["success"] is False
+        assert entry["message"] == ""
+        assert entry["successMessage"] == ""
+        assert entry["failureMessage"] == ""
+
+    # ------------------------------------------------------------------
+    # Envelope ``success`` reports preflight execution, not per-check pass
+    # (DBBI-665 root cause).
+    # ------------------------------------------------------------------
+    #
+    # The previous behaviour ``success = (status == READY)`` made every
+    # PARTIAL/NOT_READY response surface as a blank "Check failed" panel
+    # because SageV2.vue:249 short-circuits on ``!response.success`` and
+    # never iterates the per-check data. These tests pin the new contract:
+    # envelope success is true as long as preflight produced any checks.
+
+    def test_preflight_envelope_success_true_when_all_checks_pass(self) -> None:
+        """Status READY → envelope success true (regression guard)."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.READY,
+                    checks=[
+                        PreflightCheck(name="apiVersion", passed=True, message="ok")
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_OneCheck())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is True
+
+    def test_preflight_envelope_success_true_when_a_check_fails(self) -> None:
+        """Status NOT_READY → envelope success TRUE so SageV2 still renders per-check rows.
+
+        This is the DBBI-665 case: previously a failed check forced envelope
+        success=false, which made the widget skip the per-check loop entirely
+        and show a blank "Hide details" panel. Pinning envelope success=true
+        whenever checks ran lets the per-check rows render.
+        """
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=False,
+                            message="Could not connect to Tableau",
+                        )
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_OneCheck())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is True
+        # Per-check detail is still on the wire so the widget can render it.
+        assert body["data"]["apiVersion"]["success"] is False
+        assert body["data"]["apiVersion"]["failureMessage"] == (
+            "Could not connect to Tableau"
+        )
+
+    def test_preflight_envelope_success_true_on_partial_status(self) -> None:
+        """Status PARTIAL → envelope success TRUE.
+
+        Mixed pass/fail must surface to the UI; a single failing check
+        cannot collapse the entire response.
+        """
+
+        class _Mixed(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.PARTIAL,
+                    checks=[
+                        PreflightCheck(name="apiVersion", passed=True, message="ok"),
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="GraphQL 404",
+                        ),
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_Mixed())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is True
+        assert body["data"]["apiVersion"]["success"] is True
+        assert body["data"]["metadataAPI"]["failureMessage"] == "GraphQL 404"
+
+    def test_preflight_envelope_success_false_when_no_checks_run(self) -> None:
+        """No checks emitted → envelope success FALSE — preflight-system failure.
+
+        A handler that returns zero checks signals that preflight itself
+        couldn't execute (e.g. the client failed to construct). The widget
+        falls back to the top-level "Check failed" branch — same UX as a
+        thrown exception, just without the 500.
+        """
+
+        class _ZeroChecks(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[],
+                    message="couldn't build client",
+                )
+
+        body = (
+            _make_client(handler=_ZeroChecks())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is False
+        assert body["data"] == {}
 
 
 class TestMetadataEndpoint:

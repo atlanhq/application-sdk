@@ -1,13 +1,23 @@
 import asyncio
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.models import DatabaseConfig
-from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.error_codes import CommonError
+from application_sdk.clients.sql import AsyncBaseSQLClient, BaseSQLClient
+from application_sdk.clients.sql_errors import (
+    EngineNotInitializedError,
+    InvalidSqlEngineTypeError,
+    MissingSqlParamError,
+    SqlAwsCredentialsError,
+    SqlClientAuthFailedError,
+    SqlClientConfigError,
+    SqlCredentialsParseError,
+    SqlPandasResultError,
+    UnsupportedSqlCursorError,
+)
 from application_sdk.testing.hypothesis.strategies.clients.sql import (
     sql_credentials_strategy,
     sqlalchemy_connect_args_strategy,
@@ -118,8 +128,8 @@ async def test_load_uses_asyncio_to_thread_for_ping(
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_load_property_based(
     sql_client: BaseSQLClient,
-    credentials: Dict[str, Any],
-    connect_args: Dict[str, Any],
+    credentials: dict[str, Any],
+    connect_args: dict[str, Any],
 ):
     """Property-based test for loading with various credentials and connection arguments"""
     with patch("sqlalchemy.create_engine") as mock_create_engine:
@@ -319,7 +329,7 @@ def test_connection_string_property_based(
 @pytest.mark.skip(reason="Failing due to KeyError: 'col1'")
 async def test_run_query_property_based(
     sql_client: BaseSQLClient,
-    query_result: Dict[str, Any],
+    query_result: dict[str, Any],
 ):
     """Property-based test for query execution with various result structures"""
     with (
@@ -349,12 +359,12 @@ async def test_run_query_property_based(
         )
 
         # Run run_query and collect all results
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         async for batch in sql_client.run_query(query):
             results.extend(batch)
 
         # Verify the results
-        expected_results: List[Dict[str, Any]] = []
+        expected_results: list[dict[str, Any]] = []
         for batch in query_result["batches"]:
             expected_results.extend(batch)
 
@@ -510,8 +520,9 @@ def test_get_sqlalchemy_connection_string_missing_required_param(
     }
     sql_client_with_db_config.credentials = credentials
 
-    with pytest.raises(ValueError, match="database is required"):
+    with pytest.raises(MissingSqlParamError) as exc_info:
         sql_client_with_db_config.get_sqlalchemy_connection_string()
+    assert exc_info.value.field == "database"
 
 
 def test_get_sqlalchemy_connection_string_invalid_auth_type(sql_client_with_db_config):
@@ -526,8 +537,9 @@ def test_get_sqlalchemy_connection_string_invalid_auth_type(sql_client_with_db_c
     }
     sql_client_with_db_config.credentials = credentials
 
-    with pytest.raises(CommonError, match="invalid_auth"):
+    with pytest.raises(SqlCredentialsParseError) as exc_info:
         sql_client_with_db_config.get_sqlalchemy_connection_string()
+    assert exc_info.value.field == "authType"
 
 
 def test_get_sqlalchemy_connection_string_iam_user_missing_username(
@@ -547,10 +559,9 @@ def test_get_sqlalchemy_connection_string_iam_user_missing_username(
     }
     sql_client_with_db_config.credentials = credentials
 
-    with pytest.raises(
-        CommonError, match="username is required for IAM user authentication"
-    ):
+    with pytest.raises(SqlCredentialsParseError) as exc_info:
         sql_client_with_db_config.get_sqlalchemy_connection_string()
+    assert exc_info.value.message == "username is required for IAM user authentication"
 
 
 def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
@@ -570,10 +581,11 @@ def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
     }
     sql_client_with_db_config.credentials = credentials
 
-    with pytest.raises(
-        CommonError, match="aws_role_arn is required for IAM role authentication"
-    ):
+    with pytest.raises(SqlAwsCredentialsError) as exc_info:
         sql_client_with_db_config.get_sqlalchemy_connection_string()
+    assert (
+        exc_info.value.message == "aws_role_arn is required for IAM role authentication"
+    )
 
 
 @pytest.mark.skip(reason="Skipping this test until the native deployment is ready")
@@ -636,8 +648,6 @@ def test_get_sqlalchemy_connection_string_omits_none_parameters(
 # symbols fails at unit-test time instead of at runtime in production.
 # -----------------------------------------------------------------------------
 
-from application_sdk.clients.sql import AsyncBaseSQLClient  # noqa: E402
-from application_sdk.common.error_codes import ClientError  # noqa: E402
 
 # ---------- BaseSQLClient.load — error / edge paths ----------
 
@@ -647,7 +657,7 @@ async def test_load_raises_when_db_config_missing():
     """load() must validate DB_CONFIG before attempting any sqlalchemy import."""
     client = BaseSQLClient()
     client.DB_CONFIG = None
-    with pytest.raises(ValueError, match="DB_CONFIG is not configured"):
+    with pytest.raises(SqlClientConfigError):
         await client.load({"username": "u", "password": "p"})
 
 
@@ -656,7 +666,7 @@ async def test_load_raises_when_db_config_missing():
 async def test_load_wraps_engine_failure_as_client_error(
     mock_create_engine: Any, sql_client: BaseSQLClient
 ):
-    """A sqlalchemy create_engine failure must be wrapped as ClientError and
+    """A sqlalchemy create_engine failure must be wrapped as SqlClientAuthFailedError and
     the (partially constructed) engine disposed so connections do not leak."""
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
@@ -664,8 +674,9 @@ async def test_load_wraps_engine_failure_as_client_error(
     # Force the connect-test inside asyncio.to_thread to fail
     actual_async_mock = AsyncMock(side_effect=RuntimeError("auth handshake failed"))
     with patch("application_sdk.clients.sql.asyncio.to_thread", actual_async_mock):
-        with pytest.raises(ClientError, match="auth handshake failed"):
+        with pytest.raises(SqlClientAuthFailedError) as exc_info:
             await sql_client.load({"username": "u", "password": "p"})
+    assert isinstance(exc_info.value.cause, RuntimeError)
 
     # Engine must be disposed and reset to None so a retry can rebuild it.
     mock_engine.dispose.assert_called_once()
@@ -727,8 +738,9 @@ def test_get_iam_user_token_happy_path(mock_gen: MagicMock, sql_client: BaseSQLC
 
 def test_get_iam_user_token_missing_database(sql_client: BaseSQLClient):
     sql_client.credentials = {"username": "k", "extra": {"username": "u"}}
-    with pytest.raises(CommonError, match="database is required"):
+    with pytest.raises(SqlCredentialsParseError) as exc_info:
         sql_client.get_iam_user_token()
+    assert exc_info.value.message == "database is required for IAM user authentication"
 
 
 @patch("application_sdk.clients.sql.generate_aws_rds_token_with_iam_role")
@@ -754,14 +766,18 @@ def test_get_iam_role_token_happy_path(mock_gen: MagicMock, sql_client: BaseSQLC
 
 def test_get_iam_role_token_missing_role_arn(sql_client: BaseSQLClient):
     sql_client.credentials = {"extra": {"database": "db1"}}
-    with pytest.raises(CommonError, match="aws_role_arn is required"):
+    with pytest.raises(SqlAwsCredentialsError) as exc_info:
         sql_client.get_iam_role_token()
+    assert (
+        exc_info.value.message == "aws_role_arn is required for IAM role authentication"
+    )
 
 
 def test_get_iam_role_token_missing_database(sql_client: BaseSQLClient):
     sql_client.credentials = {"extra": {"aws_role_arn": "arn"}}
-    with pytest.raises(CommonError, match="database is required"):
+    with pytest.raises(SqlAwsCredentialsError) as exc_info:
         sql_client.get_iam_role_token()
+    assert exc_info.value.message == "database is required for IAM role authentication"
 
 
 # ---------- run_query guards ----------
@@ -770,7 +786,7 @@ def test_get_iam_role_token_missing_database(sql_client: BaseSQLClient):
 @pytest.mark.asyncio
 async def test_run_query_raises_when_engine_not_initialized(sql_client: BaseSQLClient):
     sql_client.engine = None
-    with pytest.raises(ValueError, match="Engine is not initialized"):
+    with pytest.raises(EngineNotInitializedError):
         async for _ in sql_client.run_query("SELECT 1"):
             pass
 
@@ -795,7 +811,7 @@ async def test_run_query_raises_when_cursor_unsupported(
     bad_result.cursor = None
     mock_loop.return_value.run_in_executor = AsyncMock(return_value=bad_result)
 
-    with pytest.raises(ValueError, match="Cursor is not supported"):
+    with pytest.raises(UnsupportedSqlCursorError):
         async for _ in sql_client.run_query("SELECT 1"):
             pass
 
@@ -811,7 +827,7 @@ async def test_run_query_raises_when_cursor_unsupported(
 def test_get_sqlalchemy_connection_string_requires_db_config():
     client = BaseSQLClient()
     client.DB_CONFIG = None
-    with pytest.raises(ValueError, match="DB_CONFIG is not configured"):
+    with pytest.raises(SqlClientConfigError):
         client.get_sqlalchemy_connection_string()
 
 
@@ -820,7 +836,7 @@ def test_get_sqlalchemy_connection_string_requires_db_config():
 
 def test_execute_query_daft_requires_engine(sql_client: BaseSQLClient):
     sql_client.engine = None
-    with pytest.raises(ValueError, match="Engine is not initialized"):
+    with pytest.raises(EngineNotInitializedError):
         sql_client._execute_query_daft("SELECT 1", chunksize=None)
 
 
@@ -856,7 +872,7 @@ def test_execute_query_daft_with_engine_object(sql_client: BaseSQLClient):
 
 def test_execute_query_requires_engine(sql_client: BaseSQLClient):
     sql_client.engine = None
-    with pytest.raises(ValueError, match="Engine is not initialized"):
+    with pytest.raises(EngineNotInitializedError):
         sql_client._execute_query("SELECT 1", chunksize=None)
 
 
@@ -942,7 +958,7 @@ async def test_execute_async_read_operation_rejects_string_engine(
     sql_client: BaseSQLClient,
 ):
     sql_client.engine = "postgresql://u:p@h/db"  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="Engine should be an SQLAlchemy engine"):
+    with pytest.raises(InvalidSqlEngineTypeError):
         await sql_client._execute_async_read_operation("SELECT 1", chunksize=None)
 
 
@@ -967,29 +983,32 @@ async def test_get_results_returns_dataframe(sql_client: BaseSQLClient):
 @pytest.mark.asyncio
 async def test_get_results_rejects_non_dataframe(sql_client: BaseSQLClient):
     """If the read path returns something that isn't a DataFrame, get_results
-    must surface the error (wrapped via rewrap)."""
+    must surface the error as SqlPandasResultError."""
     sql_client.engine = MagicMock()
     with patch.object(
         sql_client,
         "_execute_async_read_operation",
         new=AsyncMock(return_value=iter([])),  # not a DataFrame
     ):
-        with pytest.raises(Exception, match="Error reading data"):
+        with pytest.raises(SqlPandasResultError):
             await sql_client.get_results("SELECT 1")
 
 
 @pytest.mark.asyncio
-async def test_get_batched_results_wraps_errors_via_rewrap(sql_client: BaseSQLClient):
-    """Any failure in the read path must be re-raised through rewrap with the
-    'Error reading batched data(pandas) from SQL' prefix."""
+async def test_get_batched_results_raises_sql_pandas_result_error(
+    sql_client: BaseSQLClient,
+):
+    """Any failure in the read path must be raised as SqlPandasResultError."""
     sql_client.engine = MagicMock()
-    with patch.object(
-        sql_client,
-        "_execute_async_read_operation",
-        new=AsyncMock(side_effect=RuntimeError("boom")),
+    with (
+        patch.object(
+            sql_client,
+            "_execute_async_read_operation",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ),
+        pytest.raises(SqlPandasResultError),
     ):
-        with pytest.raises(Exception, match="Error reading batched data"):
-            await sql_client.get_batched_results("SELECT 1")
+        await sql_client.get_batched_results("SELECT 1")
 
 
 @pytest.mark.asyncio
@@ -1074,7 +1093,7 @@ def async_sql_client_local():
 async def test_async_load_raises_when_db_config_missing():
     client = AsyncBaseSQLClient()
     client.DB_CONFIG = None
-    with pytest.raises(ValueError, match="DB_CONFIG is not configured"):
+    with pytest.raises(SqlClientConfigError):
         await client.load({"username": "u", "password": "p"})
 
 
@@ -1083,7 +1102,7 @@ async def test_async_load_raises_when_db_config_missing():
 async def test_async_load_disposes_engine_on_failure(
     mock_create: MagicMock, async_sql_client_local: AsyncBaseSQLClient
 ):
-    """Async load() must dispose the engine and re-raise as ClientError
+    """Async load() must dispose the engine and re-raise as SqlClientAuthFailedError
     (consistent with sync load() — locked in by PR #1602 / BLDX-1180)."""
     mock_engine = AsyncMock()
     mock_engine.dispose = AsyncMock()
@@ -1098,9 +1117,9 @@ async def test_async_load_disposes_engine_on_failure(
     mock_engine.connect = MagicMock(return_value=_FailingCtx())
     mock_create.return_value = mock_engine
 
-    with pytest.raises(ClientError) as exc_info:
+    with pytest.raises(SqlClientAuthFailedError) as exc_info:
         await async_sql_client_local.load({"username": "u", "password": "p"})
-    assert str(ClientError.SQL_CLIENT_AUTH_ERROR) in str(exc_info.value)
+    assert exc_info.value.code == "AUTH_SQL_CLIENT_FAILED"
 
     mock_engine.dispose.assert_awaited_once()
     assert async_sql_client_local.engine is None
@@ -1132,6 +1151,6 @@ async def test_async_run_query_requires_engine(
     async_sql_client_local: AsyncBaseSQLClient,
 ):
     async_sql_client_local.engine = None  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="Engine is not initialized"):
+    with pytest.raises(EngineNotInitializedError):
         async for _ in async_sql_client_local.run_query("SELECT 1"):
             pass

@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any, Union, cast
 
 import orjson
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.contracts.types import FileReference
@@ -192,7 +191,11 @@ class Reader(ABC):
             NotImplementedError: If the method is not implemented.
             ValueError: If the reader has been closed.
         """
-        raise NotImplementedError
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+            AbstractFormatReaderError,
+        )
+
+        raise AbstractFormatReaderError()
 
     @abstractmethod
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
@@ -205,7 +208,11 @@ class Reader(ABC):
             NotImplementedError: If the method is not implemented.
             ValueError: If the reader has been closed.
         """
-        raise NotImplementedError
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+            AbstractFormatReaderError,
+        )
+
+        raise AbstractFormatReaderError()
 
 
 class WriteMode(Enum):
@@ -312,10 +319,11 @@ class Writer(ABC):
 
                     return daft.from_pandas(data)
                 except ImportError:
-                    raise TypeError(
-                        "daft is not installed. Please install daft to use DataframeType.daft, "
-                        "or use DataframeType.pandas instead."
+                    from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                        DaftNotInstalledError,
                     )
+
+                    raise DaftNotInstalledError()
             return data
 
         # Check for daft DataFrame
@@ -325,6 +333,8 @@ class Writer(ABC):
             if isinstance(data, daft.DataFrame):
                 return data
         except ImportError:
+            # Optional dep: daft is not installed — input cannot be a daft
+            # DataFrame, so fall through to the dict/list branches.
             pass
 
         # Convert dict or list of dicts to DataFrame
@@ -350,17 +360,19 @@ class Writer(ABC):
                                 columnar_data[key].append(value)
                     return daft.from_pydict(columnar_data)
                 except ImportError:
-                    raise TypeError(
-                        "Dict and list inputs require daft to be installed when using DataframeType.daft. "
-                        "Please install daft or use DataframeType.pandas instead."
+                    from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                        DaftNotInstalledError,
                     )
+
+                    raise DaftNotInstalledError()
             # For pandas dataframe_type, convert to pandas DataFrame
             return pd.DataFrame([data] if isinstance(data, dict) else data)
 
-        raise TypeError(
-            f"Unsupported data type: {type(data).__name__}. "
-            "Expected DataFrame, dict, or list of dicts."
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+            UnsupportedDataTypeError,
         )
+
+        raise UnsupportedDataTypeError(observed_type=type(data).__name__)
 
     async def write(
         self,
@@ -383,7 +395,11 @@ class Writer(ABC):
             TypeError: If data type is not supported.
         """
         if self._is_closed:
-            raise ValueError("Cannot write to a closed writer")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                WriterClosedError,
+            )
+
+            raise WriterClosedError()
 
         # Convert to DataFrame if needed
         dataframe = self._convert_to_dataframe(data)
@@ -393,7 +409,11 @@ class Writer(ABC):
         elif self.dataframe_type == DataframeType.daft:
             await self._write_daft_dataframe(dataframe, **kwargs)
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     async def write_batches(
         self,
@@ -411,14 +431,22 @@ class Writer(ABC):
             ValueError: If the writer has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot write to a closed writer")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                WriterClosedError,
+            )
+
+            raise WriterClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             await self._write_batched_dataframe(dataframe)
         elif self.dataframe_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     async def _write_batched_dataframe(
         self,
@@ -450,7 +478,11 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
         except Exception as e:
-            raise rewrap(e, "Error writing batched dataframe") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatWriteError,
+            )
+
+            raise FormatWriteError(cause=e) from e
 
     async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
         """Write a pandas DataFrame to Parquet files and upload to object store.
@@ -564,7 +596,11 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_daft_dataframe(dataframe)
         except Exception as e:
-            raise rewrap(e, "Error writing batched daft dataframe") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatWriteError,
+            )
+
+            raise FormatWriteError(cause=e) from e
 
     @abstractmethod
     async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):
@@ -668,7 +704,11 @@ class Writer(ABC):
             # Write statistics to file and object store
             statistics_dict = await self._write_statistics(typename)
             if not statistics_dict:
-                raise ValueError("No statistics data available")
+                from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                    MissingStatisticsError,
+                )
+
+                raise MissingStatisticsError()
 
             self._statistics = TaskStatistics(**statistics_dict)
             if typename:
@@ -685,7 +725,11 @@ class Writer(ABC):
             return self._result
 
         except Exception as e:
-            raise rewrap(e, "Error closing writer") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatCloseError,
+            )
+
+            raise FormatCloseError(cause=e) from e
 
     def _build_file_reference(self) -> "FileReference | None":
         """Return an ephemeral FileReference for the writer's output directory.
@@ -804,4 +848,8 @@ class Writer(ABC):
 
             return statistics
         except Exception as e:
-            raise rewrap(e, "Error writing statistics") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatStatisticsWriteError,
+            )
+
+            raise FormatStatisticsWriteError(cause=e) from e

@@ -26,6 +26,7 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
     InvalidInputError,
     NotFoundError,
+    PreconditionError,
 )
 
 
@@ -198,3 +199,25 @@ class StorageConfigError(InvalidInputError, StorageError):
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class UnsafeUploadPathError(InvalidInputError):
+    """Upload path is blocked — sensitive path, traversal, or user-defined block list."""
+
+    code: ClassVar[str] = "INVALID_INPUT_UPLOAD_PATH_UNSAFE"
+    message: str = "Upload path blocked"
+    field: str | None = "path"
+    unsafe_path: str | None = None
+
+
+@dataclass(kw_only=True)
+class ObjectStoreNotProvidedError(PreconditionError):
+    """No object store is available — must pass store= or configure infrastructure."""
+
+    code: ClassVar[str] = "PRECONDITION_OBJECT_STORE_NOT_PROVIDED"
+    message: str = (
+        "No ObjectStore provided and no infrastructure storage is configured. "
+        "Pass store= explicitly or call set_infrastructure() with a storage store."
+    )
+    resource: str | None = "object_store"

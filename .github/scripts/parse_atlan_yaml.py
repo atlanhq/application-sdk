@@ -15,6 +15,7 @@ Outputs (single-line, append-safe):
     build_tag          ``build_tag`` (only ``v1`` supported today)
     dockerfile         ``dockerfile`` (default ``./Dockerfile``)
     enable_sdr         ``true``/``false`` from ``self_deployed_runtime``
+    release_model      ``cd`` (default) or ``semver`` — controls publish-to-all gating
     sdk_version        atlan-application-sdk version pinned in uv.lock (or empty)
     entrypoints  JSON-encoded list (single line) or empty string
     deploy_config      YAML-dumped ``deploy:`` block (multiline; heredoc'd by caller)
@@ -42,10 +43,15 @@ _KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 # Closed type set. Mirrors core.version.model.EntrypointPackageType in GM.
 _ALLOWED_TYPES = {"connector", "miner", "orchestrator", "utility", "custom"}
 
-# Channels for which ``deploy.env_overrides.<channel>`` actually takes
-# effect at GM's catalog read. Mirrors ``_OVERRIDABLE_CHANNELS`` in
-# ``core/release/config_resolver.py`` in global-marketplace. Bumping this
-# set is a coordinated change with GM.
+# Allowed values for the release_model field.
+# "versioned" is a deprecated alias for "semver" — normalised on read.
+_ALLOWED_RELEASE_MODELS = {"cd", "semver", "versioned"}
+
+# Channel keys that GM's catalog read interprets as channel-tier overrides.
+# Any other key is interpreted as a tenant-name-tier override (matched against
+# horizon_tenants.name at runtime). We keep this constant for diagnostics —
+# the validator no longer rejects non-channel keys, since tenant-name entries
+# are a supported atlan.yaml shape.
 _OVERRIDABLE_CHANNELS = {"beta", "staging"}
 
 # Required keys for each entrypoints entry. description and icon_url
@@ -133,19 +139,20 @@ def _validate_entrypoints(wp_val: Any) -> str:
 def _validate_env_overrides(deploy_val: Any) -> None:
     """Validate ``deploy.env_overrides`` shape, if present.
 
-    GM's resolver is intentionally lenient (silent no-op on malformed input)
-    so a typo'd channel name would ship the base config to that channel with
-    no signal to the developer. We fail CI fast instead.
+    GM's resolver interprets ``env_overrides`` keys in two tiers: ``beta`` /
+    ``staging`` are channel-tier; anything else is a tenant-name match
+    against ``horizon_tenants.name``. We can only validate the shape here —
+    the SDK doesn't know the live tenant list, so we don't reject unknown
+    keys (a typo'd ``staing`` is silently a tenant name as far as the SDK
+    is concerned, and falls through to the channel tier on GM at runtime).
 
     Allowed shape::
 
         deploy:
           env_overrides:
-            beta:    {KEY: value, ...}
-            staging: {KEY: value, ...}
-
-    Only channels in ``_OVERRIDABLE_CHANNELS`` are accepted; bumping that set
-    is a coordinated change with GM's ``config_resolver._OVERRIDABLE_CHANNELS``.
+            beta:        {KEY: value, ...}
+            staging:     {KEY: value, ...}
+            tenant-xyz:  {KEY: value, ...}     # any string key = tenant name
     """
     if not isinstance(deploy_val, dict):
         return
@@ -153,17 +160,13 @@ def _validate_env_overrides(deploy_val: Any) -> None:
     if overrides is None:
         return
     if not isinstance(overrides, dict):
-        _err("deploy.env_overrides must be a mapping of channel → env vars")
-    unknown = set(overrides.keys()) - _OVERRIDABLE_CHANNELS
-    if unknown:
-        _err(
-            f"deploy.env_overrides has unknown channel(s) {sorted(unknown)}; "
-            f"allowed: {sorted(_OVERRIDABLE_CHANNELS)}"
-        )
-    for channel, env in overrides.items():
+        _err("deploy.env_overrides must be a mapping of channel-or-tenant → env vars")
+    for key, env in overrides.items():
+        if not isinstance(key, str) or not key:
+            _err(f"deploy.env_overrides keys must be non-empty strings; got {key!r}")
         if not isinstance(env, dict):
             _err(
-                f"deploy.env_overrides.{channel} must be a mapping of env vars; "
+                f"deploy.env_overrides.{key} must be a mapping of env vars; "
                 f"got {type(env).__name__}"
             )
 
@@ -217,6 +220,10 @@ def parse(
     build_tag = d.get("build_tag", "v1")
     dockerfile = d.get("dockerfile", "./Dockerfile")
     enable_sdr = "true" if d.get("self_deployed_runtime", False) else "false"
+    release_model = d.get("release_model", "cd")
+    # Normalise deprecated alias so downstream CI always sees "semver".
+    if release_model == "versioned":
+        release_model = "semver"
 
     if not app_name:
         _err('atlan.yaml is missing required "name" field')
@@ -224,6 +231,12 @@ def parse(
     if build_tag != "v1":
         _err(
             f"Unsupported build_tag {build_tag!r}. Only 'v1' is supported by this template version."
+        )
+
+    if release_model not in _ALLOWED_RELEASE_MODELS:
+        _err(
+            f"Unsupported release_model {release_model!r}. "
+            f"Must be one of: {sorted(_ALLOWED_RELEASE_MODELS)}."
         )
 
     deploy_val = d.get("deploy")
@@ -243,6 +256,7 @@ def parse(
         "build_tag": build_tag,
         "dockerfile": dockerfile,
         "enable_sdr": enable_sdr,
+        "release_model": release_model,
         "sdk_version": sdk_version,
         "entrypoints": entrypoints,
         "deploy_config": deploy_config,
@@ -283,6 +297,7 @@ def main() -> None:
     print(f"App ID: {outputs['app_id']}")
     print(f"Dockerfile: {outputs['dockerfile']}")
     print(f"SDR: {outputs['enable_sdr']}")
+    print(f"Release model: {outputs['release_model']}")
     print(f"SDK version: {outputs['sdk_version'] or '(not pinned)'}")
     print(
         "Entrypoint packages: "

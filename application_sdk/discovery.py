@@ -21,6 +21,14 @@ import inspect
 import warnings
 from typing import Any, ClassVar
 
+from application_sdk._discovery_errors import (
+    DiscoveryAppRegistrationError,
+    DiscoveryClassNotFoundError,
+    DiscoveryHandlerInvalidError,
+    DiscoveryModuleImportError,
+    DiscoveryPathFormatError,
+    DiscoveryTypeMismatchError,
+)
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.errors import DISCOVERY_ERROR, ErrorCode
@@ -71,23 +79,23 @@ def _parse_module_path(module_path: str) -> tuple[str, str]:
     """Parse "module.name:ClassName" into (module_name, class_name).
 
     Raises:
-        DiscoveryError: If the format is invalid.
+        DiscoveryPathFormatError: If the format is invalid.
     """
     if ":" not in module_path:
-        raise DiscoveryError(
-            f"Invalid module path format: expected 'module.name:ClassName', got '{module_path}'",
+        raise DiscoveryPathFormatError(
+            message=f"Invalid module path format: expected 'module.name:ClassName', got '{module_path}'",
             module_path=module_path,
         )
 
     module_name, class_name = module_path.split(":", 1)
     if not module_name:
-        raise DiscoveryError(
-            f"Empty module name in module path: '{module_path}'",
+        raise DiscoveryPathFormatError(
+            message=f"Empty module name in module path: '{module_path}'",
             module_path=module_path,
         )
     if not class_name:
-        raise DiscoveryError(
-            f"Empty class name in module path: '{module_path}'",
+        raise DiscoveryPathFormatError(
+            message=f"Empty class name in module path: '{module_path}'",
             module_path=module_path,
         )
 
@@ -98,36 +106,40 @@ def _import_class(module_name: str, class_name: str) -> type[Any]:
     """Import a class from a module by name.
 
     Raises:
-        DiscoveryError: If the module cannot be imported or class not found.
+        DiscoveryModuleImportError: If the module cannot be imported.
+        DiscoveryClassNotFoundError: If the class is not in the module.
+        DiscoveryTypeMismatchError: If the symbol is not a class.
     """
     module_path = f"{module_name}:{class_name}"
     try:
         module = importlib.import_module(module_name)
     except ImportError as e:
-        raise DiscoveryError(
-            f"Cannot import module '{module_name}'",
+        raise DiscoveryModuleImportError(
+            message=f"Cannot import module '{module_name}'",
             module_path=module_path,
             cause=e,
         ) from e
     except Exception as e:
-        raise DiscoveryError(
-            f"Error importing module '{module_name}'",
+        raise DiscoveryModuleImportError(
+            message=f"Error importing module '{module_name}'",
             module_path=module_path,
             cause=e,
         ) from e
 
     if not hasattr(module, class_name):
         available = [name for name, obj in inspect.getmembers(module, inspect.isclass)]
-        raise DiscoveryError(
-            f"Class '{class_name}' not found in module '{module_name}'. "
-            f"Available classes: {available}",
+        raise DiscoveryClassNotFoundError(
+            message=(
+                f"Class '{class_name}' not found in module '{module_name}'. "
+                f"Available classes: {available}"
+            ),
             module_path=module_path,
         )
 
     cls = getattr(module, class_name)
     if not isinstance(cls, type):
-        raise DiscoveryError(
-            f"'{class_name}' in module '{module_name}' is not a class",
+        raise DiscoveryTypeMismatchError(
+            message=f"'{class_name}' in module '{module_name}' is not a class",
             module_path=module_path,
         )
 
@@ -157,7 +169,7 @@ def load_app_class(module_path: str) -> type[App]:
         The App subclass.
 
     Raises:
-        DiscoveryError: If the module/class cannot be loaded or isn't an App.
+        DiscoveryTypeMismatchError: If the class isn't an App subclass.
 
     Example::
 
@@ -167,9 +179,11 @@ def load_app_class(module_path: str) -> type[App]:
     cls = _import_class(module_name, class_name)
 
     if not _is_app_class(cls):
-        raise DiscoveryError(
-            f"Class '{class_name}' is not an App subclass. "
-            "Ensure it inherits from App.",
+        raise DiscoveryTypeMismatchError(
+            message=(
+                f"Class '{class_name}' is not an App subclass. "
+                "Ensure it inherits from App."
+            ),
             module_path=module_path,
         )
 
@@ -198,15 +212,15 @@ def load_handler_class(
         The Handler subclass, or None if not found.
 
     Raises:
-        DiscoveryError: If ``handler_module_path`` is provided but invalid.
+        DiscoveryHandlerInvalidError: If ``handler_module_path`` is provided but invalid.
     """
     if handler_module_path:
         module_name, class_name = _parse_module_path(handler_module_path)
         cls = _import_class(module_name, class_name)
 
         if not _is_handler_class(cls):
-            raise DiscoveryError(
-                f"Class '{class_name}' is not a Handler subclass.",
+            raise DiscoveryHandlerInvalidError(
+                message=f"Class '{class_name}' is not a Handler subclass.",
                 module_path=handler_module_path,
             )
 
@@ -261,30 +275,38 @@ def validate_app_class(cls: type[App]) -> None:
     (set by ``App.__init_subclass__``) and is registered in AppRegistry.
 
     Raises:
-        DiscoveryError: If validation fails.
+        DiscoveryAppRegistrationError: If validation fails.
     """
     if not _is_app_class(cls):
-        raise DiscoveryError(f"Class {cls.__name__} is not an App subclass")
+        raise DiscoveryAppRegistrationError(
+            message=f"Class {cls.__name__} is not an App subclass"
+        )
 
     if not hasattr(cls, "_app_name"):
-        raise DiscoveryError(
-            f"Class {cls.__name__} is missing _app_name. "
-            "Ensure it inherits from App correctly."
+        raise DiscoveryAppRegistrationError(
+            message=(
+                f"Class {cls.__name__} is missing _app_name. "
+                "Ensure it inherits from App correctly."
+            )
         )
 
     if not hasattr(cls, "_app_version"):
-        raise DiscoveryError(
-            f"Class {cls.__name__} is missing _app_version. "
-            "Ensure it inherits from App correctly."
+        raise DiscoveryAppRegistrationError(
+            message=(
+                f"Class {cls.__name__} is missing _app_version. "
+                "Ensure it inherits from App correctly."
+            )
         )
 
     registry = AppRegistry.get_instance()
     app_name = cls._app_name  # type: ignore[attr-defined]
 
     if app_name not in registry.list_apps():
-        raise DiscoveryError(
-            f"App '{app_name}' is not registered in AppRegistry. "
-            "This usually means App.__init_subclass__ did not run correctly."
+        raise DiscoveryAppRegistrationError(
+            message=(
+                f"App '{app_name}' is not registered in AppRegistry. "
+                "This usually means App.__init_subclass__ did not run correctly."
+            )
         )
 
     logger.debug(
