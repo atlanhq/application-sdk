@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from opentelemetry.sdk.metrics import (
@@ -140,16 +140,15 @@ class TestExport:
         "application_sdk.observability._objectstore_metric_exporter.ENABLE_OBSERVABILITY_STORE_SINK",
         True,
     )
-    @patch(
-        "application_sdk.observability._objectstore_metric_exporter._upload_sync",
-    )
     def test_export_writes_ndjson_gz(
         self,
-        mock_upload: AsyncMock,
         provider: MeterProvider,
         in_memory_reader: InMemoryMetricReader,
         exporter: ObjectStoreMetricExporter,
     ) -> None:
+        mock_store = MagicMock()
+        exporter._deployment_store = mock_store
+
         meter = provider.get_meter("test")
         counter = meter.create_counter("export.test")
         counter.add(1, {"k": "v"})
@@ -160,10 +159,10 @@ class TestExport:
         from opentelemetry.sdk.metrics.export import MetricExportResult
 
         assert result == MetricExportResult.SUCCESS
-        assert mock_upload.called
+        assert mock_store.put.called
         # Verify the local file was cleaned up
-        local_path = mock_upload.call_args[0][0]
-        assert not os.path.exists(local_path)
+        uploaded_path = mock_store.put.call_args[0][1]
+        assert not os.path.exists(uploaded_path)
 
     @patch(
         "application_sdk.observability._objectstore_metric_exporter.ENABLE_OBSERVABILITY_STORE_SINK",
@@ -189,17 +188,16 @@ class TestExport:
         "application_sdk.observability._objectstore_metric_exporter.ENABLE_OBSERVABILITY_STORE_SINK",
         True,
     )
-    @patch(
-        "application_sdk.observability._objectstore_metric_exporter._upload_sync",
-        side_effect=Exception("upload boom"),
-    )
     def test_export_swallows_upload_failure(
         self,
-        mock_upload: AsyncMock,
         provider: MeterProvider,
         in_memory_reader: InMemoryMetricReader,
         exporter: ObjectStoreMetricExporter,
     ) -> None:
+        mock_store = MagicMock()
+        mock_store.put.side_effect = Exception("upload boom")
+        exporter._deployment_store = mock_store
+
         meter = provider.get_meter("test")
         counter = meter.create_counter("fail.test")
         counter.add(1)

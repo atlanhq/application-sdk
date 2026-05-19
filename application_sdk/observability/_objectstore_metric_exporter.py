@@ -12,12 +12,12 @@ collection.
 
 from __future__ import annotations
 
-import asyncio
 import gzip
 import os
 import posixpath
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -51,6 +51,7 @@ from application_sdk.observability.observability import OBSERVABILITY_S3_PREFIX_
 from application_sdk.observability.utils import get_observability_dir
 
 if TYPE_CHECKING:
+    from obstore.store import ObjectStore
     from opentelemetry.sdk.metrics.export import HistogramDataPoint, NumberDataPoint
     from opentelemetry.sdk.resources import Resource
 
@@ -195,48 +196,6 @@ def _write_ndjson_gz(records: Sequence[dict[str, Any]], path: str) -> None:
             f.write(orjson.dumps(record) + b"\n")
 
 
-def _upload_sync(local_path: str, remote_key: str, timeout_s: float) -> None:
-    """Upload *local_path* to object stores, bridging async→sync.
-
-    Called from the ``PeriodicExportingMetricReader`` background thread,
-    which is not an asyncio thread.  We use ``asyncio.run()`` to drive
-    the async ``upload_file`` from a synchronous context.  The upload is
-    bounded by ``timeout_s`` so a hanging store never blocks the reader.
-    """
-
-    async def _upload() -> None:
-        from application_sdk.storage import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
-            upload_file,
-        )
-        from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
-            create_store_from_binding,
-        )
-
-        try:
-            store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
-            await upload_file(remote_key, local_path, store=store)
-        except Exception:
-            logger.warning(
-                "ObjectStore metric upload to deployment store failed", exc_info=True
-            )
-
-        if ENABLE_ATLAN_UPLOAD:
-            try:
-                store = create_store_from_binding(UPSTREAM_OBJECT_STORE_NAME)
-                await upload_file(remote_key, local_path, store=store)
-            except Exception:
-                logger.warning(
-                    "ObjectStore metric upload to upstream store failed", exc_info=True
-                )
-
-    try:
-        asyncio.run(asyncio.wait_for(_upload(), timeout=timeout_s))
-    except TimeoutError:
-        logger.warning(
-            "ObjectStore metric upload timed out after %.1fs", timeout_s, exc_info=True
-        )
-
-
 class ObjectStoreMetricExporter(MetricExporter):
     """Exports OTel metrics as NDJSON.gz files to ObjectStore.
 
@@ -256,6 +215,32 @@ class ObjectStoreMetricExporter(MetricExporter):
             },
         )
         self._data_dir = data_dir or get_observability_dir()
+        self._deployment_store: ObjectStore | None = self._resolve_store(
+            DEPLOYMENT_OBJECT_STORE_NAME, "deployment"
+        )
+        self._upstream_store: ObjectStore | None = (
+            self._resolve_store(UPSTREAM_OBJECT_STORE_NAME, "upstream")
+            if ENABLE_ATLAN_UPLOAD
+            else None
+        )
+
+    def _resolve_store(self, name: str, label: str) -> ObjectStore | None:
+        from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            create_store_from_binding,
+        )
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            StorageConfigError,
+        )
+
+        try:
+            return create_store_from_binding(name)
+        except StorageConfigError:
+            logger.warning(
+                "Object store '%s' not configured; %s metric upload disabled",
+                name,
+                label,
+            )
+            return None
 
     def export(
         self,
@@ -298,9 +283,23 @@ class ObjectStoreMetricExporter(MetricExporter):
             _write_ndjson_gz(records, local_path)
 
             try:
-                _upload_sync(local_path, remote_key, timeout_millis / 1000.0)
+                if self._deployment_store is not None:
+                    try:
+                        self._deployment_store.put(remote_key, Path(local_path))
+                    except Exception:
+                        logger.warning(
+                            "ObjectStore metric upload to deployment store failed",
+                            exc_info=True,
+                        )
+                if self._upstream_store is not None:
+                    try:
+                        self._upstream_store.put(remote_key, Path(local_path))
+                    except Exception:
+                        logger.warning(
+                            "ObjectStore metric upload to upstream store failed",
+                            exc_info=True,
+                        )
             finally:
-                # Always clean up local file
                 try:
                     os.unlink(local_path)
                 except OSError:
