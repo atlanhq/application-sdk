@@ -25,7 +25,6 @@ from application_sdk.templates.contracts.incremental_sql import (
     UpdateMarkerOutput,
 )
 
-
 # Canonical valid markers covering every shape the contract permits.
 _VALID_MARKERS = [
     "",  # empty = full-extraction signal

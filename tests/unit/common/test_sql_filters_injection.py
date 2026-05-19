@@ -26,7 +26,6 @@ from application_sdk.common.sql_filters import (
     validate_filter_no_sql_injection,
 )
 
-
 # ---------------------------------------------------------------------------
 # validate_filter_no_sql_injection — the deny-list itself
 # ---------------------------------------------------------------------------
