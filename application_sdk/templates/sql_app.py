@@ -77,6 +77,8 @@ from application_sdk.credentials.ref import CredentialRef
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage import StorageNotFoundError
+from application_sdk.storage.ops import download_file
 from application_sdk.storage.transfer import upload as transfer_upload
 from application_sdk.templates.contracts.base_metadata_extraction import (
     UploadInput,
@@ -712,8 +714,19 @@ class SqlApp(App):
 
         Reads ``raw/<entity>/records.json`` line by line, runs each
         record through ``mapper_fn``, and writes the resulting Atlan
-        asset to ``transformed/<entity>/entities.json``. If the raw file
-        is missing or empty (extract returned 0 rows), this is a no-op.
+        asset to ``transformed/<entity>/entities.json``.
+
+        Cross-worker fault tolerance: each ``extract_*`` and
+        ``transform_*`` is a separate Temporal activity and can land on
+        any worker pod. When this transform runs on a pod that didn't
+        run the matching extract, the raw file isn't on this pod's
+        local filesystem — but it IS in object storage (each pod
+        mirrors its raw writes up). Fall back to fetching from object
+        storage in that case rather than silently treating the entity
+        as empty (which previously caused all downstream assets of the
+        missing type to be archived by the publish step on every run
+        that hit a cross-pod schedule). If the raw file is genuinely
+        absent in both places (extract produced 0 rows), return 0.
         """
         output_path = self._resolve_output_path(input)
         if not output_path:
@@ -721,7 +734,50 @@ class SqlApp(App):
 
         raw_file = Path(output_path) / "raw" / entity_type / "records.json"
         if not raw_file.exists() or raw_file.stat().st_size == 0:
-            return TransformOutput(typename=entity_type, total_record_count=0)
+            # Local miss — try the object store before deciding the
+            # entity is empty. The key matches what ``_extract_entity``
+            # ultimately publishes via ``transfer_upload``.
+            object_key = get_object_store_prefix(str(raw_file))
+            try:
+                await download_file(key=object_key, local_path=str(raw_file))
+            except StorageNotFoundError:
+                # Not on this pod AND not in the store ⇒ extract really
+                # returned zero rows for this entity. Preserve the
+                # historical zero-count return so the publish step
+                # interprets the absence consistently.
+                logger.info(
+                    "Transform %s: raw file absent locally and in object "
+                    "store (%s); treating as zero-row extract.",
+                    entity_type,
+                    object_key,
+                )
+                return TransformOutput(typename=entity_type, total_record_count=0)
+            except Exception:
+                # Transient object-store error — let Temporal retry the
+                # activity rather than silently dropping the entity.
+                # Historically this code path returned 0 unconditionally,
+                # which is what caused asset archival across thousands
+                # of records when a download blip coincided with a
+                # cross-worker schedule.
+                logger.error(
+                    "Transform %s: failed to fetch raw file from object "
+                    "store (%s); raising to retry the activity.",
+                    entity_type,
+                    object_key,
+                    exc_info=True,
+                )
+                raise
+            logger.info(
+                "Transform %s: hydrated raw file from object store at %s "
+                "(cross-worker schedule).",
+                entity_type,
+                object_key,
+            )
+            # Re-check after download. A zero-byte object in the store is
+            # treated the same as a genuinely-missing file: no records to
+            # transform, return 0 cleanly.
+            if not raw_file.exists() or raw_file.stat().st_size == 0:
+                return TransformOutput(typename=entity_type, total_record_count=0)
 
         connection_qn = ""
         connection_name = ""

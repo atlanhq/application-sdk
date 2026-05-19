@@ -277,15 +277,216 @@ class TestTransformTasks:
         assert json.loads(out.split("\n")[0])["typeName"] == "Table"
 
     async def test_transform_no_raw_file_returns_zero(self, app, tmp_path):
-        """When extract didn't run (no raw file), transform is a no-op."""
+        """When extract didn't run (no raw file) AND nothing exists in the
+        object store either, transform is a no-op. With BLDX-1281 the
+        transform first attempts an object-store fetch on local miss;
+        ``StorageNotFoundError`` from that fetch is treated as a true
+        zero-row signal (matches historical behaviour).
+        """
+        from application_sdk.storage import StorageNotFoundError
+
         input_ = _make_task_input(output_path=str(tmp_path))
-        result = await app.transform_tables(input_)
+        with patch(
+            "application_sdk.templates.sql_app.download_file",
+            new=AsyncMock(side_effect=StorageNotFoundError("not in store")),
+        ):
+            result = await app.transform_tables(input_)
         assert result.total_record_count == 0
 
     async def test_transform_procedures_no_raw_file(self, app, tmp_path):
+        from application_sdk.storage import StorageNotFoundError
+
         input_ = _make_task_input(output_path=str(tmp_path))
-        result = await app.transform_procedures(input_)
+        with patch(
+            "application_sdk.templates.sql_app.download_file",
+            new=AsyncMock(side_effect=StorageNotFoundError("not in store")),
+        ):
+            result = await app.transform_procedures(input_)
         assert result.total_record_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Cross-worker fault tolerance (BLDX-1281)
+# ---------------------------------------------------------------------------
+#
+# Each extract_* and transform_* is a separate Temporal activity and may run
+# on a different worker pod. The raw file written by extract is on that
+# pod's local filesystem; if transform lands on a different pod, the local
+# file is missing. Historically ``_transform_entity`` would silently return
+# total_record_count=0 in that case — and the downstream publish step would
+# interpret the empty transformed/ directory as "this entity is gone" and
+# archive every previously-published asset of that type for the connection.
+#
+# The fix: on local miss, fetch the raw file from the object store. The
+# tests below pin the three branches of that contract:
+#   * local miss + object-store hit → transform succeeds against the
+#     hydrated file (no asset archival).
+#   * local miss + object-store miss → return count=0 cleanly
+#     (interpreted as "extract produced zero rows", matches historical
+#     behaviour).
+#   * local miss + transient object-store error → raise so Temporal
+#     retries the activity (the historical silent-0 here is what caused
+#     thousands of assets to be archived on a single S3 blip).
+
+
+class TestTransformCrossWorkerFallback:
+    """``_transform_entity`` falls back to the object store on local miss."""
+
+    async def test_local_hit_skips_object_store(self, app, tmp_path):
+        """Happy path: raw is local → no download_file call, no S3 traffic."""
+        _seed_raw(tmp_path, "table", [{"table_name": "t1"}])
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        with patch(
+            "application_sdk.templates.sql_app.download_file",
+            new=AsyncMock(),
+        ) as mock_download:
+            result = await app.transform_tables(input_)
+
+        assert result.total_record_count == 1
+        mock_download.assert_not_called()
+
+    async def test_local_miss_object_store_hit_hydrates(self, app, tmp_path):
+        """Cross-worker schedule: local raw is missing, but the matching
+        extract pod uploaded it to the object store. download_file
+        materialises the file locally; transform proceeds normally and
+        writes entities.json so the publish step has data to compare.
+        """
+        # raw/table/records.json starts absent — simulate the file landing
+        # only after a download_file call.
+        records = [
+            {"table_name": "users"},
+            {"table_name": "orders"},
+            {"table_name": "products"},
+        ]
+
+        async def fake_download(*, key: str, local_path: str):
+            # download_file creates parents itself; mirror that contract.
+            from pathlib import Path
+
+            target = Path(local_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+            return None
+
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        with patch(
+            "application_sdk.templates.sql_app.download_file",
+            new=AsyncMock(side_effect=fake_download),
+        ) as mock_download:
+            result = await app.transform_tables(input_)
+
+        assert result.total_record_count == 3
+        # Transform was hydrated from the object store, not skipped.
+        mock_download.assert_awaited_once()
+        # entities.json was written with one mapped row per raw record.
+        out_lines = (
+            (tmp_path / "transformed" / "table" / "entities.json")
+            .read_text()
+            .strip()
+            .split("\n")
+        )
+        assert len(out_lines) == 3
+        assert {
+            json.loads(line)["qualifiedName"].rsplit("/", 1)[-1] for line in out_lines
+        } == {"users", "orders", "products"}
+
+    async def test_local_miss_object_store_miss_returns_zero(self, app, tmp_path):
+        """Genuine zero-row extract: raw is absent locally AND in the store.
+        ``StorageNotFoundError`` from download_file is treated as the
+        "extract produced 0 rows" signal so the publish step downstream
+        sees consistent zero-count behaviour (matches the historical
+        contract — no spurious asset archival on first-time runs of
+        empty entity types like ``view`` or ``procedure``).
+        """
+        from application_sdk.storage import StorageNotFoundError
+
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        with patch(
+            "application_sdk.templates.sql_app.download_file",
+            new=AsyncMock(side_effect=StorageNotFoundError("absent")),
+        ):
+            result = await app.transform_tables(input_)
+
+        assert result.total_record_count == 0
+        # No entities.json should have been created.
+        assert not (tmp_path / "transformed" / "table" / "entities.json").exists()
+
+    async def test_local_miss_object_store_transient_error_raises(self, app, tmp_path):
+        """A transient object-store error (network blip, throttling, etc.)
+        must NOT be swallowed — Temporal needs to retry the activity.
+        Silently returning 0 here is what caused the thirdbridge incident
+        where a multi-pod schedule + a transient S3 hiccup archived
+        thousands of assets in a single publish round.
+        """
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        with patch(
+            "application_sdk.templates.sql_app.download_file",
+            new=AsyncMock(side_effect=ConnectionError("transient")),
+        ):
+            with pytest.raises(ConnectionError):
+                await app.transform_tables(input_)
+
+    async def test_object_store_returns_empty_file_returns_zero(self, app, tmp_path):
+        """Edge case: download_file succeeds but the object is zero bytes.
+        Treat the same as a missing raw — return 0 instead of attempting
+        to read an empty file (which would also yield 0 but burn an
+        extra activity stat-call). This keeps the contract symmetric
+        with the local-empty-file early return at the top of the helper.
+        """
+
+        async def fake_empty_download(*, key: str, local_path: str):
+            from pathlib import Path
+
+            target = Path(local_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"")
+            return None
+
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        with patch(
+            "application_sdk.templates.sql_app.download_file",
+            new=AsyncMock(side_effect=fake_empty_download),
+        ):
+            result = await app.transform_tables(input_)
+
+        assert result.total_record_count == 0
+        assert not (tmp_path / "transformed" / "table" / "entities.json").exists()
+
+    async def test_object_store_key_matches_extract_upload(self, app, tmp_path):
+        """Sanity: the object key passed to download_file is derived from
+        the same path extract uses. Concretely, it must be the
+        ``get_object_store_prefix(...)`` of the local raw path so the
+        upload (transfer_upload of TEMPORARY_PATH/.../raw/<entity>/
+        records.json) and the download line up on the same key.
+        """
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        captured_keys: list[str] = []
+
+        async def capture_key(*, key: str, local_path: str):
+            captured_keys.append(key)
+            from application_sdk.storage import StorageNotFoundError
+
+            raise StorageNotFoundError("simulated absence")
+
+        with patch(
+            "application_sdk.templates.sql_app.download_file",
+            new=AsyncMock(side_effect=capture_key),
+        ):
+            await app.transform_tables(input_)
+
+        assert len(captured_keys) == 1
+        # The key must reference the same ``raw/table/records.json`` path
+        # the extract step writes — any drift between the two would
+        # silently break the fallback in production. Don't pin the full
+        # prefix shape (it depends on TEMPORARY_PATH at runtime); just
+        # pin the suffix that uniquely identifies this entity.
+        assert captured_keys[0].endswith("raw/table/records.json")
 
 
 # ---------------------------------------------------------------------------
