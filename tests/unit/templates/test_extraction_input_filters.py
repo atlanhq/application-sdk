@@ -118,6 +118,49 @@ class TestFilterSQLInjectionGuard:
         assert result.include_filter == r"^(prod|stage)_db\.[a-z]+(\.bak)?$"
 
 
+class TestTempTableRegexInjectionGuard:
+    """temp_table_regex Pydantic validator blocks SQL injection (BLDX-518).
+
+    Single-char forbidden sequences ('  " ; \\x00) are caught by
+    Field(pattern=SAFE_FILTER_PATTERN) — Pydantic raises a
+    string_pattern_mismatch error.  Multi-char sequences (-- /* */) are
+    not matched by the regex and are caught by the @field_validator that
+    calls validate_filter_no_sql_injection, which raises a ValueError
+    with "SQL-unsafe sequence" in the message.
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "evil--comment",
+            "evil/* block",
+            "evil */",
+        ],
+    )
+    def test_multichar_sequence_rejected(self, value: str) -> None:
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate({"temp_table_regex": value})
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "evil; DROP TABLE x",
+            "evil'injection",
+        ],
+    )
+    def test_singlechar_sequence_rejected(self, value: str) -> None:
+        with pytest.raises(ValueError):
+            ExtractionInput.model_validate({"temp_table_regex": value})
+
+    def test_clean_regex_passes(self) -> None:
+        result = ExtractionInput.model_validate({"temp_table_regex": "^temp_.*$"})
+        assert result.temp_table_regex == "^temp_.*$"
+
+    def test_task_input_multichar_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionTaskInput.model_validate({"temp_table_regex": "evil--"})
+
+
 class TestExtractionTaskInputFilters:
     """ExtractionTaskInput has the same filter coercion."""
 
