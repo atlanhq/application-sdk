@@ -215,12 +215,14 @@ class ObjectStoreMetricExporter(MetricExporter):
             },
         )
         self._data_dir = data_dir or get_observability_dir()
-        self._deployment_store: ObjectStore | None = self._resolve_store(
-            DEPLOYMENT_OBJECT_STORE_NAME, "deployment"
+        self._deployment_store: ObjectStore | None = (
+            self._resolve_store(DEPLOYMENT_OBJECT_STORE_NAME, "deployment")
+            if ENABLE_OBSERVABILITY_STORE_SINK
+            else None
         )
         self._upstream_store: ObjectStore | None = (
             self._resolve_store(UPSTREAM_OBJECT_STORE_NAME, "upstream")
-            if ENABLE_ATLAN_UPLOAD
+            if ENABLE_OBSERVABILITY_STORE_SINK and ENABLE_ATLAN_UPLOAD
             else None
         )
 
@@ -239,6 +241,14 @@ class ObjectStoreMetricExporter(MetricExporter):
                 "Object store '%s' not configured; %s metric upload disabled",
                 name,
                 label,
+            )
+            return None
+        except Exception:
+            logger.warning(
+                "Object store '%s' setup failed; %s metric upload disabled",
+                name,
+                label,
+                exc_info=True,
             )
             return None
 
