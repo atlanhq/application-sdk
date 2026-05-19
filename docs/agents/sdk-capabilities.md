@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.0
-source-sha:    ba367b634bad31b406d3408b5c994720eb8f859d
-source-date:   2026-05-19T17:06:10+05:30
+source-sha:    08d9c6bdef909ed20401df5af8d956d23e659d72
+source-date:   2026-05-19T17:52:49+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2815,10 +2815,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import TransformInput`
 - **Summary:** Input for transform tasks.
 - **Fields:**
-  - `typename: str` `= ''`
-  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)`
-  - `chunk_start: int` `= 0`
-  - `raw_file: FileReference | None` — Durable ``FileReference`` to the matching ``raw/<entity>/records.json``.
+  - `typename: str` `= ''` — **Deprecated** — kept for backward compatibility with existing
+  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated** — relative parquet file names under
+  - `chunk_start: int` `= 0` — **Deprecated** — chunk-offset hint used by the legacy
+  - `raw_file: FileReference | None` — Durable singular ``FileReference`` to the matching
+  - `raw_dir: FileReference | None` — Durable directory-shaped ``FileReference`` to a raw output
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `TransformOutput`
@@ -2829,7 +2830,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `typename: str` `= ''`
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
-  - `transformed_file: FileReference | None` — ``FileReference`` to ``transformed/<entity>/entities.json``.
+  - `transformed_file: FileReference | None` — Singular ``FileReference`` to ``transformed/<entity>/entities.json``.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `UpdateMarkerInput`

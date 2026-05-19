@@ -365,46 +365,59 @@ class ExtractionTaskOutput(Output):
 class TransformInput(ExtractionTaskInput):
     """Input for transform tasks.
 
-    Extends :class:`ExtractionTaskInput` with the ``raw_file`` reference
-    threaded in by ``SqlApp.run()`` from the matching extract's
-    :class:`ExtractionTaskOutput`.
-
-    Two extraction shapes share this input type today:
+    Extends :class:`ExtractionTaskInput` with the ``raw_file`` /
+    ``raw_dir`` references threaded in by extract tasks via the
+    ``FileReference`` interceptor handshake. Three extraction shapes
+    coexist on this input type:
 
     1. **Single-file extraction** (the v3 ``SqlApp`` per-entity flow) —
        carries ``raw_file`` (a singular ``FileReference``). The activity
        interceptor auto-materialises it on the transform worker.
-    2. **Multi-file batch extraction** (the v3
-       :class:`IncrementalSqlMetadataExtractor` column-batch flow) —
-       carries ``file_names`` (a list of relative parquet file names
-       under ``input.output_path``) plus ``chunk_start``. These fields
-       are NOT routed through the ``FileReference`` interceptor — the
-       transform implementation owns materialising / reading them. The
-       same cross-worker fault tolerance the ``FileReference`` path
-       gives ``raw_file`` is therefore an open follow-up for the
-       batch path (BLDX follow-up: migrate ``file_names`` to a
-       directory-shaped ``FileReference`` so it auto-materialises too).
+    2. **Multi-file batch extraction (preferred)** — carries ``raw_dir``
+       (a directory-shaped ``FileReference``). The interceptor
+       auto-materialises every file under the prefix onto the
+       transform worker with the same SHA-256 sidecar verification.
+       Adopt this for any new connector that needs multi-file output.
+    3. **Multi-file batch extraction (deprecated legacy)** — carries
+       ``file_names`` (a list of relative parquet file names under
+       ``input.output_path``) plus ``chunk_start`` / ``typename``.
+       These fields are NOT routed through the ``FileReference``
+       interceptor — the transform implementation owns materialising
+       / reading them. **New connectors should use ``raw_dir`` instead.**
+       Kept for backward compatibility with existing v3 consumers
+       (``atlan-alloydb-postgres-app``, ``atlan-cloudsql-postgres-app``,
+       ``atlan-mssql-app``, ``atlan-presto-app``, ``atlan-trino-app``).
 
     Connectors implementing a custom ``transform_data`` (the legacy
-    v2 activity) read both shapes; v3's per-entity ``transform_*``
-    tasks only consume ``raw_file``.
+    v2 activity) read either shape; v3's per-entity ``transform_*``
+    tasks consume ``raw_file``.
     """
 
     typename: str = ""
-    file_names: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
-    """Relative parquet file names under ``output_path`` (multi-file
-    batch flow). NOT auto-materialised by the activity interceptor —
-    the transform implementation owns reading them, and a transform
-    that lands on a different worker pod than the extract will NOT
-    see them unless the connector code downloads them itself.
-
-    Used today only by the
-    :class:`~application_sdk.templates.incremental_sql_metadata_extractor.IncrementalSqlMetadataExtractor`
-    column-batch path. A follow-up should migrate this to a
-    directory-shaped ``FileReference`` so the same auto-materialise
-    contract applies.
+    """**Deprecated** — kept for backward compatibility with existing
+    v3 consumers that read ``input.typename`` to dispatch by entity.
+    New connectors should infer typename from the activity name or a
+    dedicated dispatch field on a connector-specific input subclass.
     """
+
+    file_names: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
+    """**Deprecated** — relative parquet file names under
+    ``output_path`` (multi-file batch flow). NOT auto-materialised by
+    the activity interceptor — a transform that lands on a different
+    worker pod than the extract will NOT see these files unless the
+    connector downloads them itself.
+
+    **New connectors should use** :attr:`raw_dir` **instead** — it
+    routes through the ``FileReference`` interceptor and gets the
+    same cross-worker fault tolerance ``raw_file`` does.
+    """
+
     chunk_start: int = 0
+    """**Deprecated** — chunk-offset hint used by the legacy
+    ``file_names``-based batch flow. New connectors using ``raw_dir``
+    don't need this; iterate the directory contents directly.
+    """
+
     raw_file: FileReference | None = None
     """Durable singular ``FileReference`` to the matching
     ``raw/<entity>/records.json``.
@@ -418,6 +431,26 @@ class TransformInput(ExtractionTaskInput):
 
     See :class:`ExtractionTaskOutput` for the single-file constraint
     and the upgrade path if multi-file extracts become necessary.
+    """
+
+    raw_dir: FileReference | None = None
+    """Durable directory-shaped ``FileReference`` to a raw output
+    prefix containing multiple files.
+
+    This is the recommended shape for any new multi-file batch
+    extraction flow. The activity interceptor materialises the entire
+    directory onto the transform worker before the activity runs,
+    with per-file SHA-256 sidecar verification (see
+    :mod:`application_sdk.storage.file_ref_sync` for the contract).
+    The transform reads ``input.raw_dir.local_path`` and iterates the
+    files under it the same way a connector would iterate a local
+    directory — no manual ``download_file`` plumbing required.
+
+    Replaces the legacy :attr:`file_names` / :attr:`chunk_start` pair
+    for new connectors. The legacy fields stay on this contract for
+    backward compatibility with existing v3 consumers; they will be
+    removed in a coordinated migration once those consumers adopt
+    ``raw_dir``.
     """
 
 
