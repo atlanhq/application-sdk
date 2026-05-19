@@ -93,9 +93,20 @@ class PreflightOutput(Output, allow_unbounded_fields=True):  # type: ignore[call
 async def _get_service_token() -> str:
     """Obtain a service bearer token using the app's client_credentials.
 
-    Reads ``ATLAN_AUTH_CLIENT_ID`` / ``ATLAN_AUTH_CLIENT_SECRET`` from the
-    deployment secret store and exchanges them for a bearer token via
-    ``ATLAN_AUTH_URL``.  Returns an empty string if any credential is absent
+    Reads ``ATLAN_AUTH_CLIENT_ID`` / ``ATLAN_AUTH_CLIENT_SECRET`` and exchanges
+    them for a bearer token via ``ATLAN_AUTH_URL``.
+
+    Resolution order for each credential:
+
+    1. ``get_deployment_secret(key)`` — Dapr ``deployment-secret-store``
+       component (when mounted).
+    2. ``os.environ[key]`` — direct env var fallback.  Required because the
+       ``deployment-secret-store`` component is not provisioned on all app
+       pods (e.g. atlan-hive-app's worker only ships ``objectstore.yaml`` and
+       ``secretstore.yaml``); atlan-publish-app sidesteps this by reading
+       env vars directly via ``os.getenv``, so the SDK matches that pattern.
+
+    Returns an empty string if any credential is absent in both sources
     (caller treats this as a non-fatal skip).
     """
     from application_sdk.constants import (  # noqa: PLC0415 — cold path
@@ -109,8 +120,12 @@ async def _get_service_token() -> str:
         get_deployment_secret,
     )
 
-    client_id = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
-    client_secret = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
+    client_id = await get_deployment_secret(
+        WORKFLOW_AUTH_CLIENT_ID_KEY
+    ) or os.environ.get(WORKFLOW_AUTH_CLIENT_ID_KEY, "")
+    client_secret = await get_deployment_secret(
+        WORKFLOW_AUTH_CLIENT_SECRET_KEY
+    ) or os.environ.get(WORKFLOW_AUTH_CLIENT_SECRET_KEY, "")
     token_url = AUTH_URL
 
     if not client_id or not client_secret or not token_url:
@@ -211,8 +226,17 @@ class PublishPreflightMixin:
             get_deployment_secret,
         )
 
-        client_id = await get_deployment_secret(client_id_key) or ""
-        client_secret = await get_deployment_secret(client_secret_key) or ""
+        # Same dual-source pattern as _get_service_token: Dapr secret store
+        # when available, env var fallback when not (e.g. on app pods that
+        # don't ship the deployment-secret-store Dapr component).
+        client_id = (
+            await get_deployment_secret(client_id_key)
+            or os.environ.get(client_id_key, "")
+        )
+        client_secret = (
+            await get_deployment_secret(client_secret_key)
+            or os.environ.get(client_secret_key, "")
+        )
 
         if connection_qname:
             checks = await check_atlan_publish_permission(
