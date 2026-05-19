@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.12.1 (May 19, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.12.0...v3.12.1
+
+### Bug Fixes
+
+- repair objectstore metric reader temporality (#1780) (by @fyzanshaik-atlan in [f76098c](https://github.com/atlanhq/application-sdk/commit/f76098c))
+- preserve correlation state on workflow replay (#1791) (by @louisnow in [5658e73](https://github.com/atlanhq/application-sdk/commit/5658e73))
+- publish skipped when unit-tests-gate is skipped (#1794) (by @anurag-atlan in [f4d06ed](https://github.com/atlanhq/application-sdk/commit/f4d06ed))
+- tighten SQL injection defenses in filter / marker paths (BLDX-518) (#1785) (by @Aryamanz29 in [882888e](https://github.com/atlanhq/application-sdk/commit/882888e))
+- trailing dot after URL in unit-tests-gate annotation breaks the link (#1795) (by @anurag-atlan in [174393f](https://github.com/atlanhq/application-sdk/commit/174393f))
+- demote storage upload/download success logs to DEBUG (#1796) (by @cmgrote in [5c3db7e](https://github.com/atlanhq/application-sdk/commit/5c3db7e))
+- thread raw/transformed files via FileReference (BLDX-1281) (#1792) (by @Aryamanz29 in [7731fcd](https://github.com/atlanhq/application-sdk/commit/7731fcd))
+
+
 ## v3.12.0 (May 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.11.0...v3.12.0
