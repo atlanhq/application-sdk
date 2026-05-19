@@ -215,3 +215,76 @@ def test_internal_error_classification_pending_set() -> None:
     e = InternalError(message="unclassified failure", classification_pending=True)
     fd = e.to_failure_details()
     assert fd.evidence["classification_pending"] is True
+
+
+# ---------------------------------------------------------------------------
+# EC1 — FailureCategory.http_status maps to RFC-standard codes
+# ---------------------------------------------------------------------------
+
+_CATEGORY_HTTP_STATUS = [
+    (FailureCategory.CANCELLED, 499),
+    (FailureCategory.TIMEOUT, 504),
+    (FailureCategory.RATE_LIMITED, 429),
+    (FailureCategory.AUTH, 401),
+    (FailureCategory.PERMISSION, 403),
+    (FailureCategory.NOT_FOUND, 404),
+    (FailureCategory.ALREADY_EXISTS, 409),
+    (FailureCategory.INVALID_INPUT, 422),
+    (FailureCategory.PRECONDITION, 409),
+    (FailureCategory.DEPENDENCY_UNAVAILABLE, 503),
+    (FailureCategory.RESOURCE_EXHAUSTED, 503),
+    (FailureCategory.DATA_INTEGRITY, 500),
+    (FailureCategory.INTERNAL, 500),
+    (FailureCategory.UNIMPLEMENTED, 501),
+]
+
+
+@pytest.mark.parametrize("category,expected_status", _CATEGORY_HTTP_STATUS)
+def test_failure_category_http_status(
+    category: FailureCategory, expected_status: int
+) -> None:
+    assert category.http_status == expected_status
+
+
+def test_every_failure_category_has_http_status() -> None:
+    """Guard: adding a new FailureCategory without updating the http_status map raises KeyError."""
+    for category in FailureCategory:
+        assert isinstance(
+            category.http_status, int
+        ), f"{category} missing from http_status map"
+
+
+# ---------------------------------------------------------------------------
+# EC2 — typed AppError leaves carry the right category for HTTP code mapping
+#
+# We do not put a `http_status` property on AppError itself because
+# HandlerError (legacy AppError subclass) already uses `http_status` as an
+# instance attribute set in __init__. A read-only property would shadow that
+# setter. The service layer reads `_CATEGORY_TO_HTTP[exc.category]` via
+# `_app_error_to_http_status` instead — these tests verify the category
+# carries the right code so that lookup returns what we expect.
+# ---------------------------------------------------------------------------
+
+
+def test_app_permission_denied_error_category_maps_to_403() -> None:
+    assert AppPermissionDeniedError(message="no access").category.http_status == 403
+
+
+def test_auth_error_category_maps_to_401() -> None:
+    assert AuthError(message="invalid token").category.http_status == 401
+
+
+def test_dependency_unavailable_error_category_maps_to_503() -> None:
+    assert DependencyUnavailableError(message="db down").category.http_status == 503
+
+
+def test_invalid_input_error_category_maps_to_422() -> None:
+    assert InvalidInputError(message="bad field").category.http_status == 422
+
+
+def test_not_found_error_category_maps_to_404() -> None:
+    assert NotFoundError(message="missing resource").category.http_status == 404
+
+
+def test_internal_error_category_maps_to_500() -> None:
+    assert InternalError(message="unexpected").category.http_status == 500

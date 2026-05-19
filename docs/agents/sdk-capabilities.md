@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.0
-source-sha:    528d7f48c54990992053278dcef2a7488ce0e3ea
-source-date:   2026-05-19T13:19:36+01:00
+source-sha:    e57c1af666be8f7f34f78a95046c5227f78f9b19
+source-date:   2026-05-20T00:20:41+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,14 +18,14 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 17 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 18 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 50 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 24 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
@@ -111,6 +111,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `class OutputStatus`
 - **Summary:** Standard run-result status used on :class:`Output`.
 - **Defined in:** `application_sdk/contracts/base.py`
+
+#### `PublishPreflightMixin`
+
+- **Import:** `from application_sdk.app import PublishPreflightMixin`
+- **Signature:** `class PublishPreflightMixin`
+- **Summary:** Mixin that adds a ``run_publish_preflight`` Temporal activity to an App.
+- **Defined in:** `application_sdk/app/preflight.py`
 
 #### `RetryableError`
 
@@ -1403,6 +1410,20 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 ### Functions
+
+#### `check_atlan_publish_permission`
+
+- **Import:** `from application_sdk.handler import check_atlan_publish_permission`
+- **Signature:** `check_atlan_publish_permission(user_id: str, ...)`
+- **Summary:** Verify the triggering user can publish to the target Atlan connection.
+- **Defined in:** `application_sdk/handler/checks.py`
+
+#### `check_user_enabled`
+
+- **Import:** `from application_sdk.handler import check_user_enabled`
+- **Signature:** `check_user_enabled(user_id: str, bearer_token: str, *, heracles_url: str = '')`
+- **Summary:** Check whether the triggering user's account is active in Keycloak.
+- **Defined in:** `application_sdk/handler/checks.py`
 
 #### `create_app_handler_service`
 

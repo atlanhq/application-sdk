@@ -581,7 +581,12 @@ def create_app_handler_service(
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
         body = _normalize_credentials(await request.json())
-        auth_input = AuthInput.model_validate(body)
+        try:
+            auth_input = AuthInput.model_validate(body)
+        except Exception:
+            raise HTTPException(
+                status_code=422, detail="Invalid auth request body"
+            ) from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
@@ -655,7 +660,12 @@ def create_app_handler_service(
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
         body = _normalize_credentials(await request.json())
-        preflight_input = PreflightInput.model_validate(body)
+        try:
+            preflight_input = PreflightInput.model_validate(body)
+        except Exception:
+            raise HTTPException(
+                status_code=422, detail="Invalid preflight request body"
+            ) from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in preflight_input.credentials
@@ -769,7 +779,12 @@ def create_app_handler_service(
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
         body = _normalize_credentials(await request.json())
-        metadata_input = MetadataInput.model_validate(body)
+        try:
+            metadata_input = MetadataInput.model_validate(body)
+        except Exception:
+            raise HTTPException(
+                status_code=422, detail="Invalid metadata request body"
+            ) from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in metadata_input.credentials
