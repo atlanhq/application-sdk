@@ -2816,6 +2816,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for transform tasks.
 - **Fields:**
   - `typename: str` `= ''` — **Deprecated** — kept for backward compatibility with existing
+  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated** — relative parquet file names under
   - `chunk_start: int` `= 0` — **Deprecated** — chunk-offset hint used by the legacy
   - `raw_file: FileReference | None` — Durable singular ``FileReference`` to the matching
   - `raw_dir: FileReference | None` — Durable directory-shaped ``FileReference`` to a raw output
