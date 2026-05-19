@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.0
-source-sha:    acb4f53f5c12535cca0d7cf1a552bb4eb37039c5
-source-date:   2026-05-19T19:48:24+05:30
+source-sha:    8194183581801dd4d4506e818ae2b023596c84a4
+source-date:   2026-05-19T20:13:38+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2818,7 +2818,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `typename: str` `= ''` — **Deprecated** — kept for backward compatibility with existing
   - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated and unused** — retained on the schema as a no-op
   - `chunk_start: int` `= 0` — **Deprecated** — chunk-offset hint used by the legacy
-  - `raw_file: FileReference | None` — Durable singular ``FileReference`` to the matching
+  - `raw_file: FileReference | None` — Durable ``FileReference`` to the matching extract's raw output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `TransformOutput`
@@ -2829,7 +2829,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `typename: str` `= ''`
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
-  - `transformed_file: FileReference | None` — Singular ``FileReference`` to ``transformed/<entity>/entities.json``.
+  - `transformed_file: FileReference | None` — ``FileReference`` to the transformed asset output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `UpdateMarkerInput`
