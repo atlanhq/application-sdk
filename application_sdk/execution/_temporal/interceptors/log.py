@@ -221,11 +221,17 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         return str(uuid4())
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        # During Temporal replay the workflow code re-executes for determinism;
-        # observability events would double-count, so we skip everything.
-        if workflow.unsafe.is_replaying():
-            return await self.next.execute_workflow(input)
-
+        # State setup (ContextVars + interceptor-instance attrs) must run on
+        # every replay, not just the first execution: the outbound interceptor
+        # reads ``self._correlation_id`` / ``self._parent_*`` to inject
+        # ``x-correlation-id`` and ``atlan-parent-*`` headers on workflow-issued
+        # commands. A fresh worker that picks up an in-flight workflow rebuilds
+        # state by replaying history with ``is_replaying() == True``; if we
+        # short-circuit here, those instance attrs stay at their ``__init__``
+        # defaults and outbound commands issued post-replay lose the headers,
+        # breaking the correlation chain at child-workflow / activity calls.
+        # Only the side-effectful log emission (workflow.started /
+        # workflow.ended) is gated on ``is_replaying()`` to avoid double-count.
         info = workflow.info()
         parent = getattr(info, "parent", None)
         self._parent_workflow_id = (parent.workflow_id if parent else "") or ""
@@ -248,6 +254,9 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         correlation_id = self._resolve_correlation_id(input)
         self._correlation_id = correlation_id
         set_correlation_context(CorrelationContext(correlation_id=correlation_id))
+
+        if workflow.unsafe.is_replaying():
+            return await self.next.execute_workflow(input)
 
         identity: dict[str, str | int | float] = {
             "temporal.workflow.id": info.workflow_id or "",
