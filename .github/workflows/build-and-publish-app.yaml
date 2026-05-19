@@ -344,7 +344,7 @@ jobs:
             echo ""
             echo "**Currently warn-only — publish will proceed.** Once the enforcement-flip PR lands, this state will block publish. Fix the failing tests before then."
           } >> "${GITHUB_STEP_SUMMARY}"
-          echo "::warning title=Tests failed (warn-only)::${WORKFLOW_FILE} concluded as ${CONCLUSION}. See ${URL}. Publish proceeded; will block once enforcement lands."
+          echo "::warning title=Tests failed (warn-only)::${WORKFLOW_FILE} concluded as ${CONCLUSION}. Publish proceeded; will block once enforcement lands. See: ${URL}"
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
