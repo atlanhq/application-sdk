@@ -138,6 +138,51 @@ class _FailingHandler(Handler):
         raise HandlerError("metadata failed")
 
 
+class _AppErrorAuthHandler(Handler):
+    """Handler that raises AppPermissionDeniedError in test_auth (→ HTTP 403)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        from application_sdk.errors.leaves import AppPermissionDeniedError
+
+        raise AppPermissionDeniedError(message="user lacks connector access")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AppErrorPreflightHandler(Handler):
+    """Handler that raises AppPermissionDeniedError in preflight_check (→ HTTP 403)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS, message="ok")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        from application_sdk.errors.leaves import AppPermissionDeniedError
+
+        raise AppPermissionDeniedError(message="user is disabled")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AppErrorMetadataHandler(Handler):
+    """Handler that raises DependencyUnavailableError in fetch_metadata (→ HTTP 503)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS, message="ok")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        raise DependencyUnavailableError(message="upstream catalog unreachable")
+
+
 # ---------------------------------------------------------------------------
 # Module-level contract types for routing tests
 # (locally-defined dataclasses fail get_type_hints() when
@@ -536,6 +581,73 @@ class TestMetadataEndpoint:
             json={"credentials": []},
         )
         assert response.status_code == 500
+
+
+class TestAppErrorHttpStatusEndpoints:
+    """EC3-EC6: AppError subclasses raised in handler methods return semantic HTTP codes.
+
+    Covers the ``except AppError`` clause added to /auth, /check, and /metadata
+    so typed errors (PERMISSION→403, DEPENDENCY_UNAVAILABLE→503, etc.) surface
+    the correct HTTP status instead of always returning 500.
+    """
+
+    # -- EC3: /workflows/v1/auth ------------------------------------------
+
+    def test_auth_app_permission_error_returns_403(self) -> None:
+        client = _make_client(handler=_AppErrorAuthHandler())
+        response = client.post("/workflows/v1/auth", json={"credentials": []})
+        assert response.status_code == 403
+        assert "user lacks connector access" in response.json()["detail"]
+
+    # -- EC4: /workflows/v1/check -----------------------------------------
+
+    def test_preflight_app_permission_error_returns_403(self) -> None:
+        client = _make_client(handler=_AppErrorPreflightHandler())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 403
+        assert "user is disabled" in response.json()["detail"]
+
+    # -- EC5: /workflows/v1/metadata --------------------------------------
+
+    def test_metadata_dependency_unavailable_returns_503(self) -> None:
+        client = _make_client(handler=_AppErrorMetadataHandler())
+        response = client.post("/workflows/v1/metadata", json={"credentials": []})
+        assert response.status_code == 503
+        assert "unreachable" in response.json()["detail"]
+
+    # -- EC6: malformed body → InvalidInputError → 422 (not 500) ----------
+
+    def test_auth_malformed_credentials_returns_422(self) -> None:
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": "not-a-list"},
+        )
+        assert response.status_code == 422
+
+    def test_preflight_malformed_credentials_returns_422(self) -> None:
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check",
+            json={"credentials": "not-a-list"},
+        )
+        assert response.status_code == 422
+
+    def test_metadata_malformed_credentials_returns_422(self) -> None:
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"credentials": "not-a-list"},
+        )
+        assert response.status_code == 422
+
+    def test_app_error_does_not_leak_stack_trace(self) -> None:
+        """AppError detail must be the error message string, not an exception traceback."""
+        client = _make_client(handler=_AppErrorAuthHandler())
+        response = client.post("/workflows/v1/auth", json={"credentials": []})
+        detail = response.json()["detail"]
+        assert "Traceback" not in detail
+        assert "raise" not in detail
 
 
 class TestStartWorkflowEndpoint:

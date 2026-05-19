@@ -54,7 +54,6 @@ from temporalio.client import WorkflowFailureError
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors.base import AppError
-from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -557,10 +556,8 @@ def create_app_handler_service(
         body = _normalize_credentials(await request.json())
         try:
             auth_input = AuthInput.model_validate(body)
-        except Exception as exc:
-            raise InvalidInputError(
-                message="Invalid auth request body", cause=exc
-            ) from None
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid auth request body") from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
@@ -627,10 +624,8 @@ def create_app_handler_service(
         body = _normalize_credentials(await request.json())
         try:
             preflight_input = PreflightInput.model_validate(body)
-        except Exception as exc:
-            raise InvalidInputError(
-                message="Invalid preflight request body", cause=exc
-            ) from None
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid preflight request body") from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in preflight_input.credentials
@@ -709,10 +704,8 @@ def create_app_handler_service(
         body = _normalize_credentials(await request.json())
         try:
             metadata_input = MetadataInput.model_validate(body)
-        except Exception as exc:
-            raise InvalidInputError(
-                message="Invalid metadata request body", cause=exc
-            ) from None
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid metadata request body") from None
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in metadata_input.credentials

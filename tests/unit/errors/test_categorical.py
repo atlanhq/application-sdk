@@ -215,3 +215,69 @@ def test_internal_error_classification_pending_set() -> None:
     e = InternalError(message="unclassified failure", classification_pending=True)
     fd = e.to_failure_details()
     assert fd.evidence["classification_pending"] is True
+
+
+# ---------------------------------------------------------------------------
+# EC1 — FailureCategory.http_status maps to RFC-standard codes
+# ---------------------------------------------------------------------------
+
+_CATEGORY_HTTP_STATUS = [
+    (FailureCategory.CANCELLED, 499),
+    (FailureCategory.TIMEOUT, 504),
+    (FailureCategory.RATE_LIMITED, 429),
+    (FailureCategory.AUTH, 401),
+    (FailureCategory.PERMISSION, 403),
+    (FailureCategory.NOT_FOUND, 404),
+    (FailureCategory.ALREADY_EXISTS, 409),
+    (FailureCategory.INVALID_INPUT, 422),
+    (FailureCategory.PRECONDITION, 409),
+    (FailureCategory.DEPENDENCY_UNAVAILABLE, 503),
+    (FailureCategory.RESOURCE_EXHAUSTED, 503),
+    (FailureCategory.DATA_INTEGRITY, 500),
+    (FailureCategory.INTERNAL, 500),
+    (FailureCategory.UNIMPLEMENTED, 501),
+]
+
+
+@pytest.mark.parametrize("category,expected_status", _CATEGORY_HTTP_STATUS)
+def test_failure_category_http_status(
+    category: FailureCategory, expected_status: int
+) -> None:
+    assert category.http_status == expected_status
+
+
+def test_every_failure_category_has_http_status() -> None:
+    """Guard: adding a new FailureCategory without updating the http_status map raises KeyError."""
+    for category in FailureCategory:
+        assert isinstance(category.http_status, int), (
+            f"{category} missing from http_status map"
+        )
+
+
+# ---------------------------------------------------------------------------
+# EC2 — AppError.http_status delegates to its category
+# ---------------------------------------------------------------------------
+
+
+def test_app_error_http_status_permission_is_403() -> None:
+    assert AppPermissionDeniedError(message="no access").http_status == 403
+
+
+def test_app_error_http_status_auth_is_401() -> None:
+    assert AuthError(message="invalid token").http_status == 401
+
+
+def test_app_error_http_status_dependency_unavailable_is_503() -> None:
+    assert DependencyUnavailableError(message="db down").http_status == 503
+
+
+def test_app_error_http_status_invalid_input_is_422() -> None:
+    assert InvalidInputError(message="bad field").http_status == 422
+
+
+def test_app_error_http_status_not_found_is_404() -> None:
+    assert NotFoundError(message="missing resource").http_status == 404
+
+
+def test_app_error_http_status_internal_is_500() -> None:
+    assert InternalError(message="unexpected").http_status == 500

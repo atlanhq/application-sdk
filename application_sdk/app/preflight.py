@@ -178,6 +178,7 @@ class PublishPreflightMixin:
             )
             return PreflightOutput(
                 passed=True,
+                checks=[],
                 message="Preflight skipped — user_id not available in workflow input.",
             )
 
@@ -188,6 +189,7 @@ class PublishPreflightMixin:
             )
             return PreflightOutput(
                 passed=True,
+                checks=[],
                 message="Preflight skipped — service credentials not configured.",
             )
 

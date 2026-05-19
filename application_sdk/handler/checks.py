@@ -21,10 +21,19 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
-_HERACLES_URL = os.environ.get(
-    "ATLAN_INTERNAL_HERACLES_URL",
-    os.environ.get("HERACLES_URL", "http://localhost:5201"),
-)
+def _default_heracles_url() -> str:
+    """Resolve the default Heracles URL at call time.
+
+    Reading env vars at call time (rather than module import) lets
+    deployment configs that set ``ATLAN_INTERNAL_HERACLES_URL`` /
+    ``HERACLES_URL`` after the module loads — e.g. via lazily-injected
+    Dapr secrets or test fixtures — take effect.
+    """
+    return os.environ.get(
+        "ATLAN_INTERNAL_HERACLES_URL",
+        os.environ.get("HERACLES_URL", "http://localhost:5201"),
+    )
+
 
 _PERMISSIONS_TO_CHECK = ["ENTITY_CREATE", "ENTITY_UPDATE", "ENTITY_DELETE"]
 
@@ -137,7 +146,7 @@ async def check_user_enabled(
     """
     check_name = "UserEnabled"
     start = time.monotonic()
-    url = heracles_url or _HERACLES_URL
+    url = heracles_url or _default_heracles_url()
 
     try:
         user = await _get_user(url, bearer_token, user_id)
@@ -211,7 +220,7 @@ async def check_atlan_publish_permission(
         List of :class:`PreflightCheck` results — always at least ``UserEnabled``,
         plus ``AtlanPublishPermission`` when impersonation credentials are available.
     """
-    url = heracles_url or _HERACLES_URL
+    url = heracles_url or _default_heracles_url()
     t_url = token_url or os.environ.get("ATLAN_AUTH_URL", "")
 
     user_check, perm_check = await asyncio.gather(
