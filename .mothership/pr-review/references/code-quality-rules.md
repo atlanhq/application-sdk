@@ -76,6 +76,188 @@ logger.info("Processing " + str(count) + " records")
 logger.info("Processing %d records", count)
 ```
 
+## Retro Learnings — 2026-05-20
+
+> Each subsection is a generalized rule. Concrete incidents that
+> surfaced the rule are recorded in `retro-2026-05-20.md`.
+
+### Exception chains must preserve the cause with `from exc` (Critical)
+
+When raising a new exception from inside an `except` block, the
+`raise NewError(...) from exc` form preserves the original exception
+in `__cause__`. Dropping `from exc` produces a `During handling of
+the above exception, another exception occurred` traceback that
+hides the original cause and breaks our error-classification
+pipeline (the wire-format `cause` field is empty). Pre-commit
+doesn't reliably catch this — the reviewer must.
+
+**Flag any new code that:**
+- Has a `raise X(...)` inside an `except Y as exc:` block without
+  `from exc` (or `from None` if intentionally suppressing).
+- Re-raises after wrapping: `raise NewError("...")` where the
+  outer `try/except` clearly catches the cause.
+- Uses `raise X(...) from None` without an inline comment
+  justifying the suppression (rare; usually a bug).
+
+**Detection heuristic:** for every `raise <ExceptionName>(` added on
+a line inside an `except ... as <name>:` block (i.e. the diff shows
+a `raise` indented under an `except`), the same statement must
+include `from <name>` (the captured exception, or `None` if
+documented).
+
+**Replacement:**
+
+```python
+# BAD
+try:
+    do_work()
+except ValueError as exc:
+    raise PreconditionError("operation precondition failed")
+
+# GOOD
+try:
+    do_work()
+except ValueError as exc:
+    raise PreconditionError("operation precondition failed") from exc
+```
+
+**Severity:** Critical. A broken exception chain destroys
+debuggability and silently zeros out the error-taxonomy `cause`
+field consumers depend on.
+
+### Suppression comments require an inline justification (Important)
+
+`# noqa`, `# type: ignore`, `# pylint: disable`, `# mypy: ignore`,
+`# pragma: no cover` all bypass a quality gate. A bare suppression
+silently disables the check; an inline justification ("# noqa: PLC0415
+— lazy import: heavy dependency") preserves the decision history and
+the next reader can validate it.
+
+**Flag any new suppression comment that:**
+- Lacks a same-line rationale after the directive: bare `# noqa`,
+  `# noqa: E501` (no reason), `# type: ignore` (no reason).
+- Disables a category broadly when the actual issue is local:
+  blanket `# noqa` instead of `# noqa: <specific-code>`.
+- Adds `# pragma: no cover` on production code paths (acceptable
+  for `if TYPE_CHECKING:` blocks or `__main__` guards; suspicious
+  anywhere else).
+
+**Required form:**
+
+```python
+# Acceptable
+import duckdb  # noqa: PLC0415 — lazy import: heavy dependency
+result: Any  # type: ignore[no-any-return] — upstream library returns dict
+
+# Reject
+import duckdb  # noqa
+result: Any  # type: ignore
+```
+
+**Severity:** Important. The suppression itself isn't a bug, but
+silent suppressions accumulate and degrade the value of the
+underlying gate.
+
+### Tunables and identifiers belong in `constants.py` (Important)
+
+User-visible metric names, log/trace attribute prefixes, service
+names, and numeric tunables (sample intervals, batch sizes, retry
+backoffs, timeouts) MUST live in `application_sdk/constants.py`
+sourced from `ATLAN_`-prefixed env vars with documented defaults.
+Inline values can't be overridden by operators and tend to drift
+when copies appear in multiple call sites.
+
+**Flag any new code that:**
+- Hard-codes a string used as a metric/trace/log attribute name or
+  prefix (`"application.custom"`, service names, namespace prefixes)
+  in a module other than `constants.py`.
+- Hard-codes a numeric tunable (timeout, interval, batch size,
+  retry/backoff parameter) in a module other than `constants.py`.
+- Defines the same default value inline at the use site that
+  already exists in `constants.py` — pick one; it should be the
+  `constants.py` import.
+
+**Expected pattern:** the constant is defined once in `constants.py`
+with `os.getenv("ATLAN_<NAME>", "<default>")` and imported at every
+use site.
+
+### Exhaust enum variants when matching state (Important)
+
+When matching on an `Enum`, status string, or other discriminator
+with a known fixed set of values, the branch chain must either
+handle every variant explicitly or use a default branch that
+records the unhandled value (typically a `WARNING` log plus an
+`unknown` bucket on the relevant metric). Silent under-coverage
+shows up as dashboards that mislabel real transitions and metrics
+that under-count.
+
+**Flag any new code that:**
+- Has an `if x == A elif x == B` chain over a known `Enum` /
+  status set without exhausting the variants or providing a default
+  branch.
+- Uses `match` / `case` against an `Enum` without a `case _:`.
+- Introduces a metric or log attribute labelled by an enum value
+  but only emits a subset of the enum's variants.
+
+**Detection heuristic:** when a new branch over a `Status`-shaped
+value appears, find the enum/source-of-truth declaration and compare
+the branches against the variants. Any missing variant without an
+explicit default is a finding.
+
+### Don't wrap upstream APIs in single-purpose helpers (Minor)
+
+Thin wrappers around upstream APIs that only rename without adding
+type safety, validation, defaults, retries, or any other behaviour
+are net negative — they add a maintenance burden, hide the upstream
+documentation, and force every consumer to learn two names for the
+same thing.
+
+**Flag any new helper module that:**
+- Re-exports an upstream API surface (OpenTelemetry, httpx,
+  temporalio, pydantic, etc.) with one-line wrapper functions whose
+  body is essentially the upstream call.
+- Adds a `def record_*` / `def emit_*` / `def get_*` that only
+  calls the upstream client with no other logic.
+
+Prefer exposing the upstream object directly and letting callers
+use the native API. Add a wrapper only when it provides typed
+arguments, default labels, retries, deadlines, validation, or other
+real value beyond renaming.
+
+**Severity:** Minor. Suggest removal; do not block.
+
+### Log exceptions with `exc_info`, never via formatted strings (Important)
+
+The structured way to capture an exception traceback in a log call
+is `logger.error(msg, exc_info=True)` or `logger.exception(msg)`.
+Doing this manually — formatting `str(exc)` / `repr(exc)` /
+`traceback.format_exc()` into the message string — defeats Loki/
+Grafana's structured indexing, loses the structured `exception.*`
+attributes, and forces operators to grep raw text rather than query
+fields.
+
+**Flag any new log call that:**
+- Builds a string that includes `str(exc)`, `repr(exc)`,
+  `f"{exc}"`, or any pattern that drops the traceback into the
+  message body, instead of passing the exception via `exc_info`.
+- Calls `traceback.format_exc()` and concatenates the result into a
+  log message.
+- Logs an exception inside an `except` block without `exc_info=True`
+  or using `logger.exception(...)`.
+
+**Expected pattern:**
+
+```python
+try:
+    do_work()
+except SomeError as exc:
+    logger.error("operation failed", exc_info=True)  # or:
+    logger.exception("operation failed")  # implies exc_info=True
+```
+
+**Severity:** Important (QUAL + DX). Mis-logged exceptions are
+debugger-quality regressions that compound over the codebase.
+
 ### No % Formatting Inline in Log Calls (G001)
 
 ```python
