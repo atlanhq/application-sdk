@@ -2627,9 +2627,9 @@ local function toPyName(k: String): String = k.replaceAll("-", "_")
 local function getInputPyField(k: String, u: Config.UIElement): String =
   let (k = toPyName(k))
   if (u is Config.BooleanInput)
-    "\(k): bool = \(if ((u as Config.BooleanInput).defaultSelection) "True" else "False")"
+    "\(k): bool = \(if ((u as Config.BooleanInput).default) "True" else "False")"
   else if (u is Config.Switcher)
-    "\(k): bool = \(if ((u as Config.Switcher).defaultSelection) "True" else "False")"
+    "\(k): bool = \(if ((u as Config.Switcher).default) "True" else "False")"
   else if (u is Config.NumericInput)
     "\(k): int = \(if ((u as Config.NumericInput).default != null) (u as Config.NumericInput).default!!.toInt() else 0)"
   else if (u is Config.DateInput)
@@ -2669,7 +2669,7 @@ local function getInputPyField(k: String, u: Config.UIElement): String =
   else if (u is Config.CustomWidget)
     "\(k): str = \"\""
   else if (u is Config.TextInput)
-    "\(k): str = \"\(if ((u as Config.TextInput).defaultValue != null) (u as Config.TextInput).defaultValue!! else "")\""
+    "\(k): str = \"\(if ((u as Config.TextInput).default != null) (u as Config.TextInput).default!! else "")\""
   else if (u is Config.TextBoxInput)
     "\(k): str = \"\""
   else if (u is Config.ConditionalInput)
