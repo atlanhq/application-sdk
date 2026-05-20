@@ -511,6 +511,142 @@ class TestCanonicalStoragePaths:
             f"{file_refs_keys}"
         )
 
+    async def test_full_pipeline_writes_only_canonical_keys_no_file_refs_orphans(
+        self, app, tmp_path
+    ):
+        """End-to-end multi-entity guard for the customer-tenant
+        production incident.
+
+        Reproduces the customer scenario:
+            * 4 entities (database, schema, table, column) extracted
+              and transformed in parallel.
+            * Every emitted ``FileReference`` is persisted (the
+              interceptor pattern).
+            * Walks the store and asserts the final layout matches
+              what publish expects:
+
+                <run_prefix>/raw/database/records.json
+                <run_prefix>/raw/schema/records.json
+                <run_prefix>/raw/table/records.json
+                <run_prefix>/raw/column/records.json
+                <run_prefix>/transformed/database/entities.json
+                <run_prefix>/transformed/schema/entities.json
+                <run_prefix>/transformed/table/entities.json
+                <run_prefix>/transformed/column/entities.json
+
+              and NOTHING under ``file_refs/<uuid>.json``.
+
+        Customer-bucket S3 listing for the failing run had a mix of
+        canonical ``transformed/<entity>/entities.json`` (4 entities,
+        missing the database one) AND ``file_refs/<uuid>.json``
+        orphans (7 entries — content of the missing transformed
+        files, but at UUID keys publish couldn't discover). Publish
+        archived the missing-canonical entity as 'removed from
+        source'. This test catches that pattern before it ships.
+        """
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        store = create_local_store(tmp_path / "store")
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        # ── extract all 4 standard entities (the SqlApp.run() parallel set) ──
+        entity_sql_rows = {
+            "database": [{"database_name": "prod"}],
+            "schema": [{"schema_name": "public"}, {"schema_name": "private"}],
+            "table": [
+                {"table_name": "users"},
+                {"table_name": "orders"},
+                {"table_name": "products"},
+            ],
+            "column": [{"column_name": "id"}, {"column_name": "name"}],
+        }
+        extract_methods = {
+            "database": app.extract_databases,
+            "schema": app.extract_schemas,
+            "table": app.extract_tables,
+            "column": app.extract_columns,
+        }
+        extract_results = {}
+        for entity, rows in entity_sql_rows.items():
+            with patch.object(
+                app, "_init_sql_client", side_effect=_mock_init_client(rows)
+            ):
+                extract_results[entity] = await extract_methods[entity](input_)
+
+        # ── persist every raw_file (interceptor pattern, simulated) ──
+        for entity, result in extract_results.items():
+            assert result.raw_file is not None, f"extract_{entity}s returned no ref"
+            durable = await persist_file_reference(
+                store, result.raw_file, output_path="ignored"
+            )
+            assert durable.storage_path == result.raw_file.storage_path
+            assert durable.storage_path.endswith(f"/raw/{entity}/records.json"), (
+                f"raw_file for {entity} not at canonical key: "
+                f"{durable.storage_path!r}"
+            )
+
+        # ── transform all 4 entities (each with its raw_file threaded in) ──
+        transform_methods = {
+            "database": app.transform_databases,
+            "schema": app.transform_schemas,
+            "table": app.transform_tables,
+            "column": app.transform_columns,
+        }
+        for entity in entity_sql_rows:
+            transform_input = _make_task_input(
+                output_path=str(tmp_path),
+                raw_file=extract_results[entity].raw_file,
+            )
+            transform_result = await transform_methods[entity](transform_input)
+            assert transform_result.transformed_file is not None, (
+                f"transform_{entity}s returned no ref"
+            )
+            # Persist the transformed ref.
+            durable = await persist_file_reference(
+                store, transform_result.transformed_file, output_path="ignored"
+            )
+            assert durable.storage_path.endswith(
+                f"/transformed/{entity}/entities.json"
+            ), (
+                f"transformed_file for {entity} not at canonical key: "
+                f"{durable.storage_path!r}"
+            )
+
+        # ── Walk the store: verify the layout matches publish expectations ──
+        all_keys = sorted(await list_keys("", store, normalize=False))
+        # Strip sidecars (we only care about the data files for this check).
+        data_keys = [k for k in all_keys if not k.endswith(".sha256")]
+
+        # Expectation: 4 canonical raw + 4 canonical transformed = 8 data files.
+        expected_suffixes = {
+            f"/raw/{e}/records.json" for e in entity_sql_rows
+        } | {
+            f"/transformed/{e}/entities.json" for e in entity_sql_rows
+        }
+        actual_suffixes = {
+            "/" + "/".join(k.rsplit("/", 3)[-3:])
+            for k in data_keys
+            if any(k.endswith(s) for s in expected_suffixes)
+        }
+        assert actual_suffixes == expected_suffixes, (
+            f"missing canonical keys for some entities. "
+            f"expected: {expected_suffixes}, got: {actual_suffixes}, "
+            f"all data keys: {data_keys}"
+        )
+
+        # ── And ZERO file_refs/<uuid> orphans. The customer-bucket
+        # repro had 7 such orphans — publish ignored them and the
+        # entity whose canonical key was missing got archived.
+        file_refs_orphans = [k for k in data_keys if "file_refs/" in k]
+        assert not file_refs_orphans, (
+            "persist created file_refs/<uuid> orphan(s) — the customer "
+            "incident pattern. Publish discovers transformed assets by "
+            "walking transformed/<entity>/ and CANNOT find these UUID "
+            f"keys: {file_refs_orphans}"
+        )
+
     async def test_cross_pod_handshake_preserved_with_canonical_keys(
         self, app, tmp_path
     ):
@@ -574,6 +710,144 @@ class TestCanonicalStoragePaths:
         assert transform_result.transformed_file.storage_path is not None
         assert transform_result.transformed_file.storage_path.endswith(
             "/transformed/database/entities.json"
+        )
+
+    async def test_cross_pod_multi_entity_no_upload_to_atlan_dependency(
+        self, app, tmp_path
+    ):
+        """Pin the **specific cross-pod failure mode** that caused the
+        customer incident: extract and transform activities for
+        different entities scheduled on different pods, with NO
+        ``upload_to_atlan`` running (or it ran on a pod with empty
+        local FS — equivalent).
+
+        Pre-fix flow on the customer tenant:
+            * extract_databases on pod A → wrote
+              ``raw/database/records.json`` locally + emitted ref.
+            * transform_databases on pod B → consumed via materialise,
+              wrote ``transformed/database/entities.json`` locally +
+              emitted ref. Interceptor uploaded both refs to
+              ``file_refs/<uuid>.json``.
+            * extract_schemas / transform_schemas on pod C →
+              ``file_refs/<other-uuid>.json`` for schema's refs.
+            * upload_to_atlan on pod D → local FS empty → uploaded
+              nothing canonical → publish saw only partial
+              ``transformed/<entity>/`` → archived missing entities.
+
+        Post-fix: pre-set ``storage_path`` on every ref means persist
+        lands the file at the canonical key from whichever pod ran
+        the activity — no dependency on ``upload_to_atlan``'s local
+        FS state. This test simulates that distributed schedule.
+        """
+        from pathlib import Path
+
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import (
+            materialize_file_reference,
+            persist_file_reference,
+        )
+
+        store = create_local_store(tmp_path / "store")
+
+        # Each entity runs on its own (different) pod — separate tmp
+        # subdirs simulate per-pod local FS isolation.
+        pods = {
+            entity: tmp_path / f"pod-{entity}"
+            for entity in ("database", "schema", "table", "column")
+        }
+        for pod_dir in pods.values():
+            pod_dir.mkdir()
+
+        entity_rows = {
+            "database": [{"database_name": "db1"}],
+            "schema": [{"schema_name": "public"}],
+            "table": [{"table_name": "users"}],
+            "column": [{"column_name": "id"}],
+        }
+        extract_methods = {
+            "database": app.extract_databases,
+            "schema": app.extract_schemas,
+            "table": app.extract_tables,
+            "column": app.extract_columns,
+        }
+        transform_methods = {
+            "database": app.transform_databases,
+            "schema": app.transform_schemas,
+            "table": app.transform_tables,
+            "column": app.transform_columns,
+        }
+
+        # ── Each entity: extract on its pod → persist → DELETE local
+        # file (simulating that pod going away) → transform on a
+        # different pod that materialises from object store. ──
+        for entity, rows in entity_rows.items():
+            extract_pod = pods[entity]
+            extract_input = _make_task_input(output_path=str(extract_pod))
+
+            with patch.object(
+                app, "_init_sql_client", side_effect=_mock_init_client(rows)
+            ):
+                extract_result = await extract_methods[entity](extract_input)
+
+            assert extract_result.raw_file is not None
+            durable_raw = await persist_file_reference(
+                store, extract_result.raw_file, output_path="ignored"
+            )
+            assert durable_raw.storage_path.endswith(
+                f"/raw/{entity}/records.json"
+            )
+
+            # Simulate the extract pod going away — its local FS is
+            # gone before the transform runs.
+            Path(extract_result.raw_file.local_path).unlink()
+
+            # Transform runs on a DIFFERENT pod (one of the other
+            # entities' pod dirs — to be explicit, none of these
+            # pods have the raw file locally). Materialise via the
+            # interceptor pattern.
+            transform_pod_entities = [e for e in pods if e != entity]
+            transform_pod = pods[transform_pod_entities[0]]
+            materialised = await materialize_file_reference(store, durable_raw)
+            assert Path(materialised.local_path).exists(), (
+                f"materialise must rebuild raw file for {entity} on a "
+                f"different pod — BLDX-1281 cross-pod guarantee"
+            )
+
+            transform_input = _make_task_input(
+                output_path=str(transform_pod), raw_file=materialised
+            )
+            transform_result = await transform_methods[entity](transform_input)
+
+            assert transform_result.transformed_file is not None
+            durable_transformed = await persist_file_reference(
+                store, transform_result.transformed_file, output_path="ignored"
+            )
+            assert durable_transformed.storage_path.endswith(
+                f"/transformed/{entity}/entities.json"
+            )
+
+        # ── Verify the final store layout: every entity has its
+        # canonical raw + transformed keys, NO file_refs/<uuid>
+        # orphans, regardless of which "pod" each activity ran on. ──
+        all_keys = await list_keys("", store, normalize=False)
+        data_keys = [k for k in all_keys if not k.endswith(".sha256")]
+
+        for entity in entity_rows:
+            assert any(
+                k.endswith(f"/raw/{entity}/records.json") for k in data_keys
+            ), f"missing canonical raw key for {entity}: {data_keys}"
+            assert any(
+                k.endswith(f"/transformed/{entity}/entities.json")
+                for k in data_keys
+            ), f"missing canonical transformed key for {entity}: {data_keys}"
+
+        # The smoking gun: NO file_refs/<uuid> orphans. The customer
+        # incident had these next to partial transformed/ paths.
+        orphans = [k for k in data_keys if "file_refs/" in k]
+        assert not orphans, (
+            "cross-pod multi-entity persist created file_refs/<uuid> "
+            f"orphan(s) — publish will archive missing entities: {orphans}"
         )
 
     async def test_persist_honours_pre_set_storage_path(self, tmp_path):
