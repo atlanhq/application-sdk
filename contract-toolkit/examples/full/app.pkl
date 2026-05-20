@@ -1,0 +1,212 @@
+/// Full-featured example — demonstrates every configurable App.pkl property.
+///
+/// This is a toolkit reference contract, not a real connector. Each section
+/// exercises a distinct feature surface:
+///   - pipeline: typed extract/parseQueries/publish overrides with errorHandling
+///   - credentialUrlGroup: AdvancedJDBCUrlGroup (JDBC URL builder with two auth modes)
+///   - credentialAuthOptions: JDBCUrlAuthOption with UrlPartMapping/UrlRef/UrlLiteral
+///   - uiConfig: TextInput, BooleanInput, NumericInput, Radio, DropDown, SqlTree,
+///               conditional UIRule, CredentialInput, ConnectionCreator
+///   - extraNodes: custom DAG node outside the typed pipeline
+amends "../../src/App.pkl"
+
+import "../../src/Connectors.pkl"
+
+name = "full-featured"
+displayName = "Full-Featured Example"
+connector = Connectors.POSTGRES
+workflowType = "FullFeaturedExampleWorkflow"
+icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+credentialConnectorType = "jdbc"
+
+pipeline {
+  extract {
+    // Override the default "Extract" label for apps whose first step is
+    // conceptually different (e.g. "Discover", "Apply", "Sync").
+    displayName = "Discover"
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 7200
+    }
+  }
+  parseQueries = new ParseQueriesStep {
+    vendorName = "postgres"
+    sqlKey = "QUERY_TEXT"
+    catalogKey = "DATABASE_NAME"
+    schemaKey = "SCHEMA_NAME"
+    timestampKey = "START_TIME"
+    mineOutputType = "parquet"
+    parsingMode = "fallback"
+    inputPrefix = "$.extract.outputs.query_history_prefix"
+    outputPrefix = "$.extract.outputs.qi_output_prefix"
+  }
+  publish {
+    // Wire the publish toggle from a workflow form field so the user can
+    // opt out of publishing assets on a given run.
+    executorEnabled = "{{load-to-atlan}}"
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 14400
+    }
+  }
+}
+
+credentialUrlGroup = new AdvancedJDBCUrlGroup {
+  protocol = ""
+  urlAddonBefore = "jdbc:postgresql://"
+  hostField = new FieldSpec {
+    name = "host"
+    displayName = "Host"
+    placeholder = "host.example.com"
+    width = 6
+    feedback = true
+  }
+  portField = new FieldSpec {
+    name = "port"
+    fieldType = "number"
+    displayName = "Port"
+    placeholder = "5432"
+    defaultValue = "5432"
+    required = false
+    width = 3
+  }
+  extraFields {
+    new FieldSpec { name = "database"; displayName = "Database"; width = 4 }
+  }
+}
+
+credentialAuthOptions {
+  ["basic"] = new JDBCUrlAuthOption {
+    label = "Basic"
+    nestedLabel = "Basic Auth"
+    urlPartMapping = new UrlPartMapping {
+      hostname = "host"
+      searchParams {
+        ["port"] = new UrlRef { field = "port" }
+      }
+    }
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+  ["token"] = new JDBCUrlAuthOption {
+    label = "Token"
+    nestedLabel = "Token Auth"
+    urlPartMapping = new UrlPartMapping {
+      hostname = "host"
+      searchParams {
+        ["port"] = new UrlRef { field = "port" }
+        ["sslmode"] = new UrlLiteral { value = "require" }
+      }
+    }
+    fields {
+      new FieldSpec { name = "token"; sensitive = true; displayName = "API Token"; width = 8 }
+    }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new CredentialInput {
+          credType = "atlan-connectors-full-featured"
+        }
+      }
+    }
+    ["Connection"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Configuration"] {
+      inputs {
+        ["include_filter"] = new TextInput {
+          title = "Include filter"
+          helpText = "Comma-separated list of schemas to include (leave blank for all)."
+          width = 8
+        }
+        ["output_format"] = new Radio {
+          title = "Output format"
+          helpText = "Format for extracted metadata files."
+          possibleValues {
+            ["parquet"] = "Parquet"
+            ["json"] = "JSON"
+          }
+          default = "parquet"
+          required = true
+        }
+        ["max_results"] = new NumericInput {
+          title = "Max results"
+          helpText = "Cap on assets returned per schema."
+          default = 500
+          width = 4
+          validationRules {
+            new { type = "number"; required = false; min = 1; message = "Must be at least 1." }
+          }
+        }
+        ["enable_lineage"] = new BooleanInput {
+          title = "Enable lineage parsing"
+          helpText = "Parse query history for column-level lineage."
+          width = 4
+        }
+        ["load-to-atlan"] = new BooleanInput {
+          title = "Publish to Atlan"
+          helpText = "Publish extracted assets; uncheck for a dry run."
+          default = true
+          width = 4
+        }
+        ["log_level"] = new DropDown {
+          title = "Log level"
+          helpText = "Verbosity for the extraction run."
+          possibleValues {
+            ["INFO"] = "Info"
+            ["DEBUG"] = "Debug"
+            ["WARNING"] = "Warning"
+          }
+          default = "INFO"
+          width = 4
+        }
+        ["lineage_depth"] = new NumericInput {
+          title = "Lineage depth"
+          helpText = "How many hops of upstream lineage to resolve (required when lineage is on)."
+          default = 3
+          width = 4
+        }
+      }
+    }
+    ["Schema selection"] {
+      inputs {
+        ["schemas"] = new SqlTree {
+          title = "Schemas to include"
+          desc = "Select schemas from which to extract metadata."
+          sqlQuery = "show atlan schemas"
+          credentialType = "atlan-connectors-full-featured"
+          excludePatterns = List("information_schema")
+        }
+      }
+    }
+  }
+  // lineage_depth becomes required when the lineage toggle is on.
+  rules {
+    new UIRule {
+      whenInputs { ["enable_lineage"] = "true" }
+      required { "lineage_depth" }
+    }
+  }
+}
+
+// Custom node outside the typed pipeline — useful for one-off steps that
+// do not fit the canonical extract→qi→publish sequence.
+extraNodes {
+  // Custom node outside the typed pipeline — runs after publish completes.
+  ["notify"] = new DAGNode {
+    displayName = "Notify"
+    workflowType = "NotifyWorkflow"
+    args {
+      ["webhook_url"] = "$.extract.outputs.notify_webhook_url"
+    }
+    dependsOn { "publish" }
+  }
+}

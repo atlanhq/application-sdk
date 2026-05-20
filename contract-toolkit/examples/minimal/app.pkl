@@ -1,0 +1,29 @@
+/// Minimal example — demonstrates the smallest possible App.pkl contract.
+///
+/// Every field not set here takes its documented default. No credentials,
+/// no connector, opted-out of publish in the pipeline. Use this as the
+/// starting point when scaffolding a new app contract.
+amends "../../src/App.pkl"
+
+name = "minimal"
+displayName = "Minimal Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput {
+          title = "Target"
+          helpText = "What to process."
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}

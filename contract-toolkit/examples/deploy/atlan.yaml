@@ -1,0 +1,43 @@
+# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: deploy
+display_name: Deploy Config Example
+type: connector
+icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: false
+entrypoints:
+- name: deploy
+  display_name: Deploy Config Example
+  icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+  type: connector
+deploy:
+  execution_mode: native
+  splitDeploymentEnabled: false
+  dapr:
+    objectstore: true
+    secretstore: true
+    statestore: false
+    eventstore: false
+    subscription: false
+    configurationstore: false
+    lock: false
+  keda:
+    enabled: true
+    minReplicaCount: 1
+    temporal:
+      targetQueueSize: 10
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: '2'
+      memory: 4Gi
+  env:
+    LOG_LEVEL: INFO
+    MAX_WORKERS: '4'
+  verticalPodAutoscaler:
+    enabled: true
+    updateMode: Auto

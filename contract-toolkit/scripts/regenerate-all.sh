@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Discover and regenerate all PKL example outputs.
 # New examples are auto-discovered — no list to maintain.
+#
+# Each example is evaluated with `pkl eval -m <example-dir> <example>/app.pkl`
+# so that output file keys (e.g. `app/generated/foo.json`, `atlan.yaml`)
+# land at their natural paths relative to the example directory — mirroring
+# how consuming apps run `pkl eval -m . contract/app.pkl` from their repo root.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,25 +13,12 @@ cd "$REPO_ROOT"
 
 failed=0
 
-for pkl in examples/*/*.pkl; do
+for pkl in examples/*/app.pkl; do
   [ -f "$pkl" ] || continue
 
-  base="$(basename "$pkl" .pkl)"
-
-  # Skip non-contract files (shared modules, package metadata)
-  case "$base" in
-    credentials|PklProject) continue ;;
-  esac
-
-  dir="$(dirname "$pkl")/generated"
-
-  # Optional split contracts: foo.pkl → generated/foo/
-  if [ "$base" != "app" ]; then
-    dir="$(dirname "$pkl")/generated/$base"
-  fi
-
-  echo ":: $pkl → $dir"
-  if ! pkl eval -m "$dir" "$pkl"; then
+  example_dir="$(dirname "$pkl")"
+  echo ":: $pkl → $example_dir"
+  if ! pkl eval -m "$example_dir" "$pkl"; then
     echo "FAIL: $pkl"
     failed=1
   fi

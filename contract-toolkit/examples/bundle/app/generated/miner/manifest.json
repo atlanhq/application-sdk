@@ -1,0 +1,23 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Query Miner Metadata",
+      "app_name": "{app_name}",
+      "inputs": {
+        "workflow_type": "miner",
+        "app_name": "{app_name}",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-miner-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "credential_guid": "{{credential-guid}}",
+          "lookback_days": "{{lookback-days}}",
+          "max_queries": "{{max-queries}}"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+app_name: publish-controls
+app_image: ${APP_IMAGE}
+app_port: 8000
