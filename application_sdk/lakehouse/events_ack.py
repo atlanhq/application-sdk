@@ -1,0 +1,134 @@
+"""Generic event-acknowledgement Parquet writer.
+
+Writes a Parquet ack file consumed by the automation engine after an app
+processes an event batch. The path follows a date-partitioned layout the AE
+expects::
+
+    artifacts/<app_name>/<workflow_name>/<yyyy>/<mm>/<dd>/<run_id>/<filename>.parquet
+
+The ack schema is intentionally minimal — one row per event with its
+processing status and any error message — so the AE can mark events as
+acknowledged without re-reading the lakehouse.
+
+All path components (``app_name``, ``workflow_name``, ``workflow_run_id``,
+``filename``) are validated at the boundary against an allowlist regex —
+they're interpolated into an object-store key so unvalidated input would be
+a path-traversal vector.
+"""
+
+from __future__ import annotations
+
+import io
+import logging
+import re
+from datetime import datetime, timezone
+from typing import Any
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from application_sdk.lakehouse.models import EventResult
+from application_sdk.storage.batch import upload_file_from_bytes
+
+logger = logging.getLogger(__name__)
+
+# Allowlist for path components. App / workflow names: identifiers (no dots
+# or slashes). Run IDs: Temporal generates UUID-shaped strings; the regex
+# accepts the broader "identifier-with-hyphens" set. Filename: same set
+# plus a single dot for the extension.
+_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+_RUN_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+_FILENAME_RE = re.compile(r"^[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$")
+
+_ACK_SCHEMA = pa.schema(
+    [
+        pa.field("event_id", pa.string(), nullable=False),
+        pa.field("status", pa.string(), nullable=False),
+        pa.field("error_message", pa.string(), nullable=True),
+    ]
+)
+
+
+def _validate(label: str, value: str, pattern: re.Pattern[str]) -> None:
+    if not pattern.match(value):
+        raise ValueError(f"Invalid {label}: {value!r}")
+
+
+def _ack_path(
+    app_name: str,
+    workflow_name: str,
+    workflow_run_id: str,
+    filename: str,
+    now: datetime | None = None,
+) -> str:
+    ts = now or datetime.now(timezone.utc)
+    return (
+        f"artifacts/{app_name}/{workflow_name}/"
+        f"{ts.year}/{ts.month:02d}/{ts.day:02d}/"
+        f"{workflow_run_id}/{filename}"
+    )
+
+
+def _build_ack_arrow(
+    events: list[dict[str, Any]],
+    results: list[EventResult],
+) -> pa.Table:
+    if len(events) != len(results):
+        raise ValueError(
+            f"events ({len(events)}) and results ({len(results)}) must align"
+        )
+    return pa.table(
+        {
+            "event_id": [e["event_id"] for e in events],
+            "status": [r.status for r in results],
+            "error_message": [r.error_message for r in results],
+        },
+        schema=_ACK_SCHEMA,
+    )
+
+
+async def events_ack(
+    events: list[dict[str, Any]],
+    results: list[EventResult],
+    *,
+    app_name: str,
+    workflow_name: str,
+    workflow_run_id: str,
+    filename: str = "events_ack.parquet",
+) -> str:
+    """Write the AE-expected Parquet ack and return the path.
+
+    ``events`` and ``results`` must align 1:1 (``events_read`` guarantees
+    this); a mismatch raises ``ValueError`` before any I/O.
+
+    All four string inputs are validated against an allowlist regex —
+    they're interpolated into an object-store key, so unvalidated input
+    would be a path-traversal vector.
+
+    Example::
+
+        from application_sdk.lakehouse import events_ack
+
+        path = await events_ack(
+            events,
+            results,
+            app_name="databricks",
+            workflow_name="reverse-sync-description",
+            workflow_run_id="run-abc-123",
+        )
+        # path = "artifacts/databricks/reverse-sync-description/2026/05/06/"
+        #        "run-abc-123/events_ack.parquet"
+    """
+    _validate("app_name", app_name, _NAME_RE)
+    _validate("workflow_name", workflow_name, _NAME_RE)
+    _validate("workflow_run_id", workflow_run_id, _RUN_ID_RE)
+    _validate("filename", filename, _FILENAME_RE)
+
+    ack_path = _ack_path(app_name, workflow_name, workflow_run_id, filename)
+    arrow = _build_ack_arrow(events, results)
+
+    buf = io.BytesIO()
+    pq.write_table(arrow, buf)
+    await upload_file_from_bytes(key=ack_path, content=buf.getvalue())
+    logger.info("Wrote event ack: %d rows → %s", arrow.num_rows, ack_path)
+    return ack_path
