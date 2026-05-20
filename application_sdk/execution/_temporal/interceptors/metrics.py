@@ -40,8 +40,6 @@ def _meter():
     return _otel_metrics.get_meter(_METER_NAME)
 
 
-# Lazily created singletons — meters/instruments are cheap to look up but we
-# only want one of each per process.
 _INSTRUMENTS: dict[str, Any] = {}
 
 

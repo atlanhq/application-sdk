@@ -169,9 +169,6 @@ class TestMetricsWorkflowInboundInterceptor:
             with pytest.raises(RuntimeError, match="boom"):
                 await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
-        # Executions counter still fires with ERROR; raw exc also routes
-        # through the classified counter with INTERNAL / APP_OWNER fallback,
-        # so create_counter is invoked twice (one per instrument).
         exec_calls = [
             c
             for c in mock_meter.create_counter.return_value.add.call_args_list
@@ -190,7 +187,6 @@ class TestWorkflowFailuresClassified:
 
     @pytest.fixture
     def split_counters(self, mock_meter):
-        """Return (exec, classified) counters so emits are distinguishable."""
         exec_counter = MagicMock()
         classified_counter = MagicMock()
         histogram = MagicMock()
@@ -218,7 +214,6 @@ class TestWorkflowFailuresClassified:
 
     async def test_app_owner_audience_fires_with_correct_labels(self, split_counters):
         _, classified = split_counters
-        # Raw RuntimeError → fallback INTERNAL / APP_OWNER.
         await self._run_failing_workflow(RuntimeError("boom"), split_counters)
 
         classified.add.assert_called_once()
@@ -269,8 +264,6 @@ class TestWorkflowFailuresClassified:
             "application_sdk.execution._temporal.interceptors.metrics.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = True
-            # Under replay the interceptor delegates straight through without
-            # touching counters; the underlying exc still propagates.
             with pytest.raises(RuntimeError, match="boom"):
                 await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
@@ -286,7 +279,6 @@ class TestWorkflowFailuresClassified:
         assert tags["failure.audience"] == Audience.APP_OWNER.value
 
     async def test_classified_emit_failure_is_silent(self, mock_meter):
-        """Metric exceptions must not propagate into workflow execution."""
         exec_counter = MagicMock()
         classified_counter = MagicMock()
         classified_counter.add.side_effect = RuntimeError("metrics broken")
