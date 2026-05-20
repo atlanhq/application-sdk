@@ -229,8 +229,7 @@ jobs:
               echo
               echo "Merging this PR triggers Publish Contract Toolkit, which builds the"
               echo "PKL package, publishes it under contracts/ on the gh-pages"
-              echo "branch, creates the contract-toolkit-v${new_version} tag, and creates"
-              echo "the GitHub release."
+              echo "branch, and creates the contract-toolkit-v${new_version} tag."
               echo
               echo "## Release notes preview"
               echo
