@@ -324,6 +324,7 @@ class TestMetricsActivityInboundInterceptor:
             mock_act.info.return_value = MockActivityInfo()
             await interceptor.execute_activity(MockExecuteActivityInput())
 
+        # create_counter is called for both executions and (not errors on success)
         counter = mock_meter.create_counter.return_value
         counter.add.assert_called_once()
         tags = counter.add.call_args[0][1]
@@ -357,6 +358,7 @@ class TestMetricsActivityInboundInterceptor:
             with pytest.raises(ValueError, match="bad"):
                 await interceptor.execute_activity(MockExecuteActivityInput())
 
+        # Both executions counter and errors counter should be called
         exec_counter_calls = [
             c
             for c in mock_meter.create_counter.return_value.add.call_args_list
@@ -367,11 +369,14 @@ class TestMetricsActivityInboundInterceptor:
     async def test_error_increments_errors_counter_with_exception_type(
         self, mock_next, mock_meter
     ):
+        # Use separate counters for executions vs errors
         exec_counter = MagicMock()
         errors_counter = MagicMock()
         histogram = MagicMock()
+        call_count = [0]
 
         def make_counter(name, **kwargs):
+            call_count[0] += 1
             if "errors" in name:
                 return errors_counter
             return exec_counter
