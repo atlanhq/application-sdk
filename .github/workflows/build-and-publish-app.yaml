@@ -247,6 +247,11 @@ jobs:
           # `gh workflow run` doesn't return the new run's ID, so capture
           # it by listing recent dispatches after the trigger.
           echo "No existing run of '${WORKFLOW_FILE}' on ${SHA}. Dispatching on '${DISPATCH_REF}'..."
+          # `gh run list --branch` compares against the short headBranch (e.g. 'main'),
+          # not the full ref ('refs/heads/main'). Strip the prefix so the filter actually
+          # matches the dispatched run.
+          DISPATCH_BRANCH="${DISPATCH_REF#refs/heads/}"
+          DISPATCH_BRANCH="${DISPATCH_BRANCH#refs/tags/}"
           BEFORE=$(date -u +%FT%TZ)
           if ! gh workflow run "${WORKFLOW_FILE}" --repo "${REPO}" --ref "${DISPATCH_REF}"; then
             {
@@ -275,7 +280,7 @@ jobs:
             RUN_ID=$(gh run list \
               --repo "${REPO}" \
               --workflow "${WORKFLOW_FILE}" \
-              --branch "${DISPATCH_REF}" \
+              --branch "${DISPATCH_BRANCH}" \
               --event workflow_dispatch \
               --created ">${BEFORE}" \
               --limit 1 \
