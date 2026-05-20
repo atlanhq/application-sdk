@@ -223,17 +223,42 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         # (notably the automation-engine on SDK 2.8.7) still rely on this
         # convention and have no way to inject memo / header on workflow
         # start. Reading args here keeps those callers' correlation chains
-        # intact without forcing each one to migrate immediately. Falls
-        # through silently for typed-arg workflows (Pydantic models,
-        # dataclasses, primitives) — those callers should use memo / header
-        # at start time, which are the preferred channels.
+        # intact without forcing each one to migrate immediately.
+        #
+        # Three shapes covered, in order:
+        #   1. ``args[0]`` is a ``dict`` → ``correlation_id`` key. Plain
+        #      dict-shaped configs (AE 2.8.7, scripted starts, tests).
+        #   2. ``args[0]`` is a typed object (Pydantic model, dataclass,
+        #      namespace) with a ``correlation_id`` attribute. Catches v3
+        #      SDK-generated workflow wrappers whose ``run(input: Input)``
+        #      converted the caller's dict into a typed Input before the
+        #      interceptor was called.
+        #   3. ``args[0]`` is a Pydantic v2 model with ``extra='allow'`` and
+        #      ``correlation_id`` ended up in ``__pydantic_extra__`` because
+        #      the field wasn't declared on the model. Pydantic still
+        #      preserves it on the instance even though it's not a typed
+        #      attribute.
+        #
+        # Falls through silently for any other shape — primitives, models
+        # without the field and ``extra='ignore'`` (default), etc. Those
+        # callers should use memo / header at start time, which are the
+        # preferred OTel-aligned channels.
         try:
             if input.args:
                 first = input.args[0]
+                cid: str | None = None
                 if isinstance(first, dict):
                     cid = first.get("correlation_id")
-                    if cid:
-                        return str(cid)
+                else:
+                    raw = getattr(first, "correlation_id", None)
+                    if not raw:
+                        extras = getattr(first, "__pydantic_extra__", None)
+                        if isinstance(extras, dict):
+                            raw = extras.get("correlation_id")
+                    if raw:
+                        cid = str(raw)
+                if cid:
+                    return str(cid)
         except Exception:
             logger.warning(
                 "Failed to read correlation_id from workflow args", exc_info=True
