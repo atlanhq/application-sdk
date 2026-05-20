@@ -64,7 +64,7 @@ uiConfig {
         }
         ["popularity-custom-label"] = new Config.TextInput {
           title = "Custom Label"
-          defaultValue = "default-label"
+          default = "direct-default"
           width = 4
         }
       }

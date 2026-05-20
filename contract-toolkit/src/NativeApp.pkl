@@ -2629,7 +2629,7 @@ local function getInputPyField(k: String, u: Config.UIElement): String =
   if (u is Config.BooleanInput)
     "\(k): bool = \(if ((u as Config.BooleanInput).default) "True" else "False")"
   else if (u is Config.Switcher)
-    "\(k): bool = \(if ((u as Config.Switcher).defaultSelection) "True" else "False")"
+    "\(k): bool = \(if ((u as Config.Switcher).default) "True" else "False")"
   else if (u is Config.NumericInput)
     "\(k): int = \(if ((u as Config.NumericInput).default != null) (u as Config.NumericInput).default!!.toInt() else 0)"
   else if (u is Config.DateInput)
