@@ -134,6 +134,7 @@ facts {
     dynamicInputPy.contains("popularity_filter_errors: bool = False")
     dynamicInputPy.contains("popularity_output_attribution: bool = False")
     dynamicInputPy.contains("popularity_dry_run: bool = False")
+    dynamicInputPy.contains("popularity_custom_label: str = \"direct-default\"")
   }
   ["Popularity node omits storage override by default"] {
     !defaultPopularityNode.args.containsKey("lake_provider")

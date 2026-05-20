@@ -11,7 +11,7 @@ amends "pkl:Project"
 
 dependencies {
   ["app-contract-toolkit"] {
-    uri = "package://atlanhq.github.io/application-sdk/app-contract-toolkit/app-contract-toolkit@<LATEST_VERSION>"
+    uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<LATEST_VERSION>"
   }
 }
 ```
@@ -1170,16 +1170,18 @@ Every PR that touches `src/` must pass generation for all examples.
 
 ## Releasing
 
-Releases are **manual** — triggered from the GitHub Actions tab, never on push.
+Releases are **automatic** — no manual trigger or version input required.
 
-1. Go to **Actions → Release Contract Toolkit → Run workflow** in the
-   `atlanhq/application-sdk` repository.
-2. Enter the target version (e.g. `1.0.0`). The workflow validates it as
-   semver-greater-than-current before bumping.
-3. Submit. The workflow bumps `contract-toolkit/src/PklProject`, regenerates
-   `contract-toolkit/CHANGELOG.md` via `git-cliff`, publishes the package under
-   `app-contract-toolkit/` on the `application-sdk` GitHub Pages branch, tags
-   `contract-toolkit-v<version>`, and creates the GitHub Release.
+1. Merge any PR that touches `contract-toolkit/` files. The Release Contract
+   Toolkit workflow fires automatically, computes the next semver from
+   unreleased conventional commits via `git-cliff`, and opens (or updates) a
+   `bump-version-contract-toolkit` PR with the version bump and updated
+   `CHANGELOG.md`.
+2. Review and merge the release PR.
+3. The Publish Contract Toolkit workflow fires on merge: it bumps
+   `contract-toolkit/src/PklProject`, publishes the package under `contracts/`
+   on the `application-sdk` GitHub Pages branch, and tags
+   `contract-toolkit-v<version>`.
 
 ## Requirements
 
