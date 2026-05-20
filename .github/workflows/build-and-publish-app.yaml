@@ -247,7 +247,11 @@ jobs:
           # `gh workflow run` doesn't return the new run's ID, so capture
           # it by listing recent dispatches after the trigger.
           echo "No existing run of '${WORKFLOW_FILE}' on ${SHA}. Dispatching on '${DISPATCH_REF}'..."
-          BEFORE=$(date -u +%FT%TZ)
+          # 5s buffer: `gh run list --created '>X'` uses strict-greater-than at
+          # second granularity, so a same-second dispatch silently excludes the
+          # newly-created run from polling results and the gate fails the 60s
+          # window even though the run actually got created.
+          BEFORE=$(date -u -d '5 seconds ago' +%FT%TZ)
           if ! gh workflow run "${WORKFLOW_FILE}" --repo "${REPO}" --ref "${DISPATCH_REF}"; then
             {
               echo "### Publish blocked: failed to dispatch '${WORKFLOW_FILE}'"
