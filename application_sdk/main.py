@@ -1188,7 +1188,7 @@ async def run_dev_combined(
     temporal_host: str | None = None,  # deprecated — ignored, kept for back-compat
     temporal_namespace: str | None = None,
     temporal_ui: bool = False,
-    temporal_ui_port: int | None = None,
+    temporal_ui_port: int = 8233,
     task_queue: str | None = None,
 ) -> None:
     """Run worker + handler in a single process for local development.
@@ -1234,8 +1234,7 @@ async def run_dev_combined(
             ``"default"``.
         temporal_ui: Enable the embedded Temporal Web UI for local debugging.
             Default ``False`` keeps the dev server headless.
-        temporal_ui_port: Optional Temporal Web UI port. Defaults to ``8233``
-            when ``temporal_ui`` is enabled.
+        temporal_ui_port: Temporal Web UI port. Defaults to ``8233``.
         task_queue: Task queue name. Default precedence: kwarg →
             ``ATLAN_TASK_QUEUE`` → ``"{app_name}-queue"``.
 
