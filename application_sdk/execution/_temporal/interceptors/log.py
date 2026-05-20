@@ -217,7 +217,29 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "Failed to read correlation header in workflow", exc_info=True
             )
 
-        # Priority 3: top-level workflow — generate a fresh correlation ID.
+        # Priority 3: legacy args-based propagation. The pre-v3
+        # CorrelationContextInterceptor read ``correlation_id`` from the
+        # first workflow argument when it was a dict; many existing callers
+        # (notably the automation-engine on SDK 2.8.7) still rely on this
+        # convention and have no way to inject memo / header on workflow
+        # start. Reading args here keeps those callers' correlation chains
+        # intact without forcing each one to migrate immediately. Falls
+        # through silently for typed-arg workflows (Pydantic models,
+        # dataclasses, primitives) — those callers should use memo / header
+        # at start time, which are the preferred channels.
+        try:
+            if input.args:
+                first = input.args[0]
+                if isinstance(first, dict):
+                    cid = first.get("correlation_id")
+                    if cid:
+                        return str(cid)
+        except Exception:
+            logger.warning(
+                "Failed to read correlation_id from workflow args", exc_info=True
+            )
+
+        # Priority 4: top-level workflow — generate a fresh correlation ID.
         return str(uuid4())
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
