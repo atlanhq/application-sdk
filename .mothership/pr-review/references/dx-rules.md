@@ -50,6 +50,37 @@ Flag:
 - Returning raw `dict` or `tuple` instead of typed `Output` subclass
 - Using `datetime.now()` or `uuid.uuid4()` instead of `self.now()` / `self.uuid()`
 
+### Public surface should expose one recommended variant (Important)
+
+New public factories, builders, and helpers should default to ONE
+recommended variant per concept. Multiple parallel variants (sync vs
+async, v8 vs v9, legacy vs new) on a single helper return point
+fragment the API surface and force every connector developer to
+re-derive "which one should I use?"
+
+**Flag any new code that:**
+- Adds a factory / builder / helper that returns one of several
+  client/object variants based on a parameter, where the SDK's
+  recommended path is a specific variant. The factory should default
+  to (or only return) that variant; other variants should be reached
+  via a separate documented escape hatch with a deprecation/future-
+  removal note.
+- Returns `object`, `Any`, `Union[A, B]`, or a `# type: ignore`-d
+  type from a public factory or accessor. The return type MUST be
+  the concrete typed class connectors will actually consume.
+- Adds a kwarg to a public function whose values map to qualitatively
+  different return shapes — splitting the function into two narrowly-
+  typed alternatives is almost always clearer.
+
+**Heuristic:** if the PR description has to explain "we support all
+four variants because…", the surface is too broad — push back with
+"which variant should the typical connector use? Make that the only
+default; relegate the rest behind a separate, narrowly-documented
+helper."
+
+**Severity:** Important (DX). Not blocking, but should be flagged
+loudly with a suggested narrower signature.
+
 ---
 
 ## 2. Error Messages and Debugging
@@ -160,6 +191,39 @@ Flag:
 - Changed field types
 - New required fields (no default) on existing contracts
 
+### Removing a public kwarg requires a deprecation cycle (Important)
+
+Public function/method kwargs are part of the contract. Silently
+dropping or ignoring a previously-supported kwarg breaks callers
+without warning. A removal must keep the parameter in the signature
+for at least one release with a `DeprecationWarning`.
+
+**Flag any change that:**
+- Removes a kwarg from a public method or function signature that was
+  present in the prior release.
+- Renames a kwarg without keeping the old name as a deprecated alias
+  (`old_name=DeprecationAlias(new_name)` or accept-and-warn).
+- Silently ignores a kwarg's value (still accepting it for back-compat
+  but discarding it) without emitting `warnings.warn(...,
+  DeprecationWarning, stacklevel=2)`.
+
+**Expected pattern:**
+
+```python
+def configure(self, *, new_name: str, old_name: str | None = None) -> None:
+    if old_name is not None:
+        warnings.warn(
+            "`old_name` is deprecated, use `new_name`. Removal in v3.X.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        new_name = old_name
+    ...
+```
+
+**Severity:** Important (DX + back-compat). Same class as removing a
+contract field — broadens the consumer-blast-radius check.
+
 ---
 
 ## 4. Discoverability and Imports
@@ -188,6 +252,39 @@ Connector developers should reach any public API within 3 levels: `application_s
 Flag:
 - Public APIs requiring 4+ levels of import nesting
 - Imports traversing `_`-prefixed (private) directories for public functionality
+
+### Private-module imports from app code are forbidden (Critical)
+
+Anything under a `_`-prefixed module (`_temporal/`, `_dapr/`,
+`_redis/`, etc.) is private to the SDK. Connector developers and
+app code MUST import only through the public-protocol surface
+(`application_sdk.execution`, `application_sdk.infrastructure`,
+etc.). Direct imports from private modules couple consumers to
+implementation details and prevent the SDK from refactoring them.
+
+**Flag any new import in the diff that:**
+- Matches `from application_sdk\.[a-z_]+\._[a-z_]+(\.[a-z_]+)*` —
+  i.e., reaches into a `_`-prefixed package or module from outside.
+- Imports `temporalio.*`, `dapr.*`, `redis.*` directly anywhere
+  outside the corresponding `_temporal/`, `_dapr/`, `_redis/`
+  directories.
+- Imports a symbol whose name starts with `_` from a non-`_`
+  package (private symbol leaking through a public module).
+
+**Diff-grep heuristic:**
+
+```bash
+git diff origin/main...HEAD -- '*.py' | \
+  grep -E '^\+from application_sdk\.[a-z_]+\._[a-z_]+'
+git diff origin/main...HEAD -- '*.py' | \
+  grep -E '^\+(from|import) (temporalio|dapr|redis)\b' | \
+  grep -vE '_temporal|_dapr|_redis'
+```
+
+Both should be empty. Any hit is a Critical finding.
+
+**Severity:** Critical (ARCH). Concrete detection method for
+ADR-0005.
 
 ---
 
@@ -228,10 +325,40 @@ Flag:
 
 ---
 
-## Retro Learnings — 2026-05-20
+## 7. Conventional Commits and Releases
 
-> Each subsection is a generalized rule. Concrete incidents that
-> surfaced the rule are recorded in `retro-2026-05-20.md`.
+### Conventional Commits prefix must match diff scope (Critical)
+
+The prefix on the PR title becomes the merge-squash commit message
+and feeds `release-please`. A mismatched prefix ships the wrong
+version number — major-bumping for nothing, minor-bumping for CI-only
+content, or burying a real break behind `fix:`.
+
+**For every PR, check the prefix against the diff content:**
+
+| Prefix | Required evidence in the diff (else flag mismatch) |
+|---|---|
+| `feat!:` / `BREAKING CHANGE:` footer | At least one developer-facing public-API break: removed/renamed export in `__init__.py`'s `__all__`, removed/renamed public class or function, removed/renamed/retyped field on a public Input/Output contract, removed deprecation shim. If none → flag "drop the `!` or document the specific break in a `BREAKING CHANGE:` footer." |
+| `feat:` | At least one new public capability — new export, new public method, new env-var-controlled behavior, new entry point. If the diff is purely under `.github/`, build config, or otherwise non-shipping → flag "this is not a feature; pick `ci:` / `build:` / `chore:`." |
+| `fix:` | A code change that resolves a defect (logic change, missing case, race condition). Pure refactor with no behavior change → flag "use `refactor:`." |
+| `ci:` / `build:` | Only files under `.github/`, `.pre-commit-config.yaml`, release/build config, Dockerfiles. Application code under `application_sdk/` touched → flag "the diff includes app code; pick a stronger prefix." |
+| `chore:` / `docs:` | No application-code or contract change. |
+
+**Detection:** for `feat!:` claims, diff the `__init__.py` files under
+`application_sdk/` and check for removed `__all__` entries / missing
+deprecation shims. For `feat:` / `fix:` on CI-only diffs, check
+`git diff --name-only origin/main...HEAD` — if every path matches
+`^\.github/|^\.pre-commit|^pyproject\.toml$|^uv\.lock$`, the prefix
+should be `ci:` or `build:`.
+
+**Severity:** Critical when the wrong prefix would cause a
+major-version bump (`feat!:` on non-breaking diff). Important
+otherwise. Always actionable — the PR title can be edited before
+merge.
+
+---
+
+## 8. Environment Variables
 
 ### Env-var lifecycle: prefix, removal warnings, doc updates (Important)
 
@@ -265,129 +392,3 @@ updated; (c) `docs/standards/env-vars.md` has a touch in the diff.
 **Severity:** Important. Silent rename/removal breaks production
 rollouts; the `_REMOVED_ENV_VARS` mechanism exists precisely so the
 user sees a warning instead of running with stale config.
-
-### Private-module imports from app code are forbidden (Critical)
-
-Anything under a `_`-prefixed module (`_temporal/`, `_dapr/`,
-`_redis/`, etc.) is private to the SDK. Connector developers and
-app code MUST import only through the public-protocol surface
-(`application_sdk.execution`, `application_sdk.infrastructure`,
-etc.). Direct imports from private modules couple consumers to
-implementation details and prevent the SDK from refactoring them.
-
-**Flag any new import in the diff that:**
-- Matches `from application_sdk\.[a-z_]+\._[a-z_]+(\.[a-z_]+)*` —
-  i.e., reaches into a `_`-prefixed package or module from outside.
-- Imports `temporalio.*`, `dapr.*`, `redis.*` directly anywhere
-  outside the corresponding `_temporal/`, `_dapr/`, `_redis/`
-  directories.
-- Imports a symbol whose name starts with `_` from a non-`_`
-  package (private symbol leaking through a public module).
-
-**Diff-grep heuristic:**
-
-```bash
-git diff origin/main...HEAD -- '*.py' | \
-  grep -E '^\+from application_sdk\.[a-z_]+\._[a-z_]+'
-git diff origin/main...HEAD -- '*.py' | \
-  grep -E '^\+(from|import) (temporalio|dapr|redis)\b' | \
-  grep -vE '_temporal|_dapr|_redis'
-```
-
-Both should be empty. Any hit is a Critical finding.
-
-**Severity:** Critical (ARCH). Restates ADR-0005 with a concrete
-detection method because PRs keep slipping past the general rule.
-
-### Conventional Commits prefix must match diff scope (Critical)
-
-The prefix on the PR title becomes the merge-squash commit message
-and feeds `release-please`. A mismatched prefix ships the wrong
-version number — major-bumping for nothing, minor-bumping for CI-only
-content, or burying a real break behind `fix:`.
-
-**For every PR, check the prefix against the diff content:**
-
-| Prefix | Required evidence in the diff (else flag mismatch) |
-|---|---|
-| `feat!:` / `BREAKING CHANGE:` footer | At least one developer-facing public-API break: removed/renamed export in `__init__.py`'s `__all__`, removed/renamed public class or function, removed/renamed/retyped field on a public Input/Output contract, removed deprecation shim. If none → flag "drop the `!` or document the specific break in a `BREAKING CHANGE:` footer." |
-| `feat:` | At least one new public capability — new export, new public method, new env-var-controlled behavior, new entry point. If the diff is purely under `.github/`, build config, or otherwise non-shipping → flag "this is not a feature; pick `ci:` / `build:` / `chore:`." |
-| `fix:` | A code change that resolves a defect (logic change, missing case, race condition). Pure refactor with no behavior change → flag "use `refactor:`." |
-| `ci:` / `build:` | Only files under `.github/`, `.pre-commit-config.yaml`, release/build config, Dockerfiles. Application code under `application_sdk/` touched → flag "the diff includes app code; pick a stronger prefix." |
-| `chore:` / `docs:` | No application-code or contract change. |
-
-**Detection:** for `feat!:` claims, diff the `__init__.py` files under
-`application_sdk/` and check for removed `__all__` entries / missing
-deprecation shims. For `feat:` / `fix:` on CI-only diffs, check
-`git diff --name-only origin/main...HEAD` — if every path matches
-`^\.github/|^\.pre-commit|^pyproject\.toml$|^uv\.lock$`, the prefix
-should be `ci:` or `build:`.
-
-**Severity:** Critical when the wrong prefix would cause a
-major-version bump (`feat!:` on non-breaking diff). Important
-otherwise. Always actionable — the PR title can be edited before
-merge.
-
-### Public surface should expose one recommended variant (Important)
-
-New public factories, builders, and helpers should default to ONE
-recommended variant per concept. Multiple parallel variants (sync vs
-async, v8 vs v9, legacy vs new) on a single helper return point
-fragment the API surface and force every connector developer to
-re-derive "which one should I use?"
-
-**Flag any new code that:**
-- Adds a factory / builder / helper that returns one of several
-  client/object variants based on a parameter, where the SDK's
-  recommended path is a specific variant. The factory should default
-  to (or only return) that variant; other variants should be reached
-  via a separate documented escape hatch with a deprecation/future-
-  removal note.
-- Returns `object`, `Any`, `Union[A, B]`, or a `# type: ignore`-d
-  type from a public factory or accessor. The return type MUST be
-  the concrete typed class connectors will actually consume.
-- Adds a kwarg to a public function whose values map to qualitatively
-  different return shapes — splitting the function into two narrowly-
-  typed alternatives is almost always clearer.
-
-**Heuristic:** if the PR description has to explain "we support all
-four variants because…", the surface is too broad — push back with
-"which variant should the typical connector use? Make that the only
-default; relegate the rest behind a separate, narrowly-documented
-helper."
-
-**Severity:** Important (DX). Not blocking, but should be flagged
-loudly with a suggested narrower signature.
-
-### Removing a public kwarg requires a deprecation cycle (Important)
-
-Public function/method kwargs are part of the contract. Silently
-dropping or ignoring a previously-supported kwarg breaks callers
-without warning. A removal must keep the parameter in the signature
-for at least one release with a `DeprecationWarning`.
-
-**Flag any change that:**
-- Removes a kwarg from a public method or function signature that was
-  present in the prior release.
-- Renames a kwarg without keeping the old name as a deprecated alias
-  (`old_name=DeprecationAlias(new_name)` or accept-and-warn).
-- Silently ignores a kwarg's value (still accepting it for back-compat
-  but discarding it) without emitting `warnings.warn(...,
-  DeprecationWarning, stacklevel=2)`.
-
-**Expected pattern:**
-
-```python
-def configure(self, *, new_name: str, old_name: str | None = None) -> None:
-    if old_name is not None:
-        warnings.warn(
-            "`old_name` is deprecated, use `new_name`. Removal in v3.X.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        new_name = old_name
-    ...
-```
-
-**Severity:** Important (DX + back-compat). Same class as removing a
-contract field — broadens the consumer-blast-radius check.

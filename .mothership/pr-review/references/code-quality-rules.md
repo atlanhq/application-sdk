@@ -52,78 +52,7 @@ Flag any imported name not used in the file. Exception: re-exports in `__init__.
 
 ---
 
-## Logging Rules (Ruff G001, G003, G004, T201)
-
-### No f-strings in Log Calls (Critical — G004)
-
-```python
-# BAD
-logger.info(f"Processing {count} records")
-logger.error(f"Failed: {error}")
-
-# GOOD
-logger.info("Processing %d records", count)
-logger.error("Failed: %s", error)
-```
-
-### No String Concatenation in Log Calls (G003)
-
-```python
-# BAD
-logger.info("Processing " + str(count) + " records")
-
-# GOOD
-logger.info("Processing %d records", count)
-```
-
-## Retro Learnings — 2026-05-20
-
-> Each subsection is a generalized rule. Concrete incidents that
-> surfaced the rule are recorded in `retro-2026-05-20.md`.
-
-### Exception chains must preserve the cause with `from exc` (Critical)
-
-When raising a new exception from inside an `except` block, the
-`raise NewError(...) from exc` form preserves the original exception
-in `__cause__`. Dropping `from exc` produces a `During handling of
-the above exception, another exception occurred` traceback that
-hides the original cause and breaks our error-classification
-pipeline (the wire-format `cause` field is empty). Pre-commit
-doesn't reliably catch this — the reviewer must.
-
-**Flag any new code that:**
-- Has a `raise X(...)` inside an `except Y as exc:` block without
-  `from exc` (or `from None` if intentionally suppressing).
-- Re-raises after wrapping: `raise NewError("...")` where the
-  outer `try/except` clearly catches the cause.
-- Uses `raise X(...) from None` without an inline comment
-  justifying the suppression (rare; usually a bug).
-
-**Detection heuristic:** for every `raise <ExceptionName>(` added on
-a line inside an `except ... as <name>:` block (i.e. the diff shows
-a `raise` indented under an `except`), the same statement must
-include `from <name>` (the captured exception, or `None` if
-documented).
-
-**Replacement:**
-
-```python
-# BAD
-try:
-    do_work()
-except ValueError as exc:
-    raise PreconditionError("operation precondition failed")
-
-# GOOD
-try:
-    do_work()
-except ValueError as exc:
-    raise PreconditionError("operation precondition failed") from exc
-```
-
-**Severity:** Critical. A broken exception chain destroys
-debuggability and silently zeros out the error-taxonomy `cause`
-field consumers depend on.
+## Suppression Comments
 
 ### Suppression comments require an inline justification (Important)
 
@@ -158,6 +87,10 @@ result: Any  # type: ignore
 silent suppressions accumulate and degrade the value of the
 underlying gate.
 
+---
+
+## Configuration and Constants
+
 ### Tunables and identifiers belong in `constants.py` (Important)
 
 User-visible metric names, log/trace attribute prefixes, service
@@ -181,50 +114,53 @@ when copies appear in multiple call sites.
 with `os.getenv("ATLAN_<NAME>", "<default>")` and imported at every
 use site.
 
-### Exhaust enum variants when matching state (Important)
+---
 
-When matching on an `Enum`, status string, or other discriminator
-with a known fixed set of values, the branch chain must either
-handle every variant explicitly or use a default branch that
-records the unhandled value (typically a `WARNING` log plus an
-`unknown` bucket on the relevant metric). Silent under-coverage
-shows up as dashboards that mislabel real transitions and metrics
-that under-count.
+## Logging Rules (Ruff G001, G003, G004, T201)
 
-**Flag any new code that:**
-- Has an `if x == A elif x == B` chain over a known `Enum` /
-  status set without exhausting the variants or providing a default
-  branch.
-- Uses `match` / `case` against an `Enum` without a `case _:`.
-- Introduces a metric or log attribute labelled by an enum value
-  but only emits a subset of the enum's variants.
+### No f-strings in Log Calls (Critical — G004)
 
-**Detection heuristic:** when a new branch over a `Status`-shaped
-value appears, find the enum/source-of-truth declaration and compare
-the branches against the variants. Any missing variant without an
-explicit default is a finding.
+```python
+# BAD
+logger.info(f"Processing {count} records")
+logger.error(f"Failed: {error}")
 
-### Don't wrap upstream APIs in single-purpose helpers (Minor)
+# GOOD
+logger.info("Processing %d records", count)
+logger.error("Failed: %s", error)
+```
 
-Thin wrappers around upstream APIs that only rename without adding
-type safety, validation, defaults, retries, or any other behaviour
-are net negative — they add a maintenance burden, hide the upstream
-documentation, and force every consumer to learn two names for the
-same thing.
+### No String Concatenation in Log Calls (G003)
 
-**Flag any new helper module that:**
-- Re-exports an upstream API surface (OpenTelemetry, httpx,
-  temporalio, pydantic, etc.) with one-line wrapper functions whose
-  body is essentially the upstream call.
-- Adds a `def record_*` / `def emit_*` / `def get_*` that only
-  calls the upstream client with no other logic.
+```python
+# BAD
+logger.info("Processing " + str(count) + " records")
 
-Prefer exposing the upstream object directly and letting callers
-use the native API. Add a wrapper only when it provides typed
-arguments, default labels, retries, deadlines, validation, or other
-real value beyond renaming.
+# GOOD
+logger.info("Processing %d records", count)
+```
 
-**Severity:** Minor. Suggest removal; do not block.
+### No % Formatting Inline in Log Calls (G001)
+
+```python
+# BAD
+logger.info("Processing %d records" % count)
+
+# GOOD — let the logger handle it
+logger.info("Processing %d records", count)
+```
+
+### No print() Statements (T201)
+
+```python
+# BAD
+print("Debug output")
+print(f"Result: {result}")
+
+# GOOD
+logger.debug("Debug output")
+logger.debug("Result: %s", result)
+```
 
 ### Log exceptions with `exc_info`, never via formatted strings (Important)
 
@@ -257,28 +193,6 @@ except SomeError as exc:
 
 **Severity:** Important (QUAL + DX). Mis-logged exceptions are
 debugger-quality regressions that compound over the codebase.
-
-### No % Formatting Inline in Log Calls (G001)
-
-```python
-# BAD
-logger.info("Processing %d records" % count)
-
-# GOOD — let the logger handle it
-logger.info("Processing %d records", count)
-```
-
-### No print() Statements (T201)
-
-```python
-# BAD
-print("Debug output")
-print(f"Result: {result}")
-
-# GOOD
-logger.debug("Debug output")
-logger.debug("Result: %s", result)
-```
 
 ### Structured Context over String Interpolation
 
@@ -332,6 +246,33 @@ All public methods must have return type annotations. Exception: test methods.
 
 ---
 
+## Control Flow
+
+### Exhaust enum variants when matching state (Important)
+
+When matching on an `Enum`, status string, or other discriminator
+with a known fixed set of values, the branch chain must either
+handle every variant explicitly or use a default branch that
+records the unhandled value (typically a `WARNING` log plus an
+`unknown` bucket on the relevant metric). Silent under-coverage
+shows up as dashboards that mislabel real transitions and metrics
+that under-count.
+
+**Flag any new code that:**
+- Has an `if x == A elif x == B` chain over a known `Enum` /
+  status set without exhausting the variants or providing a default
+  branch.
+- Uses `match` / `case` against an `Enum` without a `case _:`.
+- Introduces a metric or log attribute labelled by an enum value
+  but only emits a subset of the enum's variants.
+
+**Detection heuristic:** when a new branch over a `Status`-shaped
+value appears, find the enum/source-of-truth declaration and compare
+the branches against the variants. Any missing variant without an
+explicit default is a finding.
+
+---
+
 ## Error Handling
 
 ### No Bare Except
@@ -363,16 +304,44 @@ Every `except` block must either:
 2. Log with `exc_info=True` at WARNING or above
 3. Wrap and raise a new exception with the original as `__cause__`
 
-### Exception Chaining
+### Exception chains must preserve the cause with `from exc` (Critical)
 
-Use the categorical leaf class that matches the failure; pass `cause=e` (the dataclass field) and also chain with `from e` so the traceback is preserved:
+When raising a new exception from inside an `except` block, the
+`raise NewError(...) from exc` form preserves the original exception
+in `__cause__`. Dropping `from exc` produces a `During handling of
+the above exception, another exception occurred` traceback that
+hides the original cause and breaks our error-classification
+pipeline (the wire-format `cause` field is empty). Pre-commit
+doesn't reliably catch this — the reviewer must.
+
+**Flag any new code that:**
+- Has a `raise X(...)` inside an `except Y as exc:` block without
+  `from exc` (or `from None` if intentionally suppressing).
+- Re-raises after wrapping: `raise NewError("...")` where the
+  outer `try/except` clearly catches the cause.
+- Uses `raise X(...) from None` without an inline comment
+  justifying the suppression (rare; usually a bug).
+
+**Detection heuristic:** for every `raise <ExceptionName>(` added on
+a line inside an `except ... as <name>:` block (i.e. the diff shows
+a `raise` indented under an `except`), the same statement must
+include `from <name>` (the captured exception, or `None` if
+documented).
+
+**Use the categorical leaf class** that matches the failure; pass
+`cause=e` (the dataclass field) and also chain with `from e` so the
+traceback is preserved:
 
 ```python
-from application_sdk.errors import DependencyUnavailableError
+from application_sdk.errors import DependencyUnavailableError, PreconditionError
 
 # BAD — loses traceback, plain base class
 except ConnectionError as e:
     raise AppError("Connection failed")
+
+# BAD — preserves chain but uses unhelpful base class
+except ValueError as exc:
+    raise PreconditionError("operation precondition failed")
 
 # GOOD — typed leaf, cause preserved
 except ConnectionError as e:
@@ -380,7 +349,41 @@ except ConnectionError as e:
         message="Connection failed",
         service="database", cause=e,
     ) from e
+
+# GOOD — preserves the cause
+except ValueError as exc:
+    raise PreconditionError("operation precondition failed") from exc
 ```
+
+**Severity:** Critical. A broken exception chain destroys
+debuggability and silently zeros out the error-taxonomy `cause`
+field consumers depend on.
+
+---
+
+## Abstraction Boundaries
+
+### Don't wrap upstream APIs in single-purpose helpers (Minor)
+
+Thin wrappers around upstream APIs that only rename without adding
+type safety, validation, defaults, retries, or any other behaviour
+are net negative — they add a maintenance burden, hide the upstream
+documentation, and force every consumer to learn two names for the
+same thing.
+
+**Flag any new helper module that:**
+- Re-exports an upstream API surface (OpenTelemetry, httpx,
+  temporalio, pydantic, etc.) with one-line wrapper functions whose
+  body is essentially the upstream call.
+- Adds a `def record_*` / `def emit_*` / `def get_*` that only
+  calls the upstream client with no other logic.
+
+Prefer exposing the upstream object directly and letting callers
+use the native API. Add a wrapper only when it provides typed
+arguments, default labels, retries, deadlines, validation, or other
+real value beyond renaming.
+
+**Severity:** Minor. Suggest removal; do not block.
 
 ---
 

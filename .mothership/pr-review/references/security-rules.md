@@ -44,6 +44,39 @@ v3 uses typed `CredentialRef` → `Credential` pattern. Flag:
 - Credential values passed through Temporal payloads (use `CredentialRef` reference, not the value)
 - Missing credential validation before use
 
+### Credential material and bulk data must use separate storage components (Critical)
+
+Credentials (keytabs, certificates, private keys, OAuth refresh
+tokens, kerberos configs, any file whose disclosure compromises
+authentication) MUST be retrieved through a storage component that is
+not also used for extracted customer data or workflow artifacts.
+Sharing a component means one IAM misconfiguration, one over-broad
+role, or one SSRF lapse exposes both secrets and data.
+
+**Flag any change that:**
+- Adds a new branch / code path to credential resolution
+  (`application_sdk/credentials/*`, anything matching
+  `resolve_credential*`, `load_secret*`, `fetch_keytab*`) that reads
+  from a storage binding, object-store component, or Dapr state
+  component already used elsewhere for non-credential data (extract
+  outputs, metadata dumps, query logs, intermediate artifacts).
+- Uses the same env-var-named binding (`DEPLOYMENT_OBJECT_STORE_NAME`,
+  `OUTPUT_*`, anything wired to data flow) for secret retrieval.
+- Reads files of types typically containing secrets (`*.pem`, `*.key`,
+  `*.keytab`, `*.p12`, `*.jks`, `*credential*`, `*secret*`, `*token*`)
+  through a binding component name that the same app uses for data.
+
+**Expected pattern:** credential reads go through a dedicated secret-
+store binding, a separate object-store binding with stricter IAM/KMS,
+or the connector's `CredentialResolver`. If a PR argues that a shared
+component is the only practical path (e.g. value-size limits in the
+secret manager), the PR description MUST cite the separate IAM
+boundary that protects the credential path — otherwise escalate to
+design review.
+
+**Severity:** Critical (SEC). Counts as a G1 guardrail violation when
+the same component name appears in both credential and data code paths.
+
 ---
 
 ## SQL Injection (Critical)
@@ -93,6 +126,32 @@ file_path = os.path.join(base_dir, user_provided_path)
 file_path = os.path.join(base_dir, os.path.basename(user_provided_path))
 # Or validate: assert not user_provided_path.startswith('..')
 ```
+
+### Validator coverage must be uniform across same-class fields (Critical)
+
+When a Pydantic model has a class of string fields that all flow to
+the same risky sink (SQL, shell, file path, log filter, regex
+compilation), every field of that class on the model MUST use the
+same validator — not a weaker per-field shortcut.
+
+**Flag any change that:**
+- Adds a string field to a model where sibling fields already use a
+  named validator (e.g. `@field_validator('foo')` calling
+  `validate_filter_no_sql_injection`, `validate_no_shell_meta`,
+  `validate_path_no_traversal`, etc.), and the new field omits it.
+- Substitutes `Field(pattern=…)` for a named validator when the named
+  validator catches multi-character patterns (`--`, `/*`, `*/`,
+  shell expansions, path traversals) that the regex doesn't.
+- Adds a model with only some fields validated for the same sink
+  class — e.g. two SQL-bound fields where one has the validator and
+  the other doesn't.
+
+**How to detect quickly:** grep the model file for `@field_validator`
+and `validate_*` function calls. Any new string field on the same
+class without one of these is a candidate finding.
+
+**Severity:** Critical (SEC). Partial mitigation on an injection path
+is functionally no mitigation.
 
 ---
 
@@ -148,6 +207,35 @@ Flag:
 
 ---
 
+## Authorization and Bypass Paths
+
+### Bypass paths must be keyed on server-verifiable facts, not caller input (Critical)
+
+Any conditional in a CI workflow, service handler, or release flow
+that skips a security check, scoping check, or release gate MUST be
+keyed on a fact the server can verify independently — not on a value
+the caller supplies.
+
+**Flag any change that:**
+- Adds an `if:` / `continue-on-error` / early-return condition in a
+  GitHub Actions workflow keyed on a `workflow_call` input,
+  `workflow_dispatch` input, or `client_payload` value that, when
+  set, skips: tenant scoping, release-branch verification, tag-
+  ancestry verification, or any security/compliance gate.
+- References a `release_tag`, `version`, `ref`, or `tenant` input
+  without a server-verifiable check that the value matches reality:
+  - Tag ancestry: `git merge-base --is-ancestor "$TAG" origin/main`
+  - Trigger ref: `github.ref == format('refs/tags/{0}', inputs.release_tag)`
+  - Tenant identity: resolved from a SAML/OIDC claim, never from a
+    request field.
+- Treats whitespace, empty strings, or null values as "skip the check"
+  (an attacker can always send empty input).
+
+**Severity:** Critical (SEC). Same attack class as trusting
+`tenant_id` from a request body.
+
+---
+
 ## Async Security
 
 ### Blocking in Event Loop (Important)
@@ -195,72 +283,7 @@ Flag introduction of known-vulnerable patterns:
 
 ---
 
-## Error Information Disclosure (Important)
-
-- Stack traces must not be returned in HTTP responses to clients
-- Error messages to external callers must not reveal internal paths, SQL queries, or infrastructure details
-- Use `HandlerError(message, http_status)` with user-safe messages
-
-```python
-# BAD
-except Exception as e:
-    return {"error": str(e)}  # leaks internal details
-
-# GOOD
-except Exception as e:
-    logger.error("Internal error: %s", e, exc_info=True)
-    raise HandlerError("An internal error occurred", http_status=500) from e
-```
-
----
-
-## Supply Chain (Important)
-
-- Dockerfile `FROM` must reference specific versions, not `latest`
-- `ghcr.io/atlanhq/application-sdk-main:3.0.0` — pinned
-- CI workflows must pin action versions to SHAs
-- No `curl | bash` patterns for installing tools in Dockerfiles
-
----
-
-## Retro Learnings — 2026-05-20
-
-> Each subsection below is a generalized rule. Concrete incidents that
-> surfaced the rule are linked in `retro-2026-05-20.md` and prior
-> entries in this section.
-
-### Credential material and bulk data must use separate storage components (Critical)
-
-Credentials (keytabs, certificates, private keys, OAuth refresh
-tokens, kerberos configs, any file whose disclosure compromises
-authentication) MUST be retrieved through a storage component that is
-not also used for extracted customer data or workflow artifacts.
-Sharing a component means one IAM misconfiguration, one over-broad
-role, or one SSRF lapse exposes both secrets and data.
-
-**Flag any change that:**
-- Adds a new branch / code path to credential resolution
-  (`application_sdk/credentials/*`, anything matching
-  `resolve_credential*`, `load_secret*`, `fetch_keytab*`) that reads
-  from a storage binding, object-store component, or Dapr state
-  component already used elsewhere for non-credential data (extract
-  outputs, metadata dumps, query logs, intermediate artifacts).
-- Uses the same env-var-named binding (`DEPLOYMENT_OBJECT_STORE_NAME`,
-  `OUTPUT_*`, anything wired to data flow) for secret retrieval.
-- Reads files of types typically containing secrets (`*.pem`, `*.key`,
-  `*.keytab`, `*.p12`, `*.jks`, `*credential*`, `*secret*`, `*token*`)
-  through a binding component name that the same app uses for data.
-
-**Expected pattern:** credential reads go through a dedicated secret-
-store binding, a separate object-store binding with stricter IAM/KMS,
-or the connector's `CredentialResolver`. If a PR argues that a shared
-component is the only practical path (e.g. value-size limits in the
-secret manager), the PR description MUST cite the separate IAM
-boundary that protects the credential path — otherwise escalate to
-design review.
-
-**Severity:** Critical (SEC). Counts as a G1 guardrail violation when
-the same component name appears in both credential and data code paths.
+## External API Integration
 
 ### Content compatibility at the edge gateway (Critical)
 
@@ -297,57 +320,34 @@ edge gateway, the PR description must state one of:
 representative content.
 
 **Severity:** Critical (SEC + integration). Block until evidence is
-attached. This is a recurring failure mode — past incidents include
-private-key-passphrase contents tripping XSS validation; future
-incidents will look similar.
+attached. This is a recurring failure mode — payloads containing
+PEM-encoded keys, templating syntax, or angle-bracketed placeholders
+have historically tripped XSS validation on edge routes.
 
-### Bypass paths must be keyed on server-verifiable facts, not caller input (Critical)
+---
 
-Any conditional in a CI workflow, service handler, or release flow
-that skips a security check, scoping check, or release gate MUST be
-keyed on a fact the server can verify independently — not on a value
-the caller supplies.
+## Error Information Disclosure (Important)
 
-**Flag any change that:**
-- Adds an `if:` / `continue-on-error` / early-return condition in a
-  GitHub Actions workflow keyed on a `workflow_call` input,
-  `workflow_dispatch` input, or `client_payload` value that, when
-  set, skips: tenant scoping, release-branch verification, tag-
-  ancestry verification, or any security/compliance gate.
-- References a `release_tag`, `version`, `ref`, or `tenant` input
-  without a server-verifiable check that the value matches reality:
-  - Tag ancestry: `git merge-base --is-ancestor "$TAG" origin/main`
-  - Trigger ref: `github.ref == format('refs/tags/{0}', inputs.release_tag)`
-  - Tenant identity: resolved from a SAML/OIDC claim, never from a
-    request field.
-- Treats whitespace, empty strings, or null values as "skip the check"
-  (an attacker can always send empty input).
+- Stack traces must not be returned in HTTP responses to clients
+- Error messages to external callers must not reveal internal paths, SQL queries, or infrastructure details
+- Use `HandlerError(message, http_status)` with user-safe messages
 
-**Severity:** Critical (SEC). Same attack class as trusting
-`tenant_id` from a request body.
+```python
+# BAD
+except Exception as e:
+    return {"error": str(e)}  # leaks internal details
 
-### Validator coverage must be uniform across same-class fields (Critical)
+# GOOD
+except Exception as e:
+    logger.error("Internal error: %s", e, exc_info=True)
+    raise HandlerError("An internal error occurred", http_status=500) from e
+```
 
-When a Pydantic model has a class of string fields that all flow to
-the same risky sink (SQL, shell, file path, log filter, regex
-compilation), every field of that class on the model MUST use the
-same validator — not a weaker per-field shortcut.
+---
 
-**Flag any change that:**
-- Adds a string field to a model where sibling fields already use a
-  named validator (e.g. `@field_validator('foo')` calling
-  `validate_filter_no_sql_injection`, `validate_no_shell_meta`,
-  `validate_path_no_traversal`, etc.), and the new field omits it.
-- Substitutes `Field(pattern=…)` for a named validator when the named
-  validator catches multi-character patterns (`--`, `/*`, `*/`,
-  shell expansions, path traversals) that the regex doesn't.
-- Adds a model with only some fields validated for the same sink
-  class — e.g. two SQL-bound fields where one has the validator and
-  the other doesn't.
+## Supply Chain (Important)
 
-**How to detect quickly:** grep the model file for `@field_validator`
-and `validate_*` function calls. Any new string field on the same
-class without one of these is a candidate finding.
-
-**Severity:** Critical (SEC). Partial mitigation on an injection path
-is functionally no mitigation.
+- Dockerfile `FROM` must reference specific versions, not `latest`
+- `ghcr.io/atlanhq/application-sdk-main:3.0.0` — pinned
+- CI workflows must pin action versions to SHAs
+- No `curl | bash` patterns for installing tools in Dockerfiles
