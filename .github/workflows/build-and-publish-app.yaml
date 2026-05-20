@@ -66,9 +66,10 @@ on:
         type: string
         default: ""
       unit_tests_workflow_file:
-        description: "Filename of the workflow in the caller's repo that runs the app's unit tests (e.g. 'unit-tests.yml', 'tests.yml'). The gate looks for an existing successful run of this workflow on the publish SHA; if none is found, it dispatches the workflow on the publish ref and waits for the new run. The target workflow MUST declare 'workflow_dispatch:' in its 'on:' block. See docs/standards/unit-tests-gate.md."
-        required: true
+        description: "Filename of the workflow in the caller's repo that runs the app's unit tests. Defaults to 'unit-tests.yml' — the conventional filename used by most apps. Override when the app uses a different filename (e.g. 'tests.yml', 'checks.yml'). The gate looks for an existing successful run of this workflow on the publish SHA; if none is found, it dispatches the workflow on the publish ref and waits for the new run. The target workflow MUST declare 'workflow_dispatch:' in its 'on:' block. See docs/standards/unit-tests-gate.md."
+        required: false
         type: string
+        default: "unit-tests.yml"
     secrets:
       ORG_PAT_GITHUB:
         required: true
