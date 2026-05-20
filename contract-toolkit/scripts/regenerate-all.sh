@@ -17,6 +17,11 @@ for pkl in examples/*/app.pkl; do
   [ -f "$pkl" ] || continue
 
   example_dir="$(dirname "$pkl")"
+
+  # Remove known generated paths before eval so stale artifacts don't linger.
+  rm -rf "${example_dir}/app/generated"
+  rm -f  "${example_dir}/atlan.yaml" "${example_dir}/app.yaml"
+
   echo ":: $pkl → $example_dir"
   if ! pkl eval -m "$example_dir" "$pkl"; then
     echo "FAIL: $pkl"
