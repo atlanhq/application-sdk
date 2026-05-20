@@ -162,6 +162,22 @@ jobs:
             core.setOutput('base_ref', pr.base.ref);
             core.setOutput('html_url', pr.html_url);
 
+      - name: Set sdk-review status to pending
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: process.env.HEAD_SHA,
+              state: 'pending',
+              context: 'sdk-review',
+              description: 'SDK Review in progress (up to ~2h)',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+
       - name: Connect to VPN (attempt 1/3)
         id: vpn1
         uses: atlanhq/github-actions/globalprotect-connect-action@main
@@ -326,3 +342,27 @@ jobs:
           fi
 
           echo "SDK Review completed successfully."
+
+      - name: Set sdk-review status to failure (only on workflow failure)
+        if: failure() && steps.pr.outputs.head_sha != ''
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Only fires when an earlier step failed AND the orchestration
+            // never got to post its own terminal state. The orchestration
+            // (Phase 3) sets success/failure based on the actual verdict;
+            // this is a safety net for "workflow died before mothership
+            // returned" cases (VPN failure, 401 on the API key, network
+            // dropped during the 2h block). Without this, the status would
+            // stay pending forever.
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: process.env.HEAD_SHA,
+              state: 'failure',
+              context: 'sdk-review',
+              description: 'SDK Review workflow failed — see logs',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
