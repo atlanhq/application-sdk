@@ -546,6 +546,74 @@ class TestLogWorkflowInboundInterceptor:
 
         assert len(interceptor._correlation_id) == 36
 
+    async def test_reads_correlation_id_from_typed_object_with_attr(self, interceptor):
+        # Real-world v3 case: the SDK-generated workflow wrapper takes a
+        # typed ``Input`` instance (Pydantic model / dataclass / namespace).
+        # args[0] reaches the interceptor as that typed object, not a dict.
+        # We must still find correlation_id via attribute access.
+        @dataclass
+        class TypedInput:
+            workflow_id: str = "wf-1"
+            correlation_id: str = "from-typed-input"
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=[TypedInput()])
+            )
+
+        assert interceptor._correlation_id == "from-typed-input"
+
+    async def test_reads_correlation_id_from_pydantic_extra_bag(self, interceptor):
+        # Pydantic v2 models with ``model_config = ConfigDict(extra='allow')``
+        # stash undeclared fields on ``__pydantic_extra__``. The caller-supplied
+        # ``correlation_id`` lives there when the model doesn't declare it as
+        # a field. Cover that bag too.
+        class FakeExtraBagModel:
+            def __init__(self):
+                # No declared correlation_id attribute — only on the extras
+                # dict. ``getattr(self, 'correlation_id', None)`` returns None.
+                self.__pydantic_extra__ = {"correlation_id": "from-extras-bag"}
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=[FakeExtraBagModel()])
+            )
+
+        assert interceptor._correlation_id == "from-extras-bag"
+
+    async def test_falls_through_typed_object_without_correlation_id(self, interceptor):
+        # Typed object that genuinely has no correlation_id (no attribute
+        # declared, no pydantic extras bag) falls through to priority 4.
+        # Common case: v3 workflows whose Input contract doesn't carry the
+        # correlation field at all — those callers should use memo / header.
+        @dataclass
+        class TypedInputWithoutCorrId:
+            workflow_id: str = "wf-1"
+            some_other_field: int = 42
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=[TypedInputWithoutCorrId()])
+            )
+
+        # uuid4 fallback — 36 chars with hyphens.
+        assert len(interceptor._correlation_id) == 36
+
     async def test_reads_correlation_id_from_header(self, interceptor):
         payload = _encode_header("header-corr-id")
         headers = {"x-correlation-id": payload}
