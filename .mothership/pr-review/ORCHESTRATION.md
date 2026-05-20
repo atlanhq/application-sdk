@@ -24,8 +24,8 @@ you have — a partial review is better than no review.
 | Massive (20K+) | ~26 min | 35 min |
 
 If the sandbox has been running past the hard stop, finalize immediately
-with whatever findings you have. Submit the review — never exit without
-calling submit_review.
+with whatever findings you have. Post the review summary + commit
+status — never exit without posting to the PR.
 
 ---
 
@@ -521,7 +521,8 @@ Print: `[Phase 2 complete] <N> findings, verdict=<verdict>`
 
 ### 3a. Build Payload
 
-For each finding, build the object matching submit_review schema.
+For each finding, build the object matching the in-sandbox review
+payload schema (used for the inline-comment loop in 3f below).
 
 **Strip fields not in the schema** — the handler will 422 on unknown fields.
 Only include: title, pattern_id, severity, category, confidence, file, line,
@@ -543,10 +544,10 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
   **Fix:** <exact code suggestion if PATCH scope>
   ```
 
-### 3c. Label Management (after submit_review succeeds)
+### 3c. Label Management (after posting the review in 3f)
 
-The submit_review handler swaps generic labels (`mothership-review → mothership-reviewed`).
-You manage SDK-specific labels via gh CLI:
+There is no mothership-side label handler. You manage all
+SDK-specific labels via the `gh` CLI from within the sandbox:
 
 ```bash
 # $GITHUB_TOKEN is set in Phase 0 step 3 (injected by dispatcher)
@@ -641,14 +642,33 @@ Use our SDK review template (not mothership's generic template):
 
 ### 3f. Submit
 
+There is no mothership-side `submit-review` endpoint. Use the
+`gh` CLI directly from the sandbox to post the summary as a PR
+comment and each finding as an inline review comment.
+
 ```bash
-curl -X POST "$PROXY_BASE/sandbox/submit-review" \
-  -H "Authorization: Bearer $PROXY_JWT" \
-  -H "Content-Type: application/json" \
-  --data-binary @/tmp/review-payload.json
+# Summary comment (the body built in 3a, including the
+# <!-- SDK_REVIEW_V2 --> marker and the <!-- REVIEW_DATA --> JSON):
+gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
+
+# Inline comments — use `gh pr review` (one batched review) or
+# `gh api pulls/<n>/comments` per finding. Both routes work; prefer
+# `gh pr review --body-file ... --comment` for a single bundled
+# review.
+gh pr review "$PR_NUMBER" --repo "$REPO" --comment \
+  --body-file /tmp/review-summary.md
+
+# Commit status — set the sdk-review check explicitly:
+gh api "repos/$REPO/statuses/$HEAD_SHA" \
+  -f context="sdk-review" \
+  -f state="$STATE" \
+  -f description="$DESCRIPTION"
+# where STATE ∈ success|failure|pending and DESCRIPTION ≤ 140 chars
 ```
 
-Retry up to 3x on 422, once on 5xx.
+Retry once on 5xx from the GitHub API. On 422 (malformed inline
+comment because the line is not in the diff), drop that one finding
+and continue with the rest.
 
 ### 3g. CI Check — Fix Failures Before Final Verdict
 
@@ -825,7 +845,8 @@ Print: `[CI-Fix complete] <fixed and re-approved | needs manual fix>`
 
 ## If You Cannot Finish
 
-Always call submit_review before exiting. A PR with no review comment
+Always post the summary comment + set the commit status before
+exiting (see Phase 3f). A PR with no review comment
 and no status update is the worst outcome.
 
 Submit minimal:
