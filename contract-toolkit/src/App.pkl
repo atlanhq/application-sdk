@@ -2283,7 +2283,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     credFieldLine +
     publishFieldBlock
   text =
-    "# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.\n" +
+    "# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.\n" +
     "# To regenerate: pkl eval -m . contract/app.pkl\n" +
     "from __future__ import annotations\n" +
     (if (!objectStringCoercionFields.isEmpty) "import json\n" else "") +
@@ -2420,7 +2420,7 @@ local atlanYamlData: Mapping<String, Any> =
   deepMergeMapping(deepMergeMapping(generatedAtlanYamlData, metadata), atlanYamlOverrides)
 
 local generatedYamlHeader: String =
-  "# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.\n" +
+  "# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.\n" +
   "# To regenerate: pkl eval -m . contract/app.pkl\n"
 
 local atlanYamlOutput: FileOutput = new FileOutput {
