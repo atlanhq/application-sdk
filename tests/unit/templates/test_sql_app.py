@@ -909,166 +909,6 @@ class TestCanonicalStoragePaths:
         assert persistent_ref.tier == StorageTier.PERSISTENT
 
 
-class TestUploadToAtlanSkipIfExists:
-    """``upload_to_atlan`` threads ``UploadInput.skip_if_exists``
-    through to ``transfer_upload`` so callers control the directory
-    walk's SHA-compare-and-skip behaviour.
-
-    Default (``True``) is the right choice after BLDX-1281: every
-    ``raw_file`` / ``transformed_file`` ref the SqlApp emits carries
-    a pre-set canonical ``storage_path``, so the interceptor's
-    persist step has already uploaded every entity file to the same
-    key this walk would produce. With ``skip_if_exists=True`` the
-    walk SHA-compares each local file against the remote sidecar
-    and short-circuits — no doubled network IO, no doubled
-    object-store write cost. The walk still uploads any side-files
-    a subclass wrote under ``output_path`` outside the FileReference
-    contract (e.g. mysql-app's ``lineage_stage/`` pipeline files).
-
-    Callers that genuinely want overwrites (force re-upload regardless
-    of the stored hash, or apps that don't use the interceptor at
-    all) set ``skip_if_exists=False`` on the input.
-    """
-
-    async def test_upload_to_atlan_defaults_skip_if_exists_to_true(self, app, tmp_path):
-        """Pin the default: ``UploadInput.skip_if_exists`` is ``True``
-        out of the box, and ``upload_to_atlan`` forwards that to
-        ``transfer_upload``. Without the default, every single-pod
-        SqlApp run would double-upload its raw/transformed files.
-        """
-        from application_sdk.contracts.types import FileReference
-        from application_sdk.templates.contracts.base_metadata_extraction import (
-            UploadInput,
-        )
-
-        # Default-constructed UploadInput must opt in to skip.
-        default_input = UploadInput(output_path=str(tmp_path))
-        assert default_input.skip_if_exists is True, (
-            "UploadInput.skip_if_exists must default to True so SqlApp "
-            "single-pod runs don't double-upload canonical-key files. "
-            f"got: {default_input.skip_if_exists!r}"
-        )
-
-        # ``transfer_upload`` is imported as ``transfer_upload`` inside
-        # sql_app.py — patch at that import site so the @task body
-        # sees the mock. ``build_output_path`` is also patched because
-        # ``upload_to_atlan`` calls it for the storage_path argument
-        # and we're running outside a Temporal activity context.
-        with (
-            patch(
-                "application_sdk.templates.sql_app.transfer_upload",
-                new=AsyncMock(
-                    return_value=MagicMock(
-                        ref=FileReference(file_count=0),
-                        synced=True,
-                    )
-                ),
-            ) as mock_upload,
-            patch(
-                "application_sdk.templates.sql_app.build_output_path",
-                return_value="artifacts/apps/test/workflows/wf/run",
-            ),
-        ):
-            await app.upload_to_atlan(default_input)
-
-        mock_upload.assert_called_once()
-        assert mock_upload.call_args.kwargs.get("skip_if_exists") is True, (
-            "upload_to_atlan must forward UploadInput.skip_if_exists to "
-            "transfer_upload. Got kwargs: "
-            f"{mock_upload.call_args.kwargs}"
-        )
-
-    async def test_upload_to_atlan_threads_skip_if_exists_false(self, app, tmp_path):
-        """Callers opting out of skip — e.g. recovery workflows that
-        need to force re-upload — must reach ``transfer_upload``
-        unchanged. Pins the override path so the kwarg isn't
-        silently dropped by ``upload_to_atlan``.
-        """
-        from application_sdk.contracts.types import FileReference
-        from application_sdk.templates.contracts.base_metadata_extraction import (
-            UploadInput,
-        )
-
-        force_input = UploadInput(output_path=str(tmp_path), skip_if_exists=False)
-
-        with (
-            patch(
-                "application_sdk.templates.sql_app.transfer_upload",
-                new=AsyncMock(
-                    return_value=MagicMock(
-                        ref=FileReference(file_count=0),
-                        synced=True,
-                    )
-                ),
-            ) as mock_upload,
-            patch(
-                "application_sdk.templates.sql_app.build_output_path",
-                return_value="artifacts/apps/test/workflows/wf/run",
-            ),
-        ):
-            await app.upload_to_atlan(force_input)
-
-        assert mock_upload.call_args.kwargs.get("skip_if_exists") is False, (
-            "upload_to_atlan must propagate skip_if_exists=False to "
-            "transfer_upload when the caller opts out. Got kwargs: "
-            f"{mock_upload.call_args.kwargs}"
-        )
-
-    async def test_upload_to_atlan_actually_skips_files_already_in_store(
-        self, app, tmp_path
-    ):
-        """End-to-end against a real local store: when a file already
-        exists in the store with the matching SHA (as the interceptor
-        would have put there after an extract/transform activity),
-        the subsequent ``upload_to_atlan`` walk SHA-compares and
-        skips re-uploading it. Pins the actual behaviour, not just
-        the kwarg passthrough.
-        """
-        from application_sdk.contracts.types import FileReference
-        from application_sdk.storage.factory import create_local_store
-        from application_sdk.storage.reference import persist_file_reference
-        from application_sdk.templates.contracts.base_metadata_extraction import (
-            UploadInput,
-        )
-
-        # ── Phase 1: simulate the interceptor's canonical-key upload.
-        store = create_local_store(tmp_path / "store")
-        raw_dir = tmp_path / "raw" / "database"
-        raw_dir.mkdir(parents=True)
-        raw_local = raw_dir / "records.json"
-        raw_local.write_text('{"database_name": "db1"}\n')
-
-        canonical_key = "artifacts/apps/test/workflows/wf/run/raw/database/records.json"
-        ref = FileReference(
-            local_path=str(raw_local),
-            storage_path=canonical_key,
-            tier=StorageTier.TRANSIENT,
-        )
-        await persist_file_reference(store, ref, output_path="ignored")
-
-        # ── Phase 2: run upload_to_atlan. The walk finds the same
-        # local file the interceptor already uploaded; the default
-        # ``skip_if_exists=True`` should make ``transfer_upload``
-        # short-circuit on SHA match.
-        from application_sdk.storage import ops as storage_ops
-
-        with patch.object(storage_ops, "_resolve_store", return_value=store):
-            with patch(
-                "application_sdk.templates.sql_app.build_output_path",
-                return_value="artifacts/apps/test/workflows/wf/run",
-            ):
-                result = await app.upload_to_atlan(
-                    UploadInput(output_path=str(tmp_path))
-                )
-
-        # The walk completed without error. The exact byte count is
-        # an implementation detail of ``transfer_upload``; what we
-        # care about is that the call succeeded with the skip in
-        # effect (kwarg propagation is asserted in the unit test
-        # above).
-        assert result is not None, "upload_to_atlan returned no result"
-
-
 class TestTransformInputLegacyFields:
     """Sanity tests for the deprecated-but-retained fields on
     :class:`TransformInput` (``file_names`` / ``chunk_start`` /
@@ -1273,9 +1113,6 @@ class TestRunThreadsRawFileRefs:
             patch.object(
                 app, "transform_columns", side_effect=make_transform("column")
             ),
-            patch.object(
-                app, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
-            ),
             patch.object(app, "_resolve_credential_ref", return_value=None),
             patch(
                 "application_sdk.templates.sql_app._temporal_workflow.info",
@@ -1426,7 +1263,7 @@ class TestRunOutputPrefixes:
         return app
 
     def _patch_extract_tasks(self):
-        """Return list of patches that mock all extract_* + transform_* + upload_to_atlan.
+        """Return list of patches that mock all extract_* + transform_*.
 
         Use real ``ExtractionTaskOutput`` instances (not MagicMocks) for
         the extract returns — ``run()`` reads ``.raw_file`` and threads
@@ -1490,9 +1327,6 @@ class TestRunOutputPrefixes:
                 SqlApp,
                 "transform_columns",
                 new=AsyncMock(return_value=MagicMock(total_record_count=10)),
-            ),
-            patch.object(
-                SqlApp, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
             ),
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
         ]

@@ -13,7 +13,12 @@ Replaces ``SqlMetadataExtractor``, ``SqlQueryExtractor``, and
 * Per-entity asset mappers (``map_database`` / ``map_schema`` /
   ``map_table`` / ``map_column`` / ``map_procedure``) — direct
   pyatlan_v9 ``Asset`` construction, no YAML transformer.
-* ``upload_to_atlan`` for output migration to the upstream object store.
+* Per-entity ``FileReference`` emission with pre-set canonical
+  ``storage_path`` keys (``<run_prefix>/raw/<entity>/records.json`` /
+  ``<run_prefix>/transformed/<entity>/entities.json``) — the activity
+  interceptor's persist step uploads each one to that exact key, so
+  downstream publish discovers the data at the path it expects with
+  no separate upload step needed (BLDX-1281).
 * ``build_task_input()`` as public API for ``run()`` overrides (BLDX-1138).
 * ``extract_views()`` / ``extract_procedures()`` /
   ``transform_views()`` / ``transform_procedures()`` for the optional
@@ -78,11 +83,6 @@ from application_sdk.credentials.ref import CredentialRef
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.transfer import upload as transfer_upload
-from application_sdk.templates.contracts.base_metadata_extraction import (
-    UploadInput,
-    UploadOutput,
-)
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -381,54 +381,6 @@ class SqlApp(App):
             input=input,
         )
 
-    # ── Upload ──────────────────────────────────────────────────────────
-
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
-        """Upload transformed output to the upstream Atlan store.
-
-        Threads ``input.skip_if_exists`` through to ``transfer_upload``
-        so callers control whether the directory walk SHA-compares
-        each local file against the remote sidecar and skips matches.
-        Default (``True``) is the right choice after BLDX-1281: the
-        v3 SqlApp's per-entity extract/transform activities pre-set
-        canonical ``storage_path`` values on the ``FileReference``
-        objects they emit, so the activity interceptor already
-        uploads every raw/transformed file to the same key this walk
-        would produce. With the skip on, the walk becomes a safety
-        net for side-files (``lineage_stage/``,
-        pre-FileReference ``extras-procedure/`` outputs, etc.) the
-        per-entity contract doesn't cover.
-
-        Pre-BLDX-1281 this walk was load-bearing for the publish
-        handoff — it was the only thing populating
-        ``<run_prefix>/transformed/<entity>/entities.json``. Now the
-        interceptor's pre-set ``storage_path`` lands the file at the
-        canonical key directly, regardless of which pod ran the
-        activity, and this walk is purely a safety net. See
-        ``UploadInput.skip_if_exists`` for when to override the
-        default.
-        """
-        output_path = input.output_path or os.path.join(
-            TEMPORARY_PATH, build_output_path()
-        )
-        if not output_path:
-            return UploadOutput(migrated_files=0, total_files=0)
-
-        result = await transfer_upload(
-            local_path=output_path,
-            storage_path=build_output_path(),
-            skip_if_exists=input.skip_if_exists,
-        )
-        file_count = result.ref.file_count if result.ref else 0
-        logger.info("Uploaded %d files to Atlan (synced=%s)", file_count, result.synced)
-        return UploadOutput(
-            migrated_files=file_count,
-            total_files=file_count,
-        )
-
     # =====================================================================
     # Asset mapper stubs — connectors override these
     # =====================================================================
@@ -557,12 +509,22 @@ class SqlApp(App):
             ),
         )
 
-        # ── Phase 3: Upload ─────────────────────────────────────────────
-        # Always call upload — upload_to_atlan auto-resolves output_path in activity context.
-        upload_input = UploadInput(
-            output_path=input.output_path,
-        )
-        await self.upload_to_atlan(upload_input)
+        # ── Phase 3: ExtractionOutput ───────────────────────────────────
+        # No explicit upload step — every ``raw_file`` / ``transformed_file``
+        # ``FileReference`` emitted by the extract/transform tasks above
+        # carries a pre-set canonical ``storage_path``
+        # (``<run_prefix>/raw/<entity>/records.json`` /
+        # ``<run_prefix>/transformed/<entity>/entities.json``), and the
+        # activity interceptor's persist step has already uploaded each
+        # one to that key. Publish discovers transformed assets by
+        # walking ``transformed/<entity>/`` prefixes, so all the data
+        # the downstream pipeline needs is already in object store
+        # before this method returns. Subclasses that produce
+        # side-files outside the FileReference contract should issue
+        # their own ``App.upload(...)`` call (or override ``run()`` to
+        # do so) — the template no longer auto-walks ``output_path``
+        # because the walk was redundant with the canonical-key
+        # uploads and didn't cross pod boundaries safely (BLDX-1281).
 
         connection_qn = ""
         if input.connection and input.connection.attributes:
