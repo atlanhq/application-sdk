@@ -1,22 +1,41 @@
 # Code Review
 
-PRs to `main` are reviewed by the SDK Reviewer agent running on mothership.
+PRs to `main` are reviewed by the SDK Reviewer agent running in a
+Cloudflare sandbox via mothership's Rover Direct API. The orchestration
+that drives the review lives in this repo at
+`.mothership/pr-review/ORCHESTRATION.md` — mothership only provides the
+runtime.
 
 ## Trigger
 
 Comment on any PR:
 
-| Command | What It Does |
+| What you type | What happens |
 |---|---|
-| `@sdk-review` | Review only — findings posted, author fixes manually |
-| `@sdk-review auto-complete` | Review + auto-fix loop (max 3 iterations) |
-| `@sdk-review challenge: <reason>` | Re-evaluate disputed findings with your context |
-| `@sdk-review override: <reason>` | Force-pass (repo admins only) |
-| `@sdk-review stop` | Cancel in-progress review |
+| `@sdk-review` | Standard review. The orchestration picks the right mode based on PR state and prior review history. |
+| `@sdk-review <free-form text>` | Same, but the trailing text is forwarded as `COMMENTER_INTENT`. The agent interprets it and decides what to do — auto-fix, dispute a finding, stop, override, retrospect, focus on a specific area, etc. |
 
-Extra context is passed through: `@sdk-review auto-complete Fix type annotations but skip perf findings`
+Examples:
 
-Only repo OWNER/MEMBER/COLLABORATOR can trigger. External fork contributors cannot.
+- `@sdk-review please also fix the lint warnings` — review and auto-fix
+  any PATCH-scope findings.
+- `@sdk-review focus on the new metric reader code` — standard review,
+  but the agent weights that area extra.
+- `@sdk-review stop` — cancel an in-flight review.
+- `@sdk-review override: rule does not apply to internal helper` —
+  admin force-pass (the orchestration verifies the commenter is a repo
+  admin before honouring this).
+- `@sdk-review challenge: ARCH-001 — this is intentional because …` —
+  re-evaluate a specific finding with the author's reasoning.
+- `@sdk-review retrospect` — analyse recent merged PRs and surface
+  recurring patterns.
+
+There is no command enumeration in the workflow YAML. All intent
+inference happens in `.mothership/pr-review/ORCHESTRATION.md`
+(§Intent Inference) so it can be tuned without editing CI.
+
+Only repo OWNER, MEMBER, or COLLABORATOR can trigger. External fork
+contributors cannot.
 
 ## What It Checks
 
@@ -45,24 +64,33 @@ Only repo OWNER/MEMBER/COLLABORATOR can trigger. External fork contributors cann
 ### Cross-Model Review
 
 The review uses two model families to eliminate bias:
-- **GPT-5.3-codex** reviews the code (3 domain agents)
-- **Claude Opus** challenges every GPT finding (adversarial)
+
+- **Claude Opus 4.6** reviews the code (3 domain agents in parallel)
+- **GPT-5.3-codex** challenges every finding (adversarial)
 - Findings where the models disagree are dropped (model bias)
 - Guardrail violations are always kept regardless of model agreement
 
-## Auto-Complete Loop
+## Auto-Fix Loop
 
-When triggered with `auto-complete`:
-1. Bot reviews the PR
-2. Bot fixes PATCH-scope findings (exact code changes)
-3. Bot re-reviews with the new diff
-4. Repeats until clean or max 3 iterations
-5. MIGRATE/REFACTOR/DESIGN_CHANGE scope findings are left for humans
+When the human's intent text asks the agent to fix (e.g.
+`@sdk-review apply fixes`):
+
+1. Review the PR
+2. Apply PATCH-scope findings (exact code changes from the review)
+3. Push the fix commit
+4. Re-review with the new diff
+5. Repeat until clean or max 3 iterations
+
+The whole loop runs inside the same Cloudflare sandbox via Rover
+Direct's `session_id` resume — no re-dispatch from CI. MIGRATE,
+REFACTOR, and DESIGN_CHANGE scope findings are left for humans.
 
 ## Disputing a Finding
 
-Comment `@sdk-review challenge: <your explanation>`. The next review run
-re-evaluates all findings against your context:
+Comment `@sdk-review challenge: <your explanation>` (or any equivalent
+phrasing — the orchestration parses intent, not exact commands). The
+next review run re-evaluates the cited findings against your context:
+
 - If your reasoning is valid: finding is dropped
 - If partially valid: severity is downgraded
 - If not valid: finding stays with explanation
@@ -70,19 +98,42 @@ re-evaluates all findings against your context:
 ## Override (Admin Only)
 
 `@sdk-review override: <reason>` — sets the status check to success.
-Only repo admins can do this. Logged for audit trail.
+Only repo admins can do this; the orchestration verifies via
+`gh api repos/<repo>/collaborators/<commenter>/permission` before
+honouring the override. Logged for audit trail.
 
 ## Merge Queue
 
 After a PR is approved, the merge queue workflow automatically:
+
 - Updates the branch when it falls behind main
 - Lets GitHub's native auto-merge handle the final squash
 - Labels `needs-rebase` if conflicts arise
+- Auto-triggers `@sdk-review` if post-update CI fails on an approved PR
 
 Enable auto-merge on the PR or add the `auto-merge` label to opt in.
 
+## Required configuration
+
+The `sdk-review` and `sdk-evolution-cron` workflows need these repo-level
+secrets and variables:
+
+| Kind | Name | Purpose |
+|---|---|---|
+| Secret | `HARNESS_TOKEN` | Bearer token for mothership's `/api/sandbox/execute` (must be a valid entry in mothership's `SANDBOX_API_KEYS` map). |
+| Secret | `GLOBALPROTECT_USERNAME` | VPN auth — `mothership.atlan.dev` is on the private network. |
+| Secret | `GLOBALPROTECT_PASSWORD` | VPN auth. |
+| Variable | `GLOBALPROTECT_PORTAL_URL` | VPN portal URL. |
+| Variable | `MOTHERSHIP_URL` | e.g. `https://mothership.atlan.dev`. |
+
+`GITHUB_TOKEN` inside the sandbox is auto-injected by mothership from
+its GitHub App installation — do not try to override it via `env_vars`.
+
 ## Reference
 
-- Detailed checklist: `docs/standards/review-checklist.md`
-- Severity rubric: managed in mothership `snapshots/sdk-reviewer/severity-rubric.yaml`
-- Reference rules: `.claude/skills/sdk-review/references/`
+- Orchestration: `.mothership/pr-review/ORCHESTRATION.md`
+- Reviewer identity: `.mothership/pr-review/CLAUDE.md`
+- Severity rubric: `.mothership/pr-review/severity-rubric.yaml`
+- Reference rules: `.mothership/pr-review/references/`
+- Mothership Rover Direct API: `docs/reference/rover-direct-api.md` in
+  `atlanhq/mothership`.

@@ -1,11 +1,23 @@
 # SDK Evolution — nightly codebase scan
 #
-# Dispatches the sdk-evolution snapshot on mothership to scan this repo
-# for bugs, architecture violations, security issues, performance problems,
-# and SDK improvement opportunities.
+# Dispatches a Cloudflare sandbox via mothership's Rover Direct API
+# (POST /api/sandbox/execute, mode=direct, snapshot=_base) to scan this
+# repo for bugs, architecture violations, security issues, performance
+# problems, and SDK improvement opportunities.
+#
+# The sandbox clones the repo into /workspace/application-sdk and then
+# reads .mothership/sdk-evolution/ORCHESTRATION.md from disk — all the
+# discovery + gating + ticketing logic lives there, not on mothership.
 #
 # Runs nightly at 2am UTC. Sunday runs are full scans (entire codebase).
 # Weekday runs are incremental (changed files + dependency cone only).
+#
+# Required configuration:
+#   secrets.HARNESS_TOKEN           Bearer token for /api/sandbox/execute.
+#   secrets.GLOBALPROTECT_USERNAME  VPN auth.
+#   secrets.GLOBALPROTECT_PASSWORD  VPN auth.
+#   vars.GLOBALPROTECT_PORTAL_URL   VPN portal URL.
+#   vars.MOTHERSHIP_URL             e.g. https://mothership.atlan.dev
 
 name: SDK Evolution (Nightly)
 
@@ -24,10 +36,15 @@ on:
           - full
           - incremental
 
+permissions:
+  contents: read
+
 jobs:
   trigger:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The sandbox runs for up to 2h (max_timeout_seconds: 7200) and the
+    # curl --max-time matches.
+    timeout-minutes: 130
     steps:
       - name: Connect to VPN (attempt 1/3)
         id: vpn1
@@ -56,47 +73,98 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
-      - name: Dispatch SDK Evolution
+      - name: Dispatch SDK Evolution to mothership Rover Direct API
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
           SCAN_MODE: ${{ inputs.scan_mode || 'auto' }}
         run: |
-          # Verify mothership is reachable
+          set -euo pipefail
+
+          # Mothership reachability check (5 retries).
           for attempt in 1 2 3 4 5; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${MOTHERSHIP_URL}/health" 2>/dev/null || echo "000")
-            if [ "$STATUS" = "200" ]; then break; fi
-            echo "Mothership unreachable (status=$STATUS), retrying... ($attempt/5)"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+              "${MOTHERSHIP_URL}/health" 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Mothership reachable (attempt $attempt)"
+              break
+            fi
+            echo "Mothership unreachable (status=$STATUS), retry $attempt/5"
             sleep 5
           done
-
           if [ "$STATUS" != "200" ]; then
             echo "::error::Cannot reach mothership after 5 attempts"
             exit 1
           fi
 
+          RUN_DATE=$(date -u +%Y-%m-%d)
+
+          PROMPT=$(cat <<PROMPT_END
+          You are running the nightly SDK Evolution scan in a Cloudflare sandbox.
+
+          Repository cloned at: /workspace/application-sdk (on main).
+          Working directory: cd /workspace/application-sdk
+
+          Read and follow the orchestration:
+            .mothership/sdk-evolution/ORCHESTRATION.md
+            .mothership/sdk-evolution/CLAUDE.md
+            .mothership/sdk-evolution/tools.md
+
+          Run metadata (use these verbatim):
+            RUN_DATE:  ${RUN_DATE}
+            SCAN_MODE: ${SCAN_MODE}    # auto = full on Sunday, incremental otherwise
+
+          GITHUB_TOKEN is pre-injected by the sandbox. Use \`gh\` for all
+          GitHub operations.
+
+          Linear / GPT proxy access: use the \$PROXY_BASE and \$PROXY_JWT
+          env vars injected by mothership (see tools.md).
+          PROMPT_END
+          )
+
           PAYLOAD=$(jq -n \
-            --arg repo_url "https://github.com/${{ github.repository }}" \
-            --arg run_date "$(date +%Y-%m-%d)" \
+            --arg source_id "sdk-evolution-${RUN_DATE}" \
+            --arg prompt "${PROMPT}" \
+            --arg run_date "${RUN_DATE}" \
             --arg scan_mode "${SCAN_MODE}" \
             '{
-              repo_url: $repo_url,
-              run_date: $run_date,
-              scan_mode: $scan_mode
+              mode: "direct",
+              source: "github-cron",
+              source_id: $source_id,
+              repositories: ["atlanhq/application-sdk"],
+              base_branch: "main",
+              snapshot: "_base",
+              prompt: $prompt,
+              max_timeout_seconds: 7200,
+              idle_timeout_seconds: 1800,
+              metadata: {
+                run_date: $run_date,
+                scan_mode: $scan_mode
+              }
             }')
 
-          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" --max-time 30 \
-            -X POST "${MOTHERSHIP_URL}/api/sdk-evolution/dispatch" \
+          HTTP_STATUS=$(curl -sS -o /tmp/response.json -w "%{http_code}" \
+            --max-time 7200 \
+            -X POST "${MOTHERSHIP_URL}/api/sandbox/execute" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${HARNESS_TOKEN}" \
-            -d "$PAYLOAD")
+            -d "${PAYLOAD}")
 
-          echo "Dispatch status: $STATUS"
-          cat /tmp/response.json
+          echo "Dispatch HTTP status: ${HTTP_STATUS}"
+          jq -r '{session_id, sandbox_id, status, cost_usd, error}' \
+            /tmp/response.json 2>/dev/null || cat /tmp/response.json
 
-          if [ "$STATUS" -ge 400 ]; then
-            echo "::error::SDK Evolution dispatch failed with status $STATUS"
+          if [ "${HTTP_STATUS}" != "200" ]; then
+            echo "::error::Mothership dispatch returned HTTP ${HTTP_STATUS}"
             exit 1
           fi
 
-          echo "SDK Evolution dispatched successfully"
+          BODY_STATUS=$(jq -r '.status // "unknown"' /tmp/response.json 2>/dev/null || echo "unknown")
+          if [ "${BODY_STATUS}" != "completed" ]; then
+            ERR_CODE=$(jq -r '.error.code // "none"' /tmp/response.json 2>/dev/null || echo "none")
+            ERR_MSG=$(jq -r '.error.message // ""' /tmp/response.json 2>/dev/null || echo "")
+            echo "::error::Sandbox status=${BODY_STATUS} error.code=${ERR_CODE} message=${ERR_MSG}"
+            exit 1
+          fi
+
+          echo "SDK Evolution completed successfully."

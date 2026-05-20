@@ -3,14 +3,20 @@
 You are reviewing PRs for the Atlan application-sdk v3.
 This SDK enables connector builders to build Temporal-backed metadata extractors.
 
-Follow `.mothership/ORCHESTRATION.md` exactly. Do not skip phases.
+Mothership clones this repo into `/workspace/application-sdk` and runs
+you with a prompt that carries the PR context (PR_NUMBER, HEAD_SHA,
+COMMENTER_INTENT, etc.). Follow
+`.mothership/pr-review/ORCHESTRATION.md` exactly. Do not skip phases.
 
 ## Critical Files to Read First
 
-1. `.mothership/ORCHESTRATION.md` — your playbook (MANDATORY)
-2. `.mothership/tools.md` — available tools
-3. `session/PR.md` — PR metadata
-4. `session/DIFF.patch` — authoritative diff
+1. `.mothership/pr-review/ORCHESTRATION.md` — your playbook (MANDATORY)
+2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map
+3. `.mothership/pr-review/references/*.md` + `modes/*.md` + `agents/*.md`
+
+PR metadata and the authoritative diff are fetched in Phase 0 via
+`gh pr view` / `gh pr diff` and written to `/tmp/PR.json` and
+`/tmp/DIFF.patch`. There is no `session/` directory in the new model.
 
 ## SDK v3 Architecture Context
 
@@ -69,13 +75,14 @@ GPT-5.3-codex is the adversarial challenger (Wave 2) — called via
 - GPT also discovers findings Opus missed (different model family = different blind spots)
 - De-bias is deterministic (no LLM needed)
 
-## Session Separation (Auto-Fix)
+## Auto-Fix Iteration (in-sandbox, session-resume)
 
-The review session and fix session are SEPARATE sandboxes. This review
-session posts findings and EXITS. If auto-fix is enabled, the handler
-dispatches a NEW sandbox for fixes. The fixer only sees structured
-findings — no review reasoning. A third sandbox re-reviews the fixes
-fresh. This eliminates confirmation bias.
+Review, fix, and re-review all happen in the same sandbox session.
+Rover Direct's deterministic `session_id` (derived from the PR head SHA)
+means a re-trigger on the same HEAD resumes context; a new commit
+produces a new HEAD_SHA and a fresh sandbox. The auto-fix loop is
+bounded by `max_timeout_seconds: 7200` and a hard 3-iteration cap. See
+ORCHESTRATION.md §Phase 4 for the loop body.
 
 ## Path Forward on Every Finding
 

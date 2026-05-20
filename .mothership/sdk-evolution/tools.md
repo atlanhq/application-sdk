@@ -5,14 +5,29 @@
 - `Read`, `Glob`, `Grep`, `Bash`, `Edit`, `Write` — full access
 - `Agent` — dispatch sub-agents (see `.mothership/agents/`)
 
+## Environment
+
+Mothership's `_base` snapshot injects these env vars into the sandbox.
+They are not configurable from this repo — they come from mothership's
+GitHub App + credential proxy setup.
+
+| Env var | Source | Used for |
+|---|---|---|
+| `GITHUB_TOKEN` | mothership GitHub App installation | `gh` CLI + `git push`; blocked from `env_vars` override |
+| `PROXY_BASE` | mothership credential proxy | base URL for LiteLLM (GPT) and Linear proxies |
+| `PROXY_JWT` | mothership credential proxy | bearer for the proxies above |
+
 ## Git + GitHub
 
-Pre-authenticated via `$GITHUB_TOKEN` env var (injected by dispatcher).
-Run `echo "$GITHUB_TOKEN" | gh auth login --with-token` in Stage 0.
+Mothership has already cloned the repo on `main` into
+`/workspace/application-sdk`. Stage 0 only needs to authenticate `gh`:
+```bash
+echo "$GITHUB_TOKEN" | gh auth login --with-token
+```
 
 ```bash
-# Clone (pre-cached)
-git clone /opt/repo-cache/application-sdk /workspace/repo
+# Working directory
+cd /workspace/application-sdk
 
 # Create branch
 git checkout -b BLDX-456 origin/main

@@ -31,144 +31,174 @@ calling submit_review.
 
 ## Phase 0: Orient (~30s)
 
-1. Read `session/PR.md` for PR URL, number, commit SHA, base ref,
-   source branch, github_token, review_mode.
+The dispatch prompt passes the PR context directly. Read these values
+from the prompt header (do NOT re-derive):
 
-2. Read `session/DIFF.patch` — authoritative diff from GitHub API.
-   Do NOT generate your own diff. DIFF.patch is the source of truth.
+```
+PR_NUMBER, PR_URL, REPO, HEAD_SHA, BASE_REF, HEAD_REF,
+COMMENTER, COMMENT_ID, COMMENTER_INTENT
+```
 
-3. **Auth setup** (use `$GITHUB_TOKEN` env var — injected by dispatcher):
+1. **Set working directory** — mothership cloned the repo on the PR head
+   ref into `/workspace/application-sdk`:
    ```bash
-   # Authenticate gh CLI (needed for gh pr edit, gh api graphql, gh pr checks)
-   echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null
-   ```
-
-4. **Stale SHA guard**: Check if the PR has been updated since dispatch:
-   ```bash
-   DISPATCH_SHA=$(grep -oP 'commit_sha:\s*\K[a-f0-9]+' session/PR.md)
-   PR_NUM=$(grep -oP 'pr_number:\s*\K\d+' session/PR.md)
-   CURRENT_SHA=$(curl -sf -H "Authorization: Bearer $GITHUB_TOKEN" \
-     "https://api.github.com/repos/atlanhq/application-sdk/pulls/$PR_NUM" \
-     | jq -r '.head.sha')
-   if [ "$DISPATCH_SHA" != "$CURRENT_SHA" ]; then
-     echo "PR updated since dispatch. Aborting — will be re-triggered."
-     # Submit minimal review so status doesn't stay pending
-     # ... submit with summary "PR updated during review, re-trigger @sdk-review"
-     exit 0
-   fi
-   ```
-
-5. Clone and checkout:
-   ```bash
-   cp -r /opt/repo-cache/application-sdk /workspace/repo 2>/dev/null || \
-     git clone --depth=50 https://github.com/atlanhq/application-sdk.git /workspace/repo
-   cd /workspace/repo
-   git fetch origin pull/<PR_NUMBER>/head:pr-branch
-   git checkout pr-branch
+   cd /workspace/application-sdk
 
    # Background: install deps so uv run pre-commit/pytest don't wait
    uv sync --all-extras 2>/dev/null &
    ```
 
-5. **Branch freshness + conflict resolution** (before reviewing):
+2. **Auth setup** — `$GITHUB_TOKEN` is injected by mothership from its
+   GitHub App installation (see snapshots/_base). Make `gh` use it:
    ```bash
-   # Check merge status
-   MERGE_STATUS=$(gh pr view <PR> --repo atlanhq/application-sdk \
-     --json mergeStateStatus,mergeable --jq '.mergeStateStatus')
+   echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null
    ```
-   
+
+3. **Fetch authoritative PR metadata** (no session/PR.md anymore):
+   ```bash
+   gh pr view "$PR_NUMBER" --repo "$REPO" \
+     --json number,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,headRefOid,title,body,labels \
+     > /tmp/PR.json
+   ```
+
+4. **Fetch authoritative diff** (no session/DIFF.patch anymore):
+   ```bash
+   gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
+   ```
+
+5. **Stale SHA guard** — bail if the PR has moved since dispatch:
+   ```bash
+   CURRENT_SHA=$(jq -r '.headRefOid' /tmp/PR.json)
+   if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
+     echo "PR moved from $HEAD_SHA to $CURRENT_SHA since dispatch — aborting cleanly."
+     # Submit a minimal review so the status check doesn't stay pending,
+     # then exit. A fresh @sdk-review on the new HEAD gets a new session.
+     exit 0
+   fi
+   ```
+
+6. **Read in-repo orchestration assets** — these are the source of truth
+   for SDK review behavior. All paths are relative to the repo root:
+   - `.mothership/pr-review/CLAUDE.md`
+   - `.mothership/pr-review/severity-rubric.yaml`
+   - `.mothership/pr-review/modes/standard.md`
+   - `.mothership/pr-review/modes/auto-complete.md`
+   - `.mothership/pr-review/references/*.md`
+   - `.mothership/pr-review/agents/*.md`
+   - `.mothership/review-policy.md`
+   - `.mothership/review.yaml`
+
+7. **§Intent Inference** — interpret `COMMENTER_INTENT` (free-form text
+   the human typed after `@sdk-review`) and set the mode for this run.
+   The workflow does NOT parse commands — that is your job.
+
+   Apply these rules in order; first match wins. If `COMMENTER_INTENT`
+   is empty, default to **standard review** (Mode A).
+
+   | If the intent contains... | Mode |
+   |---|---|
+   | (empty) | **A. Standard review** — full multi-agent review, post findings, exit. |
+   | `stop`, `cancel`, `abort` | **B. Stop** — no-op. Reply to the triggering comment confirming the cancel, label the PR if applicable, exit cleanly. |
+   | `auto-complete`, `resolve all`, `apply fixes`, `fix it`, `fix the issues` | **C. Auto-fix loop** — review, then iterate the in-sandbox fix loop (see §Auto-fix loop). |
+   | `challenge` *with* a finding ID, a quoted finding, or a paragraph of reasoning | **D. Targeted challenge** — re-evaluate only the cited findings using the human's explanation as additional context (see Phase 2h). |
+   | `override:` followed by a justification | **E. Admin override** — verify the commenter is a repo admin via `gh api repos/$REPO/collaborators/$COMMENTER/permission`. If admin, set status check to success and log the override in REVIEW_DATA. If not admin, reply with the failure reason and exit. |
+   | `retrospect`, `retro` | **F. Retrospect** — run the retro flow (see Retrospect Mode section below). |
+   | `ci-fix`, `fix ci`, `CI fail` | **G. CI fix** — lightweight Sonnet-only path that fixes a failing CI on an already-approved PR (see CI-Fix Mode section). |
+   | Anything else (free-form prose) | **H. Standard review with focus** — run mode A, but treat the prose as a supplementary focus area or extra context the reviewers should weigh (e.g., "look closely at the new metric reader code"). Echo the focus back in the summary so the human sees it landed. |
+
+   Record the chosen mode and pass it forward — every downstream phase
+   may behave slightly differently based on it.
+
+8. **Branch freshness + conflict resolution** (before reviewing):
+   ```bash
+   MERGE_STATUS=$(jq -r '.mergeStateStatus' /tmp/PR.json)
+   ```
+
    If `BEHIND`:
    ```bash
-   # Tier 1: API update (merges main into PR branch)
-   gh api repos/atlanhq/application-sdk/pulls/<PR>/update-branch \
+   # Tier 1: GitHub-side update (merges base into the PR branch)
+   gh api "repos/$REPO/pulls/$PR_NUMBER/update-branch" \
      -X PUT -f update_method=merge 2>/dev/null
    sleep 10
    # Re-fetch — SHA changed after merge
-   git pull origin pr-branch
+   git fetch origin "$HEAD_REF" && git reset --hard "origin/$HEAD_REF"
+   # Re-fetch authoritative PR metadata and diff after the update
+   gh pr view "$PR_NUMBER" --repo "$REPO" --json number,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,headRefOid,title,body,labels > /tmp/PR.json
+   gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
    ```
-   
+
    If `CONFLICTING`:
    ```bash
-   # Tier 2: git merge (handles non-overlapping conflicts)
-   git fetch origin main
-   git merge origin/main --no-edit 2>/dev/null
+   # Tier 2: local git merge (handles non-overlapping conflicts)
+   git fetch origin "$BASE_REF"
+   git merge "origin/$BASE_REF" --no-edit 2>/dev/null
    ```
-   If merge succeeds → `git push origin HEAD`. Continue with review of merged result.
+   If merge succeeds → `git push origin HEAD`, then re-fetch `/tmp/PR.json`
+   and `/tmp/DIFF.patch` and continue review of the merged result.
    If merge fails:
    ```bash
    git merge --abort
    ```
-   Submit minimal review: "PR has merge conflicts. Please rebase or comment
-   `@sdk-review` after resolving conflicts." Label `needs-rebase`. EXIT.
+   Submit minimal review: "PR has merge conflicts. Please rebase or
+   comment `@sdk-review` after resolving conflicts." Label `needs-rebase`.
+   EXIT.
 
-6. **Pre-commit cleanup** (eliminate style noise before review):
+9. **Pre-commit cleanup** (eliminate style noise before review):
    ```bash
-   CHANGED=$(git diff --name-only origin/main...HEAD -- '*.py')
+   CHANGED=$(git diff --name-only "origin/$BASE_REF"...HEAD -- '*.py')
    if [ -n "$CHANGED" ]; then
      uv run pre-commit run --files $CHANGED 2>/dev/null || true
      if [ -n "$(git status --porcelain -- '*.py')" ]; then
        git add $(git diff --name-only)
        git commit -m "style: auto-format via pre-commit"
        git push origin HEAD
+       # Refresh the diff after the auto-format commit.
+       gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
      fi
    fi
    ```
    This ensures the review finds REAL issues, not formatting noise.
 
-7. **CI pre-check** (don't waste review time if CI is broken):
-   ```bash
-   FAILING=$(gh pr checks <PR> --repo atlanhq/application-sdk \
-     --json name,conclusion --jq '.[] | select(.conclusion=="failure") | .name' 2>/dev/null)
-   ```
-   
-   If CI is failing:
-   - Read failure logs: `gh run view <run_id> --log-failed 2>/dev/null | head -100`
-   - If failure is in PR code (lint, type error, missing import, test failure):
-     → Dispatch Sonnet CI fix sub-agent (see below)
-   - If failure is pre-existing or infrastructure: note in review, proceed
-   
-   **Sonnet CI Fix sub-agent** (lightweight, fast):
-   ```
-   Read the CI failure logs. Fix categories you CAN handle:
-   - Pre-commit failures (ruff, isort) → run pre-commit, commit
-   - Import errors → add missing imports
-   - Type errors (pyright) → fix type annotations
-   - Unit test failures from PR changes → fix the code
-   
-   Categories you CANNOT handle (skip):
-   - Test failures in untouched code (pre-existing)
-   - Infrastructure failures (timeout, OOM)
-   - Complex logic errors (leave for review)
-   
-   Run: uv run pre-commit run --files <files> && uv run pytest tests/unit/ -x --timeout=60
-   If fix works: git commit -m "fix(ci): <description>" && git push
-   If not: skip, note for review
-   ```
+10. **CI pre-check** (don't waste review time if CI is broken):
+    ```bash
+    FAILING=$(gh pr checks "$PR_NUMBER" --repo "$REPO" \
+      --json name,conclusion --jq '.[] | select(.conclusion=="failure") | .name' 2>/dev/null)
+    ```
 
-8. Read the repo's `CLAUDE.md` for conventions.
+    If CI is failing:
+    - Read failure logs: `gh run view <run_id> --log-failed 2>/dev/null | head -100`
+    - If failure is in PR code (lint, type error, missing import, test failure):
+      → Dispatch Sonnet CI fix sub-agent (see below)
+    - If failure is pre-existing or infrastructure: note in review, proceed
 
-9. Determine mode from session files:
-   - `session/CI_FIX_ONLY` exists → **ci-fix mode** (skip to CI-Fix Mode section)
-   - `session/AUTO_FIX` exists → auto_fix = true
-   - `session/CHALLENGE.md` exists → challenge mode
-   - `session/RETROSPECT` exists → retrospect mode (skip to Retrospect section)
-   - `session/AUTHOR_CONTEXT.md` exists → read, consider during review
-   - Always read `modes/standard.md`
-   
-   **Iterations (--iteration=N in command_context):** Every iteration runs
-   a FULL review (all agents, adversarial, guardrails) — not a delta.
-   The fix may have introduced cross-file regressions that only a full
-   review catches. Delta tracking (RESOLVED/STILL/NEW) is a presentation
-   layer — the agents still review the entire diff.
+    **Sonnet CI Fix sub-agent** (lightweight, fast):
+    ```
+    Read the CI failure logs. Fix categories you CAN handle:
+    - Pre-commit failures (ruff, isort) → run pre-commit, commit
+    - Import errors → add missing imports
+    - Type errors (pyright) → fix type annotations
+    - Unit test failures from PR changes → fix the code
 
-10. **Smart agent routing** — classify the PR:
-   ```bash
-   TOTAL_FILES=$(grep -c '^+++ b/' session/DIFF.patch || echo 0)
-   TEST_FILES=$(grep -c '^+++ b/tests/' session/DIFF.patch || echo 0)
-   DOC_FILES=$(grep -c '^+++ b/docs/' session/DIFF.patch || echo 0)
-   CONFIG_FILES=$(grep -cE '^+++ b/(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' session/DIFF.patch || echo 0)
-   SOURCE_FILES=$((TOTAL_FILES - TEST_FILES - DOC_FILES - CONFIG_FILES))
-   ```
+    Categories you CANNOT handle (skip):
+    - Test failures in untouched code (pre-existing)
+    - Infrastructure failures (timeout, OOM)
+    - Complex logic errors (leave for review)
+
+    Run: uv run pre-commit run --files <files> && uv run pytest tests/unit/ -x --timeout=60
+    If fix works: git commit -m "fix(ci): <description>" && git push
+    If not: skip, note for review
+    ```
+
+11. Read the repo's `CLAUDE.md` for project conventions.
+
+12. **Smart agent routing** — classify the PR:
+    ```bash
+    TOTAL_FILES=$(grep -c '^+++ b/' /tmp/DIFF.patch || echo 0)
+    TEST_FILES=$(grep -c '^+++ b/tests/' /tmp/DIFF.patch || echo 0)
+    DOC_FILES=$(grep -c '^+++ b/docs/' /tmp/DIFF.patch || echo 0)
+    CONFIG_FILES=$(grep -cE '^\+\+\+ b/(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' /tmp/DIFF.patch || echo 0)
+    SOURCE_FILES=$((TOTAL_FILES - TEST_FILES - DOC_FILES - CONFIG_FILES))
+    ```
    - If `SOURCE_FILES == 0 && TEST_FILES > 0` → `review_scope=tests-only`
      (QUALITY agent only — focused on test patterns, coverage, assertions)
    - If `SOURCE_FILES == 0 && DOC_FILES > 0 && TEST_FILES == 0` → `review_scope=docs-only`
@@ -179,12 +209,12 @@ calling submit_review.
      (QUALITY agent + lightweight CORRECTNESS — mostly tests with a few source changes)
    - Otherwise → `review_scope=full` (all 3 agents)
 
-11. Check diff size for tier:
-   - < 2000 lines → `review_tier = "full"`
-   - 2000-20000 → `review_tier = "partitioned"`
-   - > 20000 → `review_tier = "staged"`
+13. Check diff size for tier:
+    - < 2000 lines → `review_tier = "full"`
+    - 2000-20000 → `review_tier = "partitioned"`
+    - > 20000 → `review_tier = "staged"`
 
-Print: `[Phase 0 complete] PR #<N>, scope=<scope>, tier=<tier>, auto_fix=<bool>`
+Print: `[Phase 0 complete] PR #<N>, mode=<A-H>, scope=<scope>, tier=<tier>`
 
 ---
 
@@ -192,7 +222,7 @@ Print: `[Phase 0 complete] PR #<N>, scope=<scope>, tier=<tier>, auto_fix=<bool>`
 
 ### 1a. Holistic File Assessment (NO LLM)
 
-For each changed source file in DIFF.patch:
+For each changed source file in `/tmp/DIFF.patch`:
 ```bash
 wc -l <file>                                           # line count
 rg -l "from.*<module>.*import" application_sdk/ -t py | wc -l  # callers
@@ -230,7 +260,7 @@ This fits within budget for most PRs.
 
 **Safety check:** Before sending to agents, measure total context:
 ```bash
-DIFF_CHARS=$(wc -c < session/DIFF.patch)
+DIFF_CHARS=$(wc -c < /tmp/DIFF.patch)
 FILE_CHARS=0
 for f in <changed_files>; do
   FILE_CHARS=$((FILE_CHARS + $(wc -c < "$f")))
@@ -254,7 +284,7 @@ Split files by directory. Each agent gets only its partition:
 **Diff splitting:** Each agent gets only the hunks for files in its partition:
 ```bash
 # Extract hunks for specific files from the full diff
-grep -A 9999 "^diff --git a/<file>" session/DIFF.patch | \
+grep -A 9999 "^diff --git a/<file>" /tmp/DIFF.patch | \
   sed '/^diff --git a\//q' | head -n -1
 ```
 
@@ -265,12 +295,12 @@ grep -A 9999 "^diff --git a/<file>" session/DIFF.patch | \
   === FILE: path/to/large_file.py (2100 lines, TRUNCATED) ===
   [Lines 1-500]
   <content>
-  
+
   [Lines 501-2000 OMITTED — function index:]
   - def function_a: line 520
   - class MyClass: line 680
   - def function_b: line 1200
-  
+
   [Lines 2001-2100]
   <content>
   ```
@@ -467,12 +497,12 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 | NEEDS_FIXES | Critical, G4/G6, 3+ Important, CI failing | REQUEST_CHANGES |
 | READY_TO_MERGE | No Critical, < 3 Important, CI passing | APPROVE |
 
-### 2h. Challenge Mode (if session/CHALLENGE.md exists)
+### 2h. Challenge Mode (if Intent Inference picked Mode D)
 
 **Targeted challenge** — do NOT re-run the full review. Instead:
 
 1. Read the previous review comment from this PR (delta tracking in 2d)
-2. Read the author's challenge from `session/CHALLENGE.md`
+2. Take the author's challenge text from `COMMENTER_INTENT`
 3. Identify which specific findings the challenge addresses
    (match by file, line, or description keywords)
 4. For ONLY the disputed findings:
@@ -622,7 +652,7 @@ Retry up to 3x on 422, once on 5xx.
 
 ### 3g. CI Check — Fix Failures Before Final Verdict
 
-After posting the review, if CI status from session/PR.md shows failures:
+After posting the review, re-check CI via `gh pr checks "$PR_NUMBER" --repo "$REPO"`. If failures:
 
 1. Read the failing check logs (if accessible via gh CLI in sandbox)
 2. If the failure is in code the PR touched AND the fix is obvious (lint, type error, import):
@@ -638,39 +668,75 @@ Print: `[Phase 3 complete] Review submitted`
 
 ---
 
-## Phase 4: Auto-Fix Session Management
+## Phase 4: Auto-Fix Loop (in-sandbox iteration)
 
-**IMPORTANT: The auto-fix loop should NOT run in this same session.**
+**Runs only when Intent Inference picked Mode C (auto-fix) AND the
+verdict is NEEDS_FIXES.** Skip entirely for any other mode/verdict.
 
-When auto_fix = true AND verdict = NEEDS_FIXES:
+The loop happens *inside this same sandbox* — no re-dispatch, no
+separate fix-only session. Rover Direct's `session_id` resume means the
+GHA workflow blocks on this one dispatch for the whole loop (sync
+delivery, capped at `max_timeout_seconds: 7200`).
 
-This review session's job is DONE after Phase 3. The structured findings
-in the review comment contain all the information a separate fix session needs.
+### Hard limits
+- Max 3 iterations total (including this review = iteration 1).
+- Wall-clock cap on the loop: 90 minutes from Phase 0 start. If
+  approaching, finalize whatever fixes have landed and exit with the
+  current verdict.
+- One CI retry per push. Two consecutive red CIs ends the loop with
+  `REQUEST_CHANGES`.
 
-The `submit_review` handler, upon seeing `auto_fix: true` in the session
-metadata, will dispatch a NEW sandbox with the `sdk-reviewer` snapshot
-in fix-only mode. That session:
+### Loop body
 
-1. Reads the review comment (structured findings only — no review reasoning)
-2. Applies PATCH-scope fixes
-3. Runs pre-commit + pytest
-4. Pushes
-5. Triggers a fresh review (another new sandbox)
+```
+for iteration in 2 3:
+  # 1. Read the just-posted review comment (REVIEW_DATA block) and pull
+  #    every PATCH-scope finding (any severity). Skip MIGRATE, REFACTOR,
+  #    DESIGN_CHANGE — those need human decisions.
+  # 2. For each PATCH finding, in severity order:
+  #    a. Read the full file
+  #    b. Apply the exact suggested_fix
+  #    c. uv run pre-commit run --files <file>
+  #    d. uv run pytest tests/unit/ -x --timeout=60 (scoped if possible)
+  #    e. If anything fails → revert this fix only, note why, continue
+  # 3. git diff --stat — verify only intended files changed
+  #    If pre-commit reformatted unrelated files: git checkout -- them
+  # 4. Stage specific files (NEVER git add -A), commit with Conventional
+  #    Commits ("fix(review): address SDK review findings (iter N/3)"),
+  #    push origin HEAD.
+  # 5. gh pr checks "$PR_NUMBER" --repo "$REPO" --watch (max 10 min)
+  #    If CI red and fix is obvious (lint/import/type) → one CI fix
+  #    push. If CI red again → exit loop, submit REQUEST_CHANGES.
+  # 6. Re-run Phases 0 (steps 3-12 only — skip Intent Inference, mode
+  #    stays C) → 1 → 2 → 3 with the new diff.
+  # 7. If new verdict == READY_TO_MERGE → break, submit APPROVE
+  # 8. If new verdict != NEEDS_FIXES → break, submit current verdict
+  # 9. Otherwise continue
+```
 
-Each session is independent. The fixer never sees the reviewer's reasoning.
-The re-reviewer never sees the fixer's context. This eliminates confirmation bias.
+### Scope restrictions (non-negotiable)
+- ONLY fix PATCH scope findings
+- NEVER touch MIGRATE, REFACTOR, or DESIGN_CHANGE scope findings
+- NEVER modify files the PR doesn't already touch
+- NEVER add features, refactor, or "improve" things beyond the findings
+- NEVER force-push
+- NEVER add Co-Authored-By lines
 
-If the handler doesn't support auto-dispatch yet, fall back:
-Post a comment on the PR: `@sdk-review auto-complete --iteration=2 --max=3`
-This triggers a new GHA run → new dispatch → new sandbox.
+### Why in-sandbox now
+The previous design ran each iteration as a separate sandbox dispatched
+by re-posting `@sdk-review --iteration=N+1`. That worked but cost more
+(no cache reuse) and was hard to bound under a single GHA job. With
+Rover Direct's session resume + sync delivery, one dispatch covers the
+whole loop and the GHA workflow simply waits.
 
-Print: `[Phase 4 complete] Handed off to fix session` OR `[Phase 4 skipped] review-only mode`
+Print: `[Phase 4 complete] iter=<N>, verdict=<verdict>` or
+`[Phase 4 skipped] mode=<mode>, verdict=<verdict>`
 
 ---
 
-## Retrospect Mode (if session/RETROSPECT exists)
+## Retrospect Mode (Intent Inference Mode F)
 
-When triggered by `@sdk-review retrospect`:
+When `COMMENTER_INTENT` contains `retrospect` or `retro`:
 
 1. Read the last 10 merged PRs:
    ```bash
@@ -696,15 +762,15 @@ When triggered by `@sdk-review retrospect`:
 5. Post a summary comment on the PR:
    ```
    ## SDK Review Retrospective
-   
+
    Analyzed last 10 merged PRs.
-   
+
    ### Recurring Findings
    - <pattern>: flagged N times, resolved M times, disputed K times
-   
+
    ### Recommended POLICY.md Updates
    - Add: "<pattern> is intentional because <reason>"
-   
+
    ### Recommended Rule Changes
    - Tighten: <rule> (too many false positives)
    - Relax: <rule> (too aggressive)
@@ -716,11 +782,12 @@ Print: `[Retrospect complete]`
 
 ---
 
-## CI-Fix Mode (if session/CI_FIX_ONLY exists)
+## CI-Fix Mode (Intent Inference Mode G)
 
-Triggered by merge queue when CI fails after a branch update on an
-approved PR. This is a LIGHTWEIGHT mode — no full review, just fix CI
-and re-approve if the fix is clean.
+Triggered when `COMMENTER_INTENT` contains `ci-fix`, `fix ci`, or
+`CI fail` — typically by the merge-queue workflow when CI fails after a
+branch update on an approved PR. This is a LIGHTWEIGHT mode — no full
+review, just fix CI and re-approve if the fix is clean.
 
 **Cost: ~$0.50 (Sonnet only, no Opus agents, no GPT adversarial)**
 

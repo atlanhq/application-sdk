@@ -24,23 +24,40 @@ Hard stop: **60 minutes total.** If approaching, skip to Stage 8 and submit summ
 
 ## Stage 0: Preflight
 
-1. **Auth setup:**
+The dispatch prompt passes the run context directly. Read these values
+from the prompt header (do NOT re-derive):
+
+```
+RUN_DATE, SCAN_MODE   # SCAN_MODE: auto | full | incremental
+```
+
+If `SCAN_MODE == auto`: resolve at runtime → `full` on Sunday (UTC),
+`incremental` otherwise.
+
+1. **Set working directory** — mothership cloned the repo on `main` into
+   `/workspace/application-sdk`:
+   ```bash
+   cd /workspace/application-sdk
+
+   # Background: install deps so uv run pre-commit/pytest don't wait
+   uv sync --all-extras 2>/dev/null &
+   ```
+
+2. **Auth setup** — `$GITHUB_TOKEN` is injected by mothership from its
+   GitHub App installation. Make `gh` use it:
    ```bash
    echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null
    ```
 
-2. **Clone and sync:**
-   ```bash
-   cp -r /opt/repo-cache/application-sdk /workspace/repo 2>/dev/null || \
-     git clone --depth=100 https://github.com/atlanhq/application-sdk.git /workspace/repo
-   cd /workspace/repo
-   git checkout main && git pull origin main
-   
-   # Background: install deps for pre-commit/pytest
-   uv sync --all-extras 2>/dev/null &
-   ```
+3. **Read in-repo orchestration assets** — these are the source of truth
+   for SDK Evolution behavior. All paths are relative to the repo root:
+   - `.mothership/sdk-evolution/CLAUDE.md`
+   - `.mothership/sdk-evolution/tools.md`
+   - `.mothership/sdk-evolution/references/*.md`
+   - `.mothership/sdk-evolution/agents/*.md`
+   - `.mothership/sdk-evolution/scripts/update_index.py`
 
-3. **Build suppression list** (query Linear directly via proxy):
+4. **Build suppression list** (query Linear directly via proxy):
    ```bash
    # Get all open tickets in the "Autonomous SDK Evolution" milestone
    RESPONSE=$(curl -s "$PROXY_BASE/proxy/linear" \
@@ -55,27 +72,26 @@ Hard stop: **60 minutes total.** If approaching, skip to Stage 8 and submit summ
    - Rule IDs cited
    Build a suppression list of file:rule pairs to skip during discovery.
 
-   If the Linear proxy call fails → proceed with empty suppression (will discover
-   some duplicates, but won't block the run).
+   Linear is the canonical source for suppression — there is no pre-loaded
+   `session/SUPPRESSION.md` in this model. If the Linear proxy call fails,
+   proceed with empty suppression (will discover some duplicates, but
+   won't block the run).
 
-   Also read `session/SUPPRESSION.md` if it exists (dispatch may have pre-loaded it).
-
-4. **Load codebase index:**
-   - First check R2: `cat /workspace/.shared-memory/sdk-evolution/index.json 2>/dev/null`
-   - If found → use it (incremental update in Stage 1)
-   - If not found → also check `session/INDEX.md` (dispatch may have pre-loaded it)
-   - If neither exists → Stage 1 will do a full AST parse (first run is slow, ~30s)
-
-5. Read `session/SCAN_MODE`: incremental or full.
-
-6. **Read previous learnings** (self-improvement loop):
+5. **Build the codebase index** in-sandbox:
    ```bash
-   cat /workspace/.shared-memory/sdk-evolution/learnings.yaml 2>/dev/null
+   python .mothership/sdk-evolution/scripts/update_index.py > /tmp/index.json
    ```
-   If found → apply: tightened rules, known false positives, files needing refactor.
-   If not found → first run, no learnings yet.
+   Stage 1 reads `/tmp/index.json` for the AST view of the codebase.
+   There is no R2 shared-memory store in this model — the index is
+   rebuilt every run from the freshly-cloned source.
 
-Print: `[Stage 0/9 complete] scan_mode=<mode>, suppressed=<N> pairs, index=<found|not found>, learnings=<found|not found>`
+6. **Read previous learnings (optional):**
+   Learnings, if any, live as comments on the parent Linear ticket for
+   the most recent SDK Evolution run. Query Linear for the most recent
+   "SDK Evolution — <date>" parent ticket and read its learnings
+   section. If none found → first run, no learnings yet.
+
+Print: `[Stage 0/9 complete] scan_mode=<resolved mode>, suppressed=<N> pairs, learnings=<found|none>`
 
 ---
 
@@ -208,7 +224,7 @@ Print: `[Stage 3/9 complete] <N> FIX, <M> NEEDS_DESIGN, <K> KILLED`
 ### 4a. Pull latest main (stale guard)
 
 ```bash
-cd /workspace/repo
+cd /workspace/application-sdk
 git checkout main
 git pull origin main
 ```
@@ -413,13 +429,13 @@ Print: `[Stage 6/9 complete] <N> FIX PRs auto-complete, <M> DESIGN PRs review-on
   → create a single DESIGN ticket instead of individual fixes
 ```
 
-### 7b. Update Rules (write to R2)
+### 7b. Persist Learnings (as Linear ticket comments)
 
-If patterns emerged, write updates to R2 persistent storage:
+If patterns emerged, post them as a comment on this run's parent Linear
+ticket ("SDK Evolution — {date}"). Use the same YAML shape so future
+runs can parse it:
 
-```bash
-# Write learnings that future runs should know
-cat > /workspace/.shared-memory/sdk-evolution/learnings.yaml << 'EOF'
+```yaml
 last_run: {date}
 rules_to_tighten:
   - rule: <rule_id>
@@ -440,13 +456,16 @@ improvement_backlog:
   - title: "Add batch upload utility"
     rationale: "3 connectors implement this independently"
     priority: medium
-EOF
 ```
+
+Linear is the persistent store — there is no R2 shared-memory volume
+in this model. The codebase index is rebuilt every run from source.
 
 ### 7c. Read Previous Learnings
 
-At the START of Stage 1, read `/workspace/.shared-memory/sdk-evolution/learnings.yaml`
-if it exists. Apply:
+At the START of Stage 1, query Linear for the most recent
+"SDK Evolution — *" parent ticket and read its learnings comment.
+Apply:
 - Tightened rules → raise confidence thresholds in agent prompts
 - Relaxed rules → lower thresholds or skip checks
 - Known false positives → add to suppression
@@ -487,7 +506,7 @@ Print: `[Stage 7/9 complete] <N> rules updated, <M> learnings stored`
 2. **Update Linear parent ticket** with summary table via proxy:
    ```bash
    SUMMARY_BODY="## SDK Evolution — {date}\n\n| Metric | Count |\n|---|---|\n| Discovered | {N} |\n| Killed (pre-filter) | {N} |\n| Killed (Gate 1) | {N} |\n| Killed (Gate 2) | {N} |\n| FIX PRs created | {N} |\n| DESIGN PRs created | {N} |\n| Handed to reviewer | {N} |\n| Rules updated | {N} |"
-   
+
    curl -s "$PROXY_BASE/proxy/linear" \
      -H "Authorization: Bearer $PROXY_JWT" \
      -H "Content-Type: application/json" \
@@ -506,10 +525,8 @@ Print: `[Stage 7/9 complete] <N> rules updated, <M> learnings stored`
    - Scan all PR descriptions for secrets/tokens
    - Scan all Linear ticket content for internal URLs/credentials
 
-5. **Save codebase index** to R2:
-   ```bash
-   cp /tmp/updated-index.json /workspace/.shared-memory/sdk-evolution/index.json
-   ```
+5. **Codebase index is ephemeral** — rebuilt next run via
+   `scripts/update_index.py`. Nothing to persist here.
 
 Print:
 ```

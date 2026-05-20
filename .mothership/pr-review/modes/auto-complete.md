@@ -1,9 +1,16 @@
 # Auto-Complete Mode
 
-When `session/AUTO_FIX` exists, after posting the initial review (Phase 3),
-enter the fix loop (Phase 4).
+Selected when Intent Inference (ORCHESTRATION.md Phase 0 §Intent
+Inference) picks Mode C — i.e., `COMMENTER_INTENT` contains phrases
+like `auto-complete`, `resolve all`, `apply fixes`, `fix it`, `fix the
+issues`. After posting the initial review (Phase 3), enter the in-
+sandbox fix loop (Phase 4).
 
 ## Fix Loop
+
+Source of findings: parse the just-posted SDK Review comment's
+`<!-- REVIEW_DATA -->` JSON block. That is the authoritative list — do
+NOT read findings from any `session/` path.
 
 For each finding with scope PATCH (any severity — Critical, Important, Minor):
 
@@ -43,10 +50,11 @@ Then re-run Phases 0-3 with the new diff to verify fixes.
 
 ## Reading Author Instructions
 
-If `session/INSTRUCTIONS.md` exists, read it first. The author may have
-specific guidance like "skip the performance findings" or "focus on security".
-Honor these instructions unless they conflict with guardrails G1-G5
-(those are non-negotiable).
+The free-form text the human typed after `@sdk-review` is forwarded to
+the orchestration as `COMMENTER_INTENT`. The author may have included
+specific guidance like "skip the performance findings" or "focus on
+security". Honor these instructions unless they conflict with
+guardrails G1-G5 (those are non-negotiable).
 
 ## When to Stop
 

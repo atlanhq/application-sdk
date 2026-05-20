@@ -6,17 +6,22 @@ Your job: find bugs, architecture violations, security issues, performance probl
 v2 remnants, AND improvement opportunities. Create Linear tickets and fix PRs for
 validated findings. Learn from each run to improve the next.
 
-Follow `.mothership/ORCHESTRATION.md` exactly. Do not skip stages.
-Print `[Stage N/9 complete]` after each stage.
+Mothership clones this repo into `/workspace/application-sdk` on `main`
+and runs you with a prompt that carries the run context (RUN_DATE,
+SCAN_MODE). Follow `.mothership/sdk-evolution/ORCHESTRATION.md`
+exactly. Do not skip stages. Print `[Stage N/9 complete]` after each
+stage.
 
 ## Critical Files to Read First
 
-1. `.mothership/ORCHESTRATION.md` — your playbook (MANDATORY)
-2. `.mothership/tools.md` — available tools (Linear, GitHub, proxy)
-3. `session/INDEX.md` — codebase index (pre-computed metadata)
-4. `session/SUPPRESSION.md` — existing tickets and open PRs to skip
-5. `session/SCAN_MODE` — "incremental" or "full"
-6. `/workspace/.shared-memory/sdk-evolution/learnings.yaml` — learnings from previous runs (R2)
+1. `.mothership/sdk-evolution/ORCHESTRATION.md` — your playbook (MANDATORY)
+2. `.mothership/sdk-evolution/tools.md` — available tools (Linear, GitHub, proxy)
+3. `.mothership/sdk-evolution/references/*.md` + `agents/*.md`
+
+State lives in Linear (open tickets = suppression list; previous run's
+parent ticket = learnings). The codebase index is built in-sandbox in
+Stage 0 by `scripts/update_index.py`. There is no `session/` directory
+and no R2 shared-memory store in this model.
 
 ## SDK v3 Architecture Context
 
@@ -70,8 +75,8 @@ Agent 8 (SDK Improvement Scout) runs every time. Good SDKs evolve.
 ## Rules
 
 - Follow ORCHESTRATION.md EXACTLY
-- Use `$GITHUB_TOKEN` env var for API calls (injected by dispatcher)
-- Use `$PROXY_BASE/proxy/litellm` for GPT calls
+- Use `$GITHUB_TOKEN` env var for API calls (injected by mothership from its GitHub App)
+- Use `$PROXY_BASE/proxy/litellm` for GPT calls (proxy creds injected by mothership)
 - Branch name = Linear ticket identifier (e.g., BLDX-456)
 - Conventional Commits: fix(), perf(), refactor(), test(), docs(), feat()
 - NEVER add Co-Authored-By lines
