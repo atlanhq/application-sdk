@@ -19,7 +19,7 @@ repos:
         entry: isort
         types: [python]
         args: ["--profile", "black"]
-        exclude: ^contract-toolkit/examples/.*/generated/_input\.py$
+        exclude: ^contract-toolkit/examples/.*/_input\.py$
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.0.0
     hooks:
