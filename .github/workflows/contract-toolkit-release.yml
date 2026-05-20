@@ -228,7 +228,7 @@ jobs:
               echo "Automated release PR for app-contract-toolkit v${new_version}."
               echo
               echo "Merging this PR triggers Publish Contract Toolkit, which builds the"
-              echo "PKL package, publishes it under app-contract-toolkit/ on the gh-pages"
+              echo "PKL package, publishes it under contracts/ on the gh-pages"
               echo "branch, creates the contract-toolkit-v${new_version} tag, and creates"
               echo "the GitHub release."
               echo

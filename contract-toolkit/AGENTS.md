@@ -272,7 +272,7 @@ Releases are automated and require no manual version input:
    Validation checks and needs a codeowner review.
 3. **Auto-publish (Phase B):** Merging the labeled PR fires `Publish Contract
    Toolkit`, which builds the PKL package from merged `main`, publishes the
-   artifacts under `app-contract-toolkit/` on the `gh-pages` branch, triggers a
+   artifacts under `contracts/` on the `gh-pages` branch, triggers a
    GitHub Pages build, tags `contract-toolkit-v<version>` at the merge commit,
    and creates the GitHub Release with the rendered notes and package assets.
 
