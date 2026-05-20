@@ -3,6 +3,7 @@
 name: deploy
 display_name: Deploy Config Example
 type: connector
+execution_mode: native
 icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
 visibility: public
 build_tag: v1

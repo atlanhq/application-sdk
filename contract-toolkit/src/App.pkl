@@ -128,17 +128,11 @@ creatorOrg: String?
 /// Marketplace app type (`connector`, `miner`, `utility`, `system`, ...).
 type: String = "connector"
 
-/// Optional top-level execution mode for atlan.yaml.
-executionMode: String?
-
 /// Marketplace icon URL. Defaults to the app `icon` when not set.
 iconUrl: String? = icon
 
 /// Marketplace visibility.
 visibility: String = "public"
-
-/// Argo package names used for legacy/stitching lookup.
-argoPackageNames: Listing<String> = new Listing {}
 
 /// Marketplace build tag.
 buildTag: String = "v1"
@@ -226,12 +220,6 @@ credentialNamePlaceholder: String = "Host Name"
 /// Optional default for the hidden credential `connector` field.
 credentialConnectorDefault: String?
 
-/// Whether to emit top-level metadata keys on the credential configmap.
-credentialConfigIncludeTopLevelMetadata: Boolean = true
-
-/// Whether to emit `ui.hidden=false` on the auth-type radio.
-credentialAuthIncludeHiddenFlag: Boolean = true
-
 /// Field name for the app's credential reference in the generated Input class.
 credentialFieldName: String? = if (hasCredentialConfig) "\(name.replaceAll("-", "_"))_credential" else null
 
@@ -244,10 +232,6 @@ workflowConfigName: String = name
 /// Required for single-entrypoint apps (when `entrypoints` is empty).
 uiConfig: Widgets.UIConfig?
 
-/// Whether to emit top-level id/name/logo keys on the workflow configmap.
-workflowConfigIncludeTopLevelMetadata: Boolean = true
-
-
 // ── MANIFEST CONFIG ───────────────────────────────────────────────────────────
 
 /// Additional DAG nodes beyond the pipeline.
@@ -259,12 +243,6 @@ manifestTopLevelArgs: Mapping<String, String> = new Mapping {
   ["credential_guid"] = "credential-guid"
   ["connection"] = "connection"
 }
-
-/// When true, all workflow params are emitted as top-level keys inside `args`.
-flatManifestArgs: Boolean = true
-
-/// Optional mapping of metadata arg key → form field name for legacy manifests.
-manifestMetadataArgs: Mapping<String, String>?
 
 // ── PIPELINE ─────────────────────────────────────────────────────────────────
 
@@ -1709,13 +1687,11 @@ local connectorInvariant =
 local function generateCredentialConfig(): Mapping<String, Any> =
   let (_ = jdbcInvariant)
   new Mapping {
-  when (credentialConfigIncludeTopLevelMetadata) {
-    ["icon"] = icon
-    ["helpdeskLink"] = helpdeskLink
-    ["logo"] = logo
-    ["connector"] = connector?.value
-    ["defaultConnectorType"] = credentialConnectorType
-  }
+  ["icon"] = icon
+  ["helpdeskLink"] = helpdeskLink
+  ["logo"] = logo
+  ["connector"] = connector?.value
+  ["defaultConnectorType"] = credentialConnectorType
   ["config"] = new Mapping {
     ["properties"] = new Mapping {
       ["name"] = new Mapping {
@@ -1758,7 +1734,7 @@ local function generateCredentialConfig(): Mapping<String, Any> =
           }
           ["ui"] = new Mapping {
             ["widget"] = "radio"
-            when (credentialAuthIncludeHiddenFlag) { ["hidden"] = false }
+            ["hidden"] = false
             ["label"] = credentialAuthTitle
             when (credentialAuthRules != null) { ["rules"] = credentialAuthRules }
             when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
@@ -2062,29 +2038,9 @@ local function generateExtractNode(): Mapping<String, Any> =
             [argName] = "{{" + formField + "}}"
           }
         }
-        when (flatManifestArgs) {
-          for (paramKey, param in (uiConfig?.properties ?? Map())) {
-            when (param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
-              [toPyName(paramKey)] = "{{" + paramKey + "}}"
-            }
-          }
-        }
-        when (!flatManifestArgs) {
-          ["metadata"] = new Mapping {
-            when (manifestMetadataArgs != null) {
-              for (argName, formField in manifestMetadataArgs!!) {
-                when (uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
-                  [argName] = "{{" + formField + "}}"
-                }
-              }
-            }
-            when (manifestMetadataArgs == null) {
-              for (paramKey, param in (uiConfig?.properties ?? Map())) {
-                when (param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
-                  [toPyName(paramKey)] = "{{" + paramKey + "}}"
-                }
-              }
-            }
+        for (paramKey, param in (uiConfig?.properties ?? Map())) {
+          when (param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
+            [toPyName(paramKey)] = "{{" + paramKey + "}}"
           }
         }
       }
@@ -2098,11 +2054,9 @@ local function generateExtractNode(): Mapping<String, Any> =
 
 local workflowConfigOutput: FileOutput = new FileOutput {
   value = new Mapping {
-    when (workflowConfigIncludeTopLevelMetadata) {
-      ["id"] = workflowConfigName
-      ["name"] = displayName
-      ["logo"] = logo
-    }
+    ["id"] = workflowConfigName
+    ["name"] = displayName
+    ["logo"] = logo
     ["config"] = uiConfig
   }
   renderer = new JsonRenderer {}
@@ -2400,10 +2354,9 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["display_name"] = displayName
   when (creatorOrg != null) { ["creator_org"] = creatorOrg }
   ["type"] = type
-  when (executionMode != null) { ["execution_mode"] = executionMode }
+  ["execution_mode"] = deploy.executionMode
   when (iconUrl != null) { ["icon_url"] = iconUrl }
   ["visibility"] = visibility
-  when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
   ["build_tag"] = buildTag
   ["self_deployed_runtime"] = selfDeployedRuntime
   when (emitEntrypoints) {

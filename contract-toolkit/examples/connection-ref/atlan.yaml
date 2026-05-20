@@ -3,6 +3,7 @@
 name: connection-ref
 display_name: ConnectionRef Example
 type: connector
+execution_mode: native
 icon_url: https://assets.atlan.com/assets/trino.svg
 visibility: public
 build_tag: v1

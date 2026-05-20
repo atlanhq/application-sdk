@@ -105,7 +105,6 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `workflowType` | String | `""` | Python App class name in PascalCase. Auto-converted to kebab-case. Either this or `workflowTypeOverride` must be set. |
 | `workflowTypeOverride` | String? | null | Explicit workflow type (used as-is, overrides `workflowType`). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
-| `flatManifestArgs` | Boolean | `true` | Emit workflow params as top-level keys in `args`. Set `false` only for legacy workflows. |
 
 ### Pipeline Block
 
@@ -309,7 +308,6 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 | `workflowConfigName` | String | `name` | Workflow configmap name / output filename. |
 | `credentialFieldName` | String? | `"{name}_credential"` | Credential ref field in Input class. Null to omit. |
 | `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. |
-| `manifestMetadataArgs` | Mapping<String, String>? | null | Legacy `args.metadata` mapping when `flatManifestArgs = false`. |
 | `publishTagPipelineEnabled` | Boolean\|String? | auto | Value for `PublishNode`'s `tag_pipeline_enabled`. Auto-wired when `enable-tags` or `enable-tag-sync` is in the form. |
 | `publishTagAttachmentsPrefix` | String? | auto | Value for `PublishNode`'s `tag_attachments_prefix`. |
 
@@ -354,8 +352,6 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `additionalOutputFiles` | Mapping<String, FileOutput> | `{}` | Explicit opt-in files to emit with this contract, for example a customized `AgentConfig.pkl` output. |
 | `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom DAG nodes. Use `DAGNode` for arbitrary workflows, `PublishNode` for the standard Atlas publish step, `QueryIntelligenceNode` for native QI, `PopularityNode` for popularity metrics, `LineageNode` for the Lineage app, or `LineagePublishNode` for lineage publish. Key `"publish"` replaces auto-generated publish. |
 | `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. These remain top-level in either manifest shape. |
-| `flatManifestArgs` | Boolean | `true` | When `true`, all workflow params are emitted as top-level keys in `args` with no `metadata` wrapper, matching generated SDK v3 `_input.py` fields. Set to `false` only for legacy workflows that intentionally read `args.metadata`. |
-| `manifestMetadataArgs` | Mapping<String, String>? | null | Optional explicit mapping of legacy `args.metadata` key → workflow form field when `flatManifestArgs = false`. |
 
 ### Credential Config
 
@@ -376,8 +372,6 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for the hidden credential `name` field. |
 | `credentialConnectorDefault` | String? | null | Optional default for the hidden credential `connector` field. |
-| `credentialConfigIncludeTopLevelMetadata` | Boolean | `true` | Emits top-level credential config metadata (`icon`, `helpdeskLink`, `logo`, `connector`, `defaultConnectorType`). Set `false` only for legacy parity. |
-| `credentialAuthIncludeHiddenFlag` | Boolean | `true` | Emits `ui.hidden=false` on the auth-type radio. Set `false` only for legacy parity. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. When set, every `credentialAuthOptions` entry must be a `JDBCUrlAuthOption`. See [AdvancedJDBCUrlGroup](#advancedjdbcurlgroup--hostrlarrowurl-jdbc-credential-form). |
 
 ### Workflow Config
@@ -385,7 +379,6 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | Property | Type | Description |
 |---|---|---|
 | `uiConfig` | Config.UIConfig | Setup form definition with tasks, rules. |
-| `workflowConfigIncludeTopLevelMetadata` | Boolean | Emits top-level workflow config metadata (`id`, `name`, `logo`). Set `false` only for legacy parity. |
 
 ---
 
@@ -420,10 +413,8 @@ contract/app.pkl
 | `displayName` | String | `name.capitalize()` | App display name emitted as `display_name`. |
 | `creatorOrg` | String? | null | Optional `creator_org`. |
 | `type` | String | `"connector"` | Root marketplace type. |
-| `executionMode` | String? | null | Optional top-level `execution_mode`. Current app yaml files may also use `deploy.execution_mode`. |
 | `iconUrl` | String? | null | Root `icon_url`. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
-| `argoPackageNames` | Listing<String> | `[]` | Emitted as `argo_package_names`. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `false` | Emitted as `self_deployed_runtime`. |
 | `metadata` | Mapping<String, Any> | `{}` | Extra top-level `atlan.yaml` fields. |

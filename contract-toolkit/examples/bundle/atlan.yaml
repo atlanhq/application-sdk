@@ -3,6 +3,7 @@
 name: bundle
 display_name: Bundle Example
 type: connector
+execution_mode: native
 icon_url: https://assets.atlan.com/assets/snowflake.svg
 visibility: public
 build_tag: v1

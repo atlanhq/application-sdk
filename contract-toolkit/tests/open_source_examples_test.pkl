@@ -151,6 +151,8 @@ facts {
   ["Deploy example atlan.yaml includes typed KEDA, Dapr, resources, env, and deployOverrides"] {
     deployApp.output.files.containsKey("atlan.yaml")
     local deployYaml: String = deployApp.output.files["atlan.yaml"].text
+    // execution_mode at top level (read by global-marketplace and atlan-local-marketplace-app)
+    deployYaml.contains("execution_mode: native")
     // KEDA settings
     deployYaml.contains("enabled: true")
     deployYaml.contains("targetQueueSize: 10")

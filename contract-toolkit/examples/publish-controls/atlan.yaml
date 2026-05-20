@@ -3,6 +3,7 @@
 name: publish-controls
 display_name: Publish Controls Example
 type: connector
+execution_mode: native
 icon_url: https://assets.atlan.com/assets/trino.svg
 visibility: public
 build_tag: v1

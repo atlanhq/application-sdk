@@ -3,6 +3,7 @@
 name: minimal
 display_name: Minimal Example
 type: connector
+execution_mode: native
 icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
 visibility: public
 build_tag: v1
