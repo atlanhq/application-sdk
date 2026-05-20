@@ -347,9 +347,9 @@ class TestExtractEmitsRawFileReference:
         # the local_path is under TEMPORARY_PATH, so the strip
         # yields ``<run_prefix>/raw/<entity>/records.json``.
         assert result.raw_file.storage_path is not None
-        assert result.raw_file.storage_path.endswith(
-            "/raw/database/records.json"
-        ), f"unexpected storage_path: {result.raw_file.storage_path!r}"
+        assert result.raw_file.storage_path.endswith("/raw/database/records.json"), (
+            f"unexpected storage_path: {result.raw_file.storage_path!r}"
+        )
         # Tier stays TRANSIENT (the semantically correct choice — the
         # raw file is an intermediate extract→transform handoff and
         # gets auto-cleaned at run end by ``cleanup_storage``).
@@ -583,8 +583,7 @@ class TestCanonicalStoragePaths:
             )
             assert durable.storage_path == result.raw_file.storage_path
             assert durable.storage_path.endswith(f"/raw/{entity}/records.json"), (
-                f"raw_file for {entity} not at canonical key: "
-                f"{durable.storage_path!r}"
+                f"raw_file for {entity} not at canonical key: {durable.storage_path!r}"
             )
 
         # ── transform all 4 entities (each with its raw_file threaded in) ──
@@ -620,9 +619,7 @@ class TestCanonicalStoragePaths:
         data_keys = [k for k in all_keys if not k.endswith(".sha256")]
 
         # Expectation: 4 canonical raw + 4 canonical transformed = 8 data files.
-        expected_suffixes = {
-            f"/raw/{e}/records.json" for e in entity_sql_rows
-        } | {
+        expected_suffixes = {f"/raw/{e}/records.json" for e in entity_sql_rows} | {
             f"/transformed/{e}/entities.json" for e in entity_sql_rows
         }
         actual_suffixes = {
@@ -794,9 +791,7 @@ class TestCanonicalStoragePaths:
             durable_raw = await persist_file_reference(
                 store, extract_result.raw_file, output_path="ignored"
             )
-            assert durable_raw.storage_path.endswith(
-                f"/raw/{entity}/records.json"
-            )
+            assert durable_raw.storage_path.endswith(f"/raw/{entity}/records.json")
 
             # Simulate the extract pod going away — its local FS is
             # gone before the transform runs.
@@ -834,12 +829,11 @@ class TestCanonicalStoragePaths:
         data_keys = [k for k in all_keys if not k.endswith(".sha256")]
 
         for entity in entity_rows:
+            assert any(k.endswith(f"/raw/{entity}/records.json") for k in data_keys), (
+                f"missing canonical raw key for {entity}: {data_keys}"
+            )
             assert any(
-                k.endswith(f"/raw/{entity}/records.json") for k in data_keys
-            ), f"missing canonical raw key for {entity}: {data_keys}"
-            assert any(
-                k.endswith(f"/transformed/{entity}/entities.json")
-                for k in data_keys
+                k.endswith(f"/transformed/{entity}/entities.json") for k in data_keys
             ), f"missing canonical transformed key for {entity}: {data_keys}"
 
         # The smoking gun: NO file_refs/<uuid> orphans. The customer
