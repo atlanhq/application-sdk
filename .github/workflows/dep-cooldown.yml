@@ -1,0 +1,30 @@
+name: dep-cooldown
+
+# Calls the org-shared cooldown checker in atlanhq/.github.
+# Fails the PR if any newly-introduced dependency version is younger
+# than 7 days. Covers both ecosystems:
+#   - JS:     package-lock.json, pnpm-lock.yaml, yarn.lock
+#   - Python: uv.lock, poetry.lock, requirements*.txt
+# Bypass: add the 'security' label to the PR (audited).
+#
+# This file is uniform across every consumer repo. To change policy,
+# edit the reusable workflow in atlanhq/.github.
+
+on:
+  # Trigger on every PR regardless of base branch. Some repos use master /
+  # staging / develop as default; hardcoding 'main' would silently skip them.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  cooldown:
+    uses: atlanhq/.github/.github/workflows/reusable-dep-cooldown.yml@main
+    with:
+      min-age-days: 7
+    # Forwards SLACK_DEP_COOLDOWN_WEBHOOK to the reusable workflow so
+    # cooldown failures alert in #community-security with PR + deps + run-log.
+    secrets: inherit

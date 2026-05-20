@@ -6,13 +6,17 @@ deadlock timeout.
 """
 
 import random
-from typing import Any, Dict
+from typing import Any
 
 from temporalio import activity
 
 from application_sdk.clients.redis import RedisClientAsync
-from application_sdk.common.error_codes import ActivityError
-from application_sdk.execution.errors import ApplicationError
+from application_sdk.errors import AppError
+from application_sdk.execution._temporal._lock_errors import (
+    LockAcquisitionError,
+    MaxLocksInvalidError,
+    RedisLockError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -24,7 +28,7 @@ async def acquire_distributed_lock(
     max_locks: int,
     ttl_seconds: int = 100,
     owner_id: str = "default_owner",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Acquire a distributed lock with retry logic.
 
     Args:
@@ -40,13 +44,13 @@ async def acquire_distributed_lock(
             - owner_id (str): Owner identifier.
 
     Raises:
-        ActivityError: If lock acquisition fails due to Redis errors or invalid parameters.
+        AppError: If lock acquisition fails due to Redis errors or invalid parameters.
     """
     # Input validation
     if max_locks <= 0:
-        raise ApplicationError(
-            f"{ActivityError.LOCK_ACQUISITION_ERROR}: max_locks must be greater than 0, got {max_locks}",
-            non_retryable=True,
+        raise MaxLocksInvalidError(
+            message=f"max_locks must be greater than 0, got {max_locks}",
+            value_summary=str(max_locks),
         )
     slot = random.randint(0, max_locks - 1)
     resource_id = f"{lock_name}:{slot}"
@@ -66,17 +70,13 @@ async def acquire_distributed_lock(
                     "owner_id": owner_id,
                 }
 
-            raise ActivityError(
-                f"{ActivityError.LOCK_ACQUISITION_ERROR}: Lock not acquired for {resource_id}, will retry after some time"
-            )
+            raise LockAcquisitionError()
     except Exception as e:
-        # Redis connection or operation failed - propagate as activity error
-        if isinstance(e, ActivityError):
+        if isinstance(e, AppError):
             raise
-        raise ApplicationError(
-            f"Redis error during lock acquisition for {resource_id}",
-            non_retryable=True,
-            type=type(e).__name__,
+        raise RedisLockError(
+            message=f"Redis error during lock acquisition for {resource_id}",
+            network_error=type(e).__name__,
         ) from e
 
 

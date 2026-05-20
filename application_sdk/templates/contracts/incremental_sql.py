@@ -8,7 +8,9 @@ input/output types.
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional
+import re
+
+from pydantic import field_validator
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.templates.contracts.sql_metadata import (
@@ -20,6 +22,49 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchSchemasOutput,
     FetchTablesOutput,
 )
+
+# BLDX-518: marker_timestamp is substituted into incremental SQL templates
+# via ``str.replace``, so untrusted input could carry SQL escape sequences
+# (the marker is sourced from a persistent file but can also be overridden
+# from the workflow input — see ``FetchIncrementalMarkerInput.existing_marker``).
+#
+# Accept either:
+#   * Empty string — signals "no marker, perform a full extraction".
+#   * ISO-8601 / RFC-3339 timestamp — date + time, optional fractional
+#     seconds, optional timezone offset. ``T`` or space between date and
+#     time is allowed to match the variants different sources emit.
+#
+# Anything else (including SQL escape chars) is rejected by the validator
+# regardless of whether the value came from object storage or a workflow
+# override.
+_ISO_TIMESTAMP_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$"
+)
+
+
+def _validate_marker_timestamp(value: str | None) -> str | None:
+    """Reject marker timestamps that don't match ISO-8601 / empty.
+
+    Empty / None passes through (no marker = full-extraction signal).
+    Anything else must match :data:`_ISO_TIMESTAMP_PATTERN`. Raises
+    ``ValueError`` so Pydantic surfaces it as ``ValidationError``.
+
+    Assumption: all SDK-produced markers are ISO-8601 timestamps or empty
+    strings, so adding this validator to Output contracts
+    (``FetchIncrementalMarkerOutput``, ``UpdateMarkerOutput``) is safe for
+    Temporal workflow replay — no well-formed history entry would be
+    rejected by this constraint.
+    """
+    if value is None or value == "":
+        return value
+    if not _ISO_TIMESTAMP_PATTERN.match(value):
+        raise ValueError(
+            f"marker_timestamp must be empty or an ISO-8601 / RFC-3339 timestamp "
+            f"(got {value!r}). Reject reason: prevents SQL injection via "
+            "templates that substitute the marker into a quoted literal."
+        )
+    return value
+
 
 # =============================================================================
 # IncrementalRunContext — local accumulator, NOT a Temporal payload
@@ -50,7 +95,7 @@ class IncrementalRunContext:
     prepone_marker_timestamp: bool = True
     prepone_marker_hours: int = 3
     # Set by fetch_incremental_marker
-    marker_timestamp: Optional[str] = None
+    marker_timestamp: str | None = None
     next_marker_timestamp: str = ""
     # Set by read_current_state
     current_state_available: bool = False
@@ -87,7 +132,7 @@ class IncrementalRunContext:
 # =============================================================================
 
 
-class IncrementalExtractionInput(ExtractionInput, allow_unbounded_fields=True):
+class IncrementalExtractionInput(ExtractionInput):
     """Top-level input for an incremental SQL metadata extraction run.
 
     Extends :class:`ExtractionInput` with incremental-specific configuration.
@@ -142,7 +187,7 @@ class IncrementalExtractionOutput(ExtractionOutput):
 # =============================================================================
 
 
-class IncrementalTaskInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class IncrementalTaskInput(ExtractionTaskInput):
     """Base task input with incremental runtime state.
 
     Extends :class:`ExtractionTaskInput` with the incremental fields that
@@ -161,13 +206,18 @@ class IncrementalTaskInput(ExtractionTaskInput, allow_unbounded_fields=True):
     column_chunk_size: int = 100000
     """Number of column records per output chunk file."""
 
+    @field_validator("marker_timestamp", mode="after")
+    @classmethod
+    def _validate_marker(cls, v: str) -> str:
+        return _validate_marker_timestamp(v) or ""
+
 
 # =============================================================================
 # Per-task incremental input types (inherit IncrementalTaskInput)
 # =============================================================================
 
 
-class FetchTablesIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class FetchTablesIncrementalInput(IncrementalTaskInput):
     """Input for the incremental fetch_tables task.
 
     Carries all fields from :class:`IncrementalTaskInput`. The marker and
@@ -177,7 +227,7 @@ class FetchTablesIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=T
     """
 
 
-class FetchColumnsIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class FetchColumnsIncrementalInput(IncrementalTaskInput):
     """Input for the incremental fetch_columns task.
 
     When both ``marker_timestamp`` is non-empty and ``current_state_available``
@@ -191,7 +241,7 @@ class FetchColumnsIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=
 # =============================================================================
 
 
-class FetchIncrementalMarkerInput(Input, allow_unbounded_fields=True):
+class FetchIncrementalMarkerInput(Input):
     """Input for the fetch_incremental_marker task."""
 
     connection_qualified_name: str = ""
@@ -200,7 +250,7 @@ class FetchIncrementalMarkerInput(Input, allow_unbounded_fields=True):
     application_name: str = ""
     """Application name for S3 path resolution."""
 
-    existing_marker: Optional[str] = None
+    existing_marker: str | None = None
     """Pre-existing marker value (e.g., from a manual workflow override)."""
 
     prepone_enabled: bool = True
@@ -208,6 +258,11 @@ class FetchIncrementalMarkerInput(Input, allow_unbounded_fields=True):
 
     prepone_hours: float = 3.0
     """Hours to subtract from the marker when preponing is enabled."""
+
+    @field_validator("existing_marker", mode="after")
+    @classmethod
+    def _validate_existing_marker(cls, v: str | None) -> str | None:
+        return _validate_marker_timestamp(v)
 
 
 class FetchIncrementalMarkerOutput(Output):
@@ -219,13 +274,18 @@ class FetchIncrementalMarkerOutput(Output):
     next_marker_timestamp: str = ""
     """New marker timestamp generated for the current run."""
 
+    @field_validator("marker_timestamp", "next_marker_timestamp", mode="after")
+    @classmethod
+    def _validate_marker(cls, v: str) -> str:
+        return _validate_marker_timestamp(v) or ""
+
 
 # =============================================================================
 # read_current_state task
 # =============================================================================
 
 
-class ReadCurrentStateInput(Input, allow_unbounded_fields=True):
+class ReadCurrentStateInput(Input):
     """Input for the read_current_state task."""
 
     connection_qualified_name: str = ""
@@ -253,7 +313,7 @@ class ReadCurrentStateOutput(Output):
 # =============================================================================
 
 
-class PrepareColumnQueriesInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class PrepareColumnQueriesInput(IncrementalTaskInput):
     """Input for the prepare_column_extraction_queries task."""
 
     connection_qualified_name: str = ""
@@ -284,7 +344,7 @@ class PrepareColumnQueriesOutput(Output):
 # =============================================================================
 
 
-class ExecuteColumnBatchInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class ExecuteColumnBatchInput(IncrementalTaskInput):
     """Input for executing a single incremental column batch."""
 
     batch_index: int = 0
@@ -304,7 +364,11 @@ class ExecuteColumnBatchOutput(Output):
 
     batch_index: int = 0
     records: int = 0
-    status: str = ""
+    # Pre-dates BLDX-1244's standard Output.status (``OutputStatus`` enum)
+    # and uses domain-specific values ("not_found", "success") that aren't
+    # part of the enum vocabulary. Keep the str override for backward-compat;
+    # the misc ignore acknowledges the deliberate field-type narrowing.
+    status: str = ""  # type: ignore[assignment]
 
 
 # =============================================================================
@@ -312,7 +376,7 @@ class ExecuteColumnBatchOutput(Output):
 # =============================================================================
 
 
-class WriteCurrentStateInput(IncrementalTaskInput, allow_unbounded_fields=True):
+class WriteCurrentStateInput(IncrementalTaskInput):
     """Input for the write_current_state task."""
 
     workflow_run_id: str = ""
@@ -343,12 +407,17 @@ class WriteCurrentStateOutput(Output):
 # =============================================================================
 
 
-class UpdateMarkerInput(Input, allow_unbounded_fields=True):
+class UpdateMarkerInput(Input):
     """Input for the update_incremental_marker task."""
 
     connection_qualified_name: str = ""
     next_marker_timestamp: str = ""
     application_name: str = ""
+
+    @field_validator("next_marker_timestamp", mode="after")
+    @classmethod
+    def _validate_marker(cls, v: str) -> str:
+        return _validate_marker_timestamp(v) or ""
 
 
 class UpdateMarkerOutput(Output):
@@ -357,6 +426,11 @@ class UpdateMarkerOutput(Output):
     marker_written: bool = False
     marker_timestamp: str = ""
     s3_key: str = ""
+
+    @field_validator("marker_timestamp", mode="after")
+    @classmethod
+    def _validate_marker(cls, v: str) -> str:
+        return _validate_marker_timestamp(v) or ""
 
 
 # =============================================================================

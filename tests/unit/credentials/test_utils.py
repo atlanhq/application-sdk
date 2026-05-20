@@ -107,6 +107,103 @@ class TestResolveCredentialFile:
         assert result is None
 
     # ------------------------------------------------------------------
+    # Customer object store path (objectstore:// prefix)
+    # ------------------------------------------------------------------
+
+    @patch(
+        "application_sdk.credentials.utils.download_file",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.credentials.utils.create_store_from_binding")
+    async def test_objectstore_prefix_downloads_via_deployment_binding(
+        self, mock_create_store, mock_download, tmp_path
+    ):
+        """objectstore:// prefix routes to download_file with DEPLOYMENT binding."""
+        fake_store = object()
+        mock_create_store.return_value = fake_store
+
+        result = await resolve_credential_file(
+            "objectstore://kerberos/hiveadmin.keytab",
+            "keytab.keytab",
+            str(tmp_path),
+        )
+
+        # Binding name comes from the SDK constant
+        from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
+
+        mock_create_store.assert_called_once_with(DEPLOYMENT_OBJECT_STORE_NAME)
+        mock_download.assert_awaited_once_with(
+            "kerberos/hiveadmin.keytab",
+            os.path.join(str(tmp_path), "keytab.keytab"),
+            store=fake_store,
+        )
+        assert result == os.path.join(str(tmp_path), "keytab.keytab")
+
+    @patch(
+        "application_sdk.credentials.utils.download_file",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.credentials.utils.create_store_from_binding")
+    async def test_objectstore_prefix_strips_whitespace(
+        self, mock_create_store, mock_download, tmp_path
+    ):
+        """Leading/trailing whitespace is stripped before prefix detection."""
+        mock_create_store.return_value = object()
+
+        result = await resolve_credential_file(
+            "  objectstore://foo/bar.keytab  ",
+            "keytab.keytab",
+            str(tmp_path),
+        )
+
+        mock_download.assert_awaited_once()
+        called_key = mock_download.await_args.args[0]
+        assert called_key == "foo/bar.keytab"
+        assert result == os.path.join(str(tmp_path), "keytab.keytab")
+
+    async def test_objectstore_prefix_rejects_empty_key(self, tmp_path):
+        """objectstore:// with no key after the prefix returns None."""
+        result = await resolve_credential_file(
+            "objectstore://", "keytab.keytab", str(tmp_path)
+        )
+        assert result is None
+
+    async def test_objectstore_prefix_rejects_absolute_path(self, tmp_path):
+        """Absolute paths after the prefix are rejected."""
+        result = await resolve_credential_file(
+            "objectstore:///etc/passwd", "keytab.keytab", str(tmp_path)
+        )
+        assert result is None
+
+    async def test_objectstore_prefix_rejects_path_traversal(self, tmp_path):
+        """Path traversal segments (..) are rejected."""
+        result = await resolve_credential_file(
+            "objectstore://kerberos/../secrets/keytab",
+            "keytab.keytab",
+            str(tmp_path),
+        )
+        assert result is None
+
+    @patch(
+        "application_sdk.credentials.utils.download_file",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.credentials.utils.create_store_from_binding")
+    async def test_objectstore_download_failure_returns_none(
+        self, mock_create_store, mock_download, tmp_path
+    ):
+        """Download failures are logged and return None — never raise."""
+        mock_create_store.return_value = object()
+        mock_download.side_effect = RuntimeError("network down")
+
+        result = await resolve_credential_file(
+            "objectstore://kerberos/hiveadmin.keytab",
+            "keytab.keytab",
+            str(tmp_path),
+        )
+        assert result is None
+
+    # ------------------------------------------------------------------
     # Empty / None inputs
     # ------------------------------------------------------------------
 

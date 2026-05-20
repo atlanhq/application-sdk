@@ -19,10 +19,10 @@ per batch → aggregate). Override ``run()`` to customise parallelism or error h
 
 from __future__ import annotations
 
-from typing import ClassVar
+import warnings
+from typing import Any, ClassVar
 
 from application_sdk.app.task import task
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.credentials import legacy_credential_ref
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
@@ -41,8 +41,12 @@ logger = get_logger(__name__)
 class SqlQueryExtractor(BaseMetadataExtractor):
     """Abstract base class for SQL query extraction apps.
 
-    Inherits ``upload_to_atlan``, ``client_class``, ``handler_class``,
-    and ``transformer_class`` from ``BaseMetadataExtractor``.
+    .. deprecated::
+        Will be removed in v4.0.0. Use
+        :class:`application_sdk.templates.SqlApp` instead.
+
+    Inherits ``client_class``, ``handler_class``, and ``transformer_class``
+    from ``BaseMetadataExtractor``.
 
     The ``run()`` method orchestrates the full extraction:
     ``get_query_batches`` → ``fetch_queries`` (per batch) → aggregate output.
@@ -52,6 +56,20 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
     # Prevent auto-registration of the abstract base template.
     _app_registered: ClassVar[bool] = True
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if cls.__module__.startswith("application_sdk."):
+            return
+        if SqlQueryExtractor not in cls.__bases__:
+            return
+        warnings.warn(
+            f"{cls.__name__} subclasses SqlQueryExtractor which is deprecated. "
+            "Use application_sdk.templates.SqlApp instead. "
+            "Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
@@ -134,6 +152,8 @@ class SqlQueryExtractor(BaseMetadataExtractor):
             )
 
         except Exception as e:
-            raise rewrap(
-                e, f"SQL query extraction failed (workflow_id={workflow_id})"
-            ) from e
+            from application_sdk.templates._template_errors import (  # noqa: PLC0415
+                SqlQueryExtractionError,
+            )
+
+            raise SqlQueryExtractionError(workflow_id=str(workflow_id), cause=e) from e

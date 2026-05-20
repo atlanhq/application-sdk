@@ -28,6 +28,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
     ExtractionTaskInput,
+    ExtractionTaskOutput,
     FetchColumnsInput,
     FetchColumnsOutput,
     FetchDatabasesInput,
@@ -38,6 +39,8 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchSchemasOutput,
     FetchTablesInput,
     FetchTablesOutput,
+    FetchViewsInput,
+    FetchViewsOutput,
     TransformInput,
     TransformOutput,
 )
@@ -51,13 +54,14 @@ from application_sdk.templates.contracts.sql_query import (
 )
 
 __all__ = [
-    # Base metadata extraction
+    # Base metadata extraction (deprecated upload_to_atlan task)
     "UploadInput",
     "UploadOutput",
     # SQL metadata — base
     "ExtractionInput",
     "ExtractionOutput",
     "ExtractionTaskInput",
+    "ExtractionTaskOutput",
     "FetchColumnsInput",
     "FetchColumnsOutput",
     "FetchDatabasesInput",
@@ -68,6 +72,8 @@ __all__ = [
     "FetchSchemasOutput",
     "FetchTablesInput",
     "FetchTablesOutput",
+    "FetchViewsInput",
+    "FetchViewsOutput",
     "TransformInput",
     "TransformOutput",
     # Incremental SQL

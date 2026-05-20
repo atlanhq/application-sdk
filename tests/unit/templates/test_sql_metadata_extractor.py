@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, get_type_hints
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -690,6 +691,30 @@ class TestGetCredentials:
                 ExtractionTaskInput(credential_guid="some-guid-that-needs-a-store")
             )
 
+    async def test_resolves_credentials_via_resolver(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Happy path: infra+secret_store present → resolve_raw returns dict."""
+        from application_sdk.credentials.ref import CredentialRef
+
+        fake_secret_store = MagicMock()
+        fake_infra = MagicMock(secret_store=fake_secret_store)
+        monkeypatch.setattr(mod, "get_infrastructure", lambda: fake_infra)
+
+        # Patch CredentialResolver to return our fake resolver
+        fake_resolver = MagicMock()
+        fake_resolver.resolve_raw = AsyncMock(return_value={"u": "v"})
+        monkeypatch.setattr(
+            mod, "CredentialResolver", MagicMock(return_value=fake_resolver)
+        )
+
+        extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        creds = await extractor._get_credentials(
+            ExtractionTaskInput(credential_ref=CredentialRef(credential_guid="g"))
+        )
+        assert creds == {"u": "v"}
+        fake_resolver.resolve_raw.assert_awaited_once()
+
 
 class TestConnectionQnExtraction:
     """Tests for connection_qualified_name extraction logic in run().
@@ -780,3 +805,311 @@ class TestExtractionOutputFields:
         assert "default/postgres/prod" in output.publish_state_prefix
         assert "default/postgres/prod" in output.staging_data_prefix
         assert "default/postgres/prod" in output.current_state_prefix
+
+
+class TestPrepareSqlMixedFilterModes:
+    """Cover line 197: dict exclude + string include (mirror branch)."""
+
+    def test_dict_exclude_string_include(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import ExtractionTaskInput
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        ext = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        sql = "{normalized_exclude_regex}|{normalized_include_regex}"
+        out = ext._prepare_sql(
+            sql,
+            ExtractionTaskInput(
+                exclude_filter={"^prod$": ["^temp$"]},
+                include_filter="^public_.*$",
+            ),
+        )
+        # Dict exclude is normalized; string include passed through
+        assert "prod" in out
+        assert "^public_" in out
+
+    def test_dict_exclude_empty_include_uses_default(self) -> None:
+        """Dict exclude + empty string include defaults include to '.*'."""
+        from application_sdk.templates.contracts.sql_metadata import ExtractionTaskInput
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        ext = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        sql = "X{normalized_include_regex}Y"
+        out = ext._prepare_sql(
+            sql,
+            ExtractionTaskInput(
+                exclude_filter={"^a$": ["^b$"]},
+                include_filter="",
+            ),
+        )
+        # Empty include + dict exclude path → include default to ".*" (line 197)
+        assert ".*" in out
+
+
+class TestFetchTablesHappyPath:
+    """Cover lines 308-312 — fetch_tables default execution path."""
+
+    async def test_fetch_tables_returns_tables_and_closes_client(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import (
+            FetchTablesInput,
+            FetchTablesOutput,
+        )
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        rows = [
+            {"table_name": "users"},
+            {"table_name": "orders"},
+            {"table_name": ""},  # filtered out
+            {"table_name": None},  # filtered out
+        ]
+        stub = _StubSQLClient(rows=rows)
+
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            sql_client_class = type(stub)  # type: ignore[assignment]
+            fetch_table_sql = (
+                "SELECT t FROM tables WHERE name !~ '{normalized_exclude_regex}'"
+            )
+
+        extractor = _E.__new__(_E)
+
+        async def _fake_load(_input: ExtractionTaskInput):
+            return stub
+
+        extractor._load_sql_client = _fake_load  # type: ignore[method-assign]
+
+        out = await extractor.fetch_tables(FetchTablesInput(exclude_filter="^skip_"))
+        assert isinstance(out, FetchTablesOutput)
+        assert out.tables == ["users", "orders"]
+        assert out.total_record_count == 2
+        assert out.chunk_count == 1
+        assert stub.last_query is not None
+        assert "^skip_" in stub.last_query
+        assert stub.closed is True
+
+    async def test_fetch_tables_raises_when_sql_not_set(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import FetchTablesInput
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        with pytest.raises(NotImplementedError, match="fetch_table_sql"):
+            await extractor.fetch_tables(FetchTablesInput())
+
+    async def test_fetch_schemas_raises_when_sql_not_set(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import FetchSchemasInput
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        with pytest.raises(NotImplementedError, match="fetch_schema_sql"):
+            await extractor.fetch_schemas(FetchSchemasInput())
+
+    async def test_fetch_columns_raises_when_sql_not_set(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import FetchColumnsInput
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        with pytest.raises(NotImplementedError, match="fetch_column_sql"):
+            await extractor.fetch_columns(FetchColumnsInput())
+
+
+class TestTaskInputHelper:
+    """Cover line 75 — _task_input helper."""
+
+    def test_task_input_propagates_all_fields(self) -> None:
+        from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+        from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.templates.contracts.sql_metadata import (
+            ExtractionInput,
+            FetchDatabasesInput,
+        )
+        from application_sdk.templates.sql_metadata_extractor import _task_input
+
+        src = ExtractionInput(
+            workflow_id="wf-7",
+            connection=ConnectionRef(
+                attributes=ConnectionAttributes(qualified_name="qn", name="n")
+            ),
+            credential_guid="g",
+            output_prefix="/p",
+            output_path="/path",
+            exclude_filter="^x$",
+            include_filter="^y$",
+            temp_table_regex="^tmp_",
+            source_tag_prefix="src",
+        )
+        cred = CredentialRef(credential_guid="g")
+        out = _task_input(FetchDatabasesInput, src, cred_ref=cred)
+
+        assert isinstance(out, FetchDatabasesInput)
+        assert out.workflow_id == "wf-7"
+        assert out.credential_guid == "g"
+        assert out.credential_ref is cred
+        assert out.output_prefix == "/p"
+        assert out.output_path == "/path"
+        assert out.exclude_filter == "^x$"
+        assert out.include_filter == "^y$"
+        assert out.temp_table_regex == "^tmp_"
+        assert out.source_tag_prefix == "src"
+
+
+# ---------------------------------------------------------------------------
+# Lines 382-452: run() orchestration. Stub all @task methods + upload_to_atlan
+# and exercise the full pipeline. No real I/O, no real DB.
+# ---------------------------------------------------------------------------
+
+
+class TestRunOrchestration:
+    def _build(self) -> Any:
+        """Construct an extractor with all tasks stubbed via AsyncMock."""
+        from application_sdk.contracts.storage import UploadOutput
+        from application_sdk.contracts.types import FileReference
+        from application_sdk.templates.contracts.sql_metadata import (
+            FetchColumnsOutput,
+            FetchDatabasesOutput,
+            FetchSchemasOutput,
+            FetchTablesOutput,
+        )
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        ext = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        ext.fetch_databases = AsyncMock(
+            return_value=FetchDatabasesOutput(total_record_count=2)
+        )
+        ext.fetch_schemas = AsyncMock(
+            return_value=FetchSchemasOutput(total_record_count=3)
+        )
+        ext.fetch_tables = AsyncMock(
+            return_value=FetchTablesOutput(total_record_count=10)
+        )
+        ext.fetch_columns = AsyncMock(
+            return_value=FetchColumnsOutput(total_record_count=100)
+        )
+        ext.upload = AsyncMock(
+            return_value=UploadOutput(ref=FileReference(file_count=12))
+        )
+        return ext
+
+    async def test_run_happy_path(self) -> None:
+        from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+        from application_sdk.templates.contracts.sql_metadata import (
+            ExtractionInput,
+            ExtractionOutput,
+        )
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        ext = self._build()
+        inp = ExtractionInput(
+            workflow_id="wf-1",
+            connection=ConnectionRef(
+                attributes=ConnectionAttributes(
+                    qualified_name="default/test/c", name="c"
+                )
+            ),
+            output_path="/tmp/out",
+            output_prefix="/tmp",
+        )
+        out = await SqlMetadataExtractor.run(ext, inp)
+        assert isinstance(out, ExtractionOutput)
+        assert out.success is True
+        assert out.databases_extracted == 2
+        assert out.schemas_extracted == 3
+        assert out.tables_extracted == 10
+        assert out.columns_extracted == 100
+        assert out.records_uploaded == 12
+        assert out.connection_qualified_name == "default/test/c"
+        assert out.output_path == "/tmp/out"
+        ext.fetch_databases.assert_awaited_once()
+        ext.upload.assert_awaited_once()
+
+    async def test_run_skips_upload_when_no_output_path(self) -> None:
+        from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        ext = self._build()
+        inp = ExtractionInput(
+            workflow_id="wf-2",
+            connection=ConnectionRef(
+                attributes=ConnectionAttributes(qualified_name="qn", name="n")
+            ),
+            output_path="",
+        )
+        out = await SqlMetadataExtractor.run(ext, inp)
+        assert out.records_uploaded == 0
+        ext.upload.assert_not_awaited()
+
+    async def test_run_uses_legacy_credential_guid_fallback(self) -> None:
+        """credential_ref None + credential_guid set → calls legacy_credential_ref."""
+        from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+        from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        ext = self._build()
+        inp = ExtractionInput(
+            workflow_id="wf-3",
+            connection=ConnectionRef(
+                attributes=ConnectionAttributes(qualified_name="qn", name="n")
+            ),
+            output_path="/tmp/out",
+            credential_guid="legacy-guid",
+        )
+        fake_ref = CredentialRef(credential_guid="legacy-guid")
+        with patch(
+            "application_sdk.templates.sql_metadata_extractor.legacy_credential_ref",
+            return_value=fake_ref,
+        ) as mock_legacy:
+            await SqlMetadataExtractor.run(ext, inp)
+        mock_legacy.assert_called_once_with("legacy-guid")
+
+    async def test_run_raises_sql_metadata_extraction_error(self) -> None:
+        from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+        from application_sdk.templates._template_errors import (
+            SqlMetadataExtractionError,
+        )
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        ext = self._build()
+        ext.fetch_databases = AsyncMock(side_effect=RuntimeError("db boom"))
+        inp = ExtractionInput(
+            workflow_id="wf-4",
+            connection=ConnectionRef(
+                attributes=ConnectionAttributes(qualified_name="qn", name="n")
+            ),
+        )
+        with pytest.raises(SqlMetadataExtractionError) as excinfo:
+            await SqlMetadataExtractor.run(ext, inp)
+        assert excinfo.value.code == "INTERNAL_SQL_METADATA_EXTRACTION"
+
+    async def test_run_handles_no_connection(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        ext = self._build()
+        inp = ExtractionInput(workflow_id="wf-5")
+        out = await SqlMetadataExtractor.run(ext, inp)
+        assert out.connection_qualified_name == ""

@@ -7,30 +7,33 @@ database operations, supporting batch processing and server-side cursors.
 
 import asyncio
 import concurrent
+import hashlib
+from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Union, cast
 from urllib.parse import quote_plus
 
-from application_sdk.clients import ClientInterface
+from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
+from application_sdk.clients.sql_errors import (
+    EngineNotInitializedError,
+    InvalidSqlEngineTypeError,
+    MissingSqlParamError,
+    SqlAwsCredentialsError,
+    SqlClientAuthFailedError,
+    SqlClientConfigError,
+    SqlCredentialsParseError,
+    SqlPandasResultError,
+    UnsupportedSqlCursorError,
+)
+from application_sdk.clients.sql_typecasters import install_tolerant_text_decoder_hook
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
 )
-from application_sdk.common.error_codes import ClientError, CommonError
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
+from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -58,15 +61,15 @@ class BaseSQLClient(ClientInterface):
 
     connection = None
     engine = None
-    credentials: Dict[str, Any] = {}
-    resolved_credentials: Dict[str, Any] = {}
+    credentials: dict[str, Any]
+    resolved_credentials: dict[str, Any]
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
-    DB_CONFIG: Optional[DatabaseConfig] = None
+    DB_CONFIG: DatabaseConfig | None = None
 
     def __init__(
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
-        credentials: Dict[str, Any] = {},
+        credentials: dict[str, Any] | None = None,
         chunk_size: int = 5000,
     ):
         """
@@ -75,13 +78,15 @@ class BaseSQLClient(ClientInterface):
         Args:
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
                 Defaults to USE_SERVER_SIDE_CURSOR.
-            credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
+            credentials (Optional[Dict[str, Any]], optional): Database credentials.
+                Defaults to None, which is treated as an empty dict.
         """
         self.use_server_side_cursor = use_server_side_cursor
-        self.credentials = credentials
+        self.credentials = credentials if credentials is not None else {}
+        self.resolved_credentials = {}
         self.chunk_size = chunk_size
 
-    async def load(self, credentials: Dict[str, Any]) -> None:
+    async def load(self, credentials: dict[str, Any]) -> None:
         """Load credentials and prepare engine for lazy connections.
 
         This method now only stores credentials and creates the engine without
@@ -91,21 +96,29 @@ class BaseSQLClient(ClientInterface):
             credentials (Dict[str, Any]): Database connection credentials.
 
         Raises:
-            ClientError: If credentials are invalid or engine creation fails
+            SqlClientAuthFailedError: If credentials are invalid or engine creation fails.
         """
         if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+            raise SqlClientConfigError()
 
         self.credentials = credentials  # Update the instance credentials
         try:
-            from sqlalchemy import create_engine
+            from sqlalchemy import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                create_engine,
+            )
 
             # Create engine but no persistent connection
             self.engine = create_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.DB_CONFIG.connect_args,
-                pool_pre_ping=True,
+                pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
+
+            # Install a tolerant UTF-8 text decoder on every new psycopg2/psycopg3
+            # connection so query-history rows containing non-UTF-8 bytes (e.g.
+            # 0x96 from Windows-1252 paste) yield U+FFFD instead of raising
+            # UnicodeDecodeError. Tracking: WARE-970.
+            install_tolerant_text_decoder_hook(self.engine)
 
             # Test connection briefly to validate credentials.
             # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
@@ -129,7 +142,7 @@ class BaseSQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}") from e
+            raise SqlClientAuthFailedError(cause=e) from e
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -149,7 +162,7 @@ class BaseSQLClient(ClientInterface):
             str: A temporary authentication token for database access.
 
         Raises:
-            CommonError: If required credentials (username or database) are missing.
+            SqlCredentialsParseError: If required credentials (username or database) are missing.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_access_key_id = self.credentials.get("username")
@@ -158,12 +171,14 @@ class BaseSQLClient(ClientInterface):
         user = extra.get("username")
         database = extra.get("database")
         if not user:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: username is required for IAM user authentication"
+            raise SqlCredentialsParseError(
+                field="username",
+                message="username is required for IAM user authentication",
             )
         if not database:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM user authentication"
+            raise SqlCredentialsParseError(
+                field="database",
+                message="database is required for IAM user authentication",
             )
 
         port = self.credentials.get("port")
@@ -190,7 +205,7 @@ class BaseSQLClient(ClientInterface):
             str: A temporary authentication token for database access.
 
         Raises:
-            CommonError: If required credentials (aws_role_arn or database) are missing.
+            SqlAwsCredentialsError: If required credentials (aws_role_arn or database) are missing.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_role_arn = extra.get("aws_role_arn")
@@ -198,12 +213,12 @@ class BaseSQLClient(ClientInterface):
         external_id = extra.get("aws_external_id")
 
         if not aws_role_arn:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: aws_role_arn is required for IAM role authentication"
+            raise SqlAwsCredentialsError(
+                message="aws_role_arn is required for IAM role authentication",
             )
         if not database:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM role authentication"
+            raise SqlAwsCredentialsError(
+                message="database is required for IAM role authentication",
             )
 
         session_name = AWS_SESSION_NAME
@@ -234,7 +249,7 @@ class BaseSQLClient(ClientInterface):
             str: URL-encoded authentication token.
 
         Raises:
-            CommonError: If an invalid authentication type is specified.
+            SqlCredentialsParseError: If an invalid authentication type is specified.
         """
         authType = self.credentials.get("authType", "basic")  # Default to basic auth
         token = None
@@ -247,14 +262,14 @@ class BaseSQLClient(ClientInterface):
             case "basic":
                 token = self.credentials.get("password")
             case _:
-                raise CommonError(f"{CommonError.CREDENTIALS_PARSE_ERROR}: {authType}")
+                raise SqlCredentialsParseError(field="authType", value_summary=authType)
 
         # Handle None values and ensure token is a string before encoding
         encoded_token = quote_plus(str(token or ""))
         return encoded_token
 
     def add_connection_params(
-        self, connection_string: str, source_connection_params: Dict[str, Any]
+        self, connection_string: str, source_connection_params: dict[str, Any]
     ) -> str:
         """Add additional connection parameters to a SQLAlchemy connection string.
 
@@ -275,23 +290,6 @@ class BaseSQLClient(ClientInterface):
 
         return connection_string
 
-    def get_supported_sqlalchemy_url(self, sqlalchemy_url: str) -> str:
-        """Update the dialect in the URL if it is different from the installed dialect.
-
-        Args:
-            url (str): The URL to update.
-
-        Returns:
-            str: The updated URL with the dialect.
-        """
-        if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
-        installed_dialect = self.DB_CONFIG.template.split("://")[0]
-        url_dialect = sqlalchemy_url.split("://")[0]
-        if installed_dialect != url_dialect:
-            sqlalchemy_url = sqlalchemy_url.replace(url_dialect, installed_dialect)
-        return sqlalchemy_url
-
     def get_sqlalchemy_connection_string(self) -> str:
         """Generate a SQLAlchemy connection string for database connection.
 
@@ -303,18 +301,13 @@ class BaseSQLClient(ClientInterface):
             str: Complete SQLAlchemy connection string.
 
         Raises:
-            ValueError: If required connection parameters are missing.
+            SqlClientConfigError: If DB_CONFIG is not set.
+            MissingSqlParamError: If required connection parameters are missing.
         """
         if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+            raise SqlClientConfigError()
 
         extra = parse_credentials_extra(self.credentials)
-
-        # TODO: Uncomment this when the native deployment is ready
-        # If the compiled_url is present, use it directly
-        # sqlalchemy_url = extra.get("compiled_url")
-        # if sqlalchemy_url:
-        #     return self.get_supported_sqlalchemy_url(sqlalchemy_url)
 
         auth_token = self.get_auth_token()
 
@@ -326,7 +319,7 @@ class BaseSQLClient(ClientInterface):
             else:
                 value = self.credentials.get(param) or extra.get(param)
                 if value is None:
-                    raise ValueError(f"{param} is required")
+                    raise MissingSqlParamError(field=param)
                 param_values[param] = value
 
         # Fill in base template
@@ -365,14 +358,17 @@ class BaseSQLClient(ClientInterface):
                 a dictionary mapping column names to values.
 
         Raises:
-            ValueError: If engine is not initialized.
-            Exception: If query execution fails.
+            EngineNotInitializedError: If engine is not initialized.
         """
         if not self.engine:
-            raise ValueError("Engine is not initialized. Call load() first.")
+            raise EngineNotInitializedError()
 
         loop = asyncio.get_running_loop()
-        logger.debug("Running query: %s", query)
+        logger.debug(
+            "Running query (sha=%s, len=%d)",
+            hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
+            len(query),
+        )
 
         # Use context manager for automatic connection cleanup
         with self.engine.connect() as connection:
@@ -380,14 +376,14 @@ class BaseSQLClient(ClientInterface):
                 connection = connection.execution_options(yield_per=batch_size)
 
             with ThreadPoolExecutor() as pool:
-                from sqlalchemy import text
+                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
                 cursor = await loop.run_in_executor(
                     pool, connection.execute, text(query)
                 )
                 if not cursor or not cursor.cursor:
-                    raise ValueError("Cursor is not supported")
-                column_names: List[str] = [
+                    raise UnsupportedSqlCursorError()
+                column_names: list[str] = [
                     description.name.lower()
                     for description in cursor.cursor.description
                 ]
@@ -406,7 +402,7 @@ class BaseSQLClient(ClientInterface):
         logger.info("Query execution completed")
 
     def _execute_pandas_query(
-        self, conn, query, chunksize: Optional[int]
+        self, conn, query, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Helper function to execute SQL query using pandas.
            The function is responsible for using import_optional_dependency method of the pandas library to import sqlalchemy
@@ -421,9 +417,11 @@ class BaseSQLClient(ClientInterface):
             Union["pd.DataFrame", Iterator["pd.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
-        import pandas as pd
-        from pandas.compat._optional import import_optional_dependency
-        from sqlalchemy import text
+        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+        from pandas.compat._optional import (  # noqa: PLC0415 — optional dep: pandas
+            import_optional_dependency,
+        )
+        from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
         if import_optional_dependency("sqlalchemy", errors="ignore"):
             return pd.read_sql_query(text(query), conn, chunksize=chunksize)
@@ -432,7 +430,7 @@ class BaseSQLClient(ClientInterface):
             return pd.read_sql_query(query, dbapi_conn, chunksize=chunksize)
 
     def _read_sql_query(
-        self, session: "Session", query: str, chunksize: Optional[int]
+        self, session: "Session", query: str, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided session.
 
@@ -447,7 +445,7 @@ class BaseSQLClient(ClientInterface):
         return self._execute_pandas_query(conn, query, chunksize=chunksize)
 
     def _execute_query_daft(
-        self, query: str, chunksize: Optional[int]
+        self, query: str, chunksize: int | None
     ) -> Union["daft.DataFrame", Iterator["daft.DataFrame"]]:
         """Execute SQL query using the provided engine and daft.
 
@@ -455,20 +453,22 @@ class BaseSQLClient(ClientInterface):
             Union["daft.DataFrame", Iterator["daft.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
+        # Guard must come before the daft import: daft's Rust OTel extension can
+        # raise BaseException at import time, which would prevent this check from running.
+        if not self.engine:
+            raise EngineNotInitializedError()
+
         # Daft uses ConnectorX to read data from SQL by default for supported connectors
         # If a connection string is passed, it will use ConnectorX to read data
         # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-        import daft
-
-        if not self.engine:
-            raise ValueError("Engine is not initialized. Call load() first.")
+        import daft  # noqa: PLC0415 — optional dep: daft
 
         if isinstance(self.engine, str):
             return daft.read_sql(query, self.engine, infer_schema_length=chunksize)
         return daft.read_sql(query, self.engine.connect, infer_schema_length=chunksize)
 
     def _execute_query(
-        self, query: str, chunksize: Optional[int]
+        self, query: str, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided engine and pandas.
 
@@ -477,23 +477,28 @@ class BaseSQLClient(ClientInterface):
                 or iterator of DataFrames if chunked.
         """
         if not self.engine:
-            raise ValueError("Engine is not initialized. Call load() first.")
+            raise EngineNotInitializedError()
 
         with self.engine.connect() as conn:
             return self._execute_pandas_query(conn, query, chunksize)
 
     async def _execute_async_read_operation(
-        self, query: str, chunksize: Optional[int]
+        self, query: str, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Helper to execute async read operation with either async session or thread executor."""
         if isinstance(self.engine, str):
-            raise ValueError("Engine should be an SQLAlchemy engine object")
+            raise InvalidSqlEngineTypeError()
 
-        from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+        from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
+            AsyncEngine,
+            AsyncSession,
+        )
 
         async_session = None
         if self.engine and isinstance(self.engine, AsyncEngine):
-            from sqlalchemy.orm import sessionmaker
+            from sqlalchemy.orm import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                sessionmaker,
+            )
 
             async_session = sessionmaker(
                 self.engine, expire_on_commit=False, class_=AsyncSession
@@ -514,22 +519,26 @@ class BaseSQLClient(ClientInterface):
     async def get_batched_results(
         self,
         query: str,
-    ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:  # type: ignore
+    ) -> AsyncIterator["pd.DataFrame"] | Iterator["pd.DataFrame"]:  # type: ignore
         """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
             AsyncIterator["pd.DataFrame"]: Async iterator yielding batches of query results.
 
         Raises:
-            ValueError: If engine is a string instead of SQLAlchemy engine.
-            Exception: If there's an error executing the query.
+            InvalidSqlEngineTypeError: If engine is a string instead of a SQLAlchemy engine.
+            SqlPandasResultError: If there's an error executing the query.
         """
         try:
             # We cast to Iterator because passing chunk_size guarantees an Iterator return
             result = await self._execute_async_read_operation(query, self.chunk_size)
             return cast(Iterator["pd.DataFrame"], result)
+        except AppError:
+            raise
         except Exception as e:
-            raise rewrap(e, "Error reading batched data(pandas) from SQL") from e
+            raise SqlPandasResultError(
+                message="Error reading batched data from SQL", cause=e
+            ) from e
 
     async def get_results(self, query: str) -> "pd.DataFrame":
         """Get all query results as a single pandas DataFrame asynchronously.
@@ -538,19 +547,22 @@ class BaseSQLClient(ClientInterface):
             pd.DataFrame: Query results as a DataFrame.
 
         Raises:
-            ValueError: If engine is a string instead of SQLAlchemy engine.
-            Exception: If there's an error executing the query.
+            InvalidSqlEngineTypeError: If engine is a string instead of a SQLAlchemy engine.
+            SqlPandasResultError: If there's an error executing the query.
         """
         try:
             result = await self._execute_async_read_operation(query, None)
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             if isinstance(result, pd.DataFrame):
                 return result
-            raise Exception("Unable to get pandas dataframe from SQL query results")
-
+            raise SqlPandasResultError(
+                invariant="_execute_async_read_operation must return a pd.DataFrame"
+            )
+        except AppError:
+            raise
         except Exception as e:
-            raise rewrap(e, "Error reading data(pandas) from SQL") from e
+            raise SqlPandasResultError(cause=e) from e
 
 
 class AsyncBaseSQLClient(BaseSQLClient):
@@ -570,7 +582,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
     connection: "AsyncConnection"
     engine: "AsyncEngine"
 
-    async def load(self, credentials: Dict[str, Any]) -> None:
+    async def load(self, credentials: dict[str, Any]) -> None:
         """Load credentials and prepare async engine for lazy connections.
 
         This method stores credentials and creates an async engine without establishing
@@ -581,23 +593,28 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 host, port, username, password, and other connection parameters.
 
         Raises:
-            ValueError: If credentials are invalid or engine creation fails.
+            SqlClientConfigError: If DB_CONFIG is not set.
+            SqlClientAuthFailedError: If credentials are invalid or engine creation fails.
         """
         self.credentials = credentials
         if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+            raise SqlClientConfigError()
 
         try:
-            from sqlalchemy.ext.asyncio import create_async_engine
+            from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                create_async_engine,
+            )
 
             # Create async engine but no persistent connection
             self.engine = create_async_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.DB_CONFIG.connect_args,
-                pool_pre_ping=True,
+                pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
-            if not self.engine:
-                raise ValueError("Failed to create async engine")
+
+            # Same WARE-970 tolerant-decoder hook as the sync client. Async
+            # engines surface DBAPI events on the underlying sync_engine.
+            install_tolerant_text_decoder_hook(self.engine.sync_engine)
 
             # Test connection briefly to validate credentials
             async with self.engine.connect() as _:
@@ -611,7 +628,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ValueError(str(e)) from e
+            raise SqlClientAuthFailedError(cause=e) from e
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""
@@ -637,19 +654,22 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 a dictionary mapping column names to values.
 
         Raises:
-            ValueError: If engine is not initialized.
-            Exception: If query execution fails.
+            EngineNotInitializedError: If engine is not initialized.
         """
         if not self.engine:
-            raise ValueError("Engine is not initialized. Call load() first.")
+            raise EngineNotInitializedError()
 
-        logger.debug("Running query: %s", query)
+        logger.debug(
+            "Running query (sha=%s, len=%d)",
+            hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
+            len(query),
+        )
         use_server_side_cursor = self.use_server_side_cursor
 
         # Use async context manager for automatic connection cleanup
         async with self.engine.connect() as connection:
             try:
-                from sqlalchemy import text
+                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
                 if use_server_side_cursor:
                     connection = await connection.execution_options(
@@ -676,8 +696,12 @@ class AsyncBaseSQLClient(BaseSQLClient):
                         break
                     yield [dict(zip(column_names, row)) for row in rows]
 
+            except AppError:
+                raise
             except Exception as e:
-                raise rewrap(e, "Error executing query") from e
+                raise SqlPandasResultError(
+                    message="Error executing SQL query", cause=e
+                ) from e
             # Async connection automatically closed by context manager
 
         logger.info("Query execution completed")

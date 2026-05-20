@@ -15,6 +15,10 @@ from __future__ import annotations
 
 from opentelemetry import trace
 
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_trace_context() -> tuple[str, str]:
     """Return (trace_id, span_id) from the current OTel span context.
@@ -30,4 +34,5 @@ def get_trace_context() -> tuple[str, str]:
             return "", ""
         return format(ctx.trace_id, "032x"), format(ctx.span_id, "016x")
     except Exception:
+        logger.debug("Failed to read trace context", exc_info=True)
         return "", ""

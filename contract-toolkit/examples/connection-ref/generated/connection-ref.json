@@ -1,0 +1,55 @@
+{
+  "id": "connection-ref",
+  "name": "ConnectionRef Example",
+  "logo": "https://assets.atlan.com/assets/trino.svg",
+  "config": {
+    "properties": {
+      "connection": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "connectionSelector",
+          "label": "Connection",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Select a connection",
+          "grid": 8,
+          "mode": "",
+          "start": 1,
+          "connectorName": "trino",
+          "shouldIncludeConnectionInfo": true
+        }
+      },
+      "connections": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connectionSelector",
+          "label": "Connections",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Select connections",
+          "grid": 8,
+          "mode": "multiple",
+          "start": 1,
+          "connectorName": [
+            "trino",
+            "clickhouse"
+          ],
+          "shouldIncludeConnectionInfo": true
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "",
+        "id": "configuration",
+        "properties": [
+          "connection",
+          "connections"
+        ]
+      }
+    ]
+  }
+}

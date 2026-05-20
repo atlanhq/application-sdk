@@ -1,0 +1,94 @@
+amends "pkl:test"
+
+import "../examples/connection-ref/app.pkl" as connectionRefApp
+import "../examples/fanin/app.pkl" as faninApp
+import "../examples/openapi/app.pkl" as openapiApp
+import "../examples/postgres/app.pkl" as postgresApp
+import "../examples/publish-controls/app.pkl" as publishControlsApp
+import "../examples/trino/app.pkl" as trinoApp
+
+local connectionRefWorkflowJson: String = connectionRefApp.output.files["connection-ref.json"].text
+local connectionRefManifestJson: String = connectionRefApp.output.files["manifest.json"].text
+local faninManifestJson: String = faninApp.output.files["manifest.json"].text
+
+local openapiWorkflowJson: String = openapiApp.output.files["openapi.json"].text
+local openapiObjectStoreCredentialJson: String = openapiApp.output.files["csa-connectors-objectstore.json"].text
+local openapiManifestJson: String = openapiApp.output.files["manifest.json"].text
+local postgresWorkflowJson: String = postgresApp.output.files["postgres.json"].text
+local postgresCredentialJson: String = postgresApp.output.files["atlan-connectors-postgres.json"].text
+local postgresManifestJson: String = postgresApp.output.files["manifest.json"].text
+local publishControlsManifestJson: String = publishControlsApp.output.files["manifest.json"].text
+local publishControlsInputPy: String = publishControlsApp.output.files["_input.py"].text
+local trinoWorkflowJson: String = trinoApp.output.files["trino.json"].text
+local trinoCredentialJson: String = trinoApp.output.files["atlan-connectors-trino.json"].text
+
+facts {
+  ["OpenAPI emits workflow and object-store credential configmaps"] {
+    openapiApp.output.files.containsKey("openapi.json")
+    openapiApp.output.files.containsKey("csa-connectors-objectstore.json")
+    openapiWorkflowJson.contains("\"widget\": \"credential\"")
+    openapiWorkflowJson.contains("\"credentialType\": \"csa-connectors-objectstore\"")
+    openapiObjectStoreCredentialJson.contains("\"Cloud object store\"")
+    openapiObjectStoreCredentialJson.contains("\"s3\"")
+    openapiObjectStoreCredentialJson.contains("\"gcs\"")
+    openapiObjectStoreCredentialJson.contains("\"adls\"")
+  }
+
+  ["OpenAPI preserves URL and cloud import conditional requirements"] {
+    openapiWorkflowJson.contains("\"const\": \"URL\"")
+    openapiWorkflowJson.contains("\"spec_url\"")
+    openapiWorkflowJson.contains("\"const\": \"CLOUD\"")
+    openapiWorkflowJson.contains("\"cloud_source\"")
+    openapiWorkflowJson.contains("\"spec_prefix\"")
+    openapiWorkflowJson.contains("\"spec_key\"")
+  }
+
+  ["OpenAPI manifest uses the native openapi workflow type"] {
+    openapiManifestJson.contains("\"workflow_type\": \"openapi\"")
+    openapiManifestJson.contains("\"cloud_source\": \"{{cloud_source}}\"")
+  }
+
+  ["Trino remains the generic SQL connector example"] {
+    trinoWorkflowJson.contains("\"widget\": \"sqltree\"")
+    trinoWorkflowJson.contains("\"connectorConfigName\": \"atlan-connectors-trino\"")
+    trinoCredentialJson.contains("\"connector\": \"trino\"")
+    trinoCredentialJson.contains("\"jwt\"")
+  }
+
+  ["Postgres emits a basic open-source SQL datasource contract"] {
+    postgresWorkflowJson.contains("\"widget\": \"sqltree\"")
+    postgresWorkflowJson.contains("information_schema.schemata")
+    postgresWorkflowJson.contains("\"connectorConfigName\": \"atlan-connectors-postgres\"")
+    postgresCredentialJson.contains("\"connector\": \"postgres\"")
+    postgresCredentialJson.contains("\"defaultConnectorType\": \"jdbc\"")
+    postgresCredentialJson.contains("\"__enable_ssl\"")
+    postgresManifestJson.contains("\"workflow_type\": \"PostgresMetadataExtractionWorkflow\"")
+  }
+
+  ["ConnectionRef example uses public connector filters"] {
+    connectionRefWorkflowJson.contains("\"widget\": \"connectionSelector\"")
+    connectionRefWorkflowJson.contains("\"shouldIncludeConnectionInfo\": true")
+    connectionRefWorkflowJson.contains("\"trino\"")
+    connectionRefWorkflowJson.contains("\"clickhouse\"")
+    connectionRefManifestJson.contains("\"connection\": \"{{connection}}\"")
+    connectionRefManifestJson.contains("\"connections\": \"{{connections}}\"")
+  }
+
+  ["Fan-in example demonstrates multi-parent dependency conditions"] {
+    faninManifestJson.contains("\"join\"")
+    faninManifestJson.contains("\"and_conditions\"")
+    faninManifestJson.contains("\"node_id\": \"left\"")
+    faninManifestJson.contains("\"node_id\": \"right\"")
+    faninManifestJson.contains("\"or_conditions\"")
+  }
+
+  ["Publish controls example keeps explicit publish toggle behavior"] {
+    publishControlsManifestJson.contains("\"executor_enabled\": \"{{load-to-atlan}}\"")
+    publishControlsManifestJson.contains("\"activity_display_name\": \"Extract\"")
+    publishControlsManifestJson.contains("\"activity_display_name\": \"Publish\"")
+    publishControlsManifestJson.contains("\"start_to_close_timeout_seconds\": 14400")
+    publishControlsInputPy.contains("load_to_atlan: bool = True")
+    !publishControlsInputPy.contains("publish_dry_run")
+  }
+
+}

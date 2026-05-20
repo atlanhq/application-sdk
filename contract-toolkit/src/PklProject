@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2024 Atlan Pte. Ltd. */
+amends "pkl:Project"
+
+package {
+  name = "app-contract-toolkit"
+  baseUri = "package://atlanhq.github.io/application-sdk/\(name)/\(name)"
+  version = "0.9.6"
+  packageZipUrl = "https://atlanhq.github.io/application-sdk/\(name)/\(name)@\(version).zip"
+  sourceCode = "https://github.com/atlanhq/application-sdk"
+  sourceCodeUrlScheme = "\(sourceCode)/blob/contract-toolkit-v\(version)/contract-toolkit/src%{path}#L%{line}-L%{endLine}"
+}

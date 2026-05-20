@@ -85,11 +85,6 @@ class TestModulePathChange:
         assert "from application_sdk.interceptors.events import EventInterceptor" in out
         assert "# TODO(upgrade-v3): Remove this import" in out
 
-    def test_activity_sql_utils(self):
-        src = "from application_sdk.activities.common.sql_utils import some_util"
-        out, changes = rewrite(src)
-        assert "from application_sdk.common.sql_utils import some_util" in out
-
     def test_clients_temporal(self):
         src = "from application_sdk.clients.temporal import TemporalWorkflowClient"
         out, changes = rewrite(src)

@@ -7,13 +7,22 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional, Set, TypeVar, overload
+from typing import Any, TypeVar, overload
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
 from pyatlan.utils import init_guid, validate_required_fields
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.transformers.atlas.errors import (
+    TransformColumnError,
+    TransformDatabaseError,
+    TransformFunctionError,
+    TransformProcedureError,
+    TransformSchemaError,
+    TransformTableError,
+    TransformTagAttachmentError,
+)
 from application_sdk.transformers.common.utils import build_atlas_qualified_name
 
 logger = get_logger(__name__)
@@ -41,7 +50,7 @@ class Procedure(assets.Procedure):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Procedure entity's attributes.
 
         This method validates required fields and constructs the procedure's
@@ -123,8 +132,8 @@ class Procedure(assets.Procedure):
                 "custom_attributes": procedure_custom_attributes,
                 "entity_class": Procedure,
             }
-        except AssertionError as e:
-            raise ValueError(f"Error creating Procedure Entity: {str(e)}") from e
+        except AssertionError as exc:
+            raise TransformProcedureError(cause=exc) from exc
 
 
 class Database(assets.Database):
@@ -134,7 +143,7 @@ class Database(assets.Database):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Database entity.
 
         Args:
@@ -175,8 +184,8 @@ class Database(assets.Database):
                 "custom_attributes": database_custom_attributes,
                 "entity_class": Database,
             }
-        except AssertionError as e:
-            raise ValueError(f"Error creating Database Entity: {str(e)}") from e
+        except AssertionError as exc:
+            raise TransformDatabaseError(cause=exc) from exc
 
 
 class Schema(assets.Schema):
@@ -186,7 +195,7 @@ class Schema(assets.Schema):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Schema entity.
 
         Args:
@@ -244,8 +253,8 @@ class Schema(assets.Schema):
                 "custom_attributes": schema_custom_attributes,
                 "entity_class": Schema,
             }
-        except AssertionError as e:
-            raise ValueError(f"Error creating Schema Entity: {str(e)}") from e
+        except AssertionError as exc:
+            raise TransformSchemaError(cause=exc) from exc
 
 
 class Table(assets.Table):
@@ -256,7 +265,7 @@ class Table(assets.Table):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Table entity.
 
         Args:
@@ -276,10 +285,14 @@ class Table(assets.Table):
 
             assert obj.get("table_catalog") is not None, "Table catalog cannot be None"
 
-            # Determine the type of table based on metadata
-            is_partition = bool(obj.get("is_partition", False))
+            # Determine the type of table based on metadata.
+            # Source metadata layers use either bool (True/False) or the
+            # canonical string ("YES"/"NO") for these flags; treat both
+            # truthy forms as positive and reject every other string. This
+            # avoids the prior bug where bool("NO") was True. [BLDX-1168]
+            is_partition = obj.get("is_partition") in (True, "YES")
             table_type_value = obj.get("table_type", "TABLE")
-            is_dynamic = obj.get("is_dynamic") == "YES"
+            is_dynamic = obj.get("is_dynamic") in (True, "YES")
 
             if is_partition:
                 table_type = assets.TablePartition
@@ -476,8 +489,8 @@ class Table(assets.Table):
                 "custom_attributes": custom_attributes,
                 "entity_class": table_type,
             }
-        except AssertionError as e:
-            raise ValueError(f"Error creating Table Entity: {str(e)}") from e
+        except AssertionError as exc:
+            raise TransformTableError(cause=exc) from exc
 
 
 class Column(assets.Column):
@@ -487,7 +500,7 @@ class Column(assets.Column):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Column entity.
 
         Args:
@@ -643,8 +656,8 @@ class Column(assets.Column):
                 "custom_attributes": custom_attributes,
                 "entity_class": Column,
             }
-        except AssertionError as e:
-            raise ValueError(f"Error creating Column Entity: {str(e)}") from e
+        except AssertionError as exc:
+            raise TransformColumnError(cause=exc) from exc
 
 
 class Function(assets.Function):
@@ -684,7 +697,7 @@ class Function(assets.Function):
         database_name: None = None,
         database_qualified_name: None = None,
         connection_qualified_name: None = None,
-    ) -> "Function": ...
+    ) -> Function: ...
 
     @overload
     @classmethod
@@ -697,7 +710,7 @@ class Function(assets.Function):
         database_name: str,
         database_qualified_name: str,
         connection_qualified_name: str,
-    ) -> "Function": ...
+    ) -> Function: ...
 
     @classmethod
     @init_guid
@@ -706,11 +719,11 @@ class Function(assets.Function):
         *,
         name: str,
         schema_qualified_name: str,
-        schema_name: Optional[str] = None,
-        database_name: Optional[str] = None,
-        database_qualified_name: Optional[str] = None,
-        connection_qualified_name: Optional[str] = None,
-    ) -> "Function":
+        schema_name: str | None = None,
+        database_name: str | None = None,
+        database_qualified_name: str | None = None,
+        connection_qualified_name: str | None = None,
+    ) -> Function:
         """Create a new Function entity.
 
         Args:
@@ -752,7 +765,7 @@ class Function(assets.Function):
         """
 
         # overriding function_arguments same as in super class
-        function_arguments: Optional[Set[str]] = None
+        function_arguments: set[str] | None = None
 
         @classmethod
         @init_guid
@@ -761,11 +774,11 @@ class Function(assets.Function):
             *,
             name: str,
             schema_qualified_name: str,
-            schema_name: Optional[str] = None,
-            database_name: Optional[str] = None,
-            database_qualified_name: Optional[str] = None,
-            connection_qualified_name: Optional[str] = None,
-        ) -> "Function.Attributes":
+            schema_name: str | None = None,
+            database_name: str | None = None,
+            database_qualified_name: str | None = None,
+            connection_qualified_name: str | None = None,
+        ) -> Function.Attributes:
             """Create a new Function.Attributes instance.
 
             Args:
@@ -801,8 +814,8 @@ class Function(assets.Function):
                         else "unknown"
                     )
                 else:
-                    raise ValueError(
-                        f"Invalid result from AtlanConnectorType.get_connector_name: {result}"
+                    raise TransformTableError(
+                        message=f"Unexpected result from AtlanConnectorType.get_connector_name: {result}"
                     )
 
             fields = schema_qualified_name.split("/")
@@ -829,7 +842,7 @@ class Function(assets.Function):
             )
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Function entity.
 
         Args:
@@ -903,9 +916,15 @@ class Function(assets.Function):
             function_attributes["function_definition"] = obj.get(
                 "function_definition", None
             )
-            function_attributes["function_arguments"] = list(
-                obj.get("argument_signature", "()")[1:-1].split(",")
-            )
+            argument_signature = obj.get("argument_signature", "()")
+            if not (
+                argument_signature.startswith("(") and argument_signature.endswith(")")
+            ):
+                raise TransformFunctionError(
+                    message=f"Malformed argument_signature: {argument_signature!r}"
+                )
+            inner = argument_signature[1:-1]
+            function_attributes["function_arguments"] = list(inner.split(","))
             function_attributes["function_is_secure"] = (
                 obj.get("is_secure", None) == "YES"
             )
@@ -924,8 +943,8 @@ class Function(assets.Function):
                 "custom_attributes": function_custom_attributes,
                 "entity_class": Function,
             }
-        except AssertionError as e:
-            raise ValueError(f"Error creating Function Entity: {str(e)}") from e
+        except AssertionError as exc:
+            raise TransformFunctionError(cause=exc) from exc
 
 
 class TagAttachment(assets.TagAttachment):
@@ -946,7 +965,7 @@ class TagAttachment(assets.TagAttachment):
         database_name: None = None,
         database_qualified_name: None = None,
         connection_qualified_name: None = None,
-    ) -> "TagAttachment": ...
+    ) -> TagAttachment: ...
 
     @overload
     @classmethod
@@ -959,7 +978,7 @@ class TagAttachment(assets.TagAttachment):
         database_name: str,
         database_qualified_name: str,
         connection_qualified_name: str,
-    ) -> "TagAttachment": ...
+    ) -> TagAttachment: ...
 
     @classmethod
     @init_guid
@@ -968,11 +987,11 @@ class TagAttachment(assets.TagAttachment):
         *,
         name: str,
         schema_qualified_name: str,
-        schema_name: Optional[str] = None,
-        database_name: Optional[str] = None,
-        database_qualified_name: Optional[str] = None,
-        connection_qualified_name: Optional[str] = None,
-    ) -> "TagAttachment":
+        schema_name: str | None = None,
+        database_name: str | None = None,
+        database_qualified_name: str | None = None,
+        connection_qualified_name: str | None = None,
+    ) -> TagAttachment:
         """Create a new TagAttachment entity.
 
         Args:
@@ -1011,8 +1030,8 @@ class TagAttachment(assets.TagAttachment):
             *,
             name: str,
             schema_qualified_name: str,
-            connection_qualified_name: Optional[str] = None,
-        ) -> "TagAttachment.Attributes":
+            connection_qualified_name: str | None = None,
+        ) -> TagAttachment.Attributes:
             """Create a new TagAttachment.Attributes instance.
 
             Args:
@@ -1045,8 +1064,8 @@ class TagAttachment(assets.TagAttachment):
                     )
                 else:
                     # Handle the case where result is not a tuple
-                    raise ValueError(
-                        f"Invalid result from AtlanConnectorType.get_connector_name: {result}"
+                    raise TransformTagAttachmentError(
+                        message=f"Unexpected result from AtlanConnectorType.get_connector_name: {result}"
                     )
 
             qualified_name = f"{schema_qualified_name}/{name}"
@@ -1060,7 +1079,7 @@ class TagAttachment(assets.TagAttachment):
             )
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def get_attributes(cls, obj: dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a TagAttachment entity.
 
         Args:
@@ -1151,14 +1170,11 @@ class TagAttachment(assets.TagAttachment):
                     object_qualified_name = build_atlas_qualified_name(
                         obj["connection_qualified_name"], object_cat, object_name
                     )
-                elif object_domain == "SCHEMA":
-                    object_qualified_name = build_atlas_qualified_name(
-                        obj["connection_qualified_name"],
-                        object_cat,
-                        object_schema,
-                        object_name,
-                    )
-                elif object_domain in ["TABLE", "STREAM", "PIPE"]:
+                elif object_domain == "SCHEMA" or object_domain in [
+                    "TABLE",
+                    "STREAM",
+                    "PIPE",
+                ]:
                     object_qualified_name = build_atlas_qualified_name(
                         obj["connection_qualified_name"],
                         object_cat,
@@ -1207,5 +1223,5 @@ class TagAttachment(assets.TagAttachment):
                 "custom_attributes": tag_attachment_custom_attributes,
                 "entity_class": TagAttachment,
             }
-        except Exception as e:
-            raise ValueError(f"Error creating TagAttachment Entity: {str(e)}") from e
+        except AssertionError as exc:
+            raise TransformTagAttachmentError(cause=exc) from exc

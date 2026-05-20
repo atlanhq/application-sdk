@@ -13,6 +13,7 @@ Key types:
 from __future__ import annotations
 
 import dataclasses
+import uuid
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, TypeVar
@@ -20,6 +21,7 @@ from typing import Annotated, Any, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
 
 T = TypeVar("T")
@@ -75,9 +77,7 @@ class StorageTier(StrEnum):
             return "file_refs"
         if self is StorageTier.RETAINED:
             if not run_prefix:
-                raise ValueError(
-                    "run_prefix is required when computing upload prefix for RETAINED tier"
-                )
+                raise RunPrefixRequiredError()
             return run_prefix
         # PERSISTENT
         return (
@@ -107,8 +107,6 @@ class StorageTier(StrEnum):
             run_prefix: Run-scoped base prefix.  Required for ``RETAINED``.
             app_name: Application name.  Used by ``PERSISTENT``.
         """
-        import uuid
-
         base = self._file_ref_base(run_prefix=run_prefix, app_name=app_name)
         return f"{base}/{uuid.uuid4().hex}{suffix}"
 
@@ -122,20 +120,36 @@ class StorageTier(StrEnum):
             Uses ``uuid.uuid4()`` internally — **activity-context only**.
             See :meth:`_make_file_ref_path` for details.
         """
-        import uuid
-
         base = self._file_ref_base(run_prefix=run_prefix, app_name=app_name)
         return f"{base}/{uuid.uuid4().hex}/"
 
     def _file_ref_base(self, *, run_prefix: str = "", app_name: str = "") -> str:
-        """Return the base prefix under which ``file_refs/{uid}`` paths are stored."""
+        """Return the base prefix under which ``file_refs/{uid}`` paths are stored.
+
+        ``TRANSIENT`` uses *run_prefix* when one is available so that the
+        resulting storage key is tenant-scoped — production deployments
+        (Atlan blob-storage gateway) only permit writes under
+        ``artifacts/`` and ``persistent-artifacts/``. The activity
+        interceptor always supplies *run_prefix* via
+        ``persist_file_refs(..., output_path=build_output_path())``, so
+        in any real Temporal-driven workflow TRANSIENT refs land at
+        ``{run_prefix}/file_refs/{uid}``. The bare-prefix fallback is
+        kept for callers that legitimately have no run context (local
+        scripts, unit tests, ad-hoc utilities) — those run against
+        local stores with no path policy, so the bare prefix is
+        harmless there.
+
+        ``RETAINED`` continues to require *run_prefix*: it's a
+        contract-level invariant that RETAINED refs must be
+        run-scoped because they survive cleanup-at-end-of-run.
+        """
         if self is StorageTier.TRANSIENT:
-            return "file_refs"
+            # Use run-scoped prefix when available; fall back to bare
+            # ``file_refs`` for ad-hoc callers without a run context.
+            return f"{run_prefix}/file_refs" if run_prefix else "file_refs"
         if self is StorageTier.RETAINED:
             if not run_prefix:
-                raise ValueError(
-                    "run_prefix is required when persisting a RETAINED-tier FileReference"
-                )
+                raise RunPrefixRequiredError()
             return f"{run_prefix}/file_refs"
         # PERSISTENT
         return (
@@ -158,6 +172,26 @@ class MaxItems:
 
     limit: int
     """Maximum number of items allowed in the collection."""
+
+
+class Lazy:
+    """Marker: this FileReference field is NOT auto-materialized before the activity runs.
+
+    Use with ``Annotated`` on any ``FileReference | None`` field whose data is
+    too large to download unconditionally, or that the activity may not always
+    need:
+
+        class MyInput(Input):
+            heavy_artifact: Annotated[FileReference | None, Lazy()] = None
+            light_manifest: FileReference | None = None  # eager (default)
+
+    Lazy fields are left as durable ``FileReference`` objects in the activity
+    input.  Call ``await fetch(ref, store)`` from ``storage.reference`` inside
+    the activity to download on demand — the sidecar fast-path means repeated
+    calls are cheap if the file is already on disk.
+    """
+
+    __slots__ = ()
 
 
 BoundedList = Annotated[list[T], MaxItems]
@@ -191,6 +225,14 @@ class FileReference(BaseModel, frozen=True):
             run-scoped prefix for post-run investigation, or
             ``StorageTier.PERSISTENT`` to keep it indefinitely under
             ``persistent-artifacts/``.
+        auto_materialize: When ``True`` (default), the activity interceptor
+            will transparently upload (persist) ephemeral refs after a task
+            completes and download (materialize) durable refs before the
+            next task runs.  Set to ``False`` to opt out — the app then
+            owns the upload/download lifecycle.  Useful when an app needs
+            custom retry/timeout/streaming behavior the interceptor cannot
+            provide (e.g. multi-GB files, lazy-streaming reads, or
+            deferred materialization).
     """
 
     local_path: str | None = None
@@ -198,25 +240,50 @@ class FileReference(BaseModel, frozen=True):
     is_durable: bool = False
     file_count: int = 1
     tier: StorageTier = StorageTier.TRANSIENT
+    auto_materialize: bool = True
 
     @staticmethod
     def from_local(
         path: str | Path,
-    ) -> "FileReference":
+        *,
+        tier: StorageTier = StorageTier.TRANSIENT,
+    ) -> FileReference:
         """Create an ephemeral FileReference from a local filesystem path.
+
+        For a directory, ``file_count`` is computed as the number of regular
+        files under the tree (recursively); for a single file it is ``1``.
+        Non-existent paths fall back to the default ``file_count=1`` so this
+        helper is safe to call before the file has been written.
 
         Args:
             path: Local file or directory path.
+            tier: Storage lifecycle tier. Defaults to
+                :attr:`StorageTier.TRANSIENT` for one-off intermediary
+                files. Pass :attr:`StorageTier.RETAINED` when the ref
+                belongs to a workflow run and must land under the
+                run-scoped ``artifacts/`` prefix (this is what the
+                ``UploadInput`` / ``App.upload`` path uses by default
+                and what the Atlan blob-storage gateway permits in
+                production deployments).
 
         Returns:
             An ephemeral ``FileReference`` (``is_durable=False``) with
-            ``local_path`` set.  ``file_count`` is always 1; use
-            :func:`~application_sdk.storage.transfer.upload` if you need
-            accurate file counts for directories.
+            ``local_path`` and ``tier`` set.
         """
         p = Path(path) if not isinstance(path, Path) else path
+        # Best-effort file_count computation. We swallow OSError so the
+        # constructor is still usable from inside Temporal sandbox where
+        # filesystem inspection may not be desirable.
+        file_count = 1
+        try:
+            if p.is_dir():
+                file_count = sum(1 for child in p.rglob("*") if child.is_file())
+        except OSError:
+            file_count = 1
         return FileReference(
             local_path=str(p),
+            file_count=file_count,
+            tier=tier,
         )
 
 
@@ -232,7 +299,7 @@ class GitReference(BaseModel, frozen=True):
     path: str = ""
     tag: str = ""
     commit: str = ""
-    credential: "CredentialRef | None" = None
+    credential: CredentialRef | None = None
 
 
 class ConnectionAttributes(BaseModel, frozen=True):
@@ -309,7 +376,7 @@ class ConnectionRef(BaseModel, frozen=True):
     )
 
     @staticmethod
-    def from_connection(conn: Any) -> "ConnectionRef":
+    def from_connection(conn: Any) -> ConnectionRef:
         """Convert a pyatlan_v9 Connection (msgspec.Struct) to ConnectionRef.
 
         The pyatlan_v9 struct is flat (all attributes at top level with camelCase
@@ -322,7 +389,9 @@ class ConnectionRef(BaseModel, frozen=True):
         Returns:
             A ConnectionRef with normalized snake_case fields.
         """
-        from pyatlan_v9.model.transform import to_atlas_format  # type: ignore[import]
+        from pyatlan_v9.model.transform import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
+            to_atlas_format,
+        )
 
         return ConnectionRef.model_validate(to_atlas_format(conn))
 
@@ -336,6 +405,8 @@ class ConnectionRef(BaseModel, frozen=True):
         Returns:
             A pyatlan_v9 Connection msgspec.Struct instance.
         """
-        from pyatlan_v9.model.transform import from_atlas_format  # type: ignore[import]
+        from pyatlan_v9.model.transform import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
+            from_atlas_format,
+        )
 
         return from_atlas_format(self.model_dump(by_alias=True))

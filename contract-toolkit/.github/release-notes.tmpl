@@ -1,0 +1,26 @@
+{% if version -%}
+{{ version | trim_start_matches(pat="contract-toolkit-v") }} ({{ timestamp | date(format="%B %e, %Y") | replace(from="  ", to=" ") }})
+{% if previous.version -%}
+Full Changelog: [{{ previous.version }}...{{ version }}](https://github.com/atlanhq/application-sdk/compare/{{ previous.version }}...{{ version }})
+{% else -%}
+Full Changelog: {{ version | trim_start_matches(pat="contract-toolkit-v") }}
+{% endif %}
+
+{% endif -%}
+{% for group, commits in commits | group_by(attribute="group") %}
+{% if group == "Bug fixes" -%}
+Bug Fixes
+{% elif group == "CI & tooling" -%}
+CI & Tooling
+{% else -%}
+{{ group }}
+{% endif -%}
+{% for commit in commits -%}
+{{ commit.message }} (by {% if commit.remote.username %}@{{ commit.remote.username }}{% else %}{{ commit.author.name }}{% endif %} in {{ commit.id | truncate(length=7, end="") }})
+{% endfor %}
+{% endfor -%}
+Contributors
+{% for contributor in commits | map(attribute="remote.username") | unique -%}
+{% if contributor %}@{{ contributor }}
+{% endif -%}
+{% endfor %}

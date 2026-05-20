@@ -1,0 +1,96 @@
+// Test fixture: PopularityNode can intentionally wire scalar args from typed
+// workflow controls, with validation against uiConfig.properties.
+
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "popularity-dynamic-overrides"
+displayName = "Popularity Dynamic Overrides"
+connector = Connectors.SNOWFLAKE
+workflowType = "PopularityDynamicOverridesWorkflow"
+icon = "https://assets.atlan.com/assets/snowflake.svg"
+hasCredentialConfig = false
+hasPublishInputFields = false
+
+uiConfig {
+  tasks {
+    ["Connection"] {
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Popularity"] {
+      inputs {
+        ["popularity-window-days"] = new Config.NumericInput {
+          title = "Window Days"
+          default = 60
+          width = 4
+          validationRules {
+            new Dynamic { type = "number"; required = false; min = 1; message = "Window days must be at least 1." }
+          }
+        }
+        ["popularity-top-n-queries"] = new Config.NumericInput {
+          title = "Top Queries"
+          default = 8
+          width = 4
+          validationRules {
+            new Dynamic { type = "number"; required = false; min = 1; message = "Top queries must be at least 1." }
+          }
+        }
+        ["popularity-top-n-users"] = new Config.NumericInput {
+          title = "Top Users"
+          default = 12
+          width = 4
+          validationRules {
+            new Dynamic { type = "number"; required = false; min = 1; message = "Top users must be at least 1." }
+          }
+        }
+        ["popularity-filter-errors"] = new Config.BooleanInput {
+          title = "Filter Parsed Errors"
+          width = 4
+        }
+        ["popularity-output-attribution"] = new Config.BooleanInput {
+          title = "Output Attribution"
+          width = 4
+        }
+        ["popularity-dry-run"] = new Config.BooleanInput {
+          title = "Dry Run"
+          width = 4
+        }
+      }
+    }
+  }
+}
+
+extraNodes {
+  ["qi"] = new QueryIntelligenceNode {
+    vendorName = "snowflake"
+    sqlKey = "QUERY_TEXT"
+    inputPrefix = "$.extract.outputs.query_history_prefix"
+    outputPrefix = "$.extract.outputs.qi_output_prefix"
+  }
+  ["publish"] = new PublishNode {
+    args {
+      ["connection_cache_enabled"] = true
+      ["connection_cache_via_app_enabled"] = true
+    }
+  }
+  ["popularity"] = new PopularityNode {
+    tenantId = "$.extract.outputs.tenant_id"
+    parsedDataPrefix = "$.extract.outputs.qi_output_prefix"
+    minedDataPrefix = "$.extract.outputs.query_history_prefix"
+    connectionCachePath = "$.extract.outputs.connection_cache_path"
+    outputPrefix = "$.extract.outputs.popularity_output_prefix"
+    windowDays = "{{popularity-window-days}}"
+    topNQueries = "{{popularity-top-n-queries}}"
+    topNUsers = "{{popularity-top-n-users}}"
+    parsedDataFilterHasError = "{{popularity-filter-errors}}"
+    relationshipsOutputAttribution = "{{popularity-output-attribution}}"
+    dryRun = "{{popularity-dry-run}}"
+  }
+}

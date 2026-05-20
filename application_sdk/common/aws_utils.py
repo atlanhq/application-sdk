@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
+from application_sdk.common.aws_utils_errors import (
+    AwsAssumeRoleError,
+    AwsClientCreationError,
+    AwsCredentialSourceConflictError,
+    AwsCredentialSourceMissingError,
+    AwsRdsTokenError,
+    AwsRegionNotFoundError,
+)
 from application_sdk.constants import AWS_SESSION_NAME
 
 if TYPE_CHECKING:
@@ -32,7 +40,7 @@ def get_region_name_from_hostname(hostname: str) -> str:
     match = re.search(r"-([a-z]{2}-[a-z]+-\d)\.", hostname)
     if match:
         return match.group(1)
-    raise ValueError("Could not find valid AWS region from hostname")
+    raise AwsRegionNotFoundError()
 
 
 def generate_aws_rds_token_with_iam_role(
@@ -58,10 +66,12 @@ def generate_aws_rds_token_with_iam_role(
     Returns:
         str: RDS authentication token
     """
-    from botocore.exceptions import ClientError
+    from botocore.exceptions import (  # noqa: PLC0415 — optional dep: botocore
+        ClientError,
+    )
 
     try:
-        from boto3 import client
+        from boto3 import client  # noqa: PLC0415 — optional dep: boto3
 
         sts_client = client(
             "sts", region_name=region or get_region_name_from_hostname(host)
@@ -82,7 +92,7 @@ def generate_aws_rds_token_with_iam_role(
         return token
 
     except ClientError as e:
-        raise Exception(f"Failed to assume role: {str(e)}") from e
+        raise AwsAssumeRoleError(cause=e) from e
 
 
 def generate_aws_rds_token_with_iam_user(
@@ -107,7 +117,7 @@ def generate_aws_rds_token_with_iam_user(
         str: RDS authentication token
     """
     try:
-        from boto3 import client
+        from boto3 import client  # noqa: PLC0415 — optional dep: boto3
 
         aws_client = client(
             "rds",
@@ -120,10 +130,10 @@ def generate_aws_rds_token_with_iam_user(
         )
         return token
     except Exception as e:
-        raise Exception(f"Failed to get user credentials: {str(e)}") from e
+        raise AwsRdsTokenError(cause=e) from e
 
 
-def get_cluster_identifier(aws_client) -> Optional[str]:
+def get_cluster_identifier(aws_client) -> str | None:
     """
     Retrieve the cluster identifier from AWS Redshift clusters.
 
@@ -147,7 +157,7 @@ def get_cluster_identifier(aws_client) -> Optional[str]:
     return None
 
 
-def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
+def create_aws_session(credentials: dict[str, Any]) -> boto3.Session:
     """
     Create a boto3 session with AWS credentials.
 
@@ -157,7 +167,7 @@ def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
     Returns:
         boto3.Session: Configured boto3 session
     """
-    import boto3
+    import boto3  # noqa: PLC0415 — optional dep: boto3
 
     aws_access_key_id = credentials.get("aws_access_key_id") or credentials.get(
         "username"
@@ -173,8 +183,8 @@ def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
 
 
 def get_cluster_credentials(
-    aws_client, credentials: Dict[str, Any], extra: Dict[str, Any]
-) -> Dict[str, str]:
+    aws_client, credentials: dict[str, Any], extra: dict[str, Any]
+) -> dict[str, str]:
     """
     Retrieve cluster credentials using IAM authentication.
 
@@ -198,8 +208,8 @@ def get_cluster_credentials(
 def create_aws_client(
     service: str,
     region: str,
-    session: Optional[boto3.Session] = None,
-    temp_credentials: Optional[Dict[str, str]] = None,
+    session: boto3.Session | None = None,
+    temp_credentials: dict[str, str] | None = None,
     use_default_credentials: bool = False,
 ) -> Any:
     """
@@ -218,8 +228,9 @@ def create_aws_client(
         AWS client instance
 
     Raises:
-        ValueError: If invalid credential combination is provided
-        Exception: If client creation fails
+        AwsCredentialSourceMissingError: If no credential source is provided
+        AwsCredentialSourceConflictError: If more than one credential source is provided
+        AwsClientCreationError: If client creation fails
 
     Examples:
         Using temporary credentials::
@@ -257,28 +268,28 @@ def create_aws_client(
     )
 
     if credential_sources == 0:
-        raise ValueError("At least one credential source must be provided")
+        raise AwsCredentialSourceMissingError()
     if credential_sources > 1:
-        raise ValueError("Only one credential source should be provided at a time")
+        raise AwsCredentialSourceConflictError()
 
-    import boto3
+    import boto3  # noqa: PLC0415 — optional dep: boto3
 
     try:
         # Priority 1: Use provided session
         if session is not None:
             logger.debug(
-                "Creating AWS client using provided session",
-                service=service,
-                region=region,
+                "Creating AWS client using provided session service=%s region=%s",
+                service,
+                region,
             )
             return session.client(service, region_name=region)  # type: ignore
 
         # Priority 2: Use temporary credentials
         if temp_credentials is not None:
             logger.debug(
-                "Creating AWS client using temporary credentials",
-                service=service,
-                region=region,
+                "Creating AWS client using temporary credentials service=%s region=%s",
+                service,
+                region,
             )
             return boto3.client(  # type: ignore
                 service,
@@ -291,21 +302,21 @@ def create_aws_client(
         # Priority 3: Use default credentials
         if use_default_credentials:
             logger.debug(
-                "Creating AWS client using default credentials",
-                service=service,
-                region=region,
+                "Creating AWS client using default credentials service=%s region=%s",
+                service,
+                region,
             )
             return boto3.client(service, region_name=region)  # type: ignore
 
     except Exception as e:
-        raise Exception(f"Failed to create {service} client: {str(e)}") from e
+        raise AwsClientCreationError(service=service, cause=e) from e
 
 
 def create_engine_url(
     drivername: str,
-    credentials: Dict[str, Any],
-    cluster_credentials: Dict[str, str],
-    extra: Dict[str, Any],
+    credentials: dict[str, Any],
+    cluster_credentials: dict[str, str],
+    extra: dict[str, Any],
 ) -> URL:
     """
     Create SQLAlchemy engine URL for Redshift connection.
@@ -317,7 +328,7 @@ def create_engine_url(
     Returns:
         URL: SQLAlchemy engine URL
     """
-    from sqlalchemy.engine.url import URL
+    from sqlalchemy.engine.url import URL  # noqa: PLC0415 — optional dep: sqlalchemy
 
     host = credentials["host"]
     port = credentials.get("port")
@@ -342,7 +353,7 @@ def get_all_aws_regions() -> list[str]:
         Exception: If unable to retrieve regions from AWS
     """
     try:
-        import boto3
+        import boto3  # noqa: PLC0415 — optional dep: boto3
 
         # Use us-east-1 as the default region for the EC2 client since it's always available
         ec2_client = boto3.client("ec2", region_name="us-east-1")

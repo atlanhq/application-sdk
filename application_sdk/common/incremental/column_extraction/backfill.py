@@ -11,9 +11,7 @@ Functions:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Set
-
-from application_sdk.common.exc_utils import rewrap
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import duckdb
@@ -28,7 +26,7 @@ logger = get_logger(__name__)
 
 def get_backfill_tables(
     current_transformed_dir: Path, previous_current_state_dir: Path | None
-) -> Set[str] | None:
+) -> set[str] | None:
     """Use DuckDB to compare current tables vs previous current-state.
 
     Returns qualified names of tables that need backfilling
@@ -45,6 +43,10 @@ def get_backfill_tables(
         logger.info("No previous state available - returning None (should be full run)")
         return None
 
+    from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+        ColumnBatchInputError,
+    )
+
     try:
         with DuckDBConnectionManager() as conn_manager:
             conn = conn_manager.connection
@@ -58,9 +60,7 @@ def get_backfill_tables(
             )
 
             if current_tables is None or current_tables == 0:
-                raise ValueError(
-                    "No transformed tables found for finding backfill tables"
-                )
+                raise ColumnBatchInputError()
 
             if previous_tables is None or previous_tables == 0:
                 logger.warning(
@@ -101,8 +101,12 @@ def get_backfill_tables(
 
             return backfill_qns
 
-    except Exception:
-        logger.error("DuckDB analysis failed, returning None", exc_info=True)
+    except ColumnBatchInputError:
+        logger.warning(
+            "Backfill analysis: legitimate skip (no transformed tables); "
+            "returning None",
+            exc_info=True,
+        )
         return None
 
 
@@ -127,7 +131,11 @@ def _load_tables_to_duckdb(
         if table_dir.exists():
             json_files = [f.resolve() for f in table_dir.glob("*.json")]
     except OSError as e:
-        raise rewrap(e, f"Failed to scan JSON files (base_dir={base_dir})") from e
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+            JsonScanError,
+        )
+
+        raise JsonScanError(base_dir=str(base_dir), cause=e) from e
 
     if not json_files:
         conn.execute(f"""
@@ -159,7 +167,7 @@ def _load_tables_to_duckdb(
     union_query = " UNION ALL ".join(union_parts)
 
     # lazy import: heavy optional dependency (installed via [sql] extra)
-    import duckdb
+    import duckdb  # noqa: PLC0415 — optional dep: duckdb
 
     try:
         conn.execute(f"""
@@ -168,9 +176,9 @@ def _load_tables_to_duckdb(
         """)
     except duckdb.Error:
         logger.error(
-            "DuckDB failed to load JSON files",
-            file_count=len(json_files),
-            table_name=table_name,
+            "DuckDB failed to load %d JSON files for table %s",
+            len(json_files),
+            table_name,
             exc_info=True,
         )
         raise

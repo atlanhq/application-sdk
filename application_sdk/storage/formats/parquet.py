@@ -1,19 +1,13 @@
 import inspect
 import os
-from typing import (
-    TYPE_CHECKING,
-    AsyncGenerator,
-    AsyncIterator,
-    Generator,
-    List,
-    Optional,
-    Union,
-    cast,
-)
+import uuid
+import warnings
+from collections.abc import AsyncGenerator, AsyncIterator, Generator
+from typing import TYPE_CHECKING, Union, cast
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
@@ -24,6 +18,7 @@ from application_sdk.storage.formats.utils import (
     is_empty_dataframe,
     path_gen,
 )
+from application_sdk.storage.ops import normalize_key
 from application_sdk.storage.ops import upload_file as _upload_file
 
 logger = get_logger(__name__)
@@ -70,9 +65,9 @@ class ParquetFileReader(Reader):
     def __init__(
         self,
         path: str,
-        chunk_size: Optional[int] = 100000,
-        buffer_size: Optional[int] = 5000,
-        file_names: Optional[List[str]] = None,
+        chunk_size: int | None = 100000,
+        buffer_size: int | None = 5000,
+        file_names: list[str] | None = None,
         dataframe_type: DataframeType = DataframeType.pandas,
         cleanup_on_close: bool = True,
     ):
@@ -92,22 +87,36 @@ class ParquetFileReader(Reader):
         Raises:
             ValueError: When path is not provided or when single file path is combined with file_names
         """
+        warnings.warn(
+            "ParquetFileReader is deprecated and will be removed in v4.0. "
+            "Migrate now: declare the upstream artifact as a FileReference "
+            "field on your task's typed Input — the SDK's activity "
+            "interceptor auto-materialises it to a local path before the "
+            "task runs (with sha256 sidecar verification + parallel "
+            "transfers), then read it directly with pandas.read_parquet / "
+            "daft.read_parquet. See docs/agents/coding-standards.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         # Validate that single file path and file_names are not both specified
         if path.endswith(PARQUET_FILE_EXTENSION) and file_names:
-            raise ValueError(
-                f"Cannot specify both a single file path ('{path}') and file_names filter. "
-                f"Either provide a directory path with file_names, or specify the exact file path without file_names."
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                SingleFilePathWithFileNamesError,
             )
 
+            raise SingleFilePathWithFileNamesError(path=path)
+
+        # Initialise the Reader base class so `_is_closed` and
+        # `_downloaded_files` are per-instance state (not shared via the old
+        # class-level mutable defaults). Required after BLDX-1167.
+        super().__init__()
         self.path = path
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
         self.file_names = file_names
         self.dataframe_type = dataframe_type
         self.cleanup_on_close = cleanup_on_close
-        self._is_closed = False
-        self._downloaded_files: List[str] = []
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """Read the data from the parquet files and return as a single DataFrame.
@@ -119,21 +128,26 @@ class ParquetFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot read from a closed reader")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                ReaderClosedError,
+            )
+
+            raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
         elif self.dataframe_type == DataframeType.daft:
             return await self._get_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     def read_batches(
         self,
-    ) -> Union[
-        AsyncIterator["pd.DataFrame"],
-        AsyncIterator["daft.DataFrame"],
-    ]:
+    ) -> AsyncIterator["pd.DataFrame"] | AsyncIterator["daft.DataFrame"]:
         """Read the data from the parquet files and return as batched DataFrames.
 
         Returns:
@@ -144,14 +158,22 @@ class ParquetFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot read from a closed reader")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                ReaderClosedError,
+            )
+
+            raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
         elif self.dataframe_type == DataframeType.daft:
             return self._get_batched_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     async def _get_dataframe(self) -> "pd.DataFrame":
         """Read data from parquet file(s) and return as pandas DataFrame.
@@ -185,7 +207,7 @@ class ParquetFileReader(Reader):
         - Only reads files in the specified directory
         """
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -200,7 +222,11 @@ class ParquetFileReader(Reader):
                 ignore_index=True,
             )
         except Exception as e:
-            raise rewrap(e, "Error reading data from parquet file(s)") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_batched_dataframe(
         self,
@@ -245,7 +271,7 @@ class ParquetFileReader(Reader):
         - Only reads files in the specified directory
         """
         try:
-            import pandas as pd
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -253,9 +279,7 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(
-                "Reading parquet files in batches", file_count=len(parquet_files)
-            )
+            logger.info("Reading %d parquet files in batches", len(parquet_files))
 
             # Process each file individually to maintain memory efficiency
             for parquet_file in parquet_files:
@@ -263,9 +287,13 @@ class ParquetFileReader(Reader):
                 for i in range(0, len(df), self.chunk_size):
                     yield df.iloc[i : i + self.chunk_size]  # type: ignore
         except Exception as e:
-            raise rewrap(e, "Error reading data from parquet file(s) in batches") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
 
-    async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+            raise FormatReadError(cause=e) from e
+
+    async def _get_daft_dataframe(self) -> "daft.DataFrame":
         """Read data from parquet file(s) and return as daft DataFrame.
 
         Returns:
@@ -297,7 +325,7 @@ class ParquetFileReader(Reader):
         - Column schemas must be compatible across files
         """
         try:
-            import daft  # type: ignore
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -305,14 +333,16 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(
-                "Reading parquet files with daft", file_count=len(parquet_files)
-            )
+            logger.info("Reading %d parquet files with daft", len(parquet_files))
 
             # Use the discovered/downloaded files directly
             return daft.read_parquet(parquet_files)
         except Exception as e:
-            raise rewrap(e, "Error reading data from parquet file(s) using daft") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # type: ignore
         """Get batched daft dataframe from parquet file(s).
@@ -356,7 +386,7 @@ class ParquetFileReader(Reader):
         - Files processed individually for memory efficiency
         """
         try:
-            import daft  # type: ignore
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
@@ -364,9 +394,7 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(
-                "Reading parquet files as daft batches", file_count=len(parquet_files)
-            )
+            logger.info("Reading %d parquet files as daft batches", len(parquet_files))
 
             # Unify parquet schemas before reading: when early files have
             # null-typed columns and later files have string-typed columns,
@@ -375,8 +403,8 @@ class ParquetFileReader(Reader):
             # daft so it reads all files with consistent types. See BLDX-837.
             daft_schema = None
             try:
-                import pyarrow as pa
-                import pyarrow.parquet as pq_meta
+                import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+                import pyarrow.parquet as pq_meta  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
                 pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
                 unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
@@ -388,11 +416,10 @@ class ParquetFileReader(Reader):
                     )
                     for field in unified
                 }
-            except Exception as exc:
+            except Exception:
                 logger.debug(
-                    "Could not unify parquet schemas (%s); "
-                    "falling back to daft default schema inference",
-                    type(exc).__name__,
+                    "Could not unify parquet schemas, falling back to daft default schema inference",
+                    exc_info=True,
                 )
 
             lazy_df = daft.read_parquet(parquet_files, schema=daft_schema)
@@ -429,23 +456,27 @@ class ParquetFileWriter(Writer):
         end_marker (Optional[str]): End marker for query extraction.
         retain_local_copy (bool): Whether to retain the local copy of the files.
         use_consolidation (bool): Whether to use consolidation.
+        replace_prefix (bool): Whether to clear the existing object-store prefix before
+            the first write.
     """
 
     def __init__(
         self,
         path: str,
-        typename: Optional[str] = None,
-        chunk_size: Optional[int] = 100000,
-        buffer_size: Optional[int] = 5000,
-        total_record_count: Optional[int] = 0,
-        chunk_count: Optional[int] = 0,
-        chunk_part: Optional[int] = 0,
-        chunk_start: Optional[int] = None,
-        start_marker: Optional[str] = None,
-        end_marker: Optional[str] = None,
-        retain_local_copy: Optional[bool] = False,
-        use_consolidation: Optional[bool] = False,
+        typename: str | None = None,
+        chunk_size: int | None = 100000,
+        buffer_size: int | None = 5000,
+        total_record_count: int | None = 0,
+        chunk_count: int | None = 0,
+        chunk_part: int | None = 0,
+        chunk_start: int | None = None,
+        start_marker: str | None = None,
+        end_marker: str | None = None,
+        retain_local_copy: bool | None = False,
+        use_consolidation: bool | None = False,
         dataframe_type: DataframeType = DataframeType.pandas,
+        replace_prefix: bool = False,
+        defer_uploads: bool = False,
     ):
         """Initialize the Parquet output handler.
 
@@ -466,13 +497,40 @@ class ParquetFileWriter(Writer):
             use_consolidation (bool, optional): Whether to use consolidation.
                 Defaults to False.
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
+            replace_prefix (bool, optional): Clear existing object-store keys under
+                the writer prefix before the first write. Defaults to False.
+            defer_uploads (bool, optional): When False (default), the writer
+                uploads each chunk inline as on previous SDK versions — fully
+                backwards compatible. When True, no inline uploads happen on
+                any code path; the writer hands back an ephemeral
+                ``FileReference`` on ``close()`` (in ``result.files``) and the
+                Temporal activity interceptor uploads the directory with
+                SHA-256 sidecars + parallel transfers when the task returns.
+                Apps adopt the deferred path at their own pace; existing apps
+                that ignore this flag see no behaviour change.
         """
+        # ParquetFileWriter is on the v4.0 removal path. We surface a
+        # DeprecationWarning here to push callers onto FileReference *now*
+        # rather than waiting for v4.0 to break them — the new pattern is
+        # already supported, fully optimised, and copy-paste documented.
+        warnings.warn(
+            "ParquetFileWriter is deprecated and will be removed in v4.0. "
+            "Migrate now: use application_sdk.storage.rolling.RollingFileWriter "
+            "(time-based rollover, heartbeat-friendly) or write parquet "
+            "locally and return a FileReference for the output directory — "
+            "the Temporal activity interceptor persists it with SHA-256 "
+            "sidecars and parallel transfers, no caller-side upload code "
+            "needed. See the 'Replacing ParquetFileWriter / JsonFileWriter' "
+            "section in docs/agents/coding-standards.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.extension = PARQUET_FILE_EXTENSION
         self.path = path
         self.typename = typename
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
-        self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
+        self.buffer: list[pd.DataFrame | daft.DataFrame] = []
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.current_buffer_size = 0
@@ -490,6 +548,9 @@ class ParquetFileWriter(Writer):
         self.dataframe_type = dataframe_type
         self._is_closed = False
         self._statistics = None
+        self.replace_prefix = replace_prefix
+        self._prefix_replaced = False
+        self.defer_uploads = defer_uploads
 
         # Consolidation-specific attributes
         # Use consolidation to efficiently write parquet files in buffered manner
@@ -500,24 +561,67 @@ class ParquetFileWriter(Writer):
         )  # Use chunk_size as threshold
         self.current_folder_records = 0  # Track records in current temp folder
         self.temp_folder_index = 0  # Current temp folder index
-        self.temp_folders_created: List[int] = []  # Track temp folders for cleanup
-        self.current_temp_folder_path: Optional[str] = None  # Current temp folder path
+        self.temp_folders_created: list[int] = []  # Track temp folders for cleanup
+        self.current_temp_folder_path: str | None = None  # Current temp folder path
 
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
 
         if not self.path:
-            raise ValueError("path is required")
-        # Create output directory
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatPathRequiredError,
+            )
+
+            raise FormatPathRequiredError()
+        # Create output directory. When typename is set, behaviour matches
+        # main exactly (`<path>/<typename>/`). When typename is absent AND
+        # deferred uploads are on, the writer creates its own scoped
+        # sub-directory so the resulting FileReference covers only this
+        # writer's chunks — never sibling content in the caller's `path`.
+        # Default mode (defer_uploads=False) preserves main's behaviour
+        # for callers that pass a bare `path` with no typename.
         if self.typename:
             self.path = os.path.join(self.path, self.typename)
+        elif self.defer_uploads:
+            self.path = os.path.join(self.path, f"_parquet_{uuid.uuid4().hex[:8]}")
         SafeFileOps.makedirs(self.path, exist_ok=True)
+
+    async def _ensure_prefix_replaced(self) -> None:
+        """Clear the object-store prefix once for replacing writes."""
+        if not self.replace_prefix or self._prefix_replaced:
+            return
+
+        normalized_prefix = normalize_key(self.path)
+        if not normalized_prefix:
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                ReplacePrefixEmptyError,
+            )
+
+            raise ReplacePrefixEmptyError()
+
+        try:
+            deleted_count = await _delete_prefix(self.path)
+        except RuntimeError as exc:
+            if "No ObjectStore provided" not in str(exc):
+                raise
+            logger.debug("No object store configured, skipping prefix replacement")
+        else:
+            logger.info(
+                "Cleared existing parquet object-store prefix",
+                prefix=normalized_prefix,
+                deleted_count=deleted_count,
+            )
+        self._prefix_replaced = True
+
+    async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
+        """Write a pandas DataFrame after optional prefix replacement."""
+        await self._ensure_prefix_replaced()
+        await super()._write_dataframe(dataframe, **kwargs)
 
     async def _write_batched_dataframe(
         self,
-        batched_dataframe: Union[
-            AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]
-        ],
+        batched_dataframe: AsyncGenerator["pd.DataFrame", None]
+        | Generator["pd.DataFrame", None, None],
     ):
         """Write a batched pandas DataFrame to Parquet files with consolidation support.
 
@@ -532,6 +636,8 @@ class ParquetFileWriter(Writer):
         Args:
             batched_dataframe: AsyncGenerator or Generator of pandas DataFrames to write.
         """
+        await self._ensure_prefix_replaced()
+
         if not self.use_consolidation:
             # Fallback to base class implementation
             await super()._write_batched_dataframe(batched_dataframe)
@@ -567,9 +673,9 @@ class ParquetFileWriter(Writer):
 
     async def _write_daft_dataframe(
         self,
-        dataframe: "daft.DataFrame",  # noqa: F821
-        partition_cols: Optional[List] = None,
-        write_mode: Union[WriteMode, str] = WriteMode.APPEND.value,
+        dataframe: "daft.DataFrame",
+        partition_cols: list | None = None,
+        write_mode: WriteMode | str = WriteMode.APPEND.value,
         morsel_size: int = 100_000,
         **kwargs,
     ):
@@ -596,7 +702,9 @@ class ParquetFileWriter(Writer):
             - If partition_cols is set, creates Hive-style directory structure
         """
         try:
-            import daft
+            await self._ensure_prefix_replaced()
+
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Convert string to enum if needed for backward compatibility
             if isinstance(write_mode, str):
@@ -642,15 +750,20 @@ class ParquetFileWriter(Writer):
                 description="Number of write operations to Parquet files",
             )
 
-            #  Upload the entire directory (contains multiple parquet files created by Daft)
-            if write_mode == WriteMode.OVERWRITE:
-                # Delete the directory from object store
-                try:
-                    await _delete_prefix(self.path)
-                except FileNotFoundError:
-                    logger.info("No files found under prefix: %s", self.path)
-            for path in file_paths:
-                await _upload_file(path, path, retain_local_copy=self.retain_local_copy)
+            # Upload the entire directory (contains multiple parquet files
+            # created by Daft). When defer_uploads=True the caller persists
+            # via close()'s returned FileReference instead — skip inline.
+            if not self.defer_uploads:
+                if write_mode == WriteMode.OVERWRITE:
+                    # Delete the directory from object store
+                    try:
+                        await _delete_prefix(self.path)
+                    except FileNotFoundError:
+                        logger.info("No files found under prefix: %s", self.path)
+                for path in file_paths:
+                    await _upload_file(
+                        path, path, retain_local_copy=self.retain_local_copy
+                    )
 
         except Exception as e:
             # Record metrics for failed write
@@ -663,11 +776,10 @@ class ParquetFileWriter(Writer):
                     "mode": write_mode.value
                     if isinstance(write_mode, WriteMode)
                     else write_mode,
-                    "error": str(e),
+                    "error_type": type(e).__name__,
                 },
                 description="Number of errors while writing to Parquet files",
             )
-            logger.error("Error writing daft dataframe to parquet", exc_info=True)
             raise
 
     def get_full_path(self) -> str:
@@ -706,10 +818,9 @@ class ParquetFileWriter(Writer):
             # Check if we need to consolidate current folder before adding this chunk
             if (
                 self.current_folder_records + len(chunk)
-            ) > self.consolidation_threshold:
-                if self.current_folder_records > 0:
-                    await self._consolidate_current_folder()
-                    self._start_new_temp_folder()
+            ) > self.consolidation_threshold and self.current_folder_records > 0:
+                await self._consolidate_current_folder()
+                self._start_new_temp_folder()
 
             # Ensure we have a temp folder ready
             if self.current_temp_folder_path is None:
@@ -736,7 +847,11 @@ class ParquetFileWriter(Writer):
     async def _write_chunk_to_temp_folder(self, chunk: "pd.DataFrame"):
         """Write a chunk to the current temp folder."""
         if self.current_temp_folder_path is None:
-            raise ValueError("No temp folder path available")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                TempFolderPathMissingError,
+            )
+
+            raise TempFolderPathMissingError()
 
         # Generate file name for this chunk within the temp folder
         existing_files = len(
@@ -758,7 +873,7 @@ class ParquetFileWriter(Writer):
             return
 
         try:
-            import daft
+            import daft  # noqa: PLC0415 — optional dep: daft
 
             # Read all parquet files in temp folder
             pattern = os.path.join(self.current_temp_folder_path, f"*{self.extension}")
@@ -784,10 +899,13 @@ class ParquetFileWriter(Writer):
                         )
                         SafeFileOps.rename(file_path, consolidated_file_path)
 
-                        # Upload consolidated file to object store
-                        await _upload_file(
-                            consolidated_file_path, consolidated_file_path
-                        )
+                        # Upload consolidated file to object store inline
+                        # (skipped when defer_uploads=True — caller persists
+                        # via close()'s returned FileReference).
+                        if not self.defer_uploads:
+                            await _upload_file(
+                                consolidated_file_path, consolidated_file_path
+                            )
 
                 # Clean up temp consolidated dir
                 SafeFileOps.rmtree(temp_consolidated_dir, ignore_errors=True)
@@ -807,9 +925,9 @@ class ParquetFileWriter(Writer):
             )
 
             logger.info(
-                "Consolidated folder",
-                folder_index=self.temp_folder_index,
-                record_count=self.current_folder_records,
+                "Consolidated folder index=%d record_count=%d",
+                self.temp_folder_index,
+                self.current_folder_records,
             )
 
         except Exception:
@@ -858,22 +976,51 @@ class ParquetFileWriter(Writer):
         override _write_dataframe's buffer loop writes every sub-chunk to the
         same filename, silently losing all data except the last sub-chunk.
 
-        Each parquet sub-chunk file is complete after write (no appending), so
-        we upload it to the object store immediately. The base class post-loop
-        upload only handles the last file and would miss intermediate sub-chunks.
-        See HYP-773.
+        Each parquet sub-chunk is complete after write (no appending), so when
+        ``defer_uploads=False`` we upload immediately — the base class's
+        post-loop upload only handles the last file and would miss the
+        intermediate sub-chunks (HYP-773). When ``defer_uploads=True``, no
+        inline upload happens; ``close()``'s returned ``FileReference``
+        carries the entire output directory to the activity interceptor.
         """
         await super()._flush_buffer(chunk, chunk_part)
-        # Upload the completed parquet file to object store.
-        output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
-        if os.path.exists(output_file_name):
-            try:
-                await self._upload_file(output_file_name)
-            except RuntimeError:
-                # No object store configured (local dev) — file stays on disk.
-                logger.debug("No object store configured, skipping upload")
+        if not self.defer_uploads:
+            output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
+            if os.path.exists(output_file_name):
+                try:
+                    await self._upload_file(output_file_name)
+                except RuntimeError:
+                    # No object store configured (local dev) — file stays on disk.
+                    logger.debug("No object store configured, skipping upload")
         # Advance part so the next sub-chunk gets a unique filename.
         self.chunk_part += 1
+
+    async def _upload_file(self, file_name: str) -> None:
+        """Upload a file to the object store, or no-op when uploads are deferred.
+
+        With ``defer_uploads=True`` this overrides the base implementation
+        to a no-op so every base-class call site (overflow check, final
+        flush, statistics sidecar) skips inline uploads. The caller persists
+        via ``close()``'s returned ``FileReference`` instead.
+
+        With ``defer_uploads=False`` we delegate to the base, preserving the
+        pre-BLDX-1136 inline-upload behaviour.
+        """
+        if self.defer_uploads:
+            self.current_buffer_size_bytes = 0
+            return
+        await super()._upload_file(file_name)
+
+    def _build_file_reference(self) -> "FileReference | None":
+        """Surface the writer-owned directory as an ephemeral FileReference.
+
+        Returned in ``WriterResult.files`` only when ``defer_uploads=True``.
+        Default mode returns ``None`` so the activity interceptor does not
+        re-upload files that are already in the store from inline uploads.
+        """
+        if not self.defer_uploads:
+            return None
+        return FileReference.from_local(self.path)
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a Parquet file, casting null-typed columns to string.
@@ -884,8 +1031,8 @@ class ParquetFileWriter(Writer):
         conflict by using ``null`` for ALL rows, dropping actual data from files
         that had the column typed as ``string``. See BLDX-837.
         """
-        import pyarrow as pa
-        import pyarrow.parquet as pq
+        import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+        import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
         table = pa.Table.from_pandas(chunk, preserve_index=False)
 

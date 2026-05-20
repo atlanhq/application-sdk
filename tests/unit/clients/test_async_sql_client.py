@@ -5,6 +5,7 @@ import pytest
 
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import AsyncBaseSQLClient
+from application_sdk.clients.sql_errors import SqlPandasResultError
 
 
 @pytest.fixture
@@ -80,6 +81,34 @@ async def test_load(
     )
     assert async_sql_client.engine == mock_engine
     # AsyncBaseSQLClient doesn't store persistent connection
+    assert async_sql_client.connection is None
+
+
+@patch("sqlalchemy.ext.asyncio.create_async_engine")
+@pytest.mark.asyncio
+async def test_load_respects_pool_pre_ping_override(
+    create_async_engine: Any,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
+):
+    assert async_sql_client.DB_CONFIG is not None
+    async_sql_client.DB_CONFIG = DatabaseConfig(
+        template="test://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        connect_args={},
+        pool_pre_ping=False,
+    )
+    mock_engine, _, _ = mock_async_engine_with_connection
+    create_async_engine.return_value = mock_engine
+
+    await async_sql_client.load({"username": "test_user", "password": "test_password"})
+
+    create_async_engine.assert_called_once_with(
+        async_sql_client.get_sqlalchemy_connection_string(),
+        connect_args=async_sql_client.DB_CONFIG.connect_args,
+        pool_pre_ping=False,
+    )
+    assert async_sql_client.engine == mock_engine
     assert async_sql_client.connection is None
 
 
@@ -225,7 +254,8 @@ async def test_run_query_with_error(
     async_sql_client.use_server_side_cursor = True
 
     results: list[dict[str, str]] = []
-    with pytest.raises(Exception, match="Error executing query") as exc_info:
+    with pytest.raises(SqlPandasResultError) as exc_info:
         async for batch in async_sql_client.run_query(query):
             results.extend(batch)
-    assert "Simulated query failure" in str(exc_info.value.__cause__)
+    assert exc_info.value.message == "Error executing SQL query"
+    assert isinstance(exc_info.value.cause, Exception)

@@ -21,7 +21,7 @@ import asyncio
 import hashlib
 import os
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
@@ -53,30 +53,36 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-async def _get_remote_sha256(store: "ObjectStore", key: str) -> str | None:
+async def _get_remote_sha256(store: ObjectStore, key: str) -> str | None:
     """Fetch the stored SHA-256 sidecar for *key*, or ``None`` if absent."""
-    from application_sdk.storage.ops import _get_bytes
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _get_bytes,
+    )
 
     data = await _get_bytes(_sidecar_key(key), store, normalize=False)
     return data.decode() if data else None
 
 
-async def _put_remote_sha256(store: "ObjectStore", key: str, digest: str) -> None:
+async def _put_remote_sha256(store: ObjectStore, key: str, digest: str) -> None:
     """Write the SHA-256 sidecar for *key*."""
-    from application_sdk.storage.ops import _put
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _put,
+    )
 
     await _put(_sidecar_key(key), digest.encode(), store, normalize=False)
 
 
 async def _upload_one(
-    store: "ObjectStore",
+    store: ObjectStore,
     local_file: Path,
     store_key: str,
     *,
     skip_if_exists: bool,
 ) -> tuple[bool, str]:
     """Upload a single file.  Returns ``(transferred, reason)``."""
-    from application_sdk.storage.ops import upload_file
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        upload_file,
+    )
 
     if skip_if_exists:
         local_digest = _sha256_file(local_file)
@@ -92,14 +98,16 @@ async def _upload_one(
 
 
 async def _download_one(
-    store: "ObjectStore",
+    store: ObjectStore,
     store_key: str,
     local_file: Path,
     *,
     skip_if_exists: bool,
 ) -> tuple[bool, str]:
     """Download a single file.  Returns ``(transferred, reason)``."""
-    from application_sdk.storage.ops import download_file
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        download_file,
+    )
 
     if skip_if_exists and local_file.exists():
         remote_digest = await _get_remote_sha256(store, store_key)
@@ -138,27 +146,31 @@ def _parse_blocked_paths() -> list[str]:
 
 def _validate_upload_path(path: Path) -> None:
     """Block uploads from sensitive system paths, credential dirs, and env files."""
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        UnsafeUploadPathError,
+    )
+
     if ".." in path.parts:
-        raise ValueError(f"Path traversal detected in upload path: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
     resolved = path.resolve()
     resolved_str = str(resolved)
 
     if resolved_str.startswith(_SENSITIVE_SYSTEM_PREFIXES):
-        raise ValueError(f"Upload from sensitive system path blocked: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
     if any(part in _SENSITIVE_DIR_NAMES for part in resolved.parts):
-        raise ValueError(f"Upload from sensitive directory blocked: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
     if resolved.is_file() and resolved.name.startswith(_SENSITIVE_FILE_PREFIXES):
-        raise ValueError(f"Upload of sensitive file blocked: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
     # User-defined blocked paths via ATLAN_UPLOAD_FILE_BLOCKED_PATHS (comma-separated).
     # Each entry is matched as a substring against the full resolved path.
     # e.g. ATLAN_UPLOAD_FILE_BLOCKED_PATHS="/custom/secrets/,.vault,.credentials"
     user_blocked = _parse_blocked_paths()
     if any(pattern in resolved_str for pattern in user_blocked):
-        raise ValueError(f"Upload blocked by ATLAN_UPLOAD_FILE_BLOCKED_PATHS: {path!r}")
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
 
 async def upload(
@@ -167,11 +179,11 @@ async def upload(
     *,
     storage_subdir: str | None = None,
     skip_if_exists: bool = False,
-    store: "ObjectStore | None" = None,
+    store: ObjectStore | None = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
     max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
-) -> "UploadOutput":
+) -> UploadOutput:
     """Upload a local file or directory to the object store.
 
     When *storage_path* is ``None`` and *_app_prefix* is provided the key /
@@ -197,8 +209,13 @@ async def upload(
     Returns:
         :class:`~application_sdk.contracts.storage.UploadOutput`
     """
-    from application_sdk.contracts.storage import UploadOutput
-    from application_sdk.storage.ops import _resolve_store, normalize_key
+    from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        UploadOutput,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _resolve_store,
+        normalize_key,
+    )
 
     resolved = _resolve_store(store)
     src = Path(local_path)
@@ -207,7 +224,9 @@ async def upload(
     _validate_upload_path(src)
 
     if storage_subdir:
-        from pathlib import PurePosixPath
+        from pathlib import (  # noqa: PLC0415 — stdlib pathlib; lazy use only
+            PurePosixPath,
+        )
 
         cleaned = storage_subdir.strip("/")
         if (
@@ -215,9 +234,11 @@ async def upload(
             or ".." in PurePosixPath(cleaned).parts
             or "\x00" in storage_subdir
         ):
-            raise ValueError(
-                f"storage_subdir must not contain path traversal segments: {storage_subdir!r}"
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                UnsafeUploadPathError,
             )
+
+            raise UnsafeUploadPathError(unsafe_path=storage_subdir)
         storage_subdir = cleaned
 
     if src.is_file():
@@ -291,7 +312,9 @@ async def upload(
         return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
 
     else:
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
 
         raise StorageError(
             f"local_path does not exist or is not a file/directory: {local_path}"
@@ -303,8 +326,8 @@ async def download(
     local_path: str | None = None,
     *,
     skip_if_exists: bool = False,
-    store: "ObjectStore | None" = None,
-) -> "DownloadOutput":
+    store: ObjectStore | None = None,
+) -> DownloadOutput:
     """Download a key or prefix from the object store to a local path.
 
     When *storage_path* ends with ``/`` (or matches multiple keys) the
@@ -320,9 +343,17 @@ async def download(
     Returns:
         :class:`~application_sdk.contracts.storage.DownloadOutput`
     """
-    from application_sdk.contracts.storage import DownloadOutput
-    from application_sdk.storage.batch import list_keys
-    from application_sdk.storage.ops import _resolve_store, normalize_key
+    from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        DownloadOutput,
+    )
+    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        list_keys,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _resolve_store,
+        _safe_join_under,
+        normalize_key,
+    )
 
     resolved = _resolve_store(store)
     norm_path = normalize_key(storage_path)
@@ -342,16 +373,29 @@ async def download(
 
     if not is_prefix:
         # ── Single file ────────────────────────────────────────────────────
+        owns_temp = False
         if local_path is not None:
             dest = Path(local_path)
         else:
             suffix = Path(norm_path).suffix or ""
-            _, tmp = tempfile.mkstemp(suffix=suffix)
+            fd, tmp = tempfile.mkstemp(suffix=suffix)
+            os.close(fd)
             dest = Path(tmp)
+            owns_temp = True
 
-        transferred, reason = await _download_one(
-            resolved, norm_path, dest, skip_if_exists=skip_if_exists
-        )
+        try:
+            transferred, reason = await _download_one(
+                resolved, norm_path, dest, skip_if_exists=skip_if_exists
+            )
+        except BaseException:
+            # Don't leave an empty temp file behind on download failure
+            # (BLDX-1155 #5).
+            if owns_temp:
+                try:
+                    dest.unlink(missing_ok=True)
+                except OSError:
+                    pass  # best-effort cleanup of partial download; re-raise follows
+            raise
         ref = FileReference(
             local_path=str(dest),
             storage_path=norm_path,
@@ -377,9 +421,9 @@ async def download(
 
         transferred_count = 0
         for key in data_keys:
-            rel = key[len(strip) :] if key.startswith(strip) else key
-            # S3 keys use forward slashes; convert to OS-native path for local filesystem
-            local_file = dest_dir / Path(*PurePosixPath(rel.lstrip("/")).parts)
+            rel = key.removeprefix(strip)
+            # Reject keys whose resolved path escapes dest_dir (e.g. via ".." segments).
+            local_file = _safe_join_under(dest_dir, rel)
             ok, _ = await _download_one(
                 resolved, key, local_file, skip_if_exists=skip_if_exists
             )

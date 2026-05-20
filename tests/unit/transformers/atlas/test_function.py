@@ -1,11 +1,12 @@
 import json
 import os
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 from pyatlan.model.assets import Function
 
 from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.atlas.errors import TransformFunctionError
 
 
 @pytest.fixture
@@ -14,13 +15,13 @@ def resources_dir() -> str:
 
 
 @pytest.fixture
-def raw_data(resources_dir: str) -> Dict[str, Any]:
+def raw_data(resources_dir: str) -> dict[str, Any]:
     with open(os.path.join(resources_dir, "raw_functions.json")) as f:
         return json.load(f)
 
 
 @pytest.fixture
-def expected_data(resources_dir: str) -> Dict[str, Any]:
+def expected_data(resources_dir: str) -> dict[str, Any]:
     with open(os.path.join(resources_dir, "transformed_functions.json")) as f:
         return json.load(f)
 
@@ -31,8 +32,8 @@ def transformer() -> AtlasTransformer:
 
 
 def assert_attributes(
-    transformed_data: Dict[str, Any],
-    expected_data: Dict[str, Any],
+    transformed_data: dict[str, Any],
+    expected_data: dict[str, Any],
     attributes: list[str],
     is_custom: bool = False,
 ) -> None:
@@ -154,3 +155,66 @@ def test_function_from_dict():
     ]
     assert function.attributes.name is None
     assert function.attributes.function_definition is None
+
+
+# BLDX-1170 regression guard: malformed `argument_signature` (no surrounding
+# parens) used to silently strip first/last chars; e.g. "AB" yielded "B"
+# instead of an explicit error. The fix raises ValueError on any input that
+# is not bracketed by `(` and `)`.
+@pytest.mark.parametrize(
+    "bad_signature",
+    [
+        "arg1 type1",  # missing both parens
+        "(arg1 type1",  # missing closing paren
+        "arg1 type1)",  # missing opening paren
+        "AB",  # short malformed input from the original bug report
+        "",  # empty string
+    ],
+    ids=["no-parens", "missing-close", "missing-open", "short-malformed", "empty"],
+)
+def test_function_get_attributes_malformed_argument_signature_raises(
+    bad_signature: str,
+):
+    """Malformed `argument_signature` must raise ValueError, not silently
+    yield a one-character field via unconditional stripping. Documents the
+    BLDX-1170 fix.
+    """
+    from application_sdk.transformers.atlas.sql import Function as SqlFunction
+
+    obj: dict[str, Any] = {
+        "function_name": "test_function",
+        "argument_signature": bad_signature,
+        "function_definition": "SELECT 1",
+        "is_external": "NO",
+        "is_memoizable": "YES",
+        "function_language": "SQL",
+        "function_catalog": "TEST_DB",
+        "function_schema": "TEST_SCHEMA",
+        "connection_qualified_name": "default/snowflake/1728518400",
+        "data_type": "NUMBER",
+    }
+
+    with pytest.raises(TransformFunctionError):
+        SqlFunction.get_attributes(obj)
+
+
+def test_function_get_attributes_well_formed_signature_succeeds():
+    """Sanity check that the well-formed `(arg1 type1)` path still works
+    after the BLDX-1170 paren-validation guard."""
+    from application_sdk.transformers.atlas.sql import Function as SqlFunction
+
+    obj: dict[str, Any] = {
+        "function_name": "test_function",
+        "argument_signature": "(arg1 type1)",
+        "function_definition": "SELECT 1",
+        "is_external": "NO",
+        "is_memoizable": "YES",
+        "function_language": "SQL",
+        "function_catalog": "TEST_DB",
+        "function_schema": "TEST_SCHEMA",
+        "connection_qualified_name": "default/snowflake/1728518400",
+        "data_type": "NUMBER",
+    }
+
+    result = SqlFunction.get_attributes(obj)
+    assert result["attributes"]["function_arguments"] == ["arg1 type1"]

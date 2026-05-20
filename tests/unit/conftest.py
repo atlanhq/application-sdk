@@ -3,6 +3,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
+from loguru import logger as _loguru_logger
 
 # Re-export shared registry fixtures so all unit tests can use them without
 # explicit per-file imports (pytest discovers fixtures via conftest chain).
@@ -10,6 +11,24 @@ from application_sdk.testing.fixtures import (  # noqa: F401
     clean_app_registry,
     clean_task_registry,
 )
+
+
+@pytest.fixture
+def loguru_capture():
+    """Capture loguru log records emitted during the test.
+
+    Yields a list of raw loguru ``record`` dicts (same structure as
+    ``message.record`` in a loguru sink).  Extra fields bound via
+    ``logger.bind(**kwargs)`` are available under ``record["extra"]``.
+    """
+    records: list[dict] = []
+    sink_id = _loguru_logger.add(
+        lambda message: records.append(message.record),
+        level="DEBUG",
+        format="{message}",
+    )
+    yield records
+    _loguru_logger.remove(sink_id)
 
 
 def _safe_patch(target, side_effect=None, mock_obj=None):

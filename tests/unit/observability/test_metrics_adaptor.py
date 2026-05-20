@@ -1,6 +1,6 @@
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Generator
 from unittest import mock
 
 import pytest
@@ -30,13 +30,13 @@ def create_metrics_adapter() -> Generator[AtlanMetricsAdapter, None, None]:
     with mock.patch.dict(
         "os.environ",
         {
-            "ENABLE_OTLP_METRICS": "true",  # Enable OTLP for testing
+            "ATLAN_ENABLE_OTLP_METRICS": "true",  # Enable OTLP for testing
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
-            "METRICS_BATCH_SIZE": "100",
-            "METRICS_FLUSH_INTERVAL_SECONDS": "1",
-            "METRICS_RETENTION_DAYS": "7",
-            "METRICS_CLEANUP_ENABLED": "true",
-            "METRICS_FILE_NAME": "metrics.parquet",
+            "ATLAN_METRICS_BATCH_SIZE": "100",
+            "ATLAN_METRICS_FLUSH_INTERVAL_SECONDS": "1",
+            "ATLAN_METRICS_RETENTION_DAYS": "7",
+            "ATLAN_METRICS_CLEANUP_ENABLED": "true",
+            "ATLAN_METRICS_FILE_NAME": "metrics.parquet",
         },
     ):
         # Create mock meter first
@@ -98,6 +98,22 @@ def test_process_record_with_dict():
         assert processed == record
 
 
+def test_metric_record_exposes_otel_safe_metadata():
+    """Unset SDK metric metadata should map to OTel's empty-string defaults."""
+    record = MetricRecord(
+        timestamp=datetime.now().timestamp(),
+        name="test_metric",
+        value=1.0,
+        type=MetricType.COUNTER,
+        labels={},
+    )
+
+    assert record.description is None
+    assert record.unit is None
+    assert record.otel_description == ""
+    assert record.otel_unit == ""
+
+
 @given(
     st.text(min_size=1),
     st.floats(),
@@ -138,54 +154,24 @@ def test_record_metric_with_various_inputs(
         assert buffered_metric["unit"] == unit
 
 
-def test_export_record_with_otlp_enabled():
-    """Test export_record() method when OTLP is enabled."""
-    with mock.patch(
-        "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS", True
-    ):
-        with create_metrics_adapter() as metrics_adapter:
-            record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
-                name="test_metric",
-                value=42.0,
-                type=MetricType.COUNTER,
-                labels={"test": "label"},
-                description="Test metric",
-                unit="count",
-            )
-            with mock.patch.object(metrics_adapter, "_send_to_otel") as mock_send:
-                with mock.patch.object(metrics_adapter, "_log_to_console") as mock_log:
-                    metrics_adapter.export_record(record)
-                    mock_send.assert_called_once_with(record)
-                    mock_log.assert_called_once_with(record)
-
-
-def test_export_record_with_otlp_disabled():
-    """Test export_record() method when OTLP is disabled."""
-    with mock.patch(
-        "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS", False
-    ):
-        with mock.patch(
-            "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
-            False,
-        ):
-            with create_metrics_adapter() as metrics_adapter:
-                with mock.patch.object(metrics_adapter, "_send_to_otel") as mock_send:
-                    with mock.patch.object(
-                        metrics_adapter, "_log_to_console"
-                    ) as mock_log:
-                        record = MetricRecord(
-                            timestamp=datetime.now().timestamp(),
-                            name="test_metric",
-                            value=42.0,
-                            type=MetricType.COUNTER,
-                            labels={"test": "label"},
-                            description="Test metric",
-                            unit="count",
-                        )
-                        metrics_adapter.export_record(record)
-                        mock_send.assert_not_called()
-                        mock_log.assert_called_once_with(record)
+def test_export_record_sends_to_otel_and_console():
+    """export_record() always emits through the OTel meter and the console
+    logger after the consolidation — Prometheus is unconditional."""
+    with create_metrics_adapter() as metrics_adapter:
+        record = MetricRecord(
+            timestamp=datetime.now().timestamp(),
+            name="test_metric",
+            value=42.0,
+            type=MetricType.COUNTER,
+            labels={"test": "label"},
+            description="Test metric",
+            unit="count",
+        )
+        with mock.patch.object(metrics_adapter, "_send_to_otel") as mock_send:
+            with mock.patch.object(metrics_adapter, "_log_to_console") as mock_log:
+                metrics_adapter.export_record(record)
+                mock_send.assert_called_once_with(record)
+                mock_log.assert_called_once_with(record)
 
 
 def test_send_to_otel_counter():
@@ -217,9 +203,7 @@ def test_send_to_otel_counter():
 def test_send_to_otel_gauge():
     """Test _send_to_otel() method with gauge metric."""
     with create_metrics_adapter() as metrics_adapter:
-        with mock.patch.object(
-            metrics_adapter.meter, "create_observable_gauge"
-        ) as mock_create:
+        with mock.patch.object(metrics_adapter.meter, "create_gauge") as mock_create:
             mock_gauge = mock.MagicMock()
             mock_create.return_value = mock_gauge
 
@@ -239,35 +223,123 @@ def test_send_to_otel_gauge():
                 description="Test gauge",
                 unit="count",
             )
-            mock_gauge.add.assert_called_once_with(42.0, {"test": "label"})
+            mock_gauge.set.assert_called_once_with(42.0, {"test": "label"})
 
 
 def test_send_to_otel_histogram():
     """Test _send_to_otel() method with histogram metric."""
+    with (
+        create_metrics_adapter() as metrics_adapter,
+        mock.patch.object(metrics_adapter.meter, "create_histogram") as mock_create,
+    ):
+        mock_histogram = mock.MagicMock()
+        mock_create.return_value = mock_histogram
+
+        record = MetricRecord(
+            timestamp=datetime.now().timestamp(),
+            name="test_histogram",
+            value=42.0,
+            type=MetricType.HISTOGRAM,
+            labels={"test": "label"},
+            description="Test histogram",
+            unit="count",
+        )
+        metrics_adapter._send_to_otel(record)
+
+        mock_create.assert_called_once_with(
+            name="test_histogram",
+            description="Test histogram",
+            unit="count",
+        )
+        mock_histogram.record.assert_called_once_with(42.0, {"test": "label"})
+
+
+def test_send_to_otel_normalizes_optional_metadata():
+    """Test unset description and unit are normalized before creating OTel instruments."""
     with create_metrics_adapter() as metrics_adapter:
-        with mock.patch.object(
-            metrics_adapter.meter, "create_histogram"
-        ) as mock_create:
-            mock_histogram = mock.MagicMock()
-            mock_create.return_value = mock_histogram
+        with (
+            mock.patch.object(metrics_adapter.meter, "create_counter") as mock_counter,
+            mock.patch.object(metrics_adapter.meter, "create_gauge") as mock_gauge,
+            mock.patch.object(
+                metrics_adapter.meter, "create_histogram"
+            ) as mock_histogram,
+        ):
+            mock_counter_instance = mock.MagicMock()
+            mock_gauge_instance = mock.MagicMock()
+            mock_histogram_instance = mock.MagicMock()
+            mock_counter.return_value = mock_counter_instance
+            mock_gauge.return_value = mock_gauge_instance
+            mock_histogram.return_value = mock_histogram_instance
 
-            record = MetricRecord(
+            counter_record = MetricRecord(
                 timestamp=datetime.now().timestamp(),
-                name="test_histogram",
-                value=42.0,
+                name="optional_counter",
+                value=1.0,
+                type=MetricType.COUNTER,
+                labels={},
+            )
+            gauge_record = MetricRecord(
+                timestamp=datetime.now().timestamp(),
+                name="optional_gauge",
+                value=2.0,
+                type=MetricType.GAUGE,
+                labels={},
+            )
+            histogram_record = MetricRecord(
+                timestamp=datetime.now().timestamp(),
+                name="optional_histogram",
+                value=3.0,
                 type=MetricType.HISTOGRAM,
-                labels={"test": "label"},
-                description="Test histogram",
-                unit="count",
+                labels={},
             )
-            metrics_adapter._send_to_otel(record)
 
-            mock_create.assert_called_once_with(
-                name="test_histogram",
-                description="Test histogram",
-                unit="count",
+            metrics_adapter._send_to_otel(counter_record)
+            metrics_adapter._send_to_otel(gauge_record)
+            metrics_adapter._send_to_otel(histogram_record)
+
+            mock_counter.assert_called_once_with(
+                name="optional_counter",
+                description="",
+                unit="",
             )
-            mock_histogram.record.assert_called_once_with(42.0, {"test": "label"})
+            mock_gauge.assert_called_once_with(
+                name="optional_gauge",
+                description="",
+                unit="",
+            )
+            mock_histogram.assert_called_once_with(
+                name="optional_histogram",
+                description="",
+                unit="",
+            )
+            mock_counter_instance.add.assert_called_once_with(1.0, {})
+            mock_gauge_instance.set.assert_called_once_with(2.0, {})
+            mock_histogram_instance.record.assert_called_once_with(3.0, {})
+
+
+def test_record_metric_with_optional_metadata_uses_real_otel_meter():
+    """Regression test for OTel rejecting None unit or description."""
+    from opentelemetry.sdk.metrics import MeterProvider
+
+    previous_flush_task_started = AtlanMetricsAdapter._flush_task_started
+    AtlanMetricsAdapter._flush_task_started = True
+    try:
+        metrics_adapter = AtlanMetricsAdapter()
+        metrics_adapter.meter = MeterProvider().get_meter("test_optional_metadata")
+
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.logging.error"
+        ) as mock_error:
+            metrics_adapter.record_metric(
+                name="optional_metadata_counter",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={},
+            )
+
+        mock_error.assert_not_called()
+    finally:
+        AtlanMetricsAdapter._flush_task_started = previous_flush_task_started
 
 
 def test_send_to_otel_filters_non_scalar_labels():
@@ -304,34 +376,36 @@ def test_send_to_otel_filters_non_scalar_labels():
 
 def test_log_to_console():
     """Test _log_to_console() method."""
-    with create_metrics_adapter() as metrics_adapter:
-        with mock.patch(
+    with (
+        create_metrics_adapter() as metrics_adapter,
+        mock.patch(
             "application_sdk.observability.metrics_adaptor.get_logger"
-        ) as mock_get_logger:
-            mock_logger = mock.MagicMock()
-            mock_get_logger.return_value = mock_logger
+        ) as mock_get_logger,
+    ):
+        mock_logger = mock.MagicMock()
+        mock_get_logger.return_value = mock_logger
 
-            # Create a test metric record
-            metric_record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
-                name="test_metric",
-                value=42.0,
-                type=MetricType.GAUGE,
-                labels={"test": "label"},
-                description="Test metric",
-                unit="count",
-            )
+        # Create a test metric record
+        metric_record = MetricRecord(
+            timestamp=datetime.now().timestamp(),
+            name="test_metric",
+            value=42.0,
+            type=MetricType.GAUGE,
+            labels={"test": "label"},
+            description="Test metric",
+            unit="count",
+        )
 
-            # Call the method
-            metrics_adapter._log_to_console(metric_record)
+        # Call the method
+        metrics_adapter._log_to_console(metric_record)
 
-            # Verify the logger was called with the correct message
-            mock_logger.metric.assert_called_once()
-            log_message = mock_logger.metric.call_args[0][0]
-            assert "test_metric = 42.0 (gauge)" in log_message
-            assert "Labels: {'test': 'label'}" in log_message
-            assert "Description: Test metric" in log_message
-            assert "Unit: count" in log_message
+        # Verify the logger was called with the correct message
+        mock_logger.metric.assert_called_once()
+        log_message = mock_logger.metric.call_args[0][0]
+        assert "test_metric = 42.0 (gauge)" in log_message
+        assert "Labels: {'test': 'label'}" in log_message
+        assert "Description: Test metric" in log_message
+        assert "Unit: count" in log_message
 
 
 def test_get_metrics():
@@ -347,57 +421,30 @@ def test_export_record_with_segment_write_key():
 
     Segment is automatically enabled when ATLAN_SEGMENT_WRITE_KEY is set.
     """
-    with mock.patch.dict(
-        "os.environ",
-        {
-            "ATLAN_SEGMENT_WRITE_KEY": "test_key",
-            "ATLAN_SEGMENT_API_URL": "https://api.segment.io/v1/batch",
-            "METRICS_BATCH_SIZE": "100",
-            "METRICS_FLUSH_INTERVAL_SECONDS": "1",
-            "METRICS_RETENTION_DAYS": "7",
-            "METRICS_CLEANUP_ENABLED": "true",
-            "METRICS_FILE_NAME": "metrics.parquet",
-        },
+    with (
+        mock.patch.dict(
+            "os.environ",
+            {
+                "ATLAN_SEGMENT_WRITE_KEY": "test_key",
+                "ATLAN_SEGMENT_API_URL": "https://api.segment.io/v1/batch",
+                "ATLAN_METRICS_BATCH_SIZE": "100",
+                "ATLAN_METRICS_FLUSH_INTERVAL_SECONDS": "1",
+                "ATLAN_METRICS_RETENTION_DAYS": "7",
+                "ATLAN_METRICS_CLEANUP_ENABLED": "true",
+                "ATLAN_METRICS_FILE_NAME": "metrics.parquet",
+            },
+        ),
+        mock.patch("opentelemetry.metrics.set_meter_provider"),
     ):
-        with mock.patch("opentelemetry.metrics.set_meter_provider"):
-            with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                with mock.patch(
-                    "application_sdk.observability.metrics_adaptor.SegmentClient"
-                ) as mock_segment_client_class:
-                    mock_segment_client = mock.MagicMock()
-                    mock_segment_client_class.return_value = mock_segment_client
+        with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.SegmentClient"
+            ) as mock_segment_client_class:
+                mock_segment_client = mock.MagicMock()
+                mock_segment_client_class.return_value = mock_segment_client
 
-                    adapter = AtlanMetricsAdapter()
+                adapter = AtlanMetricsAdapter()
 
-                    record = MetricRecord(
-                        timestamp=datetime.now().timestamp(),
-                        name="test_metric",
-                        value=42.0,
-                        type=MetricType.COUNTER,
-                        labels={"test": "label"},
-                        description="Test metric",
-                        unit="count",
-                    )
-                    with mock.patch.object(
-                        adapter.segment_client, "send_metric"
-                    ) as mock_send:
-                        with mock.patch.object(adapter, "_log_to_console") as mock_log:
-                            adapter.export_record(record)
-                            mock_send.assert_called_once_with(record)
-                            mock_log.assert_called_once_with(record)
-
-
-def test_export_record_without_segment_write_key():
-    """Test export_record() when Segment write key is not set.
-
-    When no write key is provided, the Segment client is disabled but
-    send_metric is still called (the client handles the no-op internally).
-    """
-    with create_metrics_adapter() as metrics_adapter:
-        with mock.patch.object(
-            metrics_adapter.segment_client, "send_metric"
-        ) as mock_send:
-            with mock.patch.object(metrics_adapter, "_log_to_console") as mock_log:
                 record = MetricRecord(
                     timestamp=datetime.now().timestamp(),
                     name="test_metric",
@@ -407,9 +454,38 @@ def test_export_record_without_segment_write_key():
                     description="Test metric",
                     unit="count",
                 )
-                metrics_adapter.export_record(record)
-                mock_send.assert_called_once_with(record)
-                mock_log.assert_called_once_with(record)
+                with mock.patch.object(
+                    adapter.segment_client, "send_metric"
+                ) as mock_send:
+                    with mock.patch.object(adapter, "_log_to_console") as mock_log:
+                        adapter.export_record(record)
+                        mock_send.assert_called_once_with(record)
+                        mock_log.assert_called_once_with(record)
+
+
+def test_export_record_without_segment_write_key():
+    """Test export_record() when Segment write key is not set.
+
+    When no write key is provided, the Segment client is disabled but
+    send_metric is still called (the client handles the no-op internally).
+    """
+    with (
+        create_metrics_adapter() as metrics_adapter,
+        mock.patch.object(metrics_adapter.segment_client, "send_metric") as mock_send,
+        mock.patch.object(metrics_adapter, "_log_to_console") as mock_log,
+    ):
+        record = MetricRecord(
+            timestamp=datetime.now().timestamp(),
+            name="test_metric",
+            value=42.0,
+            type=MetricType.COUNTER,
+            labels={"test": "label"},
+            description="Test metric",
+            unit="count",
+        )
+        metrics_adapter.export_record(record)
+        mock_send.assert_called_once_with(record)
+        mock_log.assert_called_once_with(record)
 
 
 def test_segment_client_disabled_without_write_key():
@@ -418,221 +494,186 @@ def test_segment_client_disabled_without_write_key():
     The presence of the write key determines whether the client is enabled.
     No separate boolean flag is needed.
     """
-    with mock.patch.dict(
-        "os.environ",
-        {
-            "ATLAN_SEGMENT_WRITE_KEY": "",
-            "METRICS_BATCH_SIZE": "100",
-            "METRICS_FLUSH_INTERVAL_SECONDS": "1",
-            "METRICS_RETENTION_DAYS": "7",
-            "METRICS_CLEANUP_ENABLED": "true",
-            "METRICS_FILE_NAME": "metrics.parquet",
-        },
+    with (
+        mock.patch.dict(
+            "os.environ",
+            {
+                "ATLAN_SEGMENT_WRITE_KEY": "",
+                "ATLAN_METRICS_BATCH_SIZE": "100",
+                "ATLAN_METRICS_FLUSH_INTERVAL_SECONDS": "1",
+                "ATLAN_METRICS_RETENTION_DAYS": "7",
+                "ATLAN_METRICS_CLEANUP_ENABLED": "true",
+                "ATLAN_METRICS_FILE_NAME": "metrics.parquet",
+            },
+        ),
+        mock.patch("opentelemetry.metrics.set_meter_provider"),
     ):
-        with mock.patch("opentelemetry.metrics.set_meter_provider"):
-            with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
+        with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
+            with mock.patch(
+                "application_sdk.constants.SEGMENT_WRITE_KEY",
+                "",
+            ):
                 with mock.patch(
-                    "application_sdk.constants.SEGMENT_WRITE_KEY",
+                    "application_sdk.observability.segment_client.SEGMENT_WRITE_KEY",
                     "",
                 ):
-                    with mock.patch(
-                        "application_sdk.observability.segment_client.SEGMENT_WRITE_KEY",
-                        "",
-                    ):
-                        adapter = AtlanMetricsAdapter()
-                        assert adapter.segment_client is not None
-                        assert adapter.segment_client.enabled is False
+                    adapter = AtlanMetricsAdapter()
+                    assert adapter.segment_client is not None
+                    assert adapter.segment_client.enabled is False
 
 
-class TestPython314EventLoopCompat:
-    """Tests for Python 3.14 compatibility where asyncio.get_event_loop()
-    raises RuntimeError when no current event loop exists."""
+class TestMetricLabels:
+    """record_metric() merges only low-cardinality labels — no high-cardinality IDs."""
 
-    def test_flush_task_starts_via_thread_when_no_event_loop(self):
-        """When no running event loop exists (Python 3.14 behavior),
-        the adapter should fall back to starting the flush in a daemon thread."""
-        AtlanMetricsAdapter._flush_task_started = False
-        with mock.patch(
-            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
-            True,
-        ):
+    def test_only_low_cardinality_labels_merged(self):
+        with create_metrics_adapter() as adapter:
             with mock.patch(
-                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
-                False,
+                "application_sdk.observability.metrics_adaptor.get_metric_labels",
+                return_value={
+                    "app_name": "test-app",
+                    "workflow_type": "MyWorkflow",
+                    "activity_type": "MyActivity",
+                },
             ):
-                with mock.patch("opentelemetry.metrics.set_meter_provider"):
-                    with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                        with mock.patch(
-                            "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
-                            side_effect=RuntimeError("no running event loop"),
-                        ):
-                            with mock.patch(
-                                "application_sdk.observability.metrics_adaptor.threading.Thread"
-                            ) as mock_thread:
-                                mock_thread_instance = mock.MagicMock()
-                                mock_thread.return_value = mock_thread_instance
+                adapter.record_metric(
+                    name="test_metric",
+                    value=1.0,
+                    metric_type=MetricType.COUNTER,
+                    labels={},
+                )
 
-                                _ = AtlanMetricsAdapter()
+            assert len(adapter._buffer) == 1
+            labels = adapter._buffer[0]["labels"]
+            assert labels == {
+                "app_name": "test-app",
+                "workflow_type": "MyWorkflow",
+                "activity_type": "MyActivity",
+            }
+            for forbidden in (
+                "workflow_id",
+                "workflow_run_id",
+                "activity_id",
+                "task_queue",
+                "namespace",
+                "attempt",
+            ):
+                assert forbidden not in labels
 
-                                # Filter for our daemon thread (not ThreadPoolExecutor workers)
-                                daemon_calls = [
-                                    c
-                                    for c in mock_thread.call_args_list
-                                    if c[1].get("daemon") is True
-                                ]
-                                assert len(daemon_calls) == 1
-                                mock_thread_instance.start.assert_called()
-
-    def test_flush_task_uses_running_loop_when_available(self):
-        """When a running event loop exists, the adapter should create
-        a task on it instead of spawning a thread."""
-        AtlanMetricsAdapter._flush_task_started = False
-        mock_loop = mock.MagicMock()
-        with mock.patch(
-            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
-            True,
-        ):
+    def test_caller_labels_preserved(self):
+        with create_metrics_adapter() as adapter:
             with mock.patch(
-                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
-                False,
+                "application_sdk.observability.metrics_adaptor.get_metric_labels",
+                return_value={
+                    "app_name": "app",
+                    "workflow_type": "",
+                    "activity_type": "",
+                },
             ):
-                with mock.patch("opentelemetry.metrics.set_meter_provider"):
-                    with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                        with mock.patch(
-                            "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
-                            return_value=mock_loop,
-                        ):
-                            with mock.patch(
-                                "application_sdk.observability.metrics_adaptor.threading.Thread"
-                            ) as mock_thread:
-                                _ = AtlanMetricsAdapter()
+                adapter.record_metric(
+                    name="m",
+                    value=5.0,
+                    metric_type=MetricType.GAUGE,
+                    labels={"custom": "value"},
+                )
 
-                                mock_loop.create_task.assert_called_once()
-                                # Only assert no daemon thread was created (ignore
-                                # ThreadPoolExecutor worker threads from OTEL internals)
-                                daemon_calls = [
-                                    c
-                                    for c in mock_thread.call_args_list
-                                    if c[1].get("daemon") is True
-                                ]
-                                assert len(daemon_calls) == 0
+            assert adapter._buffer[0]["labels"]["custom"] == "value"
 
 
 class TestPrometheusMetrics:
-    """Tests for Prometheus metrics integration."""
+    """Tests for the consolidated Prometheus metrics path.
 
-    def test_prometheus_reader_added_when_enabled(self):
-        """When ENABLE_PROMETHEUS_METRICS is true, a PrometheusMetricReader
-        should be added to the MeterProvider."""
+    After ARUN-539 the adaptor unconditionally attaches a single
+    ``PrometheusMetricReader`` to the global ``MeterProvider``; the OTLP
+    metrics exporter and the gating env vars are gone.
+    """
+
+    def test_prometheus_reader_attached_to_meter_provider(self):
         AtlanMetricsAdapter._flush_task_started = False
-        mock_prom_reader = mock.MagicMock()
-        with mock.patch(
-            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
-            True,
+        with (
+            mock.patch(
+                "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
+            ),
+            mock.patch(
+                "application_sdk.observability.metrics_adaptor.MeterProvider"
+            ) as mock_provider,
         ):
-            with mock.patch(
-                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+            mock_provider.return_value.get_meter.return_value = mock.MagicMock()
+            with mock.patch.dict(
+                "sys.modules",
+                {
+                    "opentelemetry.exporter.prometheus": mock.MagicMock(
+                        PrometheusMetricReader=mock.MagicMock()
+                    )
+                },
+            ):
+                AtlanMetricsAdapter()
+                call_kwargs = mock_provider.call_args[1]
+                assert len(call_kwargs["metric_readers"]) == 1
+
+    def test_otel_setup_failure_disables_metric_send_spam(self):
+        AtlanMetricsAdapter._reset_for_testing()
+        AtlanMetricsAdapter._flush_task_started = True
+        with (
+            mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
                 True,
-            ):
-                with mock.patch(
-                    "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
-                ):
-                    with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.MeterProvider"
-                    ) as mock_provider:
-                        mock_provider.return_value.get_meter.return_value = (
-                            mock.MagicMock()
-                        )
-                        with mock.patch(
-                            "application_sdk.observability.metrics_adaptor.OTLPMetricExporter"
-                        ):
-                            with mock.patch(
-                                "application_sdk.observability.metrics_adaptor.PeriodicExportingMetricReader"
-                            ):
-                                with mock.patch.dict(
-                                    "sys.modules",
-                                    {
-                                        "opentelemetry.exporter.prometheus": mock.MagicMock(
-                                            PrometheusMetricReader=mock_prom_reader
-                                        )
-                                    },
-                                ):
-                                    AtlanMetricsAdapter()
-                                    call_kwargs = mock_provider.call_args[1]
-                                    assert len(call_kwargs["metric_readers"]) == 2
-
-    def test_prometheus_reader_not_added_when_disabled(self):
-        """When ENABLE_PROMETHEUS_METRICS is false, only the OTLP reader
-        should be in the MeterProvider."""
-        AtlanMetricsAdapter._flush_task_started = False
-        with mock.patch(
-            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
-            True,
+            ),
+            mock.patch(
+                "application_sdk.observability._objectstore_metric_reader.create_objectstore_metric_reader",
+                side_effect=RuntimeError("reader boom"),
+            ),
+            mock.patch(
+                "application_sdk.observability.metrics_adaptor.logging.error"
+            ) as mock_error,
         ):
-            with mock.patch(
-                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
-                False,
-            ):
-                with mock.patch(
-                    "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
-                ):
-                    with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.MeterProvider"
-                    ) as mock_provider:
-                        mock_provider.return_value.get_meter.return_value = (
-                            mock.MagicMock()
-                        )
-                        with mock.patch(
-                            "application_sdk.observability.metrics_adaptor.OTLPMetricExporter"
-                        ):
-                            with mock.patch(
-                                "application_sdk.observability.metrics_adaptor.PeriodicExportingMetricReader"
-                            ):
-                                AtlanMetricsAdapter()
-                                call_kwargs = mock_provider.call_args[1]
-                                assert len(call_kwargs["metric_readers"]) == 1
+            adapter = AtlanMetricsAdapter()
+            assert adapter._otel_metrics_enabled is False
 
-    def test_export_record_sends_to_otel_when_prometheus_only(self):
-        """When only Prometheus is enabled (no OTLP), export_record should
-        still send metrics to OTel instruments so they appear in /metrics."""
-        AtlanMetricsAdapter._flush_task_started = False
-        with mock.patch(
-            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
-            False,
-        ):
-            with mock.patch(
-                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
-                True,
-            ):
-                with mock.patch(
-                    "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
-                ):
-                    with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.MeterProvider"
-                    ) as mock_provider:
-                        mock_provider.return_value.get_meter.return_value = (
-                            mock.MagicMock()
-                        )
-                        with mock.patch.dict(
-                            "sys.modules",
-                            {
-                                "opentelemetry.exporter.prometheus": mock.MagicMock(
-                                    PrometheusMetricReader=mock.MagicMock()
-                                )
-                            },
-                        ):
-                            adapter = AtlanMetricsAdapter()
-                            with mock.patch.object(
-                                adapter, "_send_to_otel"
-                            ) as mock_send:
-                                record = MetricRecord(
-                                    timestamp=datetime.now().timestamp(),
-                                    name="test_counter",
-                                    value=1.0,
-                                    type=MetricType.COUNTER,
-                                    labels={"path": "/health"},
-                                    description="Test counter",
-                                    unit="count",
-                                )
-                                adapter.export_record(record)
-                                mock_send.assert_called_once_with(record)
+            adapter.record_metric(
+                name="setup_failure_metric",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={},
+            )
+
+        assert mock_error.call_count == 1
+        assert mock_error.call_args.args[0] == "Failed to setup OTel meter provider"
+
+
+# ---------------------------------------------------------------------------
+# METRIC_ENRICHMENT_KEYS — pin the inline label set. The minimum-viable inline
+# set keeps per-series cardinality flat across the fleet; everything else
+# travels on ``target_info`` for query-time joins.
+# ---------------------------------------------------------------------------
+
+
+class TestMetricEnrichmentKeys:
+    """Cardinality discipline guard: only ``app.name`` is inlined. Adding
+    more keys multiplies the per-series label set across every pod and
+    every metric. Per-release attributes additionally compound indexdb
+    cardinality across the retention window."""
+
+    def test_enrichment_set_is_exactly_app_name(self) -> None:
+        from application_sdk.observability.utils import METRIC_ENRICHMENT_KEYS
+
+        assert set(METRIC_ENRICHMENT_KEYS) == {"app.name"}
+
+    def test_per_release_attrs_are_excluded(self) -> None:
+        """``app.version`` / ``app.release_id`` / ``app.sdk_version`` cycle
+        on every deploy, ``app.release_channel`` cycles on channel
+        promotions. None of them are bounded over retention; inlining any
+        of them on every series produces a 60×-class indexdb multiplier."""
+        from application_sdk.observability.utils import METRIC_ENRICHMENT_KEYS
+
+        forbidden = {
+            "app.version",
+            "app.release_id",
+            "app.sdk_version",
+            "app.release_channel",
+        }
+        leaked = set(METRIC_ENRICHMENT_KEYS) & forbidden
+        assert not leaked, (
+            f"Per-release attrs leaked into METRIC_ENRICHMENT_KEYS: {leaked}. "
+            "These would multiply indexdb series across the metrics retention "
+            "window — keep them on target_info instead."
+        )

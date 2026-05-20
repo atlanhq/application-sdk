@@ -28,16 +28,17 @@ Alternatively, override the method entirely without calling super():
 from __future__ import annotations
 
 import asyncio
+import warnings
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.sql_filters import normalize_filters
+from application_sdk.contracts.storage import UploadInput
+from application_sdk.contracts.types import StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
-from application_sdk.templates.contracts.base_metadata_extraction import UploadInput
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -69,7 +70,7 @@ def _task_input(
     input_cls: type[_ET],
     src: ExtractionInput,
     *,
-    cred_ref: "CredentialRef | None",
+    cred_ref: CredentialRef | None,
 ) -> _ET:
     """Build a typed task input from the top-level extraction input."""
     return input_cls(
@@ -89,11 +90,13 @@ def _task_input(
 class SqlMetadataExtractor(BaseMetadataExtractor):
     """Base class for SQL metadata extraction apps.
 
-    Inherits ``upload_to_atlan`` from ``BaseMetadataExtractor``.
+    .. deprecated::
+        Will be removed in v4.0.0. Use
+        :class:`application_sdk.templates.SqlApp` instead.
 
     The ``run()`` method orchestrates the full extraction:
-    fetch (databases, schemas, tables, columns) → transform → upload.
-    Override ``run()`` to change the orchestration.
+    fetch (databases, schemas, tables, columns) → transform → upload via
+    :meth:`App.upload`.  Override ``run()`` to change the orchestration.
 
     All task timeouts default to 30 minutes. Override via::
 
@@ -105,6 +108,23 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     class attributes on your subclass, then call ``super()`` from each
     ``@task`` override to use the default SQL execution provided here.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Skip intra-SDK chains and only warn for the *direct* base — so a
+        # connector subclassing IncrementalSqlMetadataExtractor doesn't
+        # also see this hook fire via the MRO.
+        if cls.__module__.startswith("application_sdk."):
+            return
+        if SqlMetadataExtractor not in cls.__bases__:
+            return
+        warnings.warn(
+            f"{cls.__name__} subclasses SqlMetadataExtractor which is deprecated. "
+            "Use application_sdk.templates.SqlApp instead. "
+            "Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     # Prevent auto-registration: SqlMetadataExtractor is a base template, not a
     # concrete app. Concrete subclasses (e.g. CloudSqlApp) register themselves.
@@ -428,10 +448,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
 
             # Upload extracted data to Atlan
             if input.output_path:
-                upload_result = await self.upload_to_atlan(
-                    UploadInput(output_path=input.output_path)
+                upload_result = await self.upload(
+                    UploadInput(local_path=input.output_path, tier=StorageTier.RETAINED)
                 )
-                records_uploaded = upload_result.migrated_files
+                records_uploaded = upload_result.ref.file_count or 0
             else:
                 records_uploaded = 0
 
@@ -449,6 +469,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             )
 
         except Exception as e:
-            raise rewrap(
-                e, f"SQL metadata extraction failed (workflow_id={workflow_id})"
+            from application_sdk.templates._template_errors import (  # noqa: PLC0415
+                SqlMetadataExtractionError,
+            )
+
+            raise SqlMetadataExtractionError(
+                workflow_id=str(workflow_id), cause=e
             ) from e

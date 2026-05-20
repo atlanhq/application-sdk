@@ -37,24 +37,47 @@ Usage::
 """
 
 import inspect
+import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, TypeVar, get_type_hints
+from typing import Any, ClassVar, TypeVar, get_type_hints
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import CONTRACT_VALIDATION, ErrorCode
+from application_sdk.errors.leaves import InvalidInputError
 
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-class EntryPointContractError(Exception):
-    """Raised when an entry point's contract is invalid."""
+@dataclass(kw_only=True)
+class UnresolvableEntrypointAnnotationsError(InvalidInputError):
+    """Entry point has string annotations that cannot be resolved at decoration time."""
+
+    code: ClassVar[str] = "INVALID_INPUT_ENTRYPOINT_UNRESOLVABLE_ANNOTATIONS"
+    field: str | None = "annotations"
+
+
+class EntryPointContractError(InvalidInputError):
+    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+
+    code: ClassVar[str] = "ENTRYPOINT_CONTRACT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
-        super().__init__(message)
-        self.error_code = error_code or CONTRACT_VALIDATION
+        warnings.warn(
+            "EntryPointContractError is deprecated; use application_sdk.errors.InvalidInputError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        InvalidInputError.__init__(self, message=message)
+        self._legacy_error_code = error_code or CONTRACT_VALIDATION
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
 
     def __str__(self) -> str:
-        return f"[{self.error_code}] {super().__str__()}"
+        return f"[{self._legacy_error_code}] {self.message}"
 
 
 @dataclass
@@ -121,14 +144,16 @@ def _validate_entrypoint_signature(
 
     try:
         hints = get_type_hints(fn)
-    except Exception:
+    except NameError:
         raw: dict[str, Any] = getattr(fn, "__annotations__", {})
         unresolvable = [k for k, v in raw.items() if isinstance(v, str)]
         if unresolvable:
-            raise EntryPointContractError(
-                f"Entry point '{fn_name}' has unresolvable annotations for {unresolvable}. "
-                "This usually happens when 'from __future__ import annotations' is "
-                "used alongside Input/Output types that are not defined at module level."
+            raise UnresolvableEntrypointAnnotationsError(
+                message=(
+                    f"Entry point '{fn_name}' has unresolvable annotations for {unresolvable}. "
+                    "This usually happens when 'from __future__ import annotations' is "
+                    "used alongside Input/Output types that are not defined at module level."
+                ),
             ) from None
         hints = raw
 

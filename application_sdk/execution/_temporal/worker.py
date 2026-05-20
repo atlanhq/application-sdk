@@ -7,8 +7,10 @@ named activities.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior
@@ -17,7 +19,11 @@ from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVe
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 from application_sdk.app.registry import AppRegistry
-from application_sdk.constants import APP_BUILD_ID, APP_DEPLOYMENT_NAME
+from application_sdk.constants import (
+    APP_BUILD_ID,
+    APP_DEPLOYMENT_NAME,
+    SHUTDOWN_DRAIN_DELAY_SECONDS,
+)
 from application_sdk.execution._temporal.activities import get_all_task_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig
@@ -27,35 +33,154 @@ from application_sdk.execution.settings import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
+if TYPE_CHECKING:
+    # Imported lazily inside _start_metrics_push (cold path) — type-only here.
+    from application_sdk.handler.base import Handler
+    from application_sdk.observability.pushgateway import PushGatewayClient
+
 logger = get_logger(__name__)
 
 
 class AppWorker:
-    """Wraps Temporal Worker to emit worker_start on startup.
+    """Wraps Temporal Worker to emit worker_start on startup and to push
+    metrics on shutdown for short-lived deployments.
 
     Emits the ``worker_start`` lifecycle event on ``__aenter__`` (and ``run()``)
     so that every code path that starts a worker automatically registers the
     agent — regardless of whether the caller uses ``async with worker:`` or
     ``await worker.run()``.
+
+    When ``enable_pushgateway=True`` the wrapper also registers a
+    ``TemporalCoreCollector`` and starts a ``PushGatewayClient`` that
+    periodically pushes ``prometheus_client.REGISTRY`` to
+    ``PROMETHEUS_PUSHGATEWAY_URL``. Combined-mode deployments (FastAPI server
+    in the same process) leave this off — ``/metrics`` already exposes the
+    same series and pushing would double-count.
     """
 
-    def __init__(self, worker: Worker, *, start_event_params: dict) -> None:
+    def __init__(
+        self,
+        worker: Worker,
+        *,
+        start_event_params: dict,
+        enable_pushgateway: bool = False,
+        primary_app_name: str = "",
+        task_queue: str = "",
+    ) -> None:
         self._worker = worker
         self._start_event_params = start_event_params
+        self._enable_pushgateway = enable_pushgateway
+        self._primary_app_name = primary_app_name
+        self._task_queue = task_queue
+        self._pusher: PushGatewayClient | None = None
+
+    async def _start_metrics_push(self) -> None:
+        if not self._enable_pushgateway:
+            return
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: pushgateway env config only when worker mode enabled
+            PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN,
+            PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
+            PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS,
+            PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
+            PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START,
+            PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS,
+            PROMETHEUS_PUSHGATEWAY_URL,
+            TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+        )
+
+        if not PROMETHEUS_PUSHGATEWAY_URL:
+            logger.warning(
+                "ATLAN_PROMETHEUS_PUSHGATEWAY_URL is not set; worker will run "
+                "without pushing metrics. Set the env var (or run in combined "
+                "mode) to enable Prometheus visibility."
+            )
+            return
+
+        from prometheus_client import REGISTRY  # noqa: PLC0415 — pushgateway cold path
+
+        from application_sdk.observability.pushgateway import (  # noqa: PLC0415 — pushgateway cold path
+            PushGatewayClient,
+            TemporalCoreCollector,
+        )
+
+        # Bridge Temporal Rust-core metrics into the global registry so the
+        # Pushgateway push includes them. Idempotent — duplicate registration
+        # raises ValueError, which we swallow.
+        try:
+            REGISTRY.register(
+                TemporalCoreCollector(
+                    f"http://{TEMPORAL_PROMETHEUS_BIND_ADDRESS}/metrics"
+                )
+            )
+        except ValueError:
+            logger.debug(
+                "TemporalCoreCollector already registered; skipping",
+                exc_info=True,
+            )
+
+        self._pusher = PushGatewayClient(
+            url=PROMETHEUS_PUSHGATEWAY_URL,
+            job=f"{self._primary_app_name or 'application-sdk'}-worker",
+            task_queue=self._task_queue,
+            interval_s=PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS,
+            delete_on_shutdown=PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN,
+            sweep_stale_on_start=PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START,
+            sweep_staleness_seconds=PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS,
+            http_timeout_s=PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
+            shutdown_delete_delay_s=PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
+        )
+        await self._pusher.start()
+
+    async def _stop_metrics_push(self) -> None:
+        if self._pusher is not None:
+            try:
+                await self._pusher.stop()
+            except Exception:
+                logger.warning("Pushgateway pusher stop failed", exc_info=True)
+            finally:
+                self._pusher = None
 
     async def __aenter__(self) -> Worker:
         await _emit_worker_start_event(**self._start_event_params)
+        # Metrics is best-effort: never block the worker on a metrics failure.
+        try:
+            await self._start_metrics_push()
+        except Exception:
+            logger.error(
+                "Pushgateway pusher start failed — worker will run without metrics",
+                exc_info=True,
+            )
         return await self._worker.__aenter__()
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, *args: object
     ) -> None:
-        await self._worker.__aexit__(exc_type, *args)
+        try:
+            # Yield to the event loop so in-flight activity result RPCs
+            # (e.g. RespondActivityTaskFailed) can complete before we stop
+            # the transport. Without this, a race between SIGTERM and
+            # activity completion can leave orphaned task slots that block
+            # shutdown for the entire graceful_shutdown_timeout.
+            await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)
+            await self._worker.__aexit__(exc_type, *args)
+        finally:
+            await self._stop_metrics_push()
 
     async def run(self) -> None:
         """For callers that use worker.run() directly."""
         await _emit_worker_start_event(**self._start_event_params)
-        await self._worker.run()
+        # Metrics is best-effort: never block the worker on a metrics failure.
+        try:
+            await self._start_metrics_push()
+        except Exception:
+            logger.error(
+                "Pushgateway pusher start failed — worker will run without metrics",
+                exc_info=True,
+            )
+        try:
+            await self._worker.run()
+        finally:
+            await self._stop_metrics_push()
 
 
 async def _emit_worker_start_event(
@@ -70,7 +195,7 @@ async def _emit_worker_start_event(
     use_worker_versioning: bool = False,
 ) -> None:
     """Emit a worker_start lifecycle event via the v3 infrastructure event binding."""
-    from application_sdk.constants import (
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup config
         APP_SDK_VERSION,
         APP_TYPE,
         APPLICATION_VERSION,
@@ -78,16 +203,18 @@ async def _emit_worker_start_event(
         RELEASE_CHANNEL,
         RELEASE_ID,
     )
-    from application_sdk.contracts.events import (
+    from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
         ApplicationEventNames,
         Event,
         EventTypes,
         WorkerStartEventData,
     )
-    from application_sdk.execution._temporal.interceptors.events import (
+    from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         _publish_event_via_binding,
     )
-    from application_sdk.infrastructure.bindings import BindingError
+    from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+        BindingError,
+    )
 
     deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
     host_part, _, port_part = host.partition(":")
@@ -122,7 +249,8 @@ async def _emit_worker_start_event(
         await _publish_event_via_binding(event)
     except BindingError:
         logger.warning(
-            "eventstore binding unavailable — worker_start event not emitted"
+            "eventstore binding unavailable — worker_start event not emitted",
+            exc_info=True,
         )
     except Exception:
         logger.warning("Failed to emit worker_start event", exc_info=True)
@@ -132,30 +260,49 @@ def create_worker(
     client: Client,
     task_queue: str = "application-sdk",
     *,
+    handler: Handler | None = None,
+    enable_sdr: bool = True,
     passthrough_modules: set[str] | None = None,
     service_name: str | None = None,
     max_concurrent_activities: int | None = None,
     graceful_shutdown_timeout_seconds: int | None = None,
     interceptors: list[TemporalInterceptor] | None = None,
+    enable_pushgateway: bool = False,
 ) -> AppWorker:
     """Create a Temporal worker for registered Apps.
 
     The worker registers:
     - One workflow per entry point per App
     - All @task methods as named activities (qualified as ``{app}:{task}``)
+    - Three SDR workflows (``sdr:test_auth`` / ``sdr:preflight_check`` /
+      ``sdr:fetch_metadata``) bound to ``handler`` when one is provided and
+      ``enable_sdr`` is true.
 
     Apps must be imported/registered before creating the worker.
 
     Args:
         client: Temporal client.
         task_queue: Task queue to listen on.
+        handler: Optional Handler instance.  When provided and ``enable_sdr``
+            is true, the three SDR workflows are registered so platform
+            callers can invoke ``test_auth`` / ``preflight_check`` /
+            ``fetch_metadata`` durably as Temporal workflows (in addition to
+            the HTTP endpoints served by ``handler/service.py``).
+        enable_sdr: Opt-out flag for SDR registration.  Ignored when
+            ``handler`` is ``None``.
         passthrough_modules: Additional modules to pass through the sandbox.
         service_name: Service name for observability (traces/metrics).
         max_concurrent_activities: Maximum number of concurrent activity executions.
         graceful_shutdown_timeout_seconds: Seconds to allow in-flight activities to
             complete after SIGTERM before cancelling them.
-        interceptors: Additional Temporal interceptors to register. Correlation and
-            event interceptors are automatically prepended based on settings.
+        interceptors: Additional Temporal interceptors to register. Log /
+            Metrics / Trace observability interceptors are always prepended;
+            Output and Event interceptors are prepended based on settings.
+        enable_pushgateway: When True (worker-only deployments), the worker
+            starts a periodic Prometheus Pushgateway pusher on entry and
+            performs a final push on exit. Combined deployments (server +
+            worker in one process) should leave this False so /metrics
+            doesn't double-count.
 
     Returns:
         AppWorker wrapping a configured Temporal Worker (not yet started).
@@ -172,55 +319,70 @@ def create_worker(
     app_workflows = get_all_app_workflows()
     task_activities = get_all_task_activities()
 
-    interceptor_settings = load_interceptor_settings()
-
-    # ExecutionContextInterceptor is always first — it populates the ContextVar that
-    # all downstream interceptors and user code read for observability context.
-    from application_sdk.execution._temporal.interceptors.execution_context_interceptor import (
-        ExecutionContextInterceptor,
-    )
-
-    all_interceptors: list[TemporalInterceptor] = [ExecutionContextInterceptor()]
-    all_interceptors.extend(interceptors or [])
-
-    if interceptor_settings.enable_correlation_interceptor:
-        from application_sdk.execution._temporal.interceptors.correlation_interceptor import (
-            CorrelationContextInterceptor,
+    if enable_sdr and handler is not None:
+        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR/handler modules when a Handler is provided
+            SDR_WORKFLOWS,
+            build_sdr_activities,
         )
 
-        all_interceptors.append(CorrelationContextInterceptor())
+        sdr_registry = AppRegistry.get_instance()
+        sdr_registered_apps = sdr_registry.list_all()
+        sdr_app_name = (
+            sdr_registered_apps[0].name
+            if sdr_registered_apps
+            else (service_name or task_queue)
+        )
+        app_workflows = [*app_workflows, *SDR_WORKFLOWS]
+        task_activities = [
+            *task_activities,
+            *build_sdr_activities(handler, sdr_app_name),
+        ]
+        logger.info(
+            "SDR workflows registered for handler %s (app=%s)",
+            type(handler).__name__,
+            sdr_app_name,
+        )
 
-    # Temporal OTel TracingInterceptor — creates spans for workflow/activity
-    # executions. When enabled, our AppVitalsInterceptor picks up real trace_ids
-    # on every event (otherwise trace_id is empty).
-    # Gated behind ATLAN_ENABLE_OTLP_TRACES so apps not using traces pay nothing.
-    if os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true":
-        try:
-            from temporalio.contrib.opentelemetry import TracingInterceptor
+    interceptor_settings = load_interceptor_settings()
 
-            all_interceptors.append(TracingInterceptor())
-            logger.info(
-                "Temporal OTel TracingInterceptor registered — "
-                "App Vitals events will carry real trace_id/span_id"
-            )
-        except ImportError:
-            logger.warning(
-                "ATLAN_ENABLE_OTLP_TRACES=true but temporalio.contrib.opentelemetry "
-                "is not available; falling back to empty trace_ids"
-            )
+    # The three observability interceptors are unconditional and run first so
+    # ContextVars (ExecutionContext, CorrelationContext) and tracing spans are
+    # set before product-feature interceptors or user code observe them.
+    from application_sdk.execution._temporal.interceptors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        LogInterceptor,
+        MetricsInterceptor,
+        TraceInterceptor,
+    )
 
-    # AppVitalsInterceptor — emits lifecycle metrics on workflow/activity completion.
-    # Must come after ExecutionContext, CorrelationContext, and TracingInterceptor
-    # so ContextVars and span context are set when we emit.
-    from application_sdk.constants import ENABLE_APP_VITALS
+    # Guard against double-registration: callers migrating from v2 may pass
+    # one of these explicitly via ``interceptors=...``. Running them twice
+    # would double-count metrics and emit duplicate lifecycle log lines —
+    # silent corruption that's hard to diagnose. Fail loudly at startup.
+    _builtin_types = (LogInterceptor, MetricsInterceptor, TraceInterceptor)
+    _duplicates = [
+        type(i).__name__ for i in (interceptors or []) if isinstance(i, _builtin_types)
+    ]
+    if _duplicates:
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkerInterceptorDuplicateError,
+        )
 
-    if ENABLE_APP_VITALS:
-        from application_sdk.observability.app_vitals import AppVitalsInterceptor
+        raise WorkerInterceptorDuplicateError(
+            message=f"Duplicate interceptor types: {_duplicates}. The SDK adds "
+            "LogInterceptor / MetricsInterceptor / TraceInterceptor automatically. "
+            "Remove them from your `interceptors` list.",
+            field="interceptors",
+        )
 
-        all_interceptors.append(AppVitalsInterceptor())
+    all_interceptors: list[TemporalInterceptor] = [
+        LogInterceptor(),
+        MetricsInterceptor(),
+        TraceInterceptor(),
+    ]
+    all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_output_interceptor:
-        from application_sdk.execution._temporal.interceptors.outputs import (
+        from application_sdk.execution._temporal.interceptors.outputs import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             OutputInterceptor,
         )
 
@@ -233,19 +395,13 @@ def create_worker(
     )
 
     if interceptor_settings.enable_event_interceptor:
-        from application_sdk.execution._temporal.interceptors.events import (
+        from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             EventInterceptor,
             publish_event,
         )
 
         all_interceptors.append(EventInterceptor())
         task_activities = [*task_activities, publish_event]
-
-    from application_sdk.execution._temporal.interceptors.activity_failure_logging import (
-        TaskFailureLoggingInterceptor,
-    )
-
-    all_interceptors.append(TaskFailureLoggingInterceptor())
 
     # Build sandbox configuration
     config = SandboxConfig()
@@ -343,4 +499,7 @@ def create_worker(
             "build_id": APP_BUILD_ID,
             "use_worker_versioning": deployment_config is not None,
         },
+        enable_pushgateway=enable_pushgateway,
+        primary_app_name=primary_app_name,
+        task_queue=task_queue,
     )

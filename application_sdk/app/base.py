@@ -1,5 +1,6 @@
 """App base class and decorators."""
 
+import asyncio
 import importlib.metadata
 import inspect
 import os
@@ -7,21 +8,35 @@ import re
 import shutil
 import sys
 import threading
+import warnings
 from abc import ABC
 from collections.abc import Callable
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Never, TypeVar, cast, get_type_hints
+from dataclasses import replace
+from datetime import datetime, timedelta
+from typing import Any, ClassVar, Never, TypeVar, cast, get_type_hints
 from uuid import UUID
 
-from temporalio import workflow
+import obstore as obs
+from temporalio import activity, workflow
+from temporalio.exceptions import FailureError
 
+from application_sdk.app.base_errors import (
+    AbstractRunNotImplementedError,
+    ObjectStoreNotConfiguredError,
+)
 from application_sdk.app.context import (
     AppContext,
     TaskExecutionContext,
     _is_atlan_logger,
 )
+from application_sdk.app.entrypoint import (
+    EntryPointContractError,
+    EntryPointMetadata,
+    get_entrypoint_metadata,
+    is_entrypoint,
+)
 from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
-from application_sdk.app.task import task
+from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -35,14 +50,17 @@ from application_sdk.contracts.storage import (
     UploadInput,
     UploadOutput,
 )
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.errors import (
     APP_CONTEXT_ERROR,
     APP_ERROR,
     APP_NON_RETRYABLE,
     ErrorCode,
 )
+from application_sdk.errors.base import AppError as _NewAppError
+from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.observability import AtlanObservability
 
 _task_logger = get_logger(__name__)
 
@@ -51,10 +69,6 @@ try:
 except importlib.metadata.PackageNotFoundError:
     _FRAMEWORK_VERSION = "unknown"
 
-if TYPE_CHECKING:
-    # BLDX-878: inter-app calls deactivated pending review.
-    # from application_sdk.app.client import WorkflowAppClient
-    from application_sdk.app.entrypoint import EntryPointMetadata
 
 # Type variable for require() method
 T = TypeVar("T")
@@ -134,10 +148,15 @@ def _safe_log(level: str, message: str, **attrs: Any) -> None:
 # =============================================================================
 
 
-class AppError(Exception):
-    """Base exception for App-related errors."""
+class AppError(_NewAppError):
+    """Deprecated: use ``application_sdk.errors.AppError`` directly — removed in v4.0.
+
+    Back-compat shim. Accepts a positional ``message`` argument and the legacy
+    ``error_code`` keyword to avoid breaking existing raise sites.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
+    code: ClassVar[str] = "APP"
 
     def __init__(
         self,
@@ -148,19 +167,22 @@ class AppError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.app_name = app_name
-        self.run_id = run_id
-        self.cause = cause
-        self._error_code = error_code
+        warnings.warn(
+            "application_sdk.app.AppError is deprecated; "
+            "use application_sdk.errors.AppError — will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._legacy_error_code = error_code
 
     @property
     def error_code(self) -> ErrorCode:
-        """Structured error code for monitoring and alerting."""
         return (
-            self._error_code
-            if self._error_code is not None
+            self._legacy_error_code
+            if self._legacy_error_code is not None
             else self.DEFAULT_ERROR_CODE
         )
 
@@ -175,7 +197,7 @@ class AppError(Exception):
         return " | ".join(parts)
 
 
-class AppContextError(RuntimeError):
+class AppContextError(_InternalError):
     """Raised when App or task context is accessed outside of valid execution scope.
 
     This is a programming error — it indicates that context-dependent methods
@@ -184,26 +206,26 @@ class AppContextError(RuntimeError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_CONTEXT_ERROR
+    code: ClassVar[str] = "APP_CONTEXT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
-        super().__init__(message)
-        self._error_code = error_code
+        _InternalError.__init__(self, message=message)
+        self._legacy_error_code = error_code
 
     @property
     def error_code(self) -> ErrorCode:
-        """Structured error code for monitoring and alerting."""
         return (
-            self._error_code
-            if self._error_code is not None
+            self._legacy_error_code
+            if self._legacy_error_code is not None
             else self.DEFAULT_ERROR_CODE
         )
 
     def __str__(self) -> str:
-        return f"[{self.error_code.code}] {super().__str__()}"
+        return f"[{self.error_code.code}] {self.message}"
 
 
 class NonRetryableError(AppError):
-    """Error that should not be retried.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
 
     Use this for failures that are deterministic and will never succeed on retry:
     - Authentication failures (invalid credentials)
@@ -223,10 +245,11 @@ class NonRetryableError(AppError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_NON_RETRYABLE
+    default_retryable: ClassVar[bool] = False
 
 
 class RetryableError(AppError):
-    """Error that may be retried at the workflow level.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
 
     Extend this when raising an error directly from an ``@entrypoint`` method
     that signals a *transient* failure — one where retrying the entire workflow
@@ -255,6 +278,7 @@ class RetryableError(AppError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
+    default_retryable: ClassVar[bool] = True
 
 
 # =============================================================================
@@ -277,12 +301,13 @@ def _get_execution_id_from_task() -> str:
     Raises:
         RuntimeError: If called outside a @task method.
     """
-    from temporalio import activity
-
     try:
-        return activity.info().workflow_id or ""
+        wid = activity.info().workflow_id
     except Exception as e:
         raise AppContextError("Cannot access app state outside of task context") from e
+    if not wid:
+        raise AppContextError("activity workflow_id is empty")
+    return wid
 
 
 class TaskStateAccessor:
@@ -376,7 +401,7 @@ class PersistentStateAccessor:
             value: State data to save.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         await self._app.context.save_state(key, value)
 
@@ -390,7 +415,7 @@ class PersistentStateAccessor:
             The saved state or None if not found.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         return await self._app.context.load_state(key)
 
@@ -505,8 +530,6 @@ class App(ABC):
             # classes), explicit @entrypoint decoration is always intentional —
             # raise loudly so the developer sees the problem immediately.
             # deferred import: circular dependency (entrypoint imports App)
-            from application_sdk.app.entrypoint import EntryPointContractError
-
             for ep in entry_points.values():
                 if not (
                     isinstance(ep.input_type, type) and issubclass(ep.input_type, Input)
@@ -558,12 +581,22 @@ class App(ABC):
             return
 
         # deferred import: circular dependency (entrypoint imports App)
-        from application_sdk.app.entrypoint import EntryPointContractError
-
         try:
             hints = get_type_hints(cls.run)
         except Exception:
-            return  # Unresolvable annotations (e.g. forward refs) — skip silently
+            # Annotations are present but cannot be resolved (e.g. renamed
+            # forward refs, missing imports). Keep the registry tolerant —
+            # don't raise — but make the failure visible so the App doesn't
+            # silently disappear from the registry.
+            _task_logger.warning(
+                "Skipping run() annotation validation for %s: get_type_hints "
+                "failed to resolve annotations (likely an unresolved forward "
+                "reference or missing import). Skipping registration of run() "
+                "type validation; the App will still be registered.",
+                cls.__name__,
+                exc_info=True,
+            )
+            return
 
         input_type = hints.get("input")
         output_type = hints.get("return")
@@ -599,8 +632,6 @@ class App(ABC):
             )
 
         # deferred import: circular dependency (entrypoint imports App)
-        from application_sdk.app.entrypoint import EntryPointMetadata
-
         implicit_ep = EntryPointMetadata(
             name="run",
             input_type=input_type,
@@ -626,7 +657,7 @@ class App(ABC):
         """Get the current execution context.
 
         Raises:
-            RuntimeError: If accessed outside of run() execution.
+            AppContextError: If accessed outside of run() execution.
         """
         if self._context is None:
             raise AppContextError(
@@ -642,7 +673,7 @@ class App(ABC):
         Only available inside @task methods.
 
         Raises:
-            RuntimeError: If accessed outside of @task method execution.
+            AppContextError: If accessed outside of @task method execution.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -675,7 +706,7 @@ class App(ABC):
         return self.context.is_cancelled()
 
     # =========================================================================
-    # Task-only methods (raise RuntimeError if called outside @task methods)
+    # Task-only methods (raise AppContextError if called outside @task methods)
     # =========================================================================
 
     def heartbeat(self, *details: Any) -> None:
@@ -687,7 +718,7 @@ class App(ABC):
             *details: Serializable progress details.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -705,7 +736,7 @@ class App(ABC):
             Tuple of details from last heartbeat, or empty tuple if none.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -724,7 +755,7 @@ class App(ABC):
             or None if no heartbeat was recorded.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -748,7 +779,7 @@ class App(ABC):
             Result of ``func(*args, **kwargs)``.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         if self._task_context is None:
             raise AppContextError(
@@ -825,7 +856,7 @@ class App(ABC):
             The stored value, or None if not set.
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         execution_id = self._get_current_execution_id()
         with _app_state_lock:
@@ -841,7 +872,7 @@ class App(ABC):
             value: Value to store (any Python object).
 
         Raises:
-            RuntimeError: If called outside a @task method.
+            AppContextError: If called outside a @task method.
         """
         execution_id = self._get_current_execution_id()
         with _app_state_lock:
@@ -870,21 +901,7 @@ class App(ABC):
         Returns:
             The typed output dataclass.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement run() or define @entrypoint methods."
-        )
-
-    async def call(self, *args, **kwargs):
-        raise NotImplementedError(
-            "Inter-app call() is deactivated pending BLDX-878. "
-            "Use Automation Engine DAG orchestration for multi-app coordination."
-        )
-
-    async def call_by_name(self, *args, **kwargs):
-        raise NotImplementedError(
-            "Inter-app call_by_name() is deactivated pending BLDX-878. "
-            "Use Automation Engine DAG orchestration for multi-app coordination."
-        )
+        raise AbstractRunNotImplementedError(app_class=type(self).__name__)
 
     def continue_with(self, input: Input) -> Never:
         """Restart this App with new input, preserving correlation context.
@@ -962,14 +979,13 @@ class App(ABC):
             up = await self.upload(UploadInput(local_path="/tmp/output/"))
             # up.ref.file_count == number of files in the directory
         """
-        from application_sdk.storage.transfer import upload as _upload
+        from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+            upload as _upload,
+        )
 
         store = self.context.storage
         if store is None:
-            raise RuntimeError(
-                "No object store configured. "
-                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
-            )
+            raise ObjectStoreNotConfiguredError()
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
@@ -1021,14 +1037,13 @@ class App(ABC):
 
             dl = await self.download(DownloadInput(ref=input.model_ref))
         """
-        from application_sdk.storage.transfer import download as _download
+        from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+            download as _download,
+        )
 
         store = self.context.storage
         if store is None:
-            raise RuntimeError(
-                "No object store configured. "
-                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
-            )
+            raise ObjectStoreNotConfiguredError()
 
         # Resolve storage_path: explicit field takes precedence over ref.storage_path
         storage_path = input.storage_path
@@ -1060,12 +1075,14 @@ class App(ABC):
         automatically).  Do not call it directly from ``run()``.
         """
 
-        from application_sdk.constants import (
+        from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             CLEANUP_BASE_PATHS,
             TEMPORARY_PATH,
             TRACKED_FILE_REFS_KEY,
         )
-        from application_sdk.execution import build_output_path
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            build_output_path,
+        )
 
         path_results: dict[str, bool] = {}
 
@@ -1139,16 +1156,17 @@ class App(ABC):
         zero counts.  Individual delete errors increment ``error_count`` but
         never abort the task.
         """
-        import asyncio
-
-        import obstore as obs
-
-        from application_sdk.constants import (
+        from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             PROTECTED_STORAGE_PREFIXES,
             TRACKED_FILE_REFS_KEY,
         )
-        from application_sdk.execution import build_output_path
-        from application_sdk.storage.ops import _resolve_store, delete
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            build_output_path,
+        )
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+            _resolve_store,
+            delete,
+        )
 
         store = self.context.storage if self._context is not None else None
         if store is None:
@@ -1176,8 +1194,6 @@ class App(ABC):
                     return False
 
         # 1. Delete tracked transient objects.
-        from application_sdk.contracts.types import StorageTier
-
         tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY)
         if tracked_refs:
             for ref in tracked_refs:
@@ -1259,30 +1275,33 @@ class App(ABC):
             "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true"
         ).lower() not in ("0", "false", "no")
         if cleanup_enabled:
-            import asyncio
 
             async def _local_cleanup() -> None:
                 try:
                     await self.cleanup_files(CleanupInput())
                 except Exception:
-                    _safe_log("warning", "cleanup_files task failed during on_complete")
+                    _safe_log(
+                        "warning",
+                        "cleanup_files task failed during on_complete",
+                        exc_info=True,
+                    )
 
             async def _storage_cleanup() -> None:
                 try:
                     await self.cleanup_storage(StorageCleanupInput())
                 except Exception:
                     _safe_log(
-                        "warning", "cleanup_storage task failed during on_complete"
+                        "warning",
+                        "cleanup_storage task failed during on_complete",
+                        exc_info=True,
                     )
 
             await asyncio.gather(_local_cleanup(), _storage_cleanup())
 
         try:
-            from application_sdk.observability.observability import AtlanObservability
-
             await AtlanObservability.flush_all()
         except Exception:
-            _safe_log("warning", "flush_all() failed during on_complete")
+            _safe_log("warning", "flush_all() failed during on_complete", exc_info=True)
 
 
 # =============================================================================
@@ -1297,10 +1316,6 @@ def _register_tasks(cls: type, app_name: str) -> None:
         cls: The App class.
         app_name: The app's registered name.
     """
-    from dataclasses import replace
-
-    from application_sdk.app.task import get_task_metadata, is_task
-
     task_registry = TaskRegistry.get_instance()
 
     # Scan the class for @task decorated methods
@@ -1331,12 +1346,6 @@ def _scan_entrypoints(cls: type) -> "dict[str, EntryPointMetadata]":
         Dict mapping entry point name to EntryPointMetadata.
     """
     # deferred import: circular dependency (entrypoint imports App)
-    from application_sdk.app.entrypoint import (
-        EntryPointMetadata,
-        get_entrypoint_metadata,
-        is_entrypoint,
-    )
-
     entry_points: dict[str, EntryPointMetadata] = {}
     for attr_name in dir(cls):
         if attr_name.startswith("_"):
@@ -1440,14 +1449,12 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         # BLDX-878: inter-app calls deactivated pending review.
         # from application_sdk.app.client import WorkflowAppClient
-        from application_sdk.app.context import AppContext
-
         start_time = _safe_now()
         run_id = workflow.info().run_id
 
         try:
             with workflow.unsafe.imports_passed_through():
-                from application_sdk.observability.correlation import (
+                from application_sdk.observability.correlation import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
                     get_correlation_context,
                 )
 
@@ -1497,7 +1504,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                         input=input_summary,
                     )
         except Exception:
-            _safe_log("warning", "Failed to log input summary")
+            _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
             entry_method = getattr(app_instance, entry_method_name)
@@ -1512,6 +1519,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                 run_id=str(run_id),
                 correlation_id=context.correlation_id,
                 error_type=type(e).__name__,
+                exc_info=True,
             )
             # deferred import: circular dependency
             # Raw Python exceptions (e.g. ValueError raised directly in an
@@ -1528,12 +1536,19 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             # deterministic — retrying will never fix a KeyError or TypeError.
             # Transient failures (network, timeout) should be modelled as @task
             # activities with their own retry policy, not raised directly here.
-            from temporalio.exceptions import FailureError
-
-            from application_sdk.execution.errors import ApplicationError
+            from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+                ApplicationError,
+            )
 
             if isinstance(e, FailureError):
                 raise
+            if isinstance(e, _NewAppError):
+                raise ApplicationError(
+                    str(e),
+                    e.to_failure_details(),
+                    type=type(e).__name__,
+                    non_retryable=not e.effective_retryable,
+                ) from e
             raise ApplicationError(
                 str(e),
                 type=type(e).__name__,
@@ -1545,7 +1560,9 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                 await app_instance.on_complete()
             except Exception:
                 _safe_log(
-                    "warning", "on_complete() hook raised an unexpected exception"
+                    "warning",
+                    "on_complete() hook raised an unexpected exception",
+                    exc_info=True,
                 )
 
             end_time = _safe_now()
@@ -1605,8 +1622,6 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
         app_instance: The app instance.
         context_data: Context dict with run_id and correlation_id.
     """
-    from application_sdk.app.task import get_task_metadata, is_task
-
     for attr_name in dir(app_instance):
         if attr_name.startswith("_"):
             continue
@@ -1662,13 +1677,20 @@ def _create_task_activity_wrapper(
     Returns:
         Async function that executes the task as an activity.
     """
-    from datetime import timedelta
-
-    from application_sdk.execution.retry import RetryPolicy as _RP
-    from application_sdk.execution.retry import _to_temporal_retry_policy
+    from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+        RetryPolicy as _RP,
+    )
+    from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+        _to_temporal_retry_policy,
+    )
 
     with workflow.unsafe.imports_passed_through():
-        from application_sdk.execution._temporal.activities import TaskContext
+        from application_sdk.execution._temporal.activities import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            TaskContext,
+        )
+        from application_sdk.execution._temporal.eviction_retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            execute_activity_with_eviction_retry,
+        )
 
     # Build the Temporal RetryPolicy once (not per invocation)
     if retry_policy is not None:
@@ -1701,8 +1723,10 @@ def _create_task_activity_wrapper(
         # Extract summary from input for Temporal UI display
         summary = input_data.summary() if hasattr(input_data, "summary") else None
 
-        # Execute as activity - pass result_type for proper deserialization
-        result: Output = await workflow.execute_activity(
+        # Execute as activity, routed through the SDK eviction-retry loop so
+        # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
+        # attempts without burning the application-error retry budget.
+        result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
             start_to_close_timeout=timedelta(seconds=timeout_seconds),
@@ -1722,21 +1746,22 @@ __all__ = [
     "App",
     "AppError",
     "AppStateAccessor",
+    "FileReference",
     "NonRetryableError",
     "PersistentStateAccessor",
+    "RetryableError",
     "TaskStateAccessor",
     "_app_state",
     "_app_state_lock",
+    "_apply_app_registration",
+    "_create_task_activity_wrapper",
     "_pascal_to_kebab",
+    "_register_tasks",
     "_safe_log",
     "_safe_now",
     "_safe_uuid",
-    "_apply_app_registration",
-    "_create_task_activity_wrapper",
-    "_register_tasks",
     "_scan_entrypoints",
     "_wrap_instance_tasks",
     "generate_workflow_class",
     "task",
-    "FileReference",
 ]

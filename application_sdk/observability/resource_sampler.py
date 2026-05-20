@@ -16,12 +16,13 @@ but the sum remains correct.
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 from dataclasses import dataclass
 
-_logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+_logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ def sample() -> ResourceSample | None:
         ResourceSample, or None if sampling fails (e.g. on Windows).
     """
     try:
-        import resource
+        import resource  # noqa: PLC0415 — stdlib resource; not available on Windows (try/except wraps)
     except ImportError:
         # resource module not available on Windows
         return None

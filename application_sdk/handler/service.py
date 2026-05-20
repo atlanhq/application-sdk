@@ -28,34 +28,36 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 import warnings
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
 import orjson
+import temporalio.service
 from fastapi import FastAPI, File, Form, HTTPException
 from fastapi import Path as PathParam
 from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
+from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import (
-    DEPLOYMENT_NAME,
-    ENABLE_PROMETHEUS_METRICS,
-    LOCAL_ENVIRONMENT,
-)
+from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+from application_sdk.errors import AppError
+from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler.base import Handler, HandlerError
-from application_sdk.handler.context import HandlerContext
+from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
     EventTriggerConfig,
@@ -63,13 +65,67 @@ from application_sdk.handler.contracts import (
     HandlerCredential,
     MetadataInput,
     PreflightInput,
-    PreflightStatus,
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
+from application_sdk.handler.service_errors import (
+    InvalidConfigIdError,
+    InvalidConfigTypeError,
+    TempPathEscapeError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+_CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
+    FailureCategory.AUTH: 401,
+    FailureCategory.PERMISSION: 403,
+    FailureCategory.NOT_FOUND: 404,
+    FailureCategory.ALREADY_EXISTS: 409,
+    FailureCategory.INVALID_INPUT: 400,
+    FailureCategory.PRECONDITION: 412,
+    FailureCategory.RATE_LIMITED: 429,
+    FailureCategory.TIMEOUT: 504,
+    FailureCategory.DEPENDENCY_UNAVAILABLE: 503,
+    FailureCategory.RESOURCE_EXHAUSTED: 503,
+    FailureCategory.DATA_INTEGRITY: 500,
+    FailureCategory.INTERNAL: 500,
+    FailureCategory.UNIMPLEMENTED: 501,
+    FailureCategory.CANCELLED: 499,  # client-closed-request (nginx convention)
+}
+
+
+def _app_error_to_http_status(exc: AppError) -> int:
+    return _CATEGORY_TO_HTTP.get(exc.category, 500)
+
+
+def _record_proxy_failure(
+    reason: str,
+    log_message: str,
+    *log_args: object,
+    exc_info: bool = False,
+) -> None:
+    """Record a Temporal-core ``/metrics`` proxy failure.
+
+    Increments the ``temporal_core_metrics_proxy_failures_total`` counter
+    so failures are observable from VictoriaMetrics (and not just buried
+    in the logs), and emits a bounded diagnostic. ``reason`` should be a
+    bounded label value — exception class name or ``http_<status>``."""
+    from application_sdk.observability import (  # noqa: PLC0415 — cold path: only on proxy failure
+        metrics as _metrics_module,
+    )
+
+    counter = _metrics_module.create_counter(
+        "temporal_core_metrics_proxy_failures",
+        description=(
+            "Failures fetching the Temporal Rust-core /metrics endpoint via "
+            "the in-process FastAPI proxy. Each increment is one scrape "
+            "where Temporal-core series were not retrievable."
+        ),
+        unit="1",
+    )
+    counter.add(1, {"reason": reason})
+    logger.warning(log_message, *log_args, exc_info=exc_info)
 
 
 def _serialize_credential_value(v: Any) -> str:
@@ -171,12 +227,19 @@ def _wrap_response(
     message: str = "",
     success: bool = True,
 ) -> dict[str, Any]:
-    """Wrap response data in the standard envelope: {success, message, data}."""
-    return {"success": success, "message": message, "data": data}
+    """Wrap response data in the standard envelope: {success, message, data}.
+
+    ``message`` is omitted from the response when empty to match the legacy
+    /credentials/query format expected by the frontend filter widgets.
+    """
+    result: dict[str, Any] = {"success": success, "data": data}
+    if message:
+        result["message"] = message
+    return result
 
 
 async def _get_workflow_result(
-    client: "Client",
+    client: Client,
     *,
     workflow_id: str,
     output_type: type | None,
@@ -243,6 +306,10 @@ class WorkflowClientConfig:
     auth_base_url: str = ""
     auth_scopes: str = ""
 
+    # Temporal Rust-core metrics
+    enable_temporal_core_metrics: bool = True
+    prometheus_bind_address: str = ""
+
     def is_configured(self) -> bool:
         return bool(self.host and self.app_class)
 
@@ -282,7 +349,7 @@ def _validated_temp_path(path: str) -> str:
     tmp_root = os.path.realpath(tempfile.gettempdir())
     real = os.path.realpath(path)
     if real != tmp_root and not real.startswith(tmp_root + os.sep):
-        raise ValueError("Temp file path escapes system temp directory")
+        raise TempPathEscapeError()
     return real
 
 
@@ -293,11 +360,16 @@ async def _get_temporal_client() -> Client:
     if _temporal_client is not None:
         return _temporal_client
 
-    from application_sdk.execution import create_temporal_client
+    from application_sdk.execution import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+        create_temporal_client,
+    )
 
     api_key: str | None = None
     if _workflow_config.auth_enabled:
-        from application_sdk.execution import TemporalAuthConfig, TemporalAuthManager
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+            TemporalAuthConfig,
+            TemporalAuthManager,
+        )
 
         auth_config = TemporalAuthConfig(
             client_id=_workflow_config.auth_client_id,
@@ -311,11 +383,11 @@ async def _get_temporal_client() -> Client:
         logger.info("Acquired auth token for handler Temporal client")
 
     logger.info(
-        "Connecting to Temporal for workflow execution",
-        host=_workflow_config.host,
-        namespace=_workflow_config.namespace,
-        tls_enabled=_workflow_config.tls_enabled,
-        auth_enabled=_workflow_config.auth_enabled,
+        "Connecting to Temporal for workflow execution host=%s namespace=%s tls=%s auth=%s",
+        _workflow_config.host,
+        _workflow_config.namespace,
+        _workflow_config.tls_enabled,
+        _workflow_config.auth_enabled,
     )
 
     _temporal_client = await create_temporal_client(
@@ -328,6 +400,8 @@ async def _get_temporal_client() -> Client:
         tls_client_cert_path=_workflow_config.tls_client_cert_path,
         tls_client_private_key_path=_workflow_config.tls_client_private_key_path,
         tls_domain=_workflow_config.tls_domain,
+        enable_prometheus=_workflow_config.enable_temporal_core_metrics,
+        prometheus_bind_address=_workflow_config.prometheus_bind_address,
     )
     logger.info("Connected to Temporal")
 
@@ -372,6 +446,8 @@ def create_app_handler_service(
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
     frontend_assets_path: str = "app/generated/frontend/static",
+    enable_temporal_core_metrics: bool = True,
+    prometheus_bind_address: str = "",
     # Deprecated: state_store is no longer used. Credential resolution now
     # goes through DaprCredentialVault exclusively. Passing this parameter
     # emits a DeprecationWarning. Will be removed in v3.2.0.
@@ -395,6 +471,10 @@ def create_app_handler_service(
         frontend_assets_path: Path to the directory containing frontend static assets.
             Serves ``index.html`` at ``GET /`` and mounts remaining assets as static
             files. Defaults to ``"app/generated/frontend/static"``.
+        enable_temporal_core_metrics: When true, ``GET /metrics`` proxies
+            Temporal Rust-core metrics from ``prometheus_bind_address``.
+        prometheus_bind_address: Loopback bind address for the Temporal
+            Rust-core metrics endpoint. Defaults to the SDK constant.
 
     Returns:
         Configured FastAPI application.
@@ -429,14 +509,22 @@ def create_app_handler_service(
         auth_token_url=auth_token_url,
         auth_base_url=auth_base_url,
         auth_scopes=auth_scopes,
+        enable_temporal_core_metrics=enable_temporal_core_metrics,
+        prometheus_bind_address=prometheus_bind_address,
     )
 
-    from application_sdk.constants import ENABLE_MCP
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
+        ENABLE_MCP,
+    )
 
     if ENABLE_MCP and app_name:
-        from contextlib import asynccontextmanager
+        from contextlib import (  # noqa: PLC0415 — cold path: lifespan setup, only when MCP enabled
+            asynccontextmanager,
+        )
 
-        from application_sdk.server.mcp import MCPServer
+        from application_sdk.server.mcp import (  # noqa: PLC0415 — cold path: only when ENABLE_MCP set
+            MCPServer,
+        )
 
         _mcp_server = MCPServer(application_name=app_name)
 
@@ -457,9 +545,24 @@ def create_app_handler_service(
     else:
         app = FastAPI(title=title, description=description, version=version)
 
-    from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware
+    from opentelemetry.instrumentation.fastapi import (  # noqa: PLC0415 — cold path: FastAPI instrumentor wired at app creation
+        FastAPIInstrumentor,
+    )
 
-    app.add_middleware(MetricsMiddleware)
+    from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
+        EXCLUDED_LOG_PATHS,
+        LogMiddleware,
+    )
+
+    # Auto-instrument HTTP server with OTel: emits http.server.duration,
+    # http.server.active_requests, etc. with route-templated http.route labels
+    # (no raw-path cardinality blowup). Metrics flow through the global
+    # MeterProvider configured in observability/metrics_adaptor.py and land in
+    # prometheus_client.REGISTRY via the PrometheusMetricReader.
+    FastAPIInstrumentor.instrument_app(
+        app,
+        excluded_urls=",".join(sorted(EXCLUDED_LOG_PATHS)),
+    )
     app.add_middleware(LogMiddleware)
 
     def _create_context(credentials: list[HandlerCredential]) -> HandlerContext:
@@ -483,49 +586,67 @@ def create_app_handler_service(
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
         context = _create_context(credentials)
-        handler._context = context
-
-        try:
-            logger.info(
-                "Auth test started: app=%s request=%s", app_name, context.request_id_str
-            )
-            result = await handler.test_auth(auth_input)
-            logger.info(
-                "Auth test completed: app=%s request=%s status=%s",
-                app_name,
-                context.request_id_str,
-                result.status.value,
-            )
-            return JSONResponse(
-                status_code=result.status.http_status,
-                content=_wrap_response(
-                    result.model_dump(),
-                    message=result.message or f"Authentication {result.status.value}",
-                    success=result.status.is_success,
-                ),
-            )
-        except HandlerError as e:
-            logger.error(
-                "Auth test failed for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except Exception as e:
-            logger.error(
-                "Auth test failed unexpectedly for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-        finally:
-            handler._context = None
+        with bind_handler_context(context):
+            try:
+                logger.info(
+                    "Auth test started: app=%s request=%s",
+                    app_name,
+                    context.request_id_str,
+                )
+                result = await handler.test_auth(auth_input)
+                logger.info(
+                    "Auth test completed: app=%s request=%s status=%s",
+                    app_name,
+                    context.request_id_str,
+                    result.status.value,
+                )
+                return JSONResponse(
+                    status_code=result.status.http_status,
+                    content=_wrap_response(
+                        result.model_dump(),
+                        message=result.message
+                        or f"Authentication {result.status.value}",
+                        success=result.status.is_success,
+                    ),
+                )
+            except HandlerError as e:
+                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+                # AppError subclass caught here first so http_status is preserved.
+                # Remove once all connector subclasses raise typed AppError leaves.
+                # Tracked alongside the Handler abstract-method contract migration.
+                # See typed-error-prescription.md §5 (HandlerError row).
+                logger.error(
+                    "Auth test failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                # Forward-looking: typed AppError leaves from connectors that raise
+                # non-HandlerError typed errors (already migrated).
+                logger.error(
+                    "Auth test failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=str(e)
+                ) from None
+            except Exception as e:
+                logger.error(
+                    "Auth test failed unexpectedly for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Preflight
@@ -540,62 +661,106 @@ def create_app_handler_service(
             for c in preflight_input.credentials
         ]
         context = _create_context(credentials)
-        handler._context = context
-
-        try:
-            logger.info(
-                "Preflight check started: app=%s request=%s",
-                app_name,
-                context.request_id_str,
-            )
-            result = await handler.preflight_check(preflight_input)
-            logger.info(
-                "Preflight check completed: app=%s request=%s status=%s checks=%d",
-                app_name,
-                context.request_id_str,
-                result.status.value,
-                len(result.checks),
-            )
-            # Build v2-compatible response: each check becomes a top-level
-            # key in data so the frontend can iterate check names directly.
-            # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
-            v2_data: dict[str, Any] = {}
-            for check in result.checks:
-                # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
-                key = check.name[0].lower() + check.name[1:]
-                v2_data[key] = {
-                    "success": check.passed,
-                    "message": check.message or "",
-                }
-            return JSONResponse(
-                content=_wrap_response(
-                    v2_data,
-                    message=result.message or f"Preflight check {result.status.value}",
-                    success=result.status == PreflightStatus.READY,
+        with bind_handler_context(context):
+            try:
+                logger.info(
+                    "Preflight check started: app=%s request=%s",
+                    app_name,
+                    context.request_id_str,
                 )
-            )
-        except HandlerError as e:
-            logger.error(
-                "Preflight check failed for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except Exception as e:
-            logger.error(
-                "Preflight check failed unexpectedly for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-        finally:
-            handler._context = None
+                result = await handler.preflight_check(preflight_input)
+                logger.info(
+                    "Preflight check completed: app=%s request=%s status=%s checks=%d",
+                    app_name,
+                    context.request_id_str,
+                    result.status.value,
+                    len(result.checks),
+                )
+                # Build v2-compatible response: each check becomes a top-level
+                # key in data so the frontend can iterate check names directly.
+                # v2 format: {"authenticationCheck": {"success": true,
+                # "successMessage": "...", "failureMessage": "..."}, ...}.
+                #
+                # The SageV2 widget at
+                # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
+                # renders ``checkResult.success ? successMessage :
+                # failureMessage`` with no fallback to ``message``, so omitting
+                # those fields leaves the detail panel blank on a failed check
+                # (DBBI-665, WARE-1250). ``message`` is retained so any
+                # consumer already reading the v3 field keeps working.
+                #
+                # This finishes the third sub-mismatch from BLDX-901; PR #1228
+                # converted ``checks`` → camelCase keys and ``passed`` →
+                # ``success`` but left the message-field rename.
+                v2_data: dict[str, Any] = {}
+                for check in result.checks:
+                    # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
+                    key = check.name[0].lower() + check.name[1:]
+                    msg = check.message or ""
+                    v2_data[key] = {
+                        "success": check.passed,
+                        "message": msg,
+                        "successMessage": msg if check.passed else "",
+                        "failureMessage": "" if check.passed else msg,
+                    }
+                # Envelope ``success`` reports whether preflight executed at
+                # all, not whether every check passed — per-check pass/fail
+                # belongs in ``data.<check>.success``. The SageV2 widget at
+                # SageV2.vue:249 short-circuits on ``!response.success`` and
+                # skips the per-check render loop entirely, so collapsing
+                # envelope success to ``status == READY`` (the previous
+                # behaviour) made every PARTIAL/NOT_READY response surface
+                # as "Check failed" with a blank "Hide details" panel
+                # (DBBI-665). Tying envelope success to "any check ran"
+                # keeps it false when the handler produced no checks (a
+                # genuine preflight-system failure) and lets the widget
+                # render per-check rows otherwise.
+                return JSONResponse(
+                    content=_wrap_response(
+                        v2_data,
+                        message=result.message
+                        or f"Preflight check {result.status.value}",
+                        success=len(result.checks) > 0,
+                    )
+                )
+            except HandlerError as e:
+                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+                # AppError subclass caught here first so http_status is preserved.
+                # Remove once all connector subclasses raise typed AppError leaves.
+                # Tracked alongside the Handler abstract-method contract migration.
+                # See typed-error-prescription.md §5 (HandlerError row).
+                logger.error(
+                    "Preflight check failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                # Forward-looking: typed AppError leaves from connectors that raise
+                # non-HandlerError typed errors (already migrated).
+                logger.error(
+                    "Preflight check failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=str(e)
+                ) from None
+            except Exception as e:
+                logger.error(
+                    "Preflight check failed unexpectedly for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Metadata
@@ -610,53 +775,68 @@ def create_app_handler_service(
             for c in metadata_input.credentials
         ]
         context = _create_context(credentials)
-        handler._context = context
+        with bind_handler_context(context):
+            try:
+                logger.info(
+                    "Metadata fetch started: app=%s request=%s",
+                    app_name,
+                    context.request_id_str,
+                )
+                result = await handler.fetch_metadata(metadata_input)
 
-        try:
-            logger.info(
-                "Metadata fetch started: app=%s request=%s",
-                app_name,
-                context.request_id_str,
-            )
-            result = await handler.fetch_metadata(metadata_input)
-
-            # Both SqlMetadataOutput and ApiMetadataOutput expose
-            # .objects — model_dump() produces the correct shape for
-            # the corresponding frontend widget (sqltree / apitree).
-            data = [obj.model_dump() for obj in result.objects]
-            count = len(result.objects)
-            logger.info(
-                "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
-                app_name,
-                context.request_id_str,
-                type(result).__name__,
-                count,
-            )
-            return JSONResponse(
-                content=_wrap_response(data, message=f"Fetched {count} objects")
-            )
-        except HandlerError as e:
-            logger.error(
-                "Metadata fetch failed for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except Exception as e:
-            logger.error(
-                "Metadata fetch failed unexpectedly for app %s (request %s): %s",
-                app_name,
-                context.request_id_str,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-        finally:
-            handler._context = None
+                # Both SqlMetadataOutput and ApiMetadataOutput expose
+                # .objects — model_dump() produces the correct shape for
+                # the corresponding frontend widget (sqltree / apitree).
+                data = [obj.model_dump() for obj in result.objects]
+                count = len(result.objects)
+                logger.info(
+                    "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
+                    app_name,
+                    context.request_id_str,
+                    type(result).__name__,
+                    count,
+                )
+                # message omitted: a non-empty message field caused the
+                # frontend filter widgets to render empty dropdowns
+                return JSONResponse(content=_wrap_response(data))
+            except HandlerError as e:
+                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+                # AppError subclass caught here first so http_status is preserved.
+                # Remove once all connector subclasses raise typed AppError leaves.
+                # Tracked alongside the Handler abstract-method contract migration.
+                # See typed-error-prescription.md §5 (HandlerError row).
+                logger.error(
+                    "Metadata fetch failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                # Forward-looking: typed AppError leaves from connectors that raise
+                # non-HandlerError typed errors (already migrated).
+                logger.error(
+                    "Metadata fetch failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=str(e)
+                ) from None
+            except Exception as e:
+                logger.error(
+                    "Metadata fetch failed unexpectedly for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Workflow lifecycle
@@ -685,13 +865,13 @@ def create_app_handler_service(
 
         if legacy_workflow_type is not None and entrypoint_param is None:
             warnings.warn(
-                f"App {app_name}: 'workflow_type' body field is deprecated and will be "
-                "removed in v3.1.0. Use ?entrypoint=<name> query param instead.",
+                f"App {app_name}: 'workflow_type' body field is deprecated. "
+                "Use ?entrypoint=<name> query param instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )
             logger.warning(
-                "App %s: 'workflow_type' body field is deprecated (removed in v3.1.0); "
+                "App %s: 'workflow_type' body field is deprecated; "
                 "use ?entrypoint=<name> query param instead.",
                 app_name,
             )
@@ -782,7 +962,7 @@ def create_app_handler_service(
             input_data.correlation_id = correlation_id
             input_data._correlation_id = correlation_id
 
-            from application_sdk.observability.correlation import (
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
                 CorrelationContext,
                 set_correlation_context,
             )
@@ -856,8 +1036,10 @@ def create_app_handler_service(
                 content={"success": True, "message": "Workflow terminated successfully"}
             )
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
@@ -865,7 +1047,7 @@ def create_app_handler_service(
                 "Failed to stop workflow %s run %s: %s",
                 workflow_id,
                 run_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -901,11 +1083,12 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except WorkflowFailureError as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow execution failed for workflow_id=%s error_type=%s",
                         workflow_id,
-                        e,
+                        type(exc).__name__,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -915,6 +1098,25 @@ def create_app_handler_service(
                                 "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
+                            success=False,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Workflow result decode failed for workflow_id=%s error_type=%s",
+                        workflow_id,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content=_wrap_response(
+                            {
+                                "status": "result_decode_failed",
+                                "workflow_id": workflow_id,
+                                "error_type": type(exc).__name__,
+                            },
+                            message="Workflow result could not be decoded",
+                            success=False,
                         )
                     )
 
@@ -950,11 +1152,12 @@ def create_app_handler_service(
                             message="Workflow completed",
                         )
                     )
-                except Exception as e:
+                except WorkflowFailureError as exc:
                     logger.warning(
-                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        "Workflow execution failed for workflow_id=%s error_type=%s",
                         workflow_id,
-                        e,
+                        type(exc).__name__,
+                        exc_info=True,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -964,6 +1167,25 @@ def create_app_handler_service(
                                 "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
+                            success=False,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Workflow result decode failed for workflow_id=%s error_type=%s",
+                        workflow_id,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content=_wrap_response(
+                            {
+                                "status": "result_decode_failed",
+                                "workflow_id": workflow_id,
+                                "error_type": type(exc).__name__,
+                            },
+                            message="Workflow result could not be decoded",
+                            success=False,
                         )
                     )
             elif status in ("FAILED", "TERMINATED", "CANCELED", "TIMED_OUT"):
@@ -975,6 +1197,7 @@ def create_app_handler_service(
                             "error": f"Workflow {status.lower()}",
                         },
                         message="Workflow failed",
+                        success=False,
                     )
                 )
             else:
@@ -990,15 +1213,17 @@ def create_app_handler_service(
                 )
 
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
             logger.error(
                 "Failed to get workflow result for %s: %s",
                 workflow_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -1040,8 +1265,10 @@ def create_app_handler_service(
                 )
             )
         except Exception as e:
-            error_msg = str(e)
-            if "not found" in error_msg.lower():
+            if (
+                isinstance(e, temporalio.service.RPCError)
+                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+            ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
@@ -1049,7 +1276,7 @@ def create_app_handler_service(
                 "Failed to get workflow status for %s run %s: %s",
                 workflow_id,
                 run_id,
-                error_msg,
+                str(e),
                 exc_info=True,
             )
             raise HTTPException(
@@ -1066,16 +1293,18 @@ def create_app_handler_service(
         Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
         """
         if not _CONFIG_KEY_RE.match(config_id):
-            raise ValueError(f"Invalid config_id: {config_id!r}")
+            raise InvalidConfigIdError(config_id=config_id)
         if not _CONFIG_KEY_RE.match(config_type):
-            raise ValueError(f"Invalid config_type: {config_type!r}")
-        from application_sdk.constants import APPLICATION_NAME
+            raise InvalidConfigTypeError(config_type=config_type)
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app paths
+            APPLICATION_NAME,
+        )
 
         return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
 
     async def _config_load_from_objectstore(
         config_id: str, config_type: str = "workflows"
-    ) -> "dict[str, Any] | None":
+    ) -> dict[str, Any] | None:
         """Load workflow config from object store (S3) fallback."""
         if _storage is None:
             return None
@@ -1089,15 +1318,17 @@ def create_app_handler_service(
         try:
             await download_file(key, safe_tmp, _storage)
             return orjson.loads(Path(safe_tmp).read_bytes())
-        except Exception as exc:
-            logger.warning("Object-store config load failed for key=%s: %r", key, exc)
+        except Exception:
+            logger.warning(
+                "Object-store config load failed for key=%s", key, exc_info=True
+            )
             return None
         finally:
             if os.path.exists(safe_tmp):
                 os.unlink(safe_tmp)
 
     async def _config_save_to_objectstore(
-        config_id: str, body: "dict[str, Any]", config_type: str = "workflows"
+        config_id: str, body: dict[str, Any], config_type: str = "workflows"
     ) -> bool:
         """Save workflow config to object store (S3) fallback."""
         if _storage is None:
@@ -1178,12 +1409,9 @@ def create_app_handler_service(
         if _storage is None:
             raise HTTPException(status_code=503, detail="Storage not configured")
 
-        import asyncio
-        import os
-        import shutil
-        from pathlib import PurePosixPath
-
-        from application_sdk.storage.ops import upload_file as _upload_file
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
+            upload_file as _upload_file,
+        )
 
         raw_name = filename or file.filename or "upload"
         # Strip non-alphanumeric chars and cap at 16 chars for object-store key safety.
@@ -1220,7 +1448,7 @@ def create_app_handler_service(
             try:
                 os.unlink(safe_tmp_path)
             except FileNotFoundError:
-                pass
+                pass  # temp file already removed — nothing to clean up
 
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         response_obj = FileUploadResponse(
@@ -1254,7 +1482,9 @@ def create_app_handler_service(
 
     @app.get("/dapr/subscribe")
     async def get_dapr_subscriptions() -> JSONResponse:
-        from application_sdk.constants import EVENT_STORE_NAME
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when emitting events
+            EVENT_STORE_NAME,
+        )
 
         result: list[dict[str, Any]] = []
 
@@ -1320,6 +1550,9 @@ def create_app_handler_service(
         try:
             body = await request.json()
         except Exception:
+            # Log details server-side; the HTTPException intentionally hides the
+            # parse internals from the client (avoid leaking file/line/offset).
+            logger.warning("Failed to parse JSON request body", exc_info=True)
             raise HTTPException(status_code=400, detail="Invalid JSON body") from None
 
         try:
@@ -1381,8 +1614,10 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/configmap/{config_map_id}")
     async def get_configmap(config_map_id: str) -> JSONResponse:
+        available_configmaps: list[str] = []
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                available_configmaps.append(json_file.stem)
                 if json_file.stem == config_map_id:
                     with open(json_file) as f:
                         raw = json.load(f)
@@ -1398,7 +1633,14 @@ def create_app_handler_service(
                             message="ConfigMap fetched successfully",
                         )
                     )
-        return JSONResponse(content=_wrap_response({}, message="ConfigMap not found"))
+        logger.warning(
+            "ConfigMap not found: requested=%s available=%s",
+            config_map_id,
+            sorted(available_configmaps),
+        )
+        raise HTTPException(
+            status_code=404, detail=f"ConfigMap '{config_map_id}' not found"
+        )
 
     @app.get("/workflows/v1/configmaps")
     async def list_configmaps() -> JSONResponse:
@@ -1509,12 +1751,6 @@ def create_app_handler_service(
         if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
             raise HTTPException(status_code=403, detail="Dev-only endpoint")
 
-        if not _CONFIG_KEY_RE.match(guid):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid guid — must match %s" % _CONFIG_KEY_PATTERN,
-            )
-
         sensitive: dict[str, Any] = {}
         non_sensitive: dict[str, Any] = {}
         for key, value in body.items():
@@ -1533,7 +1769,27 @@ def create_app_handler_service(
         if secrets_file.exists():
             all_secrets = orjson.loads(secrets_file.read_bytes())
         all_secrets[guid] = sensitive
-        secrets_file.write_bytes(orjson.dumps(all_secrets))
+
+        # Atomic write: stage to a sibling temp file, then rename. This avoids
+        # a partial/truncated secrets.json if the process is killed mid-write.
+        tmp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=str(secrets_dir),
+                delete=False,
+                mode="wb",
+                suffix=".json.tmp",
+            ) as tmp:
+                tmp.write(orjson.dumps(all_secrets))
+                tmp_path = tmp.name
+            os.replace(tmp_path, str(secrets_file))
+            tmp_path = None  # ownership transferred to secrets_file
+        finally:
+            if tmp_path is not None and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass  # temp file unlink failed; best-effort cleanup, not fatal
 
         # Write non-sensitive fields to object storage
         non_sensitive["credentialSource"] = non_sensitive.get(
@@ -1582,17 +1838,69 @@ def create_app_handler_service(
     # Prometheus metrics
     # ------------------------------------------------------------------
 
-    if ENABLE_PROMETHEUS_METRICS:
+    @app.get("/metrics")
+    async def prometheus_metrics() -> Response:
+        """Expose application metrics in Prometheus exposition format.
 
-        @app.get("/metrics")
-        async def prometheus_metrics() -> Response:
-            """Expose application metrics in Prometheus exposition format."""
-            from prometheus_client import REGISTRY, generate_latest
+        Merges two sources into a single response:
+        1. The OTel ``PrometheusMetricReader`` registry — covers HTTP metrics
+           from FastAPIInstrumentor, the worker's ``MetricsInterceptor``, and
+           any custom user metrics via ``application_sdk.observability.metrics``.
+        2. The Temporal Runtime's loopback Prometheus endpoint — proxies the
+           Rust-core metrics when enabled and reachable (gRPC client-call
+           latencies on the server, workflow / activity task latencies,
+           sticky cache, etc.) so combined pods have a single scrape target.
+        """
+        from prometheus_client import (  # noqa: PLC0415 — cold path: prometheus only when /metrics is hit
+            REGISTRY,
+            generate_latest,
+        )
 
-            return Response(
-                content=generate_latest(REGISTRY),
-                media_type="text/plain; version=0.0.4; charset=utf-8",
-            )
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when /metrics is hit
+            TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
+            TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+        )
+
+        temporal_metrics_body: bytes | None = None
+
+        temporal_bind_address = (
+            prometheus_bind_address or TEMPORAL_PROMETHEUS_BIND_ADDRESS
+        )
+        if enable_temporal_core_metrics and temporal_bind_address:
+            temporal_metrics_url = f"http://{temporal_bind_address}/metrics"
+            import httpx  # noqa: PLC0415 — cold path: only when Temporal Rust-core proxy enabled
+
+            try:
+                async with httpx.AsyncClient(
+                    timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
+                ) as client:
+                    resp = await client.get(temporal_metrics_url)
+                    if resp.status_code == 200:
+                        temporal_metrics_body = resp.content
+                    else:
+                        _record_proxy_failure(
+                            f"http_{resp.status_code}",
+                            "Temporal core metrics proxy returned HTTP %s from %s; serving /metrics without Temporal core series",
+                            resp.status_code,
+                            temporal_metrics_url,
+                        )
+            except httpx.RequestError as exc:
+                # Handler-only mode disables this proxy; enabled proxy failures are unexpected.
+                _record_proxy_failure(
+                    type(exc).__name__,
+                    "Temporal core metrics proxy request failed for %s; serving /metrics without Temporal core series",
+                    temporal_metrics_url,
+                    exc_info=True,
+                )
+
+        body = generate_latest(REGISTRY)
+        if temporal_metrics_body:
+            body = body + b"\n" + temporal_metrics_body
+
+        return Response(
+            content=body,
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     # ------------------------------------------------------------------
     # UI routes
@@ -1600,8 +1908,6 @@ def create_app_handler_service(
 
     @app.get("/")
     async def frontend_home() -> HTMLResponse:
-        import os
-
         frontend_html_path = os.path.join(frontend_assets_path, "index.html")
         if os.path.exists(frontend_html_path):
             with open(frontend_html_path, encoding="utf-8") as f:
@@ -1645,7 +1951,7 @@ def run_app_handler_service(
         **kwargs: Additional keyword arguments forwarded to
             ``create_app_handler_service()``.
     """
-    import uvicorn
+    import uvicorn  # noqa: PLC0415 — cold path: uvicorn only when starting standalone server
 
     app = create_app_handler_service(handler, **kwargs)
     uvicorn.run(app, host=host, port=port, log_level=log_level)

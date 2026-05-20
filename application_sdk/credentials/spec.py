@@ -1,20 +1,13 @@
-"""AgentCredentialSpec — typed Pydantic model for agent-shape credential payloads.
+"""AgentCredentialSpec — typed Pydantic envelope for agent-shape credential payloads.
 
-Replaces the untyped ``str`` / ``dict[str, Any]`` representation of
-``agent_json`` with a model that captures the ~80 % of the structure
-that is consistent across all connectors, while allowing connector-
-and auth-type-specific dotted keys (``basic.username``,
-``gcp-wif.extra.project_id``, …) to pass through as ``extra`` fields.
-
-The model accepts three input shapes:
-
-* **JSON string** — the wire format from Argo / Temporal.
-* **dict** — an already-parsed dict (e.g. from ``input.model_dump()``).
-* **AgentCredentialSpec instance** — returned as-is.
-
-Connector-specific keys (everything not in the typed envelope) land in
-:pyattr:`pydantic.BaseModel.model_extra` and are accessible via
-:meth:`to_raw_dict`.
+The base accepts arbitrary connector-specific dotted keys
+(``basic.username``, ``noauth.extra.security_protocol``, …) via
+``extra="allow"``.  **This permissiveness will be removed in a future
+breaking release.**  Connectors should subclass :class:`AgentCredentialSpec`,
+declare every dotted key as an explicit field with an alias, and
+override ``model_config`` with ``extra="forbid"`` so unknown keys fail
+validation at parse time.  See :class:`AgentCredentialSpec` for an
+example.
 """
 
 from __future__ import annotations
@@ -22,37 +15,51 @@ from __future__ import annotations
 from typing import Any
 
 import orjson
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AgentCredentialSpec(BaseModel):
     """Typed envelope for an agent-shape credential payload.
 
     Covers the fields that are consistent across all connectors.
-    Connector-specific and dotted keys (``basic.username``,
-    ``noauth.extra.security_protocol``, …) are captured by
-    ``extra="allow"`` and are available via :meth:`to_raw_dict`.
+    Connector-specific dotted keys (``basic.username``,
+    ``noauth.extra.security_protocol``, …) are currently accepted as
+    extras via ``extra="allow"`` and are available via
+    :meth:`to_raw_dict`.
 
-    Examples of payloads this model handles::
+    .. warning::
 
-        # JDBC — CloudSQL Postgres (basic auth)
-        {"agent-name": "cloudsql-postgres-agent", "secret-manager": "awssecretmanager",
-         "secret-path": "atlan/dev/cloudsql", "auth-type": "basic",
-         "host": "34.x.x.x", "port": 5432,
-         "basic.username": "username", "basic.password": "password",
-         "extra.database": "postgres"}
+        ``extra="allow"`` will be **removed in a future breaking
+        release**.  Connectors must migrate by subclassing this class,
+        declaring every dotted key they expect as an explicit field
+        with an alias, and setting ``extra="forbid"`` in
+        ``model_config``.  Unknown keys then fail validation at parse
+        time and contract drift is caught early.  The resolver flow
+        (:meth:`to_raw_dict` → secret-bundle substitution → flat dict)
+        is unchanged for any subclass.
 
-        # API — BigQuery (GCP WIF auth)
-        {"agent-name": "bigquery-gke-bq-agent", "secret-manager": "gcpsecretmanager",
-         "secret-path": "...", "auth-type": "gcp-wif",
-         "host": "https://bigquery.googleapis.com", "port": 443,
-         "gcp-wif.extra.project_id": "my-project", ...}
+        Example — connector-specific subclass::
 
-        # Streaming — Kafka (noauth)
-        {"agent-name": "kafka-agent", "secret-manager": "awssecretmanager",
-         "secret-path": "atlan-dev-kafka", "auth-type": "noauth",
-         "host": "broker:9092", "port": 9092,
-         "noauth.extra.security_protocol": "PLAINTEXT", ...}
+            from pydantic import ConfigDict, Field
+            from application_sdk.credentials import AgentCredentialSpec
+
+            class MyAppAgentSpec(AgentCredentialSpec):
+                model_config = ConfigDict(
+                    extra="forbid", frozen=True, populate_by_name=True,
+                )
+
+                api_token: str = Field(default="", alias="api.token")
+                api_endpoint: str = Field(default="", alias="api.endpoint")
+                extra_region: str = Field(default="", alias="extra.region")
+
+        Wire it into the extraction input by overriding the field type::
+
+            from application_sdk.templates.contracts.sql_metadata import (
+                ExtractionInput,
+            )
+
+            class MyAppExtractionInput(ExtractionInput):
+                agent_json: MyAppAgentSpec | None = None
     """
 
     model_config = ConfigDict(
@@ -73,6 +80,13 @@ class AgentCredentialSpec(BaseModel):
 
     secret_path: str = Field(default="", alias="secret-path")
     """Path / ARN / name of the secret in the external secret manager."""
+
+    @field_validator("secret_path", mode="before")
+    @classmethod
+    def _strip_secret_path(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
     auth_type: str = Field(default="", alias="auth-type")
     """Authentication strategy: ``basic``, ``noauth``, ``gcp-wif``,
@@ -116,14 +130,18 @@ class AgentCredentialSpec(BaseModel):
             try:
                 parsed = orjson.loads(data)
             except Exception as exc:
-                from application_sdk.credentials.errors import CredentialParseError
+                from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                    CredentialParseError,
+                )
 
                 raise CredentialParseError(
                     f"agent_json is not valid JSON: {exc}",
                     cause=exc,
                 ) from exc
             if not isinstance(parsed, dict):
-                from application_sdk.credentials.errors import CredentialParseError
+                from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                    CredentialParseError,
+                )
 
                 raise CredentialParseError(
                     f"agent_json must be a JSON object, got {type(parsed).__name__}",

@@ -33,16 +33,20 @@ Example:
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Optional
+from typing import Any
 
 from azure.core.credentials import TokenCredential
 from azure.core.exceptions import AzureError, ClientAuthenticationError
 from pydantic import BaseModel
 
-from application_sdk.clients import ClientInterface
+from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.auth import AzureAuthProvider
-from application_sdk.common.error_codes import ClientError
+from application_sdk.clients.azure.azure_errors import (
+    AzureClientAuthError,
+    AzureInputValidationError,
+)
+from application_sdk.errors import AppError
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -58,7 +62,7 @@ class ServiceHealth(BaseModel):
     """
 
     status: str
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class HealthStatus(BaseModel):
@@ -71,7 +75,7 @@ class HealthStatus(BaseModel):
     """
 
     connection_health: bool
-    services: Dict[str, ServiceHealth]
+    services: dict[str, ServiceHealth]
     overall_health: bool
 
 
@@ -95,7 +99,7 @@ class AzureClient(ClientInterface):
 
     def __init__(
         self,
-        credentials: Optional[Dict[str, Any]] = None,
+        credentials: dict[str, Any] | None = None,
         max_workers: int = 10,
         **kwargs: Any,
     ):
@@ -109,15 +113,17 @@ class AzureClient(ClientInterface):
             **kwargs: Additional keyword arguments passed to service clients.
         """
         self.credentials = credentials or {}
-        self.resolved_credentials: Dict[str, Any] = {}
-        self.credential: Optional[TokenCredential] = None
+        self.resolved_credentials: dict[str, Any] = {}
+        self.credential: TokenCredential | None = None
         self.auth_provider = AzureAuthProvider()
-        self._services: Dict[str, Any] = {}
-        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._services: dict[str, Any] = {}
+        self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
+            max_workers=max_workers
+        )
         self._connection_health = False
         self._kwargs = kwargs
 
-    async def load(self, credentials: Optional[Dict[str, Any]] = None) -> None:
+    async def load(self, credentials: dict[str, Any] | None = None) -> None:
         """
         Load and establish Azure connection using Service Principal authentication.
 
@@ -127,17 +133,23 @@ class AzureClient(ClientInterface):
                 Must include tenant_id, client_id, and client_secret.
 
         Raises:
-            ClientError: If connection fails due to authentication or connection issues
+            AzureClientAuthError: If connection fails due to authentication or connection issues
+            AzureInputValidationError: If connection fails due to invalid input parameters
         """
         if credentials:
             self.credentials = credentials
+
+        if self._executor is None:
+            raise AzureClientAuthError(
+                message="Azure client has been closed; instantiate a new AzureClient",
+            )
 
         try:
             logger.info("Loading Azure client...")
 
             # Handle credential resolution
             if "credential_guid" in self.credentials:
-                from application_sdk.infrastructure import (
+                from application_sdk.infrastructure import (  # noqa: PLC0415 — optional dep: dapr (azure-dapr credential pattern)
                     AsyncDaprClient,
                     DaprCredentialVault,
                 )
@@ -175,21 +187,21 @@ class AzureClient(ClientInterface):
             logger.info("Azure client loaded successfully")
 
         except ClientAuthenticationError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
+            raise AzureClientAuthError(cause=e) from e
         except AzureError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
+            raise AzureClientAuthError(cause=e) from e
         except ValueError as e:
-            raise ClientError(
-                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {str(e)}"
+            raise AzureInputValidationError(
+                message="Invalid parameters", cause=e
             ) from e
         except TypeError as e:
-            raise ClientError(
-                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameter types - {str(e)}"
+            raise AzureInputValidationError(
+                message="Invalid parameter types", cause=e
             ) from e
+        except AppError:
+            raise
         except Exception as e:
-            raise ClientError(
-                f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
-            ) from e
+            raise AzureClientAuthError(message="Unexpected error", cause=e) from e
 
     async def close(self) -> None:
         """Close Azure connections and clean up resources."""
@@ -205,16 +217,16 @@ class AzureClient(ClientInterface):
                         await service_client.disconnect()
                 except Exception:
                     logger.warning(
-                        "Error closing service client",
-                        service_name=service_name,
-                        exc_info=True,
+                        "Error closing service client %s", service_name, exc_info=True
                     )
 
             # Clear service cache
             self._services.clear()
 
             # Shutdown executor
-            self._executor.shutdown(wait=True)
+            if self._executor is not None:
+                self._executor.shutdown(wait=True)
+                self._executor = None
 
             # Reset connection health
             self._connection_health = False
@@ -266,6 +278,11 @@ class AzureClient(ClientInterface):
                     error=error,
                 )
             except Exception as e:
+                logger.debug(
+                    "Service health check failed for %s",
+                    service_name,
+                    exc_info=True,
+                )
                 health_status.services[service_name] = ServiceHealth(
                     status="error", error=str(e)
                 )
@@ -282,11 +299,11 @@ class AzureClient(ClientInterface):
         Test the Azure connection by attempting to get a token.
 
         Raises:
-            ClientAuthenticationError: If connection test fails.
+            AzureClientAuthError: If connection test fails.
         """
         if not self.credential:
-            raise ClientError(
-                f"{ClientError.AUTH_CREDENTIALS_ERROR}: No credential available for connection test"
+            raise AzureClientAuthError(
+                message="No credential available for connection test",
             )
 
         try:
@@ -295,17 +312,15 @@ class AzureClient(ClientInterface):
                 self.credential.get_token, AZURE_MANAGEMENT_API_ENDPOINT
             )
         except ClientAuthenticationError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
+            raise AzureClientAuthError(cause=e) from e
         except AzureError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
+            raise AzureClientAuthError(cause=e) from e
         except ValueError as e:
-            raise ClientError(
-                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {str(e)}"
-            ) from e
+            raise AzureInputValidationError(cause=e) from e
+        except AppError:
+            raise
         except Exception as e:
-            raise ClientError(
-                f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
-            ) from e
+            raise AzureClientAuthError(message="Unexpected error", cause=e) from e
 
     def __enter__(self):
         """Context manager entry."""
@@ -326,7 +341,9 @@ class AzureClient(ClientInterface):
             loop.create_task(self.close())
         except RuntimeError:
             # No event loop running, can't schedule async cleanup
-            logger.warning("No event loop running, async cleanup not possible")
+            logger.warning(
+                "No event loop running, async cleanup not possible", exc_info=True
+            )
 
     async def __aenter__(self):
         """Async context manager entry."""

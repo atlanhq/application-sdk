@@ -1,5 +1,229 @@
 # Changelog
 
+## v3.12.1 (May 19, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.12.0...v3.12.1
+
+### Bug Fixes
+
+- repair objectstore metric reader temporality (#1780) (by @fyzanshaik-atlan in [f76098c](https://github.com/atlanhq/application-sdk/commit/f76098c))
+- preserve correlation state on workflow replay (#1791) (by @louisnow in [5658e73](https://github.com/atlanhq/application-sdk/commit/5658e73))
+- publish skipped when unit-tests-gate is skipped (#1794) (by @anurag-atlan in [f4d06ed](https://github.com/atlanhq/application-sdk/commit/f4d06ed))
+- tighten SQL injection defenses in filter / marker paths (BLDX-518) (#1785) (by @Aryamanz29 in [882888e](https://github.com/atlanhq/application-sdk/commit/882888e))
+- trailing dot after URL in unit-tests-gate annotation breaks the link (#1795) (by @anurag-atlan in [174393f](https://github.com/atlanhq/application-sdk/commit/174393f))
+- demote storage upload/download success logs to DEBUG (#1796) (by @cmgrote in [5c3db7e](https://github.com/atlanhq/application-sdk/commit/5c3db7e))
+- thread raw/transformed files via FileReference (BLDX-1281) (#1792) (by @Aryamanz29 in [7731fcd](https://github.com/atlanhq/application-sdk/commit/7731fcd))
+
+
+## v3.12.0 (May 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.11.0...v3.12.0
+
+### Features
+
+- contracts - add standard `status` to Output base (BLDX-1244) (#1767) (by @Aryamanz29 in [187b257](https://github.com/atlanhq/application-sdk/commit/187b257))
+- add --raise-prs mode to open migration PRs against consumers (#1771) (by @cmgrote in [a85acf5](https://github.com/atlanhq/application-sdk/commit/a85acf5))
+- credentials - inject x-atlan-app-* headers on pyatlan clients (BLDX-1246) (#1768) (by @Aryamanz29 in [9360d8b](https://github.com/atlanhq/application-sdk/commit/9360d8b))
+- strongly type all errors according to error hierarchy (#1754) (by @cmgrote in [1a3ab11](https://github.com/atlanhq/application-sdk/commit/1a3ab11))
+- publish app/generated/ JSON files as app_configs to GM (#1747) (by @SanilK2108 in [9a46b54](https://github.com/atlanhq/application-sdk/commit/9a46b54))
+
+### Bug Fixes
+
+- resolve created_by from PR author, not triggering_actor (#1772) (by @anurag-atlan in [a44bc1e](https://github.com/atlanhq/application-sdk/commit/a44bc1e))
+- send semver image tag to GM and fix branch slug for release builds (#1776) (by @cmgrote in [bf83d36](https://github.com/atlanhq/application-sdk/commit/bf83d36))
+- rename release_model 'versioned' → 'semver' and include in GM publish payload (#1777) (by @cmgrote in [3ce2a62](https://github.com/atlanhq/application-sdk/commit/3ce2a62))
+- break observability→storage circular import and add logger.log() (#1779) (by @cmgrote in [280aec0](https://github.com/atlanhq/application-sdk/commit/280aec0))
+
+
+## v3.11.0 (May 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.10.0...v3.11.0
+
+### Features
+
+- include sdk_version in EventMetadata (#1760) (by @vaibhavatlan in [059873e](https://github.com/atlanhq/application-sdk/commit/059873e))
+- add local_dev_mode for zero-install local app development (#1759) (by @vaibhavatlan in [f77e0c7](https://github.com/atlanhq/application-sdk/commit/f77e0c7))
+
+### Bug Fixes
+
+- tighten release_tag bypass and add release_model opt-in for versioned releases (#1757) (by @cmgrote in [14aa2e5](https://github.com/atlanhq/application-sdk/commit/14aa2e5))
+- emit top-level hidden auth panes for JDBC-URL agent merge (HYP-1251) (#1761) (by @prateek11rai in [6e1a8e6](https://github.com/atlanhq/application-sdk/commit/6e1a8e6))
+- fix Windows example CI and Capability Manifest Drift on release PRs (#1766) (by @cmgrote in [763785a](https://github.com/atlanhq/application-sdk/commit/763785a))
+
+
+## v3.10.0 (May 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.9.0...v3.10.0
+
+### Features
+
+- migrate ParquetFileWriter uploads to FileReference for SHA-256 dedup and parallel uploads (#1691) (by @vaibhavatlan in [03fdd99](https://github.com/atlanhq/application-sdk/commit/03fdd99))
+- add audit-consumers skill with major-version filter (#1733) (by @cmgrote in [1f45199](https://github.com/atlanhq/application-sdk/commit/1f45199))
+- extend audit-consumers with tool.uv.sources version detection and triage (#1734) (by @cmgrote in [7750c39](https://github.com/atlanhq/application-sdk/commit/7750c39))
+- sync ADR-0013 and common.md with WorkerEvictedError and cause_repr reality (#1735) (by @cmgrote in [008955e](https://github.com/atlanhq/application-sdk/commit/008955e))
+- add typed-error prescription to signal-over-noise (#1736) (by @cmgrote in [8213113](https://github.com/atlanhq/application-sdk/commit/8213113))
+- add SDR cross-repo trigger for connector PRs [BLDX-1254] (#1710) (by @Aryamanz29 in [ef78e62](https://github.com/atlanhq/application-sdk/commit/ef78e62))
+- add ObjectStore metric exporter for OTel instruments (#1722) (by @Garavitey in [2039cff](https://github.com/atlanhq/application-sdk/commit/2039cff))
+- canonical reference for connector SDR + full-DAG E2E pipelines (#1753) (by @Aryamanz29 in [9745175](https://github.com/atlanhq/application-sdk/commit/9745175))
+- add set-last-sync-details primitive (BLDX-1229) (#1741) (by @vaibhavatlan in [e064c49](https://github.com/atlanhq/application-sdk/commit/e064c49))
+
+### Bug Fixes
+
+- stop downstream jobs cascade-skipping when validate-channel skips (#1728) (by @adityachoudhury-cloud in [b8bea1e](https://github.com/atlanhq/application-sdk/commit/b8bea1e))
+- evolve signal-over-noise typed-error prescription (#1738) (by @cmgrote in [2c74752](https://github.com/atlanhq/application-sdk/commit/2c74752))
+- add test assertion migration rules to typed-error prescription (#1739) (by @cmgrote in [581ff40](https://github.com/atlanhq/application-sdk/commit/581ff40))
+- align preflight response shape with SageV2 widget (BLDX-901 follow-up, DBBI-665) (#1744) (by @Rittick-SRoy in [5f7ea87](https://github.com/atlanhq/application-sdk/commit/5f7ea87))
+- guard prefix downloads against path-traversal keys (BLDX-1270) (#1748) (by @vaibhavatlan in [115b8ac](https://github.com/atlanhq/application-sdk/commit/115b8ac))
+- re-add components-dir + compose-overlay overrides for multi-pipeline connectors (#1752) (by @Aryamanz29 in [57c69bc](https://github.com/atlanhq/application-sdk/commit/57c69bc))
+
+
+## v3.9.0 (May 12, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.8.0...v3.9.0
+
+### Features
+
+- port signal-over-noise from awesome-ai (#1719) (by @Garavitey in [3756697](https://github.com/atlanhq/application-sdk/commit/3756697))
+
+### Bug Fixes
+
+- flush SegmentClient queue on SIGTERM (BLDX-1260) (#1723) (by @cmgrote in [1ff0297](https://github.com/atlanhq/application-sdk/commit/1ff0297))
+
+
+## v3.8.0 (May 11, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.7.0...v3.8.0
+
+### Features
+
+- add SqlApp consolidated SQL template [BLDX-968] (#1589) (by @Aryamanz29 in [dd61012](https://github.com/atlanhq/application-sdk/commit/dd61012))
+- flatten failure.category/audience/code onto ended logs (#1706) (by @anuj-atlan in [aecdede](https://github.com/atlanhq/application-sdk/commit/aecdede))
+
+### Bug Fixes
+
+- skip None values in OTEL attribute build instead of stringifying (#1697) (by @saig214 in [c3385a4](https://github.com/atlanhq/application-sdk/commit/c3385a4))
+- allowlist 5 HIGH CVEs blocking publish-app security gate (py3-pip-wheel, Twisted, rustls-webpki) (#1702) (by @TechyMT in [c96bfc0](https://github.com/atlanhq/application-sdk/commit/c96bfc0))
+- avoid handler metrics Temporal proxy traceback (#1705) (by @fyzanshaik-atlan in [deadd6e](https://github.com/atlanhq/application-sdk/commit/deadd6e))
+- replace os.path.exists guards in JsonFileWriter with buffer-size checks to prevent silent upload skip (#1655) (by @swataswayam-14 in [e9ea907](https://github.com/atlanhq/application-sdk/commit/e9ea907))
+- skip vpa.maxAllowed clamp rule when updateMode=Off (#1712) (by @anuj-atlan in [3c61a11](https://github.com/atlanhq/application-sdk/commit/3c61a11))
+
+
+## v3.7.0 (May 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.6.1...v3.7.0
+
+### Features
+
+- free retry on worker eviction without burning Temporal attempts (#1681) (by @anuj-atlan in [3504c55](https://github.com/atlanhq/application-sdk/commit/3504c55))
+
+### Bug Fixes
+
+- run_dev_combined() honors env-var fallbacks for connection-shaped kwargs (#1614) (by @AtMrun in [2e8bb6b](https://github.com/atlanhq/application-sdk/commit/2e8bb6b))
+
+
+## v3.6.1 (May 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.6.0...v3.6.1
+
+### Bug Fixes
+
+- restore secondary OTLP log exporter for S3 archival [ARUN-539] (#1684) (by @louisnow in [fa1a100](https://github.com/atlanhq/application-sdk/commit/fa1a100))
+
+
+## v3.6.0 (May 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.5.0...v3.6.0
+
+### Features
+
+- handler - expose form metadata in PreflightInput (#1643) (by @chaitanyaatlan in [ef538ac](https://github.com/atlanhq/application-sdk/commit/ef538ac))
+- fix documentation drift against v3 SDK (BLDX-1203) (#1632) (by @cmgrote in [49fc15f](https://github.com/atlanhq/application-sdk/commit/49fc15f))
+- FileReference reliability, concurrency, observability, and ergonomics [BLDX-1155] (#1636) (by @vaibhavatlan in [f16e58d](https://github.com/atlanhq/application-sdk/commit/f16e58d))
+- trend-table sort, SDK Vulns source-of-truth, header timestamp fix (#1657) (by @mananjain99 in [1fc0bc0](https://github.com/atlanhq/application-sdk/commit/1fc0bc0))
+- DISTR-370 add objectstore:// branch in resolve_credential_file for **Non-sensitive files** (#1638) (by @Lalit3716-atlan in [b85bafc](https://github.com/atlanhq/application-sdk/commit/b85bafc))
+- expose handler ops as SDR workflows (#1561) (by @Garavitey in [95193b4](https://github.com/atlanhq/application-sdk/commit/95193b4))
+- introduce typed Pydantic bases, deprecate dict[str, Any] inputs [BLDX-1224] (#1662) (by @vaibhavatlan in [2fcb486](https://github.com/atlanhq/application-sdk/commit/2fcb486))
+- consolidate to FastAPI instrumentor + 3 worker interceptors [ARUN-539] (#1573) (by @firecast in [2ccf34e](https://github.com/atlanhq/application-sdk/commit/2ccf34e))
+- add SDR e2e composite action + pytest base class (#1669) (by @Lalit3716-atlan in [8af18f3](https://github.com/atlanhq/application-sdk/commit/8af18f3))
+- typed AppError hierarchy with Audience routing, categorical leaves, and back-compat aliases [BLDX-1195] (#1656) (by @cmgrote in [a2cc8b7](https://github.com/atlanhq/application-sdk/commit/a2cc8b7))
+
+### Bug Fixes
+
+- sql - tolerant UTF-8 typecaster on psycopg cursors (#1642) (by @sachi-atlan in [bfa8e46](https://github.com/atlanhq/application-sdk/commit/bfa8e46))
+- guard capability-manifest grep pipeline against pipefail (#1654) (by @cmgrote in [a609957](https://github.com/atlanhq/application-sdk/commit/a609957))
+- decode OID 0 as tolerant UTF-8 for PgBouncer transaction pooling (#1652) (by @mothership-ai[bot] in [aa1079a](https://github.com/atlanhq/application-sdk/commit/aa1079a))
+- split logger sinks by severity (#1666) (by @Garavitey in [8e59567](https://github.com/atlanhq/application-sdk/commit/8e59567))
+
+
+## v3.5.0 (May 01, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.4.0...v3.5.0
+
+### Features
+
+- sql - make pool pre-ping configurable (#1591) (by @fyzanshaik-atlan in [fee1a05](https://github.com/atlanhq/application-sdk/commit/fee1a05))
+- tighten upgrade-v3 idioms from atlan-mssql-app#89 review (#1630) (by @AtMrun in [f0561a3](https://github.com/atlanhq/application-sdk/commit/f0561a3))
+- add capability-manifest skill and initial SDK capability manifest (#1637) (by @cmgrote in [85d1c73](https://github.com/atlanhq/application-sdk/commit/85d1c73))
+
+### Bug Fixes
+
+- stream CloudStore file transfers to eliminate OOM risk [BLDX-1198] (#1624) (by @cmgrote in [22dfb08](https://github.com/atlanhq/application-sdk/commit/22dfb08))
+- drain delay before worker shutdown to prevent phantom task slot deadlock (#1174) (by @tczhao in [189b9ac](https://github.com/atlanhq/application-sdk/commit/189b9ac))
+- address CVEs via temporalio bump and uv lock upgrade [BLDX-1212] (#1640) (by @vaibhavatlan in [6de53dc](https://github.com/atlanhq/application-sdk/commit/6de53dc))
+
+
+## v3.4.0 (April 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.3.0...v3.4.0
+
+### Features
+
+- bundle of UX and accuracy improvements (#1596) (by @mananjain99 in [a71fee9](https://github.com/atlanhq/application-sdk/commit/a71fee9))
+- add reusable three-stage release flow for app repos (#1597) (by @cmgrote in [6e21bf1](https://github.com/atlanhq/application-sdk/commit/6e21bf1))
+- fix stale base image tags in README and docs (#1623) (by @cmgrote in [a1d6fed](https://github.com/atlanhq/application-sdk/commit/a1d6fed))
+
+### Bug Fixes
+
+- (sql-filters) anchor exclude/include regex to prevent substring matches (#1594) (by @sachi-atlan in [a45d458](https://github.com/atlanhq/application-sdk/commit/a45d458))
+- HYP-851 handle unset OTel metric metadata (#1586) (by @fyzanshaik-atlan in [c7d9036](https://github.com/atlanhq/application-sdk/commit/c7d9036))
+- strip whitespace from secret_path on load and use (#1592) (by @avinash-atlan in [5fadf7f](https://github.com/atlanhq/application-sdk/commit/5fadf7f))
+- HEAD-check before single-file download in materialize_file_reference (#1612) (by @vaibhavatlan in [f1cc78c](https://github.com/atlanhq/application-sdk/commit/f1cc78c))
+- replace ContextVar substrate with module-level singleton (#1615) (by @cmgrote in [e825a8f](https://github.com/atlanhq/application-sdk/commit/e825a8f))
+- avoid bash errexit on empty RELEASE_TAGS in compute-image-tags (#1616) (by @chaitanyaatlan in [9dc9350](https://github.com/atlanhq/application-sdk/commit/9dc9350))
+- redact secrets and PII from logs, metrics, and trace attributes (#1601) (by @vaibhavatlan in [4279250](https://github.com/atlanhq/application-sdk/commit/4279250))
+- preserve internal ClientError; consistent sync/async error contract (#1602) (by @vaibhavatlan in [70766e8](https://github.com/atlanhq/application-sdk/commit/70766e8))
+- workflow status reporting correctness in /get_result, /stop, /get_workflow_status (#1603) (by @vaibhavatlan in [9ae824e](https://github.com/atlanhq/application-sdk/commit/9ae824e))
+- move mutable class-level defaults to instance state in BaseSQLClient and Reader (#1606) (by @vaibhavatlan in [c11b34c](https://github.com/atlanhq/application-sdk/commit/c11b34c))
+- tighten broad except clauses to surface real failures (#1607) (by @vaibhavatlan in [096ef74](https://github.com/atlanhq/application-sdk/commit/096ef74))
+- lifecycle and correctness fixes across handler, main, app, transformers, and traces_adaptor (#1608) (by @vaibhavatlan in [4159a19](https://github.com/atlanhq/application-sdk/commit/4159a19))
+- narrow get_backfill_tables bare-except to ValueError [BLDX-1190] (#1609) (by @vaibhavatlan in [a8e95b7](https://github.com/atlanhq/application-sdk/commit/a8e95b7))
+- use release_tag as GM Marketplace version when available (#1618) (by @Aryamanz29 in [633134b](https://github.com/atlanhq/application-sdk/commit/633134b))
+- skip zero-byte GCS directory markers in list_keys (#1622) (by @chaitanyaatlan in [cc32958](https://github.com/atlanhq/application-sdk/commit/cc32958))
+
+
+## v3.3.0 (April 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.2.0...v3.3.0
+
+### Features
+
+- add CredentialRef.resolve() — strongly typed credential routing for agent + direct modes (#1550) (by @vaibhavatlan in [9041557](https://github.com/atlanhq/application-sdk/commit/9041557))
+- redirect activity_utils internals to input.workflow_id [BLDX-1149] (#1570) (by @vaibhavatlan in [67bfe46](https://github.com/atlanhq/application-sdk/commit/67bfe46))
+
+### Bug Fixes
+
+- export CREATED_BY so Python subprocess can read it (#1553) (by @adityachoudhury-cloud in [76b2dd6](https://github.com/atlanhq/application-sdk/commit/76b2dd6))
+- type SQL filter fields as dict | str union [BLDX-1125] (#1532) (by @Aryamanz29 in [d6ed882](https://github.com/atlanhq/application-sdk/commit/d6ed882))
+- allowlist CVE-2026-4786 and CVE-2026-6100 (python-3.11-base) (#1555) (by @hritika-atlan in [b2ba4ae](https://github.com/atlanhq/application-sdk/commit/b2ba4ae))
+- consolidate env var config through AppConfig [BLDX-1123] (#1544) (by @Aryamanz29 in [9c2710d](https://github.com/atlanhq/application-sdk/commit/9c2710d))
+- add httpx pool limits and timeout to prevent connection pool deadlock [BLDX-1153] (#1575) (by @Aryamanz29 in [8ca9c45](https://github.com/atlanhq/application-sdk/commit/8ca9c45))
+- skip allowlist approval check on PR open (#1583) (by @vaibhavatlan in [ecc731f](https://github.com/atlanhq/application-sdk/commit/ecc731f))
+- propagate ContextVars through run_in_thread [BLDX-1150] (#1567) (by @vaibhavatlan in [6ed15cc](https://github.com/atlanhq/application-sdk/commit/6ed15cc))
+- remove parquet size double-discount (#1566) (by @fyzanshaik-atlan in [dd5f342](https://github.com/atlanhq/application-sdk/commit/dd5f342))
+- logging quality audit — exc_info, %-style, noise reduction (#1572) (by @cmgrote in [c0a2b8f](https://github.com/atlanhq/application-sdk/commit/c0a2b8f))
+- move inline imports to top-level + enforce via PLC0415 (#1577) (by @vaibhavatlan in [baa506f](https://github.com/atlanhq/application-sdk/commit/baa506f))
+
+
 ## v3.2.0 (April 23, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.1.0...v3.2.0

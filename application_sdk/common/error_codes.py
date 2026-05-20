@@ -49,9 +49,18 @@ class ErrorCode:
 
 
 class AtlanError(Exception):
-    """Base exception for all Atlan errors."""
+    """Deprecated: use ``application_sdk.errors.AppError`` — removed in v4.0."""
 
-    pass
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        import warnings  # noqa: PLC0415 — deferred to avoid import cycle with errors package
+
+        warnings.warn(
+            f"{type(self).__name__} (AtlanError subclass) is deprecated; "
+            "use application_sdk.errors.AppError — will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(message)
 
 
 class ClientError(AtlanError):

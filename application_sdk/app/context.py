@@ -6,7 +6,17 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
+from loguru import logger as _loguru_logger
+from temporalio import workflow as _workflow
+
+from application_sdk.app.base_errors import (
+    SecretStoreNotConfiguredError,
+    StateStoreNotConfiguredError,
+)
 from application_sdk.contracts.base import HeartbeatDetails
+from application_sdk.credentials.resolver import CredentialResolver
+from application_sdk.observability.context import get_execution_context
+from application_sdk.observability.correlation import get_correlation_context
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -32,8 +42,6 @@ def _is_in_workflow() -> bool:
     Returns True only inside workflow code, False in activities or elsewhere.
     Reads from the ExecutionContext ContextVar — no Temporal import needed.
     """
-    from application_sdk.observability.context import get_execution_context
-
     return get_execution_context().execution_type == "workflow"
 
 
@@ -74,10 +82,6 @@ class _WorkflowSafeLogger:
     def _get_structlog_logger(self) -> Any:
         """Get or create the fallback logger (for activity/non-workflow use)."""
         if self._structlog_logger is None:
-            from temporalio import workflow as _workflow
-
-            with _workflow.unsafe.imports_passed_through():
-                from loguru import logger as _loguru_logger
             self._structlog_logger = _loguru_logger.bind(**self._context)
         return self._structlog_logger
 
@@ -102,8 +106,6 @@ class _WorkflowSafeLogger:
                 pass  # {} style or mismatch — loguru will handle it
 
         if _is_in_workflow():
-            from temporalio import workflow as _workflow
-
             wf_logger = _workflow.logger
             log_method = getattr(wf_logger, level)
 
@@ -130,15 +132,14 @@ class _WorkflowSafeLogger:
             # CorrelationContextInterceptor ran) or empty.
             if "correlation_id" not in kwargs:
                 try:
-                    from application_sdk.observability.correlation import (
-                        get_correlation_context,
-                    )
-
                     v3_ctx = get_correlation_context()
                     if v3_ctx and v3_ctx.correlation_id:
                         kwargs = {**kwargs, "correlation_id": v3_ctx.correlation_id}
                 except Exception:
-                    pass
+                    self._get_structlog_logger().debug(
+                        "Failed to resolve v3 correlation context for log enrichment",
+                        exc_info=True,
+                    )
             logger = self._get_structlog_logger()
             log_method = getattr(logger, level)
             log_method(message, *args, **kwargs)
@@ -263,10 +264,10 @@ class AppContext:
             value: State data to save.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         if self._state_store is None:
-            raise RuntimeError("No state store configured")
+            raise StateStoreNotConfiguredError()
         namespaced_key = f"{self.app_name}:{self.run_id}:{key}"
         await self._state_store.save(namespaced_key, value)
 
@@ -280,10 +281,10 @@ class AppContext:
             The saved state or None if not found.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         if self._state_store is None:
-            raise RuntimeError("No state store configured")
+            raise StateStoreNotConfiguredError()
         namespaced_key = f"{self.app_name}:{self.run_id}:{key}"
         return await self._state_store.load(namespaced_key)
 
@@ -297,10 +298,10 @@ class AppContext:
             The secret value.
 
         Raises:
-            RuntimeError: If no secret store is configured.
+            SecretStoreNotConfiguredError: If no secret store is configured.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
+            raise SecretStoreNotConfiguredError()
         return await self._secret_store.get(name)
 
     async def get_secret_optional(self, name: str) -> str | None:
@@ -351,14 +352,12 @@ class AppContext:
             A typed Credential instance.
 
         Raises:
-            RuntimeError: If no secret store is configured.
+            SecretStoreNotConfiguredError: If no secret store is configured.
             CredentialNotFoundError: If the credential cannot be found.
             CredentialParseError: If parsing fails.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
-        from application_sdk.credentials.resolver import CredentialResolver
-
+            raise SecretStoreNotConfiguredError()
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve(ref)
 
@@ -372,12 +371,10 @@ class AppContext:
             The raw credential data as a dict.
 
         Raises:
-            RuntimeError: If no secret store is configured.
+            SecretStoreNotConfiguredError: If no secret store is configured.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
-        from application_sdk.credentials.resolver import CredentialResolver
-
+            raise SecretStoreNotConfiguredError()
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve_raw(ref)
 
@@ -529,35 +526,54 @@ class TaskExecutionContext:
     async def run_in_thread(
         self, func: Callable[..., T], *args: Any, **kwargs: Any
     ) -> T:
-        """Run a blocking function in a thread pool.
+        """Last-resort escape hatch: run a blocking function in a thread pool.
 
-        Use this for blocking I/O or CPU-bound operations to keep the
-        event loop responsive for auto-heartbeating.
+        .. warning::
+            **Use only when no async-native alternative exists.** Per ADR-0010,
+            the SDK is async-first. Reach for an async library before reaching
+            for this:
 
-        CRITICAL: Auto-heartbeats only work when the event loop yields.
-        Without this wrapper, blocking operations will prevent heartbeats
-        from being sent, potentially causing Temporal to restart your activity.
+            - HTTP → ``httpx`` / ``aiohttp`` (not ``requests``)
+            - AWS  → ``aioboto3`` / ``aiobotocore`` (not ``boto3``)
+            - Postgres → ``asyncpg`` (not ``psycopg2``)
+            - File I/O → ``aiofiles`` (not blocking ``open()``)
+
+            Many SDK helpers are also already async — ``self.context.storage``,
+            ``self.context.state``, credential resolution. Don't wrap them.
+
+        Only use this wrapper after confirming no async-native alternative
+        exists for the library you're calling. The wrapper exists to keep
+        the event loop responsive for auto-heartbeating; it is not a
+        substitute for using async libraries.
+
+        ContextVars (ObjectStore, logger context, correlation ID, infrastructure
+        handles) are propagated to the worker thread automatically.
+
+        **CRITICAL: your blocking code MUST have its own timeout.** Python
+        threads cannot be forcibly killed; a hang here hangs the thread
+        forever.
 
         Args:
-            func: Blocking function to run.
-            *args: Positional arguments for func.
-            **kwargs: Keyword arguments for func.
+            func: Blocking function to run. MUST have internal timeout handling.
+            *args: Positional arguments for ``func``.
+            **kwargs: Keyword arguments for ``func``.
 
         Returns:
             Result of ``func(*args, **kwargs)``.
 
         Example::
 
-            # Instead of: response = requests.get(url)  # BLOCKS!
-            response = await self.task_context.run_in_thread(
-                requests.get, url, timeout=30
-            )
+            # WRONG — boto3 has aioboto3; use that instead.
+            # await self.task_context.run_in_thread(s3.put_object, ...)
 
-            # For pandas operations:
-            df = await self.task_context.run_in_thread(
-                pd.read_csv, path, sep=",", header=0
-            )
+            # WRONG — requests has httpx; use that instead.
+            # await self.task_context.run_in_thread(requests.get, url, timeout=30)
+
+        See Also:
+            ``docs/adr/0010-async-first-blocking-code.md`` for full rationale.
         """
-        from application_sdk.execution.heartbeat import run_in_thread
+        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            run_in_thread,
+        )
 
         return await run_in_thread(func, *args, **kwargs)

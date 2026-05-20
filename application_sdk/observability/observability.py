@@ -5,9 +5,8 @@ import os
 import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Generic, List, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 import orjson
 
@@ -25,9 +24,6 @@ from application_sdk.constants import (
     TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
-from application_sdk.observability.utils import get_observability_dir
-from application_sdk.storage import delete, upload_file
-from application_sdk.storage.binding import create_store_from_binding
 
 # --- Path configuration ---
 # Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
@@ -78,17 +74,35 @@ class AtlanObservability(Generic[T], ABC):
     _upstream_store: ClassVar["ObjectStore | None"] = None
 
     @classmethod
+    def _components_dir(cls) -> str:
+        # Honour ``DAPR_COMPONENTS_PATH`` so the embedded-Dapr local-dev path
+        # finds the auto-generated component YAMLs in the temp dir.
+        return os.environ.get("DAPR_COMPONENTS_PATH", "./components")
+
+    @classmethod
     def _get_deployment_store(cls):
         if cls._deployment_store is None:
+            from application_sdk.storage.binding import (  # noqa: PLC0415
+                create_store_from_binding,
+            )
+
             cls._deployment_store = create_store_from_binding(
-                DEPLOYMENT_OBJECT_STORE_NAME
+                DEPLOYMENT_OBJECT_STORE_NAME,
+                components_dir=cls._components_dir(),
             )
         return cls._deployment_store
 
     @classmethod
     def _get_upstream_store(cls):
         if cls._upstream_store is None:
-            cls._upstream_store = create_store_from_binding(UPSTREAM_OBJECT_STORE_NAME)
+            from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+                create_store_from_binding,
+            )
+
+            cls._upstream_store = create_store_from_binding(
+                UPSTREAM_OBJECT_STORE_NAME,
+                components_dir=cls._components_dir(),
+            )
         return cls._upstream_store
 
     def __init__(
@@ -190,7 +204,7 @@ class AtlanObservability(Generic[T], ABC):
         self.parquet_path = os.path.join(partition_path, "data.parquet")
 
     @abstractmethod
-    def process_record(self, record: T) -> Dict[str, Any]:
+    def process_record(self, record: T) -> dict[str, Any]:
         """Process a record into a dictionary format.
 
         Args:
@@ -201,7 +215,6 @@ class AtlanObservability(Generic[T], ABC):
 
         This is an abstract method that must be implemented by subclasses.
         """
-        pass
 
     @abstractmethod
     def export_record(self, record: T) -> None:
@@ -212,7 +225,6 @@ class AtlanObservability(Generic[T], ABC):
 
         This is an abstract method that must be implemented by subclasses.
         """
-        pass
 
     async def _periodic_flush(self):
         """Periodically flush the buffer to storage.
@@ -255,7 +267,7 @@ class AtlanObservability(Generic[T], ABC):
         if buffer_copy:
             await self._flush_records(buffer_copy)
 
-    async def _flush_records(self, records: List[Dict[str, Any]]):
+    async def _flush_records(self, records: list[dict[str, Any]]):
         """Flush records to json.gz files and upload to object stores.
 
         Args:
@@ -272,18 +284,22 @@ class AtlanObservability(Generic[T], ABC):
         """
         if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
             return
+        from application_sdk.storage import upload_file  # noqa: PLC0415
+
         # File I/O is restricted inside Temporal's workflow sandbox — skip the
         # store sink there; records are still exported via OTLP/console.
         try:
-            from temporalio.workflow import unsafe as _wf_unsafe
+            from temporalio.workflow import (  # noqa: PLC0415 — defensive: try/except detects temporal sandbox / non-temporal context
+                unsafe as _wf_unsafe,
+            )
 
             if _wf_unsafe.in_sandbox():
                 return
         except ImportError:
-            pass
+            pass  # optional: workflow sandbox check unavailable outside Temporal worker
         try:
             # Group records by partition using record's own timestamp
-            partition_records: Dict[str, List[Dict[str, Any]]] = {}
+            partition_records: dict[str, list[dict[str, Any]]] = {}
             for record in records:
                 record_time = datetime.fromtimestamp(record["timestamp"])
                 partition_path = self._get_partition_path(record_time)
@@ -381,7 +397,9 @@ class AtlanObservability(Generic[T], ABC):
         - Updates last cleanup time after successful cleanup
         """
         try:
-            from application_sdk.infrastructure.context import get_infrastructure
+            from application_sdk.infrastructure.context import (  # noqa: PLC0415 — circular: infrastructure imports observability
+                get_infrastructure,
+            )
 
             infra = get_infrastructure()
             state_store = infra.state_store if infra else None
@@ -416,6 +434,8 @@ class AtlanObservability(Generic[T], ABC):
         - Syncs changes with object store
         """
         try:
+            from application_sdk.storage import delete  # noqa: PLC0415
+
             # Use local subdir (same as _get_partition_path)
             signal_type = self._get_signal_type()
             local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal_type, f"{_OBS_MODE}/other")
@@ -434,7 +454,7 @@ class AtlanObservability(Generic[T], ABC):
                 year = int(year_dir.split("=")[1])
                 if year < cutoff_date.year:
                     # Delete entire year directory
-                    import shutil
+                    import shutil  # noqa: PLC0415 — stdlib shutil; lazy use only when computing disk usage
 
                     shutil.rmtree(year_path)
                     continue
@@ -519,61 +539,3 @@ class AtlanObservability(Generic[T], ABC):
 
         except Exception:
             logging.error("Error adding record", exc_info=True)
-
-
-class DuckDBUI:
-    """Class to handle DuckDB UI functionality."""
-
-    def __init__(self):
-        """Initialize the DuckDB UI handler."""
-        self.observability_dir = get_observability_dir()
-        self.db_path = self.observability_dir + "/observability.db"
-        self._duckdb_ui_con = None
-
-    def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
-        """Check if DuckDB UI is already running on the default port."""
-        import socket
-
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.5)
-            result = sock.connect_ex((host, port))
-            return result == 0
-
-    def start_ui(self):
-        """Start DuckDB UI and create views for Hive partitioned json.gz files."""
-        if not self._is_duckdb_ui_running():
-            import duckdb
-
-            os.makedirs(self.observability_dir, exist_ok=True)
-            con = duckdb.connect(self.db_path)
-
-            def process_partitioned_files(directory, view_name):
-                """Process Hive partitioned json.gz files and create views."""
-                if not os.path.exists(directory):
-                    return
-
-                # Check if there are any json.gz files in the directory
-                if not any(Path(directory).rglob("*.json.gz")):
-                    return
-
-                # Create a view that reads all json.gz files in the directory
-                # using DuckDB's native Hive partitioning support
-                view_query = f"""
-                CREATE OR REPLACE VIEW {view_name} AS
-                SELECT *
-                FROM read_json_auto('{directory}/**/*.json.gz',
-                                   hive_partitioning = true,
-                                   hive_types = {{'year': INTEGER, 'month': INTEGER, 'day': INTEGER, 'hour': INTEGER}})
-                """
-                con.execute(view_query)
-
-            # Process each signal type under the mode directory (sdr/ or non-sdr/)
-            mode_dir = os.path.join(self.observability_dir, _OBS_MODE)
-            for signal_type in ["logs", "metrics", "traces"]:
-                data_dir = os.path.join(mode_dir, signal_type)
-                if os.path.exists(data_dir):
-                    process_partitioned_files(data_dir, signal_type)
-
-            # Start DuckDB UI
-            con.execute("CALL start_ui();")
-            self._duckdb_ui_con = con

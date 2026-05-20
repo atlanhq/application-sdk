@@ -1,0 +1,21 @@
+# Hand-curated one-line purposes for each application_sdk subpackage.
+# Key = short subpackage name (without application_sdk. prefix).
+# Survives regenerations — edit here and re-run the skill to update the index table.
+
+app: Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool
+clients: Connection clients (SQL, Redis, Azure) and ClientInterface ABC
+common: Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType
+errors: Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.)
+contracts: Typed Pydantic Input/Output base classes, payload safety, storage and type helpers
+credentials: Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
+execution: Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client
+handler: HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory
+infrastructure: Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool)
+observability: Logging context — ExecutionContext, CorrelationContext, request/correlation helpers
+outputs: Output collectors and record models for Automation Engine
+main: Dev entry point — run_dev_combined() and AppConfig for local execution and container startup
+server: FastAPI server, MCP integration, middleware, health endpoint
+storage: Object-store abstraction — factory, formats, batch, transfer, cloud bindings
+templates: SQL metadata extractor templates and their contracts
+testing: Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers
+transformers: "Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md). No __all__; deep-import only."

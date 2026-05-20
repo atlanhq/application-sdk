@@ -57,8 +57,9 @@ Evolution:
 """
 
 import hashlib
-import logging
+import posixpath
 import re
+import warnings
 from enum import StrEnum
 from typing import (
     Annotated,
@@ -76,10 +77,12 @@ import orjson
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
-from application_sdk.contracts.types import MaxItems  # noqa: TC001
+from application_sdk.contracts.types import MaxItems
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
+from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
+from application_sdk.observability.logger_adaptor import get_logger
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 # =============================================================================
 # Serializable Enum Base Class
@@ -129,6 +132,42 @@ T = TypeVar("T")
 
 
 # =============================================================================
+# Output status enum
+# =============================================================================
+
+
+class OutputStatus(SerializableEnum):
+    """Standard run-result status used on :class:`Output`.
+
+    Set on every Output by default to :data:`OutputStatus.SUCCESS` so the
+    field is non-breaking for existing connectors — subclasses can leave
+    it alone if their run is unambiguously a pass, or set it to
+    ``PARTIAL_SUCCESS`` / ``FAILURE`` when they want to surface a
+    coarser-grained outcome alongside whatever domain-specific result
+    fields they already return.
+
+    Why an enum (vs. a free string): downstream consumers
+    (notifications, retries, billing, post-run wiring) all need a
+    closed vocabulary to switch on. A free string would let connectors
+    invent ad-hoc states (``"ok"``, ``"warn"``, ``"degraded"``) that
+    nothing else can interpret reliably. Additive evolution stays
+    available — new statuses get added to this enum, the default
+    stays ``SUCCESS``, so existing returners stay correct.
+
+    Members:
+        SUCCESS:          The run completed successfully.
+        PARTIAL_SUCCESS:  The run completed with some non-fatal issues
+                          (e.g. some entities were skipped due to
+                          permissions, but the rest succeeded).
+        FAILURE:          The run failed.
+    """
+
+    SUCCESS = "success"
+    PARTIAL_SUCCESS = "partial_success"
+    FAILURE = "failure"
+
+
+# =============================================================================
 # Base Contract Classes
 # =============================================================================
 
@@ -158,7 +197,24 @@ class Input(BaseModel):
     model_config = ConfigDict()
 
     workflow_id: str = ""
-    """Temporal workflow ID for the current run. Populated by the framework at dispatch time."""
+    """Temporal workflow ID for the current run.
+
+    Populated by the framework at dispatch time
+    (``application_sdk.handler.service`` sets this before the workflow
+    starts).  This is the **canonical way** for apps to access the
+    workflow ID inside a task — read it from the input parameter rather
+    than importing helpers from ``application_sdk.execution._temporal``::
+
+        @task(timeout_seconds=300)
+        async def extract(self, input: ExtractInput) -> ExtractOutput:
+            wf_id = input.workflow_id   # ← do this
+            # not: from application_sdk.execution._temporal.activity_utils
+            #      import get_workflow_id
+
+    See the ``atlan-openapi-app`` reference connector for the canonical
+    pattern, including how to compose run-scoped object-store paths from
+    ``input.workflow_id``.
+    """
 
     correlation_id: str = ""
     """Caller-supplied correlation ID for tracing across systems."""
@@ -370,7 +426,8 @@ class Output(BaseModel):
         class ExtractOutput(Output):
             records_extracted: int
             checkpoint_path: str
-            status: str = "completed"
+            # ``status`` is inherited from Output and defaults to SUCCESS;
+            # set it explicitly only to signal partial-success / failure.
 
     Structured outputs:
         The SDK's OutputInterceptor automatically populates ``metrics`` and
@@ -380,6 +437,13 @@ class Output(BaseModel):
     """
 
     model_config = ConfigDict()
+
+    status: OutputStatus = OutputStatus.SUCCESS
+    """Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+    ``SUCCESS`` so the field is additive-only for connectors that don't
+    override it. Set to ``PARTIAL_SUCCESS`` when some entities were
+    skipped or degraded but the run produced usable output; set to
+    ``FAILURE`` when the run did not produce usable output."""
 
     metrics: dict[str, Any] | None = None
     """Metrics collected by the OutputInterceptor (e.g. assets-extracted).
@@ -472,10 +536,11 @@ class Record(BaseModel):
 # =============================================================================
 
 
-class ContractValidationError(Exception):
-    """Raised when a contract validation fails."""
+class ContractValidationError(_InvalidInputError):
+    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CONTRACT_VALIDATION
+    code: ClassVar[str] = "CONTRACT_VALIDATION"
 
     def __init__(
         self,
@@ -487,8 +552,13 @@ class ContractValidationError(Exception):
         actual_type: str | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
+        warnings.warn(
+            "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        _InvalidInputError.__init__(self, message=message)
         self.contract_type = contract_type
         self.field_name = field_name
         self.expected_type = expected_type
@@ -497,7 +567,6 @@ class ContractValidationError(Exception):
 
     @property
     def error_code(self) -> ErrorCode:
-        """Structured error code for monitoring and alerting."""
         return (
             self._error_code
             if self._error_code is not None
@@ -538,6 +607,7 @@ class PayloadSafetyError(ContractValidationError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PAYLOAD_SAFETY
+    code: ClassVar[str] = "PAYLOAD_SAFETY"
 
     def __init__(
         self, cls_name: str, field_name: str, field_type: type, reason: str
@@ -551,9 +621,16 @@ class PayloadSafetyError(ContractValidationError):
             f"  - Use Annotated[dict[K,V], MaxItems(N)] for bounded dicts\n"
             f"  - Use allow_unbounded_fields=True class keyword to opt out (use with caution)"
         )
-        super().__init__(message, contract_type=cls_name, field_name=field_name)
+        # Skip ContractValidationError's __init__ to avoid double DeprecationWarning;
+        # call the new leaf directly.
+        _InvalidInputError.__init__(self, message=message)
+        self.contract_type = cls_name
+        self.field_name = field_name
+        self.expected_type: str | None = None
+        self.actual_type: str | None = None
         self.field_type = field_type
         self.reason = reason
+        self._error_code = PAYLOAD_SAFETY
 
 
 # =============================================================================
@@ -771,14 +848,14 @@ class PublishInputMixin(BaseModel):
     @model_validator(mode="after")
     def _derive_publish_paths(self) -> "PublishInputMixin":
         """Auto-derive all publish-related paths."""
-        import posixpath
-
         # Auto-resolve output_path from Temporal context if not set
         if not self.output_path:
             try:
-                from temporalio import workflow as _wf
+                from temporalio import (  # noqa: PLC0415 — defensive: try/except wraps "not in Temporal context"
+                    workflow as _wf,
+                )
 
-                from application_sdk.constants import (
+                from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
                     APPLICATION_NAME,
                     WORKFLOW_OUTPUT_PATH_TEMPLATE,
                 )
@@ -788,7 +865,7 @@ class PublishInputMixin(BaseModel):
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )
-            except Exception:
+            except Exception:  # noqa: S110
                 pass  # Not in Temporal context — output_path stays empty
 
         # Derive transformed_data_prefix from output_path
@@ -827,8 +904,6 @@ class InputContract(Protocol):
     they can be validated and serialized.
     """
 
-    pass
-
 
 @runtime_checkable
 class OutputContract(Protocol):
@@ -837,8 +912,6 @@ class OutputContract(Protocol):
     All App outputs should be BaseModel subclasses. This protocol ensures
     they can be validated and serialized.
     """
-
-    pass
 
 
 def validate_is_contract(cls: type, context: str = "contract") -> None:

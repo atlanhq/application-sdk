@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Type
+from typing import TYPE_CHECKING, Any
+
+from application_sdk.transformers.errors import TransformerNotImplementedError
 
 if TYPE_CHECKING:
     import daft
@@ -23,7 +25,7 @@ class TransformerInterface(ABC):
         dataframe: "daft.DataFrame",
         workflow_id: str,
         workflow_run_id: str,
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
+        entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: Any,
     ) -> "daft.DataFrame":
         """Transform metadata from one format to another.
@@ -49,4 +51,5 @@ class TransformerInterface(ABC):
         Raises:
             NotImplementedError: If the subclass does not implement this method.
         """
-        raise NotImplementedError
+
+        raise TransformerNotImplementedError()

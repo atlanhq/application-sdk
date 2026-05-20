@@ -71,11 +71,13 @@ class DaprCredentialVault:
         secret_store_name: str | None = None,
     ) -> None:
         # Deferred import: circular dependency with constants module
-        from application_sdk.constants import (
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
             SECRET_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
         )
-        from application_sdk.infrastructure._dapr.client import DaprBinding
+        from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            DaprBinding,
+        )
 
         self._client = client
         self._upstream = DaprBinding(
@@ -96,7 +98,9 @@ class DaprCredentialVault:
             CredentialVaultError: If any step fails.
         """
         # Deferred import: circular dependency
-        from application_sdk.infrastructure.credential_vault import CredentialVaultError
+        from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            CredentialVaultError,
+        )
 
         try:
             credential_config = await self._fetch_credential_config(credential_guid)
@@ -107,6 +111,11 @@ class DaprCredentialVault:
             try:
                 credential_source = _CredentialSource(credential_source_str)
             except ValueError:
+                logger.warning(
+                    "Unknown credentialSource=%r; defaulting to DIRECT",
+                    credential_source_str,
+                    exc_info=True,
+                )
                 credential_source = _CredentialSource.DIRECT
 
             secret_path = credential_config.get("secret-path")
@@ -158,16 +167,20 @@ class DaprCredentialVault:
             CredentialVaultError: If the GUID contains unsafe characters or no
                 config is found in the upstream store.
         """
-        import os
+        import os  # noqa: PLC0415 — cold path: only on local dev path
 
         # Deferred imports: circular dependency with constants and storage modules
-        from application_sdk.constants import (
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
             APPLICATION_NAME,
             STATE_STORE_PATH_TEMPLATE,
             TEMPORARY_PATH,
         )
-        from application_sdk.infrastructure.credential_vault import CredentialVaultError
-        from application_sdk.storage.ops import normalize_key
+        from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            CredentialVaultError,
+        )
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related modules
+            normalize_key,
+        )
 
         # Validate before interpolation to prevent path traversal.
         if not _SAFE_GUID_RE.match(credential_guid):
@@ -213,9 +226,10 @@ class DaprCredentialVault:
         Returns ``{}`` in local-environment deployments to avoid secret store
         dependency during development.
         """
-        # Deferred import: circular dependency
-        from application_sdk.common.exc_utils import rewrap
-        from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
+            DEPLOYMENT_NAME,
+            LOCAL_ENVIRONMENT,
+        )
 
         if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
             return self._get_local_secret(secret_key)
@@ -225,7 +239,11 @@ class DaprCredentialVault:
             result = await self._client.get_secret(store_name=store, key=secret_key)
             return process_secret_data(result)
         except Exception as e:
-            raise rewrap(e, "Failed to fetch secret (component=%s)" % store) from e
+            from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415
+                SecretFetchError,
+            )
+
+            raise SecretFetchError(component=store, cause=e) from e
 
     def _get_local_secret(self, secret_key: str) -> dict[str, Any]:
         """Read secret from the local secrets file for development.
@@ -233,7 +251,7 @@ class DaprCredentialVault:
         All secrets are stored in a single ``./local/dapr/secrets/secrets.json``
         file keyed by guid. No user input in filenames.
         """
-        from pathlib import Path  # deferred import: only needed in local dev path
+        from pathlib import Path  # noqa: PLC0415 — cold path: only on local dev path
 
         secrets_file = Path(".", "local", "dapr", "secrets", "secrets.json")
         if not secrets_file.exists():
@@ -272,6 +290,12 @@ class DaprCredentialVault:
                             continue
                         collected[k] = v
             except Exception as e:
+                logger.debug(
+                    "Secret resolution failed for '%s' (value=%s)",
+                    label,
+                    value,
+                    exc_info=True,
+                )
                 failed_lookups.append("  '%s' → '%s': %s" % (label, value, e))
 
         for field, value in credential_config.items():

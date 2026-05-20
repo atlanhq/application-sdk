@@ -9,10 +9,13 @@ useful for apps that don't need custom handler logic.
 
 from __future__ import annotations
 
+import warnings
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from application_sdk.errors import HANDLER_ERROR, ErrorCode
+from application_sdk.errors.base import AppError
+from application_sdk.handler.context import get_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
@@ -29,20 +32,15 @@ if TYPE_CHECKING:
     from application_sdk.handler.context import HandlerContext
 
 
-class HandlerError(Exception):
-    """Structured error raised by handler implementations.
+class HandlerError(AppError):
+    """Deprecated: use a typed ``AppError`` subclass — removed in v4.0.
 
-    Carries structured context (error_code, http_status, handler_name, app_name)
-    for better observability and consistent HTTP error responses.
-
-    Args:
-        message: Human-readable error description.
-        error_code: Structured ErrorCode (defaults to HANDLER_ERROR / AAF-HDL-001).
-        http_status: HTTP status code for the response (defaults to 500).
-        handler_name: Name of the handler that raised the error.
-        app_name: Application name for log context.
-        cause: Original exception, if any.
+    Category varies by raise site; defaults to INTERNAL until callers are
+    migrated to typed errors (Phase 5 triage).
     """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = HANDLER_ERROR
+    code: ClassVar[str] = "HANDLER"
 
     def __init__(
         self,
@@ -54,15 +52,27 @@ class HandlerError(Exception):
         app_name: str = "",
         cause: Exception | None = None,
     ) -> None:
-        super().__init__(message)
-        self.error_code = error_code or HANDLER_ERROR
+        warnings.warn(
+            "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        AppError.__init__(self, message=message, cause=cause, app_name=app_name or None)
+        self._legacy_error_code = error_code
         self.http_status = http_status
         self.handler_name = handler_name
-        self.app_name = app_name
-        self.cause = cause
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return (
+            self._legacy_error_code
+            if self._legacy_error_code is not None
+            else self.DEFAULT_ERROR_CODE
+        )
 
     def __str__(self) -> str:
-        parts = [f"[{self.error_code}] {super().__str__()}"]
+        parts = [f"[{self.error_code.code}] {self.message}"]
         if self.handler_name:
             parts.append(f"handler={self.handler_name}")
         if self.app_name:
@@ -97,8 +107,6 @@ class Handler(ABC):
                 return SqlMetadataOutput(objects=[])
     """
 
-    _context: HandlerContext | None = None
-
     @property
     def context(self) -> HandlerContext:
         """Current request context.
@@ -106,14 +114,17 @@ class Handler(ABC):
         Raises:
             RuntimeError: If accessed outside of a handler method invocation.
         """
-        if self._context is None:
-            from application_sdk.app.base import AppContextError
+        ctx = get_handler_context()
+        if ctx is None:
+            from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports handler.context transitively
+                AppContextError,
+            )
 
             raise AppContextError(
                 "Handler context is not set. "
                 "Access self.context only inside test_auth, preflight_check, or fetch_metadata."
             )
-        return self._context
+        return ctx
 
     @abstractmethod
     async def test_auth(self, input: AuthInput) -> AuthOutput:

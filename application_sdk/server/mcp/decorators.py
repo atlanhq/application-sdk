@@ -5,15 +5,16 @@ This module provides the @mcp_tool decorator that developers use to mark
 activities for automatic exposure via Model Context Protocol.
 """
 
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from application_sdk.constants import MCP_METADATA_KEY
-from application_sdk.server.mcp import MCPMetadata
+from application_sdk.server.mcp.models import MCPMetadata
 
 
 def mcp_tool(
-    name: Optional[str] = None,
-    description: Optional[str] = None,
+    name: str | None = None,
+    description: str | None = None,
     visible: bool = True,
     *args,
     **kwargs,

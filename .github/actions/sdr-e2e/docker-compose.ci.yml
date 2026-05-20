@@ -1,0 +1,48 @@
+# CI-specific docker compose overrides for the SDR integration test stack.
+#
+# Merged on top of the configurator-generated ci-deploy/docker-compose.yaml.
+# Apps may add a third file at .github/e2e/docker-compose.ci.yml in their
+# own repo for connector-specific overrides (extra env vars, additional
+# volume mounts, etc.); the composite action picks it up automatically.
+#
+# Three env-var naming gaps between the configurator and main.py:
+#   Configurator writes             main.py reads
+#   ─────────────────────────────── ──────────────────────────────
+#   ATLAN_WORKFLOW_TLS_ENABLED      ATLAN_TEMPORAL_TLS_ENABLED
+#   ATLAN_AUTH_URL                  ATLAN_AUTH_TOKEN_URL
+#   ATLAN_BASE_URL                  ATLAN_AUTH_BASE_URL
+#
+# CI_TENANT_DOMAIN must be set in the environment before docker compose runs
+# (the composite action exports it as a job-level env var).
+#
+# GITHUB_WORKSPACE is an absolute path set by GitHub Actions and is used for
+# the secrets volume mount to avoid relative-path ambiguity across compose files.
+
+services:
+  atlan-app:
+    # Ensure CWD is /app so that Path("./components") in create_store_from_binding
+    # resolves to /app/components (the bind-mounted Dapr components directory).
+    working_dir: /app
+    # Pin Temporal + auth hostnames to IPv4 so the bundled Rust gRPC
+    # resolver in temporalio 1.27.x doesn't try AAAA records the
+    # GH-runner docker bridge can't reach. The composite action's
+    # "Resolve Temporal + auth hostnames to IPv4" step exports
+    # TEMPORAL_HOST/IPV4 + AUTH_HOST/IPV4 for the substitution below.
+    extra_hosts:
+      - "${TEMPORAL_HOST}:${TEMPORAL_IPV4}"
+      - "${AUTH_HOST}:${AUTH_IPV4}"
+    # Mount CI-generated secrets file for the local.file Dapr secret store.
+    # SDR_CONFIG_DIR is set by the action's "Resolve SDR config paths" step
+    # to .github/sdr-e2e or .github/e2e depending on the app's layout.
+    volumes:
+      - ${GITHUB_WORKSPACE}/${SDR_CONFIG_DIR}/secrets:/app/secrets:ro
+    environment:
+      # Disable observability upload — the CI atlan-objectstore S3 config
+      # is not set up for external access and will crash the container on startup.
+      - ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK=false
+      # Bridge: configurator → main.py (TLS)
+      - ATLAN_TEMPORAL_TLS_ENABLED=true
+      # Bridge: configurator → main.py (auth token URL)
+      - ATLAN_AUTH_TOKEN_URL=https://${CI_TENANT_DOMAIN}/auth/realms/default/protocol/openid-connect/token
+      # Bridge: configurator → main.py (auth base URL)
+      - ATLAN_AUTH_BASE_URL=https://${CI_TENANT_DOMAIN}

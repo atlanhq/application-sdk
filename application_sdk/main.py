@@ -19,6 +19,11 @@ Environment variable equivalents::
 
 from __future__ import annotations
 
+__all__ = [
+    "AppConfig",
+    "run_dev_combined",
+]
+
 import argparse
 import asyncio
 import faulthandler
@@ -28,6 +33,20 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from application_sdk.discovery import (
+    load_app_class,
+    load_handler_class,
+    validate_app_class,
+)
+from application_sdk.errors import AppError, InvalidInputError
+from application_sdk.main_errors import (
+    DaprNotDetectedError,
+    MissingAppModuleError,
+    MultiAppModuleError,
+    UnknownModeError,
+)
+from application_sdk.observability.logger_adaptor import get_logger
+
 # Enable faulthandler so C-level crashes dump a traceback to stderr.
 faulthandler.enable()
 
@@ -36,9 +55,9 @@ faulthandler.enable()
 _worker_event_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _debug_dump_handler(signum: int, frame: object) -> None:  # noqa: ARG001
+def _debug_dump_handler(signum: int, frame: object) -> None:
     """Dump thread stacks and asyncio tasks to /tmp/debug-dump-<pid>.txt on SIGUSR1."""
-    dump_path = os.path.join("/tmp", f"debug-dump-{os.getpid()}.txt")  # noqa: PTH118
+    dump_path = os.path.join("/tmp", f"debug-dump-{os.getpid()}.txt")
     fd = os.open(dump_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     try:
         os.write(fd, b"\n===== DEBUG DUMP (SIGUSR1) =====\n")
@@ -75,16 +94,8 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure.context import InfrastructureContext
     from application_sdk.infrastructure.secrets import SecretStore
 
-from application_sdk.observability.logger_adaptor import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
-
-from application_sdk.discovery import DiscoveryError  # noqa: E402
-from application_sdk.discovery import (  # noqa: E402
-    load_app_class,
-    load_handler_class,
-    validate_app_class,
-)
 
 
 @dataclass
@@ -97,11 +108,11 @@ class AppConfig:
     (``run_dev_combined``).
 
     **Relationship with constants.py:**
-    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``,
-    ``ENABLE_PROMETHEUS_METRICS``). Those constants serve code that runs at
-    **import time** (observability init, logging.basicConfig) — before AppConfig
-    exists. Both AppConfig and constants.py read the **same env vars with the
-    same defaults** so they stay in sync.
+    Some values also exist as module-level constants (e.g. ``LOG_LEVEL``).
+    Those constants serve code that runs at **import time** (observability
+    init, logging.basicConfig) — before AppConfig exists. Both AppConfig and
+    constants.py read the **same env vars with the same defaults** so they
+    stay in sync.
 
     **Construction paths:**
     - Production: ``main()`` → ``AppConfig.from_args_and_env(args)``
@@ -149,16 +160,18 @@ class AppConfig:
     auth_scopes: str = ""
 
     # Runtime flags (env-var defaults, overridable per execution mode)
-    enable_prometheus_metrics: bool = True
-    """Enable Temporal Prometheus metrics endpoint. Default True for prod,
-    set to False in run_dev_combined() to avoid port collisions on reload."""
+    enable_temporal_core_metrics: bool = True
+    """Enable Temporal Runtime's loopback Prometheus endpoint that exposes
+    the Rust-core metric set (``temporal_workflow_*``, ``temporal_activity_*``
+    etc.). Default ``True`` so combined-mode FastAPI ``/metrics`` can proxy
+    these metrics, and so worker-mode's ``TemporalCoreCollector`` can read
+    them locally to feed the Pushgateway push. Set to ``False`` in
+    ``run_dev_combined()`` to avoid port collisions on hot reload."""
 
-    prometheus_bind_address: str = "0.0.0.0:9464"
-    """Bind address for Temporal Prometheus metrics."""
-
-    enable_app_vitals: bool = True
-    """Enable App Vitals interceptor for activity-level observability.
-    Reads same env var as constants.ENABLE_APP_VITALS (ATLAN_ENABLE_APP_VITALS)."""
+    prometheus_bind_address: str = "127.0.0.1:9464"
+    """Loopback bind address for the Temporal Runtime Prometheus endpoint.
+    Not externally reachable — only the combined-mode FastAPI ``/metrics``
+    proxy and the worker's ``TemporalCoreCollector`` consume it."""
 
     enable_mcp: bool = False
     """Enable Model Context Protocol (MCP) server.
@@ -183,10 +196,6 @@ class AppConfig:
         def _env(key: str, default: str = "") -> str:
             return os.environ.get(key, default)
 
-        def _env_int(key: str, default: int) -> int:
-            val = os.environ.get(key)
-            return int(val) if val else default
-
         def _env_bool(key: str, default: bool = False) -> bool:
             val = os.environ.get(key, "").lower()
             return val in ("true", "1", "yes") if val else default
@@ -205,18 +214,12 @@ class AppConfig:
 
         app_module_raw = args.app or _env("ATLAN_APP_MODULE")
         if not app_module_raw:
-            raise ValueError(
-                "App module is required. Use --app or set ATLAN_APP_MODULE."
-            )
+            raise MissingAppModuleError()
 
         app_module = app_module_raw.strip()
 
         if "," in app_module:
-            raise ValueError(
-                f"ATLAN_APP_MODULE contains a comma: {app_module!r}. "
-                "The multi-app pattern is not supported in v3. "
-                "Define multiple @entrypoint methods on a single App subclass instead."
-            )
+            raise MultiAppModuleError(app_module=app_module)
 
         service_name = (
             getattr(args, "service_name", None)
@@ -257,15 +260,19 @@ class AppConfig:
             handler_host=getattr(args, "handler_host", None)
             or _env("ATLAN_HANDLER_HOST")
             or _env("ATLAN_APP_HTTP_HOST", "0.0.0.0"),
-            handler_port=getattr(args, "handler_port", None)
-            or _env_int("ATLAN_HANDLER_PORT", 0)
-            or _env_int("ATLAN_APP_HTTP_PORT", 0)
-            or 8000,
+            handler_port=_handler_port_arg
+            if (_handler_port_arg := getattr(args, "handler_port", None)) is not None
+            else (
+                _env_int("ATLAN_HANDLER_PORT", 0)
+                or _env_int("ATLAN_APP_HTTP_PORT", 0)
+                or 8000
+            ),
             log_level=getattr(args, "log_level", None)
             or _env("ATLAN_LOG_LEVEL")
             or _env("LOG_LEVEL", "INFO"),
-            health_port=getattr(args, "health_port", None)
-            or _env_int("ATLAN_HEALTH_PORT", 8081),
+            health_port=_health_port_arg
+            if (_health_port_arg := getattr(args, "health_port", None)) is not None
+            else _env_int("ATLAN_HEALTH_PORT", 8081),
             service_name=service_name,
             # TLS
             tls_enabled=_env_bool("ATLAN_TEMPORAL_TLS_ENABLED"),
@@ -286,13 +293,12 @@ class AppConfig:
                 "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
             ),
             # Runtime flags
-            enable_prometheus_metrics=_env_bool(
-                "ATLAN_ENABLE_PROMETHEUS_METRICS", default=True
+            enable_temporal_core_metrics=_env_bool(
+                "ATLAN_ENABLE_TEMPORAL_CORE_METRICS", default=True
             ),
             prometheus_bind_address=_env(
-                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+                "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
             ),
-            enable_app_vitals=_env_bool("ATLAN_ENABLE_APP_VITALS", default=True),
             enable_mcp=_env_bool("ENABLE_MCP"),
             max_concurrent_storage_transfers=_env_int(
                 "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
@@ -324,16 +330,18 @@ _SAFE_METADATA_KEYS: frozenset[str] = frozenset(
 )
 
 
-def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, str]]:
+def _parse_all_component_yamls(components_dir: Path) -> dict[str, dict[str, str]]:
     """Parse all Dapr component YAML files and return safe metadata per component.
 
     Returns a mapping of component name → dict of allowlisted metadata values.
     Non-allowlisted keys (secrets, connection strings, credentials) are never included.
     Silently returns an empty dict on any parse error.
     """
-    import yaml
+    import yaml  # noqa: PLC0415 — cold path: yaml only when reading dapr binding YAML
 
-    from application_sdk.storage.binding import _parse_dapr_metadata
+    from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
+        _parse_dapr_metadata,
+    )
 
     result: dict[str, dict[str, str]] = {}
     try:
@@ -355,8 +363,8 @@ def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, st
 
 
 async def _log_dapr_components(
-    dapr_client: "AsyncDaprClient",
-    components_dir: "Path",
+    dapr_client: AsyncDaprClient,
+    components_dir: Path,
 ) -> set[str]:
     """Log registered Dapr components and their safe configuration at startup.
 
@@ -373,7 +381,7 @@ async def _log_dapr_components(
     Returns:
         Set of registered component names. Empty set if metadata query fails.
     """
-    from application_sdk.constants import (
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
         DEPLOYMENT_OBJECT_STORE_NAME,
         EVENT_STORE_NAME,
         SECRET_STORE_NAME,
@@ -434,8 +442,8 @@ async def _log_dapr_components(
 
 
 async def _create_infrastructure(
-    credential_stores: "Mapping[str, SecretStore] | None" = None,
-) -> "InfrastructureContext":
+    credential_stores: Mapping[str, SecretStore] | None = None,
+) -> InfrastructureContext:
     """Create infrastructure services based on environment.
 
     If ``DAPR_HTTP_PORT`` is set (Dapr sidecar present), creates Dapr-backed
@@ -452,27 +460,33 @@ async def _create_infrastructure(
     Raises:
         RuntimeError: If DAPR_HTTP_PORT is not set (no Dapr sidecar).
     """
-    from application_sdk.infrastructure.context import InfrastructureContext
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        InfrastructureContext,
+    )
 
     if os.environ.get("DAPR_HTTP_PORT"):
-        from pathlib import Path
+        from pathlib import (  # noqa: PLC0415 — cold path: lazy load for entry-point function
+            Path,
+        )
 
-        from application_sdk.constants import (
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
             DEPLOYMENT_OBJECT_STORE_NAME,
             EVENT_STORE_NAME,
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
         )
-        from application_sdk.infrastructure._dapr.client import (
+        from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             DaprBinding,
             DaprSecretStore,
             DaprStateStore,
         )
-        from application_sdk.infrastructure._dapr.http import (
+        from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             AsyncDaprClient,
             wait_for_dapr_sidecar,
         )
-        from application_sdk.storage import create_store_from_binding
+        from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
+            create_store_from_binding,
+        )
 
         await wait_for_dapr_sidecar()
         dapr_client = AsyncDaprClient()
@@ -494,18 +508,15 @@ async def _create_infrastructure(
             _dapr_client=dapr_client,
         )
     else:
-        # No Dapr sidecar — require it for all modes
-        raise RuntimeError(
-            "Dapr sidecar not detected (DAPR_HTTP_PORT not set). "
-            "Run 'poe start-deps' to start local Dapr + Temporal, "
-            "or set DAPR_HTTP_PORT if running daprd manually."
-        )
+        raise DaprNotDetectedError()
 
 
 def _derive_service_name(app_module: str) -> str:
     """Convert "my_package.apps:MyApp" to "my-app" (kebab-case)."""
     if ":" in app_module:
-        from application_sdk.app.base import _pascal_to_kebab
+        from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
+            _pascal_to_kebab,
+        )
 
         return _pascal_to_kebab(app_module.split(":")[1])
     return "application-sdk"
@@ -528,9 +539,92 @@ def _derive_task_queue(app_module: str) -> str:
     return f"{_derive_service_name(app_module)}-queue"
 
 
+def _env_int(key: str, default: int = 0) -> int:
+    """Read an int env var, returning ``default`` when unset, empty, or unparsable.
+
+    A malformed value like ``ATLAN_HANDLER_PORT="not-a-number"`` falls through
+    to the next key instead of crashing startup.
+    """
+    val = os.environ.get(key)
+    if not val:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        logger.warning(
+            "Ignoring non-integer env var %s=%r; falling back to default %d",
+            key,
+            val,
+            default,
+            exc_info=True,
+        )
+        return default
+
+
+def _build_dev_config(
+    app_module: str,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    temporal_host: str | None = None,
+    temporal_namespace: str | None = None,
+    task_queue: str | None = None,
+) -> AppConfig:
+    """Build an :class:`AppConfig` for the dev-combined path.
+
+    Routes through :meth:`AppConfig.from_args_and_env` so env-var reading is
+    not duplicated. Precedence per connection field:
+    ``explicit kwarg → env var(s) → AppConfig default``.
+
+    Two fields are fixed in the synthetic namespace before construction:
+
+    * ``log_level`` is always ``"DEBUG"``.
+    * ``health_port`` is always ``0`` (OS-assigned ephemeral port).
+
+    Two further overrides are applied to the config after construction,
+    because their dev defaults differ from the production defaults in
+    :meth:`AppConfig.from_args_and_env`:
+
+    * ``handler_host`` defaults to ``"127.0.0.1"`` when neither kwarg nor
+      env var is set — production defaults to ``"0.0.0.0"``.
+    * ``enable_temporal_core_metrics`` defaults to ``False`` to avoid the
+      port-9464 collision on hot reload; honoured when
+      ``ATLAN_ENABLE_TEMPORAL_CORE_METRICS`` is explicitly set.
+    """
+    args = argparse.Namespace(
+        mode="combined",
+        app=app_module,
+        handler=os.environ.get("ATLAN_HANDLER_MODULE"),
+        handler_host=host,
+        handler_port=port,
+        temporal_host=temporal_host,
+        temporal_namespace=temporal_namespace,
+        task_queue=task_queue,
+        log_level="DEBUG",
+        health_port=0,
+        service_name=None,
+    )
+    config = AppConfig.from_args_and_env(args)
+    # Dev default: loopback only. Production defaults to 0.0.0.0 for external
+    # access; dev prefers loopback unless the caller or env var says otherwise.
+    if not (
+        host
+        or os.environ.get("ATLAN_HANDLER_HOST")
+        or os.environ.get("ATLAN_APP_HTTP_HOST")
+    ):
+        config.handler_host = "127.0.0.1"
+    # Dev default: disable Temporal Rust-core Prometheus binding to avoid port
+    # 9464 collision on hot reload. Honour explicit env override.
+    if not os.environ.get("ATLAN_ENABLE_TEMPORAL_CORE_METRICS"):
+        config.enable_temporal_core_metrics = False
+    return config
+
+
 async def _flush_observability() -> None:
     """Flush all observability buffers before exit."""
-    from application_sdk.observability.observability import AtlanObservability
+    from application_sdk.observability.observability import (  # noqa: PLC0415 — cold path: observability components only at startup
+        AtlanObservability,
+    )
 
     try:
         await AtlanObservability.flush_all()
@@ -576,7 +670,7 @@ def _install_excepthook() -> None:
         )
         try:
             asyncio.run(_flush_observability())
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # best-effort; never mask the original crash
         _orig(exc_type, exc_value, exc_traceback)
 
@@ -589,15 +683,40 @@ def _install_graceful_signal_handlers(
 ) -> None:
     """Register SIGINT/SIGTERM handlers, with a fallback for platforms that
     don't support loop.add_signal_handler() (e.g. Windows).
+
+    Wraps the caller's handler so the process-wide worker-shutdown flag is
+    set before any caller-specific shutdown logic runs. The activity wrapper
+    reads that flag to attribute mid-activity ``asyncio.CancelledError`` to
+    pod termination instead of ordinary cancellation.
     """
+    from application_sdk.execution.shutdown import (  # noqa: PLC0415 — keep main.py import surface narrow
+        mark_worker_shutting_down,
+    )
+
+    def _wrapped_handler() -> None:
+        mark_worker_shutting_down()
+        handler()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, handler)
+            loop.add_signal_handler(sig, _wrapped_handler)
         except (NotImplementedError, OSError):
+            # Platforms that don't support ``loop.add_signal_handler`` (e.g.
+            # Windows) still need the worker-shutdown flag set so the
+            # eviction-retry path attributes mid-activity ``CancelledError``
+            # correctly. Drop in a plain ``signal.signal`` fallback that, at
+            # minimum, flips the flag — graceful-shutdown event integration
+            # is still unavailable in this branch but eviction detection
+            # continues to work.
+            try:
+                signal.signal(sig, lambda *_: mark_worker_shutting_down())
+            except (ValueError, OSError):
+                pass  # not on the main thread or signal is reserved
             logger.warning(
                 "loop.add_signal_handler() not supported on this platform "
                 "(signal=%s); graceful shutdown via signals is unavailable",
                 sig.name,
+                exc_info=True,
             )
 
 
@@ -610,13 +729,22 @@ async def run_worker_mode(config: AppConfig) -> None:
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
 
-    from application_sdk.app.registry import AppRegistry, TaskRegistry
-    from application_sdk.execution._temporal.backend import create_temporal_client
-    from application_sdk.execution._temporal.converter import (
+    from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
+        AppRegistry,
+        TaskRegistry,
+    )
+    from application_sdk.execution._temporal.backend import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+        create_temporal_client,
+    )
+    from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.execution._temporal.worker import create_worker
-    from application_sdk.infrastructure.context import set_infrastructure
+    from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+        create_worker,
+    )
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        set_infrastructure,
+    )
 
     logger.info(
         "Starting worker mode: app=%s temporal=%s queue=%s",
@@ -644,7 +772,7 @@ async def run_worker_mode(config: AppConfig) -> None:
     auth_manager: Any = None
     api_key: str | None = None
     if config.auth_enabled:
-        from application_sdk.execution._temporal.auth import (
+        from application_sdk.execution._temporal.auth import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
             TemporalAuthConfig,
             TemporalAuthManager,
         )
@@ -671,7 +799,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_prometheus_metrics,
+        enable_prometheus=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
     )
 
@@ -679,7 +807,31 @@ async def run_worker_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue)
+    # Discover the app's Handler so SDR workflows can be registered on the
+    # worker.  When no Handler is found, create_worker silently skips SDR.
+    handler_class_for_sdr = load_handler_class(
+        config.app_module,
+        handler_module_path=config.handler_module,
+    )
+    handler_for_sdr = (
+        handler_class_for_sdr() if handler_class_for_sdr is not None else None
+    )
+    if handler_for_sdr is not None:
+        logger.info(
+            "Loaded handler %s for SDR workflow registration",
+            type(handler_for_sdr).__name__,
+        )
+
+    # Worker-only mode pushes metrics to a Pushgateway since the process has
+    # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
+    # leaves enable_pushgateway=False so the FastAPI /metrics endpoint
+    # exposes everything via in-process proxy.
+    worker = create_worker(
+        client,
+        task_queue=config.task_queue,
+        handler=handler_for_sdr,
+        enable_pushgateway=True,
+    )
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -703,17 +855,20 @@ async def run_worker_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import WorkerHealthServer
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
+        WorkerHealthServer,
+    )
 
     health_server = WorkerHealthServer(port=config.health_port)
     health_server.set_temporal_client(client)
 
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
-    async with health_server:
-        async with worker:
-            await shutdown_event.wait()
+    async with health_server, worker:
+        await shutdown_event.wait()
 
-    from application_sdk.infrastructure.context import close_infrastructure
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        close_infrastructure,
+    )
 
     await close_infrastructure()
     await _flush_observability()
@@ -730,13 +885,16 @@ def run_handler_mode(config: AppConfig) -> None:
     Loads the handler class (or DefaultHandler) and runs the FastAPI
     server via uvicorn. This is synchronous — uvicorn manages its own loop.
     """
-    import asyncio
-
-    from application_sdk.execution._temporal.converter import (
+    from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.handler import DefaultHandler, run_app_handler_service
-    from application_sdk.infrastructure.context import set_infrastructure
+    from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
+        DefaultHandler,
+        run_app_handler_service,
+    )
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        set_infrastructure,
+    )
 
     infra = asyncio.run(_create_infrastructure())
     set_infrastructure(infra)
@@ -749,6 +907,7 @@ def run_handler_mode(config: AppConfig) -> None:
     )
 
     app_class = load_app_class(config.app_module)
+    validate_app_class(app_class)
     app_name = app_class._app_name  # type: ignore[attr-defined]
 
     handler_class = load_handler_class(
@@ -790,10 +949,18 @@ def run_handler_mode(config: AppConfig) -> None:
         auth_token_url=config.auth_token_url,
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
+        enable_temporal_core_metrics=False,
+        prometheus_bind_address=config.prometheus_bind_address,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
     )
+
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        close_infrastructure,
+    )
+
+    asyncio.run(close_infrastructure())
     asyncio.run(_flush_observability())
 
 
@@ -807,16 +974,26 @@ async def run_combined_mode(config: AppConfig) -> None:
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
 
-    import uvicorn
+    import uvicorn  # noqa: PLC0415 — cold path: uvicorn only loaded in worker/handler runtime modes
 
-    from application_sdk.app.registry import AppRegistry, TaskRegistry
-    from application_sdk.execution._temporal.backend import create_temporal_client
-    from application_sdk.execution._temporal.converter import (
+    from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
+        AppRegistry,
+        TaskRegistry,
+    )
+    from application_sdk.execution._temporal.backend import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+        create_temporal_client,
+    )
+    from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.execution._temporal.worker import create_worker
-    from application_sdk.handler import DefaultHandler, create_app_handler_service
-    from application_sdk.infrastructure.context import (
+    from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
+        create_worker,
+    )
+    from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
+        DefaultHandler,
+        create_app_handler_service,
+    )
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         get_infrastructure,
         set_infrastructure,
     )
@@ -852,7 +1029,7 @@ async def run_combined_mode(config: AppConfig) -> None:
     auth_manager: Any = None
     api_key: str | None = None
     if config.auth_enabled:
-        from application_sdk.execution._temporal.auth import (
+        from application_sdk.execution._temporal.auth import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
             TemporalAuthConfig,
             TemporalAuthManager,
         )
@@ -879,7 +1056,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         tls_client_cert_path=config.tls_client_cert_path,
         tls_client_private_key_path=config.tls_client_private_key_path,
         tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_prometheus_metrics,
+        enable_prometheus=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
     )
 
@@ -887,18 +1064,8 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue)
-
-    for registered_app in AppRegistry.get_instance().list_apps():
-        app_meta = AppRegistry.get_instance().get(registered_app)
-        logger.info("Registered app %s version %s", registered_app, app_meta.version)
-
-    for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
-        for task_meta in tasks:
-            logger.debug(
-                "Registered task %s for app %s", task_meta.name, registered_app
-            )
-
+    # Discover the handler before building the worker so the same instance
+    # serves both the HTTP service and the SDR Temporal workflows.
     handler_class = load_handler_class(
         config.app_module,
         handler_module_path=config.handler_module,
@@ -914,6 +1081,19 @@ async def run_combined_mode(config: AppConfig) -> None:
         )
 
     handler = handler_class()
+
+    worker = create_worker(client, task_queue=config.task_queue, handler=handler)
+
+    for registered_app in AppRegistry.get_instance().list_apps():
+        app_meta = AppRegistry.get_instance().get(registered_app)
+        logger.info("Registered app %s version %s", registered_app, app_meta.version)
+
+    for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
+        for task_meta in tasks:
+            logger.debug(
+                "Registered task %s for app %s", task_meta.name, registered_app
+            )
+
     fastapi_app = create_app_handler_service(
         handler,
         app_name=app_name,
@@ -933,6 +1113,8 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_token_url=config.auth_token_url,
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
+        enable_temporal_core_metrics=config.enable_temporal_core_metrics,
+        prometheus_bind_address=config.prometheus_bind_address,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
@@ -944,6 +1126,11 @@ async def run_combined_mode(config: AppConfig) -> None:
             host=config.handler_host,
             port=config.handler_port,
             log_level=config.log_level.lower(),
+            # Skip uvicorn's logging.config.dictConfig() call — it can deadlock
+            # with background gRPC threads from the Temporal SDK on Windows.
+            # Uvicorn logs still flow through Python's root logger to our
+            # structlog/loguru setup via the installed InterceptHandler.
+            log_config=None,
         )
     )
 
@@ -958,7 +1145,9 @@ async def run_combined_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import WorkerHealthServer
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
+        WorkerHealthServer,
+    )
 
     health_server = WorkerHealthServer(port=config.health_port)
     health_server.set_temporal_client(client)
@@ -969,14 +1158,15 @@ async def run_combined_mode(config: AppConfig) -> None:
         config.task_queue,
         config.handler_port,
     )
-    async with health_server:
-        async with worker:
-            await asyncio.gather(
-                uvicorn_server.serve(),
-                shutdown_event.wait(),
-            )
+    async with health_server, worker:
+        await asyncio.gather(
+            uvicorn_server.serve(),
+            shutdown_event.wait(),
+        )
 
-    from application_sdk.infrastructure.context import close_infrastructure
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        close_infrastructure,
+    )
 
     await close_infrastructure()
     await _flush_observability()
@@ -993,17 +1183,33 @@ async def run_dev_combined(
     credential_stores: Mapping[str, SecretStore] | None = None,
     credentials: dict[str, Any] | None = None,
     example_input: dict[str, Any] | None = None,
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    temporal_host: str = "localhost:7233",
-    temporal_namespace: str = "default",
-    task_queue: str = "",
+    host: str | None = None,
+    port: int | None = None,
+    temporal_host: str | None = None,  # deprecated — ignored, kept for back-compat
+    temporal_namespace: str | None = None,
+    task_queue: str | None = None,
 ) -> None:
     """Run worker + handler in a single process for local development.
 
-    Dev-friendly wrapper around ``run_combined_mode()`` that accepts a
-    Python class and keyword arguments directly. Use it in ``run_dev.py``
-    scripts; production containers use ``run_combined_mode()`` via CLI flags.
+    Boots an **in-process workflow runtime** and uses **in-process backends**
+    for state, secrets, and object storage — no Temporal CLI, no Dapr
+    sidecar, no Redis required. The customer's only prerequisite is
+    Python + ``uv``.
+
+    Use this in ``run_dev.py`` scripts; production containers use
+    ``run_combined_mode()`` via CLI flags, which goes through Dapr.
+
+    All four connection-shaped kwargs (``host``, ``port``,
+    ``temporal_namespace``, ``task_queue``) follow the same precedence as
+    the CLI path — ``explicit kwarg → env var → AppConfig default`` —
+    because they are resolved by :func:`_build_dev_config` which routes
+    through :meth:`AppConfig.from_args_and_env`. CI-stack overrides like
+    ``ATLAN_HANDLER_PORT`` or ``ATLAN_TASK_QUEUE`` work without any
+    per-connector ``os.environ.get(...)`` boilerplate at the call site.
+
+    ``temporal_host`` is still accepted for backward compatibility but is
+    ignored — the SDK always boots its own in-process workflow runtime in
+    this mode. Passing it emits a :class:`DeprecationWarning`.
 
     Args:
         app_class: The App class to serve (must already be imported).
@@ -1017,11 +1223,15 @@ async def run_dev_combined(
         example_input: Optional dict used as the workflow input. If ``credentials``
             is also provided, ``credential_guid`` is auto-injected before the
             workflow starts.
-        host: Bind host (default: "127.0.0.1").
-        port: Handler HTTP port.
-        temporal_host: Temporal server address.
-        temporal_namespace: Temporal namespace.
-        task_queue: Task queue name (default: "{app_name}-queue").
+        host: Bind host. Default precedence: kwarg → ``ATLAN_HANDLER_HOST`` →
+            ``ATLAN_APP_HTTP_HOST`` → ``"127.0.0.1"``.
+        port: Handler HTTP port. Default precedence: kwarg →
+            ``ATLAN_HANDLER_PORT`` → ``ATLAN_APP_HTTP_PORT`` → ``8000``.
+        temporal_namespace: Temporal namespace. Default precedence: kwarg →
+            ``ATLAN_TEMPORAL_NAMESPACE`` → ``ATLAN_WORKFLOW_NAMESPACE`` →
+            ``"default"``.
+        task_queue: Task queue name. Default precedence: kwarg →
+            ``ATLAN_TASK_QUEUE`` → ``"{app_name}-queue"``.
 
     Example::
 
@@ -1030,54 +1240,96 @@ async def run_dev_combined(
 
         asyncio.run(run_dev_combined(
             MyApp,
-            credentials={
-                "host": "localhost", "port": "5432", "authType": "basic",
-                "username": "admin", "password": "secret",
-                "extra": {"database": "mydb"},
-            },
             example_input={
-                "connection": {"connection_name": "test", "connection_qualified_name": "default/app/1234"},
+                "connection": {"connection_name": "test"},
             },
         ))
     """
-    import json as _json
+    # Local dev is unconditional: boot an in-process Temporal *and* an
+    # embedded ``daprd`` so the entire infrastructure code path is the same
+    # one production uses. Both daemons are auto-downloaded and managed by
+    # the SDK — the customer's host stays clean.
+    from application_sdk.dev import embedded_dapr, embedded_runtime  # noqa: PLC0415
 
-    # Dev-friendly: ensure Dapr ports are set. poe start-deps launches Dapr
-    # on the default ports but in a background process, so the env vars aren't
-    # exported to the dev's shell. Default to standard Dapr ports so devs
-    # don't need to manually export them or add them to .env.
-    os.environ.setdefault("DAPR_HTTP_PORT", "3500")
-    os.environ.setdefault("DAPR_GRPC_PORT", "50001")
+    if temporal_host is not None:
+        import warnings  # noqa: PLC0415 — cold path: deprecation warning only
+
+        warnings.warn(
+            "`temporal_host` is deprecated and ignored: `run_dev_combined` now "
+            "always boots an in-process workflow runtime. To target an external "
+            "Temporal cluster, use `run_combined_mode(config)` directly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
-    effective_task_queue = task_queue or f"{app_name}-queue"
+
+    # ``embedded_dapr`` sets ``DAPR_HTTP_PORT`` / ``DAPR_GRPC_PORT`` /
+    # ``DAPR_COMPONENTS_PATH`` itself, so the existing Dapr code path in
+    # ``_create_infrastructure`` and the observability sink see the right
+    # values from the moment daprd is spawning (avoiding races during the
+    # ~3s startup window).
+    # ``embedded_dapr`` first so ``DAPR_COMPONENTS_PATH`` is set before any
+    # observability flush cycle fires during the ~5s ``embedded_runtime``
+    # cold-start window. Otherwise the periodic flush would race with daprd
+    # startup and log spurious "objectstore upload failed" warnings.
+    async with (
+        embedded_dapr(app_id=app_name) as _dapr,
+        embedded_runtime(namespace=temporal_namespace or "default") as _rt,
+    ):
+        del _dapr  # env-side-effect is sufficient; the dataclass is just for tests
+        await _run_dev_combined_inner(
+            app_class=app_class,
+            credential_stores=credential_stores,
+            credentials=credentials,
+            example_input=example_input,
+            host=host,
+            port=port,
+            temporal_host=_rt.host,
+            temporal_namespace=_rt.namespace,
+            task_queue=task_queue,
+        )
+
+
+async def _run_dev_combined_inner(
+    *,
+    app_class: type[App],
+    credential_stores: Mapping[str, SecretStore] | None,
+    credentials: dict[str, Any] | None,
+    example_input: dict[str, Any] | None,
+    host: str | None,
+    port: int | None,
+    temporal_host: str,
+    temporal_namespace: str,
+    task_queue: str | None,
+) -> None:
+    """Body of ``run_dev_combined`` — runs against fully-resolved connection details.
+
+    Accepts ``host`` / ``port`` / ``task_queue`` as ``None`` and lets
+    ``_build_dev_config`` apply the same defaults the CLI path uses (env
+    vars → AppConfig fields). ``temporal_host`` and ``temporal_namespace``
+    always arrive populated from the embedded runtime.
+    """
+    import json as _json  # noqa: PLC0415
+
     app_module = f"{app_class.__module__}:{app_class.__name__}"
 
-    config = AppConfig(
-        mode="combined",
-        app_module=app_module,
-        handler_module=os.environ.get("ATLAN_HANDLER_MODULE") or None,
+    config = _build_dev_config(
+        app_module,
+        host=host,
+        port=port,
         temporal_host=temporal_host,
         temporal_namespace=temporal_namespace,
-        task_queue=effective_task_queue,
-        handler_host=host,
-        handler_port=port,
-        log_level="DEBUG",
-        service_name=_derive_service_name(app_module),
-        # Dev-friendly: disable Prometheus to avoid port 9464 collision on
-        # hot reload, and use ephemeral health port to avoid 8081 collision.
-        enable_prometheus_metrics=os.environ.get(
-            "ATLAN_ENABLE_PROMETHEUS_METRICS", ""
-        ).lower()
-        in ("true", "1"),
-        health_port=0,
-        frontend_assets_path=os.environ.get(
-            "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
-        ),
+        task_queue=task_queue,
     )
 
-    # Create infrastructure early so run_combined_mode uses it directly.
-    from application_sdk.infrastructure.context import set_infrastructure
+    # Build infrastructure via the standard Dapr path. ``run_dev_combined``
+    # has already started an embedded ``daprd`` (via ``embedded_dapr``) and
+    # exported ``DAPR_HTTP_PORT`` + ``DAPR_COMPONENTS_PATH``, so this goes
+    # through identical code as production / SDR / CI.
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        set_infrastructure,
+    )
 
     infra = await _create_infrastructure(credential_stores=credential_stores)
     set_infrastructure(infra)
@@ -1086,11 +1338,11 @@ async def run_dev_combined(
     # /workflows/v1/dev/local-vault before starting the workflow). This writes non-sensitive
     # config to object storage and sensitive secrets to the local secrets file.
     if credentials is not None:
-        import httpx
+        import httpx  # noqa: PLC0415 — cold path: lazy load to keep import-time cost low
 
         async def _provision_and_start() -> None:
             """Wait for handler, provision creds, start workflow — mimics prod."""
-            base = f"http://{host}:{port}"
+            base = f"http://{config.handler_host}:{config.handler_port}"
             async with httpx.AsyncClient() as client:
                 # Wait for the handler to be ready
                 for _ in range(30):
@@ -1098,7 +1350,7 @@ async def run_dev_combined(
                         resp = await client.get(f"{base}/health", timeout=2)
                         if resp.status_code == 200:
                             break
-                    except Exception:
+                    except Exception:  # noqa: S110
                         pass
                     await asyncio.sleep(1)
 
@@ -1139,7 +1391,9 @@ async def run_dev_combined(
         # Schedule provisioning + start as a background task — runs after the server starts
         asyncio.create_task(_provision_and_start())
     else:
-        print(f"\nDev server running at http://{host}:{port}")
+        print(
+            f"\nDev server running at http://{config.handler_host}:{config.handler_port}"
+        )
         print(
             "  POST /workflows/v1/dev/local-vault                            - Provision credentials"
         )
@@ -1151,16 +1405,36 @@ async def run_dev_combined(
         if example_input is not None:
             print("\nExample:")
             example_json = _json.dumps(example_input, indent=2)
-            print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
+            print(
+                f"  curl -X POST http://{config.handler_host}:{config.handler_port}/workflows/v1/start \\"
+            )
             print('    -H "Content-Type: application/json" \\')
             print(f"    -d '{example_json}'")
-        print(f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n")
+        print(
+            f"\n  curl http://{config.handler_host}:{config.handler_port}/workflows/v1/result/{{workflow_id}}\n"
+        )
 
     await run_combined_mode(config)
 
 
 def run_main(config: AppConfig) -> None:
     """Route to worker, handler, or combined mode based on config."""
+    from application_sdk.common.env_warnings import (  # noqa: PLC0415 — cold path: startup-only check
+        warn_removed_env_vars,
+    )
+
+    warn_removed_env_vars()
+
+    # Bootstrap the global MeterProvider once per process so any meter
+    # consumer (instrumentors, interceptors, decorators, …) resolves to the
+    # configured provider. Without this, handler-mode /metrics serves only
+    # the prometheus_client defaults.
+    from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — cold path: meter provider bootstrap at process start
+        get_metrics,
+    )
+
+    get_metrics()
+
     if config.mode == "worker":
         asyncio.run(run_worker_mode(config))
     elif config.mode == "handler":
@@ -1168,9 +1442,7 @@ def run_main(config: AppConfig) -> None:
     elif config.mode == "combined":
         asyncio.run(run_combined_mode(config))
     else:
-        raise ValueError(
-            f"Unknown mode: {config.mode!r}. Must be 'worker', 'handler', or 'combined'."
-        )
+        raise UnknownModeError(received_mode=config.mode)
 
 
 def parse_args() -> argparse.Namespace:
@@ -1255,7 +1527,7 @@ def main() -> NoReturn:
 
     try:
         config = AppConfig.from_args_and_env(args)
-    except ValueError:
+    except (ValueError, AppError):
         logger.error("Configuration error", exc_info=True)
         sys.exit(1)
 
@@ -1268,16 +1540,16 @@ def main() -> NoReturn:
 
     try:
         run_main(config)
-    except DiscoveryError:
+    except InvalidInputError:
         logger.error("Discovery error", exc_info=True)
         sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception:
-        logger.exception("Fatal error")
+        logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())
-        except Exception:
+        except Exception:  # noqa: S110
             pass
         sys.exit(1)
 

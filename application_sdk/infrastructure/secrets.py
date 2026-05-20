@@ -1,8 +1,12 @@
 """Secrets management abstraction."""
 
+import os
+from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
+from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.leaves import DependencyUnavailableError, NotFoundError
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -26,7 +30,7 @@ async def get_deployment_secret(key: str) -> Any:
     Returns:
         The value for *key*, or ``None`` if unavailable.
     """
-    from application_sdk.constants import (
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on secret resolution
         DEPLOYMENT_NAME,
         DEPLOYMENT_SECRET_PATH,
         DEPLOYMENT_SECRET_STORE_NAME,
@@ -37,7 +41,9 @@ async def get_deployment_secret(key: str) -> Any:
         return None
 
     try:
-        from application_sdk.infrastructure._dapr.http import AsyncDaprClient
+        from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            AsyncDaprClient,
+        )
 
         client = AsyncDaprClient()
         try:
@@ -68,11 +74,20 @@ async def get_deployment_secret(key: str) -> Any:
         return None
 
 
-class SecretStoreError(Exception):
-    """Raised when secret store operations fail."""
+@dataclass(kw_only=True)
+class SecretStoreError(DependencyUnavailableError):
+    """Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
+
+    Use ``SecretNotFoundError`` when the secret key is absent; use this class
+    for connectivity, permission, or other store-level failures.
+    """
+
+    secret_name: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
+    code: ClassVar[str] = "SECRET_STORE"
 
+    # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
         self,
         message: str,
@@ -81,10 +96,8 @@ class SecretStoreError(Exception):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        super().__init__(message)
-        self.message = message
+        DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.secret_name = secret_name
-        self.cause = cause
         self._error_code = error_code
 
     @property
@@ -104,16 +117,34 @@ class SecretStoreError(Exception):
         return " | ".join(parts)
 
 
-class SecretNotFoundError(SecretStoreError):
-    """Raised when a secret is not found."""
+@dataclass(kw_only=True)
+class SecretNotFoundError(NotFoundError, SecretStoreError):
+    """The requested secret key was not found in the secret store.
+
+    Categorical parent is ``NotFoundError`` (category=NOT_FOUND); domain
+    parent is ``SecretStoreError`` so ``except SecretStoreError:`` still catches.
+    """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_NOT_FOUND
+    code: ClassVar[str] = "SECRET_NOT_FOUND"
+    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.USER
 
     def __init__(self, secret_name: str) -> None:
-        super().__init__(
-            f"Secret '{secret_name}' not found",
-            secret_name=secret_name,
-        )
+        NotFoundError.__init__(self, message=f"Secret '{secret_name}' not found")
+        self.secret_name = secret_name
+        self._error_code = SECRET_NOT_FOUND
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._error_code
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        if self.secret_name:
+            parts.append(f"secret={self.secret_name}")
+        return " | ".join(parts)
 
 
 class SecretStore(Protocol):
@@ -193,7 +224,6 @@ class EnvironmentSecretStore:
 
     async def get(self, name: str) -> str:
         """Get a secret from environment."""
-        import os
 
         env_name = f"{self._prefix}{name}"
         value = os.environ.get(env_name)
@@ -206,14 +236,12 @@ class EnvironmentSecretStore:
 
     async def get_optional(self, name: str) -> str | None:
         """Get a secret from environment, returning None if not set."""
-        import os
 
         env_name = f"{self._prefix}{name}"
         return os.environ.get(env_name)
 
     async def get_bulk(self, names: list[str]) -> dict[str, str]:
         """Get multiple secrets from environment."""
-        import os
 
         result = {}
         missing = []
@@ -240,7 +268,6 @@ class EnvironmentSecretStore:
 
     async def list_names(self) -> list[str]:
         """List environment variables with the configured prefix."""
-        import os
 
         if not self._prefix:
             return list(os.environ.keys())

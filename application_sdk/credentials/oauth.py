@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
 from application_sdk.credentials.types import OAuthClientCredential
+from application_sdk.errors.leaves import AuthError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -30,8 +32,13 @@ logger = get_logger(__name__)
 _EXPIRY_BUFFER_SECONDS = 60
 
 
-class OAuthTokenError(Exception):
-    """Raised when an OAuth 2.0 token exchange fails."""
+class OAuthTokenError(AuthError):
+    """Raised when an OAuth 2.0 token exchange or refresh fails (category=AUTH)."""
+
+    code: ClassVar[str] = "OAUTH_TOKEN"
+
+    def __init__(self, message: str, *, cause: Exception | None = None) -> None:
+        AuthError.__init__(self, message=message, cause=cause)
 
 
 class OAuthTokenService:
@@ -136,9 +143,11 @@ class OAuthTokenService:
         Raises:
             OAuthTokenError: On HTTP error or missing ``access_token``.
         """
-        import httpx  # deferred: matches existing lazy-import pattern for optional heavy deps
+        import httpx  # deferred: matches existing lazy-import pattern for optional heavy deps  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
-        from application_sdk.clients.ssl_utils import get_ssl_context
+        from application_sdk.clients.ssl_utils import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            get_ssl_context,
+        )
 
         data: dict[str, str] = {
             "grant_type": "client_credentials",
@@ -163,17 +172,20 @@ class OAuthTokenService:
                 body: dict = response.json()
         except httpx.HTTPStatusError as exc:
             raise OAuthTokenError(
-                f"Token exchange failed (HTTP {exc.response.status_code})"
+                message=f"Token exchange failed (HTTP {exc.response.status_code})",
+                cause=exc,
             ) from exc
         except httpx.HTTPError as exc:
-            raise OAuthTokenError(f"Token exchange HTTP error: {exc}") from exc
+            raise OAuthTokenError(
+                message=f"Token exchange HTTP error: {exc}", cause=exc
+            ) from exc
 
         access_token: str = body.get("access_token", "")
         if not access_token:
             error = body.get("error", "unknown")
             error_desc = body.get("error_description", "")
             raise OAuthTokenError(
-                f"OAuth exchange returned no access_token: error={error}, description={error_desc}"
+                message=f"OAuth exchange returned no access_token: error={error}, description={error_desc}"
             )
 
         expires_in = body.get("expires_in")

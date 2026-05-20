@@ -52,6 +52,7 @@ Example:
 """
 
 import os
+import warnings
 from enum import Enum
 
 import httpx
@@ -134,9 +135,80 @@ STATE_STORE_PATH_TEMPLATE = (
 OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
 
 # Temporal Prometheus Metrics
-#: Bind address for the Temporal Prometheus metrics endpoint
+#: Bind address for the Temporal Runtime's Rust-core Prometheus endpoint.
+#: Defaults to loopback (127.0.0.1) so the endpoint is not externally
+#: reachable — combined-mode FastAPI ``/metrics`` proxies it in-process,
+#: and the worker's ``TemporalCoreCollector`` scrapes it locally to feed
+#: the Pushgateway push.
 TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
-    "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+    "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
+)
+#: Per-request HTTP timeout for the in-process FastAPI ``/metrics`` proxy
+#: that fetches Temporal Rust-core metrics from the loopback endpoint. Too
+#: low and a GC pause / CPU throttle silently drops ~460 series per scrape;
+#: too high and the outer Prometheus scrape (typical 10s budget) hits its
+#: own timeout. Default 5s gives ~2.5× tail-latency headroom while staying
+#: well inside vmagent's per-target budget.
+TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float = float(
+    os.getenv("ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS", "5.0")
+)
+
+# Prometheus Pushgateway (worker-only deployments)
+#: Pushgateway URL workers push to. Empty disables push (combined-mode
+#: server+worker deployments leave this unset; ``/metrics`` covers
+#: everything via in-process proxy).
+PROMETHEUS_PUSHGATEWAY_URL = os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_URL", "")
+#: Periodic push interval (seconds). A final push always happens on shutdown.
+PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS = float(
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS", "30")
+)
+#: When True (default), call ``delete_from_gateway`` on graceful worker
+#: shutdown so stopped pods don't leave sticky data in the Pushgateway.
+#: Pushgateway has no built-in TTL, so without this every pod ever scraped
+#: leaks its series until manually deleted. Opt out only if you specifically
+#: need the last interval of metrics to persist after a graceful exit.
+PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN = (
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN", "true").lower()
+    == "true"
+)
+#: When True (default), sweep stale ``{job=mine, instance=other}`` groups on
+#: worker startup before the first push. Covers OOM / eviction / SIGKILL
+#: leaks that DELETE_ON_SHUTDOWN can't catch — the next worker tidies up
+#: after its predecessor. Strictly job-scoped (never touches other apps'
+#: groups) and threshold-gated (never reaps live siblings).
+PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START = (
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START", "true").lower()
+    == "true"
+)
+#: Staleness threshold for the startup sweep. Groups whose last push is more
+#: recent than this are left alone — protects live siblings during Temporal
+#: Worker Deployments overlap (old pod draining + new pod ramping). Default
+#: 300s = 10× the default push interval, comfortably above any normal blip.
+PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS = float(
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS", "300")
+)
+#: Per-request HTTP timeout for every Pushgateway call (push, DELETE,
+#: sweep GET, sweep per-group DELETE). The prometheus_client default of 30s
+#: is too generous for our shape: at shutdown, two back-to-back 30s hangs
+#: (final push + DELETE_ON_SHUTDOWN) would exceed Kubernetes' default 30s
+#: terminationGracePeriodSeconds and SIGKILL the pod before cleanup runs.
+#: 10s leaves 2/3 of the push interval for actual work and ~10s of slack
+#: inside the grace period for the rest of worker shutdown.
+PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS = float(
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS", "10")
+)
+#: Sleep interval between the final push and the DELETE_ON_SHUTDOWN call
+#: so Prometheus has at least one scrape opportunity to read the final
+#: batch before we wipe the group. Without this delay, the DELETE happens
+#: milliseconds after the push and the last push window of metrics — in
+#: particular, the activity-failure increments that often trigger the
+#: scale-down — never reaches Prometheus. Default 35s = one full 30s
+#: scrape interval (the cluster default for the Pushgateway scrape, see
+#: vmagent's rendered config) plus a 5s jitter buffer. Worker pods have a
+#: 12h terminationGracePeriodSeconds, so the extra wait doesn't approach
+#: the kill timeout. Set to 0 to disable.
+PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS = float(
+    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS", "35")
 )
 
 # REMOVED: ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING, WORKFLOW_UI_HOST,
@@ -148,6 +220,18 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
 MAX_CONCURRENT_STORAGE_TRANSFERS = int(
     os.getenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "4")
 )
+
+# FileReference chunked-download configuration
+#: File size threshold above which downloads use parallel range GETs (default 32 MiB)
+FILE_REF_CHUNKED_THRESHOLD_BYTES = int(
+    os.getenv("ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES", str(32 * 1024 * 1024))
+)
+#: Size of each range-GET chunk in a chunked download (default 16 MiB)
+FILE_REF_CHUNK_SIZE_BYTES = int(
+    os.getenv("ATLAN_FILE_REF_CHUNK_SIZE_BYTES", str(16 * 1024 * 1024))
+)
+#: Maximum concurrent range-GET chunks per file (default 4)
+FILE_REF_CHUNK_CONCURRENCY = int(os.getenv("ATLAN_FILE_REF_CHUNK_CONCURRENCY", "4"))
 
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
@@ -188,6 +272,38 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 # These were never used. See ExecutionSettings for the actual runtime values:
 #   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
 #   - @task(timeout_seconds=..., heartbeat_timeout_seconds=...) for per-task timeouts
+
+#: Delay before initiating worker shutdown after receiving a termination signal.
+#: This gives the event loop time to flush in-flight activity completions
+#: (e.g. RespondActivityTaskFailed/Completed RPCs) that are already queued
+#: but haven't been sent yet. Without this, a SIGTERM that arrives right
+#: after an activity fails can preempt the _run_activity coroutine before
+#: it reaches complete_activity_task(), leaving the SDK with a phantom
+#: "in-use" task slot that blocks shutdown for the entire
+#: graceful_shutdown_timeout.
+SHUTDOWN_DRAIN_DELAY_SECONDS = int(os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5))
+
+
+#: Maximum re-dispatches per activity caused by worker pod eviction (SIGTERM
+#: during activity execution: KEDA scale-down, VPA eviction, spot reclaim,
+#: node drain, rolling deploy). These re-dispatches do not consume the
+#: activity's Temporal RetryPolicy ``max_attempts`` budget, so this cap bounds
+#: the worst case (e.g. a flaky liveness probe masquerading as eviction).
+#: Validated to a non-negative integer; malformed values fall back to 3.
+def _load_worker_eviction_max_retries() -> int:
+    raw = os.getenv("ATLAN_WORKER_EVICTION_MAX_RETRIES", "3")
+    try:
+        value = int(raw)
+    except ValueError:
+        warnings.warn(
+            f"ATLAN_WORKER_EVICTION_MAX_RETRIES={raw!r} is not a valid integer; falling back to 3",
+            stacklevel=2,
+        )
+        return 3
+    return max(0, value)
+
+
+WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
 
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
@@ -258,18 +374,16 @@ OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
-#: Secondary endpoint for workflow logs (optional, for dual export to tenant-level collector)
-OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
-#: Whether to enable workflow logs export to secondary endpoint (for S3 archival + live streaming)
+#: Whether to enable a secondary OpenTelemetry log exporter for workflow-log
+#: archival (e.g. S3 sink). When true, logs are emitted to both the primary
+#: OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_WORKFLOW_LOGS_ENDPOINT.
 ENABLE_OTLP_WORKFLOW_LOGS: bool = (
     os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
 )
-
-# App Vitals
-#: Enable App Vitals interceptor for automatic lifecycle metrics
-ENABLE_APP_VITALS: bool = os.getenv("ATLAN_ENABLE_APP_VITALS", "true").lower() == "true"
+#: Endpoint for the secondary archival OTel collector
+OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 
 # OTEL Constants
 #: Node name for workflow telemetry
@@ -293,26 +407,23 @@ LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("ATLAN_LOG_FLUSH_INTERVAL_SECOND
 
 # Log Retention configuration
 LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
-LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
+LOG_CLEANUP_ENABLED = os.getenv("ATLAN_LOG_CLEANUP_ENABLED", "false").lower() == "true"
 
 # Log Location configuration
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
-# Metrics Configuration
-ENABLE_OTLP_METRICS = os.getenv("ATLAN_ENABLE_OTLP_METRICS", "false").lower() == "true"
-METRICS_FILE_NAME = "metrics.parquet"
-METRICS_BATCH_SIZE = int(os.getenv("ATLAN_METRICS_BATCH_SIZE", "100"))
+# Metrics batching / sink configuration
+METRICS_BATCH_SIZE = int(os.environ.get("ATLAN_METRICS_BATCH_SIZE", 100))
 METRICS_FLUSH_INTERVAL_SECONDS = int(
-    os.getenv("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", "10")
+    os.environ.get("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", 10)
 )
+METRICS_RETENTION_DAYS = int(os.environ.get("ATLAN_METRICS_RETENTION_DAYS", 30))
 METRICS_CLEANUP_ENABLED = (
     os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
-METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
-ENABLE_PROMETHEUS_METRICS = (
-    os.getenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "true").lower() == "true"
-)
+METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
+TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
@@ -329,16 +440,9 @@ SEGMENT_BATCH_TIMEOUT_SECONDS = float(
 )
 
 # Traces Configuration
+#: Whether to register Temporal's OTel TracingInterceptor and emit spans.
+#: Production does not yet support traces; default is False.
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
-TRACES_BATCH_SIZE = int(os.getenv("ATLAN_TRACES_BATCH_SIZE", "100"))
-TRACES_FLUSH_INTERVAL_SECONDS = int(
-    os.getenv("ATLAN_TRACES_FLUSH_INTERVAL_SECONDS", "5")
-)
-TRACES_RETENTION_DAYS = int(os.getenv("ATLAN_TRACES_RETENTION_DAYS", "30"))
-TRACES_CLEANUP_ENABLED = (
-    os.getenv("ATLAN_TRACES_CLEANUP_ENABLED", "true").lower() == "true"
-)
-TRACES_FILE_NAME = "traces.parquet"
 
 # Store Sink Configuration (defaults to enabled)
 ENABLE_OBSERVABILITY_STORE_SINK: bool = (

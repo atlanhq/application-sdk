@@ -7,10 +7,11 @@ This is distinct from the tenant's own Dapr-configured store (``storage.ops``).
 Use ``CloudStore`` when an app needs to access a customer's cloud bucket
 using credentials they provide (e.g., cloud-sourced spec files, data imports).
 
-Note: File I/O (read_bytes/write_bytes) is synchronous within async methods.
-This is acceptable for typical use cases (spec files, config files) but not
-suitable for multi-GB payloads. For large file streaming, use the underlying
-``store`` property with obstore's streaming APIs directly.
+File transfers (``upload`` / ``download``) use obstore's streaming APIs so
+arbitrarily large objects are transferred without materialising the full payload
+in memory.  Network I/O is fully async; local disk reads and writes use
+synchronous chunked I/O (~8–10 MiB per chunk), which is standard Python
+async-library practice.
 
 Usage::
 
@@ -42,7 +43,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -55,11 +55,28 @@ from application_sdk.storage.errors import (
     StorageError,
     StorageNotFoundError,
 )
+from application_sdk.storage.ops import (
+    _list_items,
+    _safe_join_under,
+    download_file,
+    upload_file,
+)
 
-# Cannot use get_logger due to circular import
-# (observability -> storage -> cloud -> observability). Resolve when
-# observability module decouples from storage.
-logger = logging.getLogger(__name__)
+# Lazy import: direct get_logger() at module load would create a circular
+# dependency (observability -> storage -> cloud -> observability).
+# Deferred to first log call so all modules finish loading first.
+_logger = None
+
+
+def _log():
+    global _logger
+    if _logger is None:
+        from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — deferred to break circular import (observability ↔ storage)
+            get_logger,
+        )
+
+        _logger = get_logger(__name__)
+    return _logger
 
 
 class CloudStore:
@@ -135,7 +152,7 @@ class CloudStore:
                 f"Set 'authType' to 's3', 'gcs', or 'adls'. Got: {auth_type!r}"
             )
 
-        logger.debug("Created CloudStore provider=%s", auth_type)
+        _log().debug("Created CloudStore provider=%s", auth_type)
         return cls(store, provider=auth_type)
 
     # ------------------------------------------------------------------
@@ -185,8 +202,11 @@ class CloudStore:
             key: Specific object key to download (single file mode).
             output_dir: Local directory to write files into.
             prefix: Object key prefix for listing (multi-file mode).
-            suffix_filter: Only download files with these extensions
-                (e.g. ``{".json", ".yaml"}``). Ignored in single-file mode.
+            suffix_filter: Only download files whose key ends with one of
+                these strings (e.g. ``{".json", ".yaml"}``).  Matches are
+                case-insensitive and use ``endswith`` — handles multi-part
+                extensions (e.g. ``".tar.gz"``) correctly.  Ignored in
+                single-file mode.
             max_concurrency: Maximum parallel downloads (default 4).
 
         Returns:
@@ -209,13 +229,10 @@ class CloudStore:
         )
 
     async def _download_single(self, key: str, output: Path) -> list[Path]:
-        """Download a single file."""
+        """Download a single file by streaming to disk without buffering."""
         local_path = output / Path(key).name
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-
-        data = await self.get_bytes(key)
-        local_path.write_bytes(data)
-        logger.info("Downloaded key=%s size=%d local=%s", key, len(data), local_path)
+        await download_file(key, local_path, store=self._store, normalize=False)
+        _log().info("Downloaded key=%s local_path=%s", key, str(local_path))
         return [local_path]
 
     async def _download_prefix(
@@ -227,7 +244,7 @@ class CloudStore:
     ) -> list[Path]:
         """Download all files under a prefix."""
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
-        logger.info("Listing objects under prefix=%s", list_prefix)
+        _log().info("Listing objects under prefix=%s", list_prefix)
 
         keys = await self._list_keys(list_prefix, suffix_filter)
 
@@ -237,7 +254,6 @@ class CloudStore:
                 + (f" (filter: {suffix_filter})" if suffix_filter else "")
             )
 
-        resolved_output = output.resolve()
         sem = asyncio.Semaphore(max_concurrency)
 
         async def _dl(obj_key: str) -> Path:
@@ -247,59 +263,51 @@ class CloudStore:
                     if list_prefix and obj_key.startswith(list_prefix)
                     else Path(obj_key).name
                 )
-                local_path = (output / rel).resolve()
-                # Prevent path traversal from malicious remote keys
-                if not local_path.is_relative_to(resolved_output):
-                    raise StorageError(f"Path traversal detected in key: {obj_key!r}")
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                data = await self.get_bytes(obj_key)
-                local_path.write_bytes(data)
+                # Reject keys whose resolved path escapes output (e.g. via ".." segments).
+                local_path = _safe_join_under(output, rel)
+                await download_file(
+                    obj_key, local_path, store=self._store, normalize=False
+                )
                 return local_path
 
         results = await asyncio.gather(*[_dl(k) for k in keys])
         downloaded = list(results)
-        logger.info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
+        _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
-
-    def _list_keys_sync(
-        self, list_prefix: str, suffix_filter: set[str] | None = None
-    ) -> list[str]:
-        """Synchronous key listing helper (run via asyncio.to_thread)."""
-        # Normalize suffix filter to lowercase for case-insensitive matching
-        normalized_filter = (
-            {s.lower() for s in suffix_filter} if suffix_filter else None
-        )
-        try:
-            keys: list[str] = []
-            for batch in obs.list(self._store, prefix=list_prefix or None):
-                for item in batch:
-                    obj_path = str(item["path"])
-                    if normalized_filter:
-                        ext = Path(obj_path).suffix.lower()
-                        if ext not in normalized_filter:
-                            continue
-                    keys.append(obj_path)
-            return sorted(keys)
-        except Exception as exc:
-            raise StorageError(
-                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
-            ) from exc
 
     async def _list_keys(
         self, list_prefix: str, suffix_filter: set[str] | None = None
     ) -> list[str]:
-        """Async wrapper for key listing."""
-        return await asyncio.to_thread(self._list_keys_sync, list_prefix, suffix_filter)
+        # Lowercase once so endswith checks are case-insensitive (e.g. ".JSON" matches ".json").
+        lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
+        try:
+            items = await _list_items(self._store, list_prefix or None)
+            return sorted(
+                path
+                for path, _ in items
+                if not lfilter or any(path.lower().endswith(s) for s in lfilter)
+            )
+        except Exception as exc:
+            raise StorageError(
+                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
+            ) from exc
 
     async def list(self, prefix: str = "", *, suffix: str = "") -> list[str]:
         """List object keys under a prefix.
 
         Args:
             prefix: Key prefix to filter by.
-            suffix: Optional extension filter (e.g. ``".json"``).
+            suffix: Optional extension or tail filter (e.g. ``".json"``).
+                Matched case-insensitively against the full key using
+                ``endswith`` — handles multi-part extensions
+                (e.g. ``".tar.gz"``) correctly.
 
         Returns:
-            Sorted list of matching object keys.
+            Sorted list of matching object keys.  Zero-byte objects that act as
+            GCS-style directory markers (i.e. they have at least one child key
+            under them) are excluded; zero-byte files with no children are
+            returned normally.  For raw access including markers, use the
+            underlying :attr:`store` property directly.
         """
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
         suffix_filter = {suffix} if suffix else None
@@ -314,7 +322,7 @@ class CloudStore:
         local_path: str | Path,
         key: str,
     ) -> int:
-        """Upload a local file to the cloud store.
+        """Upload a local file to the cloud store by streaming without buffering.
 
         Args:
             local_path: Path to the local file.
@@ -323,14 +331,23 @@ class CloudStore:
         Returns:
             Number of bytes uploaded.
         """
+        path = Path(local_path)
         try:
-            path = Path(local_path)
-            data = path.read_bytes()
-            await obs.put_async(self._store, key, data)
+            size = path.stat().st_size
+            await upload_file(
+                key,
+                path,
+                store=self._store,
+                normalize=False,
+                retain_local_copy=True,
+                compute_hash=False,
+            )
+        except StorageError:
+            raise
         except Exception as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
-        logger.info("Uploaded key=%s size=%d", key, len(data))
-        return len(data)
+        _log().info("Uploaded key=%s bytes=%d", key, size)
+        return size
 
     async def upload_bytes(self, key: str, data: bytes) -> int:
         """Upload raw bytes to the cloud store.
@@ -408,7 +425,19 @@ def _infer_auth_type(extra: dict[str, Any]) -> str:
 
 
 def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
-    """Create an S3 store from credentials."""
+    """Create an S3 store from credentials.
+
+    BLDX-1155: customer-facing buckets traverse the public internet — exactly
+    the path most likely to time out on large extracts.  Plumb the SDK
+    defaults for ``client_options`` + ``retry_config`` so every CloudStore
+    inherits the same 30-minute request budget as the in-tenant Dapr store.
+    """
+    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
+        log_obstore_config,
+        obstore_client_options,
+        obstore_retry_config,
+    )
+
     bucket = extra.get("s3_bucket", "")
     if not bucket:
         raise StorageConfigError("S3 bucket is required (extra.s3_bucket)")
@@ -428,13 +457,32 @@ def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStor
     if role_arn:
         config["aws_role_arn"] = role_arn
         config["aws_role_session_name"] = "cloud-store-session"
-        logger.debug("S3 role-based auth configured")
+        _log().debug("S3 role-based auth configured")
 
-    return S3Store(bucket=bucket, config=config)
+    client_options = obstore_client_options()
+    retry_config = obstore_retry_config()
+    log_obstore_config(
+        "cloud-s3", client_options=client_options, retry_config=retry_config
+    )
+    return S3Store(
+        bucket=bucket,
+        config=config,
+        client_options=client_options,
+        retry_config=retry_config,
+    )
 
 
 def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
-    """Create a GCS store from credentials."""
+    """Create a GCS store from credentials.
+
+    BLDX-1155: see :func:`_create_s3_store`; same plumbing applies.
+    """
+    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
+        log_obstore_config,
+        obstore_client_options,
+        obstore_retry_config,
+    )
+
     bucket = extra.get("gcs_bucket", "")
     if not bucket:
         raise StorageConfigError("GCS bucket is required (extra.gcs_bucket)")
@@ -444,11 +492,30 @@ def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectSto
     if sa_json:
         gcs_config["google_service_account_key"] = sa_json
 
-    return GCSStore(bucket=bucket, config=gcs_config if gcs_config else None)
+    client_options = obstore_client_options()
+    retry_config = obstore_retry_config()
+    log_obstore_config(
+        "cloud-gcs", client_options=client_options, retry_config=retry_config
+    )
+    return GCSStore(
+        bucket=bucket,
+        config=gcs_config if gcs_config else None,
+        client_options=client_options,
+        retry_config=retry_config,
+    )
 
 
 def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
-    """Create an Azure (ADLS) store from credentials."""
+    """Create an Azure (ADLS) store from credentials.
+
+    BLDX-1155: see :func:`_create_s3_store`; same plumbing applies.
+    """
+    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
+        log_obstore_config,
+        obstore_client_options,
+        obstore_retry_config,
+    )
+
     storage_account = extra.get("storage_account_name", "")
     container = extra.get("adls_container", "objectstore")
     if not storage_account:
@@ -474,4 +541,14 @@ def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectS
         if access_key:
             az_config["azure_storage_client_secret"] = access_key
 
-    return AzureStore(container_name=container, config=az_config)
+    client_options = obstore_client_options()
+    retry_config = obstore_retry_config()
+    log_obstore_config(
+        "cloud-azure", client_options=client_options, retry_config=retry_config
+    )
+    return AzureStore(
+        container_name=container,
+        config=az_config,
+        client_options=client_options,
+        retry_config=retry_config,
+    )

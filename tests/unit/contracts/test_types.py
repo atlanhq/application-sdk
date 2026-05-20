@@ -109,3 +109,49 @@ class TestFileReference:
             file_count=42,
         )
         assert ref.file_count == 42
+
+    # ---- auto_materialize escape hatch (BLDX-1155) ---------------------
+
+    def test_auto_materialize_defaults_to_true(self) -> None:
+        ref = FileReference()
+        assert ref.auto_materialize is True
+
+    def test_auto_materialize_can_be_disabled(self) -> None:
+        ref = FileReference(local_path="/tmp/x", auto_materialize=False)
+        assert ref.auto_materialize is False
+
+    def test_auto_materialize_round_trips_through_model_dump(self) -> None:
+        ref = FileReference(local_path="/tmp/x", auto_materialize=False)
+        dumped = ref.model_dump()
+        restored = FileReference.model_validate(dumped)
+        assert restored.auto_materialize is False
+
+    # ---- from_local() directory file_count fix (BLDX-1155) ------------
+
+    def test_from_local_single_file_counts_one(self, tmp_path: Path) -> None:
+        f = tmp_path / "single.txt"
+        f.write_text("hi")
+        ref = FileReference.from_local(f)
+        assert ref.file_count == 1
+
+    def test_from_local_directory_counts_all_files(self, tmp_path: Path) -> None:
+        d = tmp_path / "tree"
+        d.mkdir()
+        (d / "a.txt").write_text("a")
+        (d / "b.txt").write_text("b")
+        sub = d / "sub"
+        sub.mkdir()
+        (sub / "c.txt").write_text("c")
+        ref = FileReference.from_local(d)
+        assert ref.file_count == 3
+
+    def test_from_local_empty_directory_counts_zero(self, tmp_path: Path) -> None:
+        d = tmp_path / "empty"
+        d.mkdir()
+        ref = FileReference.from_local(d)
+        assert ref.file_count == 0
+
+    def test_from_local_nonexistent_keeps_default_count(self) -> None:
+        # Does not stat the path eagerly for non-existent inputs.
+        ref = FileReference.from_local("/does/not/exist")
+        assert ref.file_count == 1

@@ -14,12 +14,9 @@ from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 def _clean_infrastructure():
     """Reset infrastructure context after each test to prevent cross-test pollution."""
     yield
-    from application_sdk.infrastructure.context import (
-        InfrastructureContext,
-        set_infrastructure,
-    )
+    from application_sdk.infrastructure.context import clear_infrastructure
 
-    set_infrastructure(InfrastructureContext())
+    clear_infrastructure()
 
 
 class TestMockProtocolCompliance:
@@ -60,24 +57,29 @@ class TestDaprRequiredStartup:
         """_create_infrastructure raises when DAPR_HTTP_PORT not set."""
         import pytest
 
+        from application_sdk.main_errors import DaprNotDetectedError
+
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
         from application_sdk.main import _create_infrastructure
 
-        with pytest.raises(RuntimeError, match="Dapr sidecar not detected"):
+        with pytest.raises(DaprNotDetectedError) as exc_info:
             await _create_infrastructure()
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAPR_SIDECAR"
 
     async def test_error_message_includes_poe_command(self, monkeypatch):
         """Error message tells developer how to fix it."""
+        from application_sdk.main_errors import DaprNotDetectedError
+
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
         from application_sdk.main import _create_infrastructure
 
         try:
             await _create_infrastructure()
-        except RuntimeError as e:
-            assert "poe start-deps" in str(e)
-            assert "DAPR_HTTP_PORT" in str(e)
+        except DaprNotDetectedError as e:
+            assert "poe start-deps" in e.message
+            assert "DAPR_HTTP_PORT" in e.message
 
 
 class TestMockPubSubSelfContained:

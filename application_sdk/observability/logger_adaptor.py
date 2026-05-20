@@ -3,7 +3,7 @@ import logging
 import sys
 import threading
 import traceback as tb_module
-from typing import Any, ClassVar, Dict, Tuple
+from typing import Any, ClassVar
 
 from loguru import logger
 from opentelemetry._logs import LogRecord, SeverityNumber
@@ -32,6 +32,9 @@ from application_sdk.constants import (
     SERVICE_NAME,
 )
 from application_sdk.observability.context import correlation_context, request_context
+from application_sdk.observability.logger_adaptor_errors import (
+    UnsupportedLogRecordError,
+)
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.utils import (
     build_otel_resource,
@@ -40,8 +43,15 @@ from application_sdk.observability.utils import (
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
+# SDK-side allowlist that gates which kwargs reach OTLP.  When a logger is called
+# with structured kwargs (e.g. ``_log().info("Downloaded", storage_path=key)``),
+# loguru places the kwargs on ``record["extra"]`` rather than in the message
+# string.  ``_build_extra_dict`` filters that dict through this set before it is
+# copied into the emitted OTLP LogRecord's ``attributes`` map — keys not listed
+# here are dropped and never reach the exporter.
 _KNOWN_EXTRA_KEYS = frozenset(
     {
+        # ── HTTP request/response ────────────────────────────────────────
         "client_host",
         "duration_ms",
         "method",
@@ -49,104 +59,106 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "request_id",
         "status_code",
         "url",
+        # ── Temporal workflow / activity context ─────────────────────────
+        # Auto-injected by `process()` + `get_workflow_context()` on every log
+        # emitted inside a workflow/activity (see logger_adaptor.process and
+        # observability/utils.get_workflow_context).
+        "in_workflow",
+        "in_activity",
         "workflow_id",
+        "workflow_run_id",
+        # Backwards-compat alias for ``workflow_run_id``.
         "run_id",
-        "workflow_run_id",  # App Vitals uses this alias alongside run_id
         "workflow_type",
         "namespace",
         "task_queue",
         "attempt",
         "activity_id",
         "activity_type",
+        # Parent identity — only emitted on child workflows (workflow.info().parent)
+        "parent_workflow_id",
+        "parent_run_id",
+        # Activity timeout fields — emitted by app authors logging activity
+        # configuration; not auto-injected.
         "schedule_to_close_timeout",
         "start_to_close_timeout",
         "schedule_to_start_timeout",
         "heartbeat_timeout",
+        # ── Outcome / error ──────────────────────────────────────────────
+        "status",
+        "error_type",
+        "error_class",
+        "error_message",
+        "stack_trace",
+        # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",
         "trace_id",
         "span_id",
         "correlation_id",
-        # ── App Vitals ───────────────────────────────────────────────────
-        # Deterministic filter flag — marks every App Vitals log event
-        "app_vitals",
-        # Per-workflow identity (deployment-level fields are on OTel Resource;
-        # tenant_id is redundant with ResourceAttributes['k8s.cluster.name'])
-        # Outcome
-        "status",
-        "error_type",
-        "error_class",
-        "error_message",
-        "error_cause_chain",
-        "stack_trace",
-        "error_fingerprint",
-        # Metric classification
-        "dimension",
-        "source",
-        "metric_name",
-        # Throughput
-        "assets_processed",
-        # Efficiency (per-activity resource deltas)
-        "cpu_seconds",
-        "mem_gb_sec",
-        # Performance timings
-        "schedule_to_start_ms",
-        "timeout_budget_total_ms",
-        "timeout_budget_used_pct",
-        # Retry context
-        "retry_max_attempts",
-        # Payload size
-        "input_payload_bytes",
-        # Activity wall-clock timestamps (ISO 8601)
-        "activity_start_time",
-        "activity_end_time",
-        # Workflow hierarchy
-        "parent_workflow_id",
-        "parent_run_id",
-        "continued_run_id",
-        "cron_schedule",
-        # Workflow-level timeout budget
-        "wf_timeout_budget_total_ms",
-        "wf_timeout_budget_used_pct",
-        "history_length",
-        # Workflow summary — activity duration rollup
-        "sum_activity_duration_ms",
-        # Workflow summary (app_vitals.wf.summary event)
-        "total_activities",
-        "succeeded_activities",
-        "failed_activities",
-        "total_child_workflows",
-        "first_failure_activity_type",
-        "first_failure_error_type",
-        "preflight_passed",
-        "circuit_breaker_tripped",
-        "bottleneck_activity_type",
-        "bottleneck_duration_ms",
+        # ── ObjectStore operations ───────────────────────────────────────
+        "storage_op",
+        "store_path",
+        "outcome",
+        "elapsed_ms",
+        "size_bytes",
+        "throughput_mibps",
+        # ── FileReference transfers ──────────────────────────────────────
+        "storage_path",
+        "local_path",
+        "file_size_bytes",
+        "bytes_uploaded",
+        "bytes_downloaded",
+        "bytes_transferred_before_failure",
+        "sha256",
+        "tier",
+        "file_count",
+        "files_skipped",
+        "files_downloaded",
+        "chunk_size_bytes",
+        "chunks_total",
+        "chunks_completed",
+        "is_cache_hit",
+        "reused_local_path",
+        "dedup_key",
+        "chunk_offset",
+        "chunk_length",
     }
 )
 
 
+_PREFIXES_PASSTHROUGH = (
+    "atlan.",  # SDK convention: atlan.correlation_id and similar dotted keys
+    "exception.",  # OTel semconv: exception.type/message/stacktrace
+    "failure.",  # SDK convention: failure.category/audience/code from AppError
+    "otel.",  # OTel semconv: otel.status_code
+    "temporal.",  # SDK convention: temporal.workflow.id, etc.
+    "tenant.",
+    "workflow_run.",  # AE convention: workflow_run.terminated / workflow_run.node
+    # events emitted from AutomationEngineWorkflow's finally block,
+    # carrying typed FailureDetails (category, code, audience,
+    # retryable, evidence) projected from the cause chain.
+)
+
+
 def _build_extra_dict(
-    record_extra: Dict[str, Any], exception: Any = None
-) -> Dict[str, Any]:
+    record_extra: dict[str, Any], exception: Any = None
+) -> dict[str, Any]:
     """Build a dict of structured log extra fields from a loguru record's extra dict."""
-    extra: Dict[str, Any] = {}
+    extra: dict[str, Any] = {}
     for k, v in record_extra.items():
-        if k != "logger_name" and k in _KNOWN_EXTRA_KEYS:
+        if k == "logger_name":
+            continue
+        if k in _KNOWN_EXTRA_KEYS:
             extra[k] = _normalize_log_extra_value(k, v)
-        elif (
-            k.startswith("atlan-")
-            or k.startswith("exception.")
-            or k.startswith("temporal.")
-            or k.startswith("tenant.")
-        ) and v is not None:
+        elif k.startswith(_PREFIXES_PASSTHROUGH) and v is not None:
             extra[k] = v if isinstance(v, (bool, int, float, str, bytes)) else str(v)
     for key, value in _extract_exception_attributes(exception).items():
         extra[key] = value
     return extra
 
 
-def _make_log_record_dict(message: Any) -> Dict[str, Any]:
+def _make_log_record_dict(message: Any) -> dict[str, Any]:
     """Build a log record dict from a loguru message."""
     return {
         "timestamp": message.record["time"].timestamp(),
@@ -176,7 +188,7 @@ def _format_exception_stacktrace(exception: Any) -> str:
     ).rstrip()
 
 
-def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
+def _extract_exception_attributes(exception: Any) -> dict[str, str]:
     """Extract OTEL semantic exception attributes from a Loguru exception record."""
     if exception is None:
         return {}
@@ -190,7 +202,7 @@ def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
     qualname = getattr(exc_type, "__qualname__", getattr(exc_type, "__name__", None))
     type_name = f"{module}.{qualname}" if module and qualname else str(exc_type)
 
-    attrs: Dict[str, str] = {"exception.type": type_name}
+    attrs: dict[str, str] = {"exception.type": type_name}
     if exc_value is not None:
         attrs["exception.message"] = str(exc_value)
 
@@ -208,7 +220,7 @@ def _normalize_log_extra_value(key: str, value: Any) -> Any:
     return value
 
 
-def _format_printf_args(msg: str, args: Tuple[Any, ...]) -> Tuple[str, Tuple[Any, ...]]:
+def _format_printf_args(msg: str, args: tuple[Any, ...]) -> tuple[str, tuple[Any, ...]]:
     """Pre-format printf-style args into the message string.
 
     Loguru uses {} formatting, not %s. This bridges the gap so both styles work
@@ -232,7 +244,9 @@ def _has_remote_otlp_endpoint() -> bool:
         ep = OTEL_EXPORTER_OTLP_ENDPOINT.strip()
         if not ep:
             return False
-        from urllib.parse import urlparse
+        from urllib.parse import (  # noqa: PLC0415 — stdlib urllib.parse; lazy use only on URL config
+            urlparse,
+        )
 
         host = urlparse(ep).hostname or ""
         return host not in ("", "localhost", "127.0.0.1", "::1")
@@ -241,15 +255,29 @@ def _has_remote_otlp_endpoint() -> bool:
         return False
 
 
-# Add a Loguru handler for the Python logging system
-class InterceptHandler(logging.Handler):
-    """A custom logging handler that intercepts Python's standard logging and forwards it to Loguru.
+#: Built-in attributes set on every ``logging.LogRecord``. Computed once at
+#: import time from a dummy record so this stays correct across Python
+#: versions (``taskName`` was added in 3.12, future versions may add more).
+#: Anything on a record's ``__dict__`` outside this set came from a
+#: caller-supplied ``extra={...}`` and needs to flow to loguru.
+_LOGRECORD_RESERVED_ATTRS: frozenset[str] = frozenset(
+    logging.LogRecord(
+        name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None
+    ).__dict__
+)
 
-    This handler ensures that all Python standard library logging is properly formatted and
-    forwarded to Loguru's logging system, maintaining consistent logging across the application.
+
+class InterceptHandler(logging.Handler):
+    """Bridge Python's stdlib logging into loguru, preserving ``extra={...}``.
+
+    Without forwarding the extras, callers like ``storage/ops.py`` that use
+    stdlib ``logging.getLogger`` and emit ``logger.log(..., extra={"outcome":
+    "success", ...})`` would have their structured fields silently dropped
+    on the way to the OTLP exporter — ``outcome``, ``elapsed_ms``, etc.
+    would never reach the exporter.
     """
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
         # Get corresponding Loguru level if it exists
         try:
             level = logger.level(record.levelname).name
@@ -267,8 +295,17 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        # Add logger_name to extra to prevent KeyError
-        logger_extras = {"logger_name": record.name}
+        # Forward caller-supplied ``extra={...}``. Python's stdlib spreads
+        # ``extra`` directly into ``record.__dict__``; the delta vs. a blank
+        # LogRecord is exactly what the caller passed.
+        logger_extras: dict[str, object] = {
+            k: v
+            for k, v in record.__dict__.items()
+            if k not in _LOGRECORD_RESERVED_ATTRS
+        }
+        # SDK convention: ``logger_name`` always tracks ``record.name``.
+        # Set last so callers can't shadow it via ``extra``.
+        logger_extras["logger_name"] = record.name
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()
@@ -306,6 +343,56 @@ SEVERITY_MAPPING = {
 }
 
 
+class _LazyLoggerProxy:
+    """Returned by AtlanLoggerAdapter.opt(); context is pre-bound, loguru handles lazy eval."""
+
+    __slots__ = ("_logger",)
+
+    def __init__(self, bound_opt_logger: Any) -> None:
+        self._logger = bound_opt_logger
+
+    def debug(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.debug(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy debug logging", exc_info=True)
+
+    def info(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.info(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy info logging", exc_info=True)
+
+    def warning(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.warning(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy warning logging", exc_info=True)
+
+    def error(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.error(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy error logging", exc_info=True)
+
+    def critical(self, msg: str, **kwargs: Any) -> None:
+        try:
+            self._logger.critical(msg, **kwargs)
+        except Exception:
+            logging.error("Error in lazy critical logging", exc_info=True)
+
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Dispatch to the named level method matching stdlib integer *level*."""
+        if level >= logging.ERROR:
+            self.error(msg, *args, **kwargs)
+        elif level >= logging.WARNING:
+            self.warning(msg, *args, **kwargs)
+        elif level >= logging.INFO:
+            self.info(msg, *args, **kwargs)
+        else:
+            self.debug(msg, *args, **kwargs)
+
+
 class AtlanLoggerAdapter(AtlanObservability[Any]):
     """A custom logger adapter for Atlan that extends AtlanObservability.
 
@@ -325,10 +412,17 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation.
 
+        Public test hook: any new ClassVar or module-level cache associated
+        with logger initialization MUST be reset here so test isolation
+        stays correct. Currently resets ``_initialized``, ``_flush_task_started``,
+        and clears the module-level ``_logger_instances`` cache.
+
         This method should only be used in tests to allow fresh sink setup
         for each test case.
         """
         cls._initialized = False
+        cls._flush_task_started = False
+        _logger_instances.clear()
 
     def __init__(self, logger_name: str) -> None:
         """Initialize the AtlanLoggerAdapter with enhanced configuration.
@@ -419,10 +513,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 " - {message}\n{exception}"
             )
 
+        # Split sinks by severity so cloud log collectors (GCP Cloud Logging,
+        # AWS CloudWatch Logs Insights, etc.) that infer severity from the file
+        # descriptor classify benign records as INFO instead of ERROR. Records
+        # at WARNING and below go to stdout; ERROR/CRITICAL/exception records
+        # stay on stderr. Matches uvicorn/gunicorn conventions.
+        _ERROR_LEVEL_NO = SEVERITY_MAPPING["ERROR"]
+        self.logger.add(
+            sys.stdout,
+            format=get_log_format,
+            level=SEVERITY_MAPPING[LOG_LEVEL],
+            colorize=colorize,
+            filter=lambda record: record["level"].no < _ERROR_LEVEL_NO,
+        )
         self.logger.add(
             sys.stderr,
             format=get_log_format,
-            level=SEVERITY_MAPPING[LOG_LEVEL],
+            level=max(SEVERITY_MAPPING[LOG_LEVEL], _ERROR_LEVEL_NO),
             colorize=colorize,
         )
 
@@ -438,16 +545,14 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                             self._periodic_flush()
                         )
                     except RuntimeError:
-                        threading.Thread(
-                            target=self._start_asyncio_flush, daemon=True
-                        ).start()
+                        self._spawn_flush_thread()
                     AtlanLoggerAdapter._flush_task_started = True
                 except Exception:
                     logging.error("Failed to start flush task", exc_info=True)
 
-        # OTLP export: build list of processors, wire up only if any are enabled.
-        #   ENABLE_OTLP_LOGS: primary exporter (host DaemonSet, central ClickHouse)
-        #   ENABLE_OTLP_WORKFLOW_LOGS: secondary exporter (tenant collector, S3/Kafka)
+        # OTLP log export — primary exporter to OTEL_EXPORTER_OTLP_ENDPOINT,
+        # plus an optional secondary exporter to OTEL_WORKFLOW_LOGS_ENDPOINT
+        # for archival pipelines (e.g. an OTel collector that writes to S3).
         try:
             otlp_processors = []
 
@@ -463,9 +568,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                         max_queue_size=OTEL_QUEUE_SIZE,
                     )
                 )
-                logging.info(
-                    "OTLP primary exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT
-                )
+                logging.info("OTLP exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT)
 
             if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
                 otlp_processors.append(
@@ -501,14 +604,14 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # Mark initialization complete only after all sinks are successfully added
         AtlanLoggerAdapter._initialized = True
 
-    def process_record(self, record: Any) -> Dict[str, Any]:
+    def process_record(self, record: Any) -> dict[str, Any]:
         """Process a log record into a standardized dictionary format.
 
         Args:
             record (Any): Input log record, can be a loguru message or pre-built dict.
 
         Returns:
-            Dict[str, Any]: Standardized dictionary representation of the log record.
+            dict[str, Any]: Standardized dictionary representation of the log record.
 
         Raises:
             ValueError: If the record format is not supported.
@@ -521,14 +624,13 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         if isinstance(record, dict):
             return record
 
-        raise ValueError(f"Unsupported record format: {type(record)}")
+        raise UnsupportedLogRecordError(observed_type=type(record).__name__)
 
     def export_record(self, record: Any) -> None:
         """Export a log record to external systems.
 
         OTLP export is handled exclusively by the otlp_sink; this path is a no-op.
         """
-        pass
 
     def _create_log_record(self, record: dict) -> LogRecord:
         """Create an OpenTelemetry LogRecord from a dictionary.
@@ -544,7 +646,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         )
 
         # Start with base attributes
-        attributes: Dict[str, Any] = {
+        attributes: dict[str, Any] = {
             "code.filepath": record["file"],
             "code.function": record["function"],
             "code.lineno": record["line"],
@@ -555,16 +657,15 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         if "extra" in record and "error_code" in record["extra"]:
             attributes["error.code"] = record["extra"]["error_code"]
 
-        # Add extra attributes at the same level
-
-        # Add extra attributes at the same level
+        # Skip None — str(None) leaks the literal "None" string downstream.
         if "extra" in record:
             for key, value in record["extra"].items():
-                if key != "error_code":  # Skip error_code as it's already handled
-                    if isinstance(value, (bool, int, float, str, bytes)):
-                        attributes[key] = value
-                    else:
-                        attributes[key] = str(value)
+                if key == "error_code" or value is None:
+                    continue
+                if isinstance(value, (bool, int, float, str, bytes)):
+                    attributes[key] = value
+                else:
+                    attributes[key] = str(value)
 
         return LogRecord(
             timestamp=int(record["timestamp"] * 1e9),
@@ -577,6 +678,14 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             body=record["message"],
             attributes=attributes,
         )
+
+    def _spawn_flush_thread(self) -> None:
+        """Spawn a daemon thread to run the asyncio flush loop.
+
+        Extracted for testability — lets tests assert this specific call without
+        patching threading.Thread globally (which would also capture OTel internals).
+        """
+        threading.Thread(target=self._start_asyncio_flush, daemon=True).start()
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic log flushing.
@@ -592,15 +701,15 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         finally:
             loop.close()
 
-    def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+    def process(self, msg: Any, kwargs: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         """Process log message with temporal and request context.
 
         Args:
             msg (Any): Original log message
-            kwargs (Dict[str, Any]): Additional logging parameters
+            kwargs (dict[str, Any]): Additional logging parameters
 
         Returns:
-            Tuple[Any, Dict[str, Any]]: Processed message and updated kwargs with context
+            tuple[Any, dict[str, Any]]: Processed message and updated kwargs with context
 
         This method:
         - Adds request context if available
@@ -628,10 +737,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         corr_ctx = correlation_context.get()
         if corr_ctx:
             # Add trace_id if present (for log format display)
-            if "trace_id" in corr_ctx and corr_ctx["trace_id"]:
+            if corr_ctx.get("trace_id"):
                 kwargs["trace_id"] = str(corr_ctx["trace_id"])
             # Add correlation_id if present (AppWorkflowRun GUID for e2e correlation)
-            if "correlation_id" in corr_ctx and corr_ctx["correlation_id"]:
+            if corr_ctx.get("correlation_id"):
                 kwargs["correlation_id"] = str(corr_ctx["correlation_id"])
             # Add atlan-* headers for OTEL
             for key, value in corr_ctx.items():
@@ -648,7 +757,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # Bridge: if legacy correlation_context dict is empty, read from v3
         # CorrelationContext ContextVar (set by the v3 CorrelationContextInterceptor).
         if "correlation_id" not in kwargs:
-            from application_sdk.observability.correlation import (
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
                 get_correlation_context,
             )
 
@@ -786,6 +895,40 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             logging.error("Error in critical logging", exc_info=True)
             self._sync_flush()
 
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Dispatch to the named level method matching stdlib integer *level*.
+
+        Accepts the same stdlib ``logging.DEBUG`` / ``logging.INFO`` /
+        ``logging.WARNING`` / ``logging.ERROR`` integer constants so callers
+        can vary the level at runtime without building a dispatch table
+        themselves.
+        """
+        if level >= logging.ERROR:
+            self.error(msg, *args, **kwargs)
+        elif level >= logging.WARNING:
+            self.warning(msg, *args, **kwargs)
+        elif level >= logging.INFO:
+            self.info(msg, *args, **kwargs)
+        else:
+            self.debug(msg, *args, **kwargs)
+
+    def opt(
+        self, *, lazy: bool = False, **loguru_opt_kwargs: Any
+    ) -> "_LazyLoggerProxy":
+        """Return a proxy with loguru opt() flags applied and context pre-bound.
+
+        Primary use case is lazy=True for performance-critical debug paths where
+        the argument expression is expensive to compute:
+
+            self.logger.opt(lazy=True).debug("record {data}", data=lambda: json.dumps(record))
+
+        The lambda is evaluated only when DEBUG is enabled. Use loguru's {key}
+        format (not %-style) when passing lazy kwargs.
+        """
+        _, ctx_kwargs = self.process("", {})
+        bound = self.logger.bind(**ctx_kwargs).opt(lazy=lazy, **loguru_opt_kwargs)
+        return _LazyLoggerProxy(bound)
+
     def activity(self, msg: str, *args: Any, **kwargs: Any):
         """Log an activity-specific message with activity context.
 
@@ -826,11 +969,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             logging.error("Error in metric logging", exc_info=True)
             self._sync_flush()
 
-    def _send_to_otel(self, record: Dict[str, Any]):
+    def _send_to_otel(self, record: dict[str, Any]):
         """Send log record to OpenTelemetry.
 
         Args:
-            record (Dict[str, Any]): Log record dict to send
+            record (dict[str, Any]): Log record dict to send
 
         This method:
         - Creates an OpenTelemetry LogRecord
@@ -924,7 +1067,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
 
 # Create a singleton instance of the logger
-_logger_instances: Dict[str, AtlanLoggerAdapter] = {}
+_logger_instances: dict[str, AtlanLoggerAdapter] = {}
 
 
 def get_logger(name: str | None = None) -> AtlanLoggerAdapter:

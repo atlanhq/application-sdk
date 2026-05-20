@@ -1,0 +1,592 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2024 Atlan Pte. Ltd. */
+
+/// Contract for the shared secure-agent connector configmap.
+///
+/// Apps can import and amend this module when they need to generate
+/// `atlan-connectors-agent.json` themselves. Native app contracts do not emit
+/// it automatically because it is a shared/global configmap by default.
+@ModuleInfo { minPklVersion = "0.25.1" }
+open module com.atlan.app.contract.AgentConfig
+
+/// Configmap name served by the SDK / Heracles configmap route.
+name: String = "atlan-connectors-agent"
+
+/// Workflow form field that contains the AgentSelector value. Conditions in
+/// this configmap reference nested values under this property.
+agentSelectorProperty: String = "agent-json"
+
+/// Agent type value used by the new app framework agent.
+newAppFrameworkAgentType: String = "new-app-framework"
+
+/// Docs URL used by the help banners.
+docsUrl: String = "https://ask.atlan.com/"
+
+/// Secret-store options shown in the secure-agent config.
+secretManagerValues: Listing<String> = new Listing {
+  "awssecretmanager"
+  "azurekeyvault"
+  "gcpsecretmanager"
+  "secretinjectionenvironment"
+  "kubernetes"
+  "custom"
+}
+
+secretManagerLabels: Listing<String> = new Listing {
+  "AWS Secret Manager"
+  "Azure Key Vault"
+  "GCP Secret Manager"
+  "Environment Variable based Injection"
+  "Kubernetes Secret"
+  "Custom"
+}
+
+awsRegionValues: Listing<String> = new Listing {
+  "us-east-1"
+  "us-east-2"
+  "us-west-1"
+  "us-west-2"
+  "af-south-1"
+  "ap-east-1"
+  "ap-south-1"
+  "ap-northeast-1"
+  "ap-northeast-2"
+  "ap-northeast-3"
+  "ap-southeast-1"
+  "ap-southeast-2"
+  "ca-central-1"
+  "eu-central-1"
+  "eu-west-1"
+  "eu-west-2"
+  "eu-west-3"
+  "eu-north-1"
+  "eu-south-1"
+  "me-south-1"
+  "sa-east-1"
+}
+
+awsRegionLabels: Listing<String> = new Listing {
+  "US East (N. Virginia)"
+  "US East (Ohio)"
+  "US West (N. California)"
+  "US West (Oregon)"
+  "Africa (Cape Town)"
+  "Asia Pacific (Hong Kong)"
+  "Asia Pacific (Mumbai)"
+  "Asia Pacific (Tokyo)"
+  "Asia Pacific (Seoul)"
+  "Asia Pacific (Osaka)"
+  "Asia Pacific (Singapore)"
+  "Asia Pacific (Sydney)"
+  "Canada (Central)"
+  "Europe (Frankfurt)"
+  "Europe (Ireland)"
+  "Europe (London)"
+  "Europe (Paris)"
+  "Europe (Stockholm)"
+  "Europe (Milan)"
+  "Middle East (Bahrain)"
+  "South America (São Paulo)"
+}
+
+awsAuthMethodValues: Listing<String> = new Listing {
+  "iam"
+  "iam-assume-role"
+  "access-key"
+}
+
+awsAuthMethodLabels: Listing<String> = new Listing {
+  "IAM"
+  "IAM Assume Role"
+  "Access Key and Secret Key"
+}
+
+azureAuthMethodValues: Listing<String> = new Listing {
+  "managed_identity"
+  "service_principal"
+}
+
+azureAuthMethodLabels: Listing<String> = new Listing {
+  "Managed Identity"
+  "Service Principal"
+}
+
+keyTypeValues: Listing<String> = new Listing {
+  "multi-key"
+  "single-key"
+}
+
+keyTypeLabels: Listing<String> = new Listing {
+  "Multi Key"
+  "Single Key"
+}
+
+/// Deep patches merged into `baseProperties`. Use this for app-specific
+/// changes without copying the whole secure-agent contract:
+///
+/// ```pkl
+/// propertyOverrides {
+///   ["secret-path"] {
+///     ["ui"] {
+///       ["label"] = "Secret name"
+///       ["placeholder"] = "Enter secret name"
+///     }
+///   }
+/// }
+/// ```
+propertyOverrides: Mapping<String, Any> = new Mapping {}
+
+/// Extra fields to append to the secure-agent config.
+extraProperties: Mapping<String, Any> = new Mapping {}
+
+/// Extra `anyOf` branches to append to the default conditional requirements.
+extraAnyOf: Listing<Any> = new Listing {}
+
+/// Top-level custom metadata to append to the generated config payload.
+extraConfig: Mapping<String, Any> = new Mapping {}
+
+function asMapping(value: Any): Mapping<String, Any>? =
+  if (value is Mapping<String, Any>)
+    value as Mapping<String, Any>
+  else if (value is Dynamic)
+    new Mapping {
+      for (key, member in (value as Dynamic).toMap()) {
+        [key] = member
+      }
+    }
+  else null
+
+function deepMerge(base: Any, patch: Any): Any =
+  let (baseMap = asMapping(base))
+  let (patchMap = asMapping(patch))
+  if (baseMap != null && patchMap != null)
+    deepMergeMapping(baseMap!!, patchMap!!)
+  else patch
+
+function deepMergeMapping(base: Mapping<String, Any>, patch: Mapping<String, Any>): Mapping<String, Any> =
+  new Mapping {
+    for (key, value in base) {
+      [key] = if (patch.containsKey(key)) deepMerge(value, patch[key]) else value
+    }
+    for (key, value in patch) {
+      when (!base.containsKey(key)) {
+        [key] = value
+      }
+    }
+  }
+
+local function requiredRule(message: String): Mapping<String, Any> = new Mapping {
+  ["required"] = true
+  ["message"] = message
+}
+
+local function hiddenForNewAppFramework(): Mapping<String, Any> = new Mapping {
+  ["property"] = "\(agentSelectorProperty).agent-type"
+  ["value"] = newAppFrameworkAgentType
+  ["ui"] = new Mapping {
+    ["hidden"] = true
+  }
+}
+
+local function hiddenWidgetForNewAppFramework(widget: String): Mapping<String, Any> = new Mapping {
+  ["property"] = "\(agentSelectorProperty).agent-type"
+  ["value"] = newAppFrameworkAgentType
+  ["ui"] = new Mapping {
+    ["widget"] = widget
+    ["hidden"] = true
+  }
+}
+
+local function banner(prefixText: String): Mapping<String, Any> = new Mapping {
+  ["type"] = "conditional"
+  ["conditions"] = new Listing {
+    hiddenWidgetForNewAppFramework("Banner")
+  }
+  ["ui"] = new Mapping {
+    ["widget"] = "Banner"
+    ["hidden"] = false
+    ["category"] = "info"
+    ["prefixText"] = prefixText
+    ["link"] = new Mapping {
+      ["label"] = "View docs"
+      ["url"] = docsUrl
+    }
+  }
+}
+
+baseProperties: Mapping<String, Any> = new Mapping {
+  ["divider"] = new Mapping {
+    ["ui"] = new Mapping {
+      ["widget"] = "divider"
+      ["class"] = "mt-0"
+    }
+  }
+  ["header"] = new Mapping {
+    ["ui"] = new Mapping {
+      ["widget"] = "header"
+      ["label"] = "Secure Agent Configuration"
+      ["class"] = "mb-4 text-base text-new-gray-500"
+    }
+  }
+  ["agent-name"] = new Mapping {
+    ["type"] = "string"
+    ["required"] = true
+    ["ui"] = new Mapping {
+      ["widget"] = "agentSelector"
+      ["label"] = "Agent"
+      ["grid"] = 4
+      ["rules"] = new Listing {
+        requiredRule("Please select an agent")
+      }
+    }
+  }
+  ["agent-type"] = new Mapping {
+    ["type"] = "string"
+    ["default"] = ""
+    ["ui"] = new Mapping {
+      ["label"] = "Agent Type"
+      ["placeholder"] = ""
+      ["hidden"] = true
+      ["grid"] = 8
+    }
+  }
+  ["key-type"] = new Mapping {
+    ["type"] = "conditional"
+    ["required"] = true
+    ["default"] = "multi-key"
+    ["enum"] = keyTypeValues
+    ["enumNames"] = keyTypeLabels
+    ["ui"] = new Mapping {
+      ["hidden"] = false
+      ["widget"] = "radio"
+      ["label"] = "Key Type"
+      ["placeholder"] = "Select Key Type"
+      ["rules"] = new Listing {
+        requiredRule("Please select a key type")
+      }
+    }
+  }
+  ["secret-manager"] = new Mapping {
+    ["type"] = "conditional"
+    ["required"] = true
+    ["enum"] = secretManagerValues
+    ["enumNames"] = secretManagerLabels
+    ["conditions"] = new Listing {
+      new Mapping {
+        ["property"] = "\(agentSelectorProperty).agent-type"
+        ["value"] = newAppFrameworkAgentType
+        ["ui"] = new Mapping {
+          ["widget"] = "select"
+          ["hidden"] = true
+        }
+      }
+      new Mapping {
+        ["property"] = "\(agentSelectorProperty).agent-type"
+        ["value"] = ""
+        ["ui"] = new Mapping {
+          ["widget"] = "select"
+          ["label"] = "Secret Store"
+          ["placeholder"] = "Secret Store"
+          ["hidden"] = false
+          ["rules"] = new Listing {
+            requiredRule("Please select the secret store")
+          }
+        }
+      }
+    }
+    ["ui"] = new Mapping {
+      ["widget"] = "select"
+      ["label"] = "Secret Store"
+      ["placeholder"] = "Secret Store"
+      ["hidden"] = false
+      ["rules"] = new Listing {
+        requiredRule("Please select the secret store")
+      }
+    }
+  }
+  ["secret-path"] = new Mapping {
+    ["type"] = "conditional"
+    ["required"] = true
+    ["conditions"] = new Listing {
+      new Mapping {
+        ["filter"] = new Mapping {
+          ["\(agentSelectorProperty).agent-type"] = newAppFrameworkAgentType
+          ["\(agentSelectorProperty).key-type"] = "single-key"
+        }
+        ["ui"] = new Mapping {
+          ["hidden"] = true
+          ["label"] = "Secret Path/Name in Secret Manager"
+          ["placeholder"] = "Enter Secret Path/Name"
+          ["help"] = "The secret path or name of the stored secret in the secret manager"
+          ["grid"] = 4
+          ["rules"] = new Listing {
+            requiredRule("Please enter the secret path")
+          }
+        }
+      }
+      new Mapping {
+        ["filter"] = new Mapping {
+          ["\(agentSelectorProperty).agent-type"] = newAppFrameworkAgentType
+          ["\(agentSelectorProperty).key-type"] = "multi-key"
+        }
+        ["ui"] = new Mapping {
+          ["hidden"] = false
+          ["label"] = "Secret Path/Name in Secret Manager"
+          ["placeholder"] = "Enter Secret Path/Name"
+          ["help"] = "The secret path or name of the stored secret in the secret manager"
+          ["grid"] = 4
+          ["rules"] = new Listing {
+            requiredRule("Please enter the secret path")
+          }
+        }
+      }
+    }
+    ["ui"] = new Mapping {
+      ["label"] = "Secret Path/Name in Secret Manager"
+      ["placeholder"] = "Enter Secret Path/Name"
+      ["help"] = "The secret path or name of the stored secret in the secret manager"
+      ["hidden"] = false
+      ["grid"] = 4
+      ["rules"] = new Listing {
+        requiredRule("Please enter the secret path")
+      }
+    }
+  }
+  ["aws-region"] = new Mapping {
+    ["type"] = "conditional"
+    ["enum"] = awsRegionValues
+    ["required"] = true
+    ["enumNames"] = awsRegionLabels
+    ["conditions"] = new Listing {
+      hiddenForNewAppFramework()
+    }
+    ["ui"] = new Mapping {
+      ["widget"] = "select"
+      ["label"] = "AWS Region"
+      ["placeholder"] = "Select AWS Region"
+      ["grid"] = 4
+      ["rules"] = new Listing {
+        requiredRule("Please select a region")
+      }
+    }
+  }
+  ["aws-auth-method"] = new Mapping {
+    ["type"] = "conditional"
+    ["required"] = true
+    ["enum"] = awsAuthMethodValues
+    ["default"] = "iam"
+    ["enumNames"] = awsAuthMethodLabels
+    ["conditions"] = new Listing {
+      hiddenForNewAppFramework()
+    }
+    ["ui"] = new Mapping {
+      ["widget"] = "select"
+      ["label"] = "AWS Authentication Method"
+      ["placeholder"] = "Select AWS Authentication Method"
+      ["help"] = "In case of IAM assume role or access key and secret key authentication, the keys should be set as environment variables or added in kubernetes secrets"
+      ["grid"] = 4
+      ["rules"] = new Listing {
+        requiredRule("Please select an AWS authentication method")
+      }
+    }
+  }
+  ["aws-assume-role-arn"] = new Mapping {
+    ["type"] = "conditional"
+    ["required"] = true
+    ["conditions"] = new Listing {
+      hiddenForNewAppFramework()
+    }
+    ["ui"] = new Mapping {
+      ["label"] = "AWS Assume Role ARN"
+      ["placeholder"] = "Enter AWS Role ARN to assume"
+      ["help"] = "The AWS role ARN to assume for accessing AWS Secret Manager"
+      ["hidden"] = false
+      ["grid"] = 4
+    }
+  }
+  ["azure-auth-method"] = new Mapping {
+    ["type"] = "conditional"
+    ["enum"] = azureAuthMethodValues
+    ["default"] = "managed_identity"
+    ["enumNames"] = azureAuthMethodLabels
+    ["conditions"] = new Listing {
+      hiddenForNewAppFramework()
+    }
+    ["ui"] = new Mapping {
+      ["widget"] = "select"
+      ["label"] = "Azure Authentication Method"
+      ["placeholder"] = "Select Azure Authentication Method"
+      ["help"] = "In case of Service Principal authentication, the client id, client secret and tenant id should be set as environment variables or added in kubernetes secrets"
+      ["grid"] = 4
+      ["rules"] = new Listing {
+        requiredRule("Please select an Azure authentication method")
+      }
+    }
+  }
+  ["azure-vault-name"] = new Mapping {
+    ["type"] = "conditional"
+    ["required"] = true
+    ["conditions"] = new Listing {
+      hiddenForNewAppFramework()
+    }
+    ["ui"] = new Mapping {
+      ["label"] = "Azure Key Vault Name"
+      ["placeholder"] = "Enter Azure Key Vault Name"
+      ["help"] = "The name of the Azure Key Vault"
+      ["hidden"] = false
+      ["grid"] = 8
+    }
+  }
+  ["agent-custom-config"] = new Mapping {
+    ["type"] = "conditional"
+    ["conditions"] = new Listing {
+      hiddenForNewAppFramework()
+    }
+    ["ui"] = new Mapping {
+      ["label"] = "Agent Custom configuration"
+      ["placeholder"] = "{}"
+      ["help"] = "Use this if you wish to use any custom configuration for the agent. Do not enter any sensitive information here."
+      ["hidden"] = false
+      ["grid"] = 8
+    }
+  }
+  ["aws-secret-manager-help-text"] = banner("For the AWS Secret, add the path for the fields with the placeholder Store Credential Path. Example: username")
+  ["azure-help-text"] = banner("For the Azure Key Vault, add the name of key vault secret for the fields with the placeholder Store Credential Path. Example: atlan-crawler-db-username")
+  ["secret-injection-help-text"] = banner("Add the expected environment variable values for the fields with the placeholder Store Credential Path. Example: vault:secret/data/accounts/test#PASSWORD")
+  ["kubernetes-secret-help-text"] = banner("For the K8S Secret, add the corresponding key name in the secret for the fields with the placeholder Store Credential Path. Example: username")
+  ["gcp-help-text"] = banner("For the Google Secret Manager, add the secret path for the fields with the placeholder Store Credential Path. Example: projects/{project_id}/secrets/{secret_id}/versions/{version_id}")
+}
+
+properties: Mapping<String, Any> =
+  deepMergeMapping(deepMergeMapping(baseProperties, extraProperties), propertyOverrides)
+
+defaultAnyOf: Listing<Any> = new Listing {
+  new Mapping {
+    ["properties"] = new Mapping {
+      ["secret-manager"] = new Mapping {
+        ["const"] = "awssecretmanager"
+      }
+    }
+    ["required"] = new Listing {
+      "aws-auth-method"
+      "aws-region"
+      "secret-path"
+      "aws-secret-manager-help-text"
+    }
+  }
+  new Mapping {
+    ["properties"] = new Mapping {
+      ["aws-auth-method"] = new Mapping {
+        ["const"] = "iam-assume-role"
+      }
+      ["secret-manager"] = new Mapping {
+        ["const"] = "awssecretmanager"
+      }
+    }
+    ["required"] = new Listing {
+      "aws-assume-role-arn"
+    }
+  }
+  new Mapping {
+    ["properties"] = new Mapping {
+      ["secret-manager"] = new Mapping {
+        ["const"] = "azurekeyvault"
+      }
+    }
+    ["required"] = new Listing {
+      "azure-auth-method"
+      "azure-vault-name"
+      "azure-help-text"
+    }
+  }
+  new Mapping {
+    ["properties"] = new Mapping {
+      ["secret-manager"] = new Mapping {
+        ["const"] = "secretinjectionenvironment"
+      }
+    }
+    ["required"] = new Listing {
+      "secret-injection-help-text"
+    }
+  }
+  new Mapping {
+    ["properties"] = new Mapping {
+      ["secret-manager"] = new Mapping {
+        ["const"] = "kubernetes"
+      }
+    }
+    ["required"] = new Listing {
+      "secret-path"
+      "kubernetes-secret-help-text"
+    }
+  }
+  new Mapping {
+    ["properties"] = new Mapping {
+      ["secret-manager"] = new Mapping {
+        ["const"] = "gcpsecretmanager"
+      }
+    }
+    ["required"] = new Listing {
+      "gcp-help-text"
+    }
+  }
+  new Mapping {
+    ["properties"] = new Mapping {
+      ["secret-manager"] = new Mapping {
+        ["const"] = "custom"
+      }
+    }
+    ["required"] = new Listing {
+      "agent-custom-config"
+    }
+  }
+  new Mapping {
+    ["properties"] = new Mapping {
+      ["agent-type"] = new Mapping {
+        ["const"] = newAppFrameworkAgentType
+      }
+    }
+    ["required"] = new Listing {
+      "key-type"
+    }
+  }
+  new Mapping {
+    ["properties"] = new Mapping {
+      ["agent-type"] = new Mapping {
+        ["const"] = newAppFrameworkAgentType
+      }
+      ["key-type"] = new Mapping {
+        ["const"] = "multi-key"
+      }
+    }
+    ["required"] = new Listing {
+      "secret-path"
+    }
+  }
+}
+
+anyOf: Listing<Any> = new Listing {
+  for (entry in defaultAnyOf) {
+    entry
+  }
+  for (entry in extraAnyOf) {
+    entry
+  }
+}
+
+config: Mapping<String, Any> = new Mapping {
+  ["properties"] = properties
+  ["anyOf"] = anyOf
+  ...extraConfig
+}
+
+configFile: FileOutput = new FileOutput {
+  value = config
+  renderer = new JsonRenderer {}
+}
+
+output: ModuleOutput = new ModuleOutput {
+  files {
+    ["\(name).json"] = configFile
+  }
+}

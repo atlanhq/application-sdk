@@ -19,7 +19,12 @@ import httpx
 from httpx_retries import Retry, RetryTransport
 from pydantic import BaseModel
 
-from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
+from application_sdk.constants import (
+    _HTTP_POOL_LIMITS,
+    _HTTP_POOL_TIMEOUT_SECONDS,
+    DEPLOYMENT_NAME,
+    LOCAL_ENVIRONMENT,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -63,7 +68,15 @@ async def wait_for_dapr_sidecar(
     Dapr returns 204 when all components have finished initializing.
     On timeout the function logs a warning and returns — startup proceeds
     and the subsequent metadata call will surface any remaining errors.
+
+    Skipped entirely in local dev — /v1.0/healthz returns 500 because
+    AWS-backed components can't initialize without real credentials.
+    All components have ignoreErrors: true so the sidecar works fine.
     """
+    if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+        logger.debug("Local dev — skipping Dapr sidecar health check")
+        return
+
     url = f"{_dapr_base_url()}{_HEALTHZ_PATH}"
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
@@ -73,8 +86,8 @@ async def wait_for_dapr_sidecar(
                 r = await client.get(url)
                 if r.status_code == 204:
                     return
-            except Exception as exc:
-                logger.debug("Dapr sidecar poll failed: %s", exc)
+            except Exception:
+                logger.debug("Dapr sidecar poll failed", exc_info=True)
             if loop.time() >= deadline:
                 logger.warning(
                     "Dapr sidecar not ready after %.0fs — proceeding anyway", timeout

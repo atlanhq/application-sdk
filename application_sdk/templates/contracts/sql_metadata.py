@@ -8,20 +8,33 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
+import orjson
 from pydantic import Field, field_validator, model_validator
 
+from application_sdk.common.sql_filters import (
+    SAFE_FILTER_PATTERN,
+    validate_filter_no_sql_injection,
+)
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
-from application_sdk.contracts.types import ConnectionRef, MaxItems
+from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 
 # Type alias for SQL filter maps: database-regex → list of schema-regexes.
 # Example: {"^prod$": ["^analytics$", "^reporting$"]}
-FilterMap = dict[str, list[str]]
+# Bounded: 100 databases × 1000 schemas-per-database — well above any
+# realistic source while still keeping payload-size guarantees.
+FilterMap = Annotated[
+    dict[str, Annotated[list[str], MaxItems(1000)]],
+    MaxItems(100),
+]
 
-# Disallow single quotes in temp_table_regex to prevent SQL injection when
-# values are substituted into SQL templates via _prepare_sql (str.replace).
-_SAFE_FILTER_PATTERN = r"^[^']*$"
+# Backward-compatible aliases: the deny-list moved to ``common.sql_filters``
+# in BLDX-518 so the same validation can be applied to raw-dict helper
+# callers (``prepare_query``, ``prepare_filters``, ``get_database_names``)
+# that bypass Pydantic. Keep the underscore-prefixed name re-exported so
+# any in-tree import path remains valid.
+_validate_filter_no_sql_injection = validate_filter_no_sql_injection
 
 
 def _coerce_filter_value(v: Any) -> FilterMap | str:
@@ -39,26 +52,7 @@ def _coerce_filter_value(v: Any) -> FilterMap | str:
     return v
 
 
-def _validate_filter_no_sql_injection(v: FilterMap | str) -> FilterMap | str:
-    """Block single quotes in filter values to prevent SQL injection."""
-    if isinstance(v, str):
-        if "'" in v:
-            msg = f"Single quotes not allowed in filter value: {v}"
-            raise ValueError(msg)
-    elif isinstance(v, dict):
-        for key, values in v.items():
-            if "'" in key:
-                msg = f"Single quotes not allowed in filter key: {key}"
-                raise ValueError(msg)
-            if isinstance(values, list):
-                for val in values:
-                    if isinstance(val, str) and "'" in val:
-                        msg = f"Single quotes not allowed in filter value: {val}"
-                        raise ValueError(msg)
-    return v
-
-
-class ExtractionInput(Input, allow_unbounded_fields=True):
+class ExtractionInput(Input):
     """Top-level input for a SQL metadata extraction run."""
 
     workflow_id: str = ""
@@ -95,6 +89,18 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
         """
         if not isinstance(data, dict):
             return data
+
+        # AE passes connection as a JSON string when {{connection}} is substituted.
+        # Parse it to a dict so Pydantic can build ConnectionRef correctly.
+        # Without this, connection.attributes.qualified_name stays empty and the
+        # publish step receives an empty connection_qualified_name.
+        raw_conn = data.get("connection")
+        if isinstance(raw_conn, str) and raw_conn.strip().startswith("{"):
+            try:
+                data = {**data, "connection": orjson.loads(raw_conn)}
+            except (orjson.JSONDecodeError, ValueError):
+                pass  # connection field isn't JSON — leave as-is for Pydantic to handle
+
         field_names = set(cls.model_fields)
         updates: dict[str, Any] = {}
 
@@ -156,7 +162,7 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     - ``None`` → empty string
     """
 
-    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
     """Regex pattern identifying temporary tables."""
 
     source_tag_prefix: str = ""
@@ -171,6 +177,12 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
         return _validate_filter_no_sql_injection(v)
+
+    @field_validator("temp_table_regex", mode="after")
+    @classmethod
+    def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
+        validate_filter_no_sql_injection(v)
+        return v
 
 
 class ExtractionOutput(Output, PublishInputMixin):
@@ -187,9 +199,13 @@ class ExtractionOutput(Output, PublishInputMixin):
     processes_extracted: int = 0
     records_uploaded: int = 0
     error: str = ""
+    output_path: str = ""
+    """Resolved local base path used during extraction. Subclasses that need
+    additional output prefixes (e.g. lineage-specific dirs) can derive them
+    from this field instead of re-calling workflow.info()."""
 
 
-class ExtractionTaskInput(Input, allow_unbounded_fields=True):
+class ExtractionTaskInput(Input):
     """Fields shared by all per-task inputs derived from ExtractionInput.
 
     Rather than passing a workflow_args dict[str, Any] blob, each task receives
@@ -205,7 +221,7 @@ class ExtractionTaskInput(Input, allow_unbounded_fields=True):
     output_path: str = ""
     exclude_filter: FilterMap | str = Field(default="")
     include_filter: FilterMap | str = Field(default="")
-    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
 
     @field_validator("include_filter", "exclude_filter", mode="before")
@@ -218,8 +234,14 @@ class ExtractionTaskInput(Input, allow_unbounded_fields=True):
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
         return _validate_filter_no_sql_injection(v)
 
+    @field_validator("temp_table_regex", mode="after")
+    @classmethod
+    def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
+        validate_filter_no_sql_injection(v)
+        return v
 
-class FetchDatabasesInput(ExtractionTaskInput, allow_unbounded_fields=True):
+
+class FetchDatabasesInput(ExtractionTaskInput):
     """Input for fetching databases from the source."""
 
 
@@ -231,7 +253,7 @@ class FetchDatabasesOutput(Output):
     total_record_count: int = 0
 
 
-class FetchSchemasInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchSchemasInput(ExtractionTaskInput):
     """Input for fetching schemas from the source."""
 
 
@@ -243,7 +265,7 @@ class FetchSchemasOutput(Output):
     total_record_count: int = 0
 
 
-class FetchTablesInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchTablesInput(ExtractionTaskInput):
     """Input for fetching tables from the source."""
 
 
@@ -255,7 +277,7 @@ class FetchTablesOutput(Output):
     total_record_count: int = 0
 
 
-class FetchColumnsInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchColumnsInput(ExtractionTaskInput):
     """Input for fetching columns from the source."""
 
 
@@ -266,7 +288,7 @@ class FetchColumnsOutput(Output):
     total_record_count: int = 0
 
 
-class FetchProceduresInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchProceduresInput(ExtractionTaskInput):
     """Input for fetching stored procedures from the source."""
 
 
@@ -277,7 +299,7 @@ class FetchProceduresOutput(Output):
     total_record_count: int = 0
 
 
-class FetchViewsInput(ExtractionTaskInput, allow_unbounded_fields=True):
+class FetchViewsInput(ExtractionTaskInput):
     """Input for fetching views from the source."""
 
 
@@ -288,17 +310,156 @@ class FetchViewsOutput(Output):
     total_record_count: int = 0
 
 
-class TransformInput(ExtractionTaskInput, allow_unbounded_fields=True):
-    """Input for the transform_data task."""
+class ExtractionTaskOutput(Output):
+    """Output from a per-entity ``extract_*`` task.
+
+    Returned by ``SqlApp._extract_entity`` so the matching ``transform_*``
+    activity can consume the raw output via the ``FileReference``
+    contract rather than reading from local FS directly.
+
+    Cross-worker contract:
+        ``raw_file`` is an ephemeral ``FileReference`` pointing at the
+        locally-written raw output. The activity interceptor
+        auto-uploads it to the object store after the extract activity
+        completes and marks it durable. ``run()`` then threads that
+        durable ref into the matching transform's ``TransformInput`` —
+        the interceptor materialises it onto the transform-worker's
+        local filesystem before the transform activity runs, with
+        SHA-256 sidecar verification (so the transform sees a
+        verified-fresh local copy even when it lands on a different
+        pod than the extract).
+
+    File vs directory: a ``FileReference`` can point at either a single
+    file or a directory — the interceptor handles both shapes. The v3
+    ``SqlApp.template's _extract_entity`` writes exactly one JSONL
+    output (``raw/<entity>/records.json``) per entity per run, so the
+    ref it produces is a single-file ref. A future connector that
+    needs multi-file output (chunked extracts, partitioned writes)
+    should write its files under a run-scoped directory (e.g.
+    ``raw/<entity>/<run_id>/``) and return a ``FileReference`` pointing
+    at that directory — no new contract field needed, the interceptor
+    already supports directory refs.
+    """
 
     typename: str = ""
+    total_record_count: int = 0
+    raw_file: FileReference | None = None
+    """``FileReference`` to the extract's raw output.
+
+    For the v3 ``SqlApp`` template, this is a single-file ref pointing
+    at ``raw/<entity>/records.json``. Other connectors may point this
+    at a directory containing multiple raw output files; the activity
+    interceptor handles both shapes transparently.
+
+    ``None`` when the extract returned zero rows — preserves the
+    'genuine zero-row extract' signal that publish relies on (the
+    matching transform then returns count=0 cleanly without spurious
+    asset archival).
+    """
+
+
+class TransformInput(ExtractionTaskInput):
+    """Input for transform tasks.
+
+    Extends :class:`ExtractionTaskInput` with the ``raw_file``
+    reference threaded in by extract tasks via the ``FileReference``
+    interceptor handshake. The activity interceptor auto-materialises
+    the referenced data onto the transform worker before the
+    transform activity runs.
+
+    ``raw_file`` can point at a single file or a directory — the
+    interceptor handles both shapes transparently. The v3 ``SqlApp``
+    template's per-entity flow uses single-file refs
+    (``raw/<entity>/records.json``); a connector with multi-file
+    output should point ``raw_file`` at a run-scoped directory
+    instead (no contract change needed).
+
+    Connectors implementing a custom ``transform_data`` (the legacy
+    v2 activity) may read ``raw_file`` directly; v3's per-entity
+    ``transform_*`` tasks consume it through the helper
+    ``SqlApp._transform_entity``.
+
+    The legacy ``file_names`` field remains on the schema as a no-op
+    placeholder — it was never populated by the SDK and reading it
+    has no effect. ``chunk_start`` / ``typename`` are still present
+    for v3 consumers that dispatch by entity. See the field-level
+    docstrings for the deprecation status of each.
+    """
+
+    typename: str = ""
+    """**Deprecated** — kept for backward compatibility with existing
+    v3 consumers that read ``input.typename`` to dispatch by entity.
+    New connectors should infer typename from the activity name or a
+    dedicated dispatch field on a connector-specific input subclass.
+    """
+
     file_names: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
+    """**Deprecated and unused** — retained on the schema as a no-op
+    placeholder for backward compatibility.
+
+    Originally a multi-file batch hint that pre-dated the
+    ``FileReference`` interceptor. No SDK code path ever populated
+    it on the v3 extract → transform handoff, so any
+    ``if input.file_names:`` read evaluates against the empty default
+    — the branch was a behavioural no-op even before this deprecation
+    note. Reading or writing this field has no effect on extract /
+    transform behaviour.
+
+    The modern replacement is :attr:`raw_file` — a ``FileReference``
+    that can point at either a single file or a run-scoped directory
+    of files. The activity interceptor handles both shapes, so
+    connectors that need multi-file output should point ``raw_file``
+    at a directory rather than adding a new field.
+
+    This field will be removed in a future major version once a
+    deprecation window has elapsed.
+    """
+
     chunk_start: int = 0
+    """**Deprecated** — chunk-offset hint used by the legacy
+    ``file_names``-based batch flow. The v3 ``SqlApp`` per-entity
+    flow streams a single ``records.json`` per entity, so this hint
+    has no role; iterate raw data through :attr:`raw_file` instead.
+    """
+
+    raw_file: FileReference | None = None
+    """Durable ``FileReference`` to the matching extract's raw output.
+
+    Set by ``SqlApp.run()`` from the corresponding
+    ``ExtractionTaskOutput.raw_file``. The activity interceptor
+    downloads (or sidecar-verifies an existing local copy of) the
+    referenced object before the transform activity runs, so
+    ``input.raw_file.local_path`` always points to verified-fresh
+    local data on whichever worker pod ends up running the transform.
+
+    For the v3 ``SqlApp`` template, this is a single-file ref pointing
+    at ``raw/<entity>/records.json``. Other connectors may point this
+    at a directory of multiple files; the interceptor handles both.
+    """
 
 
 class TransformOutput(Output):
-    """Output from the transform_data task."""
+    """Output from the v3 ``transform_*`` tasks.
+
+    Carries the transformed asset output as a ``FileReference`` so
+    downstream publish / upload activities consume it via the same
+    auto-materialise contract the framework uses for the
+    extract → transform handshake.
+    """
 
     typename: str = ""
     total_record_count: int = 0
     chunk_count: int = 0
+    transformed_file: FileReference | None = None
+    """``FileReference`` to the transformed asset output.
+
+    Ephemeral on return (``is_durable=False``); the activity interceptor
+    auto-uploads it after the transform activity finishes and marks it
+    durable so downstream tasks can consume it without local-FS coupling.
+    ``None`` when the transform processed zero rows.
+
+    For the v3 ``SqlApp`` template, this is a single-file ref pointing
+    at ``transformed/<entity>/entities.json``. A connector with
+    multi-file transform output (e.g. partitioned writes) should point
+    this at a directory instead — the interceptor handles both shapes.
+    """

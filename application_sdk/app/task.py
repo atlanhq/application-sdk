@@ -16,12 +16,14 @@ Tasks support heartbeating for long-running operations:
 """
 
 import inspect
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar, cast, get_type_hints, overload
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast, get_type_hints, overload
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import CONTRACT_VALIDATION, ErrorCode
+from application_sdk.errors.leaves import InvalidInputError
 
 if TYPE_CHECKING:
     from application_sdk.execution.retry import RetryPolicy
@@ -36,15 +38,35 @@ _USE_DEFAULT = object()
 TaskMethod = Callable[..., Any]
 
 
-class TaskContractError(Exception):
-    """Raised when a task's contract is invalid."""
+@dataclass(kw_only=True)
+class UnresolvableTaskAnnotationsError(InvalidInputError):
+    """Task has string annotations that cannot be resolved at decoration time."""
+
+    code: ClassVar[str] = "INVALID_INPUT_TASK_UNRESOLVABLE_ANNOTATIONS"
+    field: str | None = "annotations"
+
+
+class TaskContractError(InvalidInputError):
+    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+
+    code: ClassVar[str] = "TASK_CONTRACT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
-        super().__init__(message)
-        self.error_code = error_code or CONTRACT_VALIDATION
+        warnings.warn(
+            "TaskContractError is deprecated; use application_sdk.errors.InvalidInputError "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        InvalidInputError.__init__(self, message=message)
+        self._legacy_error_code = error_code or CONTRACT_VALIDATION
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return self._legacy_error_code
 
     def __str__(self) -> str:
-        return f"[{self.error_code}] {super().__str__()}"
+        return f"[{self._legacy_error_code}] {self.message}"
 
 
 @dataclass
@@ -149,16 +171,18 @@ def _validate_task_signature(
     # If the annotations are strings that cannot be resolved, raise a clear error.
     try:
         hints = get_type_hints(fn)
-    except Exception:
+    except NameError:
         raw: dict[str, Any] = getattr(fn, "__annotations__", {})
         unresolvable = [k for k, v in raw.items() if isinstance(v, str)]
         if unresolvable:
-            raise TaskContractError(
-                f"Task '{fn_name}' has unresolvable annotations for {unresolvable}. "
-                "This usually happens when 'from __future__ import annotations' is "
-                "used alongside Input/Output types that are not defined at module "
-                "level. Move the type definitions to module scope (before the App "
-                "class) or remove 'from __future__ import annotations'."
+            raise UnresolvableTaskAnnotationsError(
+                message=(
+                    f"Task '{fn_name}' has unresolvable annotations for {unresolvable}. "
+                    "This usually happens when 'from __future__ import annotations' is "
+                    "used alongside Input/Output types that are not defined at module "
+                    "level. Move the type definitions to module scope (before the App "
+                    "class) or remove 'from __future__ import annotations'."
+                ),
             ) from None
         hints = raw
 

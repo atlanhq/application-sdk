@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -14,6 +15,7 @@ from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.utils import get_metric_enrichment_labels
 
 logger = get_logger(__name__)
 
@@ -41,12 +43,27 @@ def _get_or_create_runtime(
         with _prometheus_lock:
             if _prometheus_runtime is None:
                 bind_addr = prometheus_bind_address or TEMPORAL_PROMETHEUS_BIND_ADDRESS
+                # Mirror the OTel Prometheus reader's resource enrichment onto
+                # Temporal Rust core's emitted metrics so app_name/app_version/…
+                # appear as labels on every temporal_* series, matching the
+                # SDK-side metrics.
                 _prometheus_runtime = Runtime(
                     telemetry=TelemetryConfig(
-                        metrics=PrometheusConfig(bind_address=bind_addr)
+                        metrics=PrometheusConfig(bind_address=bind_addr),
+                        global_tags=get_metric_enrichment_labels(),
                     )
                 )
                 logger.info("Temporal Prometheus metrics enabled on %s", bind_addr)
+                _host = bind_addr.split(":", 1)[0]
+                if _host in ("127.0.0.1", "::1", "localhost"):
+                    logger.info(
+                        "Temporal Prometheus endpoint bound to loopback (%s) — "
+                        "external scrapes of this address will receive no data. "
+                        "Scrape via the FastAPI /metrics route on the handler "
+                        "port (default 8000); the SDK proxies the Temporal "
+                        "Rust-core series through that endpoint.",
+                        bind_addr,
+                    )
         return _prometheus_runtime
     else:
         with _prometheus_lock:
@@ -99,7 +116,7 @@ class TemporalExecutorBackend:
                 When provided, the workflow name is ``"{app_name}:{entry_point}"``.
                 When omitted, defaults to the app name (single-entry-point apps).
         """
-        from uuid import uuid4
+        from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 
         input_data._correlation_id = context.correlation_id
 
@@ -121,11 +138,11 @@ class TemporalExecutorBackend:
             app_cls._app_metadata.entry_points.get(entry_point) if entry_point else None
         )
         if entry_point is not None and ep_meta is None:
-            available = list(app_cls._app_metadata.entry_points)
-            raise ValueError(
-                f"Unknown entry point '{entry_point}' for app '{app_cls._app_name}'. "
-                f"Available: {available}"
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                UnknownEntryPointError,
             )
+
+            raise UnknownEntryPointError(resource_identifier=entry_point)
         output_type = (
             ep_meta.output_type
             if ep_meta is not None
@@ -162,7 +179,7 @@ class TemporalExecutorBackend:
                 When provided, the workflow name is ``"{app_name}:{entry_point}"``.
                 When omitted, defaults to the app name (single-entry-point apps).
         """
-        from uuid import uuid4
+        from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 
         input_data._correlation_id = context.correlation_id
 
@@ -213,7 +230,9 @@ def _build_tls_config(
         FileNotFoundError: If a specified cert file does not exist.
         ValueError: If client cert is provided without key or vice versa.
     """
-    from temporalio.service import TLSConfig
+    from temporalio.service import (  # noqa: PLC0415 — cold path: TLS reload only when cert paths configured
+        TLSConfig,
+    )
 
     server_root_ca_cert: bytes | None = None
     client_cert: bytes | None = None
@@ -222,34 +241,41 @@ def _build_tls_config(
     if server_root_ca_cert_path:
         path = Path(server_root_ca_cert_path)
         if not path.exists():
-            raise FileNotFoundError(
-                f"TLS root CA cert file not found: {server_root_ca_cert_path}"
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                TlsCertFileNotFoundError,
             )
+
+            raise TlsCertFileNotFoundError(field="server_root_ca_cert")
         server_root_ca_cert = path.read_bytes()
         logger.info("Loaded TLS root CA cert: %s", server_root_ca_cert_path)
 
     has_cert = bool(client_cert_path)
     has_key = bool(client_private_key_path)
     if has_cert != has_key:
-        raise ValueError(
-            "mTLS requires both client cert and client private key. "
-            f"Got cert={client_cert_path!r}, key={client_private_key_path!r}"
+        from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+            MtlsConfigError,
         )
+
+        raise MtlsConfigError()
 
     if client_cert_path:
         path = Path(client_cert_path)
         if not path.exists():
-            raise FileNotFoundError(
-                f"TLS client cert file not found: {client_cert_path}"
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                TlsCertFileNotFoundError,
             )
+
+            raise TlsCertFileNotFoundError(field="client_cert")
         client_cert = path.read_bytes()
 
     if client_private_key_path:
         path = Path(client_private_key_path)
         if not path.exists():
-            raise FileNotFoundError(
-                f"TLS client private key file not found: {client_private_key_path}"
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                TlsCertFileNotFoundError,
             )
+
+            raise TlsCertFileNotFoundError(field="client_private_key")
         client_private_key = path.read_bytes()
 
     return TLSConfig(
@@ -271,8 +297,8 @@ async def create_temporal_client(
     tls_client_cert_path: str = "",
     tls_client_private_key_path: str = "",
     tls_domain: str = "",
-    connect_max_attempts: int = 5,
-    connect_retry_delay_seconds: float = 2.0,
+    connect_max_attempts: int = 10,
+    connect_retry_delay_seconds: float = 0.5,
     enable_prometheus: bool = True,
     prometheus_bind_address: str = "",
 ) -> Client:
@@ -315,13 +341,15 @@ async def create_temporal_client(
                 domain=tls_domain,
             )
         else:
-            from application_sdk.clients.ssl_utils import (  # deferred: only needed when no explicit TLS cert paths are provided
+            from application_sdk.clients.ssl_utils import (  # deferred: only needed when no explicit TLS cert paths are provided  # noqa: PLC0415 — cold path: ssl_utils only when no explicit cert paths
                 get_custom_ca_cert_bytes,
             )
 
             ca_cert_bytes = get_custom_ca_cert_bytes()
             if ca_cert_bytes:
-                from temporalio.service import TLSConfig
+                from temporalio.service import (  # noqa: PLC0415 — cold path: TLS only when reloaded
+                    TLSConfig,
+                )
 
                 tls_config = TLSConfig(server_root_ca_cert=ca_cert_bytes)
             else:
@@ -354,8 +382,12 @@ async def create_temporal_client(
         prometheus_bind_address=prometheus_bind_address,
     )
 
+    # Full-jitter exponential backoff (per AWS Architecture blog) — keeps the
+    # capped exponential growth but draws each sleep from U(0, cap_at_attempt)
+    # to spread concurrent reconnects across the window and avoid thundering
+    # herd on Temporal frontend recovery.
     last_exc: Exception | None = None
-    delay = connect_retry_delay_seconds
+    backoff_cap = 5.0
     for attempt in range(1, connect_max_attempts + 1):
         try:
             client = await Client.connect(**kwargs)
@@ -364,15 +396,21 @@ async def create_temporal_client(
         except Exception as exc:
             last_exc = exc
             if attempt < connect_max_attempts:
+                cap_at_attempt = min(
+                    connect_retry_delay_seconds * (2 ** (attempt - 1)),
+                    backoff_cap,
+                )
+                jittered = random.uniform(0, cap_at_attempt)
                 logger.warning(
-                    "Temporal connection attempt %d/%d failed, retrying in %.1fs",
+                    "Temporal connection attempt %d/%d failed, retrying in %.2fs "
+                    "(jittered, cap=%.1fs)",
                     attempt,
                     connect_max_attempts,
-                    delay,
+                    jittered,
+                    cap_at_attempt,
                     exc_info=True,
                 )
-                await asyncio.sleep(delay)
-                delay *= 2
+                await asyncio.sleep(jittered)
             else:
                 logger.error(
                     "Temporal connection failed after %d attempts",
@@ -380,6 +418,8 @@ async def create_temporal_client(
                     exc_info=True,
                 )
 
-    raise RuntimeError(
-        f"Failed to connect to Temporal at {host!r} after {connect_max_attempts} attempts"
-    ) from last_exc
+    from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+        TemporalConnectError,
+    )
+
+    raise TemporalConnectError(target=host, cause=last_exc) from last_exc

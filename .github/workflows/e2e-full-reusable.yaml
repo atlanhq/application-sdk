@@ -1,0 +1,211 @@
+name: e2e-full-reusable
+
+# Reusable workflow for the connector full-DAG e2e suite. Each connector
+# repo's per-app `e2e-full.yaml` collapses to a 5-line `uses:` call:
+#
+#     name: e2e-full
+#     on:
+#       workflow_dispatch:
+#         inputs:
+#           agent_name_override:
+#             required: false
+#             type: string
+#             default: ""
+#     jobs:
+#       e2e-full:
+#         uses: atlanhq/application-sdk/.github/workflows/e2e-full-reusable.yaml@main
+#         with:
+#           app-name: mysql
+#           app-image-name: atlan-mysql-app
+#           agent-name-override: ${{ inputs.agent_name_override }}
+#         secrets: inherit
+#
+# Boilerplate that lives here so apps don't copy-paste it:
+#   - 120-min job timeout (must be > ae_poll + atlas_poll + build/setup
+#     overhead — see :data:`ae_poll_timeout_seconds` defaults on the
+#     :class:`BaseFullDAGE2ETest`).
+#   - Concurrency group keyed on workflow + ref so re-running on the
+#     same branch queues rather than racing.
+#   - Permissions minimum set the SDR composite action needs (PR
+#     comments, GHCR push, statuses).
+#   - Tenant + OAuth + API-key env wiring.
+#   - The `Resolve agent-name` step that handles the run-id default.
+#   - The SDR composite action invocation with full-DAG defaults
+#     (test-path, secrets-script, components-dir, compose-overlay).
+#
+# `components-dir` + `compose-overlay` are explicit here because the
+# full-DAG pipeline lives alongside the SDR (testcontainer) pipeline
+# in connector repos — both share `$SDR_CONFIG_DIR` but need
+# different component sets + compose overlays (full-DAG uses an S3
+# OAuth objectstore + a worker container that registers under a
+# dynamic agent-name, SDR uses localstorage + a hermetic sibling DB).
+# Passing the per-pipeline paths through bypasses the convention
+# fallback that would otherwise pick up the SDR files.
+#
+# Caller overrides any of the input defaults when their layout differs.
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: Connector short name (e.g. "mysql", "mssql", "postgres").
+        required: true
+        type: string
+      app-image-name:
+        description: GHCR image name (e.g. "atlan-mysql-app").
+        required: true
+        type: string
+      test-path:
+        description: Pytest target directory.
+        required: false
+        type: string
+        default: tests/full_dag/
+      secrets-script:
+        description: |
+          Path to the script that writes the local-secret-store bundle
+          (typically just SDR_{CONNECTOR}_USERNAME/PASSWORD).
+        required: false
+        type: string
+        default: .github/e2e/make-secrets-e2e-full.py
+      components-dir:
+        description: |
+          App-level Dapr component overrides for the full-DAG stack
+          (e.g. S3 binding via the tenant's blobstorage proxy).
+          Default matches the convention this repo's apps follow —
+          a sibling directory in `.github/e2e/` so SDR and full-DAG
+          don't share the same overrides set.
+        required: false
+        type: string
+        default: .github/e2e/e2e-full-components
+      compose-overlay:
+        description: |
+          docker-compose overlay for the full-DAG stack. Propagates
+          AWS_* env vars to the worker for the S3 binding and sets a
+          unique agent-name so the worker registers on the harness's
+          dynamic Temporal queue.
+        required: false
+        type: string
+        default: .github/e2e/e2e-full-docker-compose.yaml
+      timeout-minutes:
+        description: |
+          GH job timeout. Must always be > ae_poll_timeout_seconds +
+          atlas_poll_timeout_seconds + ~10 min build/setup overhead.
+          Default 120 fits the SDK's 90 + 30 minute poll budgets.
+        required: false
+        type: number
+        default: 120
+      agent-name-override:
+        description: |
+          Override agent-name (default ci-<run_id>). Useful when re-
+          running against a worker that's already up.
+        required: false
+        type: string
+        default: ""
+      application-sdk-ref:
+        description: |
+          Branch / tag / SHA of application-sdk to pin during the
+          composite-action invocation. Empty = repo's pyproject pin.
+        required: false
+        type: string
+        default: ""
+      distinct-id:
+        description: |
+          Identifier passed through from the caller's
+          ``workflow_dispatch.inputs.distinct_id`` so
+          ``codex-/return-dispatch`` on the apps-sdk side can locate
+          this run from the calling workflow. Echoed in the
+          "distinct-id" step name; never read by test code.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      SDR_TEST_TENANT:
+        description: Tenant DNS short name read by the configurator.
+        required: true
+      SDR_CLIENT_ID:
+        description: Configurator OAuth client id (CI_CLIENT_ID).
+        required: true
+      SDR_CLIENT_SECRET:
+        description: Configurator OAuth client secret (CI_CLIENT_SECRET).
+        required: true
+      ATLAN_BASE_URL:
+        description: Tenant base URL (e.g. https://devex.atlan.com).
+        required: true
+      ATLAN_API_KEY:
+        description: |
+          Bearer for AE-management calls (/automation/api/v1/*). The
+          API-key service account carries realm-admin which the OAuth
+          client does not — verified on devex.
+        required: true
+      SDR_OAUTH_CLIENT_ID:
+        description: |
+          OAuth client id used by the Dapr S3 binding (via the tenant's
+          /api/blobstorage proxy) and by pyatlan for asset queries.
+          Optional — falls back to API-key bearer when absent.
+        required: false
+      SDR_OAUTH_CLIENT_SECRET:
+        description: Matching OAuth client secret.
+        required: false
+
+jobs:
+  e2e-full:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: e2e-full-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      pull-requests: write
+      contents: read
+      statuses: write
+      packages: write
+    env:
+      CI_TENANT_DOMAIN: ${{ secrets.SDR_TEST_TENANT }}
+      CI_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      CI_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      ATLAN_AUTH_CLIENT_ID: ${{ secrets.SDR_OAUTH_CLIENT_ID }}
+      ATLAN_AUTH_CLIENT_SECRET: ${{ secrets.SDR_OAUTH_CLIENT_SECRET }}
+      ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
+      SDR_OAUTH_CLIENT_ID: ${{ secrets.SDR_OAUTH_CLIENT_ID }}
+      SDR_OAUTH_CLIENT_SECRET: ${{ secrets.SDR_OAUTH_CLIENT_SECRET }}
+      ATLAN_BASE_URL: ${{ secrets.ATLAN_BASE_URL }}
+    steps:
+      # codex-/return-dispatch on the apps-sdk side scans step *names*
+      # for "distinct-id <value>". Always-run, no-op; lets the SDK PR's
+      # e2e-full-mysql job locate this run via the GH Actions API.
+      - name: distinct-id ${{ inputs.distinct-id }}
+        if: inputs.distinct-id != ''
+        shell: bash
+        run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve agent-name
+        id: agent
+        run: |
+          if [ -n "${{ inputs.agent-name-override }}" ]; then
+            echo "name=${{ inputs.agent-name-override }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=ci-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Using agent-name=$(grep '^name=' "$GITHUB_OUTPUT" | cut -d= -f2)"
+
+      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
+        with:
+          app-name: ${{ inputs.app-name }}
+          app-image-name: ${{ inputs.app-image-name }}
+          test-path: ${{ inputs.test-path }}
+          secrets-script: ${{ inputs.secrets-script }}
+          components-dir: ${{ inputs.components-dir }}
+          compose-overlay: ${{ inputs.compose-overlay }}
+          # Bump the container-health wait because the worker has to
+          # establish the Temporal connection with TLS + auth before
+          # /server/health turns green.
+          container-health-timeout-seconds: "120"
+          # `-s` streams the harness's poll-loop output in real time so
+          # operators can watch the colour-emoji DAG progression
+          # instead of waiting for a final dump.
+          pytest-extra-args: "-s"
+          application-sdk-ref: ${{ inputs.application-sdk-ref }}

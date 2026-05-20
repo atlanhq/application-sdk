@@ -11,6 +11,9 @@ permissions:
   issues: write
   security-events: write
 
+env:
+  TEMPORAL_CLI_VERSION: "1.5.1"  # bundles Server 1.29.1 — matches tenant Server 1.29.4
+
 jobs:
   # Detect which files changed
   changes:
@@ -91,12 +94,8 @@ jobs:
   # Testing
   unit:
     name: Unit Tests
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
-    # Python 3.14 RC may segfault during interpreter shutdown (known CPython issue)
-    continue-on-error: ${{ matrix.python-version == '3.14' }}
     strategy:
       fail-fast: false
       matrix:
@@ -107,7 +106,7 @@ jobs:
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          fail-under: "50"
+          fail-under: "85"
           python-version: ${{ matrix.python-version }}
 
   integration:
@@ -122,9 +121,8 @@ jobs:
 
       - name: Install Temporal CLI
         run: |
-          TEMPORAL_VERSION="1.3.0"
           mkdir -p "$HOME/.temporalio/bin"
-          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_VERSION}/temporal_cli_${TEMPORAL_VERSION}_linux_amd64.tar.gz" \
+          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_CLI_VERSION}/temporal_cli_${TEMPORAL_CLI_VERSION}_linux_amd64.tar.gz" \
             -o /tmp/temporal.tar.gz
           tar -xzf /tmp/temporal.tar.gz -C /tmp
           mv /tmp/temporal "$HOME/.temporalio/bin/temporal"
@@ -277,7 +275,7 @@ jobs:
   e2e-apps:
     name: E2E (Apps)
     needs: [changes, matrix-builder]
-    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test')) && github.event.pull_request.head.repo.fork != true
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test')) && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -289,4 +287,133 @@ jobs:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
+
+  # SDR matrix — same <repo>:<branch> label parsing as matrix-builder
+  # above, but a different default (the SDR-enabled connector fleet,
+  # not openapi-app). Keeping them separate so the SDR path can grow
+  # connectors independently of the legacy e2e path.
+  #
+  # No label gate — the SDR connector suite (~3 min per app) auto-runs
+  # on every PR push so SDK changes are validated end-to-end against
+  # the connector fleet by default. Custom <repo>:<branch> labels
+  # still override the default matrix when a contributor wants to pin
+  # an alternate target branch for a specific connector.
+  sdr-matrix-builder:
+    name: Build SDR Test Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Get PR Labels
+        id: get-labels
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const labelNames = labels.map(label => label.name).join(',');
+            console.log(`PR Labels: ${labelNames}`);
+            core.setOutput('labels', labelNames);
+
+      - name: Build matrix from PR labels
+        id: set-matrix
+        run: |
+          TARGET_BRANCH="${{ github.base_ref }}"
+          # SDR-enabled connector fleet — extend this list as new
+          # connectors wire up sdr-integration-tests.yaml.
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
+
+          LABELS="${{ steps.get-labels.outputs.labels }}"
+          FOUND_LABEL=false
+          INCLUDES=""
+
+          IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
+          for LABEL in "${LABEL_ARRAY[@]}"; do
+            if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
+              REPO="${BASH_REMATCH[1]}"
+              BRANCH="${BASH_REMATCH[2]}"
+              if [[ "$FOUND_LABEL" == "true" ]]; then
+                INCLUDES="${INCLUDES},"
+              fi
+              INCLUDES="${INCLUDES}{\"repo_name\":\"${REPO}\",\"target_branch\":\"${BRANCH}\"}"
+              FOUND_LABEL=true
+              echo "Added SDR matrix entry: $REPO:$BRANCH"
+            fi
+          done
+
+          if [[ "$FOUND_LABEL" == "true" ]]; then
+            MATRIX="{\"include\":[${INCLUDES}]}"
+          else
+            MATRIX="$DEFAULT_MATRIX"
+            echo "No repo:branch labels found, using default SDR matrix"
+          fi
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Matrix output: $MATRIX"
+
+  # SDR E2E Tests: dispatched on the connector repo at the PR's head SHA
+  # so SDK changes are validated end-to-end against the connector fleet.
+  # The connector's sdr-integration-tests.yaml accepts the
+  # application_sdk_ref input and re-pins atlan-application-sdk to that
+  # SHA before building the image + running tests.
+  sdr-e2e-apps:
+    name: SDR Integration Tests (testcontainer) — ${{ matrix.repo_name }}
+    needs: [changes, sdr-matrix-builder]
+    # No label gate — runs on every push to a non-fork, non-dependabot
+    # PR. ~3 min per connector and validates the SDR contract end-to-
+    # end, which is worth the spend on every SDK PR.
+    if: github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.sdr-matrix-builder.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: "./.github/actions/e2e-apps"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-name: ${{ matrix.repo_name }}
+          target-branch: "refs/heads/${{ matrix.target_branch }}"
+          workflow: sdr-integration-tests.yaml
+          workflow-inputs: |
+            { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}" }
+
+  # Full-DAG e2e against the mysql connector. Opt-in via the
+  # `e2e-full-mysql` label because each run is ~20 min and creates
+  # real Connection assets on the test tenant. Add a similar job +
+  # label per app as more connectors adopt the e2e-full harness — the
+  # e2e-apps composite action is generic; just change the `workflow`
+  # filename + the dispatch label (e2e-full-postgres, e2e-full-mssql,
+  # …) when wiring up a new connector.
+  e2e-full-mysql:
+    name: E2E Full Tests (system apps) — atlan-mysql-app
+    needs: [changes]
+    if: |
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'e2e-full-mysql') ||
+        contains(github.event.pull_request.labels.*.name, 'e2e-full-mysql')
+      ) && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    # The dispatched mysql-app run budget is timeout-minutes: 120
+    # (matches the SDK's e2e-full-reusable.yaml ceiling). Add ~10 min
+    # of overhead for dispatch + queue + artifact-fetch + comment-post
+    # on this side so the SDK job doesn't get killed before the
+    # dispatched run finishes legitimately.
+    timeout-minutes: 130
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: "./.github/actions/e2e-apps"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-name: atlan-mysql-app
+          target-branch: "refs/heads/${{ github.base_ref }}"
+          workflow: e2e-full.yaml
+          workflow-inputs: |
+            { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}" }
 
