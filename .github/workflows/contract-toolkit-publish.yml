@@ -3,9 +3,10 @@ name: Publish Contract Toolkit
 # Phase B of the contract-toolkit release. Fires when a release PR opened by
 # the Release Contract Toolkit workflow (contract-toolkit-release.yml) is
 # merged into main with the `release:contract-toolkit` label. Builds the PKL
-# package from merged main, publishes it under app-contract-toolkit/ on the
-# gh-pages branch, creates the contract-toolkit-v<version> tag, and creates
-# the GitHub release with the rendered notes.
+# package from merged main, publishes it under contracts/ on the gh-pages
+# branch, and creates the contract-toolkit-v<version> annotated tag.
+# No GitHub Release is created — that would interleave contract-toolkit
+# versions with SDK v* releases on the repo releases page.
 
 on:
   pull_request:
@@ -57,39 +58,6 @@ jobs:
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Publishing contract toolkit ${tag} from $(git rev-parse HEAD)"
-
-      - name: Load release body template
-        run: |
-          {
-            echo 'GIT_CLIFF_TEMPLATE<<EOF'
-            cat contract-toolkit/.github/release-notes.tmpl
-            echo EOF
-          } >> "$GITHUB_ENV"
-
-      - name: Render release body
-        uses: orhun/git-cliff-action@c93ef52f3d0ddcdcc9bd5447d98d458a11cd4f72 # v4.7.1
-        with:
-          config: contract-toolkit/cliff.toml
-          args: >-
-            --unreleased
-            --tag ${{ steps.meta.outputs.tag }}
-            --tag-pattern '^contract-toolkit-v[0-9].*'
-            --include-path 'contract-toolkit/**'
-            --github-repo ${{ github.repository }}
-            --strip all
-        env:
-          OUTPUT: /tmp/contract-toolkit-release-notes.md
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Normalize release body whitespace
-        run: |
-          set -euo pipefail
-          awk '
-            NF { blank=0; print; next }
-            !blank { print; blank=1 }
-          ' /tmp/contract-toolkit-release-notes.md > /tmp/contract-toolkit-release-notes.normalized.md
-          mv /tmp/contract-toolkit-release-notes.normalized.md /tmp/contract-toolkit-release-notes.md
-          sed -i '/./,$!d' /tmp/contract-toolkit-release-notes.md
 
       - name: Build package
         run: pkl project package contract-toolkit/src/ --output-path .out/ --skip-publish-check
@@ -173,28 +141,7 @@ jobs:
           git tag -a "$tag" "$merge_sha" -m "Release contract toolkit $tag"
           git push origin "$tag"
 
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          tag="${{ steps.meta.outputs.tag }}"
-          version="${{ steps.meta.outputs.version }}"
-
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "release ${tag} already exists; skipping creation"
-            exit 0
-          fi
-
-          notes_flag=(--generate-notes)
-          if [ -s /tmp/contract-toolkit-release-notes.md ]; then
-            notes_flag=(--notes-file /tmp/contract-toolkit-release-notes.md)
-          fi
-
-          gh release create "$tag" \
-            "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.zip" \
-            "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}" \
-            "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.zip.sha256" \
-            "/tmp/contract-toolkit-pkl-out/${PKG_NAME}@${version}.sha256" \
-            --title "$tag" \
-            "${notes_flag[@]}"
+      # No GitHub Release is created: contract-toolkit releases would
+      # interleave with SDK v* releases on the repo's releases page, which
+      # is confusing. The annotated tag, gh-pages publish, and
+      # contract-toolkit/CHANGELOG.md are the authoritative record.
