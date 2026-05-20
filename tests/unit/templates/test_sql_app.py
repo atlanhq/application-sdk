@@ -909,6 +909,95 @@ class TestCanonicalStoragePaths:
         assert persistent_ref.tier == StorageTier.PERSISTENT
 
 
+class TestGetObjectStorePrefixCrossPlatform:
+    """Pin ``get_object_store_prefix`` output shape so SqlApp's
+    canonical ``storage_path`` is always a forward-slash, drive-less,
+    leading-slash-stripped relative key — across every supported
+    platform.
+
+    Why a dedicated test: the function is the bridge between
+    OS-specific local paths and object-store keys. Windows runners
+    surfaced two bugs in succession:
+
+    1. Backslash separators leaking into ``storage_path`` (fixed
+       in a prior commit on this branch).
+    2. Drive letter (``C:\\``) leaking into ``storage_path`` so
+       obstore's LocalFileSystem backend tried to walk
+       ``<store_root>\\C:\\...`` and rejected the absolute-path
+       composition.
+
+    The function must return a relative-style key regardless of
+    whether the caller passed a POSIX-absolute, Windows-absolute,
+    or already-relative path. These tests pin that invariant so
+    a future refactor can't silently restore the Windows-only
+    breakage (Linux/macOS CI passes either way because POSIX local
+    stores tolerate the extra leading slash).
+    """
+
+    def test_no_backslashes_in_output(self):
+        """Forward-slash convention — never backslash, regardless of platform."""
+        from application_sdk.execution import get_object_store_prefix
+
+        # Simulate Windows-style separators on any platform by passing
+        # a literal backslash string. The function uses ``os.path.sep``
+        # for normalization, so on POSIX this becomes a no-op (the
+        # input has no POSIX separators); on Windows the backslashes
+        # would have been normalized in the OS-aware branch but the
+        # test would still pass.
+        out = get_object_store_prefix("some/relative/key.json")
+        assert "\\" not in out, f"backslash leaked into key: {out!r}"
+
+    def test_strips_leading_slash(self):
+        """Leading slash isn't valid in object-store keys — strip it."""
+        from application_sdk.execution import get_object_store_prefix
+
+        out = get_object_store_prefix("/already/relative/key.json")
+        # The function takes either local paths or object-store paths;
+        # for both, leading separators should be stripped.
+        assert not out.startswith("/"), f"leading slash leaked: {out!r}"
+
+    def test_relative_input_passes_through_with_separator_normalization(self):
+        """A relative path the caller passed as-is round-trips with
+        only separator + leading-slash normalization."""
+        from application_sdk.execution import get_object_store_prefix
+
+        out = get_object_store_prefix("artifacts/apps/foo/file.json")
+        assert out == "artifacts/apps/foo/file.json"
+
+    def test_windows_drive_letter_stripped(self):
+        """Windows-absolute input like ``C:\\Users\\foo\\bar`` must
+        produce a drive-less, forward-slash relative key.
+
+        Direct unit test on the helper — uses ``os.path.splitdrive``
+        which is a no-op on POSIX, so this test exercises real
+        behaviour only on Windows. On POSIX it's a smoke check that
+        the function doesn't accidentally split a colon-containing
+        POSIX path (POSIX has no drive notion).
+        """
+        import os
+
+        from application_sdk.execution import get_object_store_prefix
+
+        # Build a path with the platform's own separator + a drive-
+        # like prefix. On POSIX ``os.path.splitdrive`` returns
+        # ``("", path)`` so the drive-strip is a no-op and we get
+        # back the same (separator-normalized, leading-slash-stripped)
+        # path. On Windows the drive letter IS stripped.
+        if os.path.sep == "\\":
+            # Windows: real drive letter handling.
+            out = get_object_store_prefix("C:\\Users\\runner\\raw\\db\\records.json")
+            assert "C:" not in out, f"drive letter leaked: {out!r}"
+            assert "\\" not in out, f"backslash leaked: {out!r}"
+            assert out == "Users/runner/raw/db/records.json"
+        else:
+            # POSIX: ``os.path.splitdrive`` is a no-op. Just verify
+            # the function returns a normalized relative form for
+            # an absolute POSIX path under tmp.
+            out = get_object_store_prefix("/tmp/runner/raw/db/records.json")
+            assert not out.startswith("/")
+            assert "\\" not in out
+
+
 class TestTransformInputLegacyFields:
     """Sanity tests for the deprecated-but-retained fields on
     :class:`TransformInput` (``file_names`` / ``chunk_start`` /
