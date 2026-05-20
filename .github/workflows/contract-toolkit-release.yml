@@ -27,7 +27,6 @@ permissions:
 env:
   PKG_NAME: app-contract-toolkit
   PKL_VERSION: "0.27.2"
-  GIT_CLIFF_VERSION: "2.7.0"
   RELEASE_LABEL: "release:contract-toolkit"
   BUMP_BRANCH: "bump-version-contract-toolkit"
 
@@ -55,19 +54,9 @@ jobs:
           sudo mv /tmp/pkl /usr/local/bin/pkl
 
       - name: Install git-cliff
-        run: |
-          set -euo pipefail
-          base="https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}"
-          archive="git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          curl -fsSL -o "/tmp/${archive}" "${base}/${archive}"
-          expected="$(curl -fsSL "${base}/${archive}.sha256" | awk '{print $1}')"
-          actual="$(sha256sum "/tmp/${archive}" | awk '{print $1}')"
-          if [ "$expected" != "$actual" ]; then
-            echo "::error::SHA256 mismatch for ${archive}: expected ${expected}, got ${actual}"
-            exit 1
-          fi
-          tar -xz -f "/tmp/${archive}" -C /tmp
-          sudo mv "/tmp/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu/git-cliff" /usr/local/bin/git-cliff
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          args: --version
 
       - name: Compute next version
         id: versions
