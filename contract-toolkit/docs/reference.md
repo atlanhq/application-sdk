@@ -39,7 +39,7 @@ amends "pkl:Project"
 
 dependencies {
   ["app-contract-toolkit"] {
-    uri = "package://atlanhq.github.io/application-sdk/app-contract-toolkit/app-contract-toolkit@<LATEST_VERSION>"
+    uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<LATEST_VERSION>"
   }
 }
 ```

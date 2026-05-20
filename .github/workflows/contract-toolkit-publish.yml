@@ -20,7 +20,7 @@ permissions:
 env:
   PKG_NAME: app-contract-toolkit
   PKL_VERSION: "0.27.2"
-  PUBLISH_DIR: app-contract-toolkit
+  PUBLISH_DIR: contracts
 
 jobs:
   publish:
