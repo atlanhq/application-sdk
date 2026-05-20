@@ -747,27 +747,43 @@ class SqlApp(App):
 
         logger.info("Extracted %s: %d raw records", entity_type, count)
         # Emit a ``FileReference`` so the activity interceptor uploads the
-        # raw JSONL to the object store after the extract activity completes
-        # and marks the ref durable. ``run()`` then threads this durable ref
-        # into the matching transform's ``TransformInput`` — the interceptor
-        # re-downloads it onto whichever worker pod picks up the transform
-        # (with SHA-256 sidecar verification, so a transform that lands on
-        # a different pod than the extract still sees a verified-fresh
-        # local copy). This is how cross-worker fault tolerance for the
-        # raw → transform handoff is provided without any explicit
+        # raw JSONL to the object store after the extract activity
+        # completes and marks the ref durable. ``run()`` then threads
+        # this durable ref into the matching transform's
+        # ``TransformInput`` — the interceptor re-downloads it onto
+        # whichever worker pod picks up the transform (with SHA-256
+        # sidecar verification, so a transform that lands on a
+        # different pod than the extract still sees a verified-fresh
+        # local copy). This is how cross-worker fault tolerance for
+        # the raw → transform handoff is provided without any explicit
         # ``download_file`` plumbing in the template (BLDX-1281).
         #
-        # Default TRANSIENT tier is the right semantic choice here — the
-        # raw file is purely intermediate (extract → transform within
-        # the same run), and ``cleanup_storage`` auto-deletes tracked
-        # TRANSIENT refs at run end. The storage key resolves to
-        # ``<run_prefix>/file_refs/<uuid>.json`` because the activity
-        # interceptor passes ``output_path=build_output_path()`` to
-        # ``persist_file_refs``, and TRANSIENT's ``_file_ref_base`` now
-        # honours that run_prefix (see ``StorageTier._file_ref_base`` —
-        # tenant-scoped path so Atlan's blob-storage gateway permits
-        # the upload in production).
-        raw_ref = FileReference.from_local(output_file) if count > 0 else None
+        # ``storage_path`` is pinned to the canonical run-scoped key
+        # ``<run_prefix>/raw/<entity>/records.json`` rather than the
+        # default UUID-named ``<run_prefix>/file_refs/<uuid>.json``.
+        # ``get_object_store_prefix`` strips ``TEMPORARY_PATH`` from the
+        # local path to derive the matching object-store key — same
+        # shape ``upload_to_atlan``'s legacy directory walk would have
+        # produced. Pinning the key on the ref itself makes the upload
+        # work even when ``upload_to_atlan`` runs on a different pod
+        # than this extract and finds the local FS empty (the
+        # cross-pod failure mode that caused silent asset archival in
+        # production — publish reads from canonical paths and would
+        # miss any entity whose transformed-side upload only landed
+        # under ``file_refs/<uuid>.json``).
+        #
+        # TRANSIENT tier — the raw file is purely intermediate
+        # (extract → transform within the same run); ``cleanup_storage``
+        # auto-deletes tracked TRANSIENT refs at run end.
+        raw_ref = (
+            FileReference(
+                local_path=str(output_file),
+                storage_path=get_object_store_prefix(str(output_file)),
+                tier=StorageTier.TRANSIENT,
+            )
+            if count > 0
+            else None
+        )
         return ExtractionTaskOutput(
             typename=entity_type,
             total_record_count=count,
@@ -861,16 +877,32 @@ class SqlApp(App):
         # Downstream publish / upload tasks then consume the durable ref
         # via the same materialise contract — no local-FS coupling.
         #
-        # Tier = RETAINED here (vs. TRANSIENT on raw_file): the
+        # ``storage_path`` is pinned to the canonical
+        # ``<run_prefix>/transformed/<entity>/entities.json`` so the
+        # downstream publish step finds the file at the entity-typed
+        # path it expects. Without this pin the interceptor would
+        # auto-generate a ``file_refs/<uuid>.json`` key — publish
+        # discovers transformed assets by walking
+        # ``transformed/<entity>/`` prefixes, so anything that only
+        # lands under ``file_refs/`` is invisible to it and the
+        # entity gets archived as "removed from source" on the next
+        # publish run. ``get_object_store_prefix`` strips
+        # ``TEMPORARY_PATH`` from the local path to derive the
+        # matching object-store key; see ``_extract_entity`` for the
+        # corresponding canonical key on the raw side.
+        #
+        # Tier = RETAINED (vs. TRANSIENT on raw_file): the
         # transform → publish handoff can span an SDR → in-tenant
         # deployment boundary, so the ref must survive the SDR-side
         # workflow's auto-cleanup at run end. RETAINED keeps the
         # object-store key under the run-scoped ``artifacts/`` prefix
         # but skips ``cleanup_storage``'s tracked-TRANSIENT sweep.
-        # raw_file stays TRANSIENT because both extract and transform
-        # always run in the same deployment — see ``_extract_entity``.
         transformed_ref = (
-            FileReference.from_local(output_file, tier=StorageTier.RETAINED)
+            FileReference(
+                local_path=str(output_file),
+                storage_path=get_object_store_prefix(str(output_file)),
+                tier=StorageTier.RETAINED,
+            )
             if count > 0
             else None
         )
