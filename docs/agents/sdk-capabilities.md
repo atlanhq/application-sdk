@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.1
-source-sha:    989e255c85eec09bd4f61d581e9f85765474a0fe
-source-date:   2026-05-20T12:20:08+05:30
+source-sha:    8514e7e36dfa7cd0ce5af73fd51802bba0117614
+source-date:   2026-05-20T12:20:21+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2868,6 +2868,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the deprecated ``upload_to_atlan`` task.
 - **Fields:**
   - `output_path: str` `= ''` — Local path (file or directory) to push to the platform via App.upload.
+  - `skip_if_exists: bool` `= True` — SHA-compare each local file against the remote sidecar and skip
 - **Defined in:** `application_sdk/templates/contracts/base_metadata_extraction.py`
 
 #### `UploadOutput`

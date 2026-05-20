@@ -387,7 +387,30 @@ class SqlApp(App):
         timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
     )
     async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
-        """Upload transformed output to the upstream Atlan store."""
+        """Upload transformed output to the upstream Atlan store.
+
+        Threads ``input.skip_if_exists`` through to ``transfer_upload``
+        so callers control whether the directory walk SHA-compares
+        each local file against the remote sidecar and skips matches.
+        Default (``True``) is the right choice after BLDX-1281: the
+        v3 SqlApp's per-entity extract/transform activities pre-set
+        canonical ``storage_path`` values on the ``FileReference``
+        objects they emit, so the activity interceptor already
+        uploads every raw/transformed file to the same key this walk
+        would produce. With the skip on, the walk becomes a safety
+        net for side-files (``lineage_stage/``,
+        pre-FileReference ``extras-procedure/`` outputs, etc.) the
+        per-entity contract doesn't cover.
+
+        Pre-BLDX-1281 this walk was load-bearing for the publish
+        handoff — it was the only thing populating
+        ``<run_prefix>/transformed/<entity>/entities.json``. Now the
+        interceptor's pre-set ``storage_path`` lands the file at the
+        canonical key directly, regardless of which pod ran the
+        activity, and this walk is purely a safety net. See
+        ``UploadInput.skip_if_exists`` for when to override the
+        default.
+        """
         output_path = input.output_path or os.path.join(
             TEMPORARY_PATH, build_output_path()
         )
@@ -397,6 +420,7 @@ class SqlApp(App):
         result = await transfer_upload(
             local_path=output_path,
             storage_path=build_output_path(),
+            skip_if_exists=input.skip_if_exists,
         )
         file_count = result.ref.file_count if result.ref else 0
         logger.info("Uploaded %d files to Atlan (synced=%s)", file_count, result.synced)
