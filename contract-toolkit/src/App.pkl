@@ -2211,24 +2211,40 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   else ""
   local hasPublish = pipeline.publish != null
   local includePublishInputFields = hasPublish && pipeline.publish!!.includeInputFields
-  local publishExcludeContent: String = if (includePublishInputFields)
+  // py-names already emitted from uiConfig — used to deduplicate the publish scaffold
+  local uiPyNames: Set<String> = (new Listing {
+    for (k, u in props) {
+      when (u.includeInInput && !skipFields.contains(toPyName(k))) {
+        toPyName(k)
+      }
+    }
+  }).toList().toSet()
+  local publishHashExcludeBlock: String = if (includePublishInputFields)
+    "    _config_hash_exclude: ClassVar[set[str]] = {\n" +
     "        \"output_dir\",\n" +
     "        \"checkpoint_dir\",\n" +
     "        \"load_to_atlan\",\n" +
-    "        \"publish_dry_run\","
+    "        \"publish_dry_run\",\n" +
+    "    }\n\n"
   else ""
-  local publishHashExcludeBlock: String = if (includePublishInputFields)
-    "    _config_hash_exclude: ClassVar[set[str]] = {\n" + publishExcludeContent + "\n    }\n\n"
-  else ""
+  // Skip scaffold fields already declared via uiConfig to avoid duplicate class members.
   local publishFieldBlock: String = if (includePublishInputFields)
-    "    output_dir: str = \"\"\n" +
-    "    \"\"\"Directory for output JSONL files.\"\"\"\n" +
-    "    checkpoint_dir: str = \"\"\n" +
-    "    \"\"\"Directory for checkpoint database. If provided, enables incremental extraction.\"\"\"\n" +
-    "    load_to_atlan: bool = True\n" +
-    "    \"\"\"If True, load extracted metadata to Atlan via publish-app.\"\"\"\n" +
-    "    publish_dry_run: bool = False\n" +
-    "    \"\"\"When True, skip the Atlas publish step (executor_enabled=False).\"\"\"\n"
+    (if (!uiPyNames.contains("output_dir"))
+      "    output_dir: str = \"\"\n" +
+      "    \"\"\"Directory for output JSONL files.\"\"\"\n"
+    else "") +
+    (if (!uiPyNames.contains("checkpoint_dir"))
+      "    checkpoint_dir: str = \"\"\n" +
+      "    \"\"\"Directory for checkpoint database. If provided, enables incremental extraction.\"\"\"\n"
+    else "") +
+    (if (!uiPyNames.contains("load_to_atlan"))
+      "    load_to_atlan: bool = True\n" +
+      "    \"\"\"If True, load extracted metadata to Atlan via publish-app.\"\"\"\n"
+    else "") +
+    (if (!uiPyNames.contains("publish_dry_run"))
+      "    publish_dry_run: bool = False\n" +
+      "    \"\"\"When True, skip the Atlas publish step (executor_enabled=False).\"\"\"\n"
+    else "")
   else ""
   local classBody: String =
     publishHashExcludeBlock +

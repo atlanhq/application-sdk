@@ -53,7 +53,5 @@ class AppInputContract(ExtractionInput):
     """Directory for output JSONL files."""
     checkpoint_dir: str = ""
     """Directory for checkpoint database. If provided, enables incremental extraction."""
-    load_to_atlan: bool = True
-    """If True, load extracted metadata to Atlan via publish-app."""
     publish_dry_run: bool = False
     """When True, skip the Atlas publish step (executor_enabled=False)."""

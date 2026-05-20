@@ -98,6 +98,9 @@ facts {
 
   ["Full example generates load-to-atlan SDK input for publish toggle"] {
     fullInputPy.contains("load_to_atlan: bool = True")
+    // Form widget + publish scaffold overlap must not produce a duplicate class member.
+    // Expected occurrences: once in _config_hash_exclude, once as the field → split length 3.
+    fullInputPy.split("load_to_atlan").length == 3
   }
 
   ["ConnectionRef example uses public connector filters"] {
