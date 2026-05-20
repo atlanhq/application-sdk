@@ -347,9 +347,9 @@ class TestExtractEmitsRawFileReference:
         # the local_path is under TEMPORARY_PATH, so the strip
         # yields ``<run_prefix>/raw/<entity>/records.json``.
         assert result.raw_file.storage_path is not None
-        assert result.raw_file.storage_path.endswith("/raw/database/records.json"), (
-            f"unexpected storage_path: {result.raw_file.storage_path!r}"
-        )
+        assert result.raw_file.storage_path.endswith(
+            "/raw/database/records.json"
+        ), f"unexpected storage_path: {result.raw_file.storage_path!r}"
         # Tier stays TRANSIENT (the semantically correct choice — the
         # raw file is an intermediate extract→transform handoff and
         # gets auto-cleaned at run end by ``cleanup_storage``).
@@ -582,9 +582,9 @@ class TestCanonicalStoragePaths:
                 store, result.raw_file, output_path="ignored"
             )
             assert durable.storage_path == result.raw_file.storage_path
-            assert durable.storage_path.endswith(f"/raw/{entity}/records.json"), (
-                f"raw_file for {entity} not at canonical key: {durable.storage_path!r}"
-            )
+            assert durable.storage_path.endswith(
+                f"/raw/{entity}/records.json"
+            ), f"raw_file for {entity} not at canonical key: {durable.storage_path!r}"
 
         # ── transform all 4 entities (each with its raw_file threaded in) ──
         transform_methods = {
@@ -599,9 +599,9 @@ class TestCanonicalStoragePaths:
                 raw_file=extract_results[entity].raw_file,
             )
             transform_result = await transform_methods[entity](transform_input)
-            assert transform_result.transformed_file is not None, (
-                f"transform_{entity}s returned no ref"
-            )
+            assert (
+                transform_result.transformed_file is not None
+            ), f"transform_{entity}s returned no ref"
             # Persist the transformed ref.
             durable = await persist_file_reference(
                 store, transform_result.transformed_file, output_path="ignored"
@@ -829,9 +829,9 @@ class TestCanonicalStoragePaths:
         data_keys = [k for k in all_keys if not k.endswith(".sha256")]
 
         for entity in entity_rows:
-            assert any(k.endswith(f"/raw/{entity}/records.json") for k in data_keys), (
-                f"missing canonical raw key for {entity}: {data_keys}"
-            )
+            assert any(
+                k.endswith(f"/raw/{entity}/records.json") for k in data_keys
+            ), f"missing canonical raw key for {entity}: {data_keys}"
             assert any(
                 k.endswith(f"/transformed/{entity}/entities.json") for k in data_keys
             ), f"missing canonical transformed key for {entity}: {data_keys}"
