@@ -9,8 +9,8 @@ header = """
 All notable changes to this project are documented here.
 
 Release notes are generated from [conventional commit](https://www.conventionalcommits.org/)
-messages. Every merge to `main` produces either a patch, minor, or major release —
-see the release logic in `.github/workflows/contract-toolkit-release.yml`.
+messages. Every merge to `main` that touches contract-toolkit files auto-creates or
+updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
 """
 

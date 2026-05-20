@@ -1,18 +1,29 @@
 name: Release Contract Toolkit
 
-# Phase A of the contract-toolkit release. Bumps the PklProject version,
-# regenerates contract-toolkit/CHANGELOG.md, sanity-builds the package, and
-# opens a PR labeled `release:contract-toolkit` against main. Merging that PR
-# triggers Publish Contract Toolkit (contract-toolkit-publish.yml) which does
-# the actual gh-pages publish, tag, and GitHub release.
+# Fired automatically when a non-release PR that touches contract-toolkit files is
+# merged to main. Uses git-cliff --bumped-version (scoped to contract-toolkit/**
+# paths and contract-toolkit-v* tags) to auto-compute the next semver, bumps
+# contract-toolkit/src/PklProject, regenerates contract-toolkit/CHANGELOG.md,
+# and creates or updates the bump-version-contract-toolkit PR labeled
+# release:contract-toolkit. Merging that PR triggers Publish Contract Toolkit
+# (contract-toolkit-publish.yml), which handles gh-pages publish, tag, and release.
+#
+# Commit scoping: git-cliff --include-path and --tag-pattern ensure that only
+# commits touching contract-toolkit/** paths (anchored to contract-toolkit-v* tags)
+# influence the version bump — SDK-only commits are invisible to this workflow.
 
 on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+    paths:
+      - "contract-toolkit/**"
+      - "application_sdk/contracts/**"
+      - "application_sdk/credentials/**"
+      - "application_sdk/handler/**"
+      - "application_sdk/templates/contracts/**"
+      - ".github/workflows/contract-toolkit-*.yml"
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Target version (for example 1.0.0). Must be greater than contract-toolkit/src/PklProject."
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -21,26 +32,25 @@ permissions:
 env:
   PKG_NAME: app-contract-toolkit
   PKL_VERSION: "0.27.2"
+  GIT_CLIFF_VERSION: "2.7.0"
   RELEASE_LABEL: "release:contract-toolkit"
+  BUMP_BRANCH: "bump-version-contract-toolkit"
 
 jobs:
   open-release-pr:
-    name: Open contract toolkit release PR
+    name: Open or update contract toolkit release PR
     runs-on: ubuntu-latest
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.pull_request.merged == true &&
+        !startsWith(github.event.pull_request.head.ref, 'bump-version-contract-toolkit')
+      )
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           token: ${{ secrets.ORG_PAT_GITHUB }}
-
-      - name: Require main branch
-        run: |
-          set -euo pipefail
-          if [ "${GITHUB_REF_NAME}" != "main" ]; then
-            echo "::error::Run contract toolkit releases from main, not ${GITHUB_REF_NAME}."
-            exit 1
-          fi
 
       - name: Install PKL
         run: |
@@ -49,71 +59,83 @@ jobs:
           chmod +x /tmp/pkl
           sudo mv /tmp/pkl /usr/local/bin/pkl
 
-      - name: Validate and apply version bump
-        id: bump
+      - name: Install git-cliff
         run: |
           set -euo pipefail
-          file="contract-toolkit/src/PklProject"
-          current="$(grep -oP 'version\s*=\s*"\K[^"]+' "$file")"
-          new_version="${{ inputs.version }}"
-
-          if [ -z "$(echo "$new_version" | tr -d '[:space:]')" ]; then
-            echo "::error::version input is empty"
+          base="https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}"
+          archive="git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o "/tmp/${archive}" "${base}/${archive}"
+          expected="$(curl -fsSL "${base}/${archive}.sha256" | awk '{print $1}')"
+          actual="$(sha256sum "/tmp/${archive}" | awk '{print $1}')"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::SHA256 mismatch for ${archive}: expected ${expected}, got ${actual}"
             exit 1
           fi
+          tar -xz -f "/tmp/${archive}" -C /tmp
+          sudo mv "/tmp/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu/git-cliff" /usr/local/bin/git-cliff
 
-          if ! echo "$new_version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::version '$new_version' is not valid semver (expected MAJOR.MINOR.PATCH)"
-            exit 1
-          fi
+      - name: Compute next version
+        id: versions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          current="$(grep -oP 'version\s*=\s*"\K[^"]+' contract-toolkit/src/PklProject)"
 
-          if [ "$current" = "$new_version" ]; then
-            echo "::error::version $new_version is already current"
-            exit 1
-          fi
+          # Only commits touching contract-toolkit/** paths (since the last
+          # contract-toolkit-v* tag) determine the semver bump type.
+          next_tag="$(git cliff \
+            --config contract-toolkit/cliff.toml \
+            --bumped-version \
+            --tag-pattern '^contract-toolkit-v[0-9].*' \
+            --include-path 'contract-toolkit/**' \
+            2>/dev/null || true)"
 
+          # Strip tag prefix — handles contract-toolkit-vX.Y.Z and bare vX.Y.Z
+          new_version="${next_tag#contract-toolkit-v}"
+          new_version="${new_version#v}"
+
+          # Skip when there is nothing to release or the computed version is not
+          # an advancement over what is already in PklProject.
           higher="$(printf '%s\n%s\n' "$current" "$new_version" | sort -V | tail -1)"
-          if [ "$higher" != "$new_version" ]; then
-            echo "::error::version $new_version is not greater than current $current"
-            exit 1
+          if [ -z "$new_version" ] || [ "$higher" != "$new_version" ] || [ "$current" = "$new_version" ]; then
+            echo "No unreleased contract-toolkit changes require a version bump (current: ${current}, computed: ${new_version:-none})."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          tag="contract-toolkit-v${new_version}"
-          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-            echo "::error::tag ${tag} already exists"
-            exit 1
-          fi
-
-          branch="release/contract-toolkit-v${new_version}"
-          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
-            echo "::error::release branch ${branch} already exists on origin; close or delete the existing PR/branch before retrying"
-            exit 1
-          fi
-
-          sed -i "s/version = \"${current}\"/version = \"${new_version}\"/" "$file"
-
+          echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "old=${current}" >> "$GITHUB_OUTPUT"
           echo "new=${new_version}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+          echo "tag=contract-toolkit-v${new_version}" >> "$GITHUB_OUTPUT"
           echo "Version: ${current} -> ${new_version}"
 
+      - name: Apply version bump to PklProject
+        if: steps.versions.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          sed -i \
+            's/version = "${{ steps.versions.outputs.old }}"/version = "${{ steps.versions.outputs.new }}"/' \
+            contract-toolkit/src/PklProject
+
       - name: Render new release block
-        uses: orhun/git-cliff-action@c93ef52f3d0ddcdcc9bd5447d98d458a11cd4f72 # v4.7.1
-        with:
-          config: contract-toolkit/cliff.toml
-          args: >-
-            --unreleased
-            --tag ${{ steps.bump.outputs.tag }}
-            --tag-pattern '^contract-toolkit-v[0-9].*'
-            --include-path 'contract-toolkit/**'
-            --github-repo ${{ github.repository }}
-            --strip header
+        if: steps.versions.outputs.skip != 'true'
         env:
-          OUTPUT: /tmp/contract-toolkit-new-block.md
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git cliff \
+            --config contract-toolkit/cliff.toml \
+            --unreleased \
+            --tag "${{ steps.versions.outputs.tag }}" \
+            --tag-pattern '^contract-toolkit-v[0-9].*' \
+            --include-path 'contract-toolkit/**' \
+            --github-repo "${{ github.repository }}" \
+            --strip header \
+            --output /tmp/contract-toolkit-new-block.md
 
       - name: Merge new release block into toolkit changelog
+        if: steps.versions.outputs.skip != 'true'
         run: |
           set -euo pipefail
           changelog="contract-toolkit/CHANGELOG.md"
@@ -125,7 +147,7 @@ jobs:
           fi
 
           # Insert the new block above the first existing "## [" version heading.
-          # If there's no existing heading yet, append the block at end (first release).
+          # If there is no existing heading yet, append at end (first release).
           awk -v new_block_path="$new_block" '
             BEGIN { inserted = 0 }
             /^## \[/ && !inserted {
@@ -142,30 +164,24 @@ jobs:
           ' "$changelog" > "${changelog}.merged"
           mv "${changelog}.merged" "$changelog"
 
-      - name: Load release body template
-        run: |
-          {
-            echo 'GIT_CLIFF_TEMPLATE<<EOF'
-            cat contract-toolkit/.github/release-notes.tmpl
-            echo EOF
-          } >> "$GITHUB_ENV"
-
-      - name: Render release body for PR
-        uses: orhun/git-cliff-action@c93ef52f3d0ddcdcc9bd5447d98d458a11cd4f72 # v4.7.1
-        with:
-          config: contract-toolkit/cliff.toml
-          args: >-
-            --unreleased
-            --tag ${{ steps.bump.outputs.tag }}
-            --tag-pattern '^contract-toolkit-v[0-9].*'
-            --include-path 'contract-toolkit/**'
-            --github-repo ${{ github.repository }}
-            --strip all
+      - name: Render release notes for PR body
+        if: steps.versions.outputs.skip != 'true'
         env:
-          OUTPUT: /tmp/contract-toolkit-release-notes.md
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git cliff \
+            --config contract-toolkit/cliff.toml \
+            --unreleased \
+            --tag "${{ steps.versions.outputs.tag }}" \
+            --tag-pattern '^contract-toolkit-v[0-9].*' \
+            --include-path 'contract-toolkit/**' \
+            --github-repo "${{ github.repository }}" \
+            --strip all \
+            --output /tmp/contract-toolkit-release-notes.md
 
-      - name: Normalize release body whitespace
+      - name: Normalize release notes whitespace
+        if: steps.versions.outputs.skip != 'true'
         run: |
           set -euo pipefail
           awk '
@@ -176,41 +192,55 @@ jobs:
           sed -i '/./,$!d' /tmp/contract-toolkit-release-notes.md
 
       - name: Sanity-build package
+        if: steps.versions.outputs.skip != 'true'
         run: pkl project package contract-toolkit/src/ --output-path .out/ --skip-publish-check
 
-      - name: Push release branch and open PR
+      - name: Push bump branch and open or update PR
+        if: steps.versions.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
           set -euo pipefail
-          branch="${{ steps.bump.outputs.branch }}"
-          version="${{ steps.bump.outputs.new }}"
+          new_version="${{ steps.versions.outputs.new }}"
 
           git config --global user.name 'atlan-ci'
           git config --global user.email 'it@atlan.com'
 
-          git checkout -b "$branch"
+          git checkout -b "${BUMP_BRANCH}"
           git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md
-          git commit -m "chore(contract-toolkit): release v${version}"
-          git push origin "$branch"
+          git commit -m "chore(contract-toolkit): release v${new_version}"
+          # --force-with-lease is safe: fails if another concurrent CI run pushed
+          # to this bot-managed branch, which is the correct behavior.
+          git push origin "${BUMP_BRANCH}" --force-with-lease
 
-          body_file=$(mktemp)
-          {
-            echo "Automated release PR for app-contract-toolkit v${version}."
-            echo
-            echo "Merging this PR triggers Publish Contract Toolkit, which builds the"
-            echo "PKL package, publishes it under app-contract-toolkit/ on the gh-pages"
-            echo "branch, creates the contract-toolkit-v${version} tag, and creates the"
-            echo "GitHub release. Do not hand-edit contract-toolkit/CHANGELOG.md."
-            echo
-            echo "## Release notes preview"
-            echo
-            cat /tmp/contract-toolkit-release-notes.md
-          } > "$body_file"
-
-          gh pr create \
+          existing="$(gh pr list \
+            --head "${BUMP_BRANCH}" \
             --base main \
-            --head "$branch" \
-            --title "chore(contract-toolkit): release v${version}" \
-            --body-file "$body_file" \
-            --label "${RELEASE_LABEL}"
+            --state open \
+            --json number \
+            --jq '.[0].number')"
+
+          if [ -n "$existing" ]; then
+            echo "PR #${existing} already exists for ${BUMP_BRANCH}; force-push updated it."
+          else
+            body_file="$(mktemp)"
+            {
+              echo "Automated release PR for app-contract-toolkit v${new_version}."
+              echo
+              echo "Merging this PR triggers Publish Contract Toolkit, which builds the"
+              echo "PKL package, publishes it under app-contract-toolkit/ on the gh-pages"
+              echo "branch, creates the contract-toolkit-v${new_version} tag, and creates"
+              echo "the GitHub release."
+              echo
+              echo "## Release notes preview"
+              echo
+              cat /tmp/contract-toolkit-release-notes.md
+            } > "$body_file"
+
+            gh pr create \
+              --base main \
+              --head "${BUMP_BRANCH}" \
+              --title "chore(contract-toolkit): release v${new_version}" \
+              --body-file "$body_file" \
+              --label "${RELEASE_LABEL}"
+          fi
