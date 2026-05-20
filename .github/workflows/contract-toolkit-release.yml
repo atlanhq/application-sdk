@@ -18,11 +18,6 @@ on:
     branches: [main]
     paths:
       - "contract-toolkit/**"
-      - "application_sdk/contracts/**"
-      - "application_sdk/credentials/**"
-      - "application_sdk/handler/**"
-      - "application_sdk/templates/contracts/**"
-      - ".github/workflows/contract-toolkit-*.yml"
   workflow_dispatch:
 
 permissions:
