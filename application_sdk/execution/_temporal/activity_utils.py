@@ -191,9 +191,14 @@ def get_object_store_prefix(path: str) -> str:
             # Normalize path separators to forward slashes for object store
             return relative_path.replace(os.path.sep, "/")
         else:
-            # Path is already a relative object store path, return as-is
-            return path.strip("/")
+            # Path is already a relative object store path. Normalize
+            # separators to forward slashes — Windows callers passing
+            # a local path that's not under TEMPORARY_PATH (e.g. unit
+            # tests using ``tmp_path``) would otherwise get a key
+            # with backslashes that doesn't match the forward-slash
+            # convention object stores use everywhere else.
+            return path.strip("/").replace(os.path.sep, "/")
     except ValueError:
         # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
-        # In this case, treat as user-provided path, return as-is
-        return path.strip("/")
+        # In this case, treat as user-provided path, return as-is (with separator normalization).
+        return path.strip("/").replace(os.path.sep, "/")
