@@ -451,6 +451,101 @@ class TestLogWorkflowInboundInterceptor:
 
         assert interceptor._correlation_id == "memo-id-123"
 
+    async def test_reads_correlation_id_from_args_when_no_memo_no_headers(
+        self, interceptor
+    ):
+        # Legacy args-based propagation: pre-v3 CorrelationContextInterceptor
+        # (still in use on SDK 2.8.7 callers like the automation-engine) puts
+        # correlation_id in the first arg dict. Priority 3 must surface it so
+        # the chain stays intact without forcing every caller to migrate to
+        # memo / header on start_workflow.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(
+                    headers={}, args=[{"correlation_id": "from-args-id"}]
+                )
+            )
+
+        assert interceptor._correlation_id == "from-args-id"
+
+    async def test_args_correlation_id_is_lower_priority_than_memo(self, interceptor):
+        # Memo wins over args — memo is the explicit / preferred channel.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {"correlation_id": "memo-wins"}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(
+                    headers={}, args=[{"correlation_id": "args-loses"}]
+                )
+            )
+
+        assert interceptor._correlation_id == "memo-wins"
+
+    async def test_args_correlation_id_is_lower_priority_than_header(self, interceptor):
+        # Header wins over args — header is the explicit / preferred channel
+        # for child-workflow inheritance.
+        payload = _encode_header("header-wins")
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(
+                    headers={"x-correlation-id": payload},
+                    args=[{"correlation_id": "args-loses"}],
+                )
+            )
+
+        assert interceptor._correlation_id == "header-wins"
+
+    async def test_falls_through_args_when_first_arg_is_not_a_dict(self, interceptor):
+        # Typed args (Pydantic model, dataclass, primitive) are skipped
+        # silently — those callers should use memo / header. Verifies we
+        # fall through to the uuid4 fallback instead of crashing.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=["just-a-string"])
+            )
+
+        assert interceptor._correlation_id != ""
+        assert interceptor._correlation_id != "just-a-string"
+        # Falls back to the priority-4 uuid4 path.
+        assert len(interceptor._correlation_id) == 36
+
+    async def test_falls_through_args_when_dict_lacks_correlation_id_key(
+        self, interceptor
+    ):
+        # Dict args without the magic key fall through cleanly to uuid4
+        # rather than raising or returning an empty string.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(
+                    headers={}, args=[{"workflow_id": "wf-1", "other": "field"}]
+                )
+            )
+
+        assert len(interceptor._correlation_id) == 36
+
     async def test_reads_correlation_id_from_header(self, interceptor):
         payload = _encode_header("header-corr-id")
         headers = {"x-correlation-id": payload}

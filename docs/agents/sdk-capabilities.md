@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.12.0
-source-sha:    528d7f48c54990992053278dcef2a7488ce0e3ea
-source-date:   2026-05-19T13:19:36+01:00
+sdk-version:   3.12.1
+source-sha:    eb24effade0c5ed17743ad1fa7a22385e5a0c7bf
+source-date:   2026-05-20T00:20:24+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2536,6 +2536,16 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
+#### `ExtractionTaskOutput`
+
+- **Import:** `from application_sdk.templates.contracts import ExtractionTaskOutput`
+- **Summary:** Output from a per-entity ``extract_*`` task.
+- **Fields:**
+  - `typename: str` `= ''`
+  - `total_record_count: int` `= 0`
+  - `raw_file: FileReference | None` — ``FileReference`` to the extract's raw output.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
 #### `FetchColumnsIncrementalInput`
 
 - **Import:** `from application_sdk.templates.contracts import FetchColumnsIncrementalInput`
@@ -2813,21 +2823,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `TransformInput`
 
 - **Import:** `from application_sdk.templates.contracts import TransformInput`
-- **Summary:** Input for the transform_data task.
+- **Summary:** Input for transform tasks.
 - **Fields:**
-  - `typename: str` `= ''`
-  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)`
-  - `chunk_start: int` `= 0`
+  - `typename: str` `= ''` — **Deprecated** — kept for backward compatibility with existing
+  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated and unused** — retained on the schema as a no-op
+  - `chunk_start: int` `= 0` — **Deprecated** — chunk-offset hint used by the legacy
+  - `raw_file: FileReference | None` — Durable ``FileReference`` to the matching extract's raw output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `TransformOutput`
 
 - **Import:** `from application_sdk.templates.contracts import TransformOutput`
-- **Summary:** Output from the transform_data task.
+- **Summary:** Output from the v3 ``transform_*`` tasks.
 - **Fields:**
   - `typename: str` `= ''`
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
+  - `transformed_file: FileReference | None` — ``FileReference`` to the transformed asset output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `UpdateMarkerInput`

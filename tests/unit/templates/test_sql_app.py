@@ -8,10 +8,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
+    ExtractionTaskOutput,
+    TransformInput,
+    TransformOutput,
 )
 from application_sdk.templates.sql_app import SqlApp
 from application_sdk.templates.sql_app_errors import (
@@ -103,7 +107,16 @@ def app():
 
 
 def _make_task_input(output_path="/tmp/test", **kwargs):
-    """Helper to create ExtractionTaskInput for testing."""
+    """Helper to create a task input for testing.
+
+    Returns a ``TransformInput`` because it's the broader of the two
+    v3 contracts (extends ``ExtractionTaskInput`` with ``raw_file`` plus
+    the legacy v2 ``typename`` / ``file_names`` / ``chunk_start`` fields).
+    The ``extract_*`` activities only read ``ExtractionTaskInput`` fields
+    so the extra ``TransformInput`` attributes are ignored on that side,
+    and the ``transform_*`` activities can read ``input.raw_file``
+    without hitting an ``AttributeError``. ``raw_file`` defaults to None.
+    """
     defaults = {
         "workflow_id": "test-wf",
         "output_path": output_path,
@@ -113,7 +126,7 @@ def _make_task_input(output_path="/tmp/test", **kwargs):
         "temp_table_regex": "",
     }
     defaults.update(kwargs)
-    return ExtractionTaskInput(**defaults)
+    return TransformInput(**defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +302,444 @@ class TestTransformTasks:
 
 
 # ---------------------------------------------------------------------------
+# FileReference contract (BLDX-1281 / atlanhq/application-sdk#1787)
+# ---------------------------------------------------------------------------
+#
+# Each extract_* must emit an ephemeral FileReference to raw/<entity>/records.json
+# so the activity interceptor uploads it after the activity finishes and marks
+# it durable. run() threads that durable ref into the matching transform_*
+# input; the interceptor materialises it onto whichever worker pod runs the
+# transform (SHA-256 sidecar verification handles the cross-worker case where
+# extract and transform land on different pods). transform_* must also emit a
+# transformed_file ref so downstream publish / upload tasks can consume the
+# entities.json the same way.
+#
+# These tests pin that contract — both the "ref shape on output" and the
+# "transform reads from input.raw_file.local_path" half of the handshake.
+
+
+class TestExtractEmitsRawFileReference:
+    """extract_* returns TransformOutput.raw_file pointing at the raw JSONL."""
+
+    async def test_extract_databases_emits_raw_file(self, app, tmp_path):
+        rows = [{"database_name": "db1"}]
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
+            result = await app.extract_databases(input_)
+
+        # FileReference points at the locally-written raw JSONL. It is
+        # EPHEMERAL (is_durable=False, storage_path=None) — the activity
+        # interceptor flips both fields after the activity returns.
+        assert result.raw_file is not None
+        assert result.raw_file.local_path == str(
+            tmp_path / "raw" / "database" / "records.json"
+        )
+        assert result.raw_file.is_durable is False
+        assert result.raw_file.storage_path is None
+        # Tier stays TRANSIENT (the semantically correct choice — the
+        # raw file is an intermediate extract→transform handoff and
+        # gets auto-cleaned at run end by ``cleanup_storage``). The
+        # persist-side path scoping (which is what the production
+        # gateway actually cares about) is pinned by
+        # ``TestRawFilePersistsUnderRunScopedPrefix`` below.
+        assert result.raw_file.tier == StorageTier.TRANSIENT
+
+    async def test_extract_with_zero_rows_emits_no_raw_file(self, app, tmp_path):
+        """When extract finds no rows, raw_file is None — not a ref to an
+        empty file. The interceptor then has nothing to upload, and the
+        downstream transform sees ``input.raw_file is None`` and returns
+        count=0 cleanly (matches the historical 'extract returned 0 rows'
+        contract that publish relies on)."""
+        input_ = _make_task_input(output_path=str(tmp_path))
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client([])):
+            result = await app.extract_databases(input_)
+
+        assert result.total_record_count == 0
+        assert result.raw_file is None
+
+    async def test_extract_no_sql_emits_no_raw_file(self, app):
+        """No SQL configured ⇒ no extraction ⇒ no raw_file ref."""
+        app.fetch_database_sql = ""
+        input_ = _make_task_input()
+        result = await app.extract_databases(input_)
+        assert result.raw_file is None
+
+
+class TestRawFilePersistsUnderRunScopedPrefix:
+    """Regression guard: when the interceptor persists a ``raw_file`` /
+    ``transformed_file`` emitted by ``_extract_entity`` /
+    ``_transform_entity``, the resulting storage key must be
+    **run-scoped** — i.e. land under ``<run_prefix>/file_refs/<uuid>``,
+    not bare ``file_refs/<uuid>``.
+
+    Why this matters: in production the object store is Atlan's
+    blob-storage gateway, which only permits writes under
+    ``artifacts/`` and ``persistent-artifacts/``. A bare
+    ``file_refs/<uuid>`` upload returns ``403 code 1009 'Invalid Path'``.
+    The local CI suite can't catch this because the local Dapr binding
+    (``bindings.localstorage``) has no path policy — every prefix is
+    writable on disk.
+
+    Per Chris Grote's review on PR #1792, the right tier for the
+    extract→transform handoff is ``TRANSIENT`` (intermediate, auto-
+    cleaned-at-run-end). The fix is therefore NOT to change the tier
+    at the SqlApp callsites, but to make ``StorageTier.TRANSIENT``
+    honour the ``run_prefix`` passed by the activity interceptor's
+    ``persist_file_refs(..., output_path=build_output_path())``. This
+    test exercises the actual persist path to pin the resulting
+    storage key shape — the property the gateway actually evaluates.
+
+    Original production incident: every ``extract_*`` activity on a
+    real Atlan tenant failed identically with that 403 on the
+    persist step because ``StorageTier.TRANSIENT._file_ref_base()``
+    used to return bare ``"file_refs"`` regardless of run_prefix.
+    """
+
+    async def test_extract_raw_file_persists_under_run_prefix(self, app, tmp_path):
+        """End-to-end: extract emits a ref, persist resolves the
+        storage key, and the key MUST be run-scoped.
+        """
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        rows = [{"database_name": "db1"}]
+        input_ = _make_task_input(output_path=str(tmp_path))
+        store = create_local_store(tmp_path / "store")
+
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
+            result = await app.extract_databases(input_)
+
+        assert result.raw_file is not None
+
+        # Simulate what the activity interceptor does after extract returns.
+        run_prefix = "artifacts/apps/test-app/workflows/wf-1/run-1"
+        durable = await persist_file_reference(
+            store, result.raw_file, output_path=run_prefix
+        )
+
+        assert durable.storage_path is not None
+        assert durable.storage_path.startswith(f"{run_prefix}/file_refs/"), (
+            "extract→persist must produce a run-scoped storage key. Got "
+            f"{durable.storage_path!r}; Atlan's blob-storage gateway "
+            "rejects anything outside artifacts/ and persistent-artifacts/ "
+            "with 403 code 1009 'Invalid Path'."
+        )
+
+    async def test_transform_transformed_file_persists_under_run_prefix(
+        self, app, tmp_path
+    ):
+        """Same guard for the transform → publish handoff."""
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        _seed_raw(tmp_path, "database", [{"database_name": "remote_db"}])
+        input_ = _make_task_input(output_path=str(tmp_path))
+        store = create_local_store(tmp_path / "store")
+
+        result = await app.transform_databases(input_)
+
+        assert result.transformed_file is not None
+
+        run_prefix = "artifacts/apps/test-app/workflows/wf-1/run-1"
+        durable = await persist_file_reference(
+            store, result.transformed_file, output_path=run_prefix
+        )
+
+        assert durable.storage_path is not None
+        assert durable.storage_path.startswith(f"{run_prefix}/file_refs/"), (
+            "transform→persist must produce a run-scoped storage key. "
+            f"Got {durable.storage_path!r}."
+        )
+
+    async def test_transient_tier_honours_run_prefix(self, tmp_path):
+        """Direct unit test on the contract: TRANSIENT must scope under
+        run_prefix when one is supplied. Guards the
+        ``StorageTier._file_ref_base`` change itself — without this,
+        the SqlApp emission paths above could silently fall back to
+        bare ``file_refs/`` if a future refactor reverts the contract.
+        """
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        f = tmp_path / "x.json"
+        f.write_text("{}")
+        store = create_local_store(tmp_path / "store")
+
+        ref = FileReference.from_local(f)  # default TRANSIENT
+        assert ref.tier == StorageTier.TRANSIENT
+
+        durable = await persist_file_reference(
+            store, ref, output_path="artifacts/apps/test/workflows/wf/run"
+        )
+        assert durable.storage_path is not None
+        assert durable.storage_path.startswith(
+            "artifacts/apps/test/workflows/wf/run/file_refs/"
+        )
+
+    async def test_transient_tier_falls_back_to_bare_prefix_without_run(self, tmp_path):
+        """Without a run_prefix (ad-hoc callers, unit tests, local
+        scripts), TRANSIENT still falls back to bare ``file_refs/`` so
+        the helper stays usable outside a Temporal workflow.
+        """
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        f = tmp_path / "x.json"
+        f.write_text("{}")
+        store = create_local_store(tmp_path / "store")
+
+        ref = FileReference.from_local(f)
+        durable = await persist_file_reference(store, ref)
+        assert durable.storage_path is not None
+        assert durable.storage_path.startswith("file_refs/")
+
+    def test_from_local_accepts_tier_kwarg(self, tmp_path):
+        """``FileReference.from_local`` accepts an explicit ``tier`` kwarg.
+
+        Default stays ``TRANSIENT`` for the common task-to-task case;
+        callers can opt into ``RETAINED`` (handoffs that cross
+        deployment boundaries, e.g. SDR → in-tenant publish) or
+        ``PERSISTENT`` (files that must survive across multiple runs).
+        Pass-through verified here.
+        """
+        f = tmp_path / "x.json"
+        f.write_text("{}")
+
+        default_ref = FileReference.from_local(f)
+        retained_ref = FileReference.from_local(f, tier=StorageTier.RETAINED)
+        persistent_ref = FileReference.from_local(f, tier=StorageTier.PERSISTENT)
+
+        assert default_ref.tier == StorageTier.TRANSIENT
+        assert retained_ref.tier == StorageTier.RETAINED
+        assert persistent_ref.tier == StorageTier.PERSISTENT
+
+
+class TestTransformInputLegacyFields:
+    """Sanity tests for the deprecated-but-retained fields on
+    :class:`TransformInput` (``file_names`` / ``chunk_start`` /
+    ``typename``). They remain on the schema so existing v3 consumers
+    keep deserialising without ``AttributeError``; the SDK itself
+    never populates them.
+    """
+
+    def test_legacy_fields_default_to_no_op_values(self) -> None:
+        """The schema defaults make every legacy read a no-op:
+        ``file_names`` is an empty list (``if input.file_names:`` is
+        falsy) and ``chunk_start`` is ``0``. Pin this so a future
+        change to the defaults can't silently flip dead branches in
+        downstream consumers into live ones.
+        """
+        input_ = TransformInput()
+        assert input_.file_names == []
+        assert input_.chunk_start == 0
+        assert input_.typename == ""
+
+    def test_legacy_fields_accept_caller_supplied_values(self) -> None:
+        """v3 consumers that dispatch via ``typename`` still set it
+        explicitly; ``file_names`` / ``chunk_start`` accept legacy
+        payloads without errors even though the SDK ignores them.
+        """
+        input_ = TransformInput(
+            typename="column",
+            file_names=["batch-0.parquet", "batch-1.parquet"],
+            chunk_start=2,
+        )
+        assert input_.typename == "column"
+        assert input_.file_names == ["batch-0.parquet", "batch-1.parquet"]
+        assert input_.chunk_start == 2
+
+
+class TestTransformConsumesRawFileReference:
+    """transform_* reads from input.raw_file.local_path when populated."""
+
+    async def test_transform_uses_raw_file_local_path(self, app, tmp_path):
+        """When input.raw_file points at a custom local_path (e.g. a path
+        the interceptor materialised under TEMPORARY_PATH on a different
+        worker pod than the original extract), transform must read from
+        there — NOT from the default ``output_path/raw/<entity>/records.json``
+        location. This is the core of the cross-worker fix.
+        """
+        # Materialise the raw file at a location that does NOT match the
+        # ``output_path/raw/database/records.json`` legacy default. If
+        # transform fell back to the legacy path, it would find nothing
+        # and return count=0; we want to assert it uses input.raw_file.
+        materialised = tmp_path / "interceptor-staged" / "raw-from-s3.jsonl"
+        materialised.parent.mkdir(parents=True, exist_ok=True)
+        materialised.write_text(json.dumps({"database_name": "remote_db"}) + "\n")
+
+        input_ = _make_task_input(
+            output_path=str(tmp_path),
+            raw_file=FileReference(
+                local_path=str(materialised),
+                storage_path="artifacts/.../raw/database/records.json",
+                is_durable=True,
+            ),
+        )
+
+        result = await app.transform_databases(input_)
+
+        assert result.total_record_count == 1
+        entities = (tmp_path / "transformed" / "database" / "entities.json").read_text()
+        assert json.loads(entities)["qualifiedName"].endswith("/remote_db")
+
+    async def test_transform_emits_transformed_file_reference(self, app, tmp_path):
+        """transform_* must emit transformed_file pointing at entities.json
+        as an ephemeral FileReference. The interceptor uploads it; the
+        publish / upload step consumes the durable ref the same way
+        transform consumed raw_file. Without this, the BLDX-1281 contract
+        is half-complete and publish would still race on local-FS reads.
+        """
+        _seed_raw(tmp_path, "table", [{"table_name": "users"}])
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        result = await app.transform_tables(input_)
+
+        assert result.transformed_file is not None
+        assert result.transformed_file.local_path == str(
+            tmp_path / "transformed" / "table" / "entities.json"
+        )
+        assert result.transformed_file.is_durable is False
+        assert result.transformed_file.storage_path is None
+        # Tier = RETAINED here because the transform → publish handoff
+        # can span SDR → in-tenant deployments — the ref must survive
+        # the SDR-side workflow's auto-cleanup at run end. Contrast
+        # with raw_file (TRANSIENT): extract and transform always run
+        # in the same deployment, so the intermediate ref is safe to
+        # auto-clean. See ``TestRawFilePersistsUnderRunScopedPrefix``
+        # for the storage-path scoping that both tiers share.
+        assert result.transformed_file.tier == StorageTier.RETAINED
+
+    async def test_transform_no_input_ref_falls_back_to_legacy_path(
+        self, app, tmp_path
+    ):
+        """If the caller doesn't thread a raw_file ref (older orchestrators,
+        unit tests that seed the raw file directly), the transform falls
+        back to ``<output_path>/raw/<entity>/records.json``. Preserves
+        compatibility with subclasses that override ``run()``.
+        """
+        _seed_raw(tmp_path, "table", [{"table_name": "t1"}])
+        input_ = _make_task_input(output_path=str(tmp_path))  # raw_file unset
+
+        result = await app.transform_tables(input_)
+
+        assert result.total_record_count == 1
+        assert result.transformed_file is not None  # still emits the ref
+
+    async def test_transform_zero_rows_emits_no_transformed_file(self, app, tmp_path):
+        """When transform processes zero rows (e.g. raw file is empty or
+        no raw_file ref was threaded), the transformed_file ref is None —
+        no empty entities.json to upload, no spurious publish-time
+        archival (the publish step interprets a missing transformed_file
+        the same way it used to interpret a missing entities.json file).
+        """
+        input_ = _make_task_input(output_path=str(tmp_path))
+        result = await app.transform_tables(input_)
+        assert result.total_record_count == 0
+        assert result.transformed_file is None
+
+
+class TestRunThreadsRawFileRefs:
+    """run() must thread each extract's raw_file ref into the matching transform."""
+
+    async def test_run_passes_extract_raw_file_into_transform(self, app, tmp_path):
+        """End-to-end: extract emits raw_file, run() passes it to transform,
+        transform reads from it. Mocks both extract and transform to capture
+        the inputs and assert the wiring.
+        """
+        # Build distinct refs per entity so we can assert the right ref
+        # reaches the matching transform (no cross-wiring between e.g.
+        # extract_schemas and transform_databases).
+        refs = {
+            "database": FileReference(
+                local_path=str(tmp_path / "raw" / "database" / "records.json"),
+                storage_path="s3://.../raw/database/records.json",
+                is_durable=True,
+            ),
+            "schema": FileReference(
+                local_path=str(tmp_path / "raw" / "schema" / "records.json"),
+                storage_path="s3://.../raw/schema/records.json",
+                is_durable=True,
+            ),
+            "table": FileReference(
+                local_path=str(tmp_path / "raw" / "table" / "records.json"),
+                storage_path="s3://.../raw/table/records.json",
+                is_durable=True,
+            ),
+            "column": FileReference(
+                local_path=str(tmp_path / "raw" / "column" / "records.json"),
+                storage_path="s3://.../raw/column/records.json",
+                is_durable=True,
+            ),
+        }
+
+        captured: dict[str, ExtractionTaskInput] = {}
+
+        def make_extract(entity: str):
+            async def _extract(_input):
+                return ExtractionTaskOutput(
+                    typename=entity,
+                    total_record_count=1,
+                    raw_file=refs[entity],
+                )
+
+            return _extract
+
+        def make_transform(entity: str):
+            async def _transform(input_):
+                captured[entity] = input_
+                return TransformOutput(typename=entity, total_record_count=1)
+
+            return _transform
+
+        with (
+            patch.object(
+                app, "extract_databases", side_effect=make_extract("database")
+            ),
+            patch.object(app, "extract_schemas", side_effect=make_extract("schema")),
+            patch.object(app, "extract_tables", side_effect=make_extract("table")),
+            patch.object(app, "extract_columns", side_effect=make_extract("column")),
+            patch.object(
+                app, "transform_databases", side_effect=make_transform("database")
+            ),
+            patch.object(
+                app, "transform_schemas", side_effect=make_transform("schema")
+            ),
+            patch.object(app, "transform_tables", side_effect=make_transform("table")),
+            patch.object(
+                app, "transform_columns", side_effect=make_transform("column")
+            ),
+            patch.object(
+                app, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(app, "_resolve_credential_ref", return_value=None),
+            patch(
+                "application_sdk.templates.sql_app._temporal_workflow.info",
+                return_value=MagicMock(workflow_id="wf-test", run_id="run-test"),
+            ),
+        ):
+            await app.run(
+                ExtractionInput(
+                    workflow_id="wf-test",
+                    output_path=str(tmp_path),
+                    credential_guid="test-guid",
+                    extraction_method="direct",
+                )
+            )
+
+        # Each transform_* must have been invoked with its OWN extract's
+        # raw_file ref, not someone else's.
+        for entity, expected_ref in refs.items():
+            assert entity in captured, f"transform_{entity} not invoked"
+            actual_ref = captured[entity].raw_file
+            assert actual_ref is not None, f"transform_{entity} got no ref"
+            assert actual_ref.storage_path == expected_ref.storage_path, (
+                f"cross-wired ref: transform_{entity} got ref for "
+                f"{actual_ref.storage_path} instead of {expected_ref.storage_path}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Asset mapper stubs
 # ---------------------------------------------------------------------------
 
@@ -411,27 +862,50 @@ class TestRunOutputPrefixes:
         return app
 
     def _patch_extract_tasks(self):
-        """Return list of patches that mock all extract_* + transform_* + upload_to_atlan."""
+        """Return list of patches that mock all extract_* + transform_* + upload_to_atlan.
+
+        Use real ``ExtractionTaskOutput`` instances (not MagicMocks) for
+        the extract returns — ``run()`` reads ``.raw_file`` and threads
+        it into ``_build_transform_input`` which Pydantic-validates the
+        ref against ``FileReference``; MagicMock auto-attrs would fail
+        that validation (BLDX-1281).
+        """
         return [
             patch.object(
                 SqlApp,
                 "extract_databases",
-                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+                new=AsyncMock(
+                    return_value=ExtractionTaskOutput(
+                        typename="database", total_record_count=1, raw_file=None
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,
                 "extract_schemas",
-                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+                new=AsyncMock(
+                    return_value=ExtractionTaskOutput(
+                        typename="schema", total_record_count=1, raw_file=None
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,
                 "extract_tables",
-                new=AsyncMock(return_value=MagicMock(total_record_count=2)),
+                new=AsyncMock(
+                    return_value=ExtractionTaskOutput(
+                        typename="table", total_record_count=2, raw_file=None
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,
                 "extract_columns",
-                new=AsyncMock(return_value=MagicMock(total_record_count=10)),
+                new=AsyncMock(
+                    return_value=ExtractionTaskOutput(
+                        typename="column", total_record_count=10, raw_file=None
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,

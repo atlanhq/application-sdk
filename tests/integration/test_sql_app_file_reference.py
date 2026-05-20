@@ -1,0 +1,401 @@
+"""Integration tests for the SqlApp FileReference handshake (BLDX-1281).
+
+Verifies the full extract → persist → cross-worker materialize → transform
+flow against a real local obstore (no mocks, no Temporal). Specifically
+pins the cross-worker fault tolerance that motivated this fix:
+
+  1. ``extract_*`` writes ``raw/<entity>/records.json`` locally and
+     returns an ephemeral ``FileReference``.
+  2. The persistence layer uploads the ref to the store and marks it
+     durable (with a SHA-256 sidecar) — this is what the activity
+     interceptor does after the extract activity finishes.
+  3. Simulate the transform landing on a different worker by deleting
+     the original local file. ``materialize_file_reference`` re-downloads
+     from the store and verifies the sidecar.
+  4. ``transform_*`` runs against the materialized FileReference,
+     reading from its ``local_path`` (which points to the freshly-
+     downloaded copy) — NOT the original local path.
+  5. The emitted ``transformed_file`` ref is persisted and we confirm
+     the entities.json landed in the store with its own sidecar.
+
+If any of these steps regresses, a customer with >1 worker replica
+risks the same silent-archive incident this PR was filed to fix.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, ClassVar
+
+import pytest
+
+from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.contracts.types import FileReference
+from application_sdk.storage.factory import create_local_store
+from application_sdk.storage.reference import (
+    materialize_file_reference,
+    persist_file_reference,
+)
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionTaskInput,
+    TransformInput,
+)
+from application_sdk.templates.sql_app import SqlApp
+
+
+class _FakeSqlClient(BaseSQLClient):
+    """In-process SQL client that yields a fixed batch — no network, no driver.
+
+    Mirrors the streaming contract ``SqlApp._extract_entity`` relies on
+    (``run_query`` yields ``list[dict]`` batches). We bypass ``BaseSQLClient``
+    initialisation because we never go through ``client.load()`` —
+    ``_init_sql_client`` is patched out below.
+    """
+
+    _ROWS: ClassVar[list[dict[str, Any]]] = [
+        {"database_name": "prod"},
+        {"database_name": "stage"},
+    ]
+
+    def __init__(self) -> None:
+        pass  # skip BaseSQLClient.__init__ — no DB_CONFIG needed for the fake
+
+    async def load(self, credentials: dict[str, Any] | None = None) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def run_query(self, query: str, batch_size: int = 100_000):
+        yield self._ROWS
+
+
+class _ConcreteSqlApp(SqlApp):
+    """Minimal SqlApp subclass exercising the extract → transform flow."""
+
+    sql_client_class: ClassVar[type[BaseSQLClient] | None] = _FakeSqlClient
+    _app_registered: ClassVar[bool] = True
+
+    fetch_database_sql: ClassVar[str] = "SELECT 1"
+
+    def map_database(
+        self, record: dict[str, Any], connection_qn: str
+    ) -> dict[str, Any]:
+        return {
+            "typeName": "Database",
+            "attributes": {
+                "name": record["database_name"],
+                "qualifiedName": f"{connection_qn}/{record['database_name']}",
+            },
+        }
+
+
+@pytest.fixture
+def store(tmp_path):
+    """Real local object store backed by a temp directory."""
+    return create_local_store(tmp_path / "store")
+
+
+def _make_extract_input(tmp_path: Path) -> ExtractionTaskInput:
+    """Build an ``ExtractionTaskInput`` for the extract side (no raw_file)."""
+    return ExtractionTaskInput(
+        workflow_id="wf-test",
+        output_path=str(tmp_path),
+        output_prefix=str(tmp_path),
+        exclude_filter="",
+        include_filter="",
+        temp_table_regex="",
+    )
+
+
+def _make_transform_input(
+    tmp_path: Path, raw_file: FileReference | None = None
+) -> TransformInput:
+    """Build a ``TransformInput`` carrying the materialised ``raw_file``."""
+    return TransformInput(
+        workflow_id="wf-test",
+        output_path=str(tmp_path),
+        output_prefix=str(tmp_path),
+        exclude_filter="",
+        include_filter="",
+        temp_table_regex="",
+        raw_file=raw_file,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Full extract → persist → cross-worker materialize → transform → persist flow
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_extract_persist_materialize_transform_round_trip(store, tmp_path):
+    """End-to-end fault-tolerance check against a real object store.
+
+    Reproduces the production scenario this fix exists for: extract
+    runs on one worker, transform runs on a different worker (raw file
+    missing locally), the framework's persist + materialize handshake
+    recovers, and transform emits its own durable ref for publish.
+    """
+    app = _ConcreteSqlApp()
+
+    # ── Step 1: extract → ephemeral raw_file FileReference ─────────────
+    extract_input = _make_extract_input(tmp_path)
+    extract_result = await app.extract_databases(extract_input)
+
+    assert extract_result.total_record_count == 2
+    assert extract_result.raw_file is not None
+    ephemeral_raw = extract_result.raw_file
+    assert ephemeral_raw.is_durable is False
+    assert ephemeral_raw.storage_path is None
+    assert ephemeral_raw.local_path == str(
+        tmp_path / "raw" / "database" / "records.json"
+    )
+    assert Path(ephemeral_raw.local_path).exists()
+
+    # ── Step 2: persist → durable raw_file ref (what the interceptor does) ─
+    # ``output_path`` is required for ``RETAINED``-tier refs (which is
+    # what ``_extract_entity`` emits — see ``StorageTier._file_ref_base``).
+    # In production the activity interceptor passes
+    # ``build_output_path()`` here; we use ``tmp_path`` to scope the
+    # storage key under this test's run prefix.
+    durable_raw = await persist_file_reference(
+        store, ephemeral_raw, output_path=str(tmp_path)
+    )
+    assert durable_raw.is_durable
+    assert durable_raw.storage_path is not None
+    # Storage path must land under the run-scoped prefix the gateway
+    # permits. The bare ``file_refs/`` prefix (default TRANSIENT) is
+    # rejected by Atlan's blob-storage policy in production.
+    assert durable_raw.storage_path.startswith(f"{tmp_path}/file_refs/") or (
+        f"{tmp_path}/file_refs/" in durable_raw.storage_path
+    ), f"raw_file persisted outside run prefix: {durable_raw.storage_path}"
+
+    # ── Step 3: simulate cross-worker — local raw file vanishes ─────────
+    # This mimics transform landing on a different Temporal worker pod
+    # that never ran the matching extract. Pre-fix, _transform_entity
+    # would see the missing file and silently return count=0.
+    Path(ephemeral_raw.local_path).unlink()
+    sidecar_local = Path(ephemeral_raw.local_path + ".sha256")
+    if sidecar_local.exists():
+        sidecar_local.unlink()
+
+    # ── Step 4: materialize on the "new" worker (fresh download) ───────
+    # The framework's interceptor calls this automatically before the
+    # transform activity runs; we invoke it directly here to exercise
+    # the contract without spinning Temporal.
+    materialized_raw = await materialize_file_reference(store, durable_raw)
+    assert materialized_raw.local_path is not None
+    assert Path(materialized_raw.local_path).exists(), (
+        "materialize must produce a local copy of the raw file even when "
+        "the extract-worker's original local path is gone — this is the "
+        "core of the cross-worker fix"
+    )
+
+    # ── Step 5: transform reads via input.raw_file.local_path ──────────
+    transform_input = _make_transform_input(tmp_path, raw_file=materialized_raw)
+    transform_result = await app.transform_databases(transform_input)
+
+    assert transform_result.total_record_count == 2
+    assert transform_result.transformed_file is not None
+    assert transform_result.transformed_file.local_path == str(
+        tmp_path / "transformed" / "database" / "entities.json"
+    )
+
+    # Inspect entities.json contents — both rows must be mapped, regardless
+    # of which worker pod the transform happened to run on.
+    out = Path(transform_result.transformed_file.local_path).read_text()
+    rendered = [json.loads(line) for line in out.strip().split("\n")]
+    assert {r["attributes"]["name"] for r in rendered} == {"prod", "stage"}
+
+    # ── Step 6: persist transformed_file ref → downstream consumes durable ─
+    # Same RETAINED-tier handling as raw_file at Step 2 — pass
+    # ``output_path`` so the persist resolves the run-scoped prefix.
+    durable_transformed = await persist_file_reference(
+        store, transform_result.transformed_file, output_path=str(tmp_path)
+    )
+    assert durable_transformed.is_durable
+    assert durable_transformed.storage_path is not None
+
+
+@pytest.mark.integration
+async def test_materialize_after_extract_pod_local_path_stale(store, tmp_path):
+    """SHA-256 sidecar verification path: stale ``local_path`` that points
+    to a file that was deleted (or never existed on this worker) must
+    NOT short-circuit the download — the file_ref_sync docstring at
+    line 28 calls out this exact case as the cross-worker invariant.
+    """
+    # Set up a raw file + persist to store.
+    raw_local = tmp_path / "raw" / "database" / "records.json"
+    raw_local.parent.mkdir(parents=True, exist_ok=True)
+    raw_local.write_text(json.dumps({"database_name": "x"}) + "\n")
+
+    ephemeral = FileReference(local_path=str(raw_local))
+    durable = await persist_file_reference(store, ephemeral)
+
+    # Simulate the "transform on different worker" environment by
+    # deleting both the file and its local sidecar. The durable ref
+    # still carries the stale local_path string.
+    raw_local.unlink()
+    sidecar = Path(str(raw_local) + ".sha256")
+    if sidecar.exists():
+        sidecar.unlink()
+
+    # Materialize must rebuild the local file from the store.
+    materialized = await materialize_file_reference(store, durable)
+    assert materialized.local_path is not None
+    assert Path(materialized.local_path).exists()
+    assert (
+        json.loads(Path(materialized.local_path).read_text().strip())["database_name"]
+        == "x"
+    )
+
+
+@pytest.mark.integration
+async def test_prod_regression_cross_worker_transform_recovers(store, tmp_path):
+    """Regression: pin the exact production scenario this fix exists for.
+
+    Production timeline (a SQL connector running v3.10.0 of the SDK):
+        1. ``extract_schemas`` ran on worker pod A, wrote
+           ``raw/schema/records.json`` to pod A's local FS, and the
+           SDK auto-uploaded it to S3.
+        2. ``transform_schemas`` ran on worker pod B (different replica).
+           Pod B's local FS had no raw file — the OLD code returned
+           ``TransformOutput(total_record_count=0)`` silently.
+        3. The publish step then archived all 14 schemas for the
+           connection because the transformed directory was empty.
+
+    This test:
+        * Reproduces pod A's extract output (a raw file + a durable ref
+          in the object store).
+        * Simulates the pod B environment by deleting pod A's local file.
+        * Confirms that, BEFORE the fix, transform would have returned 0
+          (the legacy fallback path with raw_file=None).
+        * Confirms that, AFTER the fix, threading the durable ref into
+          ``TransformInput.raw_file`` lets the interceptor materialise it
+          on pod B and the transform processes the records correctly.
+
+    If this test ever regresses, the silent-archive behaviour returns
+    and customers running multi-replica workers risk losing data on
+    every cron run that hits the wrong pod-scheduling combo.
+    """
+    # Mimic a real extract output: 14 schemas in raw/schema/records.json
+    # (count matches the production incident the fix was filed against).
+    schema_names = [f"schema_{i}" for i in range(14)]
+
+    class _SchemaApp(SqlApp):
+        sql_client_class: ClassVar[type[BaseSQLClient] | None] = None
+        _app_registered: ClassVar[bool] = True
+
+        def map_schema(self, record, connection_qn):
+            return {
+                "typeName": "Schema",
+                "attributes": {"name": record["schema_name"]},
+            }
+
+    pod_a_dir = tmp_path / "pod-a"
+    raw_dir = pod_a_dir / "raw" / "schema"
+    raw_dir.mkdir(parents=True)
+    raw_local = raw_dir / "records.json"
+    raw_local.write_text(
+        "\n".join(json.dumps({"schema_name": name}) for name in schema_names) + "\n"
+    )
+
+    # The extract activity already finished and persisted the raw file —
+    # mirror what the interceptor would have done after extract returned.
+    ephemeral = FileReference(local_path=str(raw_local))
+    durable = await persist_file_reference(store, ephemeral)
+    assert durable.is_durable
+
+    # ─── Simulate pod B: nothing on local FS that pod A produced ────────
+    raw_local.unlink()
+    sidecar = Path(str(raw_local) + ".sha256")
+    if sidecar.exists():
+        sidecar.unlink()
+    # Different output_path too (pod B is a different worker, different
+    # tmp dir mount). Pod B's transform CANNOT find raw_local at all.
+    pod_b_dir = tmp_path / "pod-b"
+    pod_b_dir.mkdir()
+
+    app = _SchemaApp()
+
+    # ─── BEFORE the fix: transform with NO raw_file ref → silent zero ──
+    # This is the historical behaviour that caused the archive incident.
+    pre_fix_input = TransformInput(
+        workflow_id="wf-test",
+        output_path=str(pod_b_dir),
+        output_prefix=str(pod_b_dir),
+        exclude_filter="",
+        include_filter="",
+        temp_table_regex="",
+        raw_file=None,  # ← what the old run() effectively passed
+    )
+    pre_fix_result = await app.transform_schemas(pre_fix_input)
+    assert pre_fix_result.total_record_count == 0, (
+        "regression check: with NO raw_file ref + missing local file, the "
+        "old silent-zero behaviour is reproduced — this is the exact "
+        "shape that archived the customer's schemas"
+    )
+    assert not (pod_b_dir / "transformed" / "schema" / "entities.json").exists(), (
+        "regression check: no entities.json must be produced — that's "
+        "what the downstream publish step interpreted as 'this entity "
+        "is gone' on the impacted production tenant"
+    )
+
+    # ─── AFTER the fix: thread the durable raw_file ref → transform works ─
+    # The interceptor would call materialize_file_reference for us at
+    # activity-boundary time; we do it inline to keep the test pure.
+    materialised = await materialize_file_reference(store, durable)
+
+    post_fix_input = TransformInput(
+        workflow_id="wf-test",
+        output_path=str(pod_b_dir),
+        output_prefix=str(pod_b_dir),
+        exclude_filter="",
+        include_filter="",
+        temp_table_regex="",
+        raw_file=materialised,  # ← what run() now threads via _build_transform_input
+    )
+    post_fix_result = await app.transform_schemas(post_fix_input)
+
+    assert post_fix_result.total_record_count == 14, (
+        "post-fix: transform must process ALL 14 schemas even though "
+        "the extract-worker's local file is gone"
+    )
+    entities_path = pod_b_dir / "transformed" / "schema" / "entities.json"
+    assert entities_path.exists()
+    rendered = [
+        json.loads(line) for line in entities_path.read_text().strip().split("\n")
+    ]
+    assert {e["attributes"]["name"] for e in rendered} == set(schema_names), (
+        "post-fix: every schema name from the extract pod must surface "
+        "in the transform output — no silent drops"
+    )
+    assert post_fix_result.transformed_file is not None, (
+        "post-fix: transform must emit a durable handle to entities.json "
+        "so the publish step consumes the same FileReference contract"
+    )
+
+
+@pytest.mark.integration
+async def test_zero_row_extract_emits_no_raw_file(store, tmp_path):
+    """Genuine zero-row extract must NOT emit a raw_file ref. Without
+    this, the persist step would upload an empty file and the downstream
+    transform would still see a durable ref (just to an empty object) —
+    breaking the historical 'extract returned 0 rows' signal that
+    publish relies on to distinguish empty extracts from cross-worker
+    misses.
+    """
+
+    class _EmptyClient(_FakeSqlClient):
+        _ROWS: ClassVar[list[dict[str, Any]]] = []
+
+    class _EmptyApp(_ConcreteSqlApp):
+        sql_client_class: ClassVar[type[BaseSQLClient] | None] = _EmptyClient
+
+    app = _EmptyApp()
+    result = await app.extract_databases(_make_extract_input(tmp_path))
+
+    assert result.total_record_count == 0
+    assert result.raw_file is None
