@@ -12,7 +12,8 @@ COMMENTER_INTENT, etc.). Follow
 
 1. `.mothership/pr-review/ORCHESTRATION.md` — your playbook (MANDATORY)
 2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map
-3. `.mothership/pr-review/references/*.md` + `modes/*.md` + `agents/*.md`
+3. `.mothership/pr-review/references/retro-log.md` — **MANDATORY: do-not-flag list.** Every candidate finding MUST be checked against the patterns here; matches are withdrawn silently with no inline comment or auto-fix.
+4. `.mothership/pr-review/references/*.md` + `modes/*.md` + `agents/*.md`
 
 PR metadata and the authoritative diff are fetched in Phase 0 via
 `gh pr view` / `gh pr diff` and written to `/tmp/PR.json` and

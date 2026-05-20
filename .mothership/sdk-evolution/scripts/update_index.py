@@ -20,12 +20,14 @@ On subsequent runs, only re-parses files changed since the index's last_commit_s
 import argparse
 import ast
 import json
+import logging
 import os
 import random
 import subprocess
-import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def git_head_sha(repo: str) -> str:
@@ -39,7 +41,9 @@ def git_changed_files(repo: str, since_sha: str) -> list[str]:
     try:
         out = subprocess.check_output(
             ["git", "diff", "--name-only", since_sha, "HEAD"],
-            cwd=repo, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo,
+            text=True,
+            stderr=subprocess.DEVNULL,
         )
         return [f for f in out.strip().split("\n") if f.endswith(".py")]
     except subprocess.CalledProcessError:
@@ -59,9 +63,13 @@ def parse_python_file(filepath: str) -> dict:
         tree = ast.parse(content, filename=filepath)
     except SyntaxError:
         return {
-            "path": filepath, "lines": lines,
-            "classes": [], "functions": [], "imports": [],
-            "domain_tags": [], "complexity_score": 0,
+            "path": filepath,
+            "lines": lines,
+            "classes": [],
+            "functions": [],
+            "imports": [],
+            "domain_tags": [],
+            "complexity_score": 0,
             "has_v2_patterns": False,
         }
 
@@ -74,39 +82,56 @@ def parse_python_file(filepath: str) -> dict:
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             bases = [_name(b) for b in node.bases]
-            classes.append({
-                "name": node.name,
-                "line_start": node.lineno,
-                "line_end": node.end_lineno or node.lineno,
-                "bases": bases,
-            })
+            classes.append(
+                {
+                    "name": node.name,
+                    "line_start": node.lineno,
+                    "line_end": node.end_lineno or node.lineno,
+                    "bases": bases,
+                }
+            )
             # Check for v2 patterns
-            if any(b in ("ActivitiesInterface", "WorkflowInterface", "HandlerInterface",
-                         "BaseSQLMetadataExtractionActivities") for b in bases):
+            if any(
+                b
+                in (
+                    "ActivitiesInterface",
+                    "WorkflowInterface",
+                    "HandlerInterface",
+                    "BaseSQLMetadataExtractionActivities",
+                )
+                for b in bases
+            ):
                 has_v2 = True
 
-        elif isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        elif isinstance(node, ast.FunctionDef) or isinstance(
+            node, ast.AsyncFunctionDef
+        ):
             if isinstance(node, ast.FunctionDef) and any(
                 isinstance(p, ast.ClassDef) for p in ast.walk(tree)
             ):
                 pass  # Skip methods inside classes for top-level function list
-            functions.append({
-                "name": node.name,
-                "line_start": node.lineno,
-                "line_end": node.end_lineno or node.lineno,
-                "is_async": isinstance(node, ast.AsyncFunctionDef),
-            })
+            functions.append(
+                {
+                    "name": node.name,
+                    "line_start": node.lineno,
+                    "line_end": node.end_lineno or node.lineno,
+                    "is_async": isinstance(node, ast.AsyncFunctionDef),
+                }
+            )
 
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             if isinstance(node, ast.ImportFrom) and node.module:
                 imports.append(node.module)
                 # Detect v2 import patterns
-                if any(v2 in node.module for v2 in (
-                    "application_sdk.workflows",
-                    "application_sdk.activities",
-                    "application_sdk.handlers",
-                    "application_sdk.services",
-                )):
+                if any(
+                    v2 in node.module
+                    for v2 in (
+                        "application_sdk.workflows",
+                        "application_sdk.activities",
+                        "application_sdk.handlers",
+                        "application_sdk.services",
+                    )
+                ):
                     has_v2 = True
                 # Domain tagging
                 if "sql" in node.module.lower():
@@ -123,7 +148,11 @@ def parse_python_file(filepath: str) -> dict:
                     domain_tags.add("http")
 
     # Simple complexity: count nesting depth indicators
-    complexity = content.count("    if ") + content.count("    for ") + content.count("    while ")
+    complexity = (
+        content.count("    if ")
+        + content.count("    for ")
+        + content.count("    while ")
+    )
 
     return {
         "path": filepath,
@@ -173,7 +202,8 @@ def build_import_graph(file_indices: dict[str, dict]) -> tuple[dict, dict]:
 def detect_dumping_grounds(file_indices: dict[str, dict]) -> list[str]:
     """Files with 3+ unrelated domain tags are dumping grounds."""
     return [
-        path for path, meta in file_indices.items()
+        path
+        for path, meta in file_indices.items()
         if len(meta.get("domain_tags", [])) >= 3
     ]
 
@@ -218,8 +248,12 @@ def spot_check(file_indices: dict[str, dict], repo: str, n: int = 5) -> int:
 def main():
     parser = argparse.ArgumentParser(description="SDK Evolution codebase index builder")
     parser.add_argument("--repo", required=True, help="Path to the repo checkout")
-    parser.add_argument("--index", required=True, help="Path to existing INDEX.md (or empty)")
-    parser.add_argument("--output", required=True, help="Path to write updated index JSON")
+    parser.add_argument(
+        "--index", required=True, help="Path to existing INDEX.md (or empty)"
+    )
+    parser.add_argument(
+        "--output", required=True, help="Path to write updated index JSON"
+    )
     parser.add_argument("--full", action="store_true", help="Force full rebuild")
     args = parser.parse_args()
 
@@ -249,10 +283,16 @@ def main():
             # No changes — spot-check and return
             stale = spot_check(existing_index.get("files", {}), repo)
             if stale > 2:
-                print(f"WARN: {stale}/5 spot-check files stale, forcing full rebuild")
+                logger.warning(
+                    "%s/5 spot-check files stale, forcing full rebuild", stale
+                )
                 force_full = True
             else:
-                print(f"Index up-to-date (SHA {current_sha[:8]}), {stale} stale spot-checks")
+                logger.info(
+                    "Index up-to-date (SHA %s), %s stale spot-checks",
+                    current_sha[:8],
+                    stale,
+                )
                 # Write existing index to output
                 with open(args.output, "w") as f:
                     json.dump(existing_index, f, indent=2)
@@ -262,7 +302,11 @@ def main():
         changed = git_changed_files(repo, last_sha)
         total_files = len(existing_index.get("files", {}))
         if total_files > 0 and len(changed) / total_files > 0.40:
-            print(f"WARN: {len(changed)}/{total_files} files changed (>40%), forcing full rebuild")
+            logger.warning(
+                "%s/%s files changed (>40%%), forcing full rebuild",
+                len(changed),
+                total_files,
+            )
             force_full = True
 
     if not existing_index:
@@ -285,14 +329,19 @@ def main():
                 all_py_files.append(rel)
 
     if force_full:
-        print(f"Full index build: {len(all_py_files)} files")
+        logger.info("Full index build: %s files", len(all_py_files))
         files_to_parse = all_py_files
         file_indices = {}
     else:
+        assert existing_index is not None
         changed = git_changed_files(repo, existing_index["last_commit_sha"])
-        files_to_parse = [f for f in changed if f in all_py_files or os.path.exists(os.path.join(repo, f))]
+        files_to_parse = [
+            f
+            for f in changed
+            if f in all_py_files or os.path.exists(os.path.join(repo, f))
+        ]
         file_indices = existing_index.get("files", {})
-        print(f"Incremental update: {len(files_to_parse)} changed files")
+        logger.info("Incremental update: %s changed files", len(files_to_parse))
 
     # Parse files
     for rel_path in files_to_parse:
@@ -310,15 +359,18 @@ def main():
     # Spot-check
     stale_count = spot_check(file_indices, repo)
     if stale_count > 2:
-        print(f"WARN: {stale_count}/5 spot-checks stale after update")
+        logger.warning("%s/5 spot-checks stale after update", stale_count)
 
     # Build output
     index = {
         "last_commit_sha": current_sha,
-        "last_updated": datetime.now(timezone.utc).isoformat(),
-        "last_full_rebuild": datetime.now(timezone.utc).isoformat() if force_full else (
-            existing_index.get("last_full_rebuild", datetime.now(timezone.utc).isoformat())
-            if existing_index else datetime.now(timezone.utc).isoformat()
+        "last_updated": datetime.now(UTC).isoformat(),
+        "last_full_rebuild": datetime.now(UTC).isoformat()
+        if force_full
+        else (
+            existing_index.get("last_full_rebuild", datetime.now(UTC).isoformat())
+            if existing_index
+            else datetime.now(UTC).isoformat()
         ),
         "total_files": len(file_indices),
         "files": file_indices,
@@ -332,8 +384,12 @@ def main():
     with open(args.output, "w") as f:
         json.dump(index, f, indent=2)
 
-    print(f"Index written: {len(file_indices)} files, {len(dumping_grounds)} dumping grounds, "
-          f"{len(public_api)} public API symbols")
+    logger.info(
+        "Index written: %s files, %s dumping grounds, %s public API symbols",
+        len(file_indices),
+        len(dumping_grounds),
+        len(public_api),
+    )
 
 
 if __name__ == "__main__":

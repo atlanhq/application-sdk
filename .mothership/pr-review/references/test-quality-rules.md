@@ -76,25 +76,25 @@ Flag:
 - Test files defining `App` subclasses without `clean_app_registry` in their conftest
 - Test files defining `App` subclasses that import `clean_app_registry` but don't use it as autouse
 
-### Async Test Pattern (Critical)
+### Async Test Pattern
 
-pytest config uses `asyncio_mode = "auto"`. All async tests must be plain `async def`:
+pytest config uses `asyncio_mode = "auto"`. All async tests can be
+plain `async def` — they will be picked up automatically:
 
 ```python
-# GOOD
 async def test_fetch_data():
     result = await app.fetch(FetchInput(source="test"))
     assert result.count > 0
-
-# BAD — unnecessary decorator with asyncio_mode=auto
-@pytest.mark.asyncio
-async def test_fetch_data():
-    ...
 ```
 
-Flag:
-- `@pytest.mark.asyncio` decorator when `asyncio_mode = "auto"` is set (redundant)
-- Sync test functions that `asyncio.run()` inside them (use native async)
+**DO NOT FLAG** the `@pytest.mark.asyncio` decorator. Whether to use
+it is a style preference, not a correctness issue, and the team has
+explicitly asked sdk-review not to raise findings about it. See
+`retro-log.md` for the do-not-flag entry.
+
+The only thing to flag here:
+- Sync test functions that call `asyncio.run()` inside them (use
+  native async def instead — Important).
 
 ---
 

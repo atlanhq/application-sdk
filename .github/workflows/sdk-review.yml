@@ -36,6 +36,22 @@ name: SDK Review
 on:
   issue_comment:
     types: [created]
+  # Manual trigger for pre-merge testing on feature branches.
+  # GitHub only runs `issue_comment`-triggered workflows from the default
+  # branch, so we expose a workflow_dispatch path that takes a PR number
+  # and an optional commenter_intent string. Useful for verifying the
+  # workflow on `sdk-mothership-migration` before #1485 lands.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: string
+      commenter_intent:
+        description: 'Free-form intent (empty = standard review)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -47,12 +63,15 @@ permissions:
 jobs:
   dispatch:
     if: >-
-      github.event.issue.pull_request
-      && contains(github.event.comment.body, '@sdk-review')
-      && (
-        github.event.comment.author_association == 'OWNER'
-        || github.event.comment.author_association == 'MEMBER'
-        || github.event.comment.author_association == 'COLLABORATOR'
+      github.event_name == 'workflow_dispatch'
+      || (
+        github.event.issue.pull_request
+        && contains(github.event.comment.body, '@sdk-review')
+        && (
+          github.event.comment.author_association == 'OWNER'
+          || github.event.comment.author_association == 'MEMBER'
+          || github.event.comment.author_association == 'COLLABORATOR'
+        )
       )
     runs-on: ubuntu-latest
     # Total budget: 5 min for orient + retries + dispatch.
@@ -60,7 +79,7 @@ jobs:
     # but `curl --max-time 7200` blocks this job for that duration.
     timeout-minutes: 130
     concurrency:
-      group: sdk-review-${{ github.event.issue.number }}
+      group: sdk-review-${{ github.event.issue.number || inputs.pr_number }}
       cancel-in-progress: true
     steps:
       - name: Parse comment intent
@@ -68,29 +87,46 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const raw = context.payload.comment.body || '';
-            // Strip the @sdk-review mention and any leading whitespace.
-            // Whatever follows is treated as free-form COMMENTER_INTENT
-            // and forwarded verbatim to the orchestration.
-            const intent = raw
-              .replace(/@sdk-review/gi, '')
-              .replace(/^\s+|\s+$/g, '');
+            const isDispatch = context.eventName === 'workflow_dispatch';
+            let intent = '';
+            let commenter = '';
+            let commentId = '';
+            let prNumber = '';
 
-            core.setOutput('commenter', context.payload.comment.user.login);
-            core.setOutput('comment_id', String(context.payload.comment.id));
-            core.setOutput('pr_number', String(context.payload.issue.number));
+            if (isDispatch) {
+              prNumber = context.payload.inputs.pr_number;
+              intent = context.payload.inputs.commenter_intent || '';
+              commenter = context.actor;
+              commentId = '';
+            } else {
+              const raw = context.payload.comment.body || '';
+              intent = raw
+                .replace(/@sdk-review/gi, '')
+                .replace(/^\s+|\s+$/g, '');
+              commenter = context.payload.comment.user.login;
+              commentId = String(context.payload.comment.id);
+              prNumber = String(context.payload.issue.number);
+            }
+
+            core.setOutput('commenter', commenter);
+            core.setOutput('comment_id', commentId);
+            core.setOutput('pr_number', prNumber);
             core.setOutput('commenter_intent', intent);
 
       - name: React to comment + ensure labels exist
         uses: actions/github-script@v7
         with:
           script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
-              content: 'eyes',
-            });
+            // Only react when triggered by a real comment (workflow_dispatch
+            // has no comment to react to).
+            if (context.eventName === 'issue_comment') {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: 'eyes',
+              });
+            }
 
             const labels = [
               { name: 'sdk-review-approved', color: '0e8a16', description: 'PR passed SDK review' },
@@ -110,13 +146,15 @@ jobs:
 
       - name: Fetch PR head metadata
         id: pr
+        env:
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
         uses: actions/github-script@v7
         with:
           script: |
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.issue.number,
+              pull_number: parseInt(process.env.PR_NUMBER, 10),
             });
             core.setOutput('head_sha', pr.head.sha);
             core.setOutput('head_sha_short', pr.head.sha.slice(0, 8));
