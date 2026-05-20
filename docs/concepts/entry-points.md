@@ -73,6 +73,13 @@ asyncio.run(run_dev_combined(MyExtractor))
 
 This starts both the Temporal worker and the HTTP handler service in a single process. It derives the module path automatically from the class.
 
+To inspect local workflows in Temporal Web UI, enable it explicitly. The UI
+uses port `8233` by default:
+
+```python
+asyncio.run(run_dev_combined(MyExtractor, temporal_ui=True))
+```
+
 ### Custom Secrets for Local Dev
 
 Pass credentials directly for local development — `run_dev_combined` auto-provisions them
