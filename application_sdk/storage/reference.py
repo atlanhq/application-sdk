@@ -263,7 +263,24 @@ async def persist_file_reference(
 
     else:
         # ── Single file upload ─────────────────────────────────────────────
-        storage_path = key or _make_storage_path(ref, output_path=output_path)
+        # Precedence for the storage key:
+        #   1. explicit ``key`` arg (caller-supplied at the persist site)
+        #   2. ``ref.storage_path`` set by the activity that produced the
+        #      ref — this is how SqlApp pins canonical keys like
+        #      ``<run_prefix>/transformed/<entity>/entities.json`` so the
+        #      downstream publish step can find the file by entity-type
+        #      lookup instead of having to discover UUIDs under
+        #      ``file_refs/``. Without this honour-path the activity
+        #      interceptor would always auto-generate
+        #      ``file_refs/<uuid>`` keys and assets would silently fall
+        #      out of the publish set when ``upload_to_atlan``'s
+        #      directory walk runs on a different pod than the
+        #      transform that produced the file.
+        #   3. ``_make_storage_path`` fallback (UUID-based, for refs that
+        #      don't have a meaningful entity-type key).
+        storage_path = (
+            key or ref.storage_path or _make_storage_path(ref, output_path=output_path)
+        )
         _file_size = local.stat().st_size
         _log = logger.info if _file_size >= _INFO_LOG_THRESHOLD else logger.debug
         _t0 = time.monotonic()
