@@ -1433,8 +1433,6 @@ def _collect_handler_relays(
 
     Returns a mapping of method name -> relay callable, ready to be placed on wf_cls.
     """
-    import dataclasses as _dc  # noqa: PLC0415 — kept local; dataclasses already imported above for `replace`
-
     relays: dict[str, Callable[..., Any]] = {}
 
     def _build_relay(method_name: str, is_coroutine: bool) -> Callable[..., Any]:
@@ -1490,11 +1488,11 @@ def _collect_handler_relays(
         if signal_defn is not None:
             # Rebind the definition's fn to the relay so Temporal's _bind_method
             # passes wf_self (not an App instance) as the first arg.
-            relay.__temporal_signal_definition = _dc.replace(  # type: ignore[attr-defined]
+            relay.__temporal_signal_definition = replace(  # type: ignore[attr-defined]
                 signal_defn, fn=relay
             )
         elif query_defn is not None:
-            relay.__temporal_query_definition = _dc.replace(  # type: ignore[attr-defined]
+            relay.__temporal_query_definition = replace(  # type: ignore[attr-defined]
                 query_defn, fn=relay
             )
         else:
@@ -1504,7 +1502,7 @@ def _collect_handler_relays(
             if update_defn.validator is not None:
                 new_validator = _build_validator_relay(update_defn.validator)
 
-            relay._defn = _dc.replace(  # type: ignore[attr-defined]
+            relay._defn = replace(  # type: ignore[attr-defined]
                 update_defn, fn=relay, validator=new_validator
             )
             # Temporal's @workflow.update decorator also sets a `.validator`

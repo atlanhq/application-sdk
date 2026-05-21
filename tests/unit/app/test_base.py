@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence as _Seq
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any as _Any
 from unittest import mock
 from uuid import UUID
 
 import pytest
+from temporalio import workflow as _wf
+from temporalio.common import RawValue as _RawValue
 
 from application_sdk.app.base import (
     App,
@@ -1250,8 +1254,6 @@ class TestWorkflowHandlerRelay:
         )
 
     def test_signal_handler_is_registered_on_wf_cls(self) -> None:
-        from temporalio import workflow as _wf
-
         class _SignalApp(App):
             def __init__(self) -> None:
                 self.pings: list[str] = []
@@ -1272,8 +1274,6 @@ class TestWorkflowHandlerRelay:
         assert "ping" in defn.signals
 
     def test_update_handler_is_registered_on_wf_cls(self) -> None:
-        from temporalio import workflow as _wf
-
         class _UpdateApp(App):
             def __init__(self) -> None:
                 self.state = "running"
@@ -1295,8 +1295,6 @@ class TestWorkflowHandlerRelay:
         assert "pause_run" in defn.updates
 
     def test_query_handler_is_registered_on_wf_cls(self) -> None:
-        from temporalio import workflow as _wf
-
         class _QueryApp(App):
             def __init__(self) -> None:
                 self.counter = 7
@@ -1319,7 +1317,6 @@ class TestWorkflowHandlerRelay:
     @pytest.mark.asyncio
     async def test_relay_delegates_to_shared_app_instance(self) -> None:
         """Handler relay must mutate the same App instance _run sees, not a fresh one."""
-        from temporalio import workflow as _wf
 
         class _StateApp(App):
             def __init__(self) -> None:
@@ -1348,8 +1345,6 @@ class TestWorkflowHandlerRelay:
         assert wf_inst._app_instance.state == "paused"
 
     def test_validator_is_preserved_through_relay(self) -> None:
-        from temporalio import workflow as _wf
-
         class _ValidatedApp(App):
             def __init__(self) -> None:
                 self.state = ""
@@ -1387,12 +1382,6 @@ class TestWorkflowHandlerRelay:
         # resolves at decoration time (Temporal's @workflow.update inspects
         # the annotation eagerly to validate dynamic-handler shape under
         # ``from __future__ import annotations``).
-        from collections.abc import Sequence as _Seq
-        from typing import Any as _Any
-
-        from temporalio import workflow as _wf
-        from temporalio.common import RawValue as _RawValue
-
         ns: dict[str, _Any] = {
             "_wf": _wf,
             "_Seq": _Seq,
@@ -1425,7 +1414,6 @@ class TestWorkflowHandlerRelay:
 
     def test_app_without_handlers_yields_no_registrations(self) -> None:
         """Regression: apps that don't declare handlers must not gain spurious entries."""
-        from temporalio import workflow as _wf
 
         class _PlainApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:

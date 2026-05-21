@@ -19,6 +19,7 @@ from datetime import timedelta
 
 import pytest
 from temporalio import workflow
+from temporalio.client import WorkflowUpdateFailedError
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -199,8 +200,6 @@ async def test_query_handler_returns_live_state() -> None:
 async def test_validator_rejects_invalid_update() -> None:
     """Validator decorated on the App method propagates through the relay,
     causing Temporal to reject the update before it reaches the handler body."""
-    from temporalio.client import WorkflowUpdateFailedError
-
     async with await WorkflowEnvironment.start_local(
         data_converter=pydantic_data_converter
     ) as env:
