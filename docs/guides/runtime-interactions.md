@@ -1,6 +1,6 @@
-# Workflow Handlers — Cookbook
+# Runtime Interactions — Cookbook
 
-`@signal`, `@query`, and `@update` let external callers reach into a running `App` without killing or restarting it. The SDK lifts these decorators from your `App` subclass onto the generated workflow class, so the Temporal client API works transparently.
+`@signal`, `@query`, and `@update` let external callers reach into a running `App` without killing or restarting it. The SDK lifts these decorators from your `App` subclass onto the generated run class, so the client API works transparently.
 
 This page collects the patterns app authors actually need. Each example is paste-into-an-App-subclass and works against the SDK as of [BLDX-1283](https://linear.app/atlan-epd/issue/BLDX-1283).
 
@@ -258,11 +258,11 @@ $ temporal workflow query --workflow-id=extract-1 --type=get_checkpoint
 
 ## Gotchas
 
-The same determinism rules that apply to `run()` apply to every handler — they all execute inside the workflow sandbox.
+The same determinism rules that apply to `run()` apply to every runtime interaction — they all execute inside the run sandbox.
 
-- **No I/O, no random, no `time.time()`.** Use `now()` / `uuid4()` (from `application_sdk.app`). Network calls and DB queries belong in `@task` activities the handler may invoke if needed.
-- **Don't `await` long-running work in a handler.** Updates have a deadline (default 10s). Flip a flag in the handler; let `run()` do the actual work.
+- **No I/O, no random, no `time.time()`.** Use `now()` / `uuid4()` (from `application_sdk.app`). Network calls and DB queries belong in `@task` activities an interaction may invoke if needed.
+- **Don't `await` long-running work in an interaction.** Updates have a deadline (default 10s). Flip a flag in the interaction; let `run()` do the actual work.
 - **Prefer `wait_condition` over polling.** `while not flag: await asyncio.sleep(0.1)` works but is wasteful. `wait_condition` is the deterministic primitive and runs only when something changes.
-- **Validators raise → update is rejected with `WorkflowUpdateFailedError` on the client.** Use `@<update_name>.validator` for argument shape checks (non-empty strings, integer ranges). The handler body should assume validated input.
-- **Handler state is per-workflow-run.** The `App` instance lives for one workflow execution; instance fields reset across runs. For cross-run state, use `self.state.persistent` / `self.state.scratch` (SDK state accessors).
-- **Dynamic handlers** (`@update(dynamic=True)` etc.) are supported — useful for catch-all routers. The handler signature must be `(self, name: str, args: Sequence[temporalio.common.RawValue])`.
+- **Validators raise → update is rejected with `WorkflowUpdateFailedError` on the client.** Use `@<update_name>.validator` for argument shape checks (non-empty strings, integer ranges). The interaction body should assume validated input.
+- **Interaction state is per-run.** The `App` instance lives for one execution; instance fields reset across runs. For cross-run state, use `self.state.persistent` / `self.state.scratch` (SDK state accessors).
+- **Dynamic interactions** (`@update(dynamic=True)` etc.) are supported — useful for catch-all routers. The interaction signature must be `(self, name: str, args: Sequence[temporalio.common.RawValue])`.

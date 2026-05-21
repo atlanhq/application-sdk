@@ -1,12 +1,12 @@
-"""End-to-end test: @workflow.update / @workflow.signal / @workflow.query on App
-classes route to per-run App-instance state through a live Temporal worker.
+"""End-to-end test: @update / @signal / @query runtime interactions on App
+classes route to per-run App-instance state through a live worker.
 
 Pre-BLDX-1283, ``generate_workflow_class`` synthesized a wf_cls carrying only
-``run``; any handlers declared on the App subclass were silently dropped.
+``run``; any interactions declared on the App subclass were silently dropped.
 ``handle.execute_update(...)`` failed with "unknown update name."
 
-This test stands up an embedded Temporal server (``WorkflowEnvironment``),
-runs a worker against an App whose lifecycle spans a long workflow body,
+This test stands up an embedded server (``WorkflowEnvironment``),
+runs a worker against an App whose lifecycle spans a long run body,
 fires updates/signals/queries against the running execution, and asserts
 that state mutations are visible to the App's ``run`` method on the same
 instance.
@@ -42,11 +42,11 @@ _SANDBOX_RUNNER = SandboxedWorkflowRunner(
 # ---------------------------------------------------------------------------
 
 
-class _HandlerInput(Input, allow_unbounded_fields=True):
+class _InteractionInput(Input, allow_unbounded_fields=True):
     timeout_seconds: float = 5.0
 
 
-class _HandlerOutput(Output, allow_unbounded_fields=True):
+class _InteractionOutput(Output, allow_unbounded_fields=True):
     final_state: str = ""
     signals_received: int = 0
 
@@ -56,15 +56,15 @@ class _HandlerOutput(Output, allow_unbounded_fields=True):
 # ---------------------------------------------------------------------------
 
 
-class _HandlerApp(App):
-    """Long-running App with one of each handler type. ``run`` polls state
-    until paused, allowing handlers to fire in-flight against the same instance."""
+class _InteractionApp(App):
+    """Long-running App with one of each interaction type. ``run`` polls state
+    until paused, allowing interactions to fire in-flight against the same instance."""
 
     def __init__(self) -> None:
         self.state: str = "running"
         self.signals_received: int = 0
 
-    async def run(self, input: _HandlerInput) -> _HandlerOutput:
+    async def run(self, input: _InteractionInput) -> _InteractionOutput:
         # Block on a state flip from any handler. ``workflow.wait_condition``
         # is the deterministic primitive — it suspends until ``self.state``
         # changes or the timeout elapses.
@@ -72,7 +72,7 @@ class _HandlerApp(App):
             lambda: self.state != "running",
             timeout=timedelta(seconds=input.timeout_seconds),
         )
-        return _HandlerOutput(
+        return _InteractionOutput(
             final_state=self.state, signals_received=self.signals_received
         )
 
@@ -95,13 +95,13 @@ class _HandlerApp(App):
             raise ValueError("reason must be non-empty")
 
 
-# Build the wf_cls via the SDK path under test (not a hand-rolled @workflow.defn).
+# Build the wf_cls via the SDK path under test.
 _WF_CLS = generate_workflow_class(
-    _HandlerApp,
+    _InteractionApp,
     EntryPointMetadata(
         name="run",
-        input_type=_HandlerInput,
-        output_type=_HandlerOutput,
+        input_type=_InteractionInput,
+        output_type=_InteractionOutput,
         method_name="run",
         implicit=True,
     ),
@@ -114,7 +114,7 @@ _WF_CLS = generate_workflow_class(
 
 
 @pytest.mark.asyncio
-async def test_update_handler_mutates_run_state() -> None:
+async def test_update_interaction_mutates_run_state() -> None:
     """Update fired mid-run reaches the same App instance ``run`` observes."""
     async with (
         await WorkflowEnvironment.start_local(
@@ -122,17 +122,17 @@ async def test_update_handler_mutates_run_state() -> None:
         ) as env,
         Worker(
             env.client,
-            task_queue="handler-relay-queue",
+            task_queue="interaction-relay-queue",
             workflows=[_WF_CLS],
             workflow_runner=_SANDBOX_RUNNER,
         ),
     ):
         handle = await env.client.start_workflow(
             _WF_CLS.run,
-            _HandlerInput(timeout_seconds=5.0),
-            id="handler-relay-update",
-            task_queue="handler-relay-queue",
-            result_type=_HandlerOutput,
+            _InteractionInput(timeout_seconds=5.0),
+            id="interaction-relay-update",
+            task_queue="interaction-relay-queue",
+            result_type=_InteractionOutput,
         )
 
         # Give run() a moment to enter the poll loop, then issue the update.
@@ -145,7 +145,7 @@ async def test_update_handler_mutates_run_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_signal_handler_increments_state() -> None:
+async def test_signal_interaction_increments_state() -> None:
     """Multiple signals accumulate on the same per-run App instance."""
     async with (
         await WorkflowEnvironment.start_local(
@@ -153,17 +153,17 @@ async def test_signal_handler_increments_state() -> None:
         ) as env,
         Worker(
             env.client,
-            task_queue="handler-relay-queue-2",
+            task_queue="interaction-relay-queue-2",
             workflows=[_WF_CLS],
             workflow_runner=_SANDBOX_RUNNER,
         ),
     ):
         handle = await env.client.start_workflow(
             _WF_CLS.run,
-            _HandlerInput(timeout_seconds=5.0),
-            id="handler-relay-signal",
-            task_queue="handler-relay-queue-2",
-            result_type=_HandlerOutput,
+            _InteractionInput(timeout_seconds=5.0),
+            id="interaction-relay-signal",
+            task_queue="interaction-relay-queue-2",
+            result_type=_InteractionOutput,
         )
         await asyncio.sleep(0.2)
         await handle.signal("ping")
@@ -176,7 +176,7 @@ async def test_signal_handler_increments_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_handler_returns_live_state() -> None:
+async def test_query_interaction_returns_live_state() -> None:
     """Query reads state from the same instance ``run`` is mutating."""
     async with (
         await WorkflowEnvironment.start_local(
@@ -184,17 +184,17 @@ async def test_query_handler_returns_live_state() -> None:
         ) as env,
         Worker(
             env.client,
-            task_queue="handler-relay-queue-3",
+            task_queue="interaction-relay-queue-3",
             workflows=[_WF_CLS],
             workflow_runner=_SANDBOX_RUNNER,
         ),
     ):
         handle = await env.client.start_workflow(
             _WF_CLS.run,
-            _HandlerInput(timeout_seconds=5.0),
-            id="handler-relay-query",
-            task_queue="handler-relay-queue-3",
-            result_type=_HandlerOutput,
+            _InteractionInput(timeout_seconds=5.0),
+            id="interaction-relay-query",
+            task_queue="interaction-relay-queue-3",
+            result_type=_InteractionOutput,
         )
         await asyncio.sleep(0.2)
         assert await handle.query("get_state") == "running"
@@ -205,24 +205,24 @@ async def test_query_handler_returns_live_state() -> None:
 @pytest.mark.asyncio
 async def test_validator_rejects_invalid_update() -> None:
     """Validator decorated on the App method propagates through the relay,
-    causing Temporal to reject the update before it reaches the handler body."""
+    causing the runtime to reject the update before it reaches the interaction body."""
     async with (
         await WorkflowEnvironment.start_local(
             data_converter=pydantic_data_converter
         ) as env,
         Worker(
             env.client,
-            task_queue="handler-relay-queue-4",
+            task_queue="interaction-relay-queue-4",
             workflows=[_WF_CLS],
             workflow_runner=_SANDBOX_RUNNER,
         ),
     ):
         handle = await env.client.start_workflow(
             _WF_CLS.run,
-            _HandlerInput(timeout_seconds=5.0),
-            id="handler-relay-validator",
-            task_queue="handler-relay-queue-4",
-            result_type=_HandlerOutput,
+            _InteractionInput(timeout_seconds=5.0),
+            id="interaction-relay-validator",
+            task_queue="interaction-relay-queue-4",
+            result_type=_InteractionOutput,
         )
         await asyncio.sleep(0.2)
 

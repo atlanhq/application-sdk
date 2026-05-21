@@ -1420,16 +1420,16 @@ def _apply_app_registration(
 _workflow_class_cache: dict[tuple[type, str], type] = {}
 
 
-def _collect_handler_relays(
+def _collect_interaction_relays(
     app_cls: "type[App]", cls_name: str
 ) -> dict[str, Callable[..., Any]]:
-    """Scan the App class for @workflow.signal / @workflow.query / @workflow.update
-    handlers and synthesize per-handler relay methods bound to the generated wf_cls.
+    """Scan the App class for @signal / @query / @update runtime interactions and
+    synthesize per-interaction relay methods bound to the generated wf_cls.
 
     Each relay extracts the per-run App instance from ``wf_self._app_instance`` and
     delegates the call. The synthesized relay carries Temporal's discovery metadata
-    (rebound to point at the relay), so @workflow.defn(wf_cls) registers the handler
-    against the generated class — which is what Temporal requires.
+    (rebound to point at the relay), so @workflow.defn(wf_cls) registers the
+    interaction against the generated class — which is what Temporal requires.
 
     Returns a mapping of method name -> relay callable, ready to be placed on wf_cls.
     """
@@ -1467,7 +1467,7 @@ def _collect_handler_relays(
 
     for member_name, member in inspect.getmembers(app_cls):
         if member_name == "run":
-            # The entry method is handled separately; never relay it as a handler.
+            # The entry method is handled separately; never relay it as an interaction.
             continue
 
         signal_defn = getattr(member, "__temporal_signal_definition", None)
@@ -1497,7 +1497,7 @@ def _collect_handler_relays(
             )
         else:
             # update_defn is _UpdateDefinition (asserted above by `is_update`).
-            assert update_defn is not None  # noqa: S101 — narrows for type-checkers
+            assert update_defn is not None
             new_validator: Callable[..., Any] | None = None
             if update_defn.validator is not None:
                 new_validator = _build_validator_relay(update_defn.validator)
@@ -1574,7 +1574,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             started_at=start_time,
         )
         # The wf_cls.__init__ constructs the App instance up-front so that any
-        # @workflow.signal / @workflow.query / @workflow.update handlers
+        # @signal / @query / @update runtime interactions
         # (which may fire as early as immediately after workflow start, before
         # _run's first await) can delegate to the same instance _run uses.
         # Fall back to constructing one here when ``self`` is a stand-in (e.g.
@@ -1706,15 +1706,15 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
     decorated_run = workflow.run(_run)
 
-    # Collect any @workflow.signal / @workflow.query / @workflow.update
-    # handlers declared on the App subclass. Each is rewritten into a relay
-    # whose Temporal-discovery metadata points at the relay (so the wf_cls
-    # is what's registered, not the App class) and whose body delegates to
-    # ``self._app_instance.<method>`` — sharing state with _run.
-    handler_relays = _collect_handler_relays(app_cls, cls_name)
+    # Collect any @signal / @query / @update runtime interactions declared on
+    # the App subclass. Each is rewritten into a relay whose Temporal-discovery
+    # metadata points at the relay (so the wf_cls is what's registered, not the
+    # App class) and whose body delegates to ``self._app_instance.<method>``
+    # — sharing state with _run.
+    interaction_relays = _collect_interaction_relays(app_cls, cls_name)
 
     def _wf_init(self: Any) -> None:
-        # Construct the per-run App instance eagerly so handlers that fire
+        # Construct the per-run App instance eagerly so interactions that fire
         # before _run's first await still hit a live instance. _run later
         # finishes context setup (correlation id, _wrap_instance_tasks, etc.)
         # on this same instance.
@@ -1725,7 +1725,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     _wf_init.__module__ = app_cls.__module__
 
     wf_methods: dict[str, Any] = {"run": decorated_run, "__init__": _wf_init}
-    wf_methods.update(handler_relays)
+    wf_methods.update(interaction_relays)
 
     wf_cls = type(cls_name, (), wf_methods)
     wf_cls.__module__ = app_cls.__module__

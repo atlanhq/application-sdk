@@ -88,7 +88,7 @@ nav:
       - PKL Contracts: guides/pkl-contracts.md
       - Deployment: guides/deployment.md
       - Multi-App Coordination: guides/multi-app-coordination.md
-      - Workflow Handlers (Signal/Query/Update): guides/workflow-handlers.md
+      - Runtime Interactions (Signal/Query/Update): guides/runtime-interactions.md
 
       # Best practices & testing
       - Best Practices: guides/best-practices.md

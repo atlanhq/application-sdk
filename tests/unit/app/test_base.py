@@ -1230,19 +1230,19 @@ class TestGenerateWorkflowClass:
 
 
 # =============================================================================
-# Workflow handler relay (BLDX-1283) — @workflow.signal/query/update on App
+# Runtime interaction relay (BLDX-1283) — @signal / @query / @update on App
 # =============================================================================
 
 
-class TestWorkflowHandlerRelay:
-    """Pin that @workflow.signal / @workflow.query / @workflow.update declared
-    on an App subclass are lifted onto the generated wf_cls so Temporal's
-    @workflow.defn discovers them and `handle.execute_update(...)` /
-    `handle.signal(...)` resolve to the App's methods at runtime.
+class TestWorkflowInteractionRelay:
+    """Pin that @signal / @query / @update declared on an App subclass are
+    lifted onto the generated wf_cls so the underlying runtime discovers them
+    and `handle.execute_update(...)` / `handle.signal(...)` resolve to the
+    App's methods at runtime.
 
-    Pre-BLDX-1283 these handlers were silently dropped because the synthesized
-    wf_cls only carried `run` — Temporal scans the generated class, not the
-    App class, so the decorators registered on App methods were invisible.
+    Pre-BLDX-1283 these interactions were silently dropped because the
+    synthesized wf_cls only carried `run` — the runtime scans the generated
+    class, not the App class, so decorators on App methods were invisible.
     """
 
     def _make_ep(self, input_type: type, output_type: type) -> EntryPointMetadata:
@@ -1254,7 +1254,7 @@ class TestWorkflowHandlerRelay:
             implicit=True,
         )
 
-    def test_signal_handler_is_registered_on_wf_cls(self) -> None:
+    def test_signal_interaction_is_registered_on_wf_cls(self) -> None:
         class _SignalApp(App):
             def __init__(self) -> None:
                 self.pings: list[str] = []
@@ -1274,7 +1274,7 @@ class TestWorkflowHandlerRelay:
         assert defn is not None
         assert "ping" in defn.signals
 
-    def test_update_handler_is_registered_on_wf_cls(self) -> None:
+    def test_update_interaction_is_registered_on_wf_cls(self) -> None:
         class _UpdateApp(App):
             def __init__(self) -> None:
                 self.state = "running"
@@ -1295,7 +1295,7 @@ class TestWorkflowHandlerRelay:
         assert defn is not None
         assert "pause_run" in defn.updates
 
-    def test_query_handler_is_registered_on_wf_cls(self) -> None:
+    def test_query_interaction_is_registered_on_wf_cls(self) -> None:
         class _QueryApp(App):
             def __init__(self) -> None:
                 self.counter = 7
@@ -1317,7 +1317,7 @@ class TestWorkflowHandlerRelay:
 
     @pytest.mark.asyncio
     async def test_relay_delegates_to_shared_app_instance(self) -> None:
-        """Handler relay must mutate the same App instance _run sees, not a fresh one."""
+        """Interaction relay must mutate the same App instance _run sees, not a fresh one."""
 
         class _StateApp(App):
             def __init__(self) -> None:
@@ -1377,11 +1377,11 @@ class TestWorkflowHandlerRelay:
         with pytest.raises(ValueError, match="non-empty"):
             update_defn.bind_validator(wf_inst)("")
 
-    def test_dynamic_update_handler_is_supported(self) -> None:
+    def test_dynamic_update_interaction_is_supported(self) -> None:
         # Define the class via exec with explicit globals so the
-        # ``Sequence[RawValue]`` annotation in the dynamic-handler signature
-        # resolves at decoration time (Temporal's @workflow.update inspects
-        # the annotation eagerly to validate dynamic-handler shape under
+        # ``Sequence[RawValue]`` annotation in the dynamic-interaction signature
+        # resolves at decoration time (the underlying runtime inspects
+        # the annotation eagerly to validate dynamic-interaction shape under
         # ``from __future__ import annotations``).
         ns: dict[str, _Any] = {
             "update": update,
@@ -1410,11 +1410,11 @@ class TestWorkflowHandlerRelay:
 
         defn = _wf._Definition.from_class(wf_cls)
         assert defn is not None
-        # Dynamic handlers are keyed by None in the registration map.
+        # Dynamic interactions are keyed by None in the registration map.
         assert None in defn.updates
 
-    def test_app_without_handlers_yields_no_registrations(self) -> None:
-        """Regression: apps that don't declare handlers must not gain spurious entries."""
+    def test_app_without_interactions_yields_no_registrations(self) -> None:
+        """Regression: apps that don't declare interactions must not gain spurious entries."""
 
         class _PlainApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:

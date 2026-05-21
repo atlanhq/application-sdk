@@ -1,9 +1,9 @@
-"""Runnable verification of the workflow handler cookbook
-(`docs/guides/workflow-handlers.md`).
+"""Runnable verification of the runtime interactions cookbook
+(`docs/guides/runtime-interactions.md`).
 
 Each test mirrors one cookbook example — the App class is as close to the
 prose example as practical, with the I/O bits replaced by deterministic
-stand-ins so the test runs under the Temporal workflow sandbox.
+stand-ins so the test runs under the workflow sandbox.
 
 If any of these break, the cookbook is wrong and must be updated in lockstep.
 """
@@ -251,7 +251,7 @@ _RATE_LIMITED_WF = generate_workflow_class(
 @pytest.mark.asyncio
 async def test_cookbook_rate_limit_validator_rejects_out_of_range() -> None:
     """Out-of-range rate limit is rejected by the validator before the
-    handler body runs; in-range update succeeds and mutates state."""
+    interaction body runs; in-range update succeeds and mutates state."""
     async with (
         await WorkflowEnvironment.start_local(
             data_converter=pydantic_data_converter
