@@ -3,8 +3,18 @@
 All notable changes to this project are documented here.
 
 Release notes are generated from [conventional commit](https://www.conventionalcommits.org/)
-messages. Every merge to `main` produces either a patch, minor, or major release —
-see the version-bump logic in `.github/workflows/release.yml`.
+messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
+updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
+
+## [0.10.0] - 2026-05-21
+
+### Features
+
+- Consolidate to single `App.pkl` template; legacy modules (`NativeApp.pkl`, `NativeAppBundle.pkl`, `Renderers.pkl`) retained as frozen reference material ([#1814](https://github.com/atlanhq/application-sdk/pull/1814))
+
+### Bug fixes
+
+- Read `.default` uniformly in `getInputPyField` so optional fields with explicit defaults render correctly in generated `_input.py` ([#1803](https://github.com/atlanhq/application-sdk/pull/1803))
 
 ## [0.9.5] - 2026-05-07
 
