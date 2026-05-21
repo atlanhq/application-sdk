@@ -303,25 +303,25 @@ class TestBuildTrackEvent:
         client = _disabled_client()
         record = _make_record(
             labels={
-                "tenant_name": "workivap01",
-                "atlan_base_url": "https://workiva.atlan.com",
+                "tenant_name": "acme-tenant-01",
+                "atlan_base_url": "https://acme.example.com",
                 "tenant_id": "default",
             }
         )
         event = client._build_track_event(record)
-        assert event.userId == f"{client._default_user_id}:workivap01"
+        assert event.userId == f"{client._default_user_id}:acme-tenant-01"
 
     def test_userid_falls_back_to_atlan_base_url(self):
         """When tenant_name is absent, atlan_base_url is appended."""
         client = _disabled_client()
         record = _make_record(
             labels={
-                "atlan_base_url": "https://workiva.atlan.com",
+                "atlan_base_url": "https://acme.example.com",
                 "tenant_id": "default",
             }
         )
         event = client._build_track_event(record)
-        assert event.userId == f"{client._default_user_id}:https://workiva.atlan.com"
+        assert event.userId == f"{client._default_user_id}:https://acme.example.com"
 
     def test_userid_falls_back_to_tenant_id(self):
         """When tenant_name and atlan_base_url absent, tenant_id is appended."""
@@ -343,11 +343,11 @@ class TestBuildTrackEvent:
         record = _make_record(
             labels={
                 "tenant_name": "",
-                "atlan_base_url": "https://workiva.atlan.com",
+                "atlan_base_url": "https://acme.example.com",
             }
         )
         event = client._build_track_event(record)
-        assert event.userId == f"{client._default_user_id}:https://workiva.atlan.com"
+        assert event.userId == f"{client._default_user_id}:https://acme.example.com"
 
 
 # ---------------------------------------------------------------------------
