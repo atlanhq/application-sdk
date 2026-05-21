@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.2
-source-sha:    c83c3c41bbd4286a68e8244aa3d5651e5ce7183e
-source-date:   2026-05-21T13:52:59+05:30
+source-sha:    0389a455e9c5faef0dec511c3ee985fdc2691998
+source-date:   2026-05-21T10:40:37+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 50 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 51 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -1140,6 +1140,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import STORAGE_CONFIG`
 - **Signature:** `STORAGE_CONFIG`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_EMPTY_UPLOAD`
+
+- **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
+- **Signature:** `STORAGE_EMPTY_UPLOAD`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
 
