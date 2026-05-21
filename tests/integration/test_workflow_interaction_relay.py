@@ -125,7 +125,6 @@ _WF_CLS = generate_workflow_class(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_update_interaction_mutates_run_state() -> None:
     """Update fired mid-run reaches the same App instance ``run`` observes."""
     async with (
@@ -158,7 +157,6 @@ async def test_update_interaction_mutates_run_state() -> None:
     assert result.final_state == "stopped:operator-request"
 
 
-@pytest.mark.asyncio
 async def test_signal_interaction_increments_state() -> None:
     """Multiple signals accumulate on the same per-run App instance."""
     async with (
@@ -189,7 +187,6 @@ async def test_signal_interaction_increments_state() -> None:
     assert result.signals_received == 3
 
 
-@pytest.mark.asyncio
 async def test_query_interaction_returns_live_state() -> None:
     """Query reads state from the same instance ``run`` is mutating."""
     async with (
@@ -216,7 +213,6 @@ async def test_query_interaction_returns_live_state() -> None:
         await handle.result()
 
 
-@pytest.mark.asyncio
 async def test_validator_rejects_invalid_update() -> None:
     """Validator decorated on the App method propagates through the relay,
     causing the runtime to reject the update before it reaches the interaction body."""

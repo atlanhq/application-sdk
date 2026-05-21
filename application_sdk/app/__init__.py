@@ -23,7 +23,16 @@ Usage::
 Runtime interaction decorators and primitives are also exported here so app code
 never needs to import the underlying orchestrator directly::
 
-    from application_sdk.app import App, signal, query, update, wait_condition
+    from application_sdk.app import App, Input, Output, signal, query, update, wait_condition
+
+    class StatusOutput(Output):
+        state: str = "running"
+
+    class PauseInput(Input):
+        reason: str = ""
+
+    class PauseOutput(Output):
+        message: str = ""
 
     class MyApp(App):
         async def run(self, input: MyInput) -> MyOutput:

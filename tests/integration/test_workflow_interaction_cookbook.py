@@ -102,7 +102,6 @@ _PAUSE_RESUME_WF = generate_workflow_class(
 )
 
 
-@pytest.mark.asyncio
 async def test_cookbook_pause_resume_cycle() -> None:
     """Customer pauses mid-extract, then resumes; run completes with full progress."""
     async with (
@@ -135,7 +134,6 @@ async def test_cookbook_pause_resume_cycle() -> None:
     assert result.rows_extracted == 300  # 3 batches × 100 rows
 
 
-@pytest.mark.asyncio
 async def test_cookbook_graceful_cancel_short_circuits_run() -> None:
     """graceful_cancel flips state; run() exits its loop without processing
     remaining batches, but with partial progress preserved."""
@@ -205,7 +203,6 @@ class _MetricsApp(App):
 _METRICS_WF = generate_workflow_class(_MetricsApp, _ep(_ExtractInput, _ExtractOutput))
 
 
-@pytest.mark.asyncio
 async def test_cookbook_progress_query_returns_live_state() -> None:
     """Operator queries get_progress mid-run; query reads live App state."""
     async with (
@@ -276,7 +273,6 @@ _RATE_LIMITED_WF = generate_workflow_class(
 )
 
 
-@pytest.mark.asyncio
 async def test_cookbook_rate_limit_validator_rejects_out_of_range() -> None:
     """Out-of-range rate limit is rejected by the validator before the
     interaction body runs; in-range update succeeds and mutates state."""
@@ -349,7 +345,6 @@ _INCREMENTAL_WF = generate_workflow_class(
 )
 
 
-@pytest.mark.asyncio
 async def test_cookbook_external_update_advances_watermark() -> None:
     """An external service sends a watermark update; run() observes it on the same instance."""
     async with (
@@ -414,7 +409,6 @@ _CHECKPOINTED_WF = generate_workflow_class(
 )
 
 
-@pytest.mark.asyncio
 async def test_cookbook_checkpoint_query_returns_position() -> None:
     """Oncall queries the live checkpoint without restarting the run."""
     async with (
