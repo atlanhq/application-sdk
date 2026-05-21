@@ -132,8 +132,13 @@ asyncio.run(
         PostgresApp,
         credentials={"host": "localhost", "port": "5432", ...},
         example_input={"connection": {"connection_name": "test", ...}},
+        temporal_ui=True,
+        temporal_ui_port=8233,
     )
 )
 ```
+
+`temporal_ui` is local-dev only. When enabled, the embedded Temporal Web UI
+binds to `http://127.0.0.1:8233` unless `temporal_ui_port` is set.
 
 See [Getting Started](../guides/getting-started.md#step-7-optional-use-run_dev_combined) for details.

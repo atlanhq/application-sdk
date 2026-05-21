@@ -1311,6 +1311,8 @@ def _stub_embedded_daemons():
     from application_sdk.dev._dapr import EmbeddedDapr
     from application_sdk.dev._embedded import EmbeddedRuntime
 
+    captured_runtime_kwargs: list[dict[str, object]] = []
+
     @asynccontextmanager
     async def _fake_dapr(**_kwargs):
         yield EmbeddedDapr(
@@ -1319,7 +1321,12 @@ def _stub_embedded_daemons():
 
     @asynccontextmanager
     async def _fake_runtime(**_kwargs):
-        yield EmbeddedRuntime(host="127.0.0.1:7233", namespace="default")
+        captured_runtime_kwargs.append(_kwargs)
+        temporal_ui = bool(_kwargs.get("temporal_ui", False))
+        temporal_ui_port = _kwargs.get("temporal_ui_port")
+        resolved_ui_port = temporal_ui_port if temporal_ui_port is not None else 8233
+        ui_url = f"http://127.0.0.1:{resolved_ui_port}" if temporal_ui else None
+        yield EmbeddedRuntime(host="127.0.0.1:7233", namespace="default", ui_url=ui_url)
 
     # ``run_dev_combined`` does ``from application_sdk.dev import embedded_dapr,
     # embedded_runtime`` lazily inside the function body, so patch them on the
@@ -1328,7 +1335,7 @@ def _stub_embedded_daemons():
         patch("application_sdk.dev.embedded_dapr", _fake_dapr),
         patch("application_sdk.dev.embedded_runtime", _fake_runtime),
     ):
-        yield
+        yield captured_runtime_kwargs
 
 
 class TestRunDevCombined:
@@ -1417,6 +1424,36 @@ class TestRunDevCombined:
             )
         out = capsys.readouterr().out
         assert "abc" in out
+
+    async def test_temporal_ui_options_are_passed_to_embedded_runtime(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        _stub_embedded_daemons: list[dict[str, object]],
+    ) -> None:
+        """Temporal UI options are forwarded and the UI URL is printed."""
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+        with (
+            patch(
+                "application_sdk.main._create_infrastructure",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch(
+                "application_sdk.main.run_combined_mode",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await run_dev_combined(
+                _fake_app_class(),
+                temporal_ui=True,
+                temporal_ui_port=8233,
+            )
+
+        assert _stub_embedded_daemons[-1]["temporal_ui"] is True
+        assert _stub_embedded_daemons[-1]["temporal_ui_port"] == 8233
+        assert "Temporal UI running at http://127.0.0.1:8233" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------- #
