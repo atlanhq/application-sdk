@@ -62,6 +62,11 @@ uiConfig {
           title = "Dry Run"
           width = 4
         }
+        ["popularity-custom-label"] = new Config.TextInput {
+          title = "Custom Label"
+          default = "direct-default"
+          width = 4
+        }
       }
     }
   }

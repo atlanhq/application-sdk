@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.12.2 (May 20, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.12.1...v3.12.2
+
+### Bug Fixes
+
+- resolve objectstore bindings once at exporter init (#1799) (by @cmgrote in [04e100d](https://github.com/atlanhq/application-sdk/commit/04e100d))
+- read correlation_id from workflow args as back-compat priority (#1802) (by @louisnow in [92c8d01](https://github.com/atlanhq/application-sdk/commit/92c8d01))
+- extend args-reading to typed Input objects (Pydantic / dataclass) (#1804) (by @louisnow in [ce1a22b](https://github.com/atlanhq/application-sdk/commit/ce1a22b))
+- read .default uniformly in getInputPyField (#1803) (by @cmgrote in [23e08dd](https://github.com/atlanhq/application-sdk/commit/23e08dd))
+
+
 ## v3.12.1 (May 19, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.12.0...v3.12.1

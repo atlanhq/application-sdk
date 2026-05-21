@@ -1187,6 +1187,8 @@ async def run_dev_combined(
     port: int | None = None,
     temporal_host: str | None = None,  # deprecated — ignored, kept for back-compat
     temporal_namespace: str | None = None,
+    temporal_ui: bool = False,
+    temporal_ui_port: int = 8233,
     task_queue: str | None = None,
 ) -> None:
     """Run worker + handler in a single process for local development.
@@ -1230,6 +1232,9 @@ async def run_dev_combined(
         temporal_namespace: Temporal namespace. Default precedence: kwarg →
             ``ATLAN_TEMPORAL_NAMESPACE`` → ``ATLAN_WORKFLOW_NAMESPACE`` →
             ``"default"``.
+        temporal_ui: Enable the embedded Temporal Web UI for local debugging.
+            Default ``False`` keeps the dev server headless.
+        temporal_ui_port: Temporal Web UI port. Defaults to ``8233``.
         task_queue: Task queue name. Default precedence: kwarg →
             ``ATLAN_TASK_QUEUE`` → ``"{app_name}-queue"``.
 
@@ -1275,9 +1280,15 @@ async def run_dev_combined(
     # startup and log spurious "objectstore upload failed" warnings.
     async with (
         embedded_dapr(app_id=app_name) as _dapr,
-        embedded_runtime(namespace=temporal_namespace or "default") as _rt,
+        embedded_runtime(
+            namespace=temporal_namespace or "default",
+            temporal_ui=temporal_ui,
+            temporal_ui_port=temporal_ui_port,
+        ) as _rt,
     ):
         del _dapr  # env-side-effect is sufficient; the dataclass is just for tests
+        if _rt.ui_url:
+            print(f"\nTemporal UI running at {_rt.ui_url}")
         await _run_dev_combined_inner(
             app_class=app_class,
             credential_stores=credential_stores,

@@ -21,12 +21,17 @@ class EmbeddedRuntime:
     namespace: str = "default"
     """Workflow namespace served by the embedded runtime."""
 
+    ui_url: str | None = None
+    """Temporal Web UI URL when enabled for local development."""
+
 
 @asynccontextmanager
 async def embedded_runtime(
     *,
     namespace: str = "default",
     log_level: str = "warn",
+    temporal_ui: bool = False,
+    temporal_ui_port: int = 8233,
 ) -> AsyncIterator[EmbeddedRuntime]:
     """Boot an in-process workflow runtime for local development.
 
@@ -39,6 +44,8 @@ async def embedded_runtime(
     logger.info("Starting embedded workflow runtime")
     env = await WorkflowEnvironment.start_local(
         namespace=namespace,
+        ui=temporal_ui,
+        ui_port=temporal_ui_port if temporal_ui else None,
         dev_server_log_level=log_level,
         dev_server_extra_args=[
             "--dynamic-config-value",
@@ -48,7 +55,8 @@ async def embedded_runtime(
     try:
         host = env.client.service_client.config.target_host
         logger.info("Embedded workflow runtime ready at %s", host)
-        yield EmbeddedRuntime(host=host, namespace=namespace)
+        ui_url = f"http://127.0.0.1:{temporal_ui_port}" if temporal_ui else None
+        yield EmbeddedRuntime(host=host, namespace=namespace, ui_url=ui_url)
     finally:
         logger.info("Shutting down embedded workflow runtime")
         await env.shutdown()
