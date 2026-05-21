@@ -20,7 +20,7 @@ Usage::
         async def run(self, input: MyInput) -> MyOutput:
             return await self.fetch_data(input)
 
-Handler decorators and runtime primitives are also exported here so app code
+Runtime interaction decorators and primitives are also exported here so app code
 never needs to import the underlying orchestrator directly::
 
     from application_sdk.app import App, signal, query, update, wait_condition

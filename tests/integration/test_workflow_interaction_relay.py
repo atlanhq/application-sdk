@@ -77,7 +77,7 @@ class _InteractionApp(App):
         self.signals_received: int = 0
 
     async def run(self, input: _InteractionInput) -> _InteractionOutput:
-        # Block on a state flip from any handler. ``workflow.wait_condition``
+        # Block on a state flip from any interaction. ``workflow.wait_condition``
         # is the deterministic primitive — it suspends until ``self.state``
         # changes or the timeout elapses.
         await wait_condition(
