@@ -159,7 +159,10 @@ async def persist_file_reference(
     Args:
         store: Destination obstore store.
         ref: An ephemeral ``FileReference`` with ``local_path`` set.
-        key: Override the generated storage path (single files only).
+        key: Explicit object-store key (single files only). Precedence:
+            ``key`` → ``ref.storage_path`` → UUID-keyed
+            ``file_refs/<uuid>.json`` fallback. Pass ``None`` (default)
+            to let ``ref.storage_path`` or the fallback decide.
         output_path: Run-scoped base prefix (e.g.
             ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}``).  Required
             when ``ref.tier`` is ``StorageTier.RETAINED``; ignored otherwise.
