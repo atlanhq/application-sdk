@@ -10,7 +10,6 @@ import pytest
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError, DependencyUnavailableError
 from application_sdk.execution._temporal.interceptors.metrics import (
-    _ALERTABLE_AUDIENCES,
     _INSTRUMENTS,
     MetricsInterceptor,
     _activity_errors,
@@ -101,12 +100,6 @@ class TestInstrumentCaching:
         assert c1 is c2
         mock_meter.create_counter.assert_called_once()
 
-    def test_alertable_audiences_constant(self):
-        assert _ALERTABLE_AUDIENCES == {
-            Audience.PLATFORM.value,
-            Audience.APP_OWNER.value,
-        }
-
 
 class TestMetricsWorkflowInboundInterceptor:
     @pytest.fixture
@@ -184,9 +177,9 @@ class TestMetricsWorkflowInboundInterceptor:
 class TestWorkflowFailuresClassified:
     """Behaviour of `temporal.workflow.failures.classified` counter.
 
-    The counter must fire only for APP_OWNER / PLATFORM audiences. USER
-    failures (auth, permission, invalid input) are intentionally excluded
-    so alerts driven off this counter stay actionable.
+    Fires on every workflow failure, partitioned by failure.category and
+    failure.audience. Consumers filter at query time (e.g. drop USER) when
+    driving alerts.
     """
 
     @pytest.fixture
@@ -238,12 +231,15 @@ class TestWorkflowFailuresClassified:
         assert tags["failure.category"] == FailureCategory.DEPENDENCY_UNAVAILABLE.value
         assert tags["failure.audience"] == Audience.PLATFORM.value
 
-    async def test_user_audience_does_not_fire(self, split_counters):
+    async def test_user_audience_fires_with_user_label(self, split_counters):
         _, classified = split_counters
         exc = AuthError(message="bad creds")
         await self._run_failing_workflow(exc, split_counters)
 
-        classified.add.assert_not_called()
+        classified.add.assert_called_once()
+        tags = classified.add.call_args[0][1]
+        assert tags["failure.category"] == FailureCategory.AUTH.value
+        assert tags["failure.audience"] == Audience.USER.value
 
     async def test_success_does_not_fire(self, split_counters):
         _, classified = split_counters

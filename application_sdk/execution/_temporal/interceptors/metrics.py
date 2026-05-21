@@ -27,12 +27,6 @@ from temporalio.worker import (
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.execution._temporal.interceptors.log import _extract_failure_attrs
 
-# Audiences that should drive alerts / Sherlock dispatch. USER-audience failures
-# (auth, permission, invalid input, not found) are customer-fixable config noise
-# and are intentionally excluded from the classified counter — they remain
-# counted in ``temporal.workflow.executions`` for general visibility.
-_ALERTABLE_AUDIENCES = frozenset({Audience.PLATFORM.value, Audience.APP_OWNER.value})
-
 _METER_NAME = "application_sdk.temporal"
 
 
@@ -71,10 +65,11 @@ def _workflow_failures_classified():
             "temporal.workflow.failures.classified",
             unit="1",
             description=(
-                "Workflow failures partitioned by failure.category + "
-                "failure.audience. Only audience in {PLATFORM, APP_OWNER} is "
-                "emitted — USER failures (customer-fixable config) are "
-                "excluded so alerts driven off this counter are actionable."
+                "Workflow failures partitioned by failure.category and "
+                "failure.audience. Emitted for every failure across all "
+                "audiences (USER, PLATFORM, APP_OWNER); consumers filter at "
+                "query time — e.g. drop USER for actionable alerts, or keep "
+                "USER for customer-failure dashboards."
             ),
         )
     return _INSTRUMENTS["wf_fail_cls"]
@@ -157,11 +152,10 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 _workflow_duration().record(duration_s, tagged)
                 if status == "ERROR":
                     classified = _classify_failure(exc_caught)
-                    if classified["failure.audience"] in _ALERTABLE_AUDIENCES:
-                        _workflow_failures_classified().add(
-                            1,
-                            {**attrs, **classified},
-                        )
+                    _workflow_failures_classified().add(
+                        1,
+                        {**attrs, **classified},
+                    )
             except Exception:  # noqa: S110 — best-effort observability; never block the workflow on metric emission
                 pass
 
@@ -206,8 +200,10 @@ class MetricsInterceptor(Interceptor):
     Instruments:
       * ``temporal.workflow.executions`` (counter)
       * ``temporal.workflow.duration`` (histogram, seconds)
-      * ``temporal.workflow.failures.classified`` (counter, only emitted for
-        ``failure.audience in {PLATFORM, APP_OWNER}`` — drives alert routing)
+      * ``temporal.workflow.failures.classified`` (counter, partitioned by
+        ``failure.category`` and ``failure.audience`` — consumers filter at
+        query time, e.g. drop ``failure_audience="USER"`` for actionable
+        alerts)
       * ``temporal.activity.executions`` (counter)
       * ``temporal.activity.duration`` (histogram, seconds)
       * ``temporal.activity.errors`` (counter, partitioned by ``exception.type``)
