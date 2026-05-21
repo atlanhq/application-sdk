@@ -32,6 +32,40 @@ Use the right type system for each zone:
 - Avoid Pydantic on high-volume paths (e.g., every log line). Use plain dicts instead — Pydantic validation overhead accumulates significantly.
 - Always use Pydantic v2 `model_config = ConfigDict(...)` style. Do not use the v1 inner `class Config:` pattern.
 
+## Temporal Determinism (CRITICAL)
+
+Code in `run()` and `@entrypoint` methods MUST be deterministic. Temporal replays workflows from history on worker restart — non-deterministic code corrupts the replay.
+
+| DO | DON'T |
+|----|-------|
+| `self.now()` | `datetime.now()`, `datetime.utcnow()` |
+| `self.uuid()` | `uuid.uuid4()`, `uuid.uuid1()` |
+| `await self.my_task(input)` | `await http_client.get(url)` |
+| Framework-provided random | `random.random()`, `random.choice()` |
+
+All I/O, network calls, and non-deterministic operations go in `@task` methods.
+
+## Contract Evolution
+
+- NEVER remove or rename fields on Input/Output classes
+- NEVER change field types
+- Add new fields with defaults only (`field: str = ""`)
+- Use `Field(default_factory=list)` for mutable defaults, never `field: list = []`
+
+Breaking a contract silently corrupts in-flight Temporal workflows.
+
+## Blocking Operations
+
+In `@task` methods, wrap blocking calls with `self.run_in_thread()`:
+
+```python
+# Wrong — blocks event loop, kills heartbeats
+result = requests.get(url)
+
+# Right
+result = await self.run_in_thread(requests.get, url)
+```
+
 ## Large Payloads and FileReference
 
 Use `FileReference` for any data that cannot fit in Temporal's 2 MB payload limit.
