@@ -164,6 +164,51 @@ class TestExtractFailureAttrs:
         exc.__context__ = exc
         assert _extract_failure_attrs(exc) == {}
 
+    def test_extracts_from_dict_details_post_serde(self):
+        # Workflow-side shape: after activity → workflow boundary, Temporal's
+        # pydantic_data_converter reconstructs ApplicationError.details from
+        # JSON without a target type, so the entry is a plain dict — not a
+        # FailureDetails model. The classifier must still recover the labels.
+        leaf = AuthError(message="bad creds")
+        wire = leaf.to_failure_details().model_dump(mode="json")
+        app_err = ApplicationError(
+            "bad creds",
+            wire,
+            type="AuthError",
+            non_retryable=True,
+        )
+        attrs = _extract_failure_attrs(app_err)
+        assert attrs == {
+            "failure.category": "AUTH",
+            "failure.audience": "USER",
+            "failure.code": "AUTH",
+        }
+
+    def test_extracts_from_dict_details_through_cause_chain(self):
+        # ActivityError-style wrapping: workflow catches ActivityError whose
+        # __cause__ is the rehydrated ApplicationError with dict-shaped details.
+        leaf = InvalidInputError(message="missing field", field="account")
+        wire = leaf.to_failure_details().model_dump(mode="json")
+        inner = ApplicationError(
+            "missing field", wire, type="InvalidInputError", non_retryable=True
+        )
+        outer = RuntimeError("Activity task failed")
+        outer.__cause__ = inner
+        attrs = _extract_failure_attrs(outer)
+        assert attrs["failure.category"] == "INVALID_INPUT"
+        assert attrs["failure.audience"] == "USER"
+
+    def test_ignores_unrelated_dict_details(self):
+        # ApplicationError.details may carry arbitrary user-supplied payloads.
+        # A dict that doesn't match the FailureDetails shape must not be
+        # mistaken for a typed envelope.
+        app_err = ApplicationError(
+            "oops",
+            {"unrelated": "payload"},
+            type="Custom",
+        )
+        assert _extract_failure_attrs(app_err) == {}
+
 
 # ---------------------------------------------------------------------------
 # TestLogWorkflowInboundInterceptor
