@@ -37,6 +37,9 @@
       },
       "depends_on": {
         "node_id": "extract"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "left": {

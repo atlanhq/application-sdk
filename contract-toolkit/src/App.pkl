@@ -556,6 +556,12 @@ open class PublishNode extends DAGNode {
   executorEnabled: Boolean|String = true
   tagPipelineEnabled: Boolean|String? = null
   tagAttachmentsPrefix: String? = null
+  /// Defaults to 24h `startToCloseTimeoutSeconds`. AE's source-code default for
+  /// workflow nodes is 2h, which is too tight for any non-trivial publish on a
+  /// large tenant. Override on the instance to use a different value.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -1068,8 +1074,14 @@ class PublishStep {
   /// Display name for the AE step.
   displayName: String = "Publish to Atlas"
 
-  /// Error handling for the publish node.
-  errorHandling: ErrorHandlingConfig? = null
+  /// Error handling for the publish node. Defaults to 24h
+  /// `startToCloseTimeoutSeconds`. AE's source-code default for workflow nodes
+  /// is 2h — too tight for any non-trivial publish on a large tenant (Cosmos
+  /// APP-1235, Fabric HYP-1189). Override to a different value as needed.
+  /// `heartbeatTimeoutSeconds` is invalid for the publish workflow node.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
 
   /// Optional lineage-publish sub-step. When set, adds a `"lineage-publish"`
   /// node after the main publish step.
