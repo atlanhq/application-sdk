@@ -162,6 +162,11 @@ class CloudStore:
     async def get_bytes(self, key: str) -> bytes:
         """Download a single object and return its contents as bytes.
 
+        Prefer ``download(key, output_dir)`` for any file large enough to
+        matter — ``get_bytes`` materialises the whole object in memory,
+        so it should be reserved for small payloads (config blobs, small
+        manifests).
+
         Args:
             key: Object key to download.
 
@@ -170,6 +175,13 @@ class CloudStore:
 
         Raises:
             StorageNotFoundError: If the key does not exist.
+            StorageError: For any other backend failure (network, perms,
+                etc.).
+
+        Example:
+            >>> store = CloudStore.from_credentials(credentials)
+            >>> manifest = await store.get_bytes("apps/my-app/manifest.json")
+            >>> data = json.loads(manifest)
         """
         try:
             result = await obs.get_async(self._store, key)
