@@ -526,6 +526,69 @@ jobs:
 
           echo "Test SDK Review (mothership) completed successfully (cost=${FINAL_COST})."
 
+      # The mothership sandbox cannot approve PRs in a way that satisfies
+      # the `require_code_owner_review` rule on `main`:
+      # `mothership-ai[bot]` is a GitHub App, and Apps cannot be listed in
+      # CODEOWNERS. So we mirror what claude.yml does for production
+      # `@sdk-review`: post the formal approval from the GHA runner with
+      # `GH_TOKEN=ORG_PAT_GITHUB`, which makes the approval show up as
+      # authored by `atlan-ci` (a regular User account that IS in
+      # CODEOWNERS). Branch-protection then accepts the approval.
+      - name: Approve PR as atlan-ci (counts as code-owner)
+        if: success() && steps.parse.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Re-read the just-posted summary comment to extract the verdict.
+          # The mothership orchestration (.mothership/pr-review/ORCHESTRATION.md
+          # §3e) posts a comment with the `<!-- TEST_SDK_REVIEW -->` HTML
+          # marker and a `### Verdict: <state>` line. If a prior summary
+          # exists from a re-trigger on the same PR head, the most recent
+          # comment wins.
+          #
+          # The jq pattern wraps `.[] | select(...)` in `[ ... ] | last` so
+          # we get the full body of the last matching comment as a single
+          # string. The pre-fix version piped a raw multiline body into
+          # `tail -1`, which truncated to the last LINE of the body and
+          # made the `### Verdict:` grep below silently miss every time.
+          # Same idiom as claude.yml:822-823 for the SDK_REVIEW_V2 marker.
+          SUMMARY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --paginate \
+            --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
+
+          if [ -z "$SUMMARY" ]; then
+            echo "::warning::No <!-- TEST_SDK_REVIEW --> summary comment found on PR #${PR_NUMBER} — skipping approval (the sandbox may have errored before posting)"
+            exit 0
+          fi
+
+          # Extract the verdict and normalize spaces → underscores.
+          # Same pattern as claude.yml:832-834: case-insensitive grep with
+          # flexible whitespace, then upper-case + collapse to underscores
+          # so "READY TO MERGE" → "READY_TO_MERGE".
+          RAW=$(printf '%s' "$SUMMARY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
+          VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
+          echo "Detected verdict: '${VERDICT}'"
+
+          case "$VERDICT" in
+            "READY_TO_MERGE")
+              APPROVE_BODY=$(printf '%s\n' \
+                "**mothership-ai (experimental SDK reviewer)** — verdict: READY TO MERGE." \
+                "" \
+                "Full review summary is in the comment posted on this PR." \
+                "Approval is posted via atlan-ci (ORG_PAT_GITHUB) so it satisfies the require_code_owner_review rule on main; mothership-ai[bot] is a GitHub App and cannot be a code owner." \
+                "")
+              gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
+              echo "Approved PR #${PR_NUMBER} as atlan-ci."
+              ;;
+            *)
+              echo "Verdict '${VERDICT}' is not READY TO MERGE — not posting an approval."
+              ;;
+          esac
+
       - name: Set test-sdk-review status to failure (only on workflow failure)
         if: failure() && steps.pr.outputs.head_sha != ''
         env:
