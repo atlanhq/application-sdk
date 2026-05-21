@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.2
-source-sha:    0389a455e9c5faef0dec511c3ee985fdc2691998
-source-date:   2026-05-21T10:40:37+01:00
+source-sha:    e07d814c6b27731e6c52db9ec8dd84b55dbb2bdd
+source-date:   2026-05-21T15:49:19+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -155,13 +155,6 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `task(func: F | None = None, ...)`
 - **Summary:** Decorator to mark a method as a task (Temporal activity).
 - **Defined in:** `application_sdk/app/task.py`
-
-#### Workflow handlers — `@workflow.signal` / `@workflow.query` / `@workflow.update`
-
-- **Import:** `from temporalio import workflow`
-- **Usage:** Decorate methods on an `App` subclass. The SDK's `generate_workflow_class` lifts handlers onto the generated workflow class so Temporal discovers them via `@workflow.defn`.
-- **Summary:** Pause/resume buttons, in-flight queries, and external signals can call directly into App methods. Handler state mutations are visible to the App's `run` coroutine on the same workflow execution. Validators (`@<update_name>.validator`) and dynamic handlers (`@workflow.update(dynamic=True)`) are supported.
-- **Defined in:** `application_sdk/app/base.py::_collect_handler_relays`
 
 ### Functions
 
