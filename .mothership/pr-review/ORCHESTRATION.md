@@ -72,7 +72,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
      echo "PR moved from $HEAD_SHA to $CURRENT_SHA since dispatch — aborting cleanly."
      # Submit a minimal review so the status check doesn't stay pending,
-     # then exit. A fresh @sdk-review on the new HEAD gets a new session.
+     # then exit. A fresh @test-sdk-review on the new HEAD gets a new session.
      exit 0
    fi
    ```
@@ -89,7 +89,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    - `.mothership/review.yaml`
 
 7. **§Intent Inference** — interpret `COMMENTER_INTENT` (free-form text
-   the human typed after `@sdk-review`) and set the mode for this run.
+   the human typed after `@test-sdk-review`) and set the mode for this run.
    The workflow does NOT parse commands — that is your job.
 
    Apply these rules in order; first match wins. If `COMMENTER_INTENT`
@@ -138,7 +138,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    git merge --abort
    ```
    Submit minimal review: "PR has merge conflicts. Please rebase or
-   comment `@sdk-review` after resolving conflicts." Label `needs-rebase`.
+   comment `@test-sdk-review` after resolving conflicts." Label `test-sdk-review-needs-rebase`.
    EXIT.
 
 9. **Pre-commit cleanup** (eliminate style noise before review):
@@ -337,7 +337,7 @@ done
 ```
 > **Large PR (N files, M lines).** Full review applied to X high-risk files.
 > Hunk review applied to Y medium-risk files. Z low-risk files skipped.
-> Re-run `@sdk-review` on specific files if needed.
+> Re-run `@test-sdk-review` on specific files if needed.
 ```
 
 #### Single-file overflow (any tier)
@@ -645,7 +645,15 @@ on subsequent runs; do NOT remove it or use the production
 **CI:** all passing | N failing
 **Models:** Claude Opus 4.6 (review) + GPT-5.3-codex (adversarial)
 **Cross-model agreement:** X/Y confirmed by both
+**Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
+
+The trailing **Run:** line is required on every summary. Substitute
+`<GHA_RUN_URL>` with the value passed in the prompt header. The link
+takes readers to the GitHub Actions run that produced this review,
+where they can inspect: the streamed event log (started → action →
+complete), the final `cost_usd`, the sandbox + session IDs, and any
+warnings. This is your audit trail — never omit it.
 
 ### 3f. Submit
 
@@ -665,9 +673,13 @@ gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 gh pr review "$PR_NUMBER" --repo "$REPO" --comment \
   --body-file /tmp/review-summary.md
 
-# Commit status — set the sdk-review check explicitly:
+# Commit status — set the test-sdk-review check explicitly.
+# This MUST be `test-sdk-review`, NOT `sdk-review` — the production
+# @sdk-review (claude.yml) reviewer owns the `sdk-review` context;
+# writing there would hijack its signal. The experimental reviewer
+# uses `test-sdk-review` so the two never collide on the merge box.
 gh api "repos/$REPO/statuses/$HEAD_SHA" \
-  -f context="sdk-review" \
+  -f context="test-sdk-review" \
   -f state="$STATE" \
   -f description="$DESCRIPTION"
 # where STATE ∈ success|failure|pending and DESCRIPTION ≤ 140 chars
@@ -771,7 +783,7 @@ Submit minimal:
 ```json
 {
   "approval_recommendation": "REQUEST_CHANGES",
-  "summary": "SDK Review could not complete: <reason>. Re-trigger with @sdk-review.",
+  "summary": "Test SDK Review (mothership) could not complete: <reason>. Re-trigger with @test-sdk-review.",
   "findings": []
 }
 ```
