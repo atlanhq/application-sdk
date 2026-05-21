@@ -135,6 +135,53 @@ class TestUploadDirectory:
             await upload(str(tmp_path), "errtest", store=store)
 
 
+class TestUploadRaiseOnEmpty:
+    """BLDX-1255: opt-in fail-loud when upload finds zero files.
+
+    Default is ``raise_on_empty=False`` (preserve historical silent-zero
+    behavior that incremental extractors rely on). Connectors hit by
+    silent-failure incidents (Tableau / Looker / Coalesce / dbt) opt in by
+    passing ``raise_on_empty=True``.
+    """
+
+    async def test_empty_dir_with_raise_on_empty_true_raises(
+        self, store, tmp_path
+    ) -> None:
+        from application_sdk.storage.errors import StorageEmptyUploadError
+
+        empty = tmp_path / "empty"
+        empty.mkdir()
+
+        with pytest.raises(StorageEmptyUploadError, match="contains zero files"):
+            await upload(str(empty), "myprefix", store=store, raise_on_empty=True)
+
+    async def test_empty_dir_with_raise_on_empty_false_returns_zero_count(
+        self, store, tmp_path
+    ) -> None:
+        """Regression pin: default behavior (silent zero) preserved when opt-in not set.
+
+        Incremental extractors that legitimately have quiet-day runs (no
+        new data since last watermark) rely on this. Flipping this would
+        break ~19 production connectors — see BLDX-1255 audit.
+        """
+        empty = tmp_path / "empty"
+        empty.mkdir()
+
+        out = await upload(str(empty), "myprefix", store=store)
+        assert out.ref.file_count == 0
+        assert out.synced is False
+
+    async def test_non_empty_dir_with_raise_on_empty_true_succeeds(
+        self, store, tmp_path
+    ) -> None:
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+
+        out = await upload(str(tmp_path), "myprefix", store=store, raise_on_empty=True)
+        assert out.ref.file_count == 2
+        assert out.synced is True
+
+
 class TestUploadStorageSubdir:
     """Tests for the storage_subdir parameter on upload."""
 

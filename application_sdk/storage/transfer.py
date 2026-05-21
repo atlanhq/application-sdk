@@ -179,6 +179,7 @@ async def upload(
     *,
     storage_subdir: str | None = None,
     skip_if_exists: bool = False,
+    raise_on_empty: bool = False,
     store: ObjectStore | None = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
@@ -201,6 +202,11 @@ async def upload(
         storage_subdir: Subdirectory name appended to the auto-generated run prefix.
             Ignored when *storage_path* is set.
         skip_if_exists: Skip files whose SHA-256 matches the stored sidecar.
+        raise_on_empty: When ``True``, raise ``StorageError`` if
+            *local_path* is a directory that contains zero files. Opt-in
+            fail-loud for connectors where empty output indicates a bug
+            (see BLDX-1255). Defaults to ``False`` to preserve historical
+            silent-zero behavior that incremental extractors rely on.
         store: Object store to use, or ``None`` to resolve from infrastructure.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
         max_concurrency: Maximum parallel uploads for directory mode
@@ -208,6 +214,13 @@ async def upload(
 
     Returns:
         :class:`~application_sdk.contracts.storage.UploadOutput`
+
+    Raises:
+        StorageError: If *local_path* does not exist or is neither a file
+            nor a directory.
+        StorageEmptyUploadError: When *raise_on_empty* is ``True`` and
+            *local_path* is a directory containing zero files
+            (category=DATA_INTEGRITY, audience=APP_OWNER, retryable=False).
     """
     from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         UploadOutput,
@@ -278,6 +291,29 @@ async def upload(
         sem = asyncio.Semaphore(max_concurrency)
 
         files = [p for p in src.rglob("*") if p.is_file()]
+
+        if raise_on_empty and not files:
+            # Opt-in fail-loud (BLDX-1255). Connectors hit by silent-zero
+            # failures pass ``raise_on_empty=True`` so an empty extract
+            # surfaces as a clear error here instead of propagating a
+            # ``file_count=0`` ``UploadOutput`` that downstream publish
+            # logic treats as success.
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                StorageEmptyUploadError,
+            )
+
+            raise StorageEmptyUploadError(
+                f"upload(local_path={local_path!r}): directory contains "
+                "zero files. Either the extract step produced no output, "
+                "or files were written to a different path than the one "
+                "passed here. If quiet-day empty uploads are expected "
+                "(e.g. incremental extracts with no new data), drop "
+                "``raise_on_empty=True``. Otherwise verify the extract "
+                "wrote files to the expected ``local_path``. See the "
+                "dbt / databricks / coalesce connectors for the "
+                "stream-uploaded-per-file workaround pattern.",
+                local_path=local_path,
+            )
 
         async def _bounded_upload(file_path: Path, key: str) -> bool:
             async with sem:
