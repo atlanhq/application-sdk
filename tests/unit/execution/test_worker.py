@@ -372,6 +372,50 @@ class TestCreateWorker:
 
         assert len(sandbox_configs) == 1
 
+    def test_max_concurrent_workflow_tasks_forwarded_when_set(self) -> None:
+        """When set, ``max_concurrent_workflow_tasks`` is forwarded to ``Worker(...)``."""
+
+        class _WFTaskCapApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, max_concurrent_workflow_tasks=1)
+
+        assert captured.get("max_concurrent_workflow_tasks") == 1
+
+    def test_max_concurrent_workflow_tasks_default_is_omitted(self) -> None:
+        """When ``None`` (default), the kwarg is not passed so Temporal's default applies."""
+
+        class _WFTaskDefaultApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+
+        assert "max_concurrent_workflow_tasks" not in captured
+
 
 class TestAppWorker:
     """Tests for AppWorker wrapper."""

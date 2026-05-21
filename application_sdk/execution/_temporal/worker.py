@@ -265,6 +265,7 @@ def create_worker(
     passthrough_modules: set[str] | None = None,
     service_name: str | None = None,
     max_concurrent_activities: int | None = None,
+    max_concurrent_workflow_tasks: int | None = None,
     graceful_shutdown_timeout_seconds: int | None = None,
     interceptors: list[TemporalInterceptor] | None = None,
     enable_pushgateway: bool = False,
@@ -293,6 +294,14 @@ def create_worker(
         passthrough_modules: Additional modules to pass through the sandbox.
         service_name: Service name for observability (traces/metrics).
         max_concurrent_activities: Maximum number of concurrent activity executions.
+        max_concurrent_workflow_tasks: Maximum number of in-flight workflow tasks
+            the worker will poll for at once. Each in-flight workflow task spins
+            up a workflow sandbox, so this also caps concurrent sandbox
+            initializations. Leave ``None`` to use Temporal's default. Set
+            explicitly when many short workflows trigger simultaneously (e.g. a
+            cron burst): excess sandboxes that can't reach activity-execution
+            progress trip Temporal's TMPRL1101 deadlock detector and bloat memory
+            via sandbox churn. The conservative pin is ``max_concurrent_activities``.
         graceful_shutdown_timeout_seconds: Seconds to allow in-flight activities to
             complete after SIGTERM before cancelling them.
         interceptors: Additional Temporal interceptors to register. Log /
@@ -474,6 +483,8 @@ def create_worker(
         max_heartbeat_throttle_interval=timedelta(seconds=10),
         graceful_shutdown_timeout=timedelta(seconds=graceful_shutdown_timeout_seconds),
     )
+    if max_concurrent_workflow_tasks is not None:
+        worker_kwargs["max_concurrent_workflow_tasks"] = max_concurrent_workflow_tasks
     if deployment_config is not None:
         worker_kwargs["deployment_config"] = deployment_config
 
