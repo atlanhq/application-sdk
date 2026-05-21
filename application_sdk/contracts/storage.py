@@ -32,7 +32,7 @@ class UploadInput(Input):
             ``artifacts/apps/`` prefix, not auto-cleaned).
         skip_if_exists: When ``True``, skip uploading files whose SHA-256
             hash already matches the stored value.  Defaults to ``False``.
-        raise_on_empty: When ``True``, raise ``StorageError`` if the upload
+        raise_on_empty: When ``True``, raise ``StorageEmptyUploadError`` if the upload
             completed with ``file_count == 0`` (i.e. ``local_path`` was an
             empty directory). Defaults to ``False`` to preserve historical
             silent-zero behavior that several incremental extractors rely
