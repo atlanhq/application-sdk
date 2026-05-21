@@ -132,6 +132,7 @@ jobs:
             --arg scan_mode "${SCAN_MODE}" \
             '{
               mode: "direct",
+              stream: true,
               source: "github-cron",
               source_id: $source_id,
               repositories: ["atlanhq/application-sdk"],
@@ -146,28 +147,86 @@ jobs:
               }
             }')
 
-          HTTP_STATUS=$(curl -sS -o /tmp/response.json -w "%{http_code}" \
-            --max-time 7200 \
+          # SSE streaming dispatch (sync mode 504s behind mothership's nginx;
+          # see test-sdk-review.yml for the full rationale).
+          EVENT=""
+          COMPLETED=0
+          ERRORED=0
+          STREAM_GOT_EVENT=0
+          FINAL_STATUS=""
+          FINAL_COST=""
+          FINAL_ERR_CODE=""
+          FINAL_ERR_MSG=""
+
+          while IFS= read -r line; do
+            case "$line" in
+              "") EVENT="" ;;
+              ":"*) ;;
+              "event: "*) EVENT="${line#event: }"; STREAM_GOT_EVENT=1 ;;
+              "id: "*) ;;
+              "data: "*)
+                DATA="${line#data: }"
+                case "$EVENT" in
+                  started)
+                    SESS=$(printf '%s' "$DATA" | jq -r '.session_id // empty' 2>/dev/null)
+                    SBX=$(printf '%s' "$DATA" | jq -r '.sandbox_id // empty' 2>/dev/null)
+                    echo "[started]   session=${SESS} sandbox=${SBX}"
+                    ;;
+                  action)
+                    AN=$(printf '%s' "$DATA" | jq -r '.action_name // empty' 2>/dev/null)
+                    [ -n "$AN" ] && echo "[action]    ${AN}"
+                    ;;
+                  thought) : ;;
+                  response) echo "[response]  (agent posted a response)" ;;
+                  elicitation)
+                    echo "[elicit]    sandbox requested user input — treating as error"
+                    ERRORED=1
+                    FINAL_ERR_CODE="elicitation"
+                    FINAL_ERR_MSG="Sandbox requires interactive input; cannot answer from GHA"
+                    ;;
+                  error)
+                    ERRORED=1
+                    FINAL_ERR_CODE=$(printf '%s' "$DATA" | jq -r '.code // "unknown"' 2>/dev/null)
+                    FINAL_ERR_MSG=$(printf '%s' "$DATA" | jq -r '.message // ""' 2>/dev/null)
+                    echo "[error]     code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
+                    ;;
+                  complete)
+                    COMPLETED=1
+                    FINAL_STATUS=$(printf '%s' "$DATA" | jq -r '.status // "unknown"' 2>/dev/null)
+                    FINAL_COST=$(printf '%s' "$DATA" | jq -r '.cost_usd // empty' 2>/dev/null)
+                    if [ "$FINAL_STATUS" = "error" ]; then
+                      FINAL_ERR_CODE=$(printf '%s' "$DATA" | jq -r '.error.code // "none"' 2>/dev/null)
+                      FINAL_ERR_MSG=$(printf '%s' "$DATA" | jq -r '.error.message // ""' 2>/dev/null)
+                    fi
+                    echo "[complete]  status=${FINAL_STATUS} cost_usd=${FINAL_COST}"
+                    ;;
+                  "") echo "[raw]       ${DATA:0:200}" ;;
+                esac
+                ;;
+              "<"*) echo "[html]      ${line}" ;;
+              *) echo "[unknown]   ${line}" ;;
+            esac
+          done < <(curl -sS -N --max-time 7200 \
             -X POST "${MOTHERSHIP_URL}/api/sandbox/execute" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${HARNESS_TOKEN}" \
-            -d "${PAYLOAD}")
+            -d "${PAYLOAD}" 2>&1)
 
-          echo "Dispatch HTTP status: ${HTTP_STATUS}"
-          jq -r '{session_id, sandbox_id, status, cost_usd, error}' \
-            /tmp/response.json 2>/dev/null || cat /tmp/response.json
-
-          if [ "${HTTP_STATUS}" != "200" ]; then
-            echo "::error::Mothership dispatch returned HTTP ${HTTP_STATUS}"
+          if [ "$ERRORED" = "1" ]; then
+            echo "::error::Sandbox error: code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
+            exit 1
+          fi
+          if [ "$STREAM_GOT_EVENT" = "0" ]; then
+            echo "::error::Stream ended without a single SSE event — likely VPN/network/proxy issue"
+            exit 1
+          fi
+          if [ "$COMPLETED" != "1" ]; then
+            echo "::error::Stream ended without a 'complete' event"
+            exit 1
+          fi
+          if [ "$FINAL_STATUS" != "completed" ]; then
+            echo "::error::Sandbox final status=${FINAL_STATUS} (expected 'completed')"
             exit 1
           fi
 
-          BODY_STATUS=$(jq -r '.status // "unknown"' /tmp/response.json 2>/dev/null || echo "unknown")
-          if [ "${BODY_STATUS}" != "completed" ]; then
-            ERR_CODE=$(jq -r '.error.code // "none"' /tmp/response.json 2>/dev/null || echo "none")
-            ERR_MSG=$(jq -r '.error.message // ""' /tmp/response.json 2>/dev/null || echo "")
-            echo "::error::Sandbox status=${BODY_STATUS} error.code=${ERR_CODE} message=${ERR_MSG}"
-            exit 1
-          fi
-
-          echo "SDK Evolution completed successfully."
+          echo "SDK Evolution completed successfully (cost=${FINAL_COST})."

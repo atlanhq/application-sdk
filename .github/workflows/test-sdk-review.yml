@@ -307,6 +307,7 @@ jobs:
             --argjson pr_number "${PR_NUMBER}" \
             '{
               mode: "direct",
+              stream: true,
               source: "github-pr-review",
               source_id: $source_id,
               session_id: $session_id,
@@ -328,35 +329,139 @@ jobs:
               }
             }')
 
-          # Sync dispatch — block until the sandbox finishes.
-          # max_timeout_seconds caps the sandbox at 2h; --max-time matches.
-          HTTP_STATUS=$(curl -sS -o /tmp/response.json -w "%{http_code}" \
-            --max-time 7200 \
+          # SSE streaming dispatch.
+          #
+          # Why streaming and not sync: mothership.atlan.dev is fronted by an
+          # nginx reverse proxy with a stock ~60s upstream-read timeout. A real
+          # sandbox run takes 10-30 minutes — long enough that sync mode
+          # always 504s. SSE keeps the connection alive via periodic events
+          # (thought / action / heartbeat) so nginx sees the upstream as
+          # responsive throughout.
+          #
+          # Wire format (per mothership/docs/reference/rover-direct-api.md):
+          #   id: N
+          #   event: <started|thought|action|response|elicitation|error|complete>
+          #   data: <json>
+          #   (blank line separates events)
+          #   : heartbeat   (comment line, every ~15s of silence)
+
+          # Parser state (the while loop runs in this shell via < <(...))
+          EVENT=""
+          COMPLETED=0
+          ERRORED=0
+          STREAM_GOT_EVENT=0
+          FINAL_STATUS=""
+          FINAL_COST=""
+          FINAL_ERR_CODE=""
+          FINAL_ERR_MSG=""
+          SESSION_FROM_STREAM=""
+          SANDBOX_FROM_STREAM=""
+
+          # curl -N: no buffering (required for SSE).
+          # --max-time matches mothership's max_timeout_seconds upper bound.
+          # 2>&1: surface curl's own diagnostics into the same stream.
+          while IFS= read -r line; do
+            case "$line" in
+              "")
+                # Blank line — end of one SSE event block. Reset event type.
+                EVENT=""
+                ;;
+              ":"*)
+                # SSE comment / heartbeat — ignore but note we're still alive.
+                ;;
+              "event: "*)
+                EVENT="${line#event: }"
+                STREAM_GOT_EVENT=1
+                ;;
+              "id: "*)
+                # ID line — informational only; ignore.
+                ;;
+              "data: "*)
+                DATA="${line#data: }"
+                case "$EVENT" in
+                  started)
+                    SESSION_FROM_STREAM=$(printf '%s' "$DATA" | jq -r '.session_id // empty' 2>/dev/null)
+                    SANDBOX_FROM_STREAM=$(printf '%s' "$DATA" | jq -r '.sandbox_id // empty' 2>/dev/null)
+                    echo "[started]   session=${SESSION_FROM_STREAM} sandbox=${SANDBOX_FROM_STREAM}"
+                    ;;
+                  action)
+                    ACTION_NAME=$(printf '%s' "$DATA" | jq -r '.action_name // empty' 2>/dev/null)
+                    [ -n "$ACTION_NAME" ] && echo "[action]    ${ACTION_NAME}"
+                    ;;
+                  thought)
+                    # Reasoning steps come every ~1s — too noisy for the log.
+                    # Keep the heartbeat visible without dumping content.
+                    :
+                    ;;
+                  response)
+                    echo "[response]  (agent posted a response)"
+                    ;;
+                  elicitation)
+                    echo "[elicit]    sandbox requested user input — treating as error"
+                    ERRORED=1
+                    FINAL_ERR_CODE="elicitation"
+                    FINAL_ERR_MSG="Sandbox requires interactive input; cannot answer from GHA"
+                    ;;
+                  error)
+                    ERRORED=1
+                    FINAL_ERR_CODE=$(printf '%s' "$DATA" | jq -r '.code // "unknown"' 2>/dev/null)
+                    FINAL_ERR_MSG=$(printf '%s' "$DATA" | jq -r '.message // ""' 2>/dev/null)
+                    echo "[error]     code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
+                    ;;
+                  complete)
+                    COMPLETED=1
+                    FINAL_STATUS=$(printf '%s' "$DATA" | jq -r '.status // "unknown"' 2>/dev/null)
+                    FINAL_COST=$(printf '%s' "$DATA" | jq -r '.cost_usd // empty' 2>/dev/null)
+                    # If complete carries error details (status=error), capture them.
+                    if [ "$FINAL_STATUS" = "error" ]; then
+                      FINAL_ERR_CODE=$(printf '%s' "$DATA" | jq -r '.error.code // "none"' 2>/dev/null)
+                      FINAL_ERR_MSG=$(printf '%s' "$DATA" | jq -r '.error.message // ""' 2>/dev/null)
+                    fi
+                    echo "[complete]  status=${FINAL_STATUS} cost_usd=${FINAL_COST}"
+                    ;;
+                  "")
+                    # data: without preceding event: → could be an HTML error
+                    # body from nginx. Print first 200 chars and move on; the
+                    # post-loop check will fail if we never get a real event.
+                    echo "[raw]       ${DATA:0:200}"
+                    ;;
+                esac
+                ;;
+              "<"*)
+                # Looks like HTML — almost certainly an nginx error page.
+                # Print verbatim so we can diagnose.
+                echo "[html]      ${line}"
+                ;;
+              *)
+                # Unknown line shape — print so we don't lose information.
+                echo "[unknown]   ${line}"
+                ;;
+            esac
+          done < <(curl -sS -N --max-time 7200 \
             -X POST "${MOTHERSHIP_URL}/api/sandbox/execute" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${HARNESS_TOKEN}" \
-            -d "${PAYLOAD}")
+            -d "${PAYLOAD}" 2>&1)
 
-          echo "Dispatch HTTP status: ${HTTP_STATUS}"
-          # Don't echo the full response — it may contain Claude's reasoning.
-          jq -r '{session_id, sandbox_id, status, cost_usd, error}' \
-            /tmp/response.json 2>/dev/null || cat /tmp/response.json
-
-          if [ "${HTTP_STATUS}" != "200" ]; then
-            echo "::error::Mothership dispatch returned HTTP ${HTTP_STATUS}"
+          # Stream ended. Decide outcome.
+          if [ "$ERRORED" = "1" ]; then
+            echo "::error::Sandbox error: code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
+            exit 1
+          fi
+          if [ "$STREAM_GOT_EVENT" = "0" ]; then
+            echo "::error::Stream ended without a single SSE event — likely VPN/network/proxy issue"
+            exit 1
+          fi
+          if [ "$COMPLETED" != "1" ]; then
+            echo "::error::Stream ended without a 'complete' event"
+            exit 1
+          fi
+          if [ "$FINAL_STATUS" != "completed" ]; then
+            echo "::error::Sandbox final status=${FINAL_STATUS} (expected 'completed')"
             exit 1
           fi
 
-          # Body status check: completed | error | streaming | accepted.
-          BODY_STATUS=$(jq -r '.status // "unknown"' /tmp/response.json 2>/dev/null || echo "unknown")
-          if [ "${BODY_STATUS}" != "completed" ]; then
-            ERR_CODE=$(jq -r '.error.code // "none"' /tmp/response.json 2>/dev/null || echo "none")
-            ERR_MSG=$(jq -r '.error.message // ""' /tmp/response.json 2>/dev/null || echo "")
-            echo "::error::Sandbox status=${BODY_STATUS} error.code=${ERR_CODE} message=${ERR_MSG}"
-            exit 1
-          fi
-
-          echo "Test SDK Review (mothership) completed successfully."
+          echo "Test SDK Review (mothership) completed successfully (cost=${FINAL_COST})."
 
       - name: Set test-sdk-review status to failure (only on workflow failure)
         if: failure() && steps.pr.outputs.head_sha != ''
