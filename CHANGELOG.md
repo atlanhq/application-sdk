@@ -1,5 +1,28 @@
 # Changelog
 
+## v3.13.0 (May 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.12.2...v3.13.0
+
+### Features
+
+- enable Temporal UI in embedded dev runtime (#1813) (by @fyzanshaik-atlan in [b450780](https://github.com/atlanhq/application-sdk/commit/b450780))
+- metrics - add classified workflow failure counter for actionable alerts (#1810) (by @anuj-atlan in [f8032a1](https://github.com/atlanhq/application-sdk/commit/f8032a1))
+- expose max_concurrent_workflow_tasks on create_worker (BLDX-1282) (#1820) (by @Aryamanz29 in [86b23cd](https://github.com/atlanhq/application-sdk/commit/86b23cd))
+- opt-in raise_on_empty on UploadInput for fail-loud-on-zero-files (BLDX-1255) (#1821) (by @Aryamanz29 in [8d5bd6b](https://github.com/atlanhq/application-sdk/commit/8d5bd6b))
+- fix raise_on_empty arg docstring in transfer.py (BLDX-1255) (#1822) (by @cmgrote in [e4a6ac2](https://github.com/atlanhq/application-sdk/commit/e4a6ac2))
+- runtime interactions (@signal/@query/@update) on App subclasses, re-exported from application_sdk.app (BLDX-1283) (#1819) (by @Aryamanz29 in [4204b22](https://github.com/atlanhq/application-sdk/commit/4204b22))
+
+### Bug Fixes
+
+- suppress health/ready/metrics logs across mounts (BLDX-1292) (#1812) (by @saig214 in [9b76f46](https://github.com/atlanhq/application-sdk/commit/9b76f46))
+- derive Segment userId per-tenant from labels (#1818) (by @anurag-atlan in [537ca06](https://github.com/atlanhq/application-sdk/commit/537ca06))
+- hard-pin daft to 0.7.3 to prevent concurrency regression (#1823) (by @cmgrote in [797326f](https://github.com/atlanhq/application-sdk/commit/797326f))
+- classify dict-shaped FailureDetails on workflow side (#1825) (by @anuj-atlan in [1a965ca](https://github.com/atlanhq/application-sdk/commit/1a965ca))
+- scope git describe to SDK version tags only (#1829) (by @cmgrote in [27dc5a4](https://github.com/atlanhq/application-sdk/commit/27dc5a4))
+- pin canonical storage paths so publish can discover them (BLDX-1281) (#1801) (by @Aryamanz29 in [91c76ce](https://github.com/atlanhq/application-sdk/commit/91c76ce))
+
+
 ## v3.12.2 (May 20, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.12.1...v3.12.2
