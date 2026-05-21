@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.2
-source-sha:    e07d814c6b27731e6c52db9ec8dd84b55dbb2bdd
-source-date:   2026-05-21T15:49:19+05:30
+source-sha:    dc6206e8f49917c2ac8abde36529c3a60de64940
+source-date:   2026-05-21T12:37:23+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 17 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 25 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
@@ -158,9 +158,49 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 ### Functions
 
+#### `HandlerUnfinishedPolicy`
+
+- **Import:** `from application_sdk.app import HandlerUnfinishedPolicy`
+- **Summary:** _(no docstring)_
+
 #### `mcp_tool`
 
 - **Import:** `from application_sdk.app import mcp_tool`
+- **Summary:** _(no docstring)_
+
+#### `now`
+
+- **Import:** `from application_sdk.app import now`
+- **Summary:** _(no docstring)_
+
+#### `query`
+
+- **Import:** `from application_sdk.app import query`
+- **Summary:** _(no docstring)_
+
+#### `signal`
+
+- **Import:** `from application_sdk.app import signal`
+- **Summary:** _(no docstring)_
+
+#### `sleep`
+
+- **Import:** `from application_sdk.app import sleep`
+- **Summary:** _(no docstring)_
+
+#### `update`
+
+- **Import:** `from application_sdk.app import update`
+- **Summary:** _(no docstring)_
+
+#### `uuid4`
+
+- **Import:** `from application_sdk.app import uuid4`
+- **Summary:** _(no docstring)_
+
+#### `wait_condition`
+
+- **Import:** `from application_sdk.app import wait_condition`
 - **Summary:** _(no docstring)_
 
 ## `application_sdk.clients`
