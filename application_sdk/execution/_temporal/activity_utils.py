@@ -194,7 +194,7 @@ def get_object_store_prefix(path: str) -> str:
         separator and convert remaining backslashes.
         """
         _drive, rest = os.path.splitdrive(p)
-        return rest.lstrip(os.path.sep).lstrip("/").replace(os.path.sep, "/")
+        return rest.replace(os.path.sep, "/").strip("/")
 
     # Check if path is under TEMPORARY_PATH
     try:

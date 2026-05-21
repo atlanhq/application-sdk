@@ -997,6 +997,14 @@ class TestGetObjectStorePrefixCrossPlatform:
             assert not out.startswith("/")
             assert "\\" not in out
 
+    def test_strips_trailing_slash(self):
+        """Trailing slash must not leak into object-store keys."""
+        from application_sdk.execution import get_object_store_prefix
+
+        out = get_object_store_prefix("datasets/sales/2024/")
+        assert not out.endswith("/"), f"trailing slash leaked: {out!r}"
+        assert out == "datasets/sales/2024"
+
 
 class TestTransformInputLegacyFields:
     """Sanity tests for the deprecated-but-retained fields on
