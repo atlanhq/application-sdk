@@ -1,0 +1,383 @@
+# Test SDK Review — experimental mothership Rover-based reviewer.
+#
+# Runs in PARALLEL with the production @sdk-review (claude.yml) so the
+# team can compare outputs. Triggered only by the explicit
+# @test-sdk-review mention; never by @sdk-review.
+#
+# All SDK-specific review behavior (orchestration, agents, rules, severity
+# rubric, guardrails, modes) lives in application-sdk/.mothership/pr-review/
+# and is read at runtime by the sandbox after the repo is cloned.
+#
+# Mothership provides: Cloudflare sandbox runtime, Claude Code CLI, repo
+# clone, GitHub token injection.
+# This repo provides: every detail of how to review SDK PRs.
+#
+# Trigger surface:
+#   @test-sdk-review                       → Standard review. Orchestration
+#                                            picks the right mode based on
+#                                            PR state and previous review
+#                                            history.
+#   @test-sdk-review <free-form text>      → Same, but the trailing text is
+#                                            forwarded to the orchestration
+#                                            as COMMENTER_INTENT. The agent
+#                                            decides what to do (auto-fix,
+#                                            dispute a finding, stop,
+#                                            override, extra focus area,
+#                                            etc.) by reading the text.
+#                                            No command enumeration here.
+#
+# Side-effects are namespaced separately from the production reviewer:
+#   commit-status context  = test-sdk-review (not sdk-review)
+#   labels                 = test-sdk-review-approved, test-sdk-review-needs-human
+#   comment marker         = <!-- TEST_SDK_REVIEW --> (orchestration uses
+#                            <!-- SDK_REVIEW_V2 --> on the production path)
+#
+# Required configuration:
+#   secrets.HARNESS_TOKEN              Bearer token for /api/sandbox/execute.
+#                                      Must be a valid entry in mothership's
+#                                      SANDBOX_API_KEYS map under caller_id
+#                                      "application-sdk".
+#   secrets.GLOBALPROTECT_USERNAME     VPN auth (mothership.atlan.dev is on
+#   secrets.GLOBALPROTECT_PASSWORD     the private network).
+#   vars.GLOBALPROTECT_PORTAL_URL      VPN portal URL.
+#   vars.MOTHERSHIP_URL                e.g. https://mothership.atlan.dev
+
+name: Test SDK Review (mothership)
+
+on:
+  issue_comment:
+    types: [created]
+  # Manual trigger for pre-merge testing on feature branches.
+  # GitHub only runs `issue_comment`-triggered workflows from the default
+  # branch, so we expose a workflow_dispatch path that takes a PR number
+  # and an optional commenter_intent string. Useful for verifying the
+  # workflow on `sdk-mothership-migration` before #1485 lands.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review with the experimental mothership Rover path'
+        required: true
+        type: string
+      commenter_intent:
+        description: 'Free-form intent (empty = standard review)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  statuses: write
+  checks: write
+
+jobs:
+  dispatch:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (
+        github.event.issue.pull_request
+        && contains(github.event.comment.body, '@test-sdk-review')
+        && (
+          github.event.comment.author_association == 'OWNER'
+          || github.event.comment.author_association == 'MEMBER'
+          || github.event.comment.author_association == 'COLLABORATOR'
+        )
+      )
+    runs-on: ubuntu-latest
+    # Total budget: 5 min for orient + retries + dispatch.
+    # The sandbox itself runs for up to 2h (max_timeout_seconds: 7200),
+    # but `curl --max-time 7200` blocks this job for that duration.
+    timeout-minutes: 130
+    concurrency:
+      group: test-sdk-review-${{ github.event.issue.number || inputs.pr_number }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repo (for local globalprotect-connect action)
+        uses: actions/checkout@v4
+
+      - name: Parse comment intent
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isDispatch = context.eventName === 'workflow_dispatch';
+            let intent = '';
+            let commenter = '';
+            let commentId = '';
+            let prNumber = '';
+
+            if (isDispatch) {
+              prNumber = context.payload.inputs.pr_number;
+              intent = context.payload.inputs.commenter_intent || '';
+              commenter = context.actor;
+              commentId = '';
+            } else {
+              const raw = context.payload.comment.body || '';
+              intent = raw
+                .replace(/@test-sdk-review/gi, '')
+                .replace(/^\s+|\s+$/g, '');
+              commenter = context.payload.comment.user.login;
+              commentId = String(context.payload.comment.id);
+              prNumber = String(context.payload.issue.number);
+            }
+
+            core.setOutput('commenter', commenter);
+            core.setOutput('comment_id', commentId);
+            core.setOutput('pr_number', prNumber);
+            core.setOutput('commenter_intent', intent);
+
+      - name: React to comment + ensure labels exist
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Only react when triggered by a real comment (workflow_dispatch
+            // has no comment to react to).
+            if (context.eventName === 'issue_comment') {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: 'eyes',
+              });
+            }
+
+            // Labels are prefixed `test-` so they don't collide with the
+            // production reviewer's labels (sdk-review-approved, etc.)
+            const labels = [
+              { name: 'test-sdk-review-approved', color: '0e8a16', description: 'Experimental SDK review (mothership) approved' },
+              { name: 'test-sdk-review-needs-human', color: 'd93f0b', description: 'Experimental SDK review (mothership) needs human decision' },
+              { name: 'test-sdk-review-needs-rebase', color: 'e4e669', description: 'Experimental SDK review (mothership) blocked on rebase conflicts' },
+            ];
+            for (const l of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo, ...l,
+                });
+              } catch (e) {
+                if (e.status !== 422) throw e;
+              }
+            }
+
+      - name: Fetch PR head metadata
+        id: pr
+        env:
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt(process.env.PR_NUMBER, 10),
+            });
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('head_sha_short', pr.head.sha.slice(0, 8));
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('base_ref', pr.base.ref);
+            core.setOutput('html_url', pr.html_url);
+
+      - name: Set test-sdk-review status to pending
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: process.env.HEAD_SHA,
+              state: 'pending',
+              context: 'test-sdk-review',
+              description: 'Test SDK Review (mothership) in progress (up to ~2h)',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+
+      - name: Connect to VPN (attempt 1/3)
+        id: vpn1
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 2/3)
+        id: vpn2
+        if: steps.vpn1.outcome == 'failure'
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 3/3)
+        if: steps.vpn2.outcome == 'failure'
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Dispatch to mothership Rover Direct API
+        env:
+          MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
+          HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          COMMENTER: ${{ steps.parse.outputs.commenter }}
+          COMMENTER_INTENT: ${{ steps.parse.outputs.commenter_intent }}
+          COMMENT_ID: ${{ steps.parse.outputs.comment_id }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          HEAD_SHA_SHORT: ${{ steps.pr.outputs.head_sha_short }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          PR_URL: ${{ steps.pr.outputs.html_url }}
+          REPO_FULL_NAME: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Mothership reachability check (5 retries).
+          for attempt in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+              "${MOTHERSHIP_URL}/health" 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Mothership reachable (attempt $attempt)"
+              break
+            fi
+            echo "Mothership unreachable (status=$STATUS), retry $attempt/5"
+            sleep 5
+          done
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cannot reach mothership after 5 attempts. VPN may have failed."
+            exit 1
+          fi
+
+          # Build the prompt the sandbox will run.
+          # The sandbox clones the repo into /workspace/application-sdk on
+          # the PR head ref. Our ORCHESTRATION.md drives everything from
+          # there.
+          PROMPT=$(cat <<PROMPT_END
+          You are running an SDK PR review in a Cloudflare sandbox.
+
+          Repository cloned at: /workspace/application-sdk (on the PR head ref).
+          Working directory: cd /workspace/application-sdk
+
+          Read and follow the orchestration:
+            .mothership/pr-review/ORCHESTRATION.md
+            .mothership/pr-review/CLAUDE.md
+
+          PR context (use these values verbatim — do not re-derive):
+            PR_NUMBER:        ${PR_NUMBER}
+            PR_URL:           ${PR_URL}
+            REPO:             ${REPO_FULL_NAME}
+            HEAD_SHA:         ${HEAD_SHA}
+            BASE_REF:         ${BASE_REF}
+            HEAD_REF:         ${HEAD_REF}
+            COMMENTER:        ${COMMENTER}
+            COMMENT_ID:       ${COMMENT_ID}
+            COMMENTER_INTENT: ${COMMENTER_INTENT}
+
+          GITHUB_TOKEN is pre-injected by the sandbox. Use \`gh\` for all
+          GitHub operations.
+
+          Interpret COMMENTER_INTENT yourself — see ORCHESTRATION.md
+          §Intent Inference. If empty, run a standard review.
+          PROMPT_END
+          )
+
+          # Deterministic session_id ties this dispatch to the PR head.
+          # A new commit produces a new HEAD_SHA → fresh sandbox.
+          # A re-trigger on the same HEAD resumes the same sandbox session.
+          SESSION_ID="test-sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}"
+
+          # Build the dispatch payload.
+          PAYLOAD=$(jq -n \
+            --arg session_id "${SESSION_ID}" \
+            --arg source_id "${REPO_FULL_NAME}#${PR_NUMBER}" \
+            --arg base_branch "${HEAD_REF}" \
+            --arg prompt "${PROMPT}" \
+            --arg pr_url "${PR_URL}" \
+            --arg head_sha "${HEAD_SHA}" \
+            --arg head_ref "${HEAD_REF}" \
+            --arg base_ref "${BASE_REF}" \
+            --arg commenter "${COMMENTER}" \
+            --arg commenter_intent "${COMMENTER_INTENT}" \
+            --arg comment_id "${COMMENT_ID}" \
+            --argjson pr_number "${PR_NUMBER}" \
+            '{
+              mode: "direct",
+              source: "github-pr-review",
+              source_id: $source_id,
+              session_id: $session_id,
+              repositories: ["atlanhq/application-sdk"],
+              base_branch: $base_branch,
+              snapshot: "_base",
+              prompt: $prompt,
+              max_timeout_seconds: 7200,
+              idle_timeout_seconds: 1800,
+              metadata: {
+                pr_number: $pr_number,
+                pr_url: $pr_url,
+                head_sha: $head_sha,
+                head_ref: $head_ref,
+                base_ref: $base_ref,
+                commenter: $commenter,
+                commenter_intent: $commenter_intent,
+                comment_id: $comment_id
+              }
+            }')
+
+          # Sync dispatch — block until the sandbox finishes.
+          # max_timeout_seconds caps the sandbox at 2h; --max-time matches.
+          HTTP_STATUS=$(curl -sS -o /tmp/response.json -w "%{http_code}" \
+            --max-time 7200 \
+            -X POST "${MOTHERSHIP_URL}/api/sandbox/execute" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${HARNESS_TOKEN}" \
+            -d "${PAYLOAD}")
+
+          echo "Dispatch HTTP status: ${HTTP_STATUS}"
+          # Don't echo the full response — it may contain Claude's reasoning.
+          jq -r '{session_id, sandbox_id, status, cost_usd, error}' \
+            /tmp/response.json 2>/dev/null || cat /tmp/response.json
+
+          if [ "${HTTP_STATUS}" != "200" ]; then
+            echo "::error::Mothership dispatch returned HTTP ${HTTP_STATUS}"
+            exit 1
+          fi
+
+          # Body status check: completed | error | streaming | accepted.
+          BODY_STATUS=$(jq -r '.status // "unknown"' /tmp/response.json 2>/dev/null || echo "unknown")
+          if [ "${BODY_STATUS}" != "completed" ]; then
+            ERR_CODE=$(jq -r '.error.code // "none"' /tmp/response.json 2>/dev/null || echo "none")
+            ERR_MSG=$(jq -r '.error.message // ""' /tmp/response.json 2>/dev/null || echo "")
+            echo "::error::Sandbox status=${BODY_STATUS} error.code=${ERR_CODE} message=${ERR_MSG}"
+            exit 1
+          fi
+
+          echo "Test SDK Review (mothership) completed successfully."
+
+      - name: Set test-sdk-review status to failure (only on workflow failure)
+        if: failure() && steps.pr.outputs.head_sha != ''
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Only fires when an earlier step failed AND the orchestration
+            // never got to post its own terminal state. The orchestration
+            // (Phase 3) sets success/failure based on the actual verdict;
+            // this is a safety net for "workflow died before mothership
+            // returned" cases (VPN failure, 401 on the API key, network
+            // dropped during the 2h block). Without this, the status would
+            // stay pending forever.
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: process.env.HEAD_SHA,
+              state: 'failure',
+              context: 'test-sdk-review',
+              description: 'Test SDK Review (mothership) workflow failed — see logs',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });

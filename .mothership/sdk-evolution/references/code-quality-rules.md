@@ -35,7 +35,7 @@ def analyze(self):
 
 ### Import Ordering (isort, black profile)
 
-Order: stdlib -> third-party -> local. Separated by blank lines. Enforced by isort with `profile = "black"`.
+Order: stdlib → third-party → local. Separated by blank lines. Enforced by isort with `profile = "black"`.
 
 **Flag:**
 - Mixed stdlib and third-party imports in same block
@@ -100,29 +100,11 @@ logger.debug("Result: %s", result)
 
 ### Structured Context over String Interpolation
 
-**Two orthogonal rules — do not conflate them:**
-
-1. **Message argument MUST use %-style** (enforced by ruff G004 — never f-strings)
-2. **Additional structured context kwargs are VALID and ENCOURAGED** for Loki/Grafana indexing
-
-Both can appear in the same call:
-
 ```python
-# BAD — f-string in message (G004 violation)
-logger.info(f"Fetched {count} records from {source}")
-
-# GOOD — %-style message + structured kwargs (BOTH are correct simultaneously)
-logger.info(
-    "Fetched %d records",
-    count,
-    source=source,
-    duration_seconds=duration,
-)
-
-# ALSO GOOD — %-style only, no kwargs
+# BAD — context buried in string
 logger.info("Fetched %d records from %s in %.2fs", count, source, duration)
 
-# ALSO GOOD — static message + kwargs only
+# GOOD — structured kwargs for Loki/Grafana indexing
 logger.info(
     "Fetched records",
     record_count=count,
@@ -131,7 +113,7 @@ logger.info(
 )
 ```
 
-The SDK's `AtlanLoggerAdapter` wraps loguru which supports structured keyword args. When reviewing, flag f-strings in log messages (G004) but do NOT flag structured kwargs — they are valid and improve observability.
+Note: The SDK uses both patterns. When reviewing, flag cases where structured kwargs would clearly improve observability (high-cardinality values, values you'd want to filter/aggregate on).
 
 ---
 
@@ -225,9 +207,9 @@ except ConnectionError as e:
 ### No Sync in Async
 
 Flag synchronous blocking calls inside `async def` methods:
-- `time.sleep()` -> `asyncio.sleep()`
-- `open().read()` for large files -> `aiofiles` or `run_in_thread`
-- `requests.get()` -> `httpx` async client
+- `time.sleep()` → `asyncio.sleep()`
+- `open().read()` for large files → `aiofiles` or `run_in_thread`
+- `requests.get()` → `httpx` async client
 
 ### Task Context Required
 
