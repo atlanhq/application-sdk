@@ -158,50 +158,68 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 ### Functions
 
-#### `HandlerUnfinishedPolicy`
-
-- **Import:** `from application_sdk.app import HandlerUnfinishedPolicy`
-- **Summary:** _(no docstring)_
-
 #### `mcp_tool`
 
 - **Import:** `from application_sdk.app import mcp_tool`
 - **Summary:** _(no docstring)_
 
+### Constants and Enums
+
+#### `InteractionUnfinishedPolicy`
+
+- **Import:** `from application_sdk.app import InteractionUnfinishedPolicy`
+- **Signature:** `InteractionUnfinishedPolicy`
+- **Summary:** Policy applied to in-flight runtime interactions when a workflow exits.
+- **Defined in:** `application_sdk/app/__init__.py`
+
 #### `now`
 
 - **Import:** `from application_sdk.app import now`
-- **Summary:** _(no docstring)_
+- **Signature:** `now`
+- **Summary:** Return the current time from the workflow's perspective (deterministic).
+- **Defined in:** `application_sdk/app/__init__.py`
 
 #### `query`
 
 - **Import:** `from application_sdk.app import query`
-- **Summary:** _(no docstring)_
+- **Signature:** `query`
+- **Summary:** Declare a ``@query`` runtime interaction that reads live state without mutation.
+- **Defined in:** `application_sdk/app/__init__.py`
 
 #### `signal`
 
 - **Import:** `from application_sdk.app import signal`
-- **Summary:** _(no docstring)_
+- **Signature:** `signal`
+- **Summary:** Declare a ``@signal`` runtime interaction on an App subclass.
+- **Defined in:** `application_sdk/app/__init__.py`
 
 #### `sleep`
 
 - **Import:** `from application_sdk.app import sleep`
-- **Summary:** _(no docstring)_
+- **Signature:** `sleep`
+- **Summary:** Sleep for a given duration inside a workflow (deterministic).
+- **Defined in:** `application_sdk/app/__init__.py`
 
 #### `update`
 
 - **Import:** `from application_sdk.app import update`
-- **Summary:** _(no docstring)_
+- **Signature:** `update`
+- **Summary:** Declare a ``@update`` runtime interaction that mutates state and returns a typed response.
+- **Defined in:** `application_sdk/app/__init__.py`
 
 #### `uuid4`
 
 - **Import:** `from application_sdk.app import uuid4`
-- **Summary:** _(no docstring)_
+- **Signature:** `uuid4`
+- **Summary:** Generate a determinism-safe v4 UUID inside a workflow.
+- **Defined in:** `application_sdk/app/__init__.py`
 
 #### `wait_condition`
 
 - **Import:** `from application_sdk.app import wait_condition`
-- **Summary:** _(no docstring)_
+- **Signature:** `wait_condition`
+- **Summary:** Suspend ``run()`` or a runtime interaction until a predicate becomes ``True``.
+- **Defined in:** `application_sdk/app/__init__.py`
 
 ## `application_sdk.clients`
 
