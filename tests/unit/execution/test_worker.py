@@ -252,6 +252,71 @@ class TestCreateWorker:
         with pytest.raises(WorkerInterceptorDuplicateError):
             create_worker(client, interceptors=[TraceInterceptor()])
 
+    # ── max_concurrent_workflow_tasks (BLDX-1282) ─────────────────────────
+
+    def test_max_concurrent_workflow_tasks_forwarded_when_set(self) -> None:
+        """When set, max_concurrent_workflow_tasks reaches Temporal's Worker(...)."""
+
+        class _MCWTApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, max_concurrent_workflow_tasks=5)
+
+        assert captured["max_concurrent_workflow_tasks"] == 5
+
+    def test_max_concurrent_workflow_tasks_omitted_when_none(self) -> None:
+        """When None (default), the kwarg is NOT forwarded — leaves Temporal's default in effect."""
+
+        class _MCWTDefaultApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+
+        # Critical: passing None would override Temporal's default with None
+        # and break worker construction. The param must be absent entirely.
+        assert "max_concurrent_workflow_tasks" not in captured
+
+    def test_max_concurrent_workflow_tasks_in_start_event_params(self) -> None:
+        """The configured value lands in worker_start observability params."""
+
+        class _MCWTObsApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            return_value=mock.MagicMock(),
+        ):
+            app_worker = create_worker(client, max_concurrent_workflow_tasks=3)
+
+        assert app_worker._start_event_params["max_concurrent_workflow_tasks"] == 3
+
     def test_sdr_workflows_skipped_when_no_handler(self) -> None:
         """SDR registration is silently skipped when no Handler is provided."""
 

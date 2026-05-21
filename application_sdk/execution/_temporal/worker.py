@@ -189,6 +189,7 @@ async def _emit_worker_start_event(
     workflow_count: int,
     activity_count: int,
     max_concurrent_activities: int,
+    max_concurrent_workflow_tasks: int | None = None,
     host: str = "",
     namespace: str = "",
     build_id: str = "",
@@ -228,6 +229,7 @@ async def _emit_worker_start_event(
         port=port_part,
         connection_string=host,
         max_concurrent_activities=max_concurrent_activities,
+        max_concurrent_workflow_tasks=max_concurrent_workflow_tasks,
         workflow_count=workflow_count,
         activity_count=activity_count,
         build_id=build_id or None,
@@ -265,6 +267,7 @@ def create_worker(
     passthrough_modules: set[str] | None = None,
     service_name: str | None = None,
     max_concurrent_activities: int | None = None,
+    max_concurrent_workflow_tasks: int | None = None,
     graceful_shutdown_timeout_seconds: int | None = None,
     interceptors: list[TemporalInterceptor] | None = None,
     enable_pushgateway: bool = False,
@@ -293,6 +296,15 @@ def create_worker(
         passthrough_modules: Additional modules to pass through the sandbox.
         service_name: Service name for observability (traces/metrics).
         max_concurrent_activities: Maximum number of concurrent activity executions.
+        max_concurrent_workflow_tasks: Maximum number of in-flight workflow task
+            pollers, which bounds the number of workflow sandboxes the worker
+            spins up concurrently. Leave ``None`` to use Temporal's default. Pin
+            this when many workflows fire simultaneously (e.g. cron bursts) and
+            the worker has limited activity capacity — excess sandboxes sitting
+            idle past the deadlock-detection timeout trip TMPRL1101 and bloat
+            resident memory. A common AE-derived heuristic is to pin it to the
+            same value as ``max_concurrent_activities`` so the active sandbox
+            count stays bounded by what the worker can actually drain.
         graceful_shutdown_timeout_seconds: Seconds to allow in-flight activities to
             complete after SIGTERM before cancelling them.
         interceptors: Additional Temporal interceptors to register. Log /
@@ -474,6 +486,10 @@ def create_worker(
         max_heartbeat_throttle_interval=timedelta(seconds=10),
         graceful_shutdown_timeout=timedelta(seconds=graceful_shutdown_timeout_seconds),
     )
+    # Only forward max_concurrent_workflow_tasks when explicitly set; passing
+    # None would override Temporal's default with None and crash the worker.
+    if max_concurrent_workflow_tasks is not None:
+        worker_kwargs["max_concurrent_workflow_tasks"] = max_concurrent_workflow_tasks
     if deployment_config is not None:
         worker_kwargs["deployment_config"] = deployment_config
 
@@ -494,6 +510,7 @@ def create_worker(
             "workflow_count": len(app_workflows),
             "activity_count": len(task_activities),
             "max_concurrent_activities": max_concurrent_activities,
+            "max_concurrent_workflow_tasks": max_concurrent_workflow_tasks,
             "host": host,
             "namespace": namespace,
             "build_id": APP_BUILD_ID,

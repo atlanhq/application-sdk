@@ -172,6 +172,8 @@ class WorkerStartEventData(BaseModel):
         port: Port number of the Temporal server.
         connection_string: Connection string for the Temporal server.
         max_concurrent_activities: Maximum number of concurrent activities.
+        max_concurrent_workflow_tasks: Maximum number of in-flight workflow
+            task pollers. ``None`` means Temporal's default applies.
         workflow_count: Number of workflow classes registered.
         activity_count: Number of activity functions registered.
         app_version: Semantic version of the app release (ATLAN_APPLICATION_VERSION).
@@ -191,6 +193,7 @@ class WorkerStartEventData(BaseModel):
     port: str
     connection_string: str
     max_concurrent_activities: int | None
+    max_concurrent_workflow_tasks: int | None = None
     workflow_count: int
     activity_count: int
     build_id: str | None = None
