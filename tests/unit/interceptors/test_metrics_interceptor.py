@@ -25,8 +25,6 @@ _METER_TARGET = (
     "application_sdk.execution._temporal.interceptors.metrics._otel_metrics.get_meter"
 )
 
-assert _ALERTABLE_AUDIENCES == {Audience.PLATFORM.value, Audience.APP_OWNER.value}
-
 
 @dataclass
 class MockWorkflowInfo:
@@ -102,6 +100,12 @@ class TestInstrumentCaching:
         c2 = _workflow_failures_classified()
         assert c1 is c2
         mock_meter.create_counter.assert_called_once()
+
+    def test_alertable_audiences_constant(self):
+        assert _ALERTABLE_AUDIENCES == {
+            Audience.PLATFORM.value,
+            Audience.APP_OWNER.value,
+        }
 
 
 class TestMetricsWorkflowInboundInterceptor:
@@ -302,6 +306,12 @@ class TestWorkflowFailuresClassified:
             mock_wf.info.return_value = MockWorkflowInfo()
             with pytest.raises(RuntimeError, match="boom"):
                 await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        # Classified emit was attempted (raw RuntimeError → APP_OWNER fallback)
+        # and the RuntimeError from `.add` was swallowed by the interceptor's
+        # outer try/except, leaving only the original workflow exception to
+        # propagate.
+        classified_counter.add.assert_called_once()
 
 
 class TestMetricsActivityInboundInterceptor:
