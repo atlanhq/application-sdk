@@ -103,45 +103,26 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
 def _failure_details_from_detail(detail: Any) -> dict[str, str]:
     """Recover ``{category, audience, code}`` from one ``ApplicationError.details`` entry.
 
-    Two shapes are accepted:
-
-    1. A live :class:`FailureDetails` Pydantic model — emitted at the activity
-       raise site (``activities.py``).
-    2. A mapping with ``category`` / ``audience`` / ``code`` keys — what
-       Temporal's ``pydantic_data_converter`` reconstructs on the workflow
-       side after the activity → workflow boundary. ``ApplicationError.details``
-       is annotated ``Sequence[Any]`` so the converter has no type hint to
-       rehydrate the Pydantic model; it returns the raw JSON object instead.
-
-    Returns an empty dict for any other shape so the caller falls through to
-    the next link in the ``__cause__`` chain.
+    Accepts either a live :class:`FailureDetails` Pydantic model (activity side,
+    pre-serde) or a plain dict (workflow side, post-serde — Temporal's
+    ``pydantic_data_converter`` returns raw JSON objects for ``Sequence[Any]``
+    fields). Returns an empty dict for any other shape.
     """
-    if isinstance(detail, FailureDetails):
+    if not isinstance(detail, (FailureDetails, dict)):
+        return {}
+    try:
+        fd = (
+            detail
+            if isinstance(detail, FailureDetails)
+            else FailureDetails.model_validate(detail)
+        )
         return {
-            "failure.category": detail.category.value,
-            "failure.audience": detail.audience.value,
-            "failure.code": detail.code,
+            "failure.category": fd.category.value,
+            "failure.audience": fd.audience.value,
+            "failure.code": fd.code,
         }
-    if isinstance(detail, dict):
-        category = detail.get("category")
-        audience = detail.get("audience")
-        code = detail.get("code")
-        # Enum members serialize as their ``.value`` (str); accept either the
-        # string form or a live enum instance (defensive — covers callers that
-        # construct ApplicationError with a half-converted dict).
-        cat_value = getattr(category, "value", category)
-        aud_value = getattr(audience, "value", audience)
-        if (
-            isinstance(cat_value, str)
-            and isinstance(aud_value, str)
-            and isinstance(code, str)
-        ):
-            return {
-                "failure.category": cat_value,
-                "failure.audience": aud_value,
-                "failure.code": code,
-            }
-    return {}
+    except Exception:
+        return {}
 
 
 _HEADER_CORRELATION_ID = "x-correlation-id"
