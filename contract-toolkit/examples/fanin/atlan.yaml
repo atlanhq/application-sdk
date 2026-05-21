@@ -1,0 +1,28 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: fanin
+display_name: Fan-in Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/trino.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: false
+entrypoints:
+- name: fanin
+  display_name: Fan-in Example
+  icon_url: https://assets.atlan.com/assets/trino.svg
+  type: connector
+deploy:
+  execution_mode: native
+  splitDeploymentEnabled: false
+  dapr:
+    objectstore: false
+    secretstore: false
+    statestore: false
+    eventstore: false
+    subscription: false
+    configurationstore: false
+    lock: false
+  keda:
+    enabled: false

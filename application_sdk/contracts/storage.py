@@ -32,6 +32,19 @@ class UploadInput(Input):
             ``artifacts/apps/`` prefix, not auto-cleaned).
         skip_if_exists: When ``True``, skip uploading files whose SHA-256
             hash already matches the stored value.  Defaults to ``False``.
+        raise_on_empty: When ``True``, raise ``StorageEmptyUploadError`` if the upload
+            completed with ``file_count == 0`` (i.e. ``local_path`` was an
+            empty directory). Defaults to ``False`` to preserve historical
+            silent-zero behavior that several incremental extractors rely
+            on (a quiet-day run that finds no new data legitimately
+            uploads zero files). Opt in (``True``) when zero files
+            indicates a bug — e.g. a non-incremental extract that wrote
+            nothing, or a directory the extract step was supposed to
+            populate. See BLDX-1255 for the incident history (Tableau /
+            Looker / Coalesce / dbt silent-failures) and the workaround
+            patterns in dbt / databricks / coalesce connectors. Will flip
+            to ``True`` default in v4.0 alongside ``BaseMetadataExtractor``
+            removal.
     """
 
     local_path: str = ""
@@ -39,6 +52,7 @@ class UploadInput(Input):
     storage_subdir: str | None = None
     tier: StorageTier = StorageTier.RETAINED
     skip_if_exists: bool = False
+    raise_on_empty: bool = False
 
     @field_validator("storage_subdir")
     @classmethod

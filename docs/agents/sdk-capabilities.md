@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.2
-source-sha:    7f86b2b2e8b38b25a18e5545f05aa0b3ebd12c5d
-source-date:   2026-05-20T23:24:07+01:00
+source-sha:    2b843687403af8ecf62d206d49955613b386eb7d
+source-date:   2026-05-21T12:57:35+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,12 +18,12 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 17 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 25 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 50 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 51 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -162,6 +162,64 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import mcp_tool`
 - **Summary:** _(no docstring)_
+
+### Constants and Enums
+
+#### `InteractionUnfinishedPolicy`
+
+- **Import:** `from application_sdk.app import InteractionUnfinishedPolicy`
+- **Signature:** `InteractionUnfinishedPolicy`
+- **Summary:** Policy applied to in-flight runtime interactions when an app run exits.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `now`
+
+- **Import:** `from application_sdk.app import now`
+- **Signature:** `now`
+- **Summary:** Return the current time from the app run's perspective (deterministic).
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `query`
+
+- **Import:** `from application_sdk.app import query`
+- **Signature:** `query`
+- **Summary:** Declare a ``@query`` runtime interaction that reads live state without mutation.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `signal`
+
+- **Import:** `from application_sdk.app import signal`
+- **Signature:** `signal`
+- **Summary:** Declare a ``@signal`` runtime interaction on an App subclass.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `sleep`
+
+- **Import:** `from application_sdk.app import sleep`
+- **Signature:** `sleep`
+- **Summary:** Sleep for a given duration inside an app run (deterministic).
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `update`
+
+- **Import:** `from application_sdk.app import update`
+- **Signature:** `update`
+- **Summary:** Declare a ``@update`` runtime interaction that mutates state and returns a typed response.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `uuid4`
+
+- **Import:** `from application_sdk.app import uuid4`
+- **Signature:** `uuid4`
+- **Summary:** Generate a determinism-safe v4 UUID inside an app run.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `wait_condition`
+
+- **Import:** `from application_sdk.app import wait_condition`
+- **Signature:** `wait_condition`
+- **Summary:** Suspend ``run()`` or a runtime interaction until a predicate becomes ``True``.
+- **Defined in:** `application_sdk/app/__init__.py`
 
 ## `application_sdk.clients`
 
@@ -1140,6 +1198,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import STORAGE_CONFIG`
 - **Signature:** `STORAGE_CONFIG`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_EMPTY_UPLOAD`
+
+- **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
+- **Signature:** `STORAGE_EMPTY_UPLOAD`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
 
@@ -2251,6 +2316,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `storage_subdir: str | None`
   - `tier: StorageTier` `= StorageTier.RETAINED`
   - `skip_if_exists: bool` `= False`
+  - `raise_on_empty: bool` `= False`
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 #### `UploadOutput`

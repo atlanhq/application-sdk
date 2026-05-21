@@ -1,0 +1,1362 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2024 Atlan Pte. Ltd. */
+
+/// Widget catalog for native Atlan apps.
+///
+/// This module is imported by `App.pkl` and re-exported to amending contracts
+/// so apps can write `Widgets.TextInput`, `Widgets.Radio`, etc. without any
+/// supplemental import.
+///
+/// Sourced from the widget portion of `Config.pkl`; the legacy CSA amend-target
+/// plumbing (`packageId`, `containerImage`, `output =` block, etc.) is excluded.
+@ModuleInfo { minPklVersion = "0.25.1" }
+module com.atlan.app.contract.Widgets
+
+/// Visual style variants supported by the workflows v2 InfoBanner component.
+typealias InfoBannerType = "info"|"warning"|"error"|"prerequisites"|"side-note"
+
+/// External link shown inside widgets such as `InfoBanner`.
+class WidgetLink {
+  /// Button/link label.
+  label: String
+
+  /// Destination URL.
+  url: String
+
+  /// Optional frontend icon name, for example `"External"`.
+  icon: String?
+}
+
+/// Configuration for the UI of the custom package.
+///
+/// | Variable | | Usage |
+/// |---|---|---|
+/// | **[tasks][UIStep]** | | Mapping of top-level tasks to be configured, keyed by the name of the task as it should appear in the UI. |
+/// | **[rules][UIRule]** | | Listing of rules to control which inputs appear based on values selected in other inputs. |
+class UIConfig {
+
+  /// Mapping of top-level tasks to be configured, keyed by the name of the task as it should appear in the UI.
+  hidden tasks: Mapping<String, UIStep>
+
+  /// (Generated) Details of all inputs across all steps for the UI.
+  fixed properties: Map<String, UIElement> = new Mapping {
+    for (_, step in tasks) {
+      ...?step.inputs
+    }
+  }.toMap()
+
+  /// Listing of rules to control which [inputs][UIElement] appear based on values selected in other inputs.
+  hidden rules: Listing<UIRule> = new Listing {}
+
+  /// (Generated) Details of all UI rules to use to control the UI.
+  fixed anyOf: List<UIRule>? = if (rules.isEmpty) null else rules.toList()
+
+  /// (Generated) Details about each task (top-level step) to use in the UI.
+  fixed steps: List<UIStep> = tasks.fold(List(), (acc: List<UIStep>, key, value) ->
+    acc.add(resolveStep(key, value))
+  )
+}
+
+const function resolveInputs(inputs: Mapping<String, UIElement>): Mapping<String, UIElement> = inputs.fold(new Mapping {}, (acc: Mapping<String, UIElement>, inputKey, input) ->
+  (acc) {
+    [inputKey] = input
+  }
+)
+
+const function resolveStep(stepName: String, step: UIStep): UIStep = (step) {
+  title = step.titleOverride ?? stepName
+}
+
+/// Configure a top-level step in the UI for the package.
+class UIStep {
+
+  /// Name to show in the UI for the step.
+  title: String
+
+  /// Optional display-title override when the step id must remain tied to the map key.
+  hidden titleOverride: String?
+
+  /// Optional id override for legacy configmaps whose displayed title and id differ.
+  hidden idOverride: String?
+
+  /// Description to show in the UI for the step.
+  description: String = ""
+
+  /// Mapping of inputs to be configured for the step, keyed by a unique (variable) name for the input.
+  hidden inputs: Mapping<String(lower_snake_case), UIElement>
+
+  /// (Generated) Unique identifier for the step.
+  fixed id = idOverride ?? title.replaceAll(" ", "_").toLowerCase()
+
+  /// (Generated) List of inputs contained within the step.
+  fixed properties: List<String> = inputs.fold(List(), (acc, key, _) -> acc.add(key))
+}
+
+/// Validates the provided string value is in snake_case.
+local const lower_snake_case = (str) -> str.matches(Regex("[a-z0-9_-]*"))
+
+/// Configure basic UI rules that when the specified inputs have specified values, certain
+/// other fields become required.
+class UIRule {
+  fixed properties: Mapping<String, Mapping<String, String>> = new Mapping {
+    for (k, v in whenInputs) {
+      [k] = new Mapping {
+        ["const"] = v
+      }
+    }
+  }
+
+  /// Mapping from input ID (variable name for the input) to value for the step
+  hidden whenInputs: Mapping<String, String>
+
+  /// List of input IDs (variable names) that should become required when the inputs all match
+  required: Listing<String>
+}
+
+/// Ant Design form validation rule emitted in a widget's `ui.rules` array.
+///
+/// Covers the serializable subset of Ant Design's `RuleObject` — fields that can
+/// be expressed as static JSON. The `validator` and `transform` callback fields
+/// are intentionally omitted (they cannot be serialized).
+///
+/// The `type` union includes Atlan's custom `"json"` extension, which the
+/// frontend's `formatFormRules` utility converts into a JSON-parse validator.
+class ValidationRule {
+  /// Built-in validation type.
+  type: ("string"|"number"|"boolean"|"integer"|"float"|"regexp"|"method"|"object"|"enum"|"date"|"url"|"hex"|"email"|"array"|"json")?
+
+  /// Whether the field is required.
+  required: Boolean?
+
+  /// Minimum value (numbers) or minimum length (strings/arrays).
+  min: Number?
+
+  /// Maximum value (numbers) or maximum length (strings/arrays).
+  max: Number?
+
+  /// Exact length constraint.
+  len: Int?
+
+  /// Validation error message shown to the user.
+  message: String?
+
+  /// Regex pattern string the value must match.
+  pattern: String?
+
+  /// Treat strings containing only whitespace as a validation failure.
+  whitespace: Boolean?
+}
+
+/// Base class for all UI elements that can be used in the configuration of a package.
+abstract class UIElement {
+  /// Type of the element.
+  fixed type: String
+
+  /// Name to show in the UI for the widget.
+  hidden title: String
+
+  /// Whether a value must be selected to proceed with the UI setup.
+  required: Boolean? = false
+
+  /// Whether the widget will be shown in the UI (false) or not (true).
+  hidden hide: Boolean = false
+
+  /// Informational text to place in a hover-over to describe the use of the input.
+  hidden helpText: String = ""
+
+  /// Sizing of the input on the UI (8 is full-width, 4 is half-width).
+  hidden width: Int = 8
+
+  /// Whether to emit the default `ui.label` field.
+  hidden emitUiLabel: Boolean = true
+
+  /// Whether to emit the default `ui.hidden` field.
+  hidden emitUiHidden: Boolean = true
+
+  /// Whether to emit the default `ui.help` field.
+  hidden emitUiHelp: Boolean = true
+
+  /// Whether to emit the default `ui.grid` field.
+  hidden emitUiGrid: Boolean = true
+
+  /// Optional CSS class for the rendered form item.
+  hidden uiClass: String?
+
+  /// Optional UI-level required marker for legacy configmaps.
+  hidden uiRequired: Boolean?
+
+  /// Whether to include this property in generated manifest `args`.
+  hidden includeInManifest: Boolean = true
+
+  /// Whether to include this property in generated Python `_input.py`.
+  hidden includeInInput: Boolean = true
+
+  /// Default fallback value to use for the element if nothing is selected or entered in the UI.
+  hidden fallback: Any? = null
+
+  /// (Generated) UI configuration for the element.
+  fixed ui: Widget|Mapping<String, Any> = new Widget {
+    label = if (emitUiLabel) title else null
+    `hidden` = if (emitUiHidden) hide else null
+    help = if (emitUiHelp) helpText else null
+    grid = if (emitUiGrid) width else null
+    `class` = uiClass
+    required = uiRequired
+  }
+}
+
+/// Base class for all UI elements that use some enumeration of valid values.
+abstract class UIElementWithEnum extends UIElement {
+
+  /// Mapping of possible values for the input.
+  hidden possibleValues: Mapping<String, String>
+
+  /// Default value to select in the input.
+  default: String?
+
+  /// (Generated) Listing of the unique variable names for the possible values.
+  fixed enum: List<String> = possibleValues.fold(List(), (acc: List<String>, key, _) -> acc.add(key))
+
+  /// (Generated) Listing of the display values for each possible value.
+  fixed enumNames: List<String> = possibleValues.fold(List(), (acc: List<String>, _, value) -> acc.add(value))
+}
+
+/// Base class for all generated elements of the UI.
+class Widget {
+
+  /// Internal name of this widget.
+  widget: String
+
+  /// Widget-specific type.
+  type: String?
+
+  /// Label to show in the UI for the widget.
+  label: String? = ""
+
+  /// Inline title used by widgets such as switcher.
+  title: String?
+
+  /// Whether the widget will be shown in the UI (false) or not (true).
+  `hidden`: Boolean? = false
+
+  /// Informational text to place in a hover-over to describe the use of the input.
+  help: String? = ""
+
+  /// Example text to place within the widget to exemplify its use.
+  placeholder: String?
+
+  /// Sizing of the input on the UI (8 is full-width, 4 is half-width).
+  grid: Int? = 8
+
+  /// Optional CSS class for the rendered form item.
+  `class`: String?
+
+  /// Optional UI-level required marker for legacy configmaps.
+  required: Boolean?
+
+  /// Mode of the widget.
+  mode: String?
+
+  /// TBC
+  start: Int?
+
+  /// List of the mime-types of files that should be accepted.
+  accept: List<String>?
+
+  /// Whether the widget should return file metadata.
+  fileMetadata: Boolean?
+
+  /// Most distant past value that can be selected through the widget.
+  min: Int?
+
+  /// Most distant future value that can be selected through the widget.
+  max: Int?
+
+  /// Default value to select in the widget.
+  default: Any?
+
+  /// Type of credential to be nested within the widget.
+  credentialType: String?
+
+  /// TBC
+  nestedValue: Boolean?
+
+  /// Fixed string that should appear (immutable) before the input box.
+  addonBefore: String?
+
+  /// Whether the value can be changed (false) or is immutable (true).
+  disabled: Boolean?
+
+  /// SQL query to run to determine the widget's selectable content.
+  query: String?
+
+  /// Whether to prevent the Test Authentication button from showing.
+  isTestAuthenticationDisabled: Boolean?
+
+  /// Whether to flatten values retrieved via API.
+  flattenValue: Boolean?
+
+  /// Whether to strictly check the tree returned via API.
+  treeCheckStrictly: Boolean?
+
+  /// Name of the connector config to use for API retrieval.
+  connectorConfigName: String?
+
+  /// Variable name containing the credential GUID.
+  credential: String?
+
+  /// Whether multiple selections are allowed (for apitree and legacy widgets).
+  isMultiple: Boolean?
+
+  /// Whether multiple selections are allowed for sqltree.
+  multiple: Boolean?
+
+  /// Key for the metadata transformer template.
+  metadataTransformerTemplateKey: String?
+
+  /// Key for the metadata template.
+  metadataTemplateKey: String?
+
+  /// SQL query for sqltree widget.
+  sql: String?
+
+  /// Schema exclude patterns for sqltree widget.
+  schemaExcludePattern: List<String>?
+
+  /// Database/catalog exclude patterns for sqltree widget.
+  databaseExcludePattern: List<String>?
+
+  /// Description text shown below the widget label.
+  description: String?
+
+  /// Configuration for widgets such as sage/sageV2 preflight checks and dsnTreeMap.
+  config: Any?
+
+  /// Connector name filter for connectionSelector widget.
+  connectorName: (String|List<String>)?
+
+  /// Validation rules for the widget.
+  rules: Listing<ValidationRule>?
+
+  /// Agent configuration entries for agent widget.
+  agentConfigs: Listing<Any>?
+
+  /// Whether to show validation feedback indicator.
+  feedback: Boolean?
+
+  /// Whether the field is disabled in BYOC mode.
+  BYOCdisabled: Boolean?
+
+  /// Inline validation message.
+  message: String?
+
+  /// Custom key override for the widget.
+  key: String?
+
+  /// Feature flag reference for gating visibility.
+  flag: String?
+
+  /// Whether the dropdown starts open.
+  `open`: Boolean?
+
+  /// Section header text (for nested widgets).
+  header: String?
+
+  /// Whether to show connection options.
+  connectionOptions: Boolean?
+
+  /// Connection category filter for connectionSelector widget.
+  connectionCategories: String?
+
+  /// Evaluated value for hidden compute widgets.
+  value: String?
+
+  /// Sibling form field whose value scopes the sqltree query.
+  dependentConnectionField: String?
+
+  /// For sqltree widgets — hide database-level nodes from selection.
+  areDatabasesUnselectable: Boolean?
+
+  /// For connectionSelector — path to the form field that receives the connector name.
+  selectedConnectorNameProperty: String?
+
+  /// For connectionSelector or sage — path to the form field that receives the credential GUID.
+  selectedConnectionCredentialGuidProperty: String?
+
+  /// For connectionSelector — when true, store full connection objects.
+  shouldIncludeConnectionInfo: Boolean?
+
+  /// For connectionSelector — render a multi-connection value in display-only mode.
+  displayOnlyMultiConnections: Boolean?
+
+  /// For credential widgets — display labels keyed by auth type.
+  authTypeVsLabel: Mapping<String, String>?
+
+  /// For credential widgets — credential summary fields to hide in view mode.
+  hiddenFields: Listing<String>?
+
+  /// For credential widgets — extra fields to render in view mode.
+  additionalDisplayFields: Listing<Dynamic>?
+
+  /// For sqltree widgets — additional form-state keys copied into the credential body.
+  additionalPropertiesToIncludeInCredentialBody: Listing<String>?
+
+  /// Markdown or rich-text content for presentational widgets such as InfoBanner.
+  content: String?
+
+  /// Optional frontend icon name.
+  icon: String?
+
+  /// Whether to hide the default icon for widgets such as InfoBanner.
+  hideIcon: Boolean?
+
+  /// Link configuration for presentational widgets.
+  link: Any?
+
+  /// Toast messages keyed by state for switch-like widgets.
+  toast: Any?
+
+  /// Whether selector options should render icons.
+  showIcon: Boolean?
+
+  /// Whether selector options should render counts.
+  showCount: Boolean?
+
+  /// For custom frontend widgets — epoch-millis cutoff.
+  endDate: Int?
+
+  /// For custom frontend widgets — inline CSS style object.
+  style: Dynamic?
+
+  /// For custom frontend widgets — plural list of connector names.
+  connectorNames: List<String>?
+}
+
+/// Widget that allows you to enter arbitrary text into a single-line text input field.
+class TextInput extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden placeholderText: String = ""
+
+  hidden defaultValue: String?
+
+  default: String? = defaultValue
+
+  hidden prepend: String?
+
+  hidden enabled: Boolean?
+
+  hidden feedbackEnabled: Boolean?
+
+  hidden byocDisabled: Boolean?
+
+  hidden validationMessage: String?
+
+  hidden keyOverride: String?
+
+  hidden validationRules: Listing<ValidationRule>?
+
+  fixed ui {
+    widget = "input"
+    placeholder = placeholderText
+    addonBefore = prepend
+    disabled = if (enabled != null) !enabled else null
+    feedback = feedbackEnabled
+    BYOCdisabled = byocDisabled
+    message = validationMessage
+    key = keyOverride
+    rules = validationRules
+  }
+}
+
+/// Widget that allows you to enter arbitrary text into a multi-line text input box.
+class TextBoxInput extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden placeholderText: String = ""
+
+  fixed ui {
+    widget = "TextInput"
+    placeholder = placeholderText
+  }
+}
+
+/// Widget that allows you to select just one option from a set of options.
+class Radio extends UIElementWithEnum {
+  fixed type = "string"
+
+  hidden possibleValues: Mapping<String, String>
+
+  default: String?(if (this != null) possibleValues.keys.contains(this) else true)
+
+  hidden placeholderText: String?
+
+  hidden validationRules: Listing<ValidationRule>?
+
+  fixed ui {
+    widget = "radio"
+    placeholder = placeholderText
+    rules = validationRules
+  }
+}
+
+/// Widget that allows you to create a new connection.
+class ConnectionCreator extends UIElement {
+  fixed type = "string"
+  title: String = ""
+  required: Boolean? = false
+
+  hidden placeholderText: String?
+
+  hidden showConnectionOptions: Boolean?
+
+  fixed ui {
+    widget = "connection"
+    placeholder = placeholderText
+    connectionOptions = showConnectionOptions
+  }
+}
+
+/// Widget that allows you to select an existing connection from a drop-down list.
+class ConnectionSelector extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden multiSelect: Boolean = false
+
+  hidden begin: Int = 1
+
+  hidden emitMode: Boolean = true
+
+  hidden emitStart: Boolean = true
+
+  hidden connectorFilter: String?
+
+  hidden connectorFilters: Listing<String>?
+
+  hidden connectionCategories: String?
+
+  hidden placeholderText: String?
+
+  hidden validationRules: Listing<ValidationRule>?
+
+  hidden selectedConnectorName: String?
+
+  hidden selectedCredentialGuid: String?
+
+  fixed ui {
+    widget = "connectionSelector"
+    mode = if (emitMode) if (multiSelect) "multiple" else "" else null
+    start = if (emitStart) begin else null
+    connectorName = if (connectorFilters != null) connectorFilters.toList() else connectorFilter
+    connectionCategories = outer.connectionCategories
+    placeholder = placeholderText
+    rules = validationRules
+    selectedConnectorNameProperty = selectedConnectorName
+    selectedConnectionCredentialGuidProperty = selectedCredentialGuid
+  }
+}
+
+/// Widget that selects existing connection(s) and returns full connection objects.
+class ConnectionRefInput extends UIElement {
+  fixed type = "string"
+
+  required: Boolean? = false
+
+  hidden multiSelect: Boolean = false
+
+  hidden begin: Int = 1
+
+  hidden emitMode: Boolean = true
+
+  hidden emitStart: Boolean = true
+
+  hidden connectorFilter: String?
+
+  hidden connectorFilters: Listing<String>?
+
+  hidden connectionCategories: String?
+
+  hidden placeholderText: String?
+
+  hidden validationRules: Listing<ValidationRule>?
+
+  hidden selectedConnectorName: String?
+
+  hidden selectedCredentialGuid: String?
+
+  hidden displayOnlyMultiConnections: Boolean?
+
+  fixed ui {
+    widget = "connectionSelector"
+    mode = if (emitMode) if (multiSelect) "multiple" else "" else null
+    start = if (emitStart) begin else null
+    connectorName = if (connectorFilters != null) connectorFilters.toList() else connectorFilter
+    connectionCategories = outer.connectionCategories
+    placeholder = placeholderText
+    rules = validationRules
+    selectedConnectorNameProperty = selectedConnectorName
+    selectedConnectionCredentialGuidProperty = selectedCredentialGuid
+    displayOnlyMultiConnections = outer.displayOnlyMultiConnections
+    shouldIncludeConnectionInfo = true
+  }
+}
+
+/// Widget that allows you to upload a file.
+class FileUploader extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden fileTypes: Listing<String>
+
+  hidden placeholderText: String = ""
+
+  fixed ui {
+    widget = "fileUpload"
+    placeholder = placeholderText
+    accept = fileTypes.toList()
+    fileMetadata = true
+  }
+}
+
+/// Widget that allows you to copy a file from the tenant's S3 bucket.
+class FileCopier extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden placeholderText: String = ""
+
+  fixed ui {
+    widget = "input"
+    placeholder = placeholderText
+  }
+}
+
+/// Widget that allows you to enter an arbitrary number.
+class NumericInput extends UIElement {
+  fixed type = "number"
+  required: Boolean? = false
+
+  hidden placeholderValue: Number?
+
+  default: Number?
+
+  hidden enabled: Boolean?
+
+  hidden byocDisabled: Boolean?
+
+  hidden validationRules: Listing<ValidationRule>?
+
+  fixed ui {
+    widget = "inputNumber"
+    placeholder = placeholderValue?.toString()
+    disabled = if (enabled != null) !enabled else null
+    BYOCdisabled = byocDisabled
+    rules = validationRules
+  }
+}
+
+/// Widget that allows you to enter or select a date from a calendar.
+class DateInput extends UIElement {
+  fixed type = "number"
+  required: Boolean? = false
+
+  hidden past: Int = -14
+
+  hidden future: Int = 0
+
+  hidden defaultDay: Int = 0
+
+  hidden begin: Int = 1
+
+  fixed ui {
+    widget = "date"
+    start = begin
+    min = past
+    max = future
+    default = defaultDay
+  }
+}
+
+/// Widget that allows you to choose either "Yes" or "No".
+class BooleanInput extends UIElement {
+  fixed type = "boolean"
+  required: Boolean? = false
+
+  hidden defaultSelection: Boolean = false
+
+  default: Boolean = defaultSelection
+
+  hidden begin: Int?
+
+  hidden featureFlag: String?
+
+  fixed ui {
+    widget = "boolean"
+    start = begin
+    flag = featureFlag
+  }
+}
+
+/// Widget that allows you to select from a drop-down of provided options.
+class DropDown extends UIElementWithEnum {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden multiSelect: Boolean = false
+
+  hidden openByDefault: Boolean?
+
+  hidden placeholderText: String?
+
+  fixed ui {
+    widget = "select"
+    mode = if (multiSelect) "multiple" else ""
+    `open` = openByDefault
+    placeholder = placeholderText
+  }
+}
+
+/// Widget that renders a tags input (free-form array of strings).
+class TagsInput extends UIElement {
+  fixed type = "array"
+  required: Boolean? = false
+
+  hidden openByDefault: Boolean = false
+
+  fixed ui {
+    widget = "select"
+    mode = "tags"
+    `open` = openByDefault
+  }
+}
+
+/// Widget that allows you to choose multiple groups.
+class MultipleGroups extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  fixed ui {
+    widget = "groupMultiple"
+  }
+}
+
+/// Widget that allows you to select a single group.
+class SingleGroup extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  fixed ui {
+    widget = "groups"
+  }
+}
+
+/// Widget that allows you to choose multiple users.
+class MultipleUsers extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  fixed ui {
+    widget = "userMultiple"
+  }
+}
+
+/// Widget that allows you to select a single user.
+class SingleUser extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  fixed ui {
+    widget = "users"
+  }
+}
+
+/// Widget that allows you to select from the types of connectors that exist in the tenant.
+class ConnectorTypeSelector extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden begin: Int = 1
+
+  fixed ui {
+    widget = "sourceConnectionSelector"
+    start = begin
+  }
+}
+
+/// Widget that allows you to select an existing API token from a drop-down list.
+class APITokenSelector extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  fixed ui {
+    widget = "apiTokenSelect"
+  }
+}
+
+/// Widget that allows you to generate a unique key.
+class KeygenInput extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  fixed ui {
+    widget = "keygen"
+  }
+}
+
+/// Widget that allows you to enter arbitrary text in masked form (password).
+class PasswordInput extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden feedbackEnabled: Boolean?
+
+  hidden placeholderText: String?
+
+  hidden validationRules: Listing<ValidationRule>?
+
+  fixed ui {
+    widget = "password"
+    feedback = feedbackEnabled
+    placeholder = placeholderText
+    rules = validationRules
+  }
+}
+
+/// Widget that allows you to enter sensitive credential information stored in Atlan's Vault.
+class CredentialInput extends UIElement {
+  fixed type = "string"
+  title: String = ""
+  required: Boolean? = false
+
+  hidden credType: String
+
+  hidden allowTestAuthentication: Boolean = true
+
+  hidden authTypeVsLabel: Mapping<String, String>?
+
+  hidden hiddenFields: Listing<String>?
+
+  hidden additionalDisplayFields: Listing<Dynamic>?
+
+  fixed ui {
+    widget = "credential"
+    credentialType = credType
+    isTestAuthenticationDisabled = !allowTestAuthentication
+    authTypeVsLabel = outer.authTypeVsLabel
+    hiddenFields = outer.hiddenFields
+    additionalDisplayFields = outer.additionalDisplayFields
+  }
+}
+
+/// Widget that allows you to configure multiple sub-elements grouped together.
+open class NestedInput extends UIElement {
+  fixed type = "object"
+
+  hidden hide: Boolean = false
+
+  hidden inputs: Mapping<String(lower_snake_case), UIElement>
+
+  hidden placeholderText: String?
+
+  hidden headerText: String?
+
+  fixed properties: Map<String, UIElement> = inputs.toMap()
+
+  fixed ui {
+    widget = "nested"
+    nestedValue = false
+    `hidden` = hide
+    placeholder = placeholderText
+    header = headerText
+  }
+}
+
+/// Widget that executes arbitrary SQL against the connector that is being configured.
+class SQLExecutor extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden sqlQuery: String
+
+  fixed ui {
+    widget = "sql"
+    query = sqlQuery
+  }
+}
+
+/// Widget that allows you to render dynamic selections driven by API retrievals.
+class APITree extends UIElement {
+  fixed type = "object"
+  required: Boolean? = false
+
+  hidden credentialType: String
+
+  hidden metadataTemplate: String?
+
+  hidden metadataTransformer: String?
+
+  hidden flatten: Boolean?
+
+  hidden strict: Boolean?
+
+  hidden multiSelect: Boolean?
+
+  hidden desc: String?
+
+  fixed additionalProperties = new Mapping {
+    ["type"] = "array"
+  }.toMap()
+
+  fixed default = new Mapping {}
+
+  hidden cred: String = "credential-guid"
+
+  fixed ui {
+    widget = "apitree"
+    flattenValue = flatten
+    treeCheckStrictly = strict
+    connectorConfigName = credentialType
+    credential = cred
+    isMultiple = multiSelect
+    description = desc
+    metadataTransformerTemplateKey = metadataTransformer
+    metadataTemplateKey = metadataTemplate
+  }
+}
+
+/// Widget that renders a workflows-v2 API tree selector.
+class ApiTreeSelect extends UIElement {
+  fixed type = "object"
+  required: Boolean? = false
+
+  hidden credentialType: String
+
+  hidden metadataTemplate: String?
+
+  hidden metadataTransformer: String?
+
+  hidden strict: Boolean?
+
+  hidden multiSelect: Boolean?
+
+  hidden desc: String?
+
+  fixed additionalProperties = new Mapping {
+    ["type"] = "array"
+  }.toMap()
+
+  fixed default = new Mapping {}
+
+  hidden cred: String = "credential-guid"
+
+  fixed ui {
+    widget = "apiTreeSelect"
+    treeCheckStrictly = strict
+    connectorConfigName = credentialType
+    credential = cred
+    isMultiple = multiSelect
+    description = outer.desc
+    metadataTransformerTemplateKey = metadataTransformer
+    metadataTemplateKey = metadataTemplate
+  }
+}
+
+/// Presentational information banner rendered by workflows v2.
+class InfoBanner extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden widgetName: String = "infoBanner"
+
+  hidden content: String
+
+  hidden bannerType: InfoBannerType = "info"
+
+  hidden iconName: String?
+
+  hidden hideBannerIcon: Boolean?
+
+  hidden linkConfig: (WidgetLink|Mapping<String, String>)? = null
+
+  hidden includeInManifest: Boolean = false
+  hidden includeInInput: Boolean = false
+
+  fixed ui {
+    widget = widgetName
+    type = bannerType
+    content = outer.content
+    icon = outer.iconName
+    hideIcon = outer.hideBannerIcon
+    link = outer.linkConfig
+  }
+}
+
+/// Widget that maps Power BI ODBC Data Source Names (DSNs) to Atlan connections.
+class DsnTreeMap extends UIElement {
+  fixed type = "object"
+  required: Boolean? = false
+
+  hidden widgetName: String = "dsnTreeMap"
+
+  hidden mapConfig: Any
+
+  fixed default = "{}"
+
+  fixed ui {
+    widget = widgetName
+    config = outer.mapConfig
+  }
+}
+
+/// Widget that renders a glossary picker.
+class GlossarySelector extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden widgetName: String = "GlossarySelector"
+
+  hidden selectorMode: "multiple"?
+
+  hidden showGlossaryIcon: Boolean?
+
+  hidden showGlossaryCount: Boolean?
+
+  hidden placeholderText: String?
+
+  fixed ui {
+    widget = widgetName
+    mode = selectorMode
+    showIcon = outer.showGlossaryIcon
+    showCount = outer.showGlossaryCount
+    placeholder = placeholderText
+  }
+}
+
+/// Widget that renders a switch/toggle with optional toast feedback.
+class Switcher extends UIElement {
+  fixed type = "boolean"
+  required: Boolean? = false
+
+  hidden switchTitle: String = title
+
+  hidden defaultSelection: Boolean = false
+
+  hidden begin: Int?
+
+  hidden toastConfig: Mapping<String, String>?
+
+  fixed default = defaultSelection
+
+  fixed ui {
+    widget = "switcher"
+    title = outer.switchTitle
+    start = begin
+    toast = outer.toastConfig
+  }
+}
+
+/// Widget that renders a preflight / health check against the connector.
+class Sage extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden checks: Listing<Dynamic>?
+
+  hidden connectorConfig: String?
+
+  hidden selectedCredentialGuid: String?
+
+  fixed ui {
+    widget = "sage"
+    config = checks
+    connectorConfigName = connectorConfig
+    selectedConnectionCredentialGuidProperty = selectedCredentialGuid
+  }
+}
+
+/// Widget that renders a v2 preflight / health check against the connector.
+class SageV2 extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  hidden checks: Listing<Dynamic>?
+
+  hidden connectorConfig: String?
+
+  hidden selectedCredentialGuid: String?
+
+  fixed ui {
+    widget = "sageV2"
+    config = checks
+    connectorConfigName = connectorConfig
+    selectedConnectionCredentialGuidProperty = selectedCredentialGuid
+  }
+}
+
+/// Widget that renders a cloud provider selector (AWS/GCP/Azure).
+class CloudProvider extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  fixed ui {
+    widget = "CloudProvider"
+  }
+}
+
+/// Widget that renders a secure agent configuration panel.
+class AgentSelector extends UIElement {
+  fixed type = "object"
+  required: Boolean? = false
+
+  hidden agentConfigEntries: Listing<Any>?
+
+  hidden placeholderText: String?
+
+  fixed ui {
+    widget = "agent"
+    agentConfigs = agentConfigEntries
+    placeholder = placeholderText
+  }
+}
+
+/// Widget that renders an SQL-driven metadata tree for browsing database objects.
+class SqlTree extends UIElement {
+  fixed type = "object"
+  required: Boolean? = false
+
+  hidden credentialType: String?
+
+  hidden sqlQuery: String?
+
+  hidden excludePatterns: List<String>?
+
+  hidden databaseExcludePatterns: List<String>?
+
+  hidden desc: String?
+
+  hidden multiSelect: Boolean?
+
+  hidden cred: String = "credential-guid"
+
+  hidden dependsOn: String?
+
+  hidden databasesUnselectable: Boolean?
+
+  hidden additionalPropertiesToIncludeInCredentialBody: Listing<String>?
+
+  hidden validationRules: Listing<ValidationRule>?
+
+  hidden includeDefault: Boolean = true
+
+  fixed additionalProperties = new Mapping {
+    ["type"] = "array"
+  }.toMap()
+
+  fixed default: String? = if (includeDefault) "{}" else null
+
+  fixed ui {
+    widget = "sqltree"
+    sql = sqlQuery
+    credential = cred
+    connectorConfigName = credentialType
+    schemaExcludePattern = excludePatterns
+    databaseExcludePattern = databaseExcludePatterns
+    description = desc
+    multiple = multiSelect
+    dependentConnectionField = dependsOn
+    areDatabasesUnselectable = databasesUnselectable
+    additionalPropertiesToIncludeInCredentialBody = outer.additionalPropertiesToIncludeInCredentialBody
+    rules = validationRules
+  }
+}
+
+/// Widget that conditionally changes its rendering based on form state or feature flags.
+class ConditionalInput extends UIElement {
+  fixed type = "conditional"
+  required: Boolean? = false
+
+  hidden baseWidgetType: String = "radio"
+
+  hidden baseEnum: Listing<String>?
+
+  hidden baseEnumNames: Listing<String>?
+
+  default: Any?
+
+  conditions: Listing<Condition>?
+
+  additionalProperties: Dynamic?
+
+  hidden placeholderText: String?
+
+  hidden validationRules: Listing<ValidationRule>?
+
+  hidden outputValueType: String = if (baseWidgetType == "sqltree" || baseWidgetType == "apitree" || baseWidgetType == "apiTreeSelect" || baseWidgetType == "dsnTreeMap") "object" else "string"
+
+  hidden uiType: String?
+
+  hidden content: String?
+
+  hidden iconName: String?
+
+  hidden hideWidgetIcon: Boolean?
+
+  hidden linkConfig: Any?
+
+  hidden widgetConfig: Any?
+
+  hidden checks: Listing<Dynamic>?
+
+  hidden sqlQuery: String?
+
+  hidden credentialRef: String?
+
+  hidden connectorConfig: String?
+
+  hidden schemaExcludePatterns: List<String>?
+
+  hidden databaseExcludePatterns: List<String>?
+
+  hidden desc: String?
+
+  hidden multiSelect: Boolean?
+
+  hidden dependsOn: String?
+
+  hidden databasesUnselectable: Boolean?
+
+  hidden connOptions: Boolean?
+
+  hidden credentialType: String?
+
+  hidden allowTestAuthentication: Boolean?
+
+  hidden authTypeVsLabel: Mapping<String, String>?
+
+  hidden hiddenFields: Listing<String>?
+
+  hidden additionalDisplayFields: Listing<Dynamic>?
+
+  fixed enum: List<String>? = if (baseEnum != null) baseEnum.toList() else null
+
+  fixed enumNames: List<String>? = if (baseEnumNames != null) baseEnumNames.toList() else null
+
+  fixed ui {
+    widget = baseWidgetType
+    placeholder = placeholderText
+    rules = validationRules
+    config = if (widgetConfig != null) widgetConfig else checks
+    type = outer.uiType
+    content = outer.content
+    icon = outer.iconName
+    hideIcon = outer.hideWidgetIcon
+    link = outer.linkConfig
+    sql = sqlQuery
+    credential = credentialRef
+    connectorConfigName = connectorConfig
+    schemaExcludePattern = schemaExcludePatterns
+    databaseExcludePattern = databaseExcludePatterns
+    description = desc
+    multiple = multiSelect
+    dependentConnectionField = dependsOn
+    areDatabasesUnselectable = databasesUnselectable
+    connectionOptions = connOptions
+    credentialType = outer.credentialType
+    isTestAuthenticationDisabled = if (allowTestAuthentication != null) !allowTestAuthentication else null
+    authTypeVsLabel = outer.authTypeVsLabel
+    hiddenFields = outer.hiddenFields
+    additionalDisplayFields = outer.additionalDisplayFields
+  }
+}
+
+/// A condition that overrides rendering when a form property, lab flag, or feature flag matches.
+class Condition {
+  property: String?
+
+  value: Any?
+
+  labFlag: String?
+
+  featureFlag: String?
+
+  filter: Dynamic?
+
+  hidden overrideEnum: Listing<String>?
+
+  hidden overrideEnumNames: Listing<String>?
+
+  hidden overrideRequired: Boolean?
+
+  hidden overrideDefault: Any?
+
+  hidden overrideType: String?
+
+  hidden overrideUi: (Widget|Mapping<String, Any>)? = null
+
+  fixed enum: List<String>? = if (overrideEnum != null) overrideEnum.toList() else null
+
+  fixed enumNames: List<String>? = if (overrideEnumNames != null) overrideEnumNames.toList() else null
+
+  fixed required: Boolean? = overrideRequired
+
+  fixed default: Any? = overrideDefault
+
+  fixed type: String? = overrideType
+
+  fixed ui: (Widget|Mapping<String, Any>)? = overrideUi
+}
+
+/// Widget that renders a repeatable list of text input fields for entering multiple string values.
+class InputRepeater extends UIElement {
+  fixed type = "object"
+  required: Boolean? = false
+
+  hidden placeholderText: String = ""
+
+  hidden validationRules: Listing<ValidationRule>?
+
+  fixed ui {
+    widget = "inputRepeater"
+    placeholder = placeholderText
+    rules = validationRules
+  }
+}
+
+/// Create an `evaluate` widget override for use inside `Condition.overrideUi`.
+const function evaluateWidget(val: String): Widget = new Widget {
+  widget = "evaluate"
+  value = val
+}
+
+/// Widget that renders a cron schedule picker.
+class Schedule extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  fixed ui {
+    widget = "schedule"
+  }
+}
+
+/// Escape hatch for bespoke frontend widgets not covered by the typed widget catalog.
+class CustomWidget extends UIElement {
+  hidden valueType: String = "string"
+  fixed type = valueType
+  required: Boolean? = false
+
+  hidden widgetName: String
+
+  hidden props: Mapping<String, Any>?
+
+  fixed ui: Mapping<String, Any> = new Mapping {
+    ["widget"] = widgetName
+    when (props != null) {
+      for (k, v in props!!) {
+        [k] = v
+      }
+    }
+  }
+}

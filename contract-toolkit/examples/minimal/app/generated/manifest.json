@@ -1,0 +1,21 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Minimal Example Metadata",
+      "app_name": "{app_name}",
+      "inputs": {
+        "workflow_type": "minimal",
+        "app_name": "{app_name}",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-minimal-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "target": "{{target}}"
+        }
+      }
+    }
+  }
+}

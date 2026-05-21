@@ -3,16 +3,16 @@
 amends "pkl:test"
 
 import "fixtures/qi_node_placeholders.pkl" as qiNodeFixture
-import "../src/NativeApp.pkl" as NativeApp
+import "../src/App.pkl" as App
 
-local qiNodeManifestJson: String = qiNodeFixture.output.files["manifest.json"].text
-local defaultQueryIntelligenceNode = new NativeApp.QueryIntelligenceNode {
+local qiNodeManifestJson: String = qiNodeFixture.output.files["app/generated/manifest.json"].text
+local defaultQueryIntelligenceNode = new App.QueryIntelligenceNode {
   vendorName = "athena"
   sqlKey = "QUERY_TEXT"
 }
 
 // Boolean-literal form — typed Boolean still accepted (back-compat).
-local boolLiteralNode = new NativeApp.QueryIntelligenceNode {
+local boolLiteralNode = new App.QueryIntelligenceNode {
   vendorName = "athena"
   sqlKey = "QUERY_TEXT"
   ignoreOrphans = true
@@ -25,7 +25,7 @@ local boolLiteralNode = new NativeApp.QueryIntelligenceNode {
 // resolves only exact workflow parameter names, so the placeholder
 // must match a parameter key (no dotted paths). Per HYP-793, this is
 // the same `Boolean|String` pattern as `PublishNode.executorEnabled`.
-local templatedNode = new NativeApp.QueryIntelligenceNode {
+local templatedNode = new App.QueryIntelligenceNode {
   vendorName = "athena"
   sqlKey = "QUERY_TEXT"
   ignoreOrphans = "{{ignore-orphans}}"

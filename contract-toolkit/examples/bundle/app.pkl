@@ -1,0 +1,44 @@
+/// Bundle example — demonstrates a multi-entrypoint App.pkl contract.
+///
+/// Two entrypoints (crawler + miner) share one deployed app service.
+/// The bundle owns atlan.yaml and app.yaml; each entrypoint contract owns
+/// its workflow config, manifest, _input.py, and (for the crawler) the
+/// shared credential configmap.
+///
+/// Generated layout:
+///   atlan.yaml                                  ← bundle-level metadata
+///   app.yaml                                    ← SDR CI shim
+///   app/generated/atlan-connectors-bundle.json  ← hoisted from crawler (shared)
+///   app/generated/crawler/crawler.json
+///   app/generated/crawler/manifest.json
+///   app/generated/crawler/_input.py
+///   app/generated/miner/miner.json
+///   app/generated/miner/manifest.json
+///   app/generated/miner/_input.py
+amends "../../src/App.pkl"
+
+import "crawler.pkl" as Crawler
+import "miner.pkl" as Miner
+
+name = "bundle"
+displayName = "Bundle Example"
+icon = "https://assets.atlan.com/assets/snowflake.svg"
+// Bundle root does not own a credential config; the crawler entrypoint does.
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint {
+    name = "crawler"
+    displayName = "Crawler"
+    source = "snowflake"
+    sourceCategory = "database"
+    contract = Crawler
+  }
+  new Entrypoint {
+    name = "miner"
+    displayName = "Query Miner"
+    source = "snowflake"
+    sourceCategory = "database"
+    contract = Miner
+  }
+}

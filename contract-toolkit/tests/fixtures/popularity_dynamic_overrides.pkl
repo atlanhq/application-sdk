@@ -1,68 +1,69 @@
 // Test fixture: PopularityNode can intentionally wire scalar args from typed
 // workflow controls, with validation against uiConfig.properties.
 
-amends "../../src/NativeApp.pkl"
+amends "../../src/App.pkl"
 
-import "../../src/Config.pkl"
 import "../../src/Connectors.pkl"
 
 name = "popularity-dynamic-overrides"
 displayName = "Popularity Dynamic Overrides"
 connector = Connectors.SNOWFLAKE
-workflowType = "PopularityDynamicOverridesWorkflow"
 icon = "https://assets.atlan.com/assets/snowflake.svg"
 hasCredentialConfig = false
-hasPublishInputFields = false
 
-uiConfig {
+pipeline {
+  // No auto-generated publish; custom publish goes into extraNodes.
+  publish = null
+}
+
+uiConfig = new UIConfig {
   tasks {
     ["Connection"] {
       inputs {
-        ["connection"] = new Config.ConnectionCreator {
-          title = ""
+        ["connection"] = new ConnectionCreator {
           placeholderText = "Connection Name"
         }
       }
     }
     ["Popularity"] {
       inputs {
-        ["popularity-window-days"] = new Config.NumericInput {
+        ["popularity-window-days"] = new NumericInput {
           title = "Window Days"
           default = 60
           width = 4
           validationRules {
-            new Dynamic { type = "number"; required = false; min = 1; message = "Window days must be at least 1." }
+            new { type = "number"; required = false; min = 1; message = "Window days must be at least 1." }
           }
         }
-        ["popularity-top-n-queries"] = new Config.NumericInput {
+        ["popularity-top-n-queries"] = new NumericInput {
           title = "Top Queries"
           default = 8
           width = 4
           validationRules {
-            new Dynamic { type = "number"; required = false; min = 1; message = "Top queries must be at least 1." }
+            new { type = "number"; required = false; min = 1; message = "Top queries must be at least 1." }
           }
         }
-        ["popularity-top-n-users"] = new Config.NumericInput {
+        ["popularity-top-n-users"] = new NumericInput {
           title = "Top Users"
           default = 12
           width = 4
           validationRules {
-            new Dynamic { type = "number"; required = false; min = 1; message = "Top users must be at least 1." }
+            new { type = "number"; required = false; min = 1; message = "Top users must be at least 1." }
           }
         }
-        ["popularity-filter-errors"] = new Config.BooleanInput {
+        ["popularity-filter-errors"] = new BooleanInput {
           title = "Filter Parsed Errors"
           width = 4
         }
-        ["popularity-output-attribution"] = new Config.BooleanInput {
+        ["popularity-output-attribution"] = new BooleanInput {
           title = "Output Attribution"
           width = 4
         }
-        ["popularity-dry-run"] = new Config.BooleanInput {
+        ["popularity-dry-run"] = new BooleanInput {
           title = "Dry Run"
           width = 4
         }
-        ["popularity-custom-label"] = new Config.TextInput {
+        ["popularity-custom-label"] = new TextInput {
           title = "Custom Label"
           default = "direct-default"
           width = 4
