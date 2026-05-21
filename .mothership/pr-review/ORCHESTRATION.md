@@ -542,65 +542,49 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
   **Fix:** <exact code suggestion if PATCH scope>
   ```
 
-### 3c. Verdict-Stamp: Formal Approval + Labels
+### 3c. Verdict-Stamp: Labels Only (formal approval is posted by the GHA runner)
 
-There is no mothership-side handler. You stamp the verdict on the PR
-two ways from inside the sandbox:
+There is no mothership-side handler, and the sandbox itself **does not
+post `gh pr review`**. The formal approval is posted **outside** the
+sandbox by the GHA workflow (`test-sdk-review.yml` → "Approve PR as
+atlan-ci" step) using `ORG_PAT_GITHUB`, so the approval is recorded
+as `atlan-ci` and counts toward the `require_code_owner_review` rule
+on `main`. `mothership-ai[bot]` is a GitHub App and cannot be in
+CODEOWNERS — same pattern claude.yml uses for the production
+reviewer.
 
-1. **Formal review** via `gh pr review` — `--approve` on
-   READY_TO_MERGE so the bot account (mothership-ai[bot]) shows up as
-   an actual approving reviewer on the PR (visible in the Reviewers
-   panel and the merge box). For every other verdict, post a
-   `--comment` review during the soak period — this records a formal
-   review event without blocking the merge box. Once the experimental
-   reviewer's calibration is trusted, NEEDS_FIXES / BLOCKED can be
-   flipped to `--request-changes`; do NOT make that flip while the
-   reviewer is still in soak.
-2. **Labels** for at-a-glance filtering in the PR list. These are
-   **prefixed `test-`** to keep the experimental reviewer's signals
-   separate from the production `@sdk-review` flow (which uses the
-   un-prefixed `sdk-review-approved` / `needs-human-review` labels).
-   Do NOT touch the production labels from this orchestration.
+The sandbox is responsible only for **labels** here. Labels are
+**prefixed `test-`** to keep the experimental reviewer's signals
+separate from the production `@sdk-review` flow (which uses the
+un-prefixed `sdk-review-approved` / `needs-human-review` labels). Do
+NOT touch the production labels from this orchestration.
 
 ```bash
 # $GITHUB_TOKEN is set in Phase 0 step 3 (injected by dispatcher)
 PR=<pr_number>
 REPO="atlanhq/application-sdk"
 
-# Body for the formal review — short, points at the summary comment
-# (which is posted separately in 3f) so reviewers can find the detail.
-REVIEW_BODY=$(printf '%s\n' \
-  "**mothership-ai (experimental reviewer)** — verdict: \`$VERDICT\`." \
-  "" \
-  "See the full review summary in the comment posted on this PR." \
-  "")
-
 case "$VERDICT" in
   "READY_TO_MERGE")
-    gh pr review "$PR" --repo "$REPO" --approve --body "$REVIEW_BODY"
     gh pr edit $PR --repo $REPO --add-label "test-sdk-review-approved"
     gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
     ;;
   "NEEDS_HUMAN")
-    # During soak: --comment, not --request-changes. The experimental
-    # reviewer must not block merges while it's being calibrated.
-    gh pr review "$PR" --repo "$REPO" --comment --body "$REVIEW_BODY"
     gh pr edit $PR --repo $REPO --add-label "test-sdk-review-needs-human"
     gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
     ;;
   "NEEDS_FIXES"|"BLOCKED")
-    # During soak: --comment, not --request-changes (see above).
-    gh pr review "$PR" --repo "$REPO" --comment --body "$REVIEW_BODY"
     gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
     gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
     ;;
 esac
 ```
 
-If a prior bot review of the same PR head exists (e.g. a re-run with
-the same `session_id` after a manual edit), GitHub will accept the new
-review as a separate event — the latest one wins for "Reviewers panel"
-purposes. No dismissal needed.
+The verdict must also be written into the summary comment in §3e as
+a line `### Verdict: READY TO MERGE` (etc.) — the GHA runner greps
+that line out of the just-posted `<!-- TEST_SDK_REVIEW -->` comment
+to decide whether to call `gh pr review --approve`. Do not change
+the verdict line's prefix without updating the workflow's parser.
 
 ### 3d. Resolve Inline Threads (on APPROVE)
 
