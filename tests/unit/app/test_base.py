@@ -1225,6 +1225,237 @@ class TestGenerateWorkflowClass:
 
 
 # =============================================================================
+# Workflow handler relay (BLDX-1283) — @workflow.signal/query/update on App
+# =============================================================================
+
+
+class TestWorkflowHandlerRelay:
+    """Pin that @workflow.signal / @workflow.query / @workflow.update declared
+    on an App subclass are lifted onto the generated wf_cls so Temporal's
+    @workflow.defn discovers them and `handle.execute_update(...)` /
+    `handle.signal(...)` resolve to the App's methods at runtime.
+
+    Pre-BLDX-1283 these handlers were silently dropped because the synthesized
+    wf_cls only carried `run` — Temporal scans the generated class, not the
+    App class, so the decorators registered on App methods were invisible.
+    """
+
+    def _make_ep(self, input_type: type, output_type: type) -> EntryPointMetadata:
+        return EntryPointMetadata(
+            name="run",
+            input_type=input_type,
+            output_type=output_type,
+            method_name="run",
+            implicit=True,
+        )
+
+    def test_signal_handler_is_registered_on_wf_cls(self) -> None:
+        from temporalio import workflow as _wf
+
+        class _SignalApp(App):
+            def __init__(self) -> None:
+                self.pings: list[str] = []
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @_wf.signal
+            async def ping(self, msg: str) -> None:
+                self.pings.append(msg)
+
+        wf_cls = generate_workflow_class(
+            _SignalApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        assert "ping" in defn.signals
+
+    def test_update_handler_is_registered_on_wf_cls(self) -> None:
+        from temporalio import workflow as _wf
+
+        class _UpdateApp(App):
+            def __init__(self) -> None:
+                self.state = "running"
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @_wf.update
+            async def pause_run(self, reason: str) -> str:
+                self.state = f"paused:{reason}"
+                return self.state
+
+        wf_cls = generate_workflow_class(
+            _UpdateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        assert "pause_run" in defn.updates
+
+    def test_query_handler_is_registered_on_wf_cls(self) -> None:
+        from temporalio import workflow as _wf
+
+        class _QueryApp(App):
+            def __init__(self) -> None:
+                self.counter = 7
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @_wf.query
+            def get_counter(self) -> int:
+                return self.counter
+
+        wf_cls = generate_workflow_class(
+            _QueryApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        assert "get_counter" in defn.queries
+
+    @pytest.mark.asyncio
+    async def test_relay_delegates_to_shared_app_instance(self) -> None:
+        """Handler relay must mutate the same App instance _run sees, not a fresh one."""
+        from temporalio import workflow as _wf
+
+        class _StateApp(App):
+            def __init__(self) -> None:
+                self.state = "init"
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result=self.state)
+
+            @_wf.update
+            async def set_state(self, value: str) -> None:
+                self.state = value
+
+        wf_cls = generate_workflow_class(
+            _StateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        # Spin up a wf_cls instance (mirrors Temporal's per-run construction).
+        wf_inst = wf_cls()
+        assert isinstance(wf_inst._app_instance, _StateApp)
+        assert wf_inst._app_instance.state == "init"
+
+        # Drive the relay directly — the same path Temporal uses internally via
+        # the rebound _UpdateDefinition.fn. State must mutate the very instance
+        # _run will later read from.
+        await wf_cls.set_state(wf_inst, "paused")
+        assert wf_inst._app_instance.state == "paused"
+
+    def test_validator_is_preserved_through_relay(self) -> None:
+        from temporalio import workflow as _wf
+
+        class _ValidatedApp(App):
+            def __init__(self) -> None:
+                self.state = ""
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @_wf.update
+            async def set_value(self, value: str) -> None:
+                self.state = value
+
+            @set_value.validator
+            def _validate(self, value: str) -> None:
+                if not value:
+                    raise ValueError("value must be non-empty")
+
+        wf_cls = generate_workflow_class(
+            _ValidatedApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        update_defn = defn.updates["set_value"]
+        assert update_defn.validator is not None
+
+        # Bound validator must hit the App's _validate and surface the ValueError
+        # — confirming the validator relay routes through _app_instance.
+        wf_inst = wf_cls()
+        with pytest.raises(ValueError, match="non-empty"):
+            update_defn.bind_validator(wf_inst)("")
+
+    def test_dynamic_update_handler_is_supported(self) -> None:
+        # Define the class via exec with explicit globals so the
+        # ``Sequence[RawValue]`` annotation in the dynamic-handler signature
+        # resolves at decoration time (Temporal's @workflow.update inspects
+        # the annotation eagerly to validate dynamic-handler shape under
+        # ``from __future__ import annotations``).
+        from collections.abc import Sequence as _Seq
+        from typing import Any as _Any
+
+        from temporalio import workflow as _wf
+        from temporalio.common import RawValue as _RawValue
+
+        ns: dict[str, _Any] = {
+            "_wf": _wf,
+            "_Seq": _Seq,
+            "_RawValue": _RawValue,
+            "App": App,
+            "_BLDXInput": _BLDXInput,
+            "_BLDXOutput": _BLDXOutput,
+        }
+        exec(  # noqa: S102 — defined in tests; deterministic input
+            "class _DynamicApp(App):\n"
+            "    def __init__(self):\n"
+            "        self.last_call = ('', 0)\n"
+            "    async def run(self, input: _BLDXInput) -> _BLDXOutput:\n"
+            "        return _BLDXOutput(result='ok')\n"
+            "    @_wf.update(dynamic=True)\n"
+            "    async def fallback(self, name: str, args: _Seq[_RawValue]) -> None:\n"
+            "        self.last_call = (name, len(args))\n",
+            ns,
+        )
+        _DynamicApp = ns["_DynamicApp"]
+
+        wf_cls = generate_workflow_class(
+            _DynamicApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        # Dynamic handlers are keyed by None in the registration map.
+        assert None in defn.updates
+
+    def test_app_without_handlers_yields_no_registrations(self) -> None:
+        """Regression: apps that don't declare handlers must not gain spurious entries."""
+        from temporalio import workflow as _wf
+
+        class _PlainApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        wf_cls = generate_workflow_class(
+            _PlainApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        assert dict(defn.signals) == {}
+        assert dict(defn.queries) == {}
+        assert dict(defn.updates) == {}
+
+    def test_wf_init_creates_fresh_app_instance_per_run(self) -> None:
+        """Each wf_cls() call constructs a fresh App instance (one per workflow run)."""
+
+        class _IsolatedApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        wf_cls = generate_workflow_class(
+            _IsolatedApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        inst_a = wf_cls()
+        inst_b = wf_cls()
+        assert inst_a._app_instance is not inst_b._app_instance
+
+
+# =============================================================================
 # Inline-import smoke checks
 # =============================================================================
 

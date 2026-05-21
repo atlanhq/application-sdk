@@ -1420,6 +1420,105 @@ def _apply_app_registration(
 _workflow_class_cache: dict[tuple[type, str], type] = {}
 
 
+def _collect_handler_relays(
+    app_cls: "type[App]", cls_name: str
+) -> dict[str, Callable[..., Any]]:
+    """Scan the App class for @workflow.signal / @workflow.query / @workflow.update
+    handlers and synthesize per-handler relay methods bound to the generated wf_cls.
+
+    Each relay extracts the per-run App instance from ``wf_self._app_instance`` and
+    delegates the call. The synthesized relay carries Temporal's discovery metadata
+    (rebound to point at the relay), so @workflow.defn(wf_cls) registers the handler
+    against the generated class — which is what Temporal requires.
+
+    Returns a mapping of method name -> relay callable, ready to be placed on wf_cls.
+    """
+    import dataclasses as _dc  # noqa: PLC0415 — kept local; dataclasses already imported above for `replace`
+
+    relays: dict[str, Callable[..., Any]] = {}
+
+    def _build_relay(method_name: str, is_coroutine: bool) -> Callable[..., Any]:
+        """Construct a wf_cls-level method that delegates to self._app_instance."""
+        if is_coroutine:
+
+            async def _async_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
+                bound = getattr(wf_self._app_instance, method_name)
+                return await bound(*args, **kwargs)
+
+            _async_relay.__name__ = method_name
+            _async_relay.__qualname__ = f"{cls_name}.{method_name}"
+            _async_relay.__module__ = app_cls.__module__
+            return _async_relay
+
+        def _sync_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
+            bound = getattr(wf_self._app_instance, method_name)
+            return bound(*args, **kwargs)
+
+        _sync_relay.__name__ = method_name
+        _sync_relay.__qualname__ = f"{cls_name}.{method_name}"
+        _sync_relay.__module__ = app_cls.__module__
+        return _sync_relay
+
+    def _build_validator_relay(
+        orig_validator: Callable[..., Any],
+    ) -> Callable[..., Any]:
+        def vrelay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
+            return orig_validator(wf_self._app_instance, *args, **kwargs)
+
+        return vrelay
+
+    for member_name, member in inspect.getmembers(app_cls):
+        if member_name == "run":
+            # The entry method is handled separately; never relay it as a handler.
+            continue
+
+        signal_defn = getattr(member, "__temporal_signal_definition", None)
+        query_defn = getattr(member, "__temporal_query_definition", None)
+        update_defn = getattr(member, "_defn", None)
+
+        # @workflow.update returns a callable with both `_defn` and `validator`
+        # (Temporal's runtime_checkable UpdateMethodMultiParam Protocol). The
+        # `validator` attribute distinguishes it from arbitrary objects that
+        # might happen to carry a `_defn` field.
+        is_update = update_defn is not None and hasattr(member, "validator")
+
+        if not (signal_defn or query_defn or is_update):
+            continue
+
+        relay = _build_relay(member_name, inspect.iscoroutinefunction(member))
+
+        if signal_defn is not None:
+            # Rebind the definition's fn to the relay so Temporal's _bind_method
+            # passes wf_self (not an App instance) as the first arg.
+            relay.__temporal_signal_definition = _dc.replace(  # type: ignore[attr-defined]
+                signal_defn, fn=relay
+            )
+        elif query_defn is not None:
+            relay.__temporal_query_definition = _dc.replace(  # type: ignore[attr-defined]
+                query_defn, fn=relay
+            )
+        else:
+            # update_defn is _UpdateDefinition (asserted above by `is_update`).
+            assert update_defn is not None  # noqa: S101 — narrows for type-checkers
+            new_validator: Callable[..., Any] | None = None
+            if update_defn.validator is not None:
+                new_validator = _build_validator_relay(update_defn.validator)
+
+            relay._defn = _dc.replace(  # type: ignore[attr-defined]
+                update_defn, fn=relay, validator=new_validator
+            )
+            # Temporal's @workflow.update decorator also sets a `.validator`
+            # attribute on the decorated fn (partial(_update_validator, defn)).
+            # We don't need it for runtime dispatch — Temporal reads the
+            # validator off the definition — but provide one so the relay
+            # structurally matches UpdateMethodMultiParam.
+            relay.validator = lambda fn: fn  # type: ignore[attr-defined]
+
+        relays[member_name] = relay
+
+    return relays
+
+
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
     """Generate a Temporal workflow class for one entry point.
 
@@ -1476,7 +1575,18 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             correlation_id=correlation_id,
             started_at=start_time,
         )
-        app_instance = app_cls()
+        # The wf_cls.__init__ constructs the App instance up-front so that any
+        # @workflow.signal / @workflow.query / @workflow.update handlers
+        # (which may fire as early as immediately after workflow start, before
+        # _run's first await) can delegate to the same instance _run uses.
+        # Fall back to constructing one here when ``self`` is a stand-in (e.g.
+        # MagicMock from unit tests) where ``__init__`` didn't run.
+        existing = getattr(self, "_app_instance", None)
+        if isinstance(existing, app_cls):
+            app_instance = existing
+        else:
+            app_instance = app_cls()
+            self._app_instance = app_instance
         app_instance._context = context
 
         context_data = {"run_id": run_id, "correlation_id": context.correlation_id}
@@ -1598,7 +1708,28 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
     decorated_run = workflow.run(_run)
 
-    wf_cls = type(cls_name, (), {"run": decorated_run})
+    # Collect any @workflow.signal / @workflow.query / @workflow.update
+    # handlers declared on the App subclass. Each is rewritten into a relay
+    # whose Temporal-discovery metadata points at the relay (so the wf_cls
+    # is what's registered, not the App class) and whose body delegates to
+    # ``self._app_instance.<method>`` — sharing state with _run.
+    handler_relays = _collect_handler_relays(app_cls, cls_name)
+
+    def _wf_init(self: Any) -> None:
+        # Construct the per-run App instance eagerly so handlers that fire
+        # before _run's first await still hit a live instance. _run later
+        # finishes context setup (correlation id, _wrap_instance_tasks, etc.)
+        # on this same instance.
+        self._app_instance = app_cls()
+
+    _wf_init.__name__ = "__init__"
+    _wf_init.__qualname__ = f"{cls_name}.__init__"
+    _wf_init.__module__ = app_cls.__module__
+
+    wf_methods: dict[str, Any] = {"run": decorated_run, "__init__": _wf_init}
+    wf_methods.update(handler_relays)
+
+    wf_cls = type(cls_name, (), wf_methods)
     wf_cls.__module__ = app_cls.__module__
     wf_cls.__qualname__ = cls_name
 

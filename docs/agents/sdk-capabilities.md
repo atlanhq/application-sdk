@@ -156,6 +156,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Decorator to mark a method as a task (Temporal activity).
 - **Defined in:** `application_sdk/app/task.py`
 
+#### Workflow handlers — `@workflow.signal` / `@workflow.query` / `@workflow.update`
+
+- **Import:** `from temporalio import workflow`
+- **Usage:** Decorate methods on an `App` subclass. The SDK's `generate_workflow_class` lifts handlers onto the generated workflow class so Temporal discovers them via `@workflow.defn`.
+- **Summary:** Pause/resume buttons, in-flight queries, and external signals can call directly into App methods. Handler state mutations are visible to the App's `run` coroutine on the same workflow execution. Validators (`@<update_name>.validator`) and dynamic handlers (`@workflow.update(dynamic=True)`) are supported.
+- **Defined in:** `application_sdk/app/base.py::_collect_handler_relays`
+
 ### Functions
 
 #### `mcp_tool`
