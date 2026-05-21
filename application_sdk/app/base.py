@@ -995,6 +995,7 @@ class App(ABC):
             input.storage_path,
             storage_subdir=input.storage_subdir,
             skip_if_exists=input.skip_if_exists,
+            raise_on_empty=input.raise_on_empty,
             store=store,
             _app_prefix=app_prefix,
             _tier=input.tier,
