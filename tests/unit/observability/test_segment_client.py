@@ -297,6 +297,58 @@ class TestBuildTrackEvent:
         # ISO 8601 format from datetime.fromtimestamp(...).isoformat().
         assert "T" in event.timestamp
 
+    def test_userid_uses_tenant_name_label_when_present(self):
+        """tenant_name takes precedence over other tenant identifiers and is
+        appended to the default namespace prefix."""
+        client = _disabled_client()
+        record = _make_record(
+            labels={
+                "tenant_name": "workivap01",
+                "atlan_base_url": "https://workiva.atlan.com",
+                "tenant_id": "default",
+            }
+        )
+        event = client._build_track_event(record)
+        assert event.userId == f"{client._default_user_id}:workivap01"
+
+    def test_userid_falls_back_to_atlan_base_url(self):
+        """When tenant_name is absent, atlan_base_url is appended."""
+        client = _disabled_client()
+        record = _make_record(
+            labels={
+                "atlan_base_url": "https://workiva.atlan.com",
+                "tenant_id": "default",
+            }
+        )
+        event = client._build_track_event(record)
+        assert event.userId == f"{client._default_user_id}:https://workiva.atlan.com"
+
+    def test_userid_falls_back_to_tenant_id(self):
+        """When tenant_name and atlan_base_url absent, tenant_id is appended."""
+        client = _disabled_client()
+        record = _make_record(labels={"tenant_id": "some-tenant"})
+        event = client._build_track_event(record)
+        assert event.userId == f"{client._default_user_id}:some-tenant"
+
+    def test_userid_falls_back_to_default_when_no_tenant_labels(self):
+        """With no tenant labels, the bare default user id is used (no suffix)."""
+        client = _disabled_client()
+        record = _make_record(labels={"unrelated": "x"})
+        event = client._build_track_event(record)
+        assert event.userId == client._default_user_id
+
+    def test_userid_ignores_empty_string_tenant_labels(self):
+        """Empty string tenant labels fall through to the next candidate."""
+        client = _disabled_client()
+        record = _make_record(
+            labels={
+                "tenant_name": "",
+                "atlan_base_url": "https://workiva.atlan.com",
+            }
+        )
+        event = client._build_track_event(record)
+        assert event.userId == f"{client._default_user_id}:https://workiva.atlan.com"
+
 
 # ---------------------------------------------------------------------------
 # send_metric — sync interface, no real thread
