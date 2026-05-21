@@ -180,6 +180,22 @@ def get_object_store_prefix(path: str) -> str:
     abs_path = os.path.abspath(path)
     abs_temp_path = os.path.abspath(TEMPORARY_PATH)
 
+    def _to_relative_object_store_key(p: str) -> str:
+        """Strip drive letter / leading anchor + normalize separators.
+
+        Object-store keys are forward-slash, **relative** strings (no
+        drive letter, no leading slash). On Windows, an absolute local
+        path like ``C:\\Users\\...\\file`` would otherwise become a
+        bogus key the obstore LocalFileSystem backend can't append to
+        its store root (it'd try to walk
+        ``<store_root>\\C:\\Users\\...`` which Windows rejects as
+        invalid syntax). ``os.path.splitdrive`` peels the drive on
+        Windows (no-op on POSIX), then we strip the leading
+        separator and convert remaining backslashes.
+        """
+        _drive, rest = os.path.splitdrive(p)
+        return rest.replace(os.path.sep, "/").strip("/")
+
     # Check if path is under TEMPORARY_PATH
     try:
         # Use os.path.commonpath to properly check if path is under temp directory
@@ -191,9 +207,12 @@ def get_object_store_prefix(path: str) -> str:
             # Normalize path separators to forward slashes for object store
             return relative_path.replace(os.path.sep, "/")
         else:
-            # Path is already a relative object store path, return as-is
-            return path.strip("/")
+            # Path is outside TEMPORARY_PATH (user-provided base, unit
+            # tests using ``tmp_path``, etc.). Strip drive letter and
+            # leading separator so the result is still a relative
+            # object-store key, not an absolute filesystem path.
+            return _to_relative_object_store_key(path)
     except ValueError:
         # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
-        # In this case, treat as user-provided path, return as-is
-        return path.strip("/")
+        # In this case, treat as user-provided path, normalize the same way.
+        return _to_relative_object_store_key(path)

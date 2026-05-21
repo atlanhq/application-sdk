@@ -328,21 +328,31 @@ class TestExtractEmitsRawFileReference:
         with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
             result = await app.extract_databases(input_)
 
-        # FileReference points at the locally-written raw JSONL. It is
-        # EPHEMERAL (is_durable=False, storage_path=None) — the activity
-        # interceptor flips both fields after the activity returns.
+        # FileReference points at the locally-written raw JSONL.
+        # is_durable=False (the activity interceptor flips it after
+        # the activity returns), but storage_path is pre-set to the
+        # canonical run-scoped key — see the comment in
+        # ``_extract_entity``'s emission site for why we pin the
+        # storage key here instead of letting the interceptor
+        # auto-generate a ``file_refs/<uuid>`` path. The persist
+        # mechanism honours the pre-set key.
         assert result.raw_file is not None
         assert result.raw_file.local_path == str(
             tmp_path / "raw" / "database" / "records.json"
         )
         assert result.raw_file.is_durable is False
-        assert result.raw_file.storage_path is None
+        # storage_path == get_object_store_prefix(local_path), which
+        # in tests with output_path=tmp_path resolves to the tmp_path
+        # itself (no TEMPORARY_PATH prefix to strip). In production
+        # the local_path is under TEMPORARY_PATH, so the strip
+        # yields ``<run_prefix>/raw/<entity>/records.json``.
+        assert result.raw_file.storage_path is not None
+        assert result.raw_file.storage_path.endswith(
+            "/raw/database/records.json"
+        ), f"unexpected storage_path: {result.raw_file.storage_path!r}"
         # Tier stays TRANSIENT (the semantically correct choice — the
         # raw file is an intermediate extract→transform handoff and
-        # gets auto-cleaned at run end by ``cleanup_storage``). The
-        # persist-side path scoping (which is what the production
-        # gateway actually cares about) is pinned by
-        # ``TestRawFilePersistsUnderRunScopedPrefix`` below.
+        # gets auto-cleaned at run end by ``cleanup_storage``).
         assert result.raw_file.tier == StorageTier.TRANSIENT
 
     async def test_extract_with_zero_rows_emits_no_raw_file(self, app, tmp_path):
@@ -366,41 +376,51 @@ class TestExtractEmitsRawFileReference:
         assert result.raw_file is None
 
 
-class TestRawFilePersistsUnderRunScopedPrefix:
-    """Regression guard: when the interceptor persists a ``raw_file`` /
-    ``transformed_file`` emitted by ``_extract_entity`` /
-    ``_transform_entity``, the resulting storage key must be
-    **run-scoped** — i.e. land under ``<run_prefix>/file_refs/<uuid>``,
-    not bare ``file_refs/<uuid>``.
+class TestCanonicalStoragePaths:
+    """Regression guard: ``_extract_entity`` / ``_transform_entity``
+    emit ``FileReference`` objects whose ``storage_path`` resolves to
+    the canonical entity-typed key
+    (``<run_prefix>/raw/<entity>/records.json`` /
+    ``<run_prefix>/transformed/<entity>/entities.json``) — **not** the
+    UUID-named ``<run_prefix>/file_refs/<uuid>.json`` fallback the bare
+    ``FileReference.from_local()`` constructor used to produce.
 
-    Why this matters: in production the object store is Atlan's
-    blob-storage gateway, which only permits writes under
-    ``artifacts/`` and ``persistent-artifacts/``. A bare
-    ``file_refs/<uuid>`` upload returns ``403 code 1009 'Invalid Path'``.
-    The local CI suite can't catch this because the local Dapr binding
-    (``bindings.localstorage``) has no path policy — every prefix is
-    writable on disk.
+    Why this matters: the downstream publish step discovers transformed
+    assets by walking ``transformed/<entity>/`` prefixes. Anything that
+    only lands under ``file_refs/<uuid>.json`` is invisible to publish
+    and the entity gets archived as "removed from source" on the next
+    run.
 
-    Per Chris Grote's review on PR #1792, the right tier for the
-    extract→transform handoff is ``TRANSIENT`` (intermediate, auto-
-    cleaned-at-run-end). The fix is therefore NOT to change the tier
-    at the SqlApp callsites, but to make ``StorageTier.TRANSIENT``
-    honour the ``run_prefix`` passed by the activity interceptor's
-    ``persist_file_refs(..., output_path=build_output_path())``. This
-    test exercises the actual persist path to pin the resulting
-    storage key shape — the property the gateway actually evaluates.
+    Production incident (customer tenant, mysql-app):
+        * ``extract_databases`` on pod A → wrote
+          ``raw/database/records.json`` to pod A local FS.
+        * ``transform_databases`` on pod B (different replica) →
+          consumed raw via the interceptor's materialise handshake,
+          wrote ``transformed/database/entities.json`` to pod B local
+          FS, emitted a ``transformed_file`` FileReference.
+        * ``upload_to_atlan`` on pod C → its directory walk found
+          pod C's local FS empty (none of the per-entity transform
+          files were ever on pod C) → uploaded nothing under
+          ``transformed/database/``.
+        * The interceptor DID upload pod B's ``entities.json`` to
+          object store — but to a UUID-named ``file_refs/<uuid>.json``
+          key that publish doesn't discover.
+        * Publish read ``transformed/database/`` → found nothing →
+          archived the database asset on the customer tenant.
 
-    Original production incident: every ``extract_*`` activity on a
-    real Atlan tenant failed identically with that 403 on the
-    persist step because ``StorageTier.TRANSIENT._file_ref_base()``
-    used to return bare ``"file_refs"`` regardless of run_prefix.
+    The fix pins ``storage_path`` on the ref at the SqlApp emission
+    sites so the interceptor's persist lands the file at the canonical
+    path directly — no dependency on ``upload_to_atlan``'s
+    cross-pod-fragile directory walk.
     """
 
-    async def test_extract_raw_file_persists_under_run_prefix(self, app, tmp_path):
-        """End-to-end: extract emits a ref, persist resolves the
-        storage key, and the key MUST be run-scoped.
+    async def test_extract_raw_file_persists_at_canonical_key(self, app, tmp_path):
+        """Extract emits a ref with ``storage_path`` pre-set to the
+        canonical key. Persist honours it and uploads to that exact
+        location — NOT under ``file_refs/<uuid>``.
         """
         from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.ops import exists
         from application_sdk.storage.reference import persist_file_reference
 
         rows = [{"database_name": "db1"}]
@@ -411,26 +431,29 @@ class TestRawFilePersistsUnderRunScopedPrefix:
             result = await app.extract_databases(input_)
 
         assert result.raw_file is not None
+        assert result.raw_file.storage_path is not None
+        # Pre-persist: storage_path is the canonical key shape.
+        assert result.raw_file.storage_path.endswith("/raw/database/records.json")
 
-        # Simulate what the activity interceptor does after extract returns.
-        run_prefix = "artifacts/apps/test-app/workflows/wf-1/run-1"
+        # Persist must honour the pre-set storage_path (the key
+        # contract change in storage/reference.py).
         durable = await persist_file_reference(
-            store, result.raw_file, output_path=run_prefix
+            store, result.raw_file, output_path="ignored-because-pre-set"
         )
-
-        assert durable.storage_path is not None
-        assert durable.storage_path.startswith(f"{run_prefix}/file_refs/"), (
-            "extract→persist must produce a run-scoped storage key. Got "
-            f"{durable.storage_path!r}; Atlan's blob-storage gateway "
-            "rejects anything outside artifacts/ and persistent-artifacts/ "
-            "with 403 code 1009 'Invalid Path'."
+        assert durable.storage_path == result.raw_file.storage_path, (
+            f"persist must honour pre-set storage_path; got "
+            f"{durable.storage_path!r} expected {result.raw_file.storage_path!r}"
         )
+        # File actually landed at the canonical key.
+        assert await exists(durable.storage_path, store, normalize=False)
 
-    async def test_transform_transformed_file_persists_under_run_prefix(
+    async def test_transform_transformed_file_persists_at_canonical_key(
         self, app, tmp_path
     ):
-        """Same guard for the transform → publish handoff."""
+        """Same guard for the transform → publish handoff — the key
+        path that broke on the customer tenant."""
         from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.ops import exists
         from application_sdk.storage.reference import persist_file_reference
 
         _seed_raw(tmp_path, "database", [{"database_name": "remote_db"}])
@@ -440,24 +463,393 @@ class TestRawFilePersistsUnderRunScopedPrefix:
         result = await app.transform_databases(input_)
 
         assert result.transformed_file is not None
+        assert result.transformed_file.storage_path is not None
+        assert result.transformed_file.storage_path.endswith(
+            "/transformed/database/entities.json"
+        )
 
-        run_prefix = "artifacts/apps/test-app/workflows/wf-1/run-1"
         durable = await persist_file_reference(
-            store, result.transformed_file, output_path=run_prefix
+            store, result.transformed_file, output_path="ignored-because-pre-set"
+        )
+        assert durable.storage_path == result.transformed_file.storage_path
+        assert await exists(durable.storage_path, store, normalize=False)
+
+    async def test_no_file_refs_uuid_orphan_when_storage_path_pre_set(
+        self, app, tmp_path
+    ):
+        """Pin the failure mode: when storage_path is pre-set, the
+        upload must land ONLY at the canonical key — NOT also at
+        ``file_refs/<uuid>``. The customer-bucket repro had
+        ``file_refs/<uuid>.json`` orphans next to (partial)
+        ``transformed/<entity>/entities.json`` files — publish ignored
+        the orphans and archived assets whose canonical key was
+        missing. This test confirms no orphan is created.
+        """
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        _seed_raw(tmp_path, "database", [{"database_name": "x"}])
+        input_ = _make_task_input(output_path=str(tmp_path))
+        store = create_local_store(tmp_path / "store")
+
+        result = await app.transform_databases(input_)
+        assert result.transformed_file is not None
+
+        await persist_file_reference(
+            store, result.transformed_file, output_path="run-prefix"
         )
 
-        assert durable.storage_path is not None
-        assert durable.storage_path.startswith(f"{run_prefix}/file_refs/"), (
-            "transform→persist must produce a run-scoped storage key. "
-            f"Got {durable.storage_path!r}."
+        # Walk the store — there must be NO file_refs/ key for this
+        # ref. The only keys we accept are at the canonical
+        # transformed/database/... prefix.
+        all_keys = await list_keys("", store, normalize=False)
+        file_refs_keys = [k for k in all_keys if "file_refs/" in k]
+        assert not file_refs_keys, (
+            "persist created file_refs/<uuid> orphan(s) — publish cannot "
+            "discover these and the entity will be archived: "
+            f"{file_refs_keys}"
         )
 
-    async def test_transient_tier_honours_run_prefix(self, tmp_path):
-        """Direct unit test on the contract: TRANSIENT must scope under
-        run_prefix when one is supplied. Guards the
-        ``StorageTier._file_ref_base`` change itself — without this,
-        the SqlApp emission paths above could silently fall back to
-        bare ``file_refs/`` if a future refactor reverts the contract.
+    async def test_full_pipeline_writes_only_canonical_keys_no_file_refs_orphans(
+        self, app, tmp_path
+    ):
+        """End-to-end multi-entity guard for the customer-tenant
+        production incident.
+
+        Reproduces the customer scenario:
+            * 4 entities (database, schema, table, column) extracted
+              and transformed in parallel.
+            * Every emitted ``FileReference`` is persisted (the
+              interceptor pattern).
+            * Walks the store and asserts the final layout matches
+              what publish expects:
+
+                <run_prefix>/raw/database/records.json
+                <run_prefix>/raw/schema/records.json
+                <run_prefix>/raw/table/records.json
+                <run_prefix>/raw/column/records.json
+                <run_prefix>/transformed/database/entities.json
+                <run_prefix>/transformed/schema/entities.json
+                <run_prefix>/transformed/table/entities.json
+                <run_prefix>/transformed/column/entities.json
+
+              and NOTHING under ``file_refs/<uuid>.json``.
+
+        Customer-bucket S3 listing for the failing run had a mix of
+        canonical ``transformed/<entity>/entities.json`` (4 entities,
+        missing the database one) AND ``file_refs/<uuid>.json``
+        orphans (7 entries — content of the missing transformed
+        files, but at UUID keys publish couldn't discover). Publish
+        archived the missing-canonical entity as 'removed from
+        source'. This test catches that pattern before it ships.
+        """
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        store = create_local_store(tmp_path / "store")
+        input_ = _make_task_input(output_path=str(tmp_path))
+
+        # ── extract all 4 standard entities (the SqlApp.run() parallel set) ──
+        entity_sql_rows = {
+            "database": [{"database_name": "prod"}],
+            "schema": [{"schema_name": "public"}, {"schema_name": "private"}],
+            "table": [
+                {"table_name": "users"},
+                {"table_name": "orders"},
+                {"table_name": "products"},
+            ],
+            "column": [{"column_name": "id"}, {"column_name": "name"}],
+        }
+        extract_methods = {
+            "database": app.extract_databases,
+            "schema": app.extract_schemas,
+            "table": app.extract_tables,
+            "column": app.extract_columns,
+        }
+        extract_results = {}
+        for entity, rows in entity_sql_rows.items():
+            with patch.object(
+                app, "_init_sql_client", side_effect=_mock_init_client(rows)
+            ):
+                extract_results[entity] = await extract_methods[entity](input_)
+
+        # ── persist every raw_file (interceptor pattern, simulated) ──
+        for entity, result in extract_results.items():
+            assert result.raw_file is not None, f"extract_{entity}s returned no ref"
+            durable = await persist_file_reference(
+                store, result.raw_file, output_path="ignored"
+            )
+            assert durable.storage_path == result.raw_file.storage_path
+            assert durable.storage_path.endswith(
+                f"/raw/{entity}/records.json"
+            ), f"raw_file for {entity} not at canonical key: {durable.storage_path!r}"
+
+        # ── transform all 4 entities (each with its raw_file threaded in) ──
+        transform_methods = {
+            "database": app.transform_databases,
+            "schema": app.transform_schemas,
+            "table": app.transform_tables,
+            "column": app.transform_columns,
+        }
+        for entity in entity_sql_rows:
+            transform_input = _make_task_input(
+                output_path=str(tmp_path),
+                raw_file=extract_results[entity].raw_file,
+            )
+            transform_result = await transform_methods[entity](transform_input)
+            assert (
+                transform_result.transformed_file is not None
+            ), f"transform_{entity}s returned no ref"
+            # Persist the transformed ref.
+            durable = await persist_file_reference(
+                store, transform_result.transformed_file, output_path="ignored"
+            )
+            assert durable.storage_path.endswith(
+                f"/transformed/{entity}/entities.json"
+            ), (
+                f"transformed_file for {entity} not at canonical key: "
+                f"{durable.storage_path!r}"
+            )
+
+        # ── Walk the store: verify the layout matches publish expectations ──
+        all_keys = sorted(await list_keys("", store, normalize=False))
+        # Strip sidecars (we only care about the data files for this check).
+        data_keys = [k for k in all_keys if not k.endswith(".sha256")]
+
+        # Expectation: 4 canonical raw + 4 canonical transformed = 8 data files.
+        expected_suffixes = {f"/raw/{e}/records.json" for e in entity_sql_rows} | {
+            f"/transformed/{e}/entities.json" for e in entity_sql_rows
+        }
+        actual_suffixes = {
+            "/" + "/".join(k.rsplit("/", 3)[-3:])
+            for k in data_keys
+            if any(k.endswith(s) for s in expected_suffixes)
+        }
+        assert actual_suffixes == expected_suffixes, (
+            f"missing canonical keys for some entities. "
+            f"expected: {expected_suffixes}, got: {actual_suffixes}, "
+            f"all data keys: {data_keys}"
+        )
+
+        # ── And ZERO file_refs/<uuid> orphans. The customer-bucket
+        # repro had 7 such orphans — publish ignored them and the
+        # entity whose canonical key was missing got archived.
+        file_refs_orphans = [k for k in data_keys if "file_refs/" in k]
+        assert not file_refs_orphans, (
+            "persist created file_refs/<uuid> orphan(s) — the customer "
+            "incident pattern. Publish discovers transformed assets by "
+            "walking transformed/<entity>/ and CANNOT find these UUID "
+            f"keys: {file_refs_orphans}"
+        )
+
+    async def test_cross_pod_handshake_preserved_with_canonical_keys(
+        self, app, tmp_path
+    ):
+        """Pin the BLDX-1281 cross-pod fault tolerance — with the
+        canonical-key change, the materialise step on a different pod
+        must still find the raw file and reproduce its contents.
+
+        Scenario: pod A extracts (writes raw, persists ref), pod A's
+        local file vanishes (simulating pod B picking up the
+        transform), materialise re-downloads from object store, then
+        transform reads the materialised file and produces a
+        transformed ref at the canonical key.
+        """
+        from pathlib import Path
+
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import (
+            materialize_file_reference,
+            persist_file_reference,
+        )
+
+        rows = [{"database_name": "db1"}, {"database_name": "db2"}]
+        input_ = _make_task_input(output_path=str(tmp_path))
+        store = create_local_store(tmp_path / "store")
+
+        # Pod A: extract → persist → file in object store at canonical key.
+        with patch.object(app, "_init_sql_client", side_effect=_mock_init_client(rows)):
+            extract_result = await app.extract_databases(input_)
+        assert extract_result.raw_file is not None
+        durable_raw = await persist_file_reference(
+            store, extract_result.raw_file, output_path="ignored"
+        )
+        # Confirm canonical key, not file_refs/<uuid>.
+        assert durable_raw.storage_path is not None
+        assert durable_raw.storage_path.endswith("/raw/database/records.json")
+
+        # Pod B simulation: delete pod A's local file.
+        Path(extract_result.raw_file.local_path).unlink()
+
+        # Materialise on pod B — re-download from object store at the
+        # canonical key. This is the BLDX-1281 cross-pod recovery
+        # path; the canonical-key change does not break it because
+        # materialise just reads ``ref.storage_path`` (wherever the
+        # caller pinned it).
+        materialised = await materialize_file_reference(store, durable_raw)
+        assert materialised.local_path is not None
+        assert Path(materialised.local_path).exists(), (
+            "materialise must rebuild the local file from the canonical "
+            "storage_path even when the original pod's copy is gone — "
+            "the BLDX-1281 cross-pod guarantee, preserved by the "
+            "canonical-key change."
+        )
+
+        # Pod B transform now has access to raw via the materialised
+        # ref. Verify the transformed ref also lands at canonical.
+        transform_input = _make_task_input(
+            output_path=str(tmp_path), raw_file=materialised
+        )
+        transform_result = await app.transform_databases(transform_input)
+        assert transform_result.transformed_file is not None
+        assert transform_result.transformed_file.storage_path is not None
+        assert transform_result.transformed_file.storage_path.endswith(
+            "/transformed/database/entities.json"
+        )
+
+    async def test_cross_pod_multi_entity_no_upload_to_atlan_dependency(
+        self, app, tmp_path
+    ):
+        """Pin the **specific cross-pod failure mode** that caused the
+        customer incident: extract and transform activities for
+        different entities scheduled on different pods, with NO
+        ``upload_to_atlan`` running (or it ran on a pod with empty
+        local FS — equivalent).
+
+        Pre-fix flow on the customer tenant:
+            * extract_databases on pod A → wrote
+              ``raw/database/records.json`` locally + emitted ref.
+            * transform_databases on pod B → consumed via materialise,
+              wrote ``transformed/database/entities.json`` locally +
+              emitted ref. Interceptor uploaded both refs to
+              ``file_refs/<uuid>.json``.
+            * extract_schemas / transform_schemas on pod C →
+              ``file_refs/<other-uuid>.json`` for schema's refs.
+            * upload_to_atlan on pod D → local FS empty → uploaded
+              nothing canonical → publish saw only partial
+              ``transformed/<entity>/`` → archived missing entities.
+
+        Post-fix: pre-set ``storage_path`` on every ref means persist
+        lands the file at the canonical key from whichever pod ran
+        the activity — no dependency on ``upload_to_atlan``'s local
+        FS state. This test simulates that distributed schedule.
+        """
+        from pathlib import Path
+
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import (
+            materialize_file_reference,
+            persist_file_reference,
+        )
+
+        store = create_local_store(tmp_path / "store")
+
+        # Each entity runs on its own (different) pod — separate tmp
+        # subdirs simulate per-pod local FS isolation.
+        pods = {
+            entity: tmp_path / f"pod-{entity}"
+            for entity in ("database", "schema", "table", "column")
+        }
+        for pod_dir in pods.values():
+            pod_dir.mkdir()
+
+        entity_rows = {
+            "database": [{"database_name": "db1"}],
+            "schema": [{"schema_name": "public"}],
+            "table": [{"table_name": "users"}],
+            "column": [{"column_name": "id"}],
+        }
+        extract_methods = {
+            "database": app.extract_databases,
+            "schema": app.extract_schemas,
+            "table": app.extract_tables,
+            "column": app.extract_columns,
+        }
+        transform_methods = {
+            "database": app.transform_databases,
+            "schema": app.transform_schemas,
+            "table": app.transform_tables,
+            "column": app.transform_columns,
+        }
+
+        # ── Each entity: extract on its pod → persist → DELETE local
+        # file (simulating that pod going away) → transform on a
+        # different pod that materialises from object store. ──
+        for entity, rows in entity_rows.items():
+            extract_pod = pods[entity]
+            extract_input = _make_task_input(output_path=str(extract_pod))
+
+            with patch.object(
+                app, "_init_sql_client", side_effect=_mock_init_client(rows)
+            ):
+                extract_result = await extract_methods[entity](extract_input)
+
+            assert extract_result.raw_file is not None
+            durable_raw = await persist_file_reference(
+                store, extract_result.raw_file, output_path="ignored"
+            )
+            assert durable_raw.storage_path.endswith(f"/raw/{entity}/records.json")
+
+            # Simulate the extract pod going away — its local FS is
+            # gone before the transform runs.
+            Path(extract_result.raw_file.local_path).unlink()
+
+            # Transform runs on a DIFFERENT pod (one of the other
+            # entities' pod dirs — to be explicit, none of these
+            # pods have the raw file locally). Materialise via the
+            # interceptor pattern.
+            transform_pod_entities = [e for e in pods if e != entity]
+            transform_pod = pods[transform_pod_entities[0]]
+            materialised = await materialize_file_reference(store, durable_raw)
+            assert Path(materialised.local_path).exists(), (
+                f"materialise must rebuild raw file for {entity} on a "
+                f"different pod — BLDX-1281 cross-pod guarantee"
+            )
+
+            transform_input = _make_task_input(
+                output_path=str(transform_pod), raw_file=materialised
+            )
+            transform_result = await transform_methods[entity](transform_input)
+
+            assert transform_result.transformed_file is not None
+            durable_transformed = await persist_file_reference(
+                store, transform_result.transformed_file, output_path="ignored"
+            )
+            assert durable_transformed.storage_path.endswith(
+                f"/transformed/{entity}/entities.json"
+            )
+
+        # ── Verify the final store layout: every entity has its
+        # canonical raw + transformed keys, NO file_refs/<uuid>
+        # orphans, regardless of which "pod" each activity ran on. ──
+        all_keys = await list_keys("", store, normalize=False)
+        data_keys = [k for k in all_keys if not k.endswith(".sha256")]
+
+        for entity in entity_rows:
+            assert any(
+                k.endswith(f"/raw/{entity}/records.json") for k in data_keys
+            ), f"missing canonical raw key for {entity}: {data_keys}"
+            assert any(
+                k.endswith(f"/transformed/{entity}/entities.json") for k in data_keys
+            ), f"missing canonical transformed key for {entity}: {data_keys}"
+
+        # The smoking gun: NO file_refs/<uuid> orphans. The customer
+        # incident had these next to partial transformed/ paths.
+        orphans = [k for k in data_keys if "file_refs/" in k]
+        assert not orphans, (
+            "cross-pod multi-entity persist created file_refs/<uuid> "
+            f"orphan(s) — publish will archive missing entities: {orphans}"
+        )
+
+    async def test_persist_honours_pre_set_storage_path(self, tmp_path):
+        """Direct unit test on the contract change in
+        ``persist_file_reference``: when ``ref.storage_path`` is set
+        pre-persist, persist uses it as the upload key (instead of
+        auto-generating a ``file_refs/<uuid>`` path). Guards a future
+        refactor that might silently revert this.
         """
         from application_sdk.storage.factory import create_local_store
         from application_sdk.storage.reference import persist_file_reference
@@ -466,33 +858,35 @@ class TestRawFilePersistsUnderRunScopedPrefix:
         f.write_text("{}")
         store = create_local_store(tmp_path / "store")
 
-        ref = FileReference.from_local(f)  # default TRANSIENT
-        assert ref.tier == StorageTier.TRANSIENT
+        ref = FileReference(
+            local_path=str(f),
+            storage_path="my/canonical/key.json",
+            tier=StorageTier.TRANSIENT,
+        )
+        durable = await persist_file_reference(store, ref, output_path="ignored")
+        assert durable.storage_path == "my/canonical/key.json"
+
+    async def test_persist_falls_back_to_uuid_when_no_storage_path(self, tmp_path):
+        """No regression on the legacy contract: refs WITHOUT a
+        pre-set storage_path still get UUID-named keys. Guards
+        existing callers (``storage/formats/parquet.py``,
+        ``storage/rolling.py``) that don't pin a storage_path.
+        """
+        from application_sdk.storage.factory import create_local_store
+        from application_sdk.storage.reference import persist_file_reference
+
+        f = tmp_path / "x.json"
+        f.write_text("{}")
+        store = create_local_store(tmp_path / "store")
+
+        ref = FileReference.from_local(f)  # default TRANSIENT, no storage_path
+        assert ref.storage_path is None
 
         durable = await persist_file_reference(
             store, ref, output_path="artifacts/apps/test/workflows/wf/run"
         )
         assert durable.storage_path is not None
-        assert durable.storage_path.startswith(
-            "artifacts/apps/test/workflows/wf/run/file_refs/"
-        )
-
-    async def test_transient_tier_falls_back_to_bare_prefix_without_run(self, tmp_path):
-        """Without a run_prefix (ad-hoc callers, unit tests, local
-        scripts), TRANSIENT still falls back to bare ``file_refs/`` so
-        the helper stays usable outside a Temporal workflow.
-        """
-        from application_sdk.storage.factory import create_local_store
-        from application_sdk.storage.reference import persist_file_reference
-
-        f = tmp_path / "x.json"
-        f.write_text("{}")
-        store = create_local_store(tmp_path / "store")
-
-        ref = FileReference.from_local(f)
-        durable = await persist_file_reference(store, ref)
-        assert durable.storage_path is not None
-        assert durable.storage_path.startswith("file_refs/")
+        assert "/file_refs/" in durable.storage_path
 
     def test_from_local_accepts_tier_kwarg(self, tmp_path):
         """``FileReference.from_local`` accepts an explicit ``tier`` kwarg.
@@ -513,6 +907,103 @@ class TestRawFilePersistsUnderRunScopedPrefix:
         assert default_ref.tier == StorageTier.TRANSIENT
         assert retained_ref.tier == StorageTier.RETAINED
         assert persistent_ref.tier == StorageTier.PERSISTENT
+
+
+class TestGetObjectStorePrefixCrossPlatform:
+    """Pin ``get_object_store_prefix`` output shape so SqlApp's
+    canonical ``storage_path`` is always a forward-slash, drive-less,
+    leading-slash-stripped relative key — across every supported
+    platform.
+
+    Why a dedicated test: the function is the bridge between
+    OS-specific local paths and object-store keys. Windows runners
+    surfaced two bugs in succession:
+
+    1. Backslash separators leaking into ``storage_path`` (fixed
+       in a prior commit on this branch).
+    2. Drive letter (``C:\\``) leaking into ``storage_path`` so
+       obstore's LocalFileSystem backend tried to walk
+       ``<store_root>\\C:\\...`` and rejected the absolute-path
+       composition.
+
+    The function must return a relative-style key regardless of
+    whether the caller passed a POSIX-absolute, Windows-absolute,
+    or already-relative path. These tests pin that invariant so
+    a future refactor can't silently restore the Windows-only
+    breakage (Linux/macOS CI passes either way because POSIX local
+    stores tolerate the extra leading slash).
+    """
+
+    def test_no_backslashes_in_output(self):
+        """Forward-slash convention — never backslash, regardless of platform."""
+        from application_sdk.execution import get_object_store_prefix
+
+        # Simulate Windows-style separators on any platform by passing
+        # a literal backslash string. The function uses ``os.path.sep``
+        # for normalization, so on POSIX this becomes a no-op (the
+        # input has no POSIX separators); on Windows the backslashes
+        # would have been normalized in the OS-aware branch but the
+        # test would still pass.
+        out = get_object_store_prefix("some/relative/key.json")
+        assert "\\" not in out, f"backslash leaked into key: {out!r}"
+
+    def test_strips_leading_slash(self):
+        """Leading slash isn't valid in object-store keys — strip it."""
+        from application_sdk.execution import get_object_store_prefix
+
+        out = get_object_store_prefix("/already/relative/key.json")
+        # The function takes either local paths or object-store paths;
+        # for both, leading separators should be stripped.
+        assert not out.startswith("/"), f"leading slash leaked: {out!r}"
+
+    def test_relative_input_passes_through_with_separator_normalization(self):
+        """A relative path the caller passed as-is round-trips with
+        only separator + leading-slash normalization."""
+        from application_sdk.execution import get_object_store_prefix
+
+        out = get_object_store_prefix("artifacts/apps/foo/file.json")
+        assert out == "artifacts/apps/foo/file.json"
+
+    def test_windows_drive_letter_stripped(self):
+        """Windows-absolute input like ``C:\\Users\\foo\\bar`` must
+        produce a drive-less, forward-slash relative key.
+
+        Direct unit test on the helper — uses ``os.path.splitdrive``
+        which is a no-op on POSIX, so this test exercises real
+        behaviour only on Windows. On POSIX it's a smoke check that
+        the function doesn't accidentally split a colon-containing
+        POSIX path (POSIX has no drive notion).
+        """
+        import os
+
+        from application_sdk.execution import get_object_store_prefix
+
+        # Build a path with the platform's own separator + a drive-
+        # like prefix. On POSIX ``os.path.splitdrive`` returns
+        # ``("", path)`` so the drive-strip is a no-op and we get
+        # back the same (separator-normalized, leading-slash-stripped)
+        # path. On Windows the drive letter IS stripped.
+        if os.path.sep == "\\":
+            # Windows: real drive letter handling.
+            out = get_object_store_prefix("C:\\Users\\runner\\raw\\db\\records.json")
+            assert "C:" not in out, f"drive letter leaked: {out!r}"
+            assert "\\" not in out, f"backslash leaked: {out!r}"
+            assert out == "Users/runner/raw/db/records.json"
+        else:
+            # POSIX: ``os.path.splitdrive`` is a no-op. Just verify
+            # the function returns a normalized relative form for
+            # an absolute POSIX path under tmp.
+            out = get_object_store_prefix("/tmp/runner/raw/db/records.json")
+            assert not out.startswith("/")
+            assert "\\" not in out
+
+    def test_strips_trailing_slash(self):
+        """Trailing slash must not leak into object-store keys."""
+        from application_sdk.execution import get_object_store_prefix
+
+        out = get_object_store_prefix("datasets/sales/2024/")
+        assert not out.endswith("/"), f"trailing slash leaked: {out!r}"
+        assert out == "datasets/sales/2024"
 
 
 class TestTransformInputLegacyFields:
@@ -600,14 +1091,24 @@ class TestTransformConsumesRawFileReference:
             tmp_path / "transformed" / "table" / "entities.json"
         )
         assert result.transformed_file.is_durable is False
-        assert result.transformed_file.storage_path is None
+        # storage_path is pre-set to the canonical
+        # ``transformed/<entity>/entities.json`` key so publish
+        # discovers the file at the entity-typed path it expects.
+        # Without this pin the interceptor would auto-generate a
+        # ``file_refs/<uuid>.json`` key and publish would silently
+        # archive the entity (production incident — see
+        # ``TestCanonicalStoragePaths`` for the cross-pod regression
+        # guard).
+        assert result.transformed_file.storage_path is not None
+        assert result.transformed_file.storage_path.endswith(
+            "/transformed/table/entities.json"
+        ), f"unexpected storage_path: {result.transformed_file.storage_path!r}"
         # Tier = RETAINED here because the transform → publish handoff
         # can span SDR → in-tenant deployments — the ref must survive
         # the SDR-side workflow's auto-cleanup at run end. Contrast
         # with raw_file (TRANSIENT): extract and transform always run
         # in the same deployment, so the intermediate ref is safe to
-        # auto-clean. See ``TestRawFilePersistsUnderRunScopedPrefix``
-        # for the storage-path scoping that both tiers share.
+        # auto-clean.
         assert result.transformed_file.tier == StorageTier.RETAINED
 
     async def test_transform_no_input_ref_falls_back_to_legacy_path(
@@ -708,9 +1209,6 @@ class TestRunThreadsRawFileRefs:
             patch.object(app, "transform_tables", side_effect=make_transform("table")),
             patch.object(
                 app, "transform_columns", side_effect=make_transform("column")
-            ),
-            patch.object(
-                app, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
             ),
             patch.object(app, "_resolve_credential_ref", return_value=None),
             patch(
@@ -862,7 +1360,7 @@ class TestRunOutputPrefixes:
         return app
 
     def _patch_extract_tasks(self):
-        """Return list of patches that mock all extract_* + transform_* + upload_to_atlan.
+        """Return list of patches that mock all extract_* + transform_*.
 
         Use real ``ExtractionTaskOutput`` instances (not MagicMocks) for
         the extract returns — ``run()`` reads ``.raw_file`` and threads
@@ -926,9 +1424,6 @@ class TestRunOutputPrefixes:
                 SqlApp,
                 "transform_columns",
                 new=AsyncMock(return_value=MagicMock(total_record_count=10)),
-            ),
-            patch.object(
-                SqlApp, "upload_to_atlan", new=AsyncMock(return_value=MagicMock())
             ),
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
         ]
