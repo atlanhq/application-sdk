@@ -19,7 +19,41 @@ Usage::
 
         async def run(self, input: MyInput) -> MyOutput:
             return await self.fetch_data(input)
+
+Handler decorators and runtime primitives are also exported here so app code
+never needs to import the underlying orchestrator directly::
+
+    from application_sdk.app import App, signal, query, update, wait_condition
+
+    class MyApp(App):
+        async def run(self, input: MyInput) -> MyOutput:
+            await wait_condition(lambda: self.ready)
+            ...
+
+        @signal
+        async def unblock(self) -> None:
+            self.ready = True
+
+        @query
+        def status(self) -> str:
+            return self._state
+
+        @update
+        async def pause(self, reason: str) -> str:
+            self._state = "paused"
+            return f"paused: {reason}"
 """
+
+from temporalio.workflow import (
+    HandlerUnfinishedPolicy,
+    now,
+    query,
+    signal,
+    sleep,
+    update,
+    uuid4,
+    wait_condition,
+)
 
 from application_sdk.app.base import App, AppError, NonRetryableError, RetryableError
 from application_sdk.app.context import AppContext
@@ -38,6 +72,7 @@ __all__ = [
     "AppRegistry",
     "AtlanClientMixin",
     "EntryPointMetadata",
+    "HandlerUnfinishedPolicy",
     "Input",
     "NonRetryableError",
     "Output",
@@ -48,5 +83,12 @@ __all__ = [
     "TaskRegistry",
     "entrypoint",
     "mcp_tool",
+    "now",
+    "query",
+    "signal",
+    "sleep",
     "task",
+    "update",
+    "uuid4",
+    "wait_condition",
 ]

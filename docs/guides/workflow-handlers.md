@@ -1,6 +1,6 @@
 # Workflow Handlers — Cookbook
 
-`@workflow.signal`, `@workflow.query`, and `@workflow.update` let external callers reach into a running `App` workflow without killing or restarting it. The SDK lifts these decorators from your `App` subclass onto the generated workflow class, so the Temporal client API works transparently.
+`@signal`, `@query`, and `@update` let external callers reach into a running `App` without killing or restarting it. The SDK lifts these decorators from your `App` subclass onto the generated workflow class, so the Temporal client API works transparently.
 
 This page collects the patterns app authors actually need. Each example is paste-into-an-App-subclass and works against the SDK as of [BLDX-1283](https://linear.app/atlan-epd/issue/BLDX-1283).
 
@@ -8,9 +8,9 @@ This page collects the patterns app authors actually need. Each example is paste
 >
 > | Need | Decorator |
 > |---|---|
-> | Mutate state and return a value, with validation, exactly-once delivery | `@workflow.update` |
-> | Mutate state, fire-and-forget, no return value | `@workflow.signal` |
-> | Read state without mutation, fast response | `@workflow.query` |
+> | Mutate state and return a value, with validation, exactly-once delivery | `@update` |
+> | Mutate state, fire-and-forget, no return value | `@signal` |
+> | Read state without mutation, fast response | `@query` |
 
 ---
 
@@ -19,8 +19,7 @@ This page collects the patterns app authors actually need. Each example is paste
 A long extract that customers can pause mid-flight (maintenance window, source incident) without losing progress.
 
 ```python
-from temporalio import workflow
-from application_sdk.app import App
+from application_sdk.app import App, update, wait_condition
 from application_sdk.contracts.base import Input, Output
 
 
@@ -42,7 +41,7 @@ class ExtractApp(App):
         for batch in self._batches(input.source_url):
             # Block here while paused — wait_condition is deterministic
             # and free when nothing is happening.
-            await workflow.wait_condition(lambda: self.state != "paused")
+            await wait_condition(lambda: self.state != "paused")
 
             if self.state == "cancelled":
                 break
@@ -53,17 +52,17 @@ class ExtractApp(App):
             rows_extracted=self.rows_extracted, final_state=self.state
         )
 
-    @workflow.update
+    @update
     async def pause(self, reason: str) -> str:
         self.state = "paused"
         return f"paused: {reason}"
 
-    @workflow.update
+    @update
     async def resume(self) -> str:
         self.state = "running"
         return "resumed"
 
-    @workflow.update
+    @update
     async def graceful_cancel(self, reason: str) -> str:
         self.state = "cancelled"
         return f"cancelling: {reason}"
@@ -89,7 +88,8 @@ Operators see throughput without waiting for the run to finish. Useful for any l
 
 ```python
 from datetime import datetime
-from temporalio import workflow
+
+from application_sdk.app import now, query
 
 
 class MetricsApp(App):
@@ -99,7 +99,7 @@ class MetricsApp(App):
         self.started_at: datetime | None = None
 
     async def run(self, input: ExtractInput) -> ExtractOutput:
-        self.started_at = workflow.now()
+        self.started_at = now()
         tables = await self._list_tables(input.source_url)
         self.tables_total = len(tables)
 
@@ -109,10 +109,10 @@ class MetricsApp(App):
 
         return ExtractOutput(rows_extracted=self.tables_done)
 
-    @workflow.query
+    @query
     def progress(self) -> dict:
         elapsed = (
-            (workflow.now() - self.started_at).total_seconds()
+            (now() - self.started_at).total_seconds()
             if self.started_at else 0
         )
         rate = self.tables_done / elapsed if elapsed > 0 else 0
@@ -141,7 +141,8 @@ Source is hitting a quota. Back off without killing the run.
 
 ```python
 from datetime import timedelta
-from temporalio import workflow
+
+from application_sdk.app import update, wait_condition
 
 
 class RateLimitedApp(App):
@@ -152,13 +153,13 @@ class RateLimitedApp(App):
         rows = 0
         async for batch in self._batches(input.source_url):
             # Re-read the live limit each batch; updates flip it mid-flight.
-            await workflow.wait_condition(
+            await wait_condition(
                 lambda: True, timeout=timedelta(seconds=1 / self.rps_limit)
             )
             rows += await self._process(batch)
         return ExtractOutput(rows_extracted=rows)
 
-    @workflow.update
+    @update
     async def set_rate_limit(self, rps: int) -> int:
         self.rps_limit = rps
         return self.rps_limit
@@ -186,7 +187,7 @@ The validator runs **before** the handler body. If it raises, the client gets a 
 Webhook / cron / sibling app pokes a long-running extractor.
 
 ```python
-from temporalio import workflow
+from application_sdk.app import signal, wait_condition
 
 
 class IncrementalApp(App):
@@ -198,10 +199,10 @@ class IncrementalApp(App):
         while True:
             await self._extract_since(self.watermark)
             # Block until an external system signals more data is ready.
-            await workflow.wait_condition(lambda: self.advance_signal)
+            await wait_condition(lambda: self.advance_signal)
             self.advance_signal = False
 
-    @workflow.signal
+    @signal
     async def new_data_available(self, new_watermark: str) -> None:
         self.watermark = new_watermark
         self.advance_signal = True
@@ -224,7 +225,7 @@ Signals are fire-and-forget. Use them when the caller doesn't need a response or
 "Where did it stop?" during oncall, without reading logs.
 
 ```python
-from temporalio import workflow
+from application_sdk.app import query
 
 
 class CheckpointedApp(App):
@@ -241,7 +242,7 @@ class CheckpointedApp(App):
                 }
         return ExtractOutput(rows_extracted=...)
 
-    @workflow.query
+    @query
     def get_checkpoint(self) -> dict:
         return self.last_checkpoint
 ```
@@ -257,11 +258,11 @@ $ temporal workflow query --workflow-id=extract-1 --type=get_checkpoint
 
 ## Gotchas
 
-The same determinism rules that apply to `run()` apply to every handler — they all execute inside Temporal's workflow sandbox.
+The same determinism rules that apply to `run()` apply to every handler — they all execute inside the workflow sandbox.
 
-- **No I/O, no random, no `time.time()`.** Use `workflow.now()` / `workflow.uuid4()`. Network calls and DB queries belong in `@task` activities the handler may invoke if needed.
+- **No I/O, no random, no `time.time()`.** Use `now()` / `uuid4()` (from `application_sdk.app`). Network calls and DB queries belong in `@task` activities the handler may invoke if needed.
 - **Don't `await` long-running work in a handler.** Updates have a deadline (default 10s). Flip a flag in the handler; let `run()` do the actual work.
-- **Prefer `workflow.wait_condition` over polling.** `while not flag: await asyncio.sleep(0.1)` works but is wasteful. `wait_condition` is the deterministic primitive and runs only when something changes.
+- **Prefer `wait_condition` over polling.** `while not flag: await asyncio.sleep(0.1)` works but is wasteful. `wait_condition` is the deterministic primitive and runs only when something changes.
 - **Validators raise → update is rejected with `WorkflowUpdateFailedError` on the client.** Use `@<update_name>.validator` for argument shape checks (non-empty strings, integer ranges). The handler body should assume validated input.
 - **Handler state is per-workflow-run.** The `App` instance lives for one workflow execution; instance fields reset across runs. For cross-run state, use `self.state.persistent` / `self.state.scratch` (SDK state accessors).
-- **Dynamic handlers** (`@workflow.update(dynamic=True)` etc.) are supported — useful for catch-all routers. The handler signature must be `(self, name: str, args: Sequence[temporalio.common.RawValue])`.
+- **Dynamic handlers** (`@update(dynamic=True)` etc.) are supported — useful for catch-all routers. The handler signature must be `(self, name: str, args: Sequence[temporalio.common.RawValue])`.

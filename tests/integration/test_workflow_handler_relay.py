@@ -18,13 +18,13 @@ import asyncio
 from datetime import timedelta
 
 import pytest
-from temporalio import workflow
 from temporalio.client import WorkflowUpdateFailedError
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
+from application_sdk.app import query, signal, update, wait_condition
 from application_sdk.app.base import App, generate_workflow_class
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.contracts.base import Input, Output
@@ -68,7 +68,7 @@ class _HandlerApp(App):
         # Block on a state flip from any handler. ``workflow.wait_condition``
         # is the deterministic primitive — it suspends until ``self.state``
         # changes or the timeout elapses.
-        await workflow.wait_condition(
+        await wait_condition(
             lambda: self.state != "running",
             timeout=timedelta(seconds=input.timeout_seconds),
         )
@@ -76,15 +76,15 @@ class _HandlerApp(App):
             final_state=self.state, signals_received=self.signals_received
         )
 
-    @workflow.signal
+    @signal
     async def ping(self) -> None:
         self.signals_received += 1
 
-    @workflow.query
+    @query
     def get_state(self) -> str:
         return self.state
 
-    @workflow.update
+    @update
     async def stop(self, reason: str) -> str:
         self.state = f"stopped:{reason}"
         return self.state
@@ -116,114 +116,122 @@ _WF_CLS = generate_workflow_class(
 @pytest.mark.asyncio
 async def test_update_handler_mutates_run_state() -> None:
     """Update fired mid-run reaches the same App instance ``run`` observes."""
-    async with await WorkflowEnvironment.start_local(
-        data_converter=pydantic_data_converter
-    ) as env:
-        async with Worker(
+    async with (
+        await WorkflowEnvironment.start_local(
+            data_converter=pydantic_data_converter
+        ) as env,
+        Worker(
             env.client,
             task_queue="handler-relay-queue",
             workflows=[_WF_CLS],
             workflow_runner=_SANDBOX_RUNNER,
-        ):
-            handle = await env.client.start_workflow(
-                _WF_CLS.run,
-                _HandlerInput(timeout_seconds=5.0),
-                id="handler-relay-update",
-                task_queue="handler-relay-queue",
-                result_type=_HandlerOutput,
-            )
+        ),
+    ):
+        handle = await env.client.start_workflow(
+            _WF_CLS.run,
+            _HandlerInput(timeout_seconds=5.0),
+            id="handler-relay-update",
+            task_queue="handler-relay-queue",
+            result_type=_HandlerOutput,
+        )
 
-            # Give run() a moment to enter the poll loop, then issue the update.
-            await asyncio.sleep(0.2)
-            stopped = await handle.execute_update("stop", "operator-request")
-            assert stopped == "stopped:operator-request"
+        # Give run() a moment to enter the poll loop, then issue the update.
+        await asyncio.sleep(0.2)
+        stopped = await handle.execute_update("stop", "operator-request")
+        assert stopped == "stopped:operator-request"
 
-            result = await handle.result()
+        result = await handle.result()
     assert result.final_state == "stopped:operator-request"
 
 
 @pytest.mark.asyncio
 async def test_signal_handler_increments_state() -> None:
     """Multiple signals accumulate on the same per-run App instance."""
-    async with await WorkflowEnvironment.start_local(
-        data_converter=pydantic_data_converter
-    ) as env:
-        async with Worker(
+    async with (
+        await WorkflowEnvironment.start_local(
+            data_converter=pydantic_data_converter
+        ) as env,
+        Worker(
             env.client,
             task_queue="handler-relay-queue-2",
             workflows=[_WF_CLS],
             workflow_runner=_SANDBOX_RUNNER,
-        ):
-            handle = await env.client.start_workflow(
-                _WF_CLS.run,
-                _HandlerInput(timeout_seconds=5.0),
-                id="handler-relay-signal",
-                task_queue="handler-relay-queue-2",
-                result_type=_HandlerOutput,
-            )
-            await asyncio.sleep(0.2)
-            await handle.signal("ping")
-            await handle.signal("ping")
-            await handle.signal("ping")
-            await handle.execute_update("stop", "done")
+        ),
+    ):
+        handle = await env.client.start_workflow(
+            _WF_CLS.run,
+            _HandlerInput(timeout_seconds=5.0),
+            id="handler-relay-signal",
+            task_queue="handler-relay-queue-2",
+            result_type=_HandlerOutput,
+        )
+        await asyncio.sleep(0.2)
+        await handle.signal("ping")
+        await handle.signal("ping")
+        await handle.signal("ping")
+        await handle.execute_update("stop", "done")
 
-            result = await handle.result()
+        result = await handle.result()
     assert result.signals_received == 3
 
 
 @pytest.mark.asyncio
 async def test_query_handler_returns_live_state() -> None:
     """Query reads state from the same instance ``run`` is mutating."""
-    async with await WorkflowEnvironment.start_local(
-        data_converter=pydantic_data_converter
-    ) as env:
-        async with Worker(
+    async with (
+        await WorkflowEnvironment.start_local(
+            data_converter=pydantic_data_converter
+        ) as env,
+        Worker(
             env.client,
             task_queue="handler-relay-queue-3",
             workflows=[_WF_CLS],
             workflow_runner=_SANDBOX_RUNNER,
-        ):
-            handle = await env.client.start_workflow(
-                _WF_CLS.run,
-                _HandlerInput(timeout_seconds=5.0),
-                id="handler-relay-query",
-                task_queue="handler-relay-queue-3",
-                result_type=_HandlerOutput,
-            )
-            await asyncio.sleep(0.2)
-            assert await handle.query("get_state") == "running"
-            await handle.execute_update("stop", "done")
-            await handle.result()
+        ),
+    ):
+        handle = await env.client.start_workflow(
+            _WF_CLS.run,
+            _HandlerInput(timeout_seconds=5.0),
+            id="handler-relay-query",
+            task_queue="handler-relay-queue-3",
+            result_type=_HandlerOutput,
+        )
+        await asyncio.sleep(0.2)
+        assert await handle.query("get_state") == "running"
+        await handle.execute_update("stop", "done")
+        await handle.result()
 
 
 @pytest.mark.asyncio
 async def test_validator_rejects_invalid_update() -> None:
     """Validator decorated on the App method propagates through the relay,
     causing Temporal to reject the update before it reaches the handler body."""
-    async with await WorkflowEnvironment.start_local(
-        data_converter=pydantic_data_converter
-    ) as env:
-        async with Worker(
+    async with (
+        await WorkflowEnvironment.start_local(
+            data_converter=pydantic_data_converter
+        ) as env,
+        Worker(
             env.client,
             task_queue="handler-relay-queue-4",
             workflows=[_WF_CLS],
             workflow_runner=_SANDBOX_RUNNER,
-        ):
-            handle = await env.client.start_workflow(
-                _WF_CLS.run,
-                _HandlerInput(timeout_seconds=5.0),
-                id="handler-relay-validator",
-                task_queue="handler-relay-queue-4",
-                result_type=_HandlerOutput,
-            )
-            await asyncio.sleep(0.2)
+        ),
+    ):
+        handle = await env.client.start_workflow(
+            _WF_CLS.run,
+            _HandlerInput(timeout_seconds=5.0),
+            id="handler-relay-validator",
+            task_queue="handler-relay-queue-4",
+            result_type=_HandlerOutput,
+        )
+        await asyncio.sleep(0.2)
 
-            with pytest.raises(WorkflowUpdateFailedError) as exc_info:
-                await handle.execute_update("stop", "")
-            # The validator's ValueError travels back as the cause chain.
-            assert "non-empty" in str(exc_info.value.cause)
+        with pytest.raises(WorkflowUpdateFailedError) as exc_info:
+            await handle.execute_update("stop", "")
+        # The validator's ValueError travels back as the cause chain.
+        assert "non-empty" in str(exc_info.value.cause)
 
-            # Workflow is still running; a valid update unblocks it.
-            await handle.execute_update("stop", "after-rejection")
-            result = await handle.result()
+        # Workflow is still running; a valid update unblocks it.
+        await handle.execute_update("stop", "after-rejection")
+        result = await handle.result()
     assert result.final_state == "stopped:after-rejection"

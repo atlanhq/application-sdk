@@ -10,9 +10,10 @@ from unittest import mock
 from uuid import UUID
 
 import pytest
-from temporalio import workflow as _wf
+from temporalio import workflow as _wf  # _wf._Definition used for relay assertions
 from temporalio.common import RawValue as _RawValue
 
+from application_sdk.app import query, signal, update
 from application_sdk.app.base import (
     App,
     AppContextError,
@@ -1261,7 +1262,7 @@ class TestWorkflowHandlerRelay:
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
                 return _BLDXOutput(result="ok")
 
-            @_wf.signal
+            @signal
             async def ping(self, msg: str) -> None:
                 self.pings.append(msg)
 
@@ -1281,7 +1282,7 @@ class TestWorkflowHandlerRelay:
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
                 return _BLDXOutput(result="ok")
 
-            @_wf.update
+            @update
             async def pause_run(self, reason: str) -> str:
                 self.state = f"paused:{reason}"
                 return self.state
@@ -1302,7 +1303,7 @@ class TestWorkflowHandlerRelay:
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
                 return _BLDXOutput(result="ok")
 
-            @_wf.query
+            @query
             def get_counter(self) -> int:
                 return self.counter
 
@@ -1325,7 +1326,7 @@ class TestWorkflowHandlerRelay:
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
                 return _BLDXOutput(result=self.state)
 
-            @_wf.update
+            @update
             async def set_state(self, value: str) -> None:
                 self.state = value
 
@@ -1352,7 +1353,7 @@ class TestWorkflowHandlerRelay:
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
                 return _BLDXOutput(result="ok")
 
-            @_wf.update
+            @update
             async def set_value(self, value: str) -> None:
                 self.state = value
 
@@ -1383,7 +1384,7 @@ class TestWorkflowHandlerRelay:
         # the annotation eagerly to validate dynamic-handler shape under
         # ``from __future__ import annotations``).
         ns: dict[str, _Any] = {
-            "_wf": _wf,
+            "update": update,
             "_Seq": _Seq,
             "_RawValue": _RawValue,
             "App": App,
@@ -1396,7 +1397,7 @@ class TestWorkflowHandlerRelay:
             "        self.last_call = ('', 0)\n"
             "    async def run(self, input: _BLDXInput) -> _BLDXOutput:\n"
             "        return _BLDXOutput(result='ok')\n"
-            "    @_wf.update(dynamic=True)\n"
+            "    @update(dynamic=True)\n"
             "    async def fallback(self, name: str, args: _Seq[_RawValue]) -> None:\n"
             "        self.last_call = (name, len(args))\n",
             ns,
