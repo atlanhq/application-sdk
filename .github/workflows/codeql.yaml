@@ -10,11 +10,13 @@ on:
   pull_request:
     types: [opened, synchronize, labeled, reopened]
     branches: [ "main" ]
+  merge_group:
   schedule:
     - cron: '45 12 * * 0'
 
 jobs:
   analyze:
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     permissions:
       actions: read

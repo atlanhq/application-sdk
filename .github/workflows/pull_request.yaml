@@ -4,6 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, labeled, reopened]
     branches: [main]
+  merge_group:
 
 permissions:
   contents: read
@@ -43,13 +44,15 @@ jobs:
   # Conventional Commits (skipped on fork PRs — no org PAT available)
   commits:
     name: Conventional Commits
-    if: github.event.pull_request.head.repo.fork != true
+    if: github.event.pull_request.head.repo.fork != true || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: github.event_name != 'merge_group'
         with:
           fetch-depth: 0
       - uses: webiny/action-conventional-commits@faccb24fc2550dd15c0390d944379d2d8ed9690e # v1.3.1
+        if: github.event_name != 'merge_group'
         with:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
@@ -176,6 +179,7 @@ jobs:
 
   matrix-builder:
     name: Build Test Matrix
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -300,6 +304,7 @@ jobs:
   # an alternate target branch for a specific connector.
   sdr-matrix-builder:
     name: Build SDR Test Matrix
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -368,7 +373,7 @@ jobs:
     # No label gate — runs on every push to a non-fork, non-dependabot
     # PR. ~3 min per connector and validates the SDR contract end-to-
     # end, which is worth the spend on every SDK PR.
-    if: github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
