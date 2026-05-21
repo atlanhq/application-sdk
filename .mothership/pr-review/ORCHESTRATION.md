@@ -645,7 +645,15 @@ on subsequent runs; do NOT remove it or use the production
 **CI:** all passing | N failing
 **Models:** Claude Opus 4.6 (review) + GPT-5.3-codex (adversarial)
 **Cross-model agreement:** X/Y confirmed by both
+**Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
+
+The trailing **Run:** line is required on every summary. Substitute
+`<GHA_RUN_URL>` with the value passed in the prompt header. The link
+takes readers to the GitHub Actions run that produced this review,
+where they can inspect: the streamed event log (started → action →
+complete), the final `cost_usd`, the sandbox + session IDs, and any
+warnings. This is your audit trail — never omit it.
 
 ### 3f. Submit
 

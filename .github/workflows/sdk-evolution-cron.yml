@@ -81,6 +81,7 @@ jobs:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
           SCAN_MODE: ${{ inputs.scan_mode || 'auto' }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -114,11 +115,17 @@ jobs:
             .mothership/sdk-evolution/tools.md
 
           Run metadata (use these verbatim):
-            RUN_DATE:  ${RUN_DATE}
-            SCAN_MODE: ${SCAN_MODE}    # auto = full on Sunday, incremental otherwise
+            RUN_DATE:     ${RUN_DATE}
+            SCAN_MODE:    ${SCAN_MODE}    # auto = full on Sunday, incremental otherwise
+            GHA_RUN_URL:  ${GHA_RUN_URL}
 
           GITHUB_TOKEN is pre-injected by the sandbox. Use \`gh\` for all
           GitHub operations.
+
+          When you create the parent Linear ticket in Stage 4b and the
+          summary post in Stage 8, include a link to GHA_RUN_URL in the
+          ticket description / summary so the reader can jump to the
+          workflow run that produced the work (cost, timing, logs).
 
           Linear / GPT proxy access: use the \$PROXY_BASE and \$PROXY_JWT
           env vars injected by mothership (see tools.md).

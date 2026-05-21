@@ -234,6 +234,7 @@ jobs:
           BASE_REF: ${{ steps.pr.outputs.base_ref }}
           PR_URL: ${{ steps.pr.outputs.html_url }}
           REPO_FULL_NAME: ${{ github.repository }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -277,9 +278,15 @@ jobs:
             COMMENTER:        ${COMMENTER}
             COMMENT_ID:       ${COMMENT_ID}
             COMMENTER_INTENT: ${COMMENTER_INTENT}
+            GHA_RUN_URL:      ${GHA_RUN_URL}
 
           GITHUB_TOKEN is pre-injected by the sandbox. Use \`gh\` for all
           GitHub operations.
+
+          When you post the review summary comment in Phase 3, include
+          a footer link to GHA_RUN_URL so the reader can jump to the
+          workflow run that produced the review (cost, timing, logs).
+          See ORCHESTRATION.md §3e for the template.
 
           Interpret COMMENTER_INTENT yourself — see ORCHESTRATION.md
           §Intent Inference. If empty, run a standard review.
