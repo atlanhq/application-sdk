@@ -542,21 +542,28 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
   **Fix:** <exact code suggestion if PATCH scope>
   ```
 
-### 3c. Label Management (after posting the review in 3f)
+### 3c. Verdict-Stamp: Labels Only (formal approval is posted by the GHA runner)
 
-There is no mothership-side label handler. You manage all
-test-sdk-review-specific labels via the `gh` CLI from within the
-sandbox. These labels are **prefixed `test-`** to keep this experimental
-reviewer's signals separate from the production `@sdk-review` flow
-(which uses the un-prefixed `sdk-review-approved` / `needs-human-review`
-labels). Do NOT touch the production labels from this orchestration.
+There is no mothership-side handler, and the sandbox itself **does not
+post `gh pr review`**. The formal approval is posted **outside** the
+sandbox by the GHA workflow (`test-sdk-review.yml` → "Approve PR as
+atlan-ci" step) using `ORG_PAT_GITHUB`, so the approval is recorded
+as `atlan-ci` and counts toward the `require_code_owner_review` rule
+on `main`. `mothership-ai[bot]` is a GitHub App and cannot be in
+CODEOWNERS — same pattern claude.yml uses for the production
+reviewer.
+
+The sandbox is responsible only for **labels** here. Labels are
+**prefixed `test-`** to keep the experimental reviewer's signals
+separate from the production `@sdk-review` flow (which uses the
+un-prefixed `sdk-review-approved` / `needs-human-review` labels). Do
+NOT touch the production labels from this orchestration.
 
 ```bash
 # $GITHUB_TOKEN is set in Phase 0 step 3 (injected by dispatcher)
 PR=<pr_number>
 REPO="atlanhq/application-sdk"
 
-# Based on verdict:
 case "$VERDICT" in
   "READY_TO_MERGE")
     gh pr edit $PR --repo $REPO --add-label "test-sdk-review-approved"
@@ -572,6 +579,12 @@ case "$VERDICT" in
     ;;
 esac
 ```
+
+The verdict must also be written into the summary comment in §3e as
+a line `### Verdict: READY TO MERGE` (etc.) — the GHA runner greps
+that line out of the just-posted `<!-- TEST_SDK_REVIEW -->` comment
+to decide whether to call `gh pr review --approve`. Do not change
+the verdict line's prefix without updating the workflow's parser.
 
 ### 3d. Resolve Inline Threads (on APPROVE)
 
@@ -666,12 +679,11 @@ comment and each finding as an inline review comment.
 # <!-- TEST_SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
 gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 
-# Inline comments — use `gh pr review` (one batched review) or
-# `gh api pulls/<n>/comments` per finding. Both routes work; prefer
-# `gh pr review --body-file ... --comment` for a single bundled
-# review.
-gh pr review "$PR_NUMBER" --repo "$REPO" --comment \
-  --body-file /tmp/review-summary.md
+# Inline finding comments — post one per finding via
+# `gh api repos/$REPO/pulls/$PR_NUMBER/comments` so each can target a
+# specific path + line in the diff. The formal verdict review
+# (--approve | --comment) is already submitted in §3c — do NOT submit
+# a second `gh pr review` here.
 
 # Commit status — set the test-sdk-review check explicitly.
 # This MUST be `test-sdk-review`, NOT `sdk-review` — the production
