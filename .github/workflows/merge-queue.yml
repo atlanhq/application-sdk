@@ -77,7 +77,7 @@ jobs:
                     } catch (_) {}
                     await github.rest.issues.createComment({
                       owner, repo, issue_number: pr.number,
-                      body: 'Merge queue: branch has conflicts. Manual rebase needed, or comment `@sdk-review` to re-trigger with conflict resolution.',
+                      body: 'Merge queue: branch has conflicts. Manual rebase needed, or comment `@test-sdk-review` to re-trigger with conflict resolution.',
                     });
                     console.log(`PR #${pr.number}: conflicts, labeled needs-rebase`);
                     continue;
@@ -105,22 +105,30 @@ jobs:
               }
 
               if (prData.mergeable_state === 'unstable') {
-                const hasApprovedLabel = pr.labels.some(l => l.name === 'sdk-review-approved');
-                if (hasApprovedLabel) {
+                // Either reviewer's approval label qualifies the PR for
+                // CI-recovery re-trigger. Production label = sdk-review-approved;
+                // experimental (mothership) label = test-sdk-review-approved.
+                const approvalLabels = ['sdk-review-approved', 'test-sdk-review-approved'];
+                const presentApprovalLabels = pr.labels
+                  .map(l => l.name)
+                  .filter(n => approvalLabels.includes(n));
+                if (presentApprovalLabels.length > 0) {
                   // CI failed after branch update on an approved PR.
-                  // Auto-trigger @sdk-review — Phase 0 will fix CI (Sonnet),
-                  // update branch, and re-review. Zero human intervention.
-                  try {
-                    await github.rest.issues.removeLabel({
-                      owner, repo, issue_number: pr.number,
-                      name: 'sdk-review-approved',
-                    });
-                  } catch (_) {}
+                  // Auto-trigger @test-sdk-review (the new mothership-Rover
+                  // flow). Phase 0 in the orchestration handles the CI fix
+                  // and re-review. Zero human intervention.
+                  for (const label of presentApprovalLabels) {
+                    try {
+                      await github.rest.issues.removeLabel({
+                        owner, repo, issue_number: pr.number, name: label,
+                      });
+                    } catch (_) {}
+                  }
                   await github.rest.issues.createComment({
                     owner, repo, issue_number: pr.number,
-                    body: '@sdk-review CI is failing after a branch update — please re-review the latest commit and check the failing CI.',
+                    body: '@test-sdk-review CI is failing after a branch update — please re-review the latest commit and check the failing CI.',
                   });
-                  console.log(`PR #${pr.number}: CI unstable after update, auto-triggered @sdk-review`);
+                  console.log(`PR #${pr.number}: CI unstable after update, auto-triggered @test-sdk-review (cleared labels: ${presentApprovalLabels.join(', ')})`);
                 }
                 continue;
               }

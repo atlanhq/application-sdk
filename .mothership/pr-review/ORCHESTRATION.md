@@ -460,7 +460,7 @@ If GPT was unavailable or skipped: keep all Opus findings >= 80%.
 Check for a previous review comment on this PR:
 ```bash
 gh api repos/atlanhq/application-sdk/issues/<PR>/comments \
-  --jq '.[] | select(.body | contains("<!-- SDK_REVIEW")) | .body' | head -1
+  --jq '.[] | select(.body | contains("<!-- TEST_SDK_REVIEW")) | .body' | head -1
 ```
 
 If found, parse the previous findings and compare:
@@ -545,7 +545,11 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
 ### 3c. Label Management (after posting the review in 3f)
 
 There is no mothership-side label handler. You manage all
-SDK-specific labels via the `gh` CLI from within the sandbox:
+test-sdk-review-specific labels via the `gh` CLI from within the
+sandbox. These labels are **prefixed `test-`** to keep this experimental
+reviewer's signals separate from the production `@sdk-review` flow
+(which uses the un-prefixed `sdk-review-approved` / `needs-human-review`
+labels). Do NOT touch the production labels from this orchestration.
 
 ```bash
 # $GITHUB_TOKEN is set in Phase 0 step 3 (injected by dispatcher)
@@ -555,16 +559,16 @@ REPO="atlanhq/application-sdk"
 # Based on verdict:
 case "$VERDICT" in
   "READY_TO_MERGE")
-    gh pr edit $PR --repo $REPO --add-label "sdk-review-approved"
-    gh pr edit $PR --repo $REPO --remove-label "needs-human-review" 2>/dev/null || true
+    gh pr edit $PR --repo $REPO --add-label "test-sdk-review-approved"
+    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
     ;;
   "NEEDS_HUMAN")
-    gh pr edit $PR --repo $REPO --add-label "needs-human-review"
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-approved" 2>/dev/null || true
+    gh pr edit $PR --repo $REPO --add-label "test-sdk-review-needs-human"
+    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
     ;;
   "NEEDS_FIXES"|"BLOCKED")
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-approved" 2>/dev/null || true
-    gh pr edit $PR --repo $REPO --remove-label "needs-human-review" 2>/dev/null || true
+    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
+    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
     ;;
 esac
 ```
@@ -607,10 +611,15 @@ Do NOT resolve threads from human reviewers.
 
 ### 3e. Summary
 
-Use our SDK review template (not mothership's generic template):
+Use this template. The leading `<!-- TEST_SDK_REVIEW -->` HTML
+comment is the marker the orchestration uses to find prior reviews
+on subsequent runs; do NOT remove it or use the production
+`<!-- SDK_REVIEW_V2 -->` marker (that belongs to the production
+@sdk-review flow):
 
 ```
-## SDK Review: PR #<number> — <title>
+<!-- TEST_SDK_REVIEW -->
+## Test SDK Review (mothership): PR #<number> — <title>
 
 ### Verdict: <READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW>
 
@@ -646,7 +655,7 @@ comment and each finding as an inline review comment.
 
 ```bash
 # Summary comment (the body built in 3a, including the
-# <!-- SDK_REVIEW_V2 --> marker and the <!-- REVIEW_DATA --> JSON):
+# <!-- TEST_SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
 gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 
 # Inline comments — use `gh pr review` (one batched review) or

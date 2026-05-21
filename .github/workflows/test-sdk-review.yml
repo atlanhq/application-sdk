@@ -1,4 +1,8 @@
-# SDK Review — dispatches to mothership's Rover Direct API
+# Test SDK Review — experimental mothership Rover-based reviewer.
+#
+# Runs in PARALLEL with the production @sdk-review (claude.yml) so the
+# team can compare outputs. Triggered only by the explicit
+# @test-sdk-review mention; never by @sdk-review.
 #
 # All SDK-specific review behavior (orchestration, agents, rules, severity
 # rubric, guardrails, modes) lives in application-sdk/.mothership/pr-review/
@@ -8,18 +12,25 @@
 # clone, GitHub token injection.
 # This repo provides: every detail of how to review SDK PRs.
 #
-# Trigger surface (simplified):
-#   @sdk-review                       → Standard review. Orchestration
-#                                       picks the right mode based on PR
-#                                       state and previous review history.
-#   @sdk-review <free-form text>      → Same, but the trailing text is
-#                                       forwarded to the orchestration as
-#                                       COMMENTER_INTENT. The agent decides
-#                                       what to do (auto-fix, dispute a
-#                                       finding, stop, override, retrospect,
-#                                       extra focus area, etc.) by reading
-#                                       the text. No command enumeration
-#                                       in this workflow.
+# Trigger surface:
+#   @test-sdk-review                       → Standard review. Orchestration
+#                                            picks the right mode based on
+#                                            PR state and previous review
+#                                            history.
+#   @test-sdk-review <free-form text>      → Same, but the trailing text is
+#                                            forwarded to the orchestration
+#                                            as COMMENTER_INTENT. The agent
+#                                            decides what to do (auto-fix,
+#                                            dispute a finding, stop,
+#                                            override, extra focus area,
+#                                            etc.) by reading the text.
+#                                            No command enumeration here.
+#
+# Side-effects are namespaced separately from the production reviewer:
+#   commit-status context  = test-sdk-review (not sdk-review)
+#   labels                 = test-sdk-review-approved, test-sdk-review-needs-human
+#   comment marker         = <!-- TEST_SDK_REVIEW --> (orchestration uses
+#                            <!-- SDK_REVIEW_V2 --> on the production path)
 #
 # Required configuration:
 #   secrets.HARNESS_TOKEN              Bearer token for /api/sandbox/execute.
@@ -31,7 +42,7 @@
 #   vars.GLOBALPROTECT_PORTAL_URL      VPN portal URL.
 #   vars.MOTHERSHIP_URL                e.g. https://mothership.atlan.dev
 
-name: SDK Review
+name: Test SDK Review (mothership)
 
 on:
   issue_comment:
@@ -44,7 +55,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to review'
+        description: 'PR number to review with the experimental mothership Rover path'
         required: true
         type: string
       commenter_intent:
@@ -66,7 +77,7 @@ jobs:
       github.event_name == 'workflow_dispatch'
       || (
         github.event.issue.pull_request
-        && contains(github.event.comment.body, '@sdk-review')
+        && contains(github.event.comment.body, '@test-sdk-review')
         && (
           github.event.comment.author_association == 'OWNER'
           || github.event.comment.author_association == 'MEMBER'
@@ -79,7 +90,7 @@ jobs:
     # but `curl --max-time 7200` blocks this job for that duration.
     timeout-minutes: 130
     concurrency:
-      group: sdk-review-${{ github.event.issue.number || inputs.pr_number }}
+      group: test-sdk-review-${{ github.event.issue.number || inputs.pr_number }}
       cancel-in-progress: true
     steps:
       - name: Checkout repo (for local globalprotect-connect action)
@@ -104,7 +115,7 @@ jobs:
             } else {
               const raw = context.payload.comment.body || '';
               intent = raw
-                .replace(/@sdk-review/gi, '')
+                .replace(/@test-sdk-review/gi, '')
                 .replace(/^\s+|\s+$/g, '');
               commenter = context.payload.comment.user.login;
               commentId = String(context.payload.comment.id);
@@ -131,11 +142,12 @@ jobs:
               });
             }
 
+            // Labels are prefixed `test-` so they don't collide with the
+            // production reviewer's labels (sdk-review-approved, etc.)
             const labels = [
-              { name: 'sdk-review-approved', color: '0e8a16', description: 'PR passed SDK review' },
-              { name: 'needs-human-review', color: 'd93f0b', description: 'SDK review needs human decision' },
-              { name: 'needs-rebase', color: 'e4e669', description: 'PR has conflicts needing manual rebase' },
-              { name: 'auto-merge', color: '1d76db', description: 'Auto-merge when approved + CI passes' },
+              { name: 'test-sdk-review-approved', color: '0e8a16', description: 'Experimental SDK review (mothership) approved' },
+              { name: 'test-sdk-review-needs-human', color: 'd93f0b', description: 'Experimental SDK review (mothership) needs human decision' },
+              { name: 'test-sdk-review-needs-rebase', color: 'e4e669', description: 'Experimental SDK review (mothership) blocked on rebase conflicts' },
             ];
             for (const l of labels) {
               try {
@@ -165,7 +177,7 @@ jobs:
             core.setOutput('base_ref', pr.base.ref);
             core.setOutput('html_url', pr.html_url);
 
-      - name: Set sdk-review status to pending
+      - name: Set test-sdk-review status to pending
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         uses: actions/github-script@v7
@@ -176,8 +188,8 @@ jobs:
               repo: context.repo.repo,
               sha: process.env.HEAD_SHA,
               state: 'pending',
-              context: 'sdk-review',
-              description: 'SDK Review in progress (up to ~2h)',
+              context: 'test-sdk-review',
+              description: 'Test SDK Review (mothership) in progress (up to ~2h)',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
 
@@ -277,7 +289,7 @@ jobs:
           # Deterministic session_id ties this dispatch to the PR head.
           # A new commit produces a new HEAD_SHA → fresh sandbox.
           # A re-trigger on the same HEAD resumes the same sandbox session.
-          SESSION_ID="sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}"
+          SESSION_ID="test-sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}"
 
           # Build the dispatch payload.
           PAYLOAD=$(jq -n \
@@ -344,9 +356,9 @@ jobs:
             exit 1
           fi
 
-          echo "SDK Review completed successfully."
+          echo "Test SDK Review (mothership) completed successfully."
 
-      - name: Set sdk-review status to failure (only on workflow failure)
+      - name: Set test-sdk-review status to failure (only on workflow failure)
         if: failure() && steps.pr.outputs.head_sha != ''
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -365,7 +377,7 @@ jobs:
               repo: context.repo.repo,
               sha: process.env.HEAD_SHA,
               state: 'failure',
-              context: 'sdk-review',
-              description: 'SDK Review workflow failed — see logs',
+              context: 'test-sdk-review',
+              description: 'Test SDK Review (mothership) workflow failed — see logs',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
