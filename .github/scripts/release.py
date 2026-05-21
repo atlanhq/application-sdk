@@ -15,7 +15,7 @@ def get_commits_since_last_tag() -> list[str]:
     """
     try:
         # Get the last non release-candidate tag or initial commit if no tags exist
-        last_tag_cmd = "git describe --tags --abbrev=0 --match='v[0-9]*' 2>/dev/null || git rev-list --max-parents=0 HEAD"
+        last_tag_cmd = "git describe --tags --abbrev=0 --match='v[0-9]*' --exclude='*rc*' 2>/dev/null || git rev-list --max-parents=0 HEAD"
         last_tag = subprocess.check_output(last_tag_cmd, shell=True).decode().strip()
         logging.info(f"Last tag found: {last_tag}")
 
