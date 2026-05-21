@@ -102,9 +102,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    | `auto-complete`, `resolve all`, `apply fixes`, `fix it`, `fix the issues` | **C. Auto-fix loop** — review, then iterate the in-sandbox fix loop (see §Auto-fix loop). |
    | `challenge` *with* a finding ID, a quoted finding, or a paragraph of reasoning | **D. Targeted challenge** — re-evaluate only the cited findings using the human's explanation as additional context (see Phase 2h). |
    | `override:` followed by a justification | **E. Admin override** — verify the commenter is a repo admin via `gh api repos/$REPO/collaborators/$COMMENTER/permission`. If admin, set status check to success and log the override in REVIEW_DATA. If not admin, reply with the failure reason and exit. |
-   | `retrospect`, `retro` | **F. Retrospect** — run the retro flow (see Retrospect Mode section below). |
-   | `ci-fix`, `fix ci`, `CI fail` | **G. CI fix** — lightweight Sonnet-only path that fixes a failing CI on an already-approved PR (see CI-Fix Mode section). |
-   | Anything else (free-form prose) | **H. Standard review with focus** — run mode A, but treat the prose as a supplementary focus area or extra context the reviewers should weigh (e.g., "look closely at the new metric reader code"). Echo the focus back in the summary so the human sees it landed. |
+   | Anything else (free-form prose) | **F. Standard review with focus** — run mode A, but treat the prose as a supplementary focus area or extra context the reviewers should weigh (e.g., "look closely at the new metric reader code"). Echo the focus back in the summary so the human sees it landed. |
 
    Record the chosen mode and pass it forward — every downstream phase
    may behave slightly differently based on it.
@@ -751,95 +749,6 @@ whole loop and the GHA workflow simply waits.
 
 Print: `[Phase 4 complete] iter=<N>, verdict=<verdict>` or
 `[Phase 4 skipped] mode=<mode>, verdict=<verdict>`
-
----
-
-## Retrospect Mode (Intent Inference Mode F)
-
-When `COMMENTER_INTENT` contains `retrospect` or `retro`:
-
-1. Read the last 10 merged PRs:
-   ```bash
-   gh pr list --repo atlanhq/application-sdk --state merged --limit 10 --json number,title,mergedAt
-   ```
-
-2. For each, check if it had SDK Review comments:
-   ```bash
-   gh api repos/atlanhq/application-sdk/issues/<N>/comments \
-     --jq '.[] | select(.body | contains("SDK Review"))'
-   ```
-
-3. Analyze patterns:
-   - Which findings were most common?
-   - Which were resolved vs disputed vs overridden?
-   - Any findings that keep recurring (should become POLICY rules)?
-   - Any false positives that keep getting challenged (should be suppressed)?
-
-4. Store learnings:
-   - Write to `/workspace/.shared-memory/sdk-reviewer/retro-log.yaml` (R2 persistent)
-   - If a pattern should be permanent, output it as a recommended POLICY.md update
-
-5. Post a summary comment on the PR:
-   ```
-   ## SDK Review Retrospective
-
-   Analyzed last 10 merged PRs.
-
-   ### Recurring Findings
-   - <pattern>: flagged N times, resolved M times, disputed K times
-
-   ### Recommended POLICY.md Updates
-   - Add: "<pattern> is intentional because <reason>"
-
-   ### Recommended Rule Changes
-   - Tighten: <rule> (too many false positives)
-   - Relax: <rule> (too aggressive)
-   ```
-
-This is a lightweight Sonnet job — no Opus needed. Use the default model.
-
-Print: `[Retrospect complete]`
-
----
-
-## CI-Fix Mode (Intent Inference Mode G)
-
-Triggered when `COMMENTER_INTENT` contains `ci-fix`, `fix ci`, or
-`CI fail` — typically by the merge-queue workflow when CI fails after a
-branch update on an approved PR. This is a LIGHTWEIGHT mode — no full
-review, just fix CI and re-approve if the fix is clean.
-
-**Cost: ~$0.50 (Sonnet only, no Opus agents, no GPT adversarial)**
-
-### Process:
-
-1. Run Phase 0 steps 1-7 as normal (clone, update branch, pre-commit, CI fix).
-   The Sonnet CI fix in step 7 will handle most cases.
-
-2. If CI fix succeeded (Sonnet pushed a fix commit):
-   - Run `uv run pytest tests/unit/ -x --timeout=60` to verify
-   - If tests pass:
-     ```bash
-     # Minimal delta review: only check the CI fix commit, not the whole PR
-     FIX_DIFF=$(git diff HEAD~1..HEAD)
-     ```
-     - If the fix is purely formatting/imports/types (no logic changes):
-       → Submit with `approval_recommendation: "APPROVE"` and summary
-       "CI fix applied (auto-format/import/type). No logic changes. Re-approved."
-     - If the fix changed logic (test code, source code beyond imports):
-       → Run ONLY the CORRECTNESS agent on the fix diff (not the whole PR)
-       → If no new findings → APPROVE
-       → If new findings → REQUEST_CHANGES with only the new findings
-
-3. If CI fix failed (Sonnet couldn't fix it):
-   - Submit with `approval_recommendation: "REQUEST_CHANGES"` and summary:
-     "CI failing after branch update. Sonnet could not auto-fix. Manual intervention needed."
-   - Include the error logs in the review body
-
-4. Manage labels as per Phase 3c (re-add `sdk-review-approved` if approved,
-   or leave it removed if not).
-
-Print: `[CI-Fix complete] <fixed and re-approved | needs manual fix>`
 
 ---
 
