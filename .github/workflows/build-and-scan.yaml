@@ -49,6 +49,10 @@ on:
 permissions:
   contents: read
   packages: read
+  # Needed for the Security Gate's "Comment on PR" step to post the gate
+  # result summary using GITHUB_TOKEN. Adds capability only — no other
+  # behaviour changes.
+  pull-requests: write
 
 jobs:
   # ── Build Docker image (single-arch, no push) ──────────────────────────────
@@ -294,7 +298,10 @@ jobs:
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          # Same-repo PR comment — use the workflow's built-in token instead
+          # of the fine-grained PAT (which has to be manually granted to each
+          # repo and 404s on any repo not on its allowlist).
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
             let body;
