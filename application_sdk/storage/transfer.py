@@ -202,7 +202,7 @@ async def upload(
         storage_subdir: Subdirectory name appended to the auto-generated run prefix.
             Ignored when *storage_path* is set.
         skip_if_exists: Skip files whose SHA-256 matches the stored sidecar.
-        raise_on_empty: When ``True``, raise ``StorageError`` if
+        raise_on_empty: When ``True``, raise ``StorageEmptyUploadError`` if
             *local_path* is a directory that contains zero files. Opt-in
             fail-loud for connectors where empty output indicates a bug
             (see BLDX-1255). Defaults to ``False`` to preserve historical
