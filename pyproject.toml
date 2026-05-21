@@ -64,7 +64,7 @@ sql = [
 ]
 # Daft transformer engine
 daft = [
-    "daft>=0.7.1,<0.8.0",
+    "daft==0.7.3",
 ]
 # Incremental extraction: sql + daft + RocksDB state store
 incremental = [
@@ -73,7 +73,7 @@ incremental = [
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
     "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
-    "daft>=0.7.1,<0.8.0",
+    "daft==0.7.3",
     "rocksdict>=0.3.0",
 ]
 # AWS IAM authentication for RDS/Redshift
