@@ -66,8 +66,12 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
     Walks ``__cause__`` and ``__context__`` looking for either:
       * an :class:`application_sdk.errors.base.AppError` (raised directly), or
       * a ``temporalio.exceptions.ApplicationError`` whose first ``details``
-        entry is a :class:`application_sdk.errors.wire.FailureDetails` (the
-        shape emitted by the SDK's activity wrapper for ``AppError`` subclasses).
+        entry carries the :class:`application_sdk.errors.wire.FailureDetails`
+        envelope — either as a live model (activity side, before serde) or as
+        a deserialized mapping (workflow side, after activity → workflow
+        boundary, where ``pydantic_data_converter`` round-trips the envelope
+        as JSON and ``ApplicationError.details`` is reconstructed without
+        the typed model since ``details`` is annotated ``Sequence[Any]``).
 
     Returns ``{"failure.category", "failure.audience", "failure.code"}`` —
     OTel attribute keys that ride the ``failure.`` passthrough prefix in
@@ -89,13 +93,54 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
             }
         if isinstance(current, _TemporalApplicationError):
             for detail in getattr(current, "details", None) or ():
-                if isinstance(detail, FailureDetails):
-                    return {
-                        "failure.category": detail.category.value,
-                        "failure.audience": detail.audience.value,
-                        "failure.code": detail.code,
-                    }
+                attrs = _failure_details_from_detail(detail)
+                if attrs:
+                    return attrs
         current = current.__cause__ or current.__context__
+    return {}
+
+
+def _failure_details_from_detail(detail: Any) -> dict[str, str]:
+    """Recover ``{category, audience, code}`` from one ``ApplicationError.details`` entry.
+
+    Two shapes are accepted:
+
+    1. A live :class:`FailureDetails` Pydantic model — emitted at the activity
+       raise site (``activities.py``).
+    2. A mapping with ``category`` / ``audience`` / ``code`` keys — what
+       Temporal's ``pydantic_data_converter`` reconstructs on the workflow
+       side after the activity → workflow boundary. ``ApplicationError.details``
+       is annotated ``Sequence[Any]`` so the converter has no type hint to
+       rehydrate the Pydantic model; it returns the raw JSON object instead.
+
+    Returns an empty dict for any other shape so the caller falls through to
+    the next link in the ``__cause__`` chain.
+    """
+    if isinstance(detail, FailureDetails):
+        return {
+            "failure.category": detail.category.value,
+            "failure.audience": detail.audience.value,
+            "failure.code": detail.code,
+        }
+    if isinstance(detail, dict):
+        category = detail.get("category")
+        audience = detail.get("audience")
+        code = detail.get("code")
+        # Enum members serialize as their ``.value`` (str); accept either the
+        # string form or a live enum instance (defensive — covers callers that
+        # construct ApplicationError with a half-converted dict).
+        cat_value = getattr(category, "value", category)
+        aud_value = getattr(audience, "value", audience)
+        if (
+            isinstance(cat_value, str)
+            and isinstance(aud_value, str)
+            and isinstance(code, str)
+        ):
+            return {
+                "failure.category": cat_value,
+                "failure.audience": aud_value,
+                "failure.code": code,
+            }
     return {}
 
 
