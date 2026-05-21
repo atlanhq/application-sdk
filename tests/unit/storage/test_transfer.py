@@ -147,12 +147,12 @@ class TestUploadRaiseOnEmpty:
     async def test_empty_dir_with_raise_on_empty_true_raises(
         self, store, tmp_path
     ) -> None:
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.storage.errors import StorageEmptyUploadError
 
         empty = tmp_path / "empty"
         empty.mkdir()
 
-        with pytest.raises(StorageError, match="contains zero files"):
+        with pytest.raises(StorageEmptyUploadError, match="contains zero files"):
             await upload(str(empty), "myprefix", store=store, raise_on_empty=True)
 
     async def test_empty_dir_with_raise_on_empty_false_returns_zero_count(

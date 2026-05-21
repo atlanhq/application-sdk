@@ -216,9 +216,11 @@ async def upload(
         :class:`~application_sdk.contracts.storage.UploadOutput`
 
     Raises:
-        StorageError: If *local_path* does not exist, is neither a file
-            nor a directory, or — when *raise_on_empty* is ``True`` — is a
-            directory containing zero files.
+        StorageError: If *local_path* does not exist or is neither a file
+            nor a directory.
+        StorageEmptyUploadError: When *raise_on_empty* is ``True`` and
+            *local_path* is a directory containing zero files
+            (category=DATA_INTEGRITY, audience=APP_OWNER, retryable=False).
     """
     from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         UploadOutput,
@@ -297,10 +299,10 @@ async def upload(
             # ``file_count=0`` ``UploadOutput`` that downstream publish
             # logic treats as success.
             from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                StorageError,
+                StorageEmptyUploadError,
             )
 
-            raise StorageError(
+            raise StorageEmptyUploadError(
                 f"upload(local_path={local_path!r}): directory contains "
                 "zero files. Either the extract step produced no output, "
                 "or files were written to a different path than the one "
@@ -309,7 +311,8 @@ async def upload(
                 "``raise_on_empty=True``. Otherwise verify the extract "
                 "wrote files to the expected ``local_path``. See the "
                 "dbt / databricks / coalesce connectors for the "
-                "stream-uploaded-per-file workaround pattern."
+                "stream-uploaded-per-file workaround pattern.",
+                local_path=local_path,
             )
 
         async def _bounded_upload(file_path: Path, key: str) -> bool:
