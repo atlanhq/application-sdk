@@ -2,12 +2,11 @@ import logging
 import re
 import subprocess
 import sys
-from typing import List, Tuple
 
 import semver
 
 
-def get_commits_since_last_tag() -> List[str]:
+def get_commits_since_last_tag() -> list[str]:
     """Get all commits since the last non release-candidate tag.
 
     Returns:
@@ -16,7 +15,7 @@ def get_commits_since_last_tag() -> List[str]:
     """
     try:
         # Get the last non release-candidate tag or initial commit if no tags exist
-        last_tag_cmd = "git describe --tags --abbrev=0 --exclude='*-rc*' 2>/dev/null || git rev-list --max-parents=0 HEAD"
+        last_tag_cmd = "git describe --tags --abbrev=0 --match='v[0-9]*' --exclude='*rc*' 2>/dev/null || git rev-list --max-parents=0 HEAD"
         last_tag = subprocess.check_output(last_tag_cmd, shell=True).decode().strip()
         logging.info(f"Last tag found: {last_tag}")
 
@@ -33,7 +32,7 @@ def get_commits_since_last_tag() -> List[str]:
         raise e
 
 
-def parse_conventional_commits(commits: List[str]) -> Tuple[bool, bool, bool]:
+def parse_conventional_commits(commits: list[str]) -> tuple[bool, bool, bool]:
     """Parse conventional commit messages to determine version bump type.
 
     Args:
@@ -56,9 +55,9 @@ def parse_conventional_commits(commits: List[str]) -> Tuple[bool, bool, bool]:
     fix_pattern = "fix"
 
     for commit in commits:
-        if re.search(breaking_pattern, commit, re.MULTILINE | re.IGNORECASE):
-            is_breaking = True
-        elif re.search(breaking_change, commit, re.MULTILINE | re.IGNORECASE):
+        if re.search(
+            breaking_pattern, commit, re.MULTILINE | re.IGNORECASE
+        ) or re.search(breaking_change, commit, re.MULTILINE | re.IGNORECASE):
             is_breaking = True
         elif re.search(feature_pattern, commit, re.IGNORECASE):
             is_feature = True
@@ -72,7 +71,7 @@ def parse_conventional_commits(commits: List[str]) -> Tuple[bool, bool, bool]:
 
 
 def calculate_version_bump(
-    current_version: str, commits: List[str], current_branch: str
+    current_version: str, commits: list[str], current_branch: str
 ) -> str:
     """Calculate the next version based on conventional commits, semver rules, and branch name.
 
