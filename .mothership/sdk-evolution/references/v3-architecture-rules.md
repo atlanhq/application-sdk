@@ -41,7 +41,7 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 
 ## ADR-0004: Build-Time Type Safety
 
-**Rule:** All contracts are `pydantic.BaseModel`. Type checking via Pyright **standard mode** (`typeCheckingMode = "standard"` in pyproject.toml; tests/ excluded from Pyright). `__init_subclass__` hooks + `@task` decorator validation provide build-time safety. No runtime validation overhead. Agents must only flag violations that would fail CI under standard mode — do not apply strict-mode rules.
+**Rule:** All contracts are `pydantic.BaseModel`. Type checking via Pyright strict mode + `__init_subclass__` hooks + `@task` decorator validation. No runtime validation overhead.
 
 **Violations to flag:**
 - `Dict[str, Any]` as task input/output (must be typed `Input`/`Output` subclass)
@@ -150,7 +150,7 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 
 ## General Architecture Checks
 
-- **App base.py size**: If changes increase `app/base.py` beyond ~1600 lines, flag for decomposition
+- **App base.py size**: `app/base.py` is currently ~1739 lines (decomposition tracked). Flag any PR that increases it further — do not allow unbounded growth
 - **Registry singleton safety**: `AppRegistry` and `TaskRegistry` mutations must be thread-safe
-- **Deprecation shims**: Any removed v2 import path must have a deprecation shim with `warnings.warn()` pointing to the v3 replacement
+- **Deprecation shims**: Only for v2 paths where connectors may already import the old symbol (i.e. `application_sdk.test_utils.integration` → `application_sdk.testing.integration`). Do NOT add shims for symbols that were removed before v3 shipped — those never existed from a public-API perspective
 - **`__init_subclass__` hooks**: New metaclass or `__init_subclass__` must not break existing subclass registration
