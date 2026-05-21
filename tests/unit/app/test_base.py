@@ -1257,14 +1257,14 @@ class TestWorkflowInteractionRelay:
     def test_signal_interaction_is_registered_on_wf_cls(self) -> None:
         class _SignalApp(App):
             def __init__(self) -> None:
-                self.pings: list[str] = []
+                self.ping_count: int = 0
 
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
                 return _BLDXOutput(result="ok")
 
             @signal
-            async def ping(self, msg: str) -> None:
-                self.pings.append(msg)
+            async def ping(self) -> None:
+                self.ping_count += 1
 
         wf_cls = generate_workflow_class(
             _SignalApp, self._make_ep(_BLDXInput, _BLDXOutput)
@@ -1283,9 +1283,9 @@ class TestWorkflowInteractionRelay:
                 return _BLDXOutput(result="ok")
 
             @update
-            async def pause_run(self, reason: str) -> str:
-                self.state = f"paused:{reason}"
-                return self.state
+            async def pause_run(self, input: _BLDXInput) -> _BLDXOutput:
+                self.state = f"paused:{input.value}"
+                return _BLDXOutput(result=self.state)
 
         wf_cls = generate_workflow_class(
             _UpdateApp, self._make_ep(_BLDXInput, _BLDXOutput)
@@ -1304,8 +1304,8 @@ class TestWorkflowInteractionRelay:
                 return _BLDXOutput(result="ok")
 
             @query
-            def get_counter(self) -> int:
-                return self.counter
+            def get_counter(self) -> _BLDXOutput:
+                return _BLDXOutput(result=str(self.counter))
 
         wf_cls = generate_workflow_class(
             _QueryApp, self._make_ep(_BLDXInput, _BLDXOutput)
@@ -1327,8 +1327,9 @@ class TestWorkflowInteractionRelay:
                 return _BLDXOutput(result=self.state)
 
             @update
-            async def set_state(self, value: str) -> None:
-                self.state = value
+            async def set_state(self, input: _BLDXInput) -> _BLDXOutput:
+                self.state = input.value
+                return _BLDXOutput(result=self.state)
 
         wf_cls = generate_workflow_class(
             _StateApp, self._make_ep(_BLDXInput, _BLDXOutput)
@@ -1342,7 +1343,7 @@ class TestWorkflowInteractionRelay:
         # Drive the relay directly — the same path Temporal uses internally via
         # the rebound _UpdateDefinition.fn. State must mutate the very instance
         # _run will later read from.
-        await wf_cls.set_state(wf_inst, "paused")
+        await wf_cls.set_state(wf_inst, _BLDXInput(value="paused"))
         assert wf_inst._app_instance.state == "paused"
 
     def test_validator_is_preserved_through_relay(self) -> None:
@@ -1354,12 +1355,13 @@ class TestWorkflowInteractionRelay:
                 return _BLDXOutput(result="ok")
 
             @update
-            async def set_value(self, value: str) -> None:
-                self.state = value
+            async def set_value(self, input: _BLDXInput) -> _BLDXOutput:
+                self.state = input.value
+                return _BLDXOutput(result=self.state)
 
             @set_value.validator
-            def _validate(self, value: str) -> None:
-                if not value:
+            def _validate(self, input: _BLDXInput) -> None:
+                if not input.value:
                     raise ValueError("value must be non-empty")
 
         wf_cls = generate_workflow_class(
@@ -1375,7 +1377,7 @@ class TestWorkflowInteractionRelay:
         # — confirming the validator relay routes through _app_instance.
         wf_inst = wf_cls()
         with pytest.raises(ValueError, match="non-empty"):
-            update_defn.bind_validator(wf_inst)("")
+            update_defn.bind_validator(wf_inst)(_BLDXInput(value=""))
 
     def test_dynamic_update_interaction_is_supported(self) -> None:
         # Define the class via exec with explicit globals so the
@@ -1428,6 +1430,139 @@ class TestWorkflowInteractionRelay:
         assert dict(defn.signals) == {}
         assert dict(defn.queries) == {}
         assert dict(defn.updates) == {}
+
+    # ------------------------------------------------------------------
+    # Contract enforcement tests
+    # ------------------------------------------------------------------
+
+    def test_signal_with_extra_params_raises_contract_error(self) -> None:
+        """@signal with params other than self is rejected at class-definition time."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadSignalApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @signal
+            async def ping(self, msg: str) -> None:
+                pass
+
+        with pytest.raises(InvalidInputError, match="no parameters besides self"):
+            generate_workflow_class(
+                _BadSignalApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_query_with_non_output_return_raises_contract_error(self) -> None:
+        """@query returning a non-Output type is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadQueryApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @query
+            def get_state(self) -> str:
+                return "running"
+
+        with pytest.raises(InvalidInputError, match="subclass of Output"):
+            generate_workflow_class(
+                _BadQueryApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_query_with_params_raises_contract_error(self) -> None:
+        """@query with params other than self is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadQueryApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @query
+            def get_value(self, key: str) -> _BLDXOutput:
+                return _BLDXOutput(result=key)
+
+        with pytest.raises(InvalidInputError, match="no parameters besides self"):
+            generate_workflow_class(
+                _BadQueryApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_update_with_non_input_param_raises_contract_error(self) -> None:
+        """@update whose param is not an Input subclass is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadUpdateApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @update
+            async def set_value(self, value: str) -> _BLDXOutput:
+                return _BLDXOutput(result=value)
+
+        with pytest.raises(InvalidInputError, match="subclass of Input"):
+            generate_workflow_class(
+                _BadUpdateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_update_with_non_output_return_raises_contract_error(self) -> None:
+        """@update returning a non-Output type is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadUpdateApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @update
+            async def set_value(self, input: _BLDXInput) -> str:
+                return input.value
+
+        with pytest.raises(InvalidInputError, match="subclass of Output"):
+            generate_workflow_class(
+                _BadUpdateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_update_with_wrong_param_count_raises_contract_error(self) -> None:
+        """@update with 0 or 2+ params besides self is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadUpdateApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @update
+            async def noop(self) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        with pytest.raises(InvalidInputError, match="exactly one parameter"):
+            generate_workflow_class(
+                _BadUpdateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_dynamic_interactions_skip_contract_enforcement(self) -> None:
+        """Dynamic interactions (name=None) are exempt from contract enforcement."""
+        ns: dict[str, _Any] = {
+            "update": update,
+            "_Seq": _Seq,
+            "_RawValue": _RawValue,
+            "App": App,
+            "_BLDXInput": _BLDXInput,
+            "_BLDXOutput": _BLDXOutput,
+        }
+        exec(  # noqa: S102
+            "class _DynamicApp(App):\n"
+            "    async def run(self, input: _BLDXInput) -> _BLDXOutput:\n"
+            "        return _BLDXOutput(result='ok')\n"
+            "    @update(dynamic=True)\n"
+            "    async def fallback(self, name: str, args: _Seq[_RawValue]) -> None:\n"
+            "        pass\n",
+            ns,
+        )
+        _DynamicApp = ns["_DynamicApp"]
+        # Must not raise despite non-Input/Output signature.
+        wf_cls = generate_workflow_class(
+            _DynamicApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        defn = _wf._Definition.from_class(wf_cls)
+        assert None in defn.updates
 
     def test_wf_init_creates_fresh_app_instance_per_run(self) -> None:
         """Each wf_cls() call constructs a fresh App instance (one per workflow run)."""

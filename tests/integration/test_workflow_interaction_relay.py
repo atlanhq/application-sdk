@@ -51,6 +51,18 @@ class _InteractionOutput(Output, allow_unbounded_fields=True):
     signals_received: int = 0
 
 
+class _StopInput(Input):
+    reason: str = ""
+
+
+class _StopOutput(Output):
+    state: str = ""
+
+
+class _StateOutput(Output):
+    state: str = ""
+
+
 # ---------------------------------------------------------------------------
 # App under test
 # ---------------------------------------------------------------------------
@@ -81,17 +93,17 @@ class _InteractionApp(App):
         self.signals_received += 1
 
     @query
-    def get_state(self) -> str:
-        return self.state
+    def get_state(self) -> _StateOutput:
+        return _StateOutput(state=self.state)
 
     @update
-    async def stop(self, reason: str) -> str:
-        self.state = f"stopped:{reason}"
-        return self.state
+    async def stop(self, input: _StopInput) -> _StopOutput:
+        self.state = f"stopped:{input.reason}"
+        return _StopOutput(state=self.state)
 
     @stop.validator
-    def _validate_stop(self, reason: str) -> None:
-        if not reason:
+    def _validate_stop(self, input: _StopInput) -> None:
+        if not input.reason:
             raise ValueError("reason must be non-empty")
 
 
@@ -137,8 +149,10 @@ async def test_update_interaction_mutates_run_state() -> None:
 
         # Give run() a moment to enter the poll loop, then issue the update.
         await asyncio.sleep(0.2)
-        stopped = await handle.execute_update("stop", "operator-request")
-        assert stopped == "stopped:operator-request"
+        stopped = await handle.execute_update(
+            "stop", _StopInput(reason="operator-request")
+        )
+        assert stopped == {"state": "stopped:operator-request"}
 
         result = await handle.result()
     assert result.final_state == "stopped:operator-request"
@@ -169,7 +183,7 @@ async def test_signal_interaction_increments_state() -> None:
         await handle.signal("ping")
         await handle.signal("ping")
         await handle.signal("ping")
-        await handle.execute_update("stop", "done")
+        await handle.execute_update("stop", _StopInput(reason="done"))
 
         result = await handle.result()
     assert result.signals_received == 3
@@ -197,8 +211,8 @@ async def test_query_interaction_returns_live_state() -> None:
             result_type=_InteractionOutput,
         )
         await asyncio.sleep(0.2)
-        assert await handle.query("get_state") == "running"
-        await handle.execute_update("stop", "done")
+        assert await handle.query("get_state") == {"state": "running"}
+        await handle.execute_update("stop", _StopInput(reason="done"))
         await handle.result()
 
 
@@ -227,11 +241,11 @@ async def test_validator_rejects_invalid_update() -> None:
         await asyncio.sleep(0.2)
 
         with pytest.raises(WorkflowUpdateFailedError) as exc_info:
-            await handle.execute_update("stop", "")
+            await handle.execute_update("stop", _StopInput(reason=""))
         # The validator's ValueError travels back as the cause chain.
         assert "non-empty" in str(exc_info.value.cause)
 
         # Workflow is still running; a valid update unblocks it.
-        await handle.execute_update("stop", "after-rejection")
+        await handle.execute_update("stop", _StopInput(reason="after-rejection"))
         result = await handle.result()
     assert result.final_state == "stopped:after-rejection"

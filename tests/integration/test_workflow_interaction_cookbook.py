@@ -55,6 +55,14 @@ class _ExtractOutput(Output, allow_unbounded_fields=True):
     final_state: str = ""
 
 
+class _ReasonInput(Input):
+    reason: str = ""
+
+
+class _StateMessageOutput(Output):
+    message: str = ""
+
+
 class _PauseResumeApp(App):
     def __init__(self) -> None:
         self.state: str = "running"
@@ -74,19 +82,19 @@ class _PauseResumeApp(App):
         )
 
     @update
-    async def pause(self, reason: str) -> str:
+    async def pause(self, input: _ReasonInput) -> _StateMessageOutput:
         self.state = "paused"
-        return f"paused: {reason}"
+        return _StateMessageOutput(message=f"paused: {input.reason}")
 
     @update
-    async def resume(self) -> str:
+    async def resume(self, input: _ReasonInput) -> _StateMessageOutput:
         self.state = "running"
-        return "resumed"
+        return _StateMessageOutput(message="resumed")
 
     @update
-    async def graceful_cancel(self, reason: str) -> str:
+    async def graceful_cancel(self, input: _ReasonInput) -> _StateMessageOutput:
         self.state = "cancelled"
-        return f"cancelling: {reason}"
+        return _StateMessageOutput(message=f"cancelling: {input.reason}")
 
 
 _PAUSE_RESUME_WF = generate_workflow_class(
@@ -116,10 +124,12 @@ async def test_cookbook_pause_resume_cycle() -> None:
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)
-        assert (
-            await handle.execute_update("pause", "maintenance") == "paused: maintenance"
-        )
-        assert await handle.execute_update("resume") == "resumed"
+        assert await handle.execute_update(
+            "pause", _ReasonInput(reason="maintenance")
+        ) == {"message": "paused: maintenance"}
+        assert await handle.execute_update("resume", _ReasonInput()) == {
+            "message": "resumed"
+        }
         result = await handle.result()
     assert result.final_state == "running"
     assert result.rows_extracted == 300  # 3 batches × 100 rows
@@ -148,8 +158,10 @@ async def test_cookbook_graceful_cancel_short_circuits_run() -> None:
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)
-        msg = await handle.execute_update("graceful_cancel", "user-request")
-        assert msg == "cancelling: user-request"
+        msg = await handle.execute_update(
+            "graceful_cancel", _ReasonInput(reason="user-request")
+        )
+        assert msg == {"message": "cancelling: user-request"}
         result = await handle.result()
     assert result.final_state == "cancelled"
     assert result.rows_extracted < 100 * 100  # short-circuited before all batches
@@ -158,6 +170,11 @@ async def test_cookbook_graceful_cancel_short_circuits_run() -> None:
 # ---------------------------------------------------------------------------
 # Cookbook 2 — Live progress / ETA query
 # ---------------------------------------------------------------------------
+
+
+class _ProgressOutput(Output):
+    tables_done: int = 0
+    tables_total: int = 0
 
 
 class _MetricsApp(App):
@@ -175,8 +192,10 @@ class _MetricsApp(App):
         return _ExtractOutput(rows_extracted=self.tables_done)
 
     @query
-    def progress(self) -> dict:
-        return {"tables_done": self.tables_done, "tables_total": self.tables_total}
+    def progress(self) -> _ProgressOutput:
+        return _ProgressOutput(
+            tables_done=self.tables_done, tables_total=self.tables_total
+        )
 
     @signal
     async def go(self) -> None:
@@ -219,6 +238,14 @@ async def test_cookbook_progress_query_returns_live_state() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _RateLimitInput(Input):
+    rps: int = 100
+
+
+class _RateLimitOutput(Output):
+    rps: int = 0
+
+
 class _RateLimitedApp(App):
     def __init__(self) -> None:
         self.rps_limit: int = 100
@@ -229,13 +256,13 @@ class _RateLimitedApp(App):
         return _ExtractOutput(rows_extracted=self.rps_limit)
 
     @update
-    async def set_rate_limit(self, rps: int) -> int:
-        self.rps_limit = rps
-        return self.rps_limit
+    async def set_rate_limit(self, input: _RateLimitInput) -> _RateLimitOutput:
+        self.rps_limit = input.rps
+        return _RateLimitOutput(rps=self.rps_limit)
 
     @set_rate_limit.validator
-    def _validate_rps(self, rps: int) -> None:
-        if rps < 1 or rps > 10_000:
+    def _validate_rps(self, input: _RateLimitInput) -> None:
+        if input.rps < 1 or input.rps > 10_000:
             raise ValueError("rps must be in [1, 10_000]")
 
     @signal
@@ -273,11 +300,13 @@ async def test_cookbook_rate_limit_validator_rejects_out_of_range() -> None:
         await asyncio.sleep(0.2)
 
         with pytest.raises(WorkflowUpdateFailedError) as exc_info:
-            await handle.execute_update("set_rate_limit", 99_999)
+            await handle.execute_update("set_rate_limit", _RateLimitInput(rps=99_999))
         assert "rps must be in" in str(exc_info.value.cause)
 
-        new_limit = await handle.execute_update("set_rate_limit", 250)
-        assert new_limit == 250
+        new_limit = await handle.execute_update(
+            "set_rate_limit", _RateLimitInput(rps=250)
+        )
+        assert new_limit == {"rps": 250}
 
         await handle.signal("go")
         result = await handle.result()
@@ -285,25 +314,33 @@ async def test_cookbook_rate_limit_validator_rejects_out_of_range() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cookbook 4 — External signal advances a watermark
+# Cookbook 4 — External update advances a watermark
 # ---------------------------------------------------------------------------
+
+
+class _WatermarkInput(Input):
+    new_watermark: str = ""
+
+
+class _WatermarkOutput(Output):
+    watermark: str = ""
 
 
 class _IncrementalApp(App):
     def __init__(self) -> None:
         self.watermark: str = ""
         self.advance_signal: bool = False
-        self.stop: bool = False
 
     async def run(self, input: _ExtractInput) -> _ExtractOutput:
         # One advance cycle for the test; production code would loop.
         await wait_condition(lambda: self.advance_signal)
         return _ExtractOutput(rows_extracted=0, final_state=self.watermark)
 
-    @signal
-    async def new_data_available(self, new_watermark: str) -> None:
-        self.watermark = new_watermark
+    @update
+    async def new_data_available(self, input: _WatermarkInput) -> _WatermarkOutput:
+        self.watermark = input.new_watermark
         self.advance_signal = True
+        return _WatermarkOutput(watermark=self.watermark)
 
 
 _INCREMENTAL_WF = generate_workflow_class(
@@ -312,8 +349,8 @@ _INCREMENTAL_WF = generate_workflow_class(
 
 
 @pytest.mark.asyncio
-async def test_cookbook_external_signal_advances_watermark() -> None:
-    """An external service signals a new watermark; run() observes it on the same instance."""
+async def test_cookbook_external_update_advances_watermark() -> None:
+    """An external service sends a watermark update; run() observes it on the same instance."""
     async with (
         await WorkflowEnvironment.start_local(
             data_converter=pydantic_data_converter
@@ -333,7 +370,10 @@ async def test_cookbook_external_signal_advances_watermark() -> None:
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)
-        await handle.signal("new_data_available", "2026-05-21T08:00:00Z")
+        result_update = await handle.execute_update(
+            "new_data_available", _WatermarkInput(new_watermark="2026-05-21T08:00:00Z")
+        )
+        assert result_update == {"watermark": "2026-05-21T08:00:00Z"}
         result = await handle.result()
     assert result.final_state == "2026-05-21T08:00:00Z"
 
@@ -343,20 +383,25 @@ async def test_cookbook_external_signal_advances_watermark() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _CheckpointOutput(Output):
+    partition: str | None = None
+    offset: int = 0
+
+
 class _CheckpointedApp(App):
     def __init__(self) -> None:
-        self.last_checkpoint: dict = {"partition": None, "offset": 0}
+        self.checkpoint: _CheckpointOutput = _CheckpointOutput()
         self.unblock: bool = False
 
     async def run(self, input: _ExtractInput) -> _ExtractOutput:
         # Simulate work that updates the checkpoint as it goes.
-        self.last_checkpoint = {"partition": "shard-7", "offset": 1842394}
+        self.checkpoint = _CheckpointOutput(partition="shard-7", offset=1842394)
         await wait_condition(lambda: self.unblock)
         return _ExtractOutput(rows_extracted=0)
 
     @query
-    def get_checkpoint(self) -> dict:
-        return self.last_checkpoint
+    def get_checkpoint(self) -> _CheckpointOutput:
+        return self.checkpoint
 
     @signal
     async def finish(self) -> None:

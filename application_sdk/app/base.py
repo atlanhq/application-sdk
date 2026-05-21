@@ -13,7 +13,7 @@ from abc import ABC
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, Never, TypeVar, cast, get_type_hints
+from typing import Any, ClassVar, Literal, Never, TypeVar, cast, get_type_hints
 from uuid import UUID
 
 import obstore as obs
@@ -59,6 +59,7 @@ from application_sdk.errors import (
 )
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.leaves import InternalError as _InternalError
+from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 
@@ -1420,6 +1421,113 @@ def _apply_app_registration(
 _workflow_class_cache: dict[tuple[type, str], type] = {}
 
 
+def _validate_interaction_signature(
+    fn: Callable[..., Any],
+    kind: Literal["signal", "query", "update"],
+    fn_name: str,
+) -> None:
+    """Validate that a @signal / @query / @update method satisfies the interaction contract.
+
+    Rules enforced at class-definition time:
+    - ``@signal``: no params besides ``self`` (pure trigger, no payload).
+    - ``@query``: no params besides ``self``; return type must be a subclass of Output.
+    - ``@update``: exactly one param besides ``self`` that is a subclass of Input;
+      return type must be a subclass of Output.
+
+    Dynamic interactions (``name is None``) are skipped — callers must check before
+    calling this function.
+
+    Args:
+        fn: The original (undecorated) interaction function.
+        kind: One of ``"signal"``, ``"query"``, or ``"update"``.
+        fn_name: Human-readable name used in error messages.
+
+    Raises:
+        _InvalidInputError: If the signature does not satisfy the contract.
+    """
+    sig = inspect.signature(fn)
+    params = [p for p in sig.parameters.values() if p.name != "self"]
+
+    try:
+        hints: dict[str, Any] = get_type_hints(fn)
+    except Exception:
+        hints = getattr(fn, "__annotations__", {})
+
+    if kind == "signal":
+        if params:
+            raise _InvalidInputError(
+                message=(
+                    f"@signal '{fn_name}' must have no parameters besides self "
+                    f"(signals are pure triggers — they carry no payload). "
+                    f"Got {len(params)} extra parameter(s): "
+                    f"{[p.name for p in params]}. "
+                    f"To carry data into a running workflow, use @update instead."
+                )
+            )
+
+    elif kind == "query":
+        if params:
+            raise _InvalidInputError(
+                message=(
+                    f"@query '{fn_name}' must have no parameters besides self. "
+                    f"Got {len(params)} extra parameter(s): "
+                    f"{[p.name for p in params]}. "
+                    f"Queries are read-only probes; pass context via instance fields set "
+                    f"by an earlier @update if needed."
+                )
+            )
+        return_type = hints.get("return")
+        if not (
+            return_type is not None
+            and isinstance(return_type, type)
+            and issubclass(return_type, Output)
+        ):
+            raise _InvalidInputError(
+                message=(
+                    f"@query '{fn_name}' return type must be a subclass of Output, "
+                    f"got {return_type!r}. "
+                    f"Define a dataclass that extends Output and annotate the return type."
+                )
+            )
+
+    else:  # kind == "update"
+        if len(params) != 1:
+            raise _InvalidInputError(
+                message=(
+                    f"@update '{fn_name}' must have exactly one parameter besides self "
+                    f"(a subclass of Input), got {len(params)}. "
+                    f"Wrap multiple values in a single Input dataclass."
+                )
+            )
+        param = params[0]
+        input_type = hints.get(param.name)
+        if not (
+            input_type is not None
+            and isinstance(input_type, type)
+            and issubclass(input_type, Input)
+        ):
+            raise _InvalidInputError(
+                message=(
+                    f"@update '{fn_name}' parameter '{param.name}' must be a subclass "
+                    f"of Input, got {input_type!r}. "
+                    f"Define a dataclass that extends Input and use it as the parameter type."
+                )
+            )
+        return_type = hints.get("return")
+        if not (
+            return_type is not None
+            and isinstance(return_type, type)
+            and issubclass(return_type, Output)
+        ):
+            raise _InvalidInputError(
+                message=(
+                    f"@update '{fn_name}' return type must be a subclass of Output, "
+                    f"got {return_type!r}. "
+                    f"Define a dataclass that extends Output and annotate the return type."
+                )
+            )
+
+
 def _collect_interaction_relays(
     app_cls: "type[App]", cls_name: str
 ) -> dict[str, Callable[..., Any]]:
@@ -1482,6 +1590,14 @@ def _collect_interaction_relays(
 
         if not (signal_defn or query_defn or is_update):
             continue
+
+        # Contract enforcement — skip dynamic interactions (name is None).
+        if signal_defn is not None and signal_defn.name is not None:
+            _validate_interaction_signature(signal_defn.fn, "signal", member_name)
+        elif query_defn is not None and query_defn.name is not None:
+            _validate_interaction_signature(query_defn.fn, "query", member_name)
+        elif is_update and update_defn is not None and update_defn.name is not None:
+            _validate_interaction_signature(update_defn.fn, "update", member_name)
 
         relay = _build_relay(member_name, inspect.iscoroutinefunction(member))
 
