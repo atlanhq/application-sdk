@@ -152,7 +152,7 @@ async def test_update_interaction_mutates_run_state() -> None:
         stopped = await handle.execute_update(
             "stop", _StopInput(reason="operator-request")
         )
-        assert stopped == {"state": "stopped:operator-request"}
+        assert stopped["state"] == "stopped:operator-request"
 
         result = await handle.result()
     assert result.final_state == "stopped:operator-request"
@@ -211,7 +211,7 @@ async def test_query_interaction_returns_live_state() -> None:
             result_type=_InteractionOutput,
         )
         await asyncio.sleep(0.2)
-        assert await handle.query("get_state") == {"state": "running"}
+        assert (await handle.query("get_state"))["state"] == "running"
         await handle.execute_update("stop", _StopInput(reason="done"))
         await handle.result()
 

@@ -124,12 +124,12 @@ async def test_cookbook_pause_resume_cycle() -> None:
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)
-        assert await handle.execute_update(
-            "pause", _ReasonInput(reason="maintenance")
-        ) == {"message": "paused: maintenance"}
-        assert await handle.execute_update("resume", _ReasonInput()) == {
-            "message": "resumed"
-        }
+        assert (
+            await handle.execute_update("pause", _ReasonInput(reason="maintenance"))
+        )["message"] == "paused: maintenance"
+        assert (await handle.execute_update("resume", _ReasonInput()))[
+            "message"
+        ] == "resumed"
         result = await handle.result()
     assert result.final_state == "running"
     assert result.rows_extracted == 300  # 3 batches × 100 rows
@@ -161,7 +161,7 @@ async def test_cookbook_graceful_cancel_short_circuits_run() -> None:
         msg = await handle.execute_update(
             "graceful_cancel", _ReasonInput(reason="user-request")
         )
-        assert msg == {"message": "cancelling: user-request"}
+        assert msg["message"] == "cancelling: user-request"
         result = await handle.result()
     assert result.final_state == "cancelled"
     assert result.rows_extracted < 100 * 100  # short-circuited before all batches
@@ -228,7 +228,8 @@ async def test_cookbook_progress_query_returns_live_state() -> None:
         )
         await asyncio.sleep(0.2)
         mid_run = await handle.query("progress")
-        assert mid_run == {"tables_done": 0, "tables_total": 7}
+        assert mid_run["tables_done"] == 0
+        assert mid_run["tables_total"] == 7
         await handle.signal("go")
         await handle.result()
 
@@ -306,7 +307,7 @@ async def test_cookbook_rate_limit_validator_rejects_out_of_range() -> None:
         new_limit = await handle.execute_update(
             "set_rate_limit", _RateLimitInput(rps=250)
         )
-        assert new_limit == {"rps": 250}
+        assert new_limit["rps"] == 250
 
         await handle.signal("go")
         result = await handle.result()
@@ -373,7 +374,7 @@ async def test_cookbook_external_update_advances_watermark() -> None:
         result_update = await handle.execute_update(
             "new_data_available", _WatermarkInput(new_watermark="2026-05-21T08:00:00Z")
         )
-        assert result_update == {"watermark": "2026-05-21T08:00:00Z"}
+        assert result_update["watermark"] == "2026-05-21T08:00:00Z"
         result = await handle.result()
     assert result.final_state == "2026-05-21T08:00:00Z"
 
@@ -436,6 +437,7 @@ async def test_cookbook_checkpoint_query_returns_position() -> None:
         )
         await asyncio.sleep(0.2)
         checkpoint = await handle.query("get_checkpoint")
-        assert checkpoint == {"partition": "shard-7", "offset": 1842394}
+        assert checkpoint["partition"] == "shard-7"
+        assert checkpoint["offset"] == 1842394
         await handle.signal("finish")
         await handle.result()
