@@ -73,7 +73,6 @@ tests/
 - `Credential.pkl` is legacy. Do not use it for new native app credential config.
 - Workflow UI uses `Config.pkl` widgets inside `uiConfig.tasks`.
 - Generated `_input.py` defines `AppInputContract` extending SDK `ExtractionInput`.
-- `flatManifestArgs = true` is the SDK v3 default. Use `flatManifestArgs = false` only for workflows that intentionally read `args.metadata`.
 - Default DAG is `extract -> publish`. Use typed nodes (`PublishNode`, `QueryIntelligenceNode`, `PopularityNode`, `LineageNode`, `LineagePublishNode`) before raw `DAGNode`.
 
 ## Commands

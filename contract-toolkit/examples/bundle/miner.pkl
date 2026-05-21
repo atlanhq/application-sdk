@@ -1,0 +1,43 @@
+/// Miner entrypoint contract for the bundle example.
+///
+/// Shares credentials with the crawler (same credType, no duplicate
+/// credential configmap — hasCredentialConfig = false).
+amends "../../src/App.pkl"
+
+name = "miner"
+displayName = "Query Miner"
+icon = "https://assets.atlan.com/assets/snowflake.svg"
+hasCredentialConfig = false
+
+pipeline {
+  // Miner mines query history; it does not publish assets.
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new CredentialInput {
+          credType = "atlan-connectors-bundle"
+        }
+      }
+    }
+    ["Settings"] {
+      inputs {
+        ["lookback-days"] = new NumericInput {
+          title = "Query lookback (days)"
+          helpText = "Number of days of query history to mine."
+          default = 30
+          width = 4
+        }
+        ["max-queries"] = new NumericInput {
+          title = "Max queries"
+          helpText = "Cap on the number of queries to mine per run. 0 = unlimited."
+          default = 0
+          width = 4
+        }
+      }
+    }
+  }
+}
