@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.2
-source-sha:    dc6206e8f49917c2ac8abde36529c3a60de64940
-source-date:   2026-05-21T12:37:23+01:00
+source-sha:    2b843687403af8ecf62d206d49955613b386eb7d
+source-date:   2026-05-21T12:57:35+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -169,14 +169,14 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import InteractionUnfinishedPolicy`
 - **Signature:** `InteractionUnfinishedPolicy`
-- **Summary:** Policy applied to in-flight runtime interactions when a workflow exits.
+- **Summary:** Policy applied to in-flight runtime interactions when an app run exits.
 - **Defined in:** `application_sdk/app/__init__.py`
 
 #### `now`
 
 - **Import:** `from application_sdk.app import now`
 - **Signature:** `now`
-- **Summary:** Return the current time from the workflow's perspective (deterministic).
+- **Summary:** Return the current time from the app run's perspective (deterministic).
 - **Defined in:** `application_sdk/app/__init__.py`
 
 #### `query`
@@ -197,7 +197,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import sleep`
 - **Signature:** `sleep`
-- **Summary:** Sleep for a given duration inside a workflow (deterministic).
+- **Summary:** Sleep for a given duration inside an app run (deterministic).
 - **Defined in:** `application_sdk/app/__init__.py`
 
 #### `update`
@@ -211,7 +211,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import uuid4`
 - **Signature:** `uuid4`
-- **Summary:** Generate a determinism-safe v4 UUID inside a workflow.
+- **Summary:** Generate a determinism-safe v4 UUID inside an app run.
 - **Defined in:** `application_sdk/app/__init__.py`
 
 #### `wait_condition`

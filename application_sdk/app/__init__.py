@@ -80,7 +80,7 @@ The caller fires and forgets; there is no typed confirmation.
 * **0 parameters** besides ``self``.
 * Return type is ``None``.
 
-To pass data into a running workflow or receive a response, use ``@update`` instead.
+To pass data into a running app or receive a response, use ``@update`` instead.
 
 Example::
 
@@ -164,7 +164,7 @@ Example::
 """
 
 # ---------------------------------------------------------------------------
-# In-workflow time / UUID / sleep / condition primitives
+# App-run time / UUID / sleep / condition primitives
 # ---------------------------------------------------------------------------
 
 wait_condition = _wait_condition
@@ -183,7 +183,7 @@ Example::
 """
 
 now = _now
-"""Return the current time from the workflow's perspective (deterministic).
+"""Return the current time from the app run's perspective (deterministic).
 
 Use this instead of ``datetime.now()`` or ``time.time()`` inside ``run()``
 and runtime interactions — those are non-deterministic and break replay.
@@ -195,7 +195,7 @@ Example::
 """
 
 sleep = _sleep
-"""Sleep for a given duration inside a workflow (deterministic).
+"""Sleep for a given duration inside an app run (deterministic).
 
 Use this instead of ``asyncio.sleep`` or ``time.sleep`` inside ``run()``
 and runtime interactions — those are non-deterministic and break replay.
@@ -209,7 +209,7 @@ Example::
 """
 
 uuid4 = _uuid4
-"""Generate a determinism-safe v4 UUID inside a workflow.
+"""Generate a determinism-safe v4 UUID inside an app run.
 
 Use this instead of ``uuid.uuid4()`` inside ``run()`` and runtime
 interactions — the standard library version is non-deterministic and
@@ -222,9 +222,9 @@ Example::
 """
 
 InteractionUnfinishedPolicy = _HandlerUnfinishedPolicy
-"""Policy applied to in-flight runtime interactions when a workflow exits.
+"""Policy applied to in-flight runtime interactions when an app run exits.
 
-Controls what happens if the workflow completes or is cancelled before
+Controls what happens if the app run completes or is cancelled before
 an in-flight ``@update`` or ``@signal`` interaction has been acknowledged.
 Pass via the decorator::
 
