@@ -11,7 +11,11 @@ Builds/updates a structured index of the application-sdk codebase:
 - Deprecation flags
 
 Usage:
-  python update_index.py --repo /workspace/repo --index session/INDEX.md --output /tmp/updated-index.json
+  python update_index.py --repo /workspace/application-sdk --output /tmp/index.json
+
+Stage 0 of the SDK Evolution orchestration runs this once per run from
+the cloned repo; the resulting /tmp/index.json is consumed by the
+discovery agents.
 
 On first run (or with --full), does a full AST parse of all .py files.
 On subsequent runs, only re-parses files changed since the index's last_commit_sha.

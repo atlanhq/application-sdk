@@ -13,7 +13,7 @@ Your domain spans 5 areas: code quality, architecture, v2 patterns, bugs, test q
 
 ## Inputs
 
-- Codebase index from `session/INDEX.md`
+- Codebase index from `/tmp/index.json` (built in Stage 0 by `scripts/update_index.py`)
 - Full content of scan_target files
 - Reference rules: `references/code-quality-rules.md`, `references/v3-architecture-rules.md`, `references/test-quality-rules.md`
 - Suppression list

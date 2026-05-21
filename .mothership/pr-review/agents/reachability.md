@@ -11,8 +11,8 @@ points in addition to standard HTTP/webhook/event patterns.
 
 ## Inputs
 
-- The authoritative PR diff at `session/DIFF.patch`
-- The cloned repo at cwd
+- The authoritative PR diff at `/tmp/DIFF.patch` (fetched in Phase 0 by `gh pr diff`)
+- The cloned repo at cwd (`/workspace/application-sdk`)
 
 ## Method
 

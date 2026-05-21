@@ -10,7 +10,7 @@ Your domain: security + performance — "what will fail or be exploited at runti
 
 ## Inputs
 
-- Codebase index from `session/INDEX.md`
+- Codebase index from `/tmp/index.json` (built in Stage 0 by `scripts/update_index.py`)
 - Full content of scan_target files
 - Reference rules: `references/security-rules.md`, `references/performance-rules.md`
 - Suppression list

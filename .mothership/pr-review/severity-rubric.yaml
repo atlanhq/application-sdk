@@ -1,9 +1,9 @@
 # SDK Reviewer Severity Rubric
 #
 # Deterministic severity table for SDK-specific patterns.
-# The submit_review handler uses this to clamp severities:
+# The orchestration (ORCHESTRATION.md Phase 2 / 3) uses this to clamp severities:
 # - LLM picks pattern_id + provides evidence + attack_path
-# - Handler looks up canonical_severity and max_severity
+# - Orchestration looks up canonical_severity and max_severity
 # - If LLM severity > max_severity, clamp down
 # - required_conditions_for_* must be substantiated in evidence/attack_path
 # - override_allowed: false means POLICY.md cannot override this pattern
