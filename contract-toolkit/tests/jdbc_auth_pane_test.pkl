@@ -8,30 +8,28 @@
 /// creates orphaned top-level entries with no ui metadata.
 amends "pkl:test"
 
-import "../src/NativeApp.pkl"
-import "../src/Config.pkl"
+import "../src/App.pkl" as App
 import "../src/Connectors.pkl"
 
 /// Minimal JDBC-URL app with two auth types — exercises the exact
 /// code path in `generateCredentialConfig()` that emits top-level
 /// auth panes alongside `connectBy` + `jdbcUrl`.
-local jdbcApp = (NativeApp) {
+local jdbcApp = (App) {
   name = "jdbc-auth-test"
   displayName = "JDBC Auth Pane Test"
   connector = Connectors.TERADATA
-  workflowType = "JDBCAuthTestWorkflow"
   icon = "https://example.com/icon.svg"
 
-  credentialUrlGroup = new NativeApp.AdvancedJDBCUrlGroup {
+  credentialUrlGroup = new App.AdvancedJDBCUrlGroup {
     protocol = ""
     urlAddonBefore = "driver://"
-    hostField = new NativeApp.FieldSpec {
+    hostField = new App.FieldSpec {
       name = "host"
       displayName = "Host"
       placeholder = "host.example.com"
       feedback = true
     }
-    portField = new NativeApp.FieldSpec {
+    portField = new App.FieldSpec {
       name = "port"
       fieldType = "number"
       displayName = "Port"
@@ -42,45 +40,43 @@ local jdbcApp = (NativeApp) {
   }
 
   credentialAuthOptions {
-    ["basic"] = new NativeApp.JDBCUrlAuthOption {
+    ["basic"] = new App.JDBCUrlAuthOption {
       label = "Basic"
       nestedLabel = "Basic"
-      urlPartMapping = new NativeApp.UrlPartMapping {
+      urlPartMapping = new App.UrlPartMapping {
         hostname = "host"
         searchParams {
-          ["PORT"] = new NativeApp.UrlRef { field = "port" }
+          ["PORT"] = new App.UrlRef { field = "port" }
         }
       }
       fields {
-        new NativeApp.FieldSpec { name = "username"; displayName = "Username" }
-        new NativeApp.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
       }
     }
-    ["ldap"] = new NativeApp.JDBCUrlAuthOption {
+    ["ldap"] = new App.JDBCUrlAuthOption {
       label = "LDAP"
       nestedLabel = "LDAP"
-      urlPartMapping = new NativeApp.UrlPartMapping {
+      urlPartMapping = new App.UrlPartMapping {
         hostname = "host"
         searchParams {
-          ["PORT"] = new NativeApp.UrlRef { field = "port" }
-          ["LOGMECH"] = new NativeApp.UrlLiteral { value = "LDAP" }
+          ["PORT"] = new App.UrlRef { field = "port" }
+          ["LOGMECH"] = new App.UrlLiteral { value = "LDAP" }
         }
       }
       fields {
-        new NativeApp.FieldSpec { name = "username"; displayName = "Username" }
-        new NativeApp.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
       }
     }
   }
 
-  uiConfig {
+  uiConfig = new App.UIConfig {
     tasks {
       ["Credential"] {
         inputs {
-          ["credential-guid"] = new Config.CredentialInput {
-            title = ""
+          ["credential-guid"] = new App.CredentialInput {
             credType = "atlan-connectors-jdbc-auth-test"
-            placeholderText = "Credential Guid"
           }
         }
       }
@@ -88,7 +84,7 @@ local jdbcApp = (NativeApp) {
   }
 }
 
-local credentialJson: String = jdbcApp.output.files["atlan-connectors-jdbc-auth-test.json"].text
+local credentialJson: String = jdbcApp.output.files["app/generated/atlan-connectors-jdbc-auth-test.json"].text
 
 facts {
   ["JDBC-URL credential configmap contains AdvancedJDBCUrlGroup and connectBy"] {

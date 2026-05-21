@@ -3,30 +3,31 @@
 /// The widget renders the frontend `connectionSelector` with
 /// `shouldIncludeConnectionInfo = true`, so the workflow receives full
 /// connection object(s) instead of only qualified-name strings.
-amends "../../src/NativeApp.pkl"
+amends "../../src/App.pkl"
 
-import "../../src/Config.pkl"
 import "../../src/Connectors.pkl"
 
 name = "connection-ref"
 displayName = "ConnectionRef Example"
 connector = Connectors.TRINO
-workflowType = "ConnectionRefExampleWorkflow"
 icon = "https://assets.atlan.com/assets/trino.svg"
 hasCredentialConfig = false
-hasPublishStep = false
 
-uiConfig {
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
   tasks {
     ["Configuration"] {
       inputs {
-        ["connection"] = new Config.ConnectionRefInput {
+        ["connection"] = new ConnectionRefInput {
           title = "Connection"
           connectorFilter = "trino"
           placeholderText = "Select a connection"
           required = true
         }
-        ["connections"] = new Config.ConnectionRefInput {
+        ["connections"] = new ConnectionRefInput {
           title = "Connections"
           connectorFilters { "trino"; "clickhouse" }
           placeholderText = "Select connections"

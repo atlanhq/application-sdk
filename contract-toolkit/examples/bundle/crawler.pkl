@@ -1,0 +1,70 @@
+/// Crawler entrypoint contract for the bundle example.
+///
+/// Owns the credential configmap (connectorConfigName overridden to the
+/// bundle-level name so the miner can share the same credType).
+amends "../../src/App.pkl"
+
+import "../../src/Connectors.pkl"
+
+name = "crawler"
+displayName = "Crawler"
+connector = Connectors.SNOWFLAKE
+icon = "https://assets.atlan.com/assets/snowflake.svg"
+credentialConnectorType = "jdbc"
+
+// Override so the credential config file is named after the bundle app, not
+// this entrypoint. The miner's CredentialInput points to the same credType.
+connectorConfigName = "atlan-connectors-bundle"
+
+credentialCommonFields {
+  new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new CredentialInput {
+          credType = "atlan-connectors-bundle"
+        }
+      }
+    }
+    ["Connection"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Metadata"] {
+      inputs {
+        ["include-filter"] = new SqlTree {
+          title = "Include schemas"
+          desc = "Only selected databases and schemas will be extracted."
+          sqlQuery = "show atlan schemas"
+          credentialType = "atlan-connectors-bundle"
+          cred = "credential-guid"
+          width = 4
+        }
+        ["exclude-filter"] = new SqlTree {
+          title = "Exclude schemas"
+          desc = "Selected databases and schemas will be skipped."
+          sqlQuery = "show atlan schemas"
+          credentialType = "atlan-connectors-bundle"
+          cred = "credential-guid"
+          width = 4
+        }
+      }
+    }
+  }
+}

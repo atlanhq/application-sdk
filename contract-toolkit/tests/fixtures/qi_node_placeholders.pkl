@@ -1,19 +1,39 @@
-/// Minimal example demonstrating the built-in `QueryIntelligenceNode`.
+/// Minimal example demonstrating the built-in `ParseQueriesStep`.
 ///
-/// This keeps `hasPublishStep = false` so the example focuses on the QI node
-/// contract itself rather than requiring a downstream publish-shaped workflow.
-amends "../../src/NativeApp.pkl"
+/// Opts out of publish (pipeline.publish = null) so the example focuses on
+/// the QI node contract itself rather than requiring a downstream publish workflow.
+amends "../../src/App.pkl"
 
-import "../../src/Config.pkl"
 import "../../src/Connectors.pkl"
 
 name = "qi-node"
 displayName = "QI Node Example"
 connector = Connectors.ATHENA
-workflowType = "QiNodeWorkflow"
 icon = "https://assets.atlan.com/assets/athena.svg"
 credentialConnectorType = "jdbc"
-hasPublishStep = false
+
+pipeline {
+  publish = null
+  parseQueries = new ParseQueriesStep {
+    vendorName = "athena"
+    sqlKey = "attributes.definition"
+    catalogKey = "attributes.databaseName"
+    schemaKey = "attributes.schemaName"
+    timestampKey = ""
+    mineOutputType = "json"
+    parsingMode = "competitive"
+    inputPrefix = "$.extract.outputs.transformed_data_prefix"
+    outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
+    // Demonstrates wiring ParseQueriesStep.ignoreOrphans /
+    // indirectLineage from workflow form fields. The input keys
+    // (`ignore-orphans`, `indirect-lineage`) match the placeholders
+    // used below verbatim — Heracles substitutes only exact workflow
+    // parameter names, so dotted paths like
+    // `{{control_config.indirect_lineage}}` would silently strip.
+    ignoreOrphans = "{{ignore-orphans}}"
+    indirectLineage = "{{indirect-lineage}}"
+  }
+}
 
 credentialCommonFields {
   new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
@@ -29,56 +49,28 @@ credentialAuthOptions {
   }
 }
 
-uiConfig {
+uiConfig = new UIConfig {
   tasks {
     ["Credential"] {
       inputs {
-        ["credential-guid"] = new Config.CredentialInput {
-          title = ""
+        ["credential-guid"] = new CredentialInput {
           credType = "atlan-connectors-qi-node"
-          placeholderText = "Credential Guid"
         }
       }
     }
-    // Demonstrates wiring QueryIntelligenceNode.ignoreOrphans /
-    // indirectLineage from workflow form fields. The input keys
-    // (`ignore-orphans`, `indirect-lineage`) match the placeholders
-    // used below verbatim — Heracles substitutes only exact workflow
-    // parameter names, so dotted paths like
-    // `{{control_config.indirect_lineage}}` would silently strip.
     ["Query Intelligence"] {
       inputs {
-        ["ignore-orphans"] = new Config.BooleanInput {
+        ["ignore-orphans"] = new BooleanInput {
           title = "Ignore orphan columns"
           helpText = "Drop orphan columns instead of linking them to the first table."
           width = 4
         }
-        ["indirect-lineage"] = new Config.BooleanInput {
+        ["indirect-lineage"] = new BooleanInput {
           title = "Indirect lineage"
           helpText = "Enable indirect lineage parsing in the QI app."
           width = 4
         }
       }
     }
-  }
-}
-
-extraNodes {
-  ["qi"] = new QueryIntelligenceNode {
-    vendorName = "athena"
-    sqlKey = "attributes.definition"
-    catalogKey = "attributes.databaseName"
-    schemaKey = "attributes.schemaName"
-    timestampKey = ""
-    mineOutputType = "json"
-    parsingMode = "competitive"
-    inputPrefix = "$.extract.outputs.transformed_data_prefix"
-    outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
-    // HYP-793 `Boolean|String` pattern: wire the value from the
-    // workflow form fields above. Heracles substitutes the exact
-    // placeholder before the workflow starts, then QI's Pydantic
-    // boundary coerces the resolved string to bool.
-    ignoreOrphans = "{{ignore-orphans}}"
-    indirectLineage = "{{indirect-lineage}}"
   }
 }
