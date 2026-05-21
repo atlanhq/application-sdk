@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.12.2
-source-sha:    7f86b2b2e8b38b25a18e5545f05aa0b3ebd12c5d
-source-date:   2026-05-20T23:24:07+01:00
+source-sha:    c83c3c41bbd4286a68e8244aa3d5651e5ce7183e
+source-date:   2026-05-21T13:52:59+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2251,6 +2251,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `storage_subdir: str | None`
   - `tier: StorageTier` `= StorageTier.RETAINED`
   - `skip_if_exists: bool` `= False`
+  - `raise_on_empty: bool` `= False`
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 #### `UploadOutput`
