@@ -66,8 +66,12 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
     Walks ``__cause__`` and ``__context__`` looking for either:
       * an :class:`application_sdk.errors.base.AppError` (raised directly), or
       * a ``temporalio.exceptions.ApplicationError`` whose first ``details``
-        entry is a :class:`application_sdk.errors.wire.FailureDetails` (the
-        shape emitted by the SDK's activity wrapper for ``AppError`` subclasses).
+        entry carries the :class:`application_sdk.errors.wire.FailureDetails`
+        envelope — either as a live model (activity side, before serde) or as
+        a deserialized mapping (workflow side, after activity → workflow
+        boundary, where ``pydantic_data_converter`` round-trips the envelope
+        as JSON and ``ApplicationError.details`` is reconstructed without
+        the typed model since ``details`` is annotated ``Sequence[Any]``).
 
     Returns ``{"failure.category", "failure.audience", "failure.code"}`` —
     OTel attribute keys that ride the ``failure.`` passthrough prefix in
@@ -89,14 +93,36 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
             }
         if isinstance(current, _TemporalApplicationError):
             for detail in getattr(current, "details", None) or ():
-                if isinstance(detail, FailureDetails):
-                    return {
-                        "failure.category": detail.category.value,
-                        "failure.audience": detail.audience.value,
-                        "failure.code": detail.code,
-                    }
+                attrs = _failure_details_from_detail(detail)
+                if attrs:
+                    return attrs
         current = current.__cause__ or current.__context__
     return {}
+
+
+def _failure_details_from_detail(detail: Any) -> dict[str, str]:
+    """Recover ``{category, audience, code}`` from one ``ApplicationError.details`` entry.
+
+    Accepts either a live :class:`FailureDetails` Pydantic model (activity side,
+    pre-serde) or a plain dict (workflow side, post-serde — Temporal's
+    ``pydantic_data_converter`` returns raw JSON objects for ``Sequence[Any]``
+    fields). Returns an empty dict for any other shape.
+    """
+    if not isinstance(detail, (FailureDetails, dict)):
+        return {}
+    try:
+        fd = (
+            detail
+            if isinstance(detail, FailureDetails)
+            else FailureDetails.model_validate(detail)
+        )
+        return {
+            "failure.category": fd.category.value,
+            "failure.audience": fd.audience.value,
+            "failure.code": fd.code,
+        }
+    except Exception:
+        return {}
 
 
 _HEADER_CORRELATION_ID = "x-correlation-id"
