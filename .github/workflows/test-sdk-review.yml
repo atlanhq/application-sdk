@@ -548,22 +548,33 @@ jobs:
           # §3e) posts a comment with the `<!-- TEST_SDK_REVIEW -->` HTML
           # marker and a `### Verdict: <state>` line. If a prior summary
           # exists from a re-trigger on the same PR head, the most recent
-          # comment wins (paginate + tail -1).
+          # comment wins.
+          #
+          # The jq pattern wraps `.[] | select(...)` in `[ ... ] | last` so
+          # we get the full body of the last matching comment as a single
+          # string. The pre-fix version piped a raw multiline body into
+          # `tail -1`, which truncated to the last LINE of the body and
+          # made the `### Verdict:` grep below silently miss every time.
+          # Same idiom as claude.yml:822-823 for the SDK_REVIEW_V2 marker.
           SUMMARY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
             --paginate \
-            --jq '.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->")) | .body' \
-            | tail -1)
+            --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
 
           if [ -z "$SUMMARY" ]; then
             echo "::warning::No <!-- TEST_SDK_REVIEW --> summary comment found on PR #${PR_NUMBER} — skipping approval (the sandbox may have errored before posting)"
             exit 0
           fi
 
-          VERDICT=$(printf '%s' "$SUMMARY" | grep -m1 '^### Verdict:' | sed 's|^### Verdict:[[:space:]]*||' | tr -d '\r' || echo "")
+          # Extract the verdict and normalize spaces → underscores.
+          # Same pattern as claude.yml:832-834: case-insensitive grep with
+          # flexible whitespace, then upper-case + collapse to underscores
+          # so "READY TO MERGE" → "READY_TO_MERGE".
+          RAW=$(printf '%s' "$SUMMARY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
+          VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
           echo "Detected verdict: '${VERDICT}'"
 
           case "$VERDICT" in
-            "READY TO MERGE"|"READY_TO_MERGE")
+            "READY_TO_MERGE")
               APPROVE_BODY=$(printf '%s\n' \
                 "**mothership-ai (experimental SDK reviewer)** — verdict: READY TO MERGE." \
                 "" \
