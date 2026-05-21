@@ -542,36 +542,65 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
   **Fix:** <exact code suggestion if PATCH scope>
   ```
 
-### 3c. Label Management (after posting the review in 3f)
+### 3c. Verdict-Stamp: Formal Approval + Labels
 
-There is no mothership-side label handler. You manage all
-test-sdk-review-specific labels via the `gh` CLI from within the
-sandbox. These labels are **prefixed `test-`** to keep this experimental
-reviewer's signals separate from the production `@sdk-review` flow
-(which uses the un-prefixed `sdk-review-approved` / `needs-human-review`
-labels). Do NOT touch the production labels from this orchestration.
+There is no mothership-side handler. You stamp the verdict on the PR
+two ways from inside the sandbox:
+
+1. **Formal review** via `gh pr review` — `--approve` on
+   READY_TO_MERGE so the bot account (mothership-ai[bot]) shows up as
+   an actual approving reviewer on the PR (visible in the Reviewers
+   panel and the merge box). For every other verdict, post a
+   `--comment` review during the soak period — this records a formal
+   review event without blocking the merge box. Once the experimental
+   reviewer's calibration is trusted, NEEDS_FIXES / BLOCKED can be
+   flipped to `--request-changes`; do NOT make that flip while the
+   reviewer is still in soak.
+2. **Labels** for at-a-glance filtering in the PR list. These are
+   **prefixed `test-`** to keep the experimental reviewer's signals
+   separate from the production `@sdk-review` flow (which uses the
+   un-prefixed `sdk-review-approved` / `needs-human-review` labels).
+   Do NOT touch the production labels from this orchestration.
 
 ```bash
 # $GITHUB_TOKEN is set in Phase 0 step 3 (injected by dispatcher)
 PR=<pr_number>
 REPO="atlanhq/application-sdk"
 
-# Based on verdict:
+# Body for the formal review — short, points at the summary comment
+# (which is posted separately in 3f) so reviewers can find the detail.
+REVIEW_BODY=$(printf '%s\n' \
+  "**mothership-ai (experimental reviewer)** — verdict: \`$VERDICT\`." \
+  "" \
+  "See the full review summary in the comment posted on this PR." \
+  "")
+
 case "$VERDICT" in
   "READY_TO_MERGE")
+    gh pr review "$PR" --repo "$REPO" --approve --body "$REVIEW_BODY"
     gh pr edit $PR --repo $REPO --add-label "test-sdk-review-approved"
     gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
     ;;
   "NEEDS_HUMAN")
+    # During soak: --comment, not --request-changes. The experimental
+    # reviewer must not block merges while it's being calibrated.
+    gh pr review "$PR" --repo "$REPO" --comment --body "$REVIEW_BODY"
     gh pr edit $PR --repo $REPO --add-label "test-sdk-review-needs-human"
     gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
     ;;
   "NEEDS_FIXES"|"BLOCKED")
+    # During soak: --comment, not --request-changes (see above).
+    gh pr review "$PR" --repo "$REPO" --comment --body "$REVIEW_BODY"
     gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
     gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
     ;;
 esac
 ```
+
+If a prior bot review of the same PR head exists (e.g. a re-run with
+the same `session_id` after a manual edit), GitHub will accept the new
+review as a separate event — the latest one wins for "Reviewers panel"
+purposes. No dismissal needed.
 
 ### 3d. Resolve Inline Threads (on APPROVE)
 
@@ -666,12 +695,11 @@ comment and each finding as an inline review comment.
 # <!-- TEST_SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
 gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 
-# Inline comments — use `gh pr review` (one batched review) or
-# `gh api pulls/<n>/comments` per finding. Both routes work; prefer
-# `gh pr review --body-file ... --comment` for a single bundled
-# review.
-gh pr review "$PR_NUMBER" --repo "$REPO" --comment \
-  --body-file /tmp/review-summary.md
+# Inline finding comments — post one per finding via
+# `gh api repos/$REPO/pulls/$PR_NUMBER/comments` so each can target a
+# specific path + line in the diff. The formal verdict review
+# (--approve | --comment) is already submitted in §3c — do NOT submit
+# a second `gh pr review` here.
 
 # Commit status — set the test-sdk-review check explicitly.
 # This MUST be `test-sdk-review`, NOT `sdk-review` — the production
