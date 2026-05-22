@@ -597,7 +597,7 @@ jobs:
             echo "::error::Stream ended without a single SSE event — likely VPN/network/proxy issue"
             exit 1
           fi
-          if [ "$COMPLETED" != "1" ]; then
+          if [ "$COMPLETED" != "1" ] && [ "$ERRORED" != "1" ]; then
             echo "::error::Stream ended without a 'complete' event"
             exit 1
           fi
