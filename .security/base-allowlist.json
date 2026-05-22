@@ -600,5 +600,16 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "SNYK-GOLANG-GOLANGORGXCRYPTOSSHKNOWNHOSTS-16796449": {
+    "package": "golang.org/x/crypto/ssh/knownhosts",
+    "severity": "HIGH",
+    "reason": "Base image — Go dependency in Dapr runtime (knownhosts subpackage of golang.org/x/crypto/ssh). Same root cause and fix as the four SSH CVEs allowlisted in #1842; missed in that batch because Snyk emits a separate ID for the knownhosts subpackage. Fix available in golang.org/x/crypto 0.52.0; awaiting upstream Dapr bump and subsequent Wolfi base image rebuild.",
+    "expires": "2026-06-21",
+    "added_by": "tejeshallampati-alt",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
