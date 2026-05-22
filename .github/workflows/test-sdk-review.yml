@@ -530,9 +530,8 @@ jobs:
       # the `require_code_owner_review` rule on `main`:
       # `mothership-ai[bot]` is a GitHub App, and Apps cannot be listed in
       # CODEOWNERS. So we mirror what claude.yml does for production
-      # `@sdk-review`: post the formal approval from the GHA runner with
-      # `GH_TOKEN=ORG_PAT_GITHUB`, which makes the approval show up as
-      # authored by `atlan-ci` (a regular User account that IS in
+      # `@sdk-review`: post the formal approval from the GHA runner so it
+      # is recorded as `atlan-ci` (a regular User account that IS in
       # CODEOWNERS). Branch-protection then accepts the approval.
       #
       # Solo-approval guard: the companion workflow

@@ -3,12 +3,12 @@
 #
 # Why this exists:
 #   The companion `test-sdk-review.yml` workflow has the bot post a
-#   formal `gh pr review --approve` as `atlan-ci` (via ORG_PAT_GITHUB)
-#   on a READY_TO_MERGE verdict. atlan-ci is in CODEOWNERS, so that
-#   approval satisfies `require_code_owner_review` on `main` — bot
-#   can actually unblock merges. The catch: once posted, the bot's
-#   approval persists even after the human dismisses theirs, so the
-#   bot could SOLO-satisfy the merge gate.
+#   formal `gh pr review --approve` as `atlan-ci` on a READY_TO_MERGE
+#   verdict. atlan-ci is in CODEOWNERS, so that approval satisfies
+#   `require_code_owner_review` on `main` — bot can actually unblock
+#   merges. The catch: once posted, the bot's approval persists even
+#   after the human dismisses theirs, so the bot could SOLO-satisfy
+#   the merge gate.
 #
 #   This workflow patches that: the moment any human-authored
 #   PR-level activity happens (comment, review submission, or
@@ -25,12 +25,6 @@
 #     to the experimental flow only.
 #   - Any review by a human reviewer.
 #   - Approvals posted by other bots (claude[bot], github-actions[bot]).
-#
-# Required configuration:
-#   secrets.ORG_PAT_GITHUB  Same PAT used by test-sdk-review.yml and
-#                           claude.yml. Needs `repo` scope so that
-#                           `PUT /repos/{}/pulls/{}/reviews/{}/dismissals`
-#                           succeeds against PRs in this repo.
 
 name: Test SDK Review — auto-dismiss bot approval on human activity
 
@@ -97,8 +91,8 @@ jobs:
           DISMISS_MESSAGE="Human activity by @${TRIGGER_ACTOR} (${TRIGGER_EVENT}) detected on this PR — the experimental @test-sdk-review bot's auto-approval has been dismissed. Re-comment \`@test-sdk-review\` once the PR is ready for the bot to re-approve, or have a code owner approve manually."
 
           # Dismiss each. The API is `PUT /repos/{}/pulls/{}/reviews/{}/dismissals`
-          # with `{message}` in the body. ORG_PAT_GITHUB is atlan-ci's PAT, so
-          # the dismissal is recorded as atlan-ci dismissing its own review.
+          # with `{message}` in the body. The dismissal is recorded as atlan-ci
+          # dismissing its own review.
           for review_id in $REVIEW_IDS; do
             gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
               -X PUT \

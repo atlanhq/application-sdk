@@ -599,11 +599,10 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
 There is no mothership-side handler, and the sandbox itself **does not
 post `gh pr review`**. The formal approval is posted **outside** the
 sandbox by the GHA workflow (`test-sdk-review.yml` → "Approve PR as
-atlan-ci" step) using `ORG_PAT_GITHUB`, so the approval is recorded
-as `atlan-ci` and counts toward the `require_code_owner_review` rule
-on `main`. `mothership-ai[bot]` is a GitHub App and cannot be in
-CODEOWNERS — same pattern claude.yml uses for the production
-reviewer.
+atlan-ci" step), so the approval is recorded as `atlan-ci` and counts
+toward the `require_code_owner_review` rule on `main`.
+`mothership-ai[bot]` is a GitHub App and cannot be in CODEOWNERS —
+same pattern claude.yml uses for the production reviewer.
 
 The atlan-ci approval is **auto-dismissed the moment any human
 comments or reviews on the PR**, via the companion workflow
