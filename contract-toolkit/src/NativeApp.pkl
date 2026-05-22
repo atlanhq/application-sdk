@@ -898,6 +898,20 @@ class PublishNode extends DAGNode {
   /// `$.extract.outputs.tag_attachments_prefix`. Publish-app reads this prefix
   /// to load TagAttachment payloads for classification enrichment.
   tagAttachmentsPrefix: String? = null
+
+  /// Whether publish should read/write connection cache entries.
+  ///
+  /// Defaults to `false`. NativeApp.pkl has no typed pipeline step to inject
+  /// a context-sensitive default, so callers must set this explicitly when the
+  /// node should build the connection cache (e.g. `connectionCacheEnabled = true`
+  /// for an asset-crawler publish node).
+  connectionCacheEnabled: Boolean = false
+
+  /// Whether publish should resolve connection cache through app storage.
+  ///
+  /// Same default semantics as `connectionCacheEnabled` — set explicitly.
+  connectionCacheViaAppEnabled: Boolean = false
+
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -909,6 +923,8 @@ class PublishNode extends DAGNode {
     ["connection_creation_enabled"] = true
     ["executor_enabled"] = executorEnabled
     ["connection_entity"] = "{{connection}}"
+    ["connection_cache_enabled"] = connectionCacheEnabled
+    ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
   }
   dependsOn { upstream }
 }
@@ -1561,10 +1577,21 @@ class LineagePublishNode extends DAGNode {
   connectionEntity: String = "{{connection}}"
 
   /// Whether publish should read/write connection cache entries.
-  connectionCacheEnabled: Boolean = true
+  ///
+  /// Defaults to `false` for lineage publish because lineage entities
+  /// (`Process`, `ColumnProcess`) must not overwrite the connection cache that
+  /// the asset crawler built with `Database`/`Schema`/`Table` rows. Passing
+  /// `true` here causes the lineage publish to rebuild the cache from
+  /// lineage-stage data, destroying asset entries and breaking subsequent miner
+  /// runs. Set to `true` only when the lineage pipeline owns the connection
+  /// cache and no asset crawler shares it.
+  connectionCacheEnabled: Boolean = false
 
   /// Whether publish should resolve connection cache through app storage.
-  connectionCacheViaAppEnabled: Boolean = true
+  ///
+  /// Defaults to `false` for the same reason as `connectionCacheEnabled`:
+  /// lineage publish must not write into the shared connection cache.
+  connectionCacheViaAppEnabled: Boolean = false
 
   /// Whether publish should resolve current state through app storage.
   currentStateViaAppEnabled: Boolean = true
