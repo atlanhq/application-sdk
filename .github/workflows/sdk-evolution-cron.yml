@@ -22,8 +22,10 @@
 name: SDK Evolution (Nightly)
 
 on:
-  schedule:
-    - cron: '0 2 * * *'     # 2am UTC daily
+  # Nightly schedule disabled — re-enable once the run produces a visible
+  # summary (Linear ticket link / GHA job summary) instead of an opaque log.
+  # schedule:
+  #   - cron: '0 2 * * *'     # 2am UTC daily
   workflow_dispatch:
     inputs:
       scan_mode:

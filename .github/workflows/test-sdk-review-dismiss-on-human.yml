@@ -1,0 +1,101 @@
+# Auto-dismiss the experimental @test-sdk-review bot's atlan-ci approval
+# the moment any human comments or reviews on the PR.
+#
+# Why this exists:
+#   The companion `test-sdk-review.yml` workflow has the bot post a
+#   formal `gh pr review --approve` as `atlan-ci` on a READY_TO_MERGE
+#   verdict. atlan-ci is in CODEOWNERS, so that approval satisfies
+#   `require_code_owner_review` on `main` — bot can actually unblock
+#   merges. The catch: once posted, the bot's approval persists even
+#   after the human dismisses theirs, so the bot could SOLO-satisfy
+#   the merge gate.
+#
+#   This workflow patches that: the moment any human-authored
+#   PR-level activity happens (comment, review submission, or
+#   review dismissal), we walk the PR's reviews and dismiss every
+#   APPROVED review by `atlan-ci` whose body starts with the
+#   experimental-reviewer signature. Net effect: bot's auto-approval
+#   only stands until a human engages — at which point the gate
+#   returns to requiring a fresh human code-owner approval.
+#
+# What it does NOT dismiss:
+#   - atlan-ci approvals posted by other flows (e.g. production
+#     @sdk-review via claude.yml). The body-text signature
+#     ("**SDK reviewer's verdict:**") is what scopes this dismissal
+#     to the experimental flow only.
+#   - Any review by a human reviewer.
+#   - Approvals posted by other bots (claude[bot], github-actions[bot]).
+
+name: Test SDK Review — auto-dismiss bot approval on human activity
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dismiss:
+    # Skip if the actor is one of our service accounts / bots — we only
+    # want to react to *human* engagement. `endsWith(..., '[bot]')`
+    # catches every GitHub App (mothership-ai[bot], claude[bot],
+    # github-actions[bot], dependabot[bot], etc.). `atlan-ci` is a
+    # regular User account (not an App, no [bot] suffix) so it has to
+    # be excluded explicitly — without this, the bot's own approval
+    # would trigger this workflow and dismiss itself.
+    #
+    # For issue_comment events, also require the comment is on a PR
+    # (issue_comment fires for both Issues and PRs). The PR-side has
+    # `github.event.issue.pull_request` populated; Issues-side does not.
+    if: >-
+      (
+        github.event_name == 'pull_request_review'
+        || (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
+      )
+      && !endsWith(github.actor, '[bot]')
+      && github.actor != 'atlan-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dismiss experimental @test-sdk-review atlan-ci approval(s)
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+          # For pull_request_review events the PR number is at
+          # event.pull_request.number; for issue_comment on a PR it's
+          # at event.issue.number. The `||` picks whichever is set.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          TRIGGER_ACTOR: ${{ github.actor }}
+          TRIGGER_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          # Find every APPROVED atlan-ci review whose body bears the
+          # experimental-reviewer signature. The signature is the
+          # leading text of the body we post in test-sdk-review.yml.
+          # Using `startswith` (anchored) avoids any chance of matching
+          # human-authored reviews that happen to quote that string.
+          REVIEW_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            --paginate \
+            --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | .[].id')
+
+          if [ -z "$REVIEW_IDS" ]; then
+            echo "No experimental-reviewer atlan-ci approval found on PR #${PR_NUMBER} — nothing to dismiss."
+            exit 0
+          fi
+
+          DISMISS_MESSAGE="Human activity by @${TRIGGER_ACTOR} (${TRIGGER_EVENT}) detected on this PR — the experimental @test-sdk-review bot's auto-approval has been dismissed. Re-comment \`@test-sdk-review\` once the PR is ready for the bot to re-approve, or have a code owner approve manually."
+
+          # Dismiss each. The API is `PUT /repos/{}/pulls/{}/reviews/{}/dismissals`
+          # with `{message}` in the body. The dismissal is recorded as atlan-ci
+          # dismissing its own review.
+          for review_id in $REVIEW_IDS; do
+            gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
+              -X PUT \
+              -f message="$DISMISS_MESSAGE"
+            echo "Dismissed atlan-ci review ${review_id} on PR #${PR_NUMBER}."
+          done

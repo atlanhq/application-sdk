@@ -88,6 +88,43 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    - `.mothership/review-policy.md`
    - `.mothership/review.yaml`
 
+6b. **Load prior review into context (re-review continuity)** — if a
+    previous `<!-- TEST_SDK_REVIEW -->` summary comment exists on this
+    PR, read its full body and write it to `/tmp/PRIOR_REVIEW.md`. The
+    body becomes **input** to Phase 2 reasoning (not just a labeling
+    reference for §2d at the end): it tells the agents what was flagged
+    before, what the author said in response, and what should be
+    carried forward, downgraded, or re-checked given the current HEAD.
+
+    ```bash
+    PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+      --paginate \
+      --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
+
+    if [ -n "$PRIOR_REVIEW" ]; then
+      printf '%s\n' "$PRIOR_REVIEW" > /tmp/PRIOR_REVIEW.md
+      echo "[bootstrap] prior test-sdk-review summary found — loaded into /tmp/PRIOR_REVIEW.md"
+    else
+      : > /tmp/PRIOR_REVIEW.md
+      echo "[bootstrap] no prior test-sdk-review summary — fresh review"
+    fi
+    ```
+
+    **CRITICAL — jq idiom:** wrap the selection in `[ ... ] | last`
+    and take `.body` from the array element. A naive
+    `--jq '.[] | select(...) | .body' | head -1` collapses the raw
+    multiline body to its first line (the `<!-- TEST_SDK_REVIEW -->`
+    HTML marker) and silently drops the entire review content.
+    Same shape-of-bug as claude.yml:822-823 is set up to avoid.
+
+    Every subsequent phase that reasons about the PR (Phase 2 agents,
+    cross-model debias, verdict determination) should treat
+    `/tmp/PRIOR_REVIEW.md` as additional context when non-empty —
+    not because it's authoritative, but because it captures both the
+    prior bot's reasoning and (often, in author replies on inline
+    threads) the human's response, which materially changes what
+    counts as a "new" finding vs a known-and-discussed one.
+
 7. **§Intent Inference** — interpret `COMMENTER_INTENT` (free-form text
    the human typed after `@test-sdk-review`) and set the mode for this run.
    The workflow does NOT parse commands — that is your job.
@@ -97,7 +134,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
 
    | If the intent contains... | Mode |
    |---|---|
-   | (empty) | **A. Standard review** — full multi-agent review, post findings, exit. |
+   | (empty) | **A. Standard review** — full multi-agent review, post findings, exit. **If `/tmp/PRIOR_REVIEW.md` is non-empty, this is a re-review**: prior findings + author replies are part of the input. Carry forward findings that are still present, label resolved ones explicitly, surface new ones, downgrade ones the author successfully challenged in inline-comment threads. See §2d for the labeling rules; see Phase 0 step 6b for how `PRIOR_REVIEW` was loaded. |
    | `stop`, `cancel`, `abort` | **B. Stop** — no-op. Reply to the triggering comment confirming the cancel, label the PR if applicable, exit cleanly. |
    | `auto-complete`, `resolve all`, `apply fixes`, `fix it`, `fix the issues` | **C. Auto-fix loop** — review, then iterate the in-sandbox fix loop (see §Auto-fix loop). |
    | `challenge` *with* a finding ID, a quoted finding, or a paragraph of reasoning | **D. Targeted challenge** — re-evaluate only the cited findings using the human's explanation as additional context (see Phase 2h). |
@@ -457,19 +494,34 @@ If GPT was unavailable or skipped: keep all Opus findings >= 80%.
 
 ### 2d. Delta Tracking (if previous review exists)
 
-Check for a previous review comment on this PR:
+The previous review should already be loaded into context in Phase 0
+step 6b (`PRIOR_REVIEW` / `/tmp/PRIOR_REVIEW.md`) and used as input
+to Phase 2 reasoning. This section is the **labeling pass on the
+output**: for each finding in the new review, decide whether it's
+RESOLVED / STILL PRESENT / NEW relative to the prior review and tag
+it accordingly in the summary.
+
+If for any reason `PRIOR_REVIEW` is empty here, re-fetch using the
+same query Phase 0 uses — wrap the selection in an array and pick
+`last | .body` so the full body of the most recent matching comment
+lands as a single string (a naive `... | .body | head -1` truncates
+to the first LINE of the body, which is just the HTML marker, and
+silently breaks downstream consumers):
+
 ```bash
-gh api repos/atlanhq/application-sdk/issues/<PR>/comments \
-  --jq '.[] | select(.body | contains("<!-- TEST_SDK_REVIEW")) | .body' | head -1
+PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+  --paginate \
+  --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
 ```
 
-If found, parse the previous findings and compare:
+Labeling rules:
 - Finding was in previous review, code at that line CHANGED → **RESOLVED**
 - Finding was in previous review, code UNCHANGED → **STILL PRESENT**
 - Finding is new (not in previous review) → **NEW**
 
-Include delta status in the review comment so the author sees what
-was fixed vs what remains.
+Include the delta status in the review summary (and inline body
+where applicable) so the author sees at a glance what was fixed vs
+what remains.
 
 ### 2e. Guardrails G1-G8
 
@@ -542,16 +594,23 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
   **Fix:** <exact code suggestion if PATCH scope>
   ```
 
-### 3c. Verdict-Stamp: Labels Only (formal approval is posted by the GHA runner)
+### 3c. Verdict-Stamp: Labels Only (formal approval posted by the GHA runner)
 
 There is no mothership-side handler, and the sandbox itself **does not
 post `gh pr review`**. The formal approval is posted **outside** the
 sandbox by the GHA workflow (`test-sdk-review.yml` → "Approve PR as
-atlan-ci" step) using `ORG_PAT_GITHUB`, so the approval is recorded
-as `atlan-ci` and counts toward the `require_code_owner_review` rule
-on `main`. `mothership-ai[bot]` is a GitHub App and cannot be in
-CODEOWNERS — same pattern claude.yml uses for the production
-reviewer.
+atlan-ci" step), so the approval is recorded as `atlan-ci` and counts
+toward the `require_code_owner_review` rule on `main`.
+`mothership-ai[bot]` is a GitHub App and cannot be in CODEOWNERS —
+same pattern claude.yml uses for the production reviewer.
+
+The atlan-ci approval is **auto-dismissed the moment any human
+comments or reviews on the PR**, via the companion workflow
+`test-sdk-review-dismiss-on-human.yml`. So the policy is: bot
+green-lights, any human touching the PR returns the gate to "needs
+human approval." That gives the bot leverage to actually unblock
+merges (real code-owner approval, not advisory) without giving it
+the ability to solo-approve in the presence of human engagement.
 
 The sandbox is responsible only for **labels** here. Labels are
 **prefixed `test-`** to keep the experimental reviewer's signals
@@ -632,7 +691,7 @@ on subsequent runs; do NOT remove it or use the production
 
 ```
 <!-- TEST_SDK_REVIEW -->
-## Test SDK Review (mothership): PR #<number> — <title>
+## Test SDK <Review | Re-review> (mothership): PR #<number> — <title>
 
 ### Verdict: <READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW>
 
@@ -640,6 +699,13 @@ on subsequent runs; do NOT remove it or use the production
 >  is this fixing symptoms or causes? What's the right path forward?>
 
 ---
+
+### Delta from previous review            <!-- ONLY when PRIOR_REVIEW non-empty -->
+- **Resolved (<N>)**: <one line per finding the author fixed>
+- **Still present (<N>)**: <one line per finding that wasn't addressed>
+- **New (<N>)**: <one line per finding introduced by the latest changes>
+- **Downgraded (<N>)**: <one line per finding the author successfully
+  challenged in an inline thread — explain why it was downgraded>
 
 ### Findings
 
@@ -660,6 +726,26 @@ on subsequent runs; do NOT remove it or use the production
 **Cross-model agreement:** X/Y confirmed by both
 **Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
+
+**Title selection — "Review" vs "Re-review":**
+- If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first
+  `<!-- TEST_SDK_REVIEW -->` comment on the PR) → use **"Test SDK
+  Review (mothership)"**.
+- If a prior summary exists → use **"Test SDK Re-review (mothership)"**.
+  This tells the human reading the PR-comment timeline that this
+  pass loaded the previous review as context and reasoned about
+  deltas (per Phase 0 §6b + §2d), not that it ignored history and
+  reran the full review from scratch.
+
+**Delta section — only on re-reviews:**
+- Omit the entire `### Delta from previous review` block on a first
+  review.
+- On re-reviews, include the block before `### Findings` so the
+  human sees what changed without scrolling. Counts can be zero
+  (e.g. "Resolved (0)") if a category is empty — that's information
+  too. If a finding moved from Critical → Important because the
+  author's inline reply provided new context, list it under
+  "Downgraded" with a one-line "why" so the reasoning is traceable.
 
 The trailing **Run:** line is required on every summary. Substitute
 `<GHA_RUN_URL>` with the value passed in the prompt header. The link

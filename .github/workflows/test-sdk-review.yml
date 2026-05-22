@@ -530,10 +530,19 @@ jobs:
       # the `require_code_owner_review` rule on `main`:
       # `mothership-ai[bot]` is a GitHub App, and Apps cannot be listed in
       # CODEOWNERS. So we mirror what claude.yml does for production
-      # `@sdk-review`: post the formal approval from the GHA runner with
-      # `GH_TOKEN=ORG_PAT_GITHUB`, which makes the approval show up as
-      # authored by `atlan-ci` (a regular User account that IS in
+      # `@sdk-review`: post the formal approval from the GHA runner so it
+      # is recorded as `atlan-ci` (a regular User account that IS in
       # CODEOWNERS). Branch-protection then accepts the approval.
+      #
+      # Solo-approval guard: the companion workflow
+      # `test-sdk-review-dismiss-on-human.yml` listens for any human
+      # comment or review on the PR and dismisses the atlan-ci approval
+      # posted below. Net effect: bot can green-light a PR by itself only
+      # until a human engages — the moment any human touches the PR
+      # (comments OR reviews), the bot's approval drops and merge gates
+      # require a fresh human approval. Identifying "the bot's approval"
+      # uses a body-text signature so we never touch other atlan-ci
+      # reviews (e.g. claude.yml's production approvals).
       - name: Approve PR as atlan-ci (counts as code-owner)
         if: success() && steps.parse.outputs.pr_number != ''
         env:
@@ -552,10 +561,9 @@ jobs:
           #
           # The jq pattern wraps `.[] | select(...)` in `[ ... ] | last` so
           # we get the full body of the last matching comment as a single
-          # string. The pre-fix version piped a raw multiline body into
-          # `tail -1`, which truncated to the last LINE of the body and
-          # made the `### Verdict:` grep below silently miss every time.
-          # Same idiom as claude.yml:822-823 for the SDK_REVIEW_V2 marker.
+          # string. A naive `.[] | select(...) | .body | tail -1` truncates
+          # the multiline body to its last line, which silently breaks the
+          # verdict grep below. Same idiom as claude.yml:822-823.
           SUMMARY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
             --paginate \
             --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
@@ -575,11 +583,14 @@ jobs:
 
           case "$VERDICT" in
             "READY_TO_MERGE")
+              # NOTE: the leading line of the body is a STABLE SIGNATURE used
+              # by the dismiss-on-human workflow to identify approvals posted
+              # by this flow. Do NOT change the leading text without updating
+              # `test-sdk-review-dismiss-on-human.yml` accordingly.
               APPROVE_BODY=$(printf '%s\n' \
-                "**mothership-ai (experimental SDK reviewer)** — verdict: READY TO MERGE." \
+                "**SDK reviewer's verdict:** READY TO MERGE." \
                 "" \
                 "Full review summary is in the comment posted on this PR." \
-                "Approval is posted via atlan-ci (ORG_PAT_GITHUB) so it satisfies the require_code_owner_review rule on main; mothership-ai[bot] is a GitHub App and cannot be a code owner." \
                 "")
               gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
               echo "Approved PR #${PR_NUMBER} as atlan-ci."
