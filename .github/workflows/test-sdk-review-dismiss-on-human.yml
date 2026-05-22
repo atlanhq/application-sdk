@@ -69,8 +69,6 @@ jobs:
           # event.pull_request.number; for issue_comment on a PR it's
           # at event.issue.number. The `||` picks whichever is set.
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-          TRIGGER_ACTOR: ${{ github.actor }}
-          TRIGGER_EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
@@ -88,7 +86,7 @@ jobs:
             exit 0
           fi
 
-          DISMISS_MESSAGE="Human activity by @${TRIGGER_ACTOR} (${TRIGGER_EVENT}) detected on this PR — the experimental @test-sdk-review bot's auto-approval has been dismissed. Re-comment \`@test-sdk-review\` once the PR is ready for the bot to re-approve, or have a code owner approve manually."
+          DISMISS_MESSAGE="Dismissed due to new activity on this PR. Re-comment \`@test-sdk-review\` to request another review."
 
           # Dismiss each. The API is `PUT /repos/{}/pulls/{}/reviews/{}/dismissals`
           # with `{message}` in the body. The dismissal is recorded as atlan-ci
