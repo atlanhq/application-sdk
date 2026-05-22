@@ -60,39 +60,50 @@ jobs:
 
       - name: Compute next version
         id: versions
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           current="$(grep -oP 'version\s*=\s*"\K[^"]+' contract-toolkit/src/PklProject)"
 
-          # Only commits touching contract-toolkit/** paths (since the last
-          # contract-toolkit-v* tag) determine the semver bump type.
-          next_tag="$(git cliff \
-            --config contract-toolkit/cliff.toml \
-            --bumped-version \
-            --tag-pattern '^contract-toolkit-v[0-9].*' \
-            --include-path 'contract-toolkit/**' \
-            2>/dev/null || true)"
+          # Find commit subjects since the last contract-toolkit-v* tag that
+          # touched contract-toolkit/** paths. We use plain git log rather than
+          # git-cliff --bumped-version because the latter has been silently
+          # returning empty output with --include-path across git-cliff 2.x
+          # releases, causing every release PR to be skipped.
+          unreleased="$(git log \
+            "contract-toolkit-v${current}..HEAD" \
+            --format='%s' \
+            -- 'contract-toolkit/**')"
 
-          # Strip tag prefix — handles contract-toolkit-vX.Y.Z and bare vX.Y.Z
-          new_version="${next_tag#contract-toolkit-v}"
-          new_version="${new_version#v}"
-
-          # Skip when there is nothing to release or the computed version is not
-          # an advancement over what is already in PklProject.
-          higher="$(printf '%s\n%s\n' "$current" "$new_version" | sort -V | tail -1)"
-          if [ -z "$new_version" ] || [ "$higher" != "$new_version" ] || [ "$current" = "$new_version" ]; then
-            echo "No unreleased contract-toolkit changes require a version bump (current: ${current}, computed: ${new_version:-none})."
+          if [ -z "$unreleased" ]; then
+            echo "No unreleased contract-toolkit commits (current: ${current})."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          # Conventional-commits bump rules:
+          #   BREAKING CHANGE trailer or ! suffix → major
+          #   feat → minor
+          #   anything else → patch
+          if echo "$unreleased" | grep -qP 'BREAKING[ _-]CHANGE|^[a-z]+(\([^)]+\))?!:'; then
+            bump="major"
+          elif echo "$unreleased" | grep -qP '^feat'; then
+            bump="minor"
+          else
+            bump="patch"
+          fi
+
+          IFS='.' read -r ver_major ver_minor ver_patch <<< "$current"
+          case "$bump" in
+            major) new_version="$((ver_major + 1)).0.0" ;;
+            minor) new_version="${ver_major}.$((ver_minor + 1)).0" ;;
+            patch) new_version="${ver_major}.${ver_minor}.$((ver_patch + 1))" ;;
+          esac
 
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "old=${current}" >> "$GITHUB_OUTPUT"
           echo "new=${new_version}" >> "$GITHUB_OUTPUT"
           echo "tag=contract-toolkit-v${new_version}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${current} -> ${new_version}"
+          echo "Version: ${current} -> ${new_version} (${bump} bump)"
 
       - name: Apply version bump to PklProject
         if: steps.versions.outputs.skip != 'true'
