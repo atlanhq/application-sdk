@@ -556,5 +556,27 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "SNYK-GOLANG-GOLANGORGXCRYPTOSSH-16795342": {
+    "package": "golang.org/x/crypto/ssh",
+    "severity": "HIGH",
+    "reason": "Base image — Go dependency in Dapr runtime. Fix available in golang.org/x/crypto 0.52.0; awaiting upstream Dapr bump and subsequent Wolfi base image rebuild.",
+    "expires": "2026-06-21",
+    "added_by": "vaibhavatlan",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "SNYK-GOLANG-GOLANGORGXCRYPTOSSH-16795344": {
+    "package": "golang.org/x/crypto/ssh",
+    "severity": "HIGH",
+    "reason": "Base image — Go dependency in Dapr runtime. Fix available in golang.org/x/crypto 0.52.0; awaiting upstream Dapr bump and subsequent Wolfi base image rebuild.",
+    "expires": "2026-06-21",
+    "added_by": "vaibhavatlan",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
