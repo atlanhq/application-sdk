@@ -362,7 +362,7 @@ class WorkflowClientConfig:
     prometheus_bind_address: str = ""
 
     def is_configured(self) -> bool:
-        return bool(self.host and self.app_class)
+        return bool(self.host and self.app_class and self.app_name)
 
 
 _temporal_client: Client | None = None
@@ -1122,7 +1122,7 @@ def create_app_handler_service(
                     desc = await handle.describe()
                     output_type = _resolve_output_type_for_workflow(desc.workflow_type)
                     if output_type is None:
-                        logger.debug(
+                        logger.warning(
                             "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
                             workflow_id,
                             desc.workflow_type,
@@ -1195,7 +1195,7 @@ def create_app_handler_service(
                 try:
                     output_type = _resolve_output_type_for_workflow(desc.workflow_type)
                     if output_type is None:
-                        logger.debug(
+                        logger.warning(
                             "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
                             workflow_id,
                             desc.workflow_type,
@@ -1639,7 +1639,7 @@ def create_app_handler_service(
             input_data.workflow_id = workflow_id
 
             handle = await client.start_workflow(
-                app_cls._app_name,  # type: ignore[attr-defined]
+                _workflow_config.app_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,

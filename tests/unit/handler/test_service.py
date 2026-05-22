@@ -3958,7 +3958,7 @@ class TestWorkflowClientConfig:
         class _Cls:
             pass
 
-        cfg = WorkflowClientConfig(host="t:7233", app_class=_Cls)  # type: ignore[arg-type]
+        cfg = WorkflowClientConfig(host="t:7233", app_class=_Cls, app_name="test-app")  # type: ignore[arg-type]
         assert cfg.is_configured() is True
 
 
