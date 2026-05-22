@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -88,6 +89,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionOutput,
     ExtractionTaskInput,
     ExtractionTaskOutput,
+    PrimeAuthOutput,
     TransformInput,
     TransformOutput,
 )
@@ -211,6 +213,85 @@ class SqlApp(App):
             temp_table_regex=src.temp_table_regex,
             source_tag_prefix=getattr(src, "source_tag_prefix", ""),
         )
+
+    # =====================================================================
+    # @task: SQL auth cache pre-warm — Argo parity (BLDX-1295)
+    # =====================================================================
+
+    @task(timeout_seconds=60, retry_max_attempts=3)
+    async def prime_sql_auth(self, input: ExtractionTaskInput) -> PrimeAuthOutput:
+        """Single sequential probe that primes the SQL server's auth cache
+        before the parallel ``_extract_entity`` burst.
+
+        Background — why this exists (BLDX-1295):
+            v3's parallel-activity execution model fans out
+            ``extract_databases / extract_schemas / extract_tables /
+            extract_columns`` (and on subclasses, ``extract_procedures``)
+            as concurrent Temporal activities. Each one creates its own
+            ``SQLClient`` instance and opens its own connections to the
+            source — roughly simultaneously when the workflow first
+            starts.
+
+            MySQL 8's default auth plugin ``caching_sha2_password`` has a
+            server-side cache keyed by ``(user, password_hash)``. The
+            *first* auth for a given user is cache-cold and requires
+            either (a) a TLS-encrypted connection or (b) an RSA key
+            exchange between client and server. Without either — which
+            is the default for ``aiomysql`` against a typical customer
+            MySQL — a cache-cold auth attempt fails with
+            ``Access denied (1045)``. When N parallel activities all hit
+            cold-cache simultaneously, each independently tries full
+            auth, each fails, and those failures stack on the server's
+            ``failed_login_attempts`` counter — tripping the
+            ``FAILED_LOGIN_ATTEMPTS`` lockout policy if the customer has
+            one set (most do). The lockout then poisons every subsequent
+            scheduled run until it auto-expires, at which point a manual
+            "Test Authentication" works briefly, the next cron burst
+            re-trips it, repeat.
+
+            The Argo-era extract ran phases serially — only one
+            connection at a time — so the cache had time to prime
+            between phases and the race never occurred. v3's parallel
+            model exposes it.
+
+            This task is the Argo-parity fix: ``run()`` awaits it
+            *once*, sequentially, before the ``asyncio.gather(...)`` of
+            extract activities. It opens one connection, runs
+            ``SELECT 1``, closes. That populates MySQL's
+            ``caching_sha2_password`` cache; subsequent parallel
+            connections take the fast path and never need full auth.
+
+            For SQL servers without this auth-cache concept (Postgres,
+            MSSQL, Snowflake on most setups), this is harmless overhead
+            — a single ~100ms probe round-trip per workflow run.
+
+        Failure semantics:
+            If the probe fails (auth rejected, network unreachable,
+            wrong host, etc.), this activity raises and Temporal
+            short-circuits the entire workflow run. That's deliberate:
+            if the probe — a single non-parallel connection — fails,
+            the parallel extract burst would have failed N-fold and
+            would have flooded the source with ``Access denied``
+            attempts that could trip rate-limits / lockouts on the
+            customer side. Failing here surfaces a clean credential /
+            connectivity error before doing damage.
+        """
+        start = time.perf_counter()
+        client = await self._init_sql_client(input)
+        try:
+            # ``SELECT 1`` is a no-op for query semantics; what we
+            # actually care about is that the client opened a
+            # connection + completed the auth handshake. The cache is
+            # populated as a side effect of that handshake.
+            await client.get_results("SELECT 1")
+        finally:
+            await client.close()
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        logger.info(
+            "SQL auth cache primed in %.1fms before parallel extract fan-out",
+            duration_ms,
+        )
+        return PrimeAuthOutput(duration_ms=duration_ms)
 
     # =====================================================================
     # @task: Metadata extraction — SQL stream → raw JSONL
@@ -465,6 +546,18 @@ class SqlApp(App):
         task_input = self.build_task_input(
             ExtractionTaskInput, input, cred_ref=cred_ref
         )
+
+        # ── Phase 0: Pre-warm SQL auth cache (BLDX-1295) ────────────────
+        # Argo parity fix. One serial probe connection BEFORE the
+        # parallel ``extract_*`` burst so MySQL 8's
+        # ``caching_sha2_password`` server-side cache is populated. The
+        # subsequent parallel connections then take the fast-auth path
+        # and never trip ``FAILED_LOGIN_ATTEMPTS`` lockouts. Failure
+        # here short-circuits the run with a clean credential /
+        # connectivity error instead of flooding the source with N
+        # parallel auth failures. See ``prime_sql_auth`` docstring for
+        # the full incident-rooted rationale.
+        await self.prime_sql_auth(task_input)
 
         # ── Phase 1: Extract — SQL rows → raw JSONL ─────────────────────
         db_result, schema_result, table_result, column_result = await asyncio.gather(

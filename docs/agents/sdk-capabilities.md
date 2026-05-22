@@ -2799,6 +2799,14 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `batches_local_dir: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
+#### `PrimeAuthOutput`
+
+- **Import:** `from application_sdk.templates.contracts import PrimeAuthOutput`
+- **Summary:** Output from the ``prime_sql_auth`` task (BLDX-1295).
+- **Fields:**
+  - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
 #### `QueryBatchInput`
 
 - **Import:** `from application_sdk.templates.contracts import QueryBatchInput`

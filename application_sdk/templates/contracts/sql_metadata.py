@@ -310,6 +310,24 @@ class FetchViewsOutput(Output):
     total_record_count: int = 0
 
 
+class PrimeAuthOutput(Output):
+    """Output from the ``prime_sql_auth`` task (BLDX-1295).
+
+    The task itself is a single serial probe — it issues one ``SELECT 1``
+    to populate the SQL server's auth cache (notably MySQL 8's
+    ``caching_sha2_password``) before the parallel ``_extract_entity``
+    burst. It returns no payload of interest; activity-level success /
+    failure on the Temporal side is the meaningful signal. The fields
+    below exist purely for observability — they surface in
+    ``worker_start`` / activity-complete events and make it easy to spot
+    primes that are unusually slow (which often correlate with an
+    impending connection-burst failure).
+    """
+
+    duration_ms: float = 0.0
+    """Wall-clock time spent on the probe connection + ``SELECT 1`` + close."""
+
+
 class ExtractionTaskOutput(Output):
     """Output from a per-entity ``extract_*`` task.
 
