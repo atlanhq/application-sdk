@@ -591,7 +591,6 @@ jobs:
                 "**SDK reviewer's verdict:** READY TO MERGE." \
                 "" \
                 "Full review summary is in the comment posted on this PR." \
-                "This approval is automatic and will be auto-dismissed the moment any human comments or reviews on the PR (see test-sdk-review-dismiss-on-human.yml)." \
                 "")
               gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
               echo "Approved PR #${PR_NUMBER} as atlan-ci."
