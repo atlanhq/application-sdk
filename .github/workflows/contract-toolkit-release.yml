@@ -54,9 +54,23 @@ jobs:
           sudo mv /tmp/pkl /usr/local/bin/pkl
 
       - name: Install git-cliff
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
-        with:
-          args: --version
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+          curl -fsSL -o "${tmpdir}/git-cliff.tar.gz" \
+            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o "${tmpdir}/git-cliff.tar.gz.sha512" \
+            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha512"
+          expected="$(awk '{print $1}' "${tmpdir}/git-cliff.tar.gz.sha512")"
+          echo "${expected}  ${tmpdir}/git-cliff.tar.gz" | sha512sum --check
+          tar -xzf "${tmpdir}/git-cliff.tar.gz" -C "${tmpdir}/"
+          sudo install -m755 \
+            "${tmpdir}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu/git-cliff" \
+            /usr/local/bin/git-cliff
+          git-cliff --version
+        env:
+          GIT_CLIFF_VERSION: "2.13.1"
 
       - name: Compute next version
         id: versions
@@ -103,7 +117,7 @@ jobs:
           if echo "$unreleased_subjects" | grep -qP '^[a-z]+(\([^)]+\))?!:' || \
              echo "$unreleased_body"     | grep -qP '^BREAKING[ _-]CHANGE:'; then
             bump="major"
-          elif echo "$unreleased_subjects" | grep -qP '^feat'; then
+          elif echo "$unreleased_subjects" | grep -qP '^feat[(!:]'; then
             bump="minor"
           else
             bump="patch"
