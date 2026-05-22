@@ -276,6 +276,56 @@ async def _get_workflow_result(
     return {}
 
 
+def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
+    """Resolve the correct Output type for a workflow from its Temporal type name.
+
+    Temporal workflow type names are ``"app-name"`` for the implicit (single)
+    entry point and ``"app-name:entrypoint-name"`` for explicit named entry
+    points.  We parse the entry-point suffix, look it up in AppRegistry, and
+    return its declared ``output_type`` so the caller can pass it to
+    ``get_workflow_handle(result_type=…)`` for typed deserialisation.
+
+    Returns ``None`` when the entry point cannot be resolved (e.g. missing
+    registry entry, external workflow); the caller falls back to untyped
+    deserialisation via ``_get_workflow_result``'s own fallback path.
+    """
+    if _workflow_config.app_class is None:
+        return None
+    app_cls_name = _workflow_config.app_name
+    if not app_cls_name:
+        return None
+
+    from application_sdk.app.registry import (  # noqa: PLC0415
+        AppNotFoundError,
+        AppRegistry,
+    )
+
+    try:
+        app_meta = AppRegistry.get_instance().get(app_cls_name)
+    except AppNotFoundError:
+        return None
+
+    if ":" in workflow_type_name:
+        prefix, ep_name = workflow_type_name.split(":", 1)
+        if prefix != app_cls_name:
+            return None  # workflow belongs to a different app
+        ep = app_meta.entry_points.get(ep_name)
+    else:
+        if workflow_type_name != app_cls_name:
+            return None  # workflow belongs to a different app
+        # Implicit single-entrypoint (backward-compat run() path)
+        ep = next((e for e in app_meta.entry_points.values() if e.implicit), None)
+        if ep is None and len(app_meta.entry_points) == 1:
+            ep = next(iter(app_meta.entry_points.values()))
+            logger.debug(
+                "Resolved output_type via single-entrypoint fallback for workflow_type=%s ep=%s",
+                workflow_type_name,
+                ep.name,
+            )
+
+    return ep.output_type if ep else None
+
+
 # ---------------------------------------------------------------------------
 # Workflow client config and singleton
 # ---------------------------------------------------------------------------
@@ -288,6 +338,7 @@ class WorkflowClientConfig:
     host: str = ""
     namespace: str = "default"
     task_queue: str = ""
+    app_name: str = ""
     app_class: type[App] | None = dataclasses.field(default=None, repr=False)
     data_converter: DataConverter | None = dataclasses.field(default=None, repr=False)
 
@@ -311,7 +362,7 @@ class WorkflowClientConfig:
     prometheus_bind_address: str = ""
 
     def is_configured(self) -> bool:
-        return bool(self.host and self.app_class)
+        return bool(self.host and self.app_class and self.app_name)
 
 
 _temporal_client: Client | None = None
@@ -496,6 +547,7 @@ def create_app_handler_service(
         host=temporal_host,
         namespace=temporal_namespace,
         task_queue=task_queue or f"{app_name}-queue",
+        app_name=getattr(app_class, "_app_name", "") if app_class is not None else "",
         app_class=app_class,
         data_converter=data_converter,
         tls_enabled=tls_enabled,
@@ -883,7 +935,7 @@ def create_app_handler_service(
             # Deferred to avoid a circular import at module load time.
             from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
 
-            app_meta = AppRegistry.get_instance().get(app_cls._app_name)  # type: ignore[attr-defined]
+            app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
             entry_points = app_meta.entry_points
 
             if selected_entrypoint:
@@ -919,9 +971,9 @@ def create_app_handler_service(
 
             input_type = ep.input_type
             workflow_name = (
-                app_cls._app_name  # type: ignore[attr-defined]
+                _workflow_config.app_name
                 if ep.implicit
-                else f"{app_cls._app_name}:{ep.name}"  # type: ignore[attr-defined]
+                else f"{_workflow_config.app_name}:{ep.name}"
             )
 
             if input_type is None:
@@ -1067,9 +1119,14 @@ def create_app_handler_service(
 
             if wait:
                 try:
-                    output_type = getattr(
-                        _workflow_config.app_class, "_output_type", None
-                    )
+                    desc = await handle.describe()
+                    output_type = _resolve_output_type_for_workflow(desc.workflow_type)
+                    if output_type is None:
+                        logger.warning(
+                            "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
+                            workflow_id,
+                            desc.workflow_type,
+                        )
                     result_data = await _get_workflow_result(
                         client, workflow_id=workflow_id, output_type=output_type
                     )
@@ -1136,9 +1193,13 @@ def create_app_handler_service(
                 )
             elif status == "COMPLETED":
                 try:
-                    output_type = getattr(
-                        _workflow_config.app_class, "_output_type", None
-                    )
+                    output_type = _resolve_output_type_for_workflow(desc.workflow_type)
+                    if output_type is None:
+                        logger.warning(
+                            "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
+                            workflow_id,
+                            desc.workflow_type,
+                        )
                     result_data = await _get_workflow_result(
                         client, workflow_id=workflow_id, output_type=output_type
                     )
@@ -1578,7 +1639,7 @@ def create_app_handler_service(
             input_data.workflow_id = workflow_id
 
             handle = await client.start_workflow(
-                app_cls._app_name,  # type: ignore[attr-defined]
+                _workflow_config.app_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
