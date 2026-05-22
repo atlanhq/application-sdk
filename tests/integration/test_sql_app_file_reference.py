@@ -148,29 +148,39 @@ async def test_extract_persist_materialize_transform_round_trip(store, tmp_path)
     assert extract_result.raw_file is not None
     ephemeral_raw = extract_result.raw_file
     assert ephemeral_raw.is_durable is False
-    assert ephemeral_raw.storage_path is None
+    # storage_path is now pre-set to the canonical key (no longer
+    # None pre-persist) — see ``_extract_entity``'s emission site for
+    # why we pin the key here. The interceptor's persist honours it
+    # instead of auto-generating a ``file_refs/<uuid>`` orphan.
+    assert ephemeral_raw.storage_path is not None
+    assert ephemeral_raw.storage_path.endswith("/raw/database/records.json")
     assert ephemeral_raw.local_path == str(
         tmp_path / "raw" / "database" / "records.json"
     )
     assert Path(ephemeral_raw.local_path).exists()
 
     # ── Step 2: persist → durable raw_file ref (what the interceptor does) ─
-    # ``output_path`` is required for ``RETAINED``-tier refs (which is
-    # what ``_extract_entity`` emits — see ``StorageTier._file_ref_base``).
-    # In production the activity interceptor passes
-    # ``build_output_path()`` here; we use ``tmp_path`` to scope the
-    # storage key under this test's run prefix.
+    # The pre-set storage_path on the ref is what persist actually
+    # uses as the upload key, so the file lands at the canonical
+    # entity-typed path (matches what ``upload_to_atlan``'s legacy
+    # directory walk would have produced — publish discovers it the
+    # same way).
     durable_raw = await persist_file_reference(
         store, ephemeral_raw, output_path=str(tmp_path)
     )
     assert durable_raw.is_durable
     assert durable_raw.storage_path is not None
-    # Storage path must land under the run-scoped prefix the gateway
-    # permits. The bare ``file_refs/`` prefix (default TRANSIENT) is
-    # rejected by Atlan's blob-storage policy in production.
-    assert durable_raw.storage_path.startswith(f"{tmp_path}/file_refs/") or (
-        f"{tmp_path}/file_refs/" in durable_raw.storage_path
-    ), f"raw_file persisted outside run prefix: {durable_raw.storage_path}"
+    # Storage key is the canonical entity-typed path — NOT under
+    # ``file_refs/<uuid>``. The customer-bucket repro had the
+    # ``file_refs/<uuid>`` orphan; we explicitly verify we don't
+    # produce one.
+    assert "/file_refs/" not in durable_raw.storage_path, (
+        f"raw_file landed at file_refs/ orphan instead of canonical "
+        f"transformed/<entity>/ key: {durable_raw.storage_path}"
+    )
+    assert durable_raw.storage_path.endswith(
+        "/raw/database/records.json"
+    ), f"raw_file did not land at canonical key: {durable_raw.storage_path}"
 
     # ── Step 3: simulate cross-worker — local raw file vanishes ─────────
     # This mimics transform landing on a different Temporal worker pod
@@ -210,13 +220,24 @@ async def test_extract_persist_materialize_transform_round_trip(store, tmp_path)
     assert {r["attributes"]["name"] for r in rendered} == {"prod", "stage"}
 
     # ── Step 6: persist transformed_file ref → downstream consumes durable ─
-    # Same RETAINED-tier handling as raw_file at Step 2 — pass
-    # ``output_path`` so the persist resolves the run-scoped prefix.
+    # The transformed ref also carries a pre-set canonical
+    # storage_path (``transformed/<entity>/entities.json``) so persist
+    # uploads to where publish reads from — no ``file_refs/<uuid>``
+    # orphan, no dependence on ``upload_to_atlan`` walking local FS
+    # on a different pod than this transform.
+    assert transform_result.transformed_file.storage_path is not None
+    assert transform_result.transformed_file.storage_path.endswith(
+        "/transformed/database/entities.json"
+    )
     durable_transformed = await persist_file_reference(
         store, transform_result.transformed_file, output_path=str(tmp_path)
     )
     assert durable_transformed.is_durable
     assert durable_transformed.storage_path is not None
+    assert "/file_refs/" not in durable_transformed.storage_path
+    assert durable_transformed.storage_path.endswith(
+        "/transformed/database/entities.json"
+    )
 
 
 @pytest.mark.integration

@@ -18,5 +18,5 @@ in the repo::
 Bump deliberately — older Dapr releases drop off the CDN.
 """
 
-__version__ = "3.12.2"
+__version__ = "3.13.0"
 __dapr_version: str = "1.17.7"
