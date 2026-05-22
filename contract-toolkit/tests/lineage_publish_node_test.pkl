@@ -60,9 +60,13 @@ facts {
   // Class-level defaults: precise per-type assertions without manifest noise.
   // -----------------------------------------------------------------------
 
-  ["PublishNode defaults connection_cache_enabled to true"] {
-    assetPublishNode.args["connection_cache_enabled"] == true
-    assetPublishNode.args["connection_cache_via_app_enabled"] == true
+  // PublishNode's base default is false — true is injected by the pipeline
+  // rendering (PublishStep → renderNode) so the pipeline asset publish always
+  // sends true without every app contract having to repeat it. Direct /
+  // extraNodes use of PublishNode is safe by default (false).
+  ["PublishNode base default for connection_cache_enabled is false"] {
+    assetPublishNode.args["connection_cache_enabled"] == false
+    assetPublishNode.args["connection_cache_via_app_enabled"] == false
   }
 
   ["LineagePublishNode defaults connection_cache_enabled to false"] {

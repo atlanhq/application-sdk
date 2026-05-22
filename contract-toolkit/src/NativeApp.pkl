@@ -901,17 +901,16 @@ class PublishNode extends DAGNode {
 
   /// Whether publish should read/write connection cache entries.
   ///
-  /// Defaults to `true` for asset publish: the crawler's `Database`/`Schema`/
-  /// `Table` rows must be written to the connection cache so downstream miners
-  /// can scope their queries. Set to `false` only for publish nodes that do not
-  /// own the cache (e.g. a lineage publish — use `LineagePublishNode` instead).
-  connectionCacheEnabled: Boolean = true
+  /// Defaults to `false`. NativeApp.pkl has no typed pipeline step to inject
+  /// a context-sensitive default, so callers must set this explicitly when the
+  /// node should build the connection cache (e.g. `connectionCacheEnabled = true`
+  /// for an asset-crawler publish node).
+  connectionCacheEnabled: Boolean = false
 
   /// Whether publish should resolve connection cache through app storage.
   ///
-  /// Defaults to `true` for asset publish. Set to `false` alongside
-  /// `connectionCacheEnabled` when the node must not touch the shared cache.
-  connectionCacheViaAppEnabled: Boolean = true
+  /// Same default semantics as `connectionCacheEnabled` — set explicitly.
+  connectionCacheViaAppEnabled: Boolean = false
 
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
