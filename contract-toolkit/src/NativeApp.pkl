@@ -898,6 +898,21 @@ class PublishNode extends DAGNode {
   /// `$.extract.outputs.tag_attachments_prefix`. Publish-app reads this prefix
   /// to load TagAttachment payloads for classification enrichment.
   tagAttachmentsPrefix: String? = null
+
+  /// Whether publish should read/write connection cache entries.
+  ///
+  /// Defaults to `true` for asset publish: the crawler's `Database`/`Schema`/
+  /// `Table` rows must be written to the connection cache so downstream miners
+  /// can scope their queries. Set to `false` only for publish nodes that do not
+  /// own the cache (e.g. a lineage publish — use `LineagePublishNode` instead).
+  connectionCacheEnabled: Boolean = true
+
+  /// Whether publish should resolve connection cache through app storage.
+  ///
+  /// Defaults to `true` for asset publish. Set to `false` alongside
+  /// `connectionCacheEnabled` when the node must not touch the shared cache.
+  connectionCacheViaAppEnabled: Boolean = true
+
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -909,6 +924,8 @@ class PublishNode extends DAGNode {
     ["connection_creation_enabled"] = true
     ["executor_enabled"] = executorEnabled
     ["connection_entity"] = "{{connection}}"
+    ["connection_cache_enabled"] = connectionCacheEnabled
+    ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
   }
   dependsOn { upstream }
 }
