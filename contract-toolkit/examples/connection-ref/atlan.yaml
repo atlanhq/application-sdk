@@ -26,6 +26,6 @@ deploy:
     lock: false
   keda:
     enabled: true
-    minReplicaCount: 1
+    minReplicaCount: 0
     temporal:
       targetQueueSize: 5

@@ -1132,7 +1132,7 @@ class KedaTemporalConfig {
 
 class KedaConfig {
   enabled: Boolean = true
-  minReplicaCount: Int = 1
+  minReplicaCount: Int = 0
   temporal: KedaTemporalConfig = new KedaTemporalConfig {}
 }
 
