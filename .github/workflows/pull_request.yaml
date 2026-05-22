@@ -97,6 +97,8 @@ jobs:
   # Testing
   unit:
     name: Unit Tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -373,7 +375,7 @@ jobs:
     # No label gate — runs on every push to a non-fork, non-dependabot
     # PR. ~3 min per connector and validates the SDR contract end-to-
     # end, which is worth the spend on every SDK PR.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

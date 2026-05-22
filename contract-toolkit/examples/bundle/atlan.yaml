@@ -23,7 +23,7 @@ entrypoints:
   source_category: database
 deploy:
   execution_mode: native
-  splitDeploymentEnabled: false
+  splitDeploymentEnabled: true
   dapr:
     objectstore: false
     secretstore: false
@@ -33,4 +33,7 @@ deploy:
     configurationstore: false
     lock: false
   keda:
-    enabled: false
+    enabled: true
+    minReplicaCount: 0
+    temporal:
+      targetQueueSize: 5
