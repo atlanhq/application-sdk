@@ -513,6 +513,11 @@ class BaseSQLClient(ClientInterface):
     ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:  # type: ignore
         """Get query results as batched pandas DataFrames asynchronously.
 
+        When use_server_side_cursor is True (default), uses
+        AsyncConnection.stream() with yield_per to stream results from the
+        server in chunks, keeping memory flat regardless of result set size.
+        Falls back to pd.read_sql_query when disabled.
+
         Returns:
             AsyncIterator["pd.DataFrame"]: Async iterator yielding batches of query results.
 
@@ -520,13 +525,44 @@ class BaseSQLClient(ClientInterface):
             ValueError: If engine is a string instead of SQLAlchemy engine.
             Exception: If there's an error executing the query.
         """
-        try:
-            # We cast to Iterator because passing chunk_size guarantees an Iterator return
-            result = await self._execute_async_read_operation(query, self.chunk_size)
-            return cast(Iterator["pd.DataFrame"], result)
-        except Exception as e:
-            logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
-            raise
+        if not self.use_server_side_cursor:
+            try:
+                result = await self._execute_async_read_operation(
+                    query, self.chunk_size
+                )
+                return cast(Iterator["pd.DataFrame"], result)
+            except Exception as e:
+                logger.error(
+                    f"Error reading batched data(pandas) from SQL: {str(e)}"
+                )
+                raise
+
+        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+
+        if not self.engine:
+            raise ValueError("Engine is not initialized. Call load() first.")
+
+        chunk_size = self.chunk_size
+
+        async def _stream():
+            from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
+
+            async with self.engine.connect() as connection:
+                connection = await connection.execution_options(
+                    yield_per=chunk_size
+                )
+                result = await connection.stream(text(query))
+                column_names = list(result.keys())
+
+                while True:
+                    rows = await result.fetchmany(chunk_size)
+                    if not rows:
+                        break
+                    yield pd.DataFrame(
+                        [dict(zip(column_names, row)) for row in rows]
+                    )
+
+        return _stream()
 
     async def get_results(self, query: str) -> "pd.DataFrame":
         """Get all query results as a single pandas DataFrame asynchronously.
