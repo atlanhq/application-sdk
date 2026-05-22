@@ -1598,7 +1598,14 @@ class TestPrimeSqlAuth:
     async def test_prime_sql_auth_closes_client_even_on_failure(self, app):
         """When the probe query itself raises (network blip, intermittent
         auth fail), the client must still be closed so the connection
-        doesn't leak — otherwise repeated failures pile up sockets."""
+        doesn't leak — otherwise repeated failures pile up sockets.
+
+        Note: post-review (PR #1835), prime_sql_auth catches the probe
+        exception and returns ``PrimeAuthOutput(success=False, ...)``
+        rather than re-raising. We still assert the inner ``client.close()``
+        was awaited so the connection is released cleanly before the
+        structured failure is reported upward.
+        """
 
         class _ExplodingClient(FakeSQLClient):
             async def run_query(self, query, batch_size=100000):
@@ -1612,10 +1619,56 @@ class TestPrimeSqlAuth:
         fake.close = close_mock  # type: ignore[method-assign]
 
         with patch.object(SqlApp, "_init_sql_client", new=AsyncMock(return_value=fake)):
-            with pytest.raises(RuntimeError, match="boom"):
-                await app.prime_sql_auth(self._build_input())
+            result = await app.prime_sql_auth(self._build_input())
 
         close_mock.assert_awaited_once()
+        # Failure is now returned as data, not raised.
+        assert isinstance(result, PrimeAuthOutput)
+        assert result.success is False
+        assert result.error_type == "RuntimeError"
+        assert result.error_message is not None and "boom" in result.error_message
+
+    async def test_prime_sql_auth_returns_failure_when_init_raises(self, app):
+        """If client construction itself raises (e.g. credential resolution
+        failed, host unresolvable), ``prime_sql_auth`` still reports the
+        failure as structured data rather than letting Temporal retry —
+        retrying that on the auth-cache probe path stacks the source's
+        ``failed_login_attempts`` counter and is the exact behaviour the
+        prime exists to avoid. Pinned by the PR #1835 reviewer's request."""
+
+        async def _exploding_init(_self, _input):
+            raise ConnectionError("could not resolve host 'mysql.bad'")
+
+        with patch.object(SqlApp, "_init_sql_client", new=_exploding_init):
+            result = await app.prime_sql_auth(self._build_input())
+
+        assert result.success is False
+        assert result.error_type == "ConnectionError"
+        assert (
+            result.error_message is not None
+            and "could not resolve host" in result.error_message
+        )
+
+    async def test_prime_sql_auth_truncates_long_error_message(self, app):
+        """Driver error strings can be huge (full server response dumps).
+        The contract field caps at 500 chars + ellipsis so the
+        ``PrimeAuthOutput`` envelope stays bounded in activity-event
+        payloads."""
+
+        long_message = "x" * 2000
+
+        class _ExplodingClient(FakeSQLClient):
+            async def get_results(self, query):
+                raise RuntimeError(long_message)
+
+        fake = _ExplodingClient()
+        with patch.object(SqlApp, "_init_sql_client", new=AsyncMock(return_value=fake)):
+            result = await app.prime_sql_auth(self._build_input())
+
+        assert result.success is False
+        assert result.error_message is not None
+        assert len(result.error_message) == 501  # 500 chars + ellipsis
+        assert result.error_message.endswith("…")
 
     # ── Bug-reproduction via call ordering ──────────────────────────────
 
@@ -1778,11 +1831,19 @@ class TestPrimeSqlAuth:
             ), f"{ext} must run after prime_sql_auth; got order: {call_order}"
 
     async def test_prime_failure_short_circuits_run(self):
-        """When ``prime_sql_auth`` raises (credential failure, network
-        unreachable), ``run()`` must abort BEFORE the parallel extract
-        burst. Otherwise we'd flood the source with N parallel
-        auth-failure attempts — the exact behaviour the prime is meant
-        to prevent."""
+        """When ``prime_sql_auth`` reports ``success=False`` (credential
+        failure, network unreachable), ``run()`` must abort BEFORE the
+        parallel extract burst. Otherwise we'd flood the source with N
+        parallel auth-failure attempts — the exact behaviour the prime
+        is meant to prevent.
+
+        Post-review (PR #1835): prime returns structured failure
+        instead of raising. ``run()`` translates it into a typed
+        ``AuthError`` that names the prime step + the underlying
+        driver error + a recommended fix path.
+        """
+        from application_sdk.errors.leaves import AuthError
+
         app = SqlApp.__new__(SqlApp)
         app._app_name = "test-app"
 
@@ -1797,14 +1858,71 @@ class TestPrimeSqlAuth:
             patch.object(
                 SqlApp,
                 "prime_sql_auth",
-                new=AsyncMock(side_effect=ConnectionError("auth refused")),
+                new=AsyncMock(
+                    return_value=PrimeAuthOutput(
+                        duration_ms=12.3,
+                        success=False,
+                        error_type="OperationalError",
+                        error_message="(1045, \"Access denied for user 'foo'@'1.2.3.4'\")",
+                    ),
+                ),
             ),
             patch.object(SqlApp, "extract_databases", new=extract_called),
             patch.object(SqlApp, "extract_schemas", new=extract_called),
             patch.object(SqlApp, "extract_tables", new=extract_called),
             patch.object(SqlApp, "extract_columns", new=extract_called),
         ):
-            with pytest.raises(ConnectionError, match="auth refused"):
+            with pytest.raises(AuthError) as exc_info:
                 await app.run(ExtractionInput(output_path="/tmp/test"))
 
         extract_called.assert_not_called()
+
+        # The raised AuthError must carry actionable context — the prime
+        # step is named, the underlying driver error is surfaced as
+        # failure_reason, and the suggestion mentions FAILED_LOGIN_ATTEMPTS
+        # so an operator knows what to check before retrying.
+        err = exc_info.value
+        assert "auth-cache prime probe failed" in err.message.lower()
+        assert "OperationalError" in err.message
+        assert err.failure_reason and "Access denied" in err.failure_reason
+        assert err.auth_method == "sql_client"
+        assert err.suggested_action and "FAILED_LOGIN_ATTEMPTS" in err.suggested_action
+
+    async def test_prime_failure_yields_auth_error_with_no_temporal_retry(self):
+        """Pin the BLDX-1295 retry-semantics decision: the structured
+        AuthError raised by ``run()`` on prime failure is
+        ``effective_retryable=False``. This is what stops Temporal from
+        auto-retrying the run-level activity and stacking the source's
+        ``failed_login_attempts`` counter on each retry — the original
+        ``@task(retry_max_attempts=3)`` on the prime itself was the
+        bug; this test pins that we don't reintroduce auto-retry on the
+        failure path.
+        """
+        from application_sdk.errors.leaves import AuthError
+
+        app = SqlApp.__new__(SqlApp)
+        app._app_name = "test-app"
+
+        with (
+            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
+            patch.object(
+                SqlApp,
+                "prime_sql_auth",
+                new=AsyncMock(
+                    return_value=PrimeAuthOutput(
+                        duration_ms=10.0,
+                        success=False,
+                        error_type="OperationalError",
+                        error_message="Access denied",
+                    ),
+                ),
+            ),
+            patch.object(SqlApp, "extract_databases", new=AsyncMock()),
+            patch.object(SqlApp, "extract_schemas", new=AsyncMock()),
+            patch.object(SqlApp, "extract_tables", new=AsyncMock()),
+            patch.object(SqlApp, "extract_columns", new=AsyncMock()),
+        ):
+            with pytest.raises(AuthError) as exc_info:
+                await app.run(ExtractionInput(output_path="/tmp/test"))
+
+        assert exc_info.value.effective_retryable is False

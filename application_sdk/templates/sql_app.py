@@ -81,6 +81,7 @@ from application_sdk.constants import (
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors.leaves import AuthError
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
@@ -218,7 +219,7 @@ class SqlApp(App):
     # @task: SQL auth cache pre-warm — Argo parity (BLDX-1295)
     # =====================================================================
 
-    @task(timeout_seconds=60, retry_max_attempts=3)
+    @task(timeout_seconds=60)
     async def prime_sql_auth(self, input: ExtractionTaskInput) -> PrimeAuthOutput:
         """Single sequential probe that primes the SQL server's auth cache
         before the parallel ``_extract_entity`` burst.
@@ -265,33 +266,65 @@ class SqlApp(App):
             MSSQL, Snowflake on most setups), this is harmless overhead
             — a single ~100ms probe round-trip per workflow run.
 
-        Failure semantics:
+        Failure semantics (return-not-raise):
             If the probe fails (auth rejected, network unreachable,
-            wrong host, etc.), this activity raises and Temporal
-            short-circuits the entire workflow run. That's deliberate:
-            if the probe — a single non-parallel connection — fails,
-            the parallel extract burst would have failed N-fold and
-            would have flooded the source with ``Access denied``
-            attempts that could trip rate-limits / lockouts on the
-            customer side. Failing here surfaces a clean credential /
-            connectivity error before doing damage.
+            wrong host, etc.) this task catches the exception, populates
+            ``success=False`` + ``error_type`` + ``error_message`` on the
+            returned ``PrimeAuthOutput``, and lets ``run()`` short-circuit
+            the workflow with a structured ``AuthError``.
+
+            Why return failure instead of raising and letting Temporal
+            retry: the failure mode this task was added to prevent is
+            cache-cold auth rejection. Retrying it via Temporal's
+            activity-level retry stacks the source's
+            ``failed_login_attempts`` counter on each attempt — i.e. it
+            accelerates the very lockout cycle the prime exists to
+            avoid. Surfacing failure as structured data on the output
+            keeps the failure visible in Temporal activity-complete
+            events, gives ``run()`` an explicit decision point, and
+            removes an auto-retry that was actively harmful for this
+            specific code path. Workflow-level retry (re-running the
+            whole extraction after operator action) remains available
+            and is the correct retry layer for transient blips.
         """
         start = time.perf_counter()
-        client = await self._init_sql_client(input)
         try:
-            # ``SELECT 1`` is a no-op for query semantics; what we
-            # actually care about is that the client opened a
-            # connection + completed the auth handshake. The cache is
-            # populated as a side effect of that handshake.
-            await client.get_results("SELECT 1")
-        finally:
-            await client.close()
+            client = await self._init_sql_client(input)
+            try:
+                # ``SELECT 1`` is a no-op for query semantics; what we
+                # actually care about is that the client opened a
+                # connection + completed the auth handshake. The cache
+                # is populated as a side effect of that handshake.
+                await client.get_results("SELECT 1")
+            finally:
+                await client.close()
+        except Exception as exc:
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            # Truncate driver messages so the contract field stays bounded;
+            # secret-sanitisation happens later when run() wraps this into
+            # an AuthError (errors.base._sanitize_cause_repr).
+            error_message = str(exc)
+            if len(error_message) > 500:
+                error_message = error_message[:500] + "…"
+            logger.error(
+                "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
+                "before parallel extract burst to avoid stacking failed_login_attempts "
+                "on the source.",
+                duration_ms,
+                type(exc).__name__,
+            )
+            return PrimeAuthOutput(
+                duration_ms=duration_ms,
+                success=False,
+                error_type=type(exc).__name__,
+                error_message=error_message,
+            )
         duration_ms = (time.perf_counter() - start) * 1000.0
         logger.info(
             "SQL auth cache primed in %.1fms before parallel extract fan-out",
             duration_ms,
         )
-        return PrimeAuthOutput(duration_ms=duration_ms)
+        return PrimeAuthOutput(duration_ms=duration_ms, success=True)
 
     # =====================================================================
     # @task: Metadata extraction — SQL stream → raw JSONL
@@ -552,12 +585,39 @@ class SqlApp(App):
         # parallel ``extract_*`` burst so MySQL 8's
         # ``caching_sha2_password`` server-side cache is populated. The
         # subsequent parallel connections then take the fast-auth path
-        # and never trip ``FAILED_LOGIN_ATTEMPTS`` lockouts. Failure
-        # here short-circuits the run with a clean credential /
-        # connectivity error instead of flooding the source with N
-        # parallel auth failures. See ``prime_sql_auth`` docstring for
-        # the full incident-rooted rationale.
-        await self.prime_sql_auth(task_input)
+        # and never trip ``FAILED_LOGIN_ATTEMPTS`` lockouts.
+        #
+        # Failure handling: prime_sql_auth catches probe exceptions and
+        # returns them as ``success=False`` on its output (see its
+        # docstring for why return-not-raise — short version: Temporal
+        # auto-retrying an auth-class failure stacks the lockout counter
+        # we're trying to avoid). We translate that structured failure
+        # into a typed AuthError here so the workflow short-circuits with
+        # an operator-actionable message that names the prime step, the
+        # underlying driver error, and the recommended fix path — and
+        # crucially, the parallel extract burst below never runs.
+        prime_result = await self.prime_sql_auth(task_input)
+        if not prime_result.success:
+            raise AuthError(
+                message=(
+                    "SQL auth-cache prime probe failed before parallel extract "
+                    f"burst ({prime_result.error_type}). Skipping extract "
+                    "fan-out to avoid stacking failed_login_attempts on the "
+                    "source's lockout counter."
+                ),
+                auth_method="sql_client",
+                failure_reason=prime_result.error_message,
+                suggested_action=(
+                    "Verify the SQL connection credentials and that the "
+                    "source is reachable from the worker. If the source is "
+                    "MySQL 8 and credentials are correct, also confirm the "
+                    "user is not currently locked out by "
+                    "FAILED_LOGIN_ATTEMPTS policy — wait for auto-unlock "
+                    "or have a DBA run ALTER USER … ACCOUNT UNLOCK before "
+                    "retrying the workflow."
+                ),
+                app_name=self._app_name,
+            )
 
         # ── Phase 1: Extract — SQL rows → raw JSONL ─────────────────────
         db_result, schema_result, table_result, column_result = await asyncio.gather(

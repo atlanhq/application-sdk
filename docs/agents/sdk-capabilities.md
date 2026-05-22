@@ -2805,6 +2805,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Output from the ``prime_sql_auth`` task (BLDX-1295).
 - **Fields:**
   - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
+  - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means ``run()`` short-circuits with a typed ``AuthError`` carrying ``error_type`` / ``error_message``.
+  - `error_type: str | None` `= None` — Exception class name when ``success`` is ``False``.
+  - `error_message: str | None` `= None` — Truncated exception message when ``success`` is ``False``.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `QueryBatchInput`
