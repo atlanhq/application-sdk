@@ -3265,6 +3265,8 @@ class TestGetResultMultiEntrypointOutputType:
         TaskRegistry.reset()
 
         class _MultiEpApp(App):
+            name = "multi-ep-test"
+
             @entrypoint
             async def alpha(self, input: _AlphaInput) -> _AlphaOutput:
                 return _AlphaOutput()

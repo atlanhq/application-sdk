@@ -295,16 +295,24 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     if not app_cls_name:
         return None
 
-    from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
+    from application_sdk.app.registry import (  # noqa: PLC0415
+        AppNotFoundError,
+        AppRegistry,
+    )
 
-    app_meta = AppRegistry.get_instance().get(app_cls_name)
-    if not app_meta:
+    try:
+        app_meta = AppRegistry.get_instance().get(app_cls_name)
+    except AppNotFoundError:
         return None
 
     if ":" in workflow_type_name:
-        _, ep_name = workflow_type_name.split(":", 1)
+        prefix, ep_name = workflow_type_name.split(":", 1)
+        if prefix != app_cls_name:
+            return None  # workflow belongs to a different app
         ep = app_meta.entry_points.get(ep_name)
     else:
+        if workflow_type_name != app_cls_name:
+            return None  # workflow belongs to a different app
         # Implicit single-entrypoint (backward-compat run() path)
         ep = next((e for e in app_meta.entry_points.values() if e.implicit), None)
         if ep is None and len(app_meta.entry_points) == 1:
