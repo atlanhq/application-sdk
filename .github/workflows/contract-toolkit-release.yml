@@ -64,29 +64,46 @@ jobs:
           set -euo pipefail
           current="$(grep -oP 'version\s*=\s*"\K[^"]+' contract-toolkit/src/PklProject)"
 
-          # Find commit subjects since the last contract-toolkit-v* tag that
-          # touched contract-toolkit/** paths. We use plain git log rather than
-          # git-cliff --bumped-version because the latter has been silently
-          # returning empty output with --include-path across git-cliff 2.x
-          # releases, causing every release PR to be skipped.
-          unreleased="$(git log \
+          # Verify the expected tag exists before using it as a revision anchor.
+          # A missing tag (e.g. failed publish, or very first release) would
+          # cause git log to exit non-zero and fail the workflow under set -e.
+          if ! git rev-parse --verify "contract-toolkit-v${current}" >/dev/null 2>&1; then
+            echo "::error::Tag contract-toolkit-v${current} not found. Publish the current version first, or create the tag manually."
+            exit 1
+          fi
+
+          # Find commit messages (full body) since the last contract-toolkit-v*
+          # tag that touched contract-toolkit/** paths. We use plain git log
+          # rather than git-cliff --bumped-version because the latter silently
+          # returns empty output with --include-path across git-cliff 2.x,
+          # causing every release PR to be skipped.
+          #
+          # Full message (%B) is used so BREAKING CHANGE trailers in commit
+          # bodies are detected; subject-only (%s) would miss them.
+          unreleased_body="$(git log \
+            "contract-toolkit-v${current}..HEAD" \
+            --format='%B' \
+            -- 'contract-toolkit/**')"
+
+          unreleased_subjects="$(git log \
             "contract-toolkit-v${current}..HEAD" \
             --format='%s' \
             -- 'contract-toolkit/**')"
 
-          if [ -z "$unreleased" ]; then
+          if [ -z "$unreleased_subjects" ]; then
             echo "No unreleased contract-toolkit commits (current: ${current})."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           # Conventional-commits bump rules:
-          #   BREAKING CHANGE trailer or ! suffix → major
+          #   BREAKING CHANGE trailer (body) or ! suffix (subject) → major
           #   feat → minor
           #   anything else → patch
-          if echo "$unreleased" | grep -qP 'BREAKING[ _-]CHANGE|^[a-z]+(\([^)]+\))?!:'; then
+          if echo "$unreleased_subjects" | grep -qP '^[a-z]+(\([^)]+\))?!:' || \
+             echo "$unreleased_body"     | grep -qP '^BREAKING[ _-]CHANGE:'; then
             bump="major"
-          elif echo "$unreleased" | grep -qP '^feat'; then
+          elif echo "$unreleased_subjects" | grep -qP '^feat'; then
             bump="minor"
           else
             bump="patch"
