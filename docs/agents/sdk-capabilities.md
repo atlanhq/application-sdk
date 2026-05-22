@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.13.0
-source-sha:    144c4044051c5e4f02febbe591fd58824ac9dd1f
-source-date:   2026-05-21T18:59:57+01:00
+source-sha:    2620401691856f2595deb93eec003b0fd1ed14df
+source-date:   2026-05-22T14:59:16+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2805,9 +2805,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Output from the ``prime_sql_auth`` task (BLDX-1295).
 - **Fields:**
   - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
-  - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means ``run()`` short-circuits with a typed ``AuthError`` carrying ``error_type`` / ``error_message``.
-  - `error_type: str | None` `= None` — Exception class name when ``success`` is ``False``.
-  - `error_message: str | None` `= None` — Truncated exception message when ``success`` is ``False``.
+  - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means the probe
+  - `error_type: str | None` — Exception class name (e.g. ``OperationalError``) when ``success``
+  - `error_message: str | None` — Truncated exception message when ``success`` is ``False``.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `QueryBatchInput`
