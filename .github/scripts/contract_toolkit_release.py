@@ -12,9 +12,9 @@ Exits 0 with "skip=true" written to GITHUB_OUTPUT when there are no
 unreleased commits touching contract-toolkit/**. Exits non-zero on error.
 
 Environment:
-    GITHUB_OUTPUT   - path to the GitHub Actions output file (optional for
-                      local runs; falls back to printing to stdout)
-    GITHUB_REPOSITORY - owner/repo (defaults to atlanhq/application-sdk)
+    GITHUB_OUTPUT      - path to the GitHub Actions output file (optional for
+                         local runs; falls back to printing to stdout)
+    GITHUB_REPOSITORY  - owner/repo (defaults to atlanhq/application-sdk)
 """
 
 import os
@@ -33,6 +33,7 @@ TAG_PREFIX = "contract-toolkit-v"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _run(cmd, **kwargs):
     return subprocess.check_output(cmd, text=True, **kwargs).strip()
@@ -56,24 +57,18 @@ def read_current_version():
 
 
 def tag_exists(tag):
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", tag],
-        capture_output=True,
-    )
-    return result.returncode == 0
+    return subprocess.run(
+        ["git", "rev-parse", "--verify", tag], capture_output=True
+    ).returncode == 0
 
 
 def commits_since_tag(tag):
     """Return (subjects, bodies) for commits since tag touching contract-toolkit/**."""
     subjects = _run([
-        "git", "log", f"{tag}..HEAD",
-        "--format=%s",
-        "--", "contract-toolkit/**",
+        "git", "log", f"{tag}..HEAD", "--format=%s", "--", "contract-toolkit/**",
     ])
     bodies = _run([
-        "git", "log", f"{tag}..HEAD",
-        "--format=%B",
-        "--", "contract-toolkit/**",
+        "git", "log", f"{tag}..HEAD", "--format=%B", "--", "contract-toolkit/**",
     ])
     return subjects, bodies
 
@@ -100,82 +95,57 @@ def bump_version(current, bump):
 # Changelog generation (matches existing ## [x.y.z] - date format)
 # ---------------------------------------------------------------------------
 
-def get_pr_commits(tag):
-    """
-    Return (sha7, author, subject) tuples for commits since tag that actually
-    touched contract-toolkit/** files.
 
-    Strategy: git log with path filter gives us the authoritative set of SHAs.
-    gh api compare enriches those with GitHub author logins. The two are joined
-    on the short SHA so we never include SDK-only commits.
+def get_commits(tag):
     """
-    # Authoritative path-filtered SHAs (full 40-char so we can join reliably)
-    raw_shas = _run([
+    Return (sha7, subject, body) tuples for commits since tag that touched
+    contract-toolkit/** files, in reverse-chronological order.
+
+    Uses git log with path filter as the authoritative source — no network
+    calls needed.
+    """
+    raw = _run([
         "git", "log", f"{tag}..HEAD",
-        "--format=%H",
+        "--format=%H%x00%s%x00%b%x1e",  # NUL-delimited fields, RS record separator
         "--", "contract-toolkit/**",
     ])
-    relevant_shas = set(raw_shas.splitlines()) if raw_shas else set()
-
-    if not relevant_shas:
-        return []
-
-    # Build short-SHA → (author, subject) from git log (always works locally)
-    git_info = {}
-    raw_local = _run([
-        "git", "log", f"{tag}..HEAD",
-        "--format=%H|%s",
-        "--", "contract-toolkit/**",
-    ])
-    for line in raw_local.splitlines():
-        if not line:
-            continue
-        full_sha, subject = line.split("|", 1)
-        git_info[full_sha] = ("unknown", subject)
-
-    # Try to enrich with GitHub author logins via gh api compare
-    owner, repo = REPO.split("/", 1)
-    range_spec = f"{tag}...HEAD"
-    jq = (
-        '.commits[] | '
-        '"\\(.sha)|\\(.author.login // .commit.author.name)'
-        '|\\(.commit.message | split("\\n")[0])"'
-    )
-    result = subprocess.run(
-        ["gh", "api", f"repos/{owner}/{repo}/compare/{range_spec}", "--jq", jq],
-        capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        for line in result.stdout.strip().splitlines():
-            parts = line.split("|", 2)
-            if len(parts) < 3:
-                continue
-            full_sha, author, subject = parts
-            if full_sha in relevant_shas:
-                git_info[full_sha] = (author, subject)
-
-    # Return in reverse-chronological git order, using short SHAs for links
     commits = []
-    for full_sha in raw_shas.splitlines():
-        if full_sha in git_info:
-            author, subject = git_info[full_sha]
-            commits.append((full_sha[:7], author, subject))
+    for record in raw.split("\x1e"):
+        record = record.strip()
+        if not record:
+            continue
+        parts = record.split("\x00", 2)
+        if len(parts) < 2:
+            continue
+        full_sha = parts[0].strip()
+        subject = parts[1].strip()
+        body = parts[2].strip() if len(parts) > 2 else ""
+        commits.append((full_sha[:7], subject, body))
     return commits
 
 
 def categorize(commits):
+    """
+    Categorise each commit into breaking / features / fixes / other.
+
+    Breaking changes are detected from both the subject (! marker) and the
+    commit body (BREAKING CHANGE: trailer) so that a major bump always has
+    corresponding release notes.
+    """
     cats = {"breaking": [], "features": [], "fixes": [], "other": []}
     owner, repo = REPO.split("/", 1)
-    for sha, author, subject in commits:
+    for sha, subject, body in commits:
         link = f"https://github.com/{owner}/{repo}/commit/{sha}"
-        if re.search(r'!:', subject):
+        is_breaking = bool(re.search(r'!:', subject)) or \
+                      bool(re.search(r'^BREAKING[ _-]CHANGE:', body, re.MULTILINE))
+        if is_breaking:
             msg = re.sub(r'^[^:]+:\s*', '', subject)
             cats["breaking"].append((link, msg))
         elif re.match(r'^feat[(!:]', subject):
-            msg = re.sub(r'^feat(\([^)]+\))?[!:]?\s*:?\s*', '', subject)
+            msg = re.sub(r'^feat(\([^)]+\))?!?:\s*', '', subject)
             cats["features"].append((link, msg))
         elif re.match(r'^fix[(!:]', subject):
-            msg = re.sub(r'^fix(\([^)]+\))?[!:]?\s*:?\s*', '', subject)
+            msg = re.sub(r'^fix(\([^)]+\))?!?:\s*', '', subject)
             cats["fixes"].append((link, msg))
         else:
             cats["other"].append((link, subject))
@@ -185,30 +155,18 @@ def categorize(commits):
 def format_block(new_version, cats):
     today = date.today().isoformat()
     lines = [f"## [{new_version}] - {today}", ""]
-    if cats["breaking"]:
-        lines += ["### Breaking changes", ""]
-        for link, msg in cats["breaking"]:
-            sha = link.split("/")[-1]
-            lines.append(f"- {msg} ([{sha}]({link}))")
-        lines.append("")
-    if cats["features"]:
-        lines += ["### Features", ""]
-        for link, msg in cats["features"]:
-            sha = link.split("/")[-1]
-            lines.append(f"- {msg} ([{sha}]({link}))")
-        lines.append("")
-    if cats["fixes"]:
-        lines += ["### Bug fixes", ""]
-        for link, msg in cats["fixes"]:
-            sha = link.split("/")[-1]
-            lines.append(f"- {msg} ([{sha}]({link}))")
-        lines.append("")
-    if cats["other"] and not (cats["breaking"] or cats["features"] or cats["fixes"]):
-        lines += ["### Changes", ""]
-        for link, msg in cats["other"]:
-            sha = link.split("/")[-1]
-            lines.append(f"- {msg} ([{sha}]({link}))")
-        lines.append("")
+    for heading, key in [
+        ("### Breaking changes", "breaking"),
+        ("### Features", "features"),
+        ("### Bug fixes", "fixes"),
+        ("### Other changes", "other"),
+    ]:
+        if cats[key]:
+            lines += [heading, ""]
+            for link, msg in cats[key]:
+                sha = link.split("/")[-1]
+                lines.append(f"- {msg} ([{sha}]({link}))")
+            lines.append("")
     return "\n".join(lines)
 
 
@@ -216,17 +174,23 @@ def prepend_changelog(block):
     existing = open(CHANGELOG).read() if os.path.exists(CHANGELOG) else "# Changelog\n"
     m = re.search(r'^## \[', existing, re.MULTILINE)
     if m:
-        new = existing[:m.start()] + block + "\n" + existing[m.start():]
+        new_content = existing[:m.start()] + block + "\n" + existing[m.start():]
     else:
-        # First release: append after header
-        new = existing.rstrip("\n") + "\n\n" + block + "\n"
+        new_content = existing.rstrip("\n") + "\n\n" + block + "\n"
     with open(CHANGELOG, "w") as f:
-        f.write(new)
+        f.write(new_content)
 
 
 def update_pklproject(current, new):
     text = open(PKLPROJECT).read()
-    updated = text.replace(f'version = "{current}"', f'version = "{new}"', 1)
+    old_str = f'version = "{current}"'
+    new_str = f'version = "{new}"'
+    updated = text.replace(old_str, new_str, 1)
+    if old_str not in text:
+        sys.exit(
+            f"ERROR: could not find {old_str!r} in {PKLPROJECT} — "
+            "version string format may have changed."
+        )
     with open(PKLPROJECT, "w") as f:
         f.write(updated)
 
@@ -234,6 +198,7 @@ def update_pklproject(current, new):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     current = read_current_version()
@@ -258,11 +223,9 @@ def main():
 
     print(f"Version: {current} -> {new_version} ({bump} bump)")
 
-    # Update PklProject
     update_pklproject(current, new_version)
 
-    # Generate and prepend changelog block
-    commits = get_pr_commits(tag)
+    commits = get_commits(tag)
     cats = categorize(commits)
     block = format_block(new_version, cats)
     prepend_changelog(block)
