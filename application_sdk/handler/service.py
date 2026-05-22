@@ -276,6 +276,43 @@ async def _get_workflow_result(
     return {}
 
 
+def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
+    """Resolve the correct Output type for a workflow from its Temporal type name.
+
+    Temporal workflow type names are ``"app-name"`` for the implicit (single)
+    entry point and ``"app-name:entrypoint-name"`` for explicit named entry
+    points.  We parse the entry-point suffix, look it up in AppRegistry, and
+    return its declared ``output_type`` so the caller can pass it to
+    ``get_workflow_handle(result_type=…)`` for typed deserialisation.
+
+    Returns ``None`` when the entry point cannot be resolved (e.g. missing
+    registry entry, external workflow); the caller falls back to untyped
+    deserialisation via ``_get_workflow_result``'s own fallback path.
+    """
+    if _workflow_config.app_class is None:
+        return None
+    app_cls_name: str | None = getattr(_workflow_config.app_class, "_app_name", None)
+    if not app_cls_name:
+        return None
+
+    from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
+
+    app_meta = AppRegistry.get_instance().get(app_cls_name)
+    if not app_meta:
+        return None
+
+    if ":" in workflow_type_name:
+        _, ep_name = workflow_type_name.split(":", 1)
+        ep = app_meta.entry_points.get(ep_name)
+    else:
+        # Implicit single-entrypoint (backward-compat run() path)
+        ep = next((e for e in app_meta.entry_points.values() if e.implicit), None)
+        if ep is None and len(app_meta.entry_points) == 1:
+            ep = next(iter(app_meta.entry_points.values()))
+
+    return ep.output_type if ep else None
+
+
 # ---------------------------------------------------------------------------
 # Workflow client config and singleton
 # ---------------------------------------------------------------------------
@@ -1067,9 +1104,8 @@ def create_app_handler_service(
 
             if wait:
                 try:
-                    output_type = getattr(
-                        _workflow_config.app_class, "_output_type", None
-                    )
+                    desc = await handle.describe()
+                    output_type = _resolve_output_type_for_workflow(desc.workflow_type)
                     result_data = await _get_workflow_result(
                         client, workflow_id=workflow_id, output_type=output_type
                     )
@@ -1136,9 +1172,7 @@ def create_app_handler_service(
                 )
             elif status == "COMPLETED":
                 try:
-                    output_type = getattr(
-                        _workflow_config.app_class, "_output_type", None
-                    )
+                    output_type = _resolve_output_type_for_workflow(desc.workflow_type)
                     result_data = await _get_workflow_result(
                         client, workflow_id=workflow_id, output_type=output_type
                     )
