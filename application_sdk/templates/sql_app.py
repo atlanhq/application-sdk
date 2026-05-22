@@ -306,12 +306,18 @@ class SqlApp(App):
             error_message = str(exc)
             if len(error_message) > 500:
                 error_message = error_message[:500] + "…"
+            # exc_info=True preserves the traceback in worker logs even
+            # though the exception is being converted to structured return
+            # data. For most failures the class+message is sufficient, but
+            # the long-tail (TLS negotiation, driver bugs, version skew)
+            # is only diagnosable from the original frames.
             logger.error(
                 "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
                 "before parallel extract burst to avoid stacking failed_login_attempts "
                 "on the source.",
                 duration_ms,
                 type(exc).__name__,
+                exc_info=True,
             )
             return PrimeAuthOutput(
                 duration_ms=duration_ms,

@@ -41,8 +41,6 @@ import time
 from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.templates.contracts.sql_metadata import ExtractionInput
 from application_sdk.templates.sql_app import SqlApp
@@ -138,7 +136,6 @@ class _PrimeAuthIntegrationApp(SqlApp):
         return {"typeName": "Column"}
 
 
-@pytest.mark.asyncio
 async def test_prime_completes_before_extracts_start(tmp_path) -> None:
     """End-to-end: drive ``SqlApp.run()`` with a real timing-instrumented
     SQL client. The prime connection must complete strictly before any
@@ -187,7 +184,6 @@ async def test_prime_completes_before_extracts_start(tmp_path) -> None:
         )
 
 
-@pytest.mark.asyncio
 async def test_extracts_still_run_concurrently_after_prime(tmp_path) -> None:
     """End-to-end: the prime serializes only the FIRST connection.
     Subsequent extracts must still overlap on the wall clock —
