@@ -21,8 +21,8 @@
 # What it does NOT dismiss:
 #   - atlan-ci approvals posted by other flows (e.g. production
 #     @sdk-review via claude.yml). The body-text signature
-#     ("**mothership-ai (experimental SDK reviewer)**") is what
-#     scopes this dismissal to the experimental flow only.
+#     ("**SDK reviewer's verdict:**") is what scopes this dismissal
+#     to the experimental flow only.
 #   - Any review by a human reviewer.
 #   - Approvals posted by other bots (claude[bot], github-actions[bot]).
 #
@@ -87,7 +87,7 @@ jobs:
           # human-authored reviews that happen to quote that string.
           REVIEW_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
             --paginate \
-            --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**mothership-ai (experimental SDK reviewer)**")))] | .[].id')
+            --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | .[].id')
 
           if [ -z "$REVIEW_IDS" ]; then
             echo "No experimental-reviewer atlan-ci approval found on PR #${PR_NUMBER} — nothing to dismiss."
