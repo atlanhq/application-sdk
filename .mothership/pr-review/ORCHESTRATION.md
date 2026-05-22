@@ -692,7 +692,7 @@ on subsequent runs; do NOT remove it or use the production
 
 ```
 <!-- TEST_SDK_REVIEW -->
-## Test SDK Review (mothership): PR #<number> — <title>
+## Test SDK <Review | Re-review> (mothership): PR #<number> — <title>
 
 ### Verdict: <READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW>
 
@@ -700,6 +700,13 @@ on subsequent runs; do NOT remove it or use the production
 >  is this fixing symptoms or causes? What's the right path forward?>
 
 ---
+
+### Delta from previous review            <!-- ONLY when PRIOR_REVIEW non-empty -->
+- **Resolved (<N>)**: <one line per finding the author fixed>
+- **Still present (<N>)**: <one line per finding that wasn't addressed>
+- **New (<N>)**: <one line per finding introduced by the latest changes>
+- **Downgraded (<N>)**: <one line per finding the author successfully
+  challenged in an inline thread — explain why it was downgraded>
 
 ### Findings
 
@@ -720,6 +727,26 @@ on subsequent runs; do NOT remove it or use the production
 **Cross-model agreement:** X/Y confirmed by both
 **Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
+
+**Title selection — "Review" vs "Re-review":**
+- If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first
+  `<!-- TEST_SDK_REVIEW -->` comment on the PR) → use **"Test SDK
+  Review (mothership)"**.
+- If a prior summary exists → use **"Test SDK Re-review (mothership)"**.
+  This tells the human reading the PR-comment timeline that this
+  pass loaded the previous review as context and reasoned about
+  deltas (per Phase 0 §6b + §2d), not that it ignored history and
+  reran the full review from scratch.
+
+**Delta section — only on re-reviews:**
+- Omit the entire `### Delta from previous review` block on a first
+  review.
+- On re-reviews, include the block before `### Findings` so the
+  human sees what changed without scrolling. Counts can be zero
+  (e.g. "Resolved (0)") if a category is empty — that's information
+  too. If a finding moved from Critical → Important because the
+  author's inline reply provided new context, list it under
+  "Downgraded" with a one-line "why" so the reasoning is traceable.
 
 The trailing **Run:** line is required on every summary. Substitute
 `<GHA_RUN_URL>` with the value passed in the prompt header. The link
