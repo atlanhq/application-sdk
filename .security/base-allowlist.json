@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-05-22",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -72,6 +72,17 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-41889": {
+    "package": "github.com/jackc/pgx",
+    "severity": "CRITICAL",
+    "reason": "Base image — Dapr runtime dependency (Dapr's PostgreSQL state-store binding pulls pgx). Fix released upstream 2026-05-08 as pgx v5.9.2 (commit 60644f8); waiver covers the window until Dapr cuts a release that transitively picks up the patched version. Surfaced fleet-wide today (2026-05-22) on 50+ SDK-based app images.",
+    "expires": "2026-06-06",
+    "added_by": "hariharanatlan",
+    "fix_available_date": "2026-05-08",
+    "compensating_controls": "Vulnerable code path requires Dapr's PostgreSQL state-store binding to be active. SDK-based connector apps deploy Dapr with SQLite state-store locally and Redis in prod (cf. each app's CLAUDE.md). The pgx binary is loaded into the daprd process but the affected simple-protocol code path is not invoked at runtime.",
+    "re_evaluation_trigger": "fix_released",
+    "exposure_assessment": "Not exploitable in current Atlan SDK-based deployments. CVE-2026-41889 (CVSS 3.1 9.8, CVSS 4.0 2.3 LOW per GitHub CNA) requires three simultaneous conditions: (a) Dapr-side simple-protocol mode enabled on a Postgres state-store, (b) a dollar-quoted string literal in the SQL, (c) text inside that literal that would be parsed as a placeholder outside it AND is attacker-controlled. The Dapr Postgres state-store binding is not configured on any SDK-based app — state-store binding is SQLite (local) / Redis (prod) — so the pgx code path is not executed. Remove from allowlist once the SDK base image is bumped to a Dapr release that pulls pgx >=5.9.2 transitively."
   },
   "CVE-2026-34986": {
     "package": "dapr-daprd-1.17",
