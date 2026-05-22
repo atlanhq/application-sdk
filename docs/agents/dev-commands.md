@@ -38,8 +38,10 @@ uv run pre-commit install
 ### Step 1: Install dependencies
 
 ```bash
-uv sync
+uv sync --all-extras --all-groups
 ```
+
+This installs the full dev/test dependency set used by pre-commit, pyright, and pytest. Plain `uv sync` only resolves runtime deps and will leave tooling missing.
 
 ### Step 2: Verify Dapr components are present
 
