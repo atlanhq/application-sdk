@@ -78,10 +78,12 @@ runs:
 
           # Initial connectivity test
           echo "Testing initial connectivity to Phoenix AI..."
-          # --max-time 30 ensures a black-holed route (e.g. broken VPN
+          # --max-time 60 ensures a black-holed route (e.g. broken VPN
           # split-tunnel) fails fast instead of burning the full retry-action
-          # timeout_minutes budget on a single hung TCP connection.
-          time curl -k -sS --max-time 30 https://phoenix-ai.atlan.com -o /dev/null
+          # timeout_minutes budget on a single hung TCP connection. 60s is
+          # comfortably above any healthy response time but well below the
+          # 5-min per-attempt cap.
+          time curl -k -sS --max-time 60 https://phoenix-ai.atlan.com -o /dev/null
 
           if [ $? -eq 0 ]; then
             echo "Initial connectivity test successful"
