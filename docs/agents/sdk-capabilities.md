@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.13.0
-source-sha:    144c4044051c5e4f02febbe591fd58824ac9dd1f
-source-date:   2026-05-21T18:59:57+01:00
+source-sha:    085256727df025f7d1acd7fd65efac9463bee9f7
+source-date:   2026-05-22T15:53:09+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2798,6 +2798,17 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `batches_s3_prefix: str` `= ''`
   - `batches_local_dir: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
+
+#### `PrimeAuthOutput`
+
+- **Import:** `from application_sdk.templates.contracts import PrimeAuthOutput`
+- **Summary:** Output from the ``prime_sql_auth`` task (BLDX-1295).
+- **Fields:**
+  - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
+  - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means the probe
+  - `error_type: str | None` — Exception class name (e.g. ``OperationalError``) when ``success``
+  - `error_message: str | None` — Truncated exception message when ``success`` is ``False``.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `QueryBatchInput`
 
