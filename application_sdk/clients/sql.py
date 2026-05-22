@@ -513,16 +513,19 @@ class BaseSQLClient(ClientInterface):
     ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:  # type: ignore
         """Get query results as batched pandas DataFrames asynchronously.
 
-        When use_server_side_cursor is True (default), uses
-        AsyncConnection.stream() with yield_per to stream results from the
-        server in chunks, keeping memory flat regardless of result set size.
+        When use_server_side_cursor is True (default), uses an explicit
+        SQL DECLARE CURSOR / FETCH loop to stream results in chunks.
+        This avoids asyncpg's protocol-level portals which can trigger
+        full result materialisation and temp_file_limit errors on large
+        result sets (see https://github.com/MagicStack/asyncpg/issues/462).
+
         Falls back to pd.read_sql_query when disabled.
 
         Returns:
-            AsyncIterator["pd.DataFrame"]: Async iterator yielding batches of query results.
+            AsyncIterator["pd.DataFrame"]: Async iterator yielding batches.
 
         Raises:
-            ValueError: If engine is a string instead of SQLAlchemy engine.
+            ValueError: If engine is not initialized.
             Exception: If there's an error executing the query.
         """
         if not self.use_server_side_cursor:
@@ -547,20 +550,45 @@ class BaseSQLClient(ClientInterface):
         async def _stream():
             from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
-            async with self.engine.connect() as connection:
-                connection = await connection.execution_options(
-                    yield_per=chunk_size
-                )
-                result = await connection.stream(text(query))
-                column_names = list(result.keys())
+            # Strip top-level ORDER BY to avoid temp-file sorts that may
+            # exceed temp_file_limit. ORDER BY inside subqueries, CTEs,
+            # and aggregates (paren depth > 0) is preserved.
+            cursor_query = query.rstrip("; \n\t")
+            upper = cursor_query.upper()
+            pos = len(cursor_query)
+            while (pos := upper.rfind("ORDER BY", 0, pos)) != -1:
+                depth = cursor_query[:pos].count("(") - cursor_query[:pos].count(")")
+                if depth == 0:
+                    cursor_query = cursor_query[:pos].rstrip()
+                    break
 
-                while True:
-                    rows = await result.fetchmany(chunk_size)
-                    if not rows:
-                        break
-                    yield pd.DataFrame(
-                        [dict(zip(column_names, row)) for row in rows]
+            async with self.engine.connect() as connection:
+                async with connection.begin():
+                    await connection.execute(
+                        text(
+                            "DECLARE _sdk_cursor NO SCROLL CURSOR "
+                            f"FOR {cursor_query}"
+                        )
                     )
+                    try:
+                        while True:
+                            result = await connection.execute(
+                                text(f"FETCH {chunk_size} FROM _sdk_cursor")
+                            )
+                            rows = result.fetchall()
+                            if not rows:
+                                break
+                            column_names = list(result.keys())
+                            yield pd.DataFrame(
+                                [dict(zip(column_names, row)) for row in rows]
+                            )
+                    finally:
+                        try:
+                            await connection.execute(
+                                text("CLOSE _sdk_cursor")
+                            )
+                        except Exception:
+                            pass
 
         return _stream()
 
