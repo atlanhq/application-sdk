@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1672,80 +1673,84 @@ class TestPrimeSqlAuth:
 
     # ── Bug-reproduction via call ordering ──────────────────────────────
 
-    async def test_reproduces_parallel_auth_burst_when_prime_skipped(self, app):
-        """BUG REPRO (pre-fix shape): without a serial prime, the four
-        extract activities each independently initialise a SQL client,
-        concurrently. Capture each ``_init_sql_client`` call and assert
-        the calls overlap in time — this is precisely what triggers the
-        cold-cache lockout cycle described in BLDX-1295.
-
-        This test patches out ``prime_sql_auth`` to simulate the
-        pre-fix code path; with ``prime_sql_auth`` skipped, all four
-        extract clients init concurrently. The complementary test
-        below pins the fix.
+    async def test_reproduces_parallel_auth_burst_when_prime_skipped(self):
+        """BUG REPRO (pre-fix shape): drive the real ``SqlApp.run()`` with
+        ``prime_sql_auth`` patched to a no-op, and observe ``_init_sql_client``
+        being entered concurrently by the four real ``extract_*``
+        activities. ``max_active >= 2`` here is meaningful — it proves
+        the *SDK's* extract fan-out actually overlaps on init, which is
+        exactly the cold-auth-burst race BLDX-1295 was filed for. (An
+        earlier version of this test was vacuous: it awaited four bare
+        helpers via ``asyncio.gather`` and never went through ``run()``.
+        Pinned by application-sdk#1835 mothership comment-3287630369.)
         """
-        import asyncio as _asyncio
+        from unittest.mock import MagicMock
 
         active = 0
         max_active = 0
-        ready = _asyncio.Event()
 
-        async def _slow_client_init(self_, input_):
+        async def _counting_init(self_, input_):
             nonlocal active, max_active
             active += 1
             max_active = max(max_active, active)
-            # Hold open briefly so concurrent inits overlap in real time
             try:
-                await _asyncio.sleep(0.02)
+                # Hold the client init open briefly so concurrent enters
+                # are observable on the wall clock.
+                await asyncio.sleep(0.02)
+                return FakeSQLClient(rows=[{"x": 1}])
             finally:
                 active -= 1
-                ready.set()
-            return FakeSQLClient(rows=[{"x": 1}])
 
-        # Simulate the pre-fix path: prime_sql_auth is a no-op, extract
-        # activities each open their own client in parallel.
-        input_ = ExtractionInput(output_path="/tmp/test")
+        async def _fake_extract(_self, input_):
+            # Each real extract_* path normally goes through
+            # _init_sql_client. Reproduce that here so the counter
+            # observes the parallel burst — and return a minimal
+            # ExtractionTaskOutput so run()'s downstream wiring
+            # (transform threading) doesn't blow up.
+            await _counting_init(_self, input_)
+            return ExtractionTaskOutput(
+                typename="x", total_record_count=0, raw_file=None
+            )
+
+        app = SqlApp.__new__(SqlApp)
+        app._app_name = "test-app"
+
+        mock_wf_info = MagicMock(workflow_id="wf-burst", run_id="run-burst")
+
         with (
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
+            patch(
+                "application_sdk.templates.sql_app._temporal_workflow.info",
+                return_value=mock_wf_info,
+            ),
+            # Simulate the pre-fix path: prime is a no-op so it does
+            # NOT serialise the first connection.
             patch.object(
                 SqlApp,
                 "prime_sql_auth",
                 new=AsyncMock(return_value=PrimeAuthOutput(duration_ms=0.0)),
             ),
-            patch.object(SqlApp, "_init_sql_client", new=_slow_client_init),
-            patch.object(
-                SqlApp,
-                "_extract_entity",
-                new=AsyncMock(
-                    side_effect=lambda **_kw: _asyncio.sleep(0).__await__().send(None)
-                    if False
-                    else _asyncio.create_task(_slow_client_init(None, None))
-                    and ExtractionTaskOutput(
-                        typename="x", total_record_count=1, raw_file=None
-                    ),
-                ),
-            ),
+            # Real extract_* tasks each enter _counting_init — that's
+            # the parallel burst we want to expose.
+            patch.object(SqlApp, "extract_databases", new=_fake_extract),
+            patch.object(SqlApp, "extract_schemas", new=_fake_extract),
+            patch.object(SqlApp, "extract_tables", new=_fake_extract),
+            patch.object(SqlApp, "extract_columns", new=_fake_extract),
             patch.object(SqlApp, "transform_databases", new=AsyncMock()),
             patch.object(SqlApp, "transform_schemas", new=AsyncMock()),
             patch.object(SqlApp, "transform_tables", new=AsyncMock()),
             patch.object(SqlApp, "transform_columns", new=AsyncMock()),
         ):
-            # Drive a minimal run via the extract_* tasks directly so the
-            # gather() in run() reproduces the parallel burst.
-            task_input = SqlApp.build_task_input(ExtractionTaskInput, input_)
-            await _asyncio.gather(
-                _slow_client_init(None, task_input),
-                _slow_client_init(None, task_input),
-                _slow_client_init(None, task_input),
-                _slow_client_init(None, task_input),
-            )
+            await app.run(ExtractionInput(output_path="/tmp/test"))
 
-        # Pre-fix shape: 4 concurrent inits overlapped. max_active > 1
-        # is the diagnostic — it's exactly what we want the prime task
-        # to prevent in real-world execution.
+        # Genuine evidence: with the prime stubbed out, the four
+        # extract_* activities all entered _init_sql_client at the
+        # same time. That is precisely the BLDX-1295 cold-auth burst
+        # the prime_sql_auth task exists to prevent.
         assert max_active >= 2, (
-            f"Expected concurrent client inits to reproduce the BLDX-1295 "
-            f"cold-auth burst, but only saw max_active={max_active}"
+            f"Expected the pre-fix shape (no real prime) to produce "
+            f"overlapping _init_sql_client entries, but only saw "
+            f"max_active={max_active}"
         )
 
     async def test_run_invokes_prime_sql_auth_before_extracts(self):
@@ -1882,7 +1887,7 @@ class TestPrimeSqlAuth:
         # failure_reason, and the suggestion mentions FAILED_LOGIN_ATTEMPTS
         # so an operator knows what to check before retrying.
         err = exc_info.value
-        assert "auth-cache prime probe failed" in err.message.lower()
+        assert "rejected by source" in err.message.lower()
         assert "OperationalError" in err.message
         assert err.failure_reason and "Access denied" in err.failure_reason
         assert err.auth_method == "sql_client"
@@ -1926,3 +1931,158 @@ class TestPrimeSqlAuth:
                 await app.run(ExtractionInput(output_path="/tmp/test"))
 
         assert exc_info.value.effective_retryable is False
+
+    @pytest.mark.parametrize(
+        "error_type,error_message",
+        [
+            ("TimeoutError", "operation timed out after 60s"),
+            ("AsyncioTimeoutError", "deadline exceeded"),
+            ("OperationalError", "(2013) Lost connection during query — timed out"),
+        ],
+    )
+    async def test_prime_timeout_raises_app_timeout_error(
+        self, error_type, error_message
+    ):
+        """Probe failures classified as timeouts must surface as
+        ``AppTimeoutError`` — NOT ``AuthError`` — so the on-call's
+        ``suggested_action`` is "check network reachability" rather
+        than "run ACCOUNT UNLOCK". Pinned by application-sdk#1835
+        mothership comment-3287630230 (HIGH).
+        """
+        from application_sdk.errors.leaves import AppTimeoutError
+
+        app = SqlApp.__new__(SqlApp)
+        app._app_name = "test-app"
+
+        with (
+            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
+            patch.object(
+                SqlApp,
+                "prime_sql_auth",
+                new=AsyncMock(
+                    return_value=PrimeAuthOutput(
+                        duration_ms=60_000.0,
+                        success=False,
+                        error_type=error_type,
+                        error_message=error_message,
+                    ),
+                ),
+            ),
+            patch.object(SqlApp, "extract_databases", new=AsyncMock()),
+            patch.object(SqlApp, "extract_schemas", new=AsyncMock()),
+            patch.object(SqlApp, "extract_tables", new=AsyncMock()),
+            patch.object(SqlApp, "extract_columns", new=AsyncMock()),
+        ):
+            with pytest.raises(AppTimeoutError) as exc_info:
+                await app.run(ExtractionInput(output_path="/tmp/test"))
+
+        err = exc_info.value
+        assert err.operation == "prime_sql_auth"
+        # AppTimeoutError doesn't define a structured ``failure_reason``
+        # field — driver message is inlined into ``message`` instead.
+        assert error_message in err.message
+        assert err.suggested_action and "network reachability" in err.suggested_action
+
+    @pytest.mark.parametrize(
+        "error_type,error_message",
+        [
+            ("ConnectionRefusedError", "[Errno 111] Connection refused"),
+            ("gaierror", "[Errno -2] Name or service not known"),
+            ("SSLError", "[SSL: CERTIFICATE_VERIFY_FAILED]"),
+            (
+                "OperationalError",
+                "(2003) Can't connect to MySQL server on 'db.example.com'",
+            ),
+        ],
+    )
+    async def test_prime_network_failure_raises_dependency_unavailable(
+        self, error_type, error_message
+    ):
+        """Probe failures that look like network / DNS / TLS /
+        connection-refused must surface as
+        ``DependencyUnavailableError``. The on-call guidance must NOT
+        suggest a credentials check (the credentials path was never
+        exercised) and must NOT suggest ACCOUNT UNLOCK (no failed
+        login attempts were made). Pinned by application-sdk#1835
+        mothership comment-3287630230 (HIGH).
+        """
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        app = SqlApp.__new__(SqlApp)
+        app._app_name = "test-app"
+
+        with (
+            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
+            patch.object(
+                SqlApp,
+                "prime_sql_auth",
+                new=AsyncMock(
+                    return_value=PrimeAuthOutput(
+                        duration_ms=50.0,
+                        success=False,
+                        error_type=error_type,
+                        error_message=error_message,
+                    ),
+                ),
+            ),
+            patch.object(SqlApp, "extract_databases", new=AsyncMock()),
+            patch.object(SqlApp, "extract_schemas", new=AsyncMock()),
+            patch.object(SqlApp, "extract_tables", new=AsyncMock()),
+            patch.object(SqlApp, "extract_columns", new=AsyncMock()),
+        ):
+            with pytest.raises(DependencyUnavailableError) as exc_info:
+                await app.run(ExtractionInput(output_path="/tmp/test"))
+
+        err = exc_info.value
+        assert err.service == "sql_source"
+        assert err.network_error == error_message
+        # Must steer the operator toward network/DNS investigation, and
+        # explicitly NOT toward auth-lockout work. The classifier's
+        # actual phrasing is "this is not a lockout situation — do not
+        # run ACCOUNT UNLOCK" (a helpful disclaimer), so check the
+        # positive guidance is network-shaped.
+        assert err.suggested_action and "DNS" in err.suggested_action
+        assert (
+            err.suggested_action and "FAILED_LOGIN_ATTEMPTS" not in err.suggested_action
+        )
+
+    async def test_prime_unknown_error_class_falls_back_to_internal(self):
+        """Last-resort: a driver throws an unrecognised exception class.
+        The classifier must NOT swallow it as auth — it returns
+        ``InternalError`` so the on-call sees "unclassified" and knows
+        to inspect worker logs (where ``exc_info=True`` preserves the
+        full traceback). Pinned by application-sdk#1835 mothership
+        comment-3287630230 (HIGH).
+        """
+        from application_sdk.errors.leaves import InternalError
+
+        app = SqlApp.__new__(SqlApp)
+        app._app_name = "test-app"
+
+        with (
+            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
+            patch.object(
+                SqlApp,
+                "prime_sql_auth",
+                new=AsyncMock(
+                    return_value=PrimeAuthOutput(
+                        duration_ms=10.0,
+                        success=False,
+                        error_type="WeirdVendorSpecificError",
+                        error_message="something we have never seen before",
+                    ),
+                ),
+            ),
+            patch.object(SqlApp, "extract_databases", new=AsyncMock()),
+            patch.object(SqlApp, "extract_schemas", new=AsyncMock()),
+            patch.object(SqlApp, "extract_tables", new=AsyncMock()),
+            patch.object(SqlApp, "extract_columns", new=AsyncMock()),
+        ):
+            with pytest.raises(InternalError) as exc_info:
+                await app.run(ExtractionInput(output_path="/tmp/test"))
+
+        err = exc_info.value
+        assert "unclassified" in err.message.lower()
+        assert (
+            err.suggested_action and "_classify_prime_failure" in err.suggested_action
+        )
