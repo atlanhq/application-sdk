@@ -310,6 +310,49 @@ class FetchViewsOutput(Output):
     total_record_count: int = 0
 
 
+class PrimeAuthOutput(Output):
+    """Output from the ``prime_sql_auth`` task (BLDX-1295).
+
+    The task itself is a single serial probe — it issues one ``SELECT 1``
+    to populate the SQL server's auth cache (notably MySQL 8's
+    ``caching_sha2_password``) before the parallel ``_extract_entity``
+    burst.
+
+    Failure-as-data contract:
+        ``prime_sql_auth`` deliberately catches probe exceptions and
+        reports them as ``success=False`` on this output rather than
+        raising. ``run()`` inspects ``success`` and short-circuits with
+        a structured ``AuthError`` before the parallel extract burst.
+
+        Why return-not-raise: the failure mode this task targets is
+        cache-cold auth rejection (``Access denied``). Retrying that
+        through Temporal's activity-level retry just stacks the source's
+        ``failed_login_attempts`` counter — i.e. accelerates the lockout
+        cycle the prime was added to prevent. Returning structured
+        failure to ``run()`` makes the short-circuit explicit, keeps
+        the contextual error visible in Temporal activity-complete
+        events, and removes the auto-retry that was actively harmful.
+    """
+
+    duration_ms: float = 0.0
+    """Wall-clock time spent on the probe connection + ``SELECT 1`` + close."""
+
+    success: bool = True
+    """Whether the probe completed cleanly. ``False`` means the probe
+    raised; ``run()`` will short-circuit the workflow with an
+    ``AuthError`` carrying ``error_type`` / ``error_message``."""
+
+    error_type: str | None = None
+    """Exception class name (e.g. ``OperationalError``) when ``success``
+    is ``False``. ``None`` on success."""
+
+    error_message: str | None = None
+    """Truncated exception message when ``success`` is ``False``.
+    ``None`` on success. Secrets in the underlying driver message are
+    sanitised by the SDK error-wrapping layer; this field is the raw
+    short summary for observability."""
+
+
 class ExtractionTaskOutput(Output):
     """Output from a per-entity ``extract_*`` task.
 
