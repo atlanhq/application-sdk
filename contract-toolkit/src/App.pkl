@@ -1131,7 +1131,7 @@ class KedaTemporalConfig {
 }
 
 class KedaConfig {
-  enabled: Boolean = false
+  enabled: Boolean = true
   minReplicaCount: Int = 1
   temporal: KedaTemporalConfig = new KedaTemporalConfig {}
 }
@@ -1144,7 +1144,7 @@ class ResourceConfig {
 /// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
 class DeployConfig {
   executionMode: String = "native"
-  splitDeployment: Boolean = false
+  splitDeployment: Boolean = true
   /// Ignored when keda.enabled = true (KEDA manages replica count).
   replicaCount: Int? = null
   dapr: DaprComponents = new DaprComponents {}

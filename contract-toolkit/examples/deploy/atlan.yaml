@@ -15,7 +15,7 @@ entrypoints:
   type: connector
 deploy:
   execution_mode: native
-  splitDeploymentEnabled: false
+  splitDeploymentEnabled: true
   dapr:
     objectstore: true
     secretstore: true
