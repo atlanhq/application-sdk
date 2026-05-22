@@ -57,27 +57,45 @@ def read_current_version():
 
 
 def tag_exists(tag):
-    return subprocess.run(
-        ["git", "rev-parse", "--verify", tag], capture_output=True
-    ).returncode == 0
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", tag], capture_output=True
+        ).returncode
+        == 0
+    )
 
 
 def commits_since_tag(tag):
     """Return (subjects, bodies) for commits since tag touching contract-toolkit/**."""
-    subjects = _run([
-        "git", "log", f"{tag}..HEAD", "--format=%s", "--", "contract-toolkit/**",
-    ])
-    bodies = _run([
-        "git", "log", f"{tag}..HEAD", "--format=%B", "--", "contract-toolkit/**",
-    ])
+    subjects = _run(
+        [
+            "git",
+            "log",
+            f"{tag}..HEAD",
+            "--format=%s",
+            "--",
+            "contract-toolkit/**",
+        ]
+    )
+    bodies = _run(
+        [
+            "git",
+            "log",
+            f"{tag}..HEAD",
+            "--format=%B",
+            "--",
+            "contract-toolkit/**",
+        ]
+    )
     return subjects, bodies
 
 
 def compute_bump(subjects, bodies):
-    if re.search(r'^[a-z]+(\([^)]+\))?!:', subjects, re.MULTILINE) or \
-       re.search(r'^BREAKING[ _-]CHANGE:', bodies, re.MULTILINE):
+    if re.search(r"^[a-z]+(\([^)]+\))?!:", subjects, re.MULTILINE) or re.search(
+        r"^BREAKING[ _-]CHANGE:", bodies, re.MULTILINE
+    ):
         return "major"
-    if re.search(r'^feat[(!:]', subjects, re.MULTILINE):
+    if re.search(r"^feat[(!:]", subjects, re.MULTILINE):
         return "minor"
     return "patch"
 
@@ -104,11 +122,16 @@ def get_commits(tag):
     Uses git log with path filter as the authoritative source — no network
     calls needed.
     """
-    raw = _run([
-        "git", "log", f"{tag}..HEAD",
-        "--format=%H%x00%s%x00%b%x1e",  # NUL-delimited fields, RS record separator
-        "--", "contract-toolkit/**",
-    ])
+    raw = _run(
+        [
+            "git",
+            "log",
+            f"{tag}..HEAD",
+            "--format=%H%x00%s%x00%b%x1e",  # NUL-delimited fields, RS record separator
+            "--",
+            "contract-toolkit/**",
+        ]
+    )
     commits = []
     for record in raw.split("\x1e"):
         record = record.strip()
@@ -136,16 +159,17 @@ def categorize(commits):
     owner, repo = REPO.split("/", 1)
     for sha, subject, body in commits:
         link = f"https://github.com/{owner}/{repo}/commit/{sha}"
-        is_breaking = bool(re.search(r'!:', subject)) or \
-                      bool(re.search(r'^BREAKING[ _-]CHANGE:', body, re.MULTILINE))
+        is_breaking = bool(re.search(r"!:", subject)) or bool(
+            re.search(r"^BREAKING[ _-]CHANGE:", body, re.MULTILINE)
+        )
         if is_breaking:
-            msg = re.sub(r'^[^:]+:\s*', '', subject)
+            msg = re.sub(r"^[^:]+:\s*", "", subject)
             cats["breaking"].append((link, msg))
-        elif re.match(r'^feat[(!:]', subject):
-            msg = re.sub(r'^feat(\([^)]+\))?!?:\s*', '', subject)
+        elif re.match(r"^feat[(!:]", subject):
+            msg = re.sub(r"^feat(\([^)]+\))?!?:\s*", "", subject)
             cats["features"].append((link, msg))
-        elif re.match(r'^fix[(!:]', subject):
-            msg = re.sub(r'^fix(\([^)]+\))?!?:\s*', '', subject)
+        elif re.match(r"^fix[(!:]", subject):
+            msg = re.sub(r"^fix(\([^)]+\))?!?:\s*", "", subject)
             cats["fixes"].append((link, msg))
         else:
             cats["other"].append((link, subject))
@@ -172,9 +196,9 @@ def format_block(new_version, cats):
 
 def prepend_changelog(block):
     existing = open(CHANGELOG).read() if os.path.exists(CHANGELOG) else "# Changelog\n"
-    m = re.search(r'^## \[', existing, re.MULTILINE)
+    m = re.search(r"^## \[", existing, re.MULTILINE)
     if m:
-        new_content = existing[:m.start()] + block + "\n" + existing[m.start():]
+        new_content = existing[: m.start()] + block + "\n" + existing[m.start() :]
     else:
         new_content = existing.rstrip("\n") + "\n\n" + block + "\n"
     with open(CHANGELOG, "w") as f:
