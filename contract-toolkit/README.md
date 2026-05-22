@@ -249,7 +249,8 @@ The typed `deploy` block replaces the legacy free-form mapping. The common 80% i
 ```pkl
 deploy {
   keda {
-    enabled = true
+    // enabled = true and minReplicaCount = 0 (scale-to-zero) by default.
+    // Set minReplicaCount = 1 to keep at least one replica running at all times.
     minReplicaCount = 1
     temporal { targetQueueSize = 10 }  // Note: must be set here, NOT on keda.targetQueueSize
   }

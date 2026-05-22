@@ -218,7 +218,7 @@ The typed `deploy` block replaces the legacy free-form mapping.
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `deploy.executionMode` | String | `"native"` | Execution mode. |
-| `deploy.splitDeployment` | Boolean | `false` | Emitted as `splitDeploymentEnabled`. |
+| `deploy.splitDeployment` | Boolean | `true` | Emitted as `splitDeploymentEnabled`. |
 | `deploy.replicaCount` | Int? | null | Honoured only when `keda.enabled = false`. |
 | `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles. |
 | `deploy.keda` | KedaConfig | `new KedaConfig {}` | KEDA autoscaling config. |
@@ -244,8 +244,8 @@ class DaprComponents {
 
 ```pkl
 class KedaConfig {
-  enabled: Boolean = false
-  minReplicaCount: Int = 1
+  enabled: Boolean = true
+  minReplicaCount: Int = 0
   temporal: KedaTemporalConfig = new { targetQueueSize = 5 }
 }
 class KedaTemporalConfig { targetQueueSize: Int }
