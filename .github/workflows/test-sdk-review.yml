@@ -332,6 +332,7 @@ jobs:
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           COMMENTER: ${{ steps.parse.outputs.commenter }}
           COMMENTER_INTENT: ${{ steps.parse.outputs.commenter_intent }}
@@ -343,6 +344,7 @@ jobs:
           PR_URL: ${{ steps.pr.outputs.html_url }}
           REPO_FULL_NAME: ${{ github.repository }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GHA_RUN_STARTED_AT: ${{ github.run_started_at }}
         run: |
           set -euo pipefail
 
@@ -559,9 +561,37 @@ jobs:
             -d "${PAYLOAD}" 2>&1)
 
           # Stream ended. Decide outcome.
+          #
+          # If a <!-- TEST_SDK_REVIEW --> summary comment was posted by this
+          # run (i.e. created after the workflow started), the review verdict
+          # was already delivered before the stream went sideways — typically
+          # a mothership-side finalize/cleanup crash that happens AFTER
+          # Phase 3 posts the summary. In that case the PR check is about
+          # whether SDK review was completed — the answer is yes — so we
+          # surface the underlying error as a warning annotation but do not
+          # fail the workflow. The timestamp filter prevents a re-trigger on
+          # a new commit from falsely soft-succeeding by counting a verdict
+          # comment that belonged to a previous head.
+          VERDICT_POSTED=0
+          RUN_STARTED_AT="${GHA_RUN_STARTED_AT}"
+          if [ -n "${PR_NUMBER}" ] && [ -n "${RUN_STARTED_AT}" ]; then
+            SUMMARY_COUNT=$(gh api "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/comments" \
+              --paginate \
+              --jq "[.[] | select(.body | contains(\"<!-- TEST_SDK_REVIEW -->\")) | select(.created_at >= \"${RUN_STARTED_AT}\")] | length" \
+              2>/dev/null || echo "0")
+            if [ "${SUMMARY_COUNT}" -gt 0 ]; then
+              VERDICT_POSTED=1
+            fi
+          fi
+
           if [ "$ERRORED" = "1" ]; then
-            echo "::error::Sandbox error: code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
-            exit 1
+            MSG="Sandbox error: code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
+            if [ "$VERDICT_POSTED" = "1" ]; then
+              echo "::warning::${MSG} — but a TEST_SDK_REVIEW summary comment was already posted on PR #${PR_NUMBER}. Treating as soft-success since the review was delivered."
+            else
+              echo "::error::${MSG}"
+              exit 1
+            fi
           fi
           if [ "$STREAM_GOT_EVENT" = "0" ]; then
             echo "::error::Stream ended without a single SSE event — likely VPN/network/proxy issue"
@@ -571,7 +601,7 @@ jobs:
             echo "::error::Stream ended without a 'complete' event"
             exit 1
           fi
-          if [ "$FINAL_STATUS" != "completed" ]; then
+          if [ "$FINAL_STATUS" != "completed" ] && [ "$ERRORED" != "1" ]; then
             echo "::error::Sandbox final status=${FINAL_STATUS} (expected 'completed')"
             exit 1
           fi
