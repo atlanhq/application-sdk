@@ -291,7 +291,7 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     """
     if _workflow_config.app_class is None:
         return None
-    app_cls_name: str | None = getattr(_workflow_config.app_class, "_app_name", None)
+    app_cls_name = _workflow_config.app_name
     if not app_cls_name:
         return None
 
@@ -317,6 +317,11 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
         ep = next((e for e in app_meta.entry_points.values() if e.implicit), None)
         if ep is None and len(app_meta.entry_points) == 1:
             ep = next(iter(app_meta.entry_points.values()))
+            logger.debug(
+                "Resolved output_type via single-entrypoint fallback for workflow_type=%s ep=%s",
+                workflow_type_name,
+                ep.name,
+            )
 
     return ep.output_type if ep else None
 
@@ -333,6 +338,7 @@ class WorkflowClientConfig:
     host: str = ""
     namespace: str = "default"
     task_queue: str = ""
+    app_name: str = ""
     app_class: type[App] | None = dataclasses.field(default=None, repr=False)
     data_converter: DataConverter | None = dataclasses.field(default=None, repr=False)
 
@@ -541,6 +547,7 @@ def create_app_handler_service(
         host=temporal_host,
         namespace=temporal_namespace,
         task_queue=task_queue or f"{app_name}-queue",
+        app_name=getattr(app_class, "_app_name", "") if app_class is not None else "",
         app_class=app_class,
         data_converter=data_converter,
         tls_enabled=tls_enabled,
@@ -928,7 +935,7 @@ def create_app_handler_service(
             # Deferred to avoid a circular import at module load time.
             from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
 
-            app_meta = AppRegistry.get_instance().get(app_cls._app_name)  # type: ignore[attr-defined]
+            app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
             entry_points = app_meta.entry_points
 
             if selected_entrypoint:
@@ -964,9 +971,9 @@ def create_app_handler_service(
 
             input_type = ep.input_type
             workflow_name = (
-                app_cls._app_name  # type: ignore[attr-defined]
+                _workflow_config.app_name
                 if ep.implicit
-                else f"{app_cls._app_name}:{ep.name}"  # type: ignore[attr-defined]
+                else f"{_workflow_config.app_name}:{ep.name}"
             )
 
             if input_type is None:
@@ -1114,6 +1121,12 @@ def create_app_handler_service(
                 try:
                     desc = await handle.describe()
                     output_type = _resolve_output_type_for_workflow(desc.workflow_type)
+                    if output_type is None:
+                        logger.debug(
+                            "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
+                            workflow_id,
+                            desc.workflow_type,
+                        )
                     result_data = await _get_workflow_result(
                         client, workflow_id=workflow_id, output_type=output_type
                     )
@@ -1181,6 +1194,12 @@ def create_app_handler_service(
             elif status == "COMPLETED":
                 try:
                     output_type = _resolve_output_type_for_workflow(desc.workflow_type)
+                    if output_type is None:
+                        logger.debug(
+                            "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
+                            workflow_id,
+                            desc.workflow_type,
+                        )
                     result_data = await _get_workflow_result(
                         client, workflow_id=workflow_id, output_type=output_type
                     )
