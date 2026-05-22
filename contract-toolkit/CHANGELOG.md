@@ -6,6 +6,13 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.10.1] - 2026-05-22
+
+### Bug fixes
+
+- default connection cache to true/false for PublishNode/LineagePublishNode (#1850) ([dd49f65](https://github.com/atlanhq/application-sdk/commit/dd49f65))
+- default splitDeployment and keda.enabled to true (#1837) ([772fa4c](https://github.com/atlanhq/application-sdk/commit/772fa4c))
+
 ## [0.10.0] - 2026-05-21
 
 ### Features
