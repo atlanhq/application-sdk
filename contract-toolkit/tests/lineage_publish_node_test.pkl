@@ -13,6 +13,7 @@ amends "pkl:test"
 
 import "pkl:json"
 import "fixtures/lineage_publish_pipeline.pkl" as pipelineApp
+import "fixtures/default_pipeline.pkl" as defaultPipelineApp
 import "../src/App.pkl" as App
 
 // Parse the generated manifest into a navigable Mapping so assertions target
@@ -22,6 +23,12 @@ local manifest = new json.Parser { useMapping = true }.parse(manifestJson)
 local dag = manifest["dag"]
 local publishArgs = dag["publish"]["inputs"]["args"]
 local lineagePublishArgs = dag["lineage-publish"]["inputs"]["args"]
+
+// Manifest for an app that declares no pipeline block at all.
+local defaultManifest = new json.Parser { useMapping = true }.parse(
+  defaultPipelineApp.output.files["app/generated/manifest.json"].text
+)
+local defaultPublishArgs = defaultManifest["dag"]["publish"]["inputs"]["args"]
 
 // Direct class instances for precise property-level assertions.
 local assetPublishNode = new App.PublishNode {}
@@ -54,6 +61,17 @@ facts {
   ["Lineage publish node args set connection_cache_enabled to false"] {
     lineagePublishArgs["connection_cache_enabled"] == false
     lineagePublishArgs["connection_cache_via_app_enabled"] == false
+  }
+
+  // -----------------------------------------------------------------------
+  // Default (undeclared) pipeline: no pipeline block at all.
+  // Regression guard — the default chain must reach connection_cache_enabled=true
+  // without the app author touching anything.
+  // -----------------------------------------------------------------------
+
+  ["App with no pipeline declaration gets connection_cache_enabled true on publish node"] {
+    defaultPublishArgs["connection_cache_enabled"] == true
+    defaultPublishArgs["connection_cache_via_app_enabled"] == true
   }
 
   // -----------------------------------------------------------------------
