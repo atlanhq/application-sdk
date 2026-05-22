@@ -30,7 +30,11 @@ runs:
       id: openconnect-connection
       with:
         max_attempts: ${{ fromJSON(inputs.max-attempts) }}
-        timeout_minutes: 10
+        # Per-attempt budget. With --max-time 30 on the curl test below, a
+        # real attempt completes (or fails) in well under a minute, so this
+        # is a safety net — kill any attempt that wedges instead of letting
+        # it consume the original 10-min cap.
+        timeout_minutes: 5
         shell: bash
         command: |
           echo "Connecting to GlobalProtect VPN using OpenConnect..."
