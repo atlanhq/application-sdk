@@ -1,0 +1,90 @@
+// Tests for the built-in LineagePublishNode and the dual-publish pipeline contract.
+//
+// Background: a pipeline that runs both an asset-crawler publish and a
+// lineage publish calls the same publish-app with different inputs. The
+// asset-publish node must be allowed to build the connection cache
+// (connection_cache_enabled=true) so that downstream miners can read it.
+// The lineage-publish node must NOT write to that cache — lineage entities
+// are only `Process`/`ColumnProcess` rows, and overwriting the cache with
+// them destroys the `Database`/`Schema`/`Table` rows the crawler wrote,
+// breaking subsequent miner runs.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/lineage_publish_pipeline.pkl" as pipelineApp
+import "../src/App.pkl" as App
+
+// Parse the generated manifest into a navigable Mapping so assertions target
+// specific nodes instead of doing substring matches on the whole document.
+local manifestJson: String = pipelineApp.output.files["app/generated/manifest.json"].text
+local manifest = new json.Parser { useMapping = true }.parse(manifestJson)
+local dag = manifest["dag"]
+local publishArgs = dag["publish"]["inputs"]["args"]
+local lineagePublishArgs = dag["lineage-publish"]["inputs"]["args"]
+
+// Direct class instances for precise property-level assertions.
+local assetPublishNode = new App.PublishNode {}
+local lineagePublishNode = new App.LineagePublishNode {}
+
+facts {
+  // -----------------------------------------------------------------------
+  // Pipeline manifest: both nodes exist in the generated DAG.
+  // -----------------------------------------------------------------------
+
+  ["Pipeline manifest DAG contains a publish node"] {
+    dag["publish"] != null
+  }
+
+  ["Pipeline manifest DAG contains a lineage-publish node"] {
+    dag["lineage-publish"] != null
+  }
+
+  // -----------------------------------------------------------------------
+  // Pipeline manifest: each node carries the correct connection-cache value.
+  // Navigated precisely to dag → <node> → inputs → args rather than
+  // substring-matching the entire document.
+  // -----------------------------------------------------------------------
+
+  ["Asset publish node args set connection_cache_enabled to true"] {
+    publishArgs["connection_cache_enabled"] == true
+    publishArgs["connection_cache_via_app_enabled"] == true
+  }
+
+  ["Lineage publish node args set connection_cache_enabled to false"] {
+    lineagePublishArgs["connection_cache_enabled"] == false
+    lineagePublishArgs["connection_cache_via_app_enabled"] == false
+  }
+
+  // -----------------------------------------------------------------------
+  // Class-level defaults: precise per-type assertions without manifest noise.
+  // -----------------------------------------------------------------------
+
+  ["PublishNode defaults connection_cache_enabled to true"] {
+    assetPublishNode.args["connection_cache_enabled"] == true
+    assetPublishNode.args["connection_cache_via_app_enabled"] == true
+  }
+
+  ["LineagePublishNode defaults connection_cache_enabled to false"] {
+    lineagePublishNode.args["connection_cache_enabled"] == false
+    lineagePublishNode.args["connection_cache_via_app_enabled"] == false
+  }
+
+  // current_state_via_app_enabled is about state tracking, not the shared
+  // connection cache — lineage publish keeps this true.
+  ["LineagePublishNode keeps current_state_via_app_enabled true"] {
+    lineagePublishNode.args["current_state_via_app_enabled"] == true
+  }
+
+  ["LineagePublishNode cache_namespace defaults to lineage"] {
+    lineagePublishNode.args["cache_namespace"] == "lineage"
+  }
+
+  ["LineagePublishNode connection_creation_enabled is false — lineage publish never creates connections"] {
+    lineagePublishNode.args["connection_creation_enabled"] == false
+  }
+
+  ["LineagePublishNode connection_cache_enabled can be explicitly opted in"] {
+    new App.LineagePublishNode { connectionCacheEnabled = true }.args["connection_cache_enabled"] == true
+  }
+}
