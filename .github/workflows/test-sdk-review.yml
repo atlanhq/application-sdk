@@ -249,6 +249,10 @@ jobs:
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
 
+      # max-attempts: '1' overrides the action's internal default of 3 so
+      # each outer step is one real attempt, not three. Combined with the
+      # action's 5-min timeout_minutes, three outer steps cap total VPN
+      # time at ~15 min in the worst case.
       - name: Connect to VPN (attempt 1/3)
         id: vpn1
         uses: ./.github/actions/globalprotect-connect
@@ -257,6 +261,7 @@ jobs:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          max-attempts: '1'
 
       - name: Connect to VPN (attempt 2/3)
         id: vpn2
@@ -267,14 +272,61 @@ jobs:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          max-attempts: '1'
 
       - name: Connect to VPN (attempt 3/3)
+        id: vpn3
         if: steps.vpn2.outcome == 'failure'
         uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          max-attempts: '1'
+
+      # If all three VPN attempts failed, post a comment on the PR so the
+      # author knows the workflow died for an infra reason (not a real review
+      # failure) and can retry with another @test-sdk-review mention. Without
+      # this, the only signal is a red commit status — and most authors don't
+      # check the GHA logs to discover it was a VPN issue.
+      - name: Notify PR if VPN failed after 3 attempts
+        if: steps.vpn3.outcome == 'failure'
+        env:
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PORTAL_URL: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const runUrl = process.env.GHA_RUN_URL;
+            const body = [
+              `⚠️ **Test SDK Review failed: could not connect to VPN.**`,
+              ``,
+              `All 3 VPN connection attempts to \`${process.env.PORTAL_URL || 'the VPN portal'}\` failed. This is usually a transient infrastructure issue.`,
+              ``,
+              `[View workflow logs](${runUrl})`,
+              ``,
+              `Please retry by commenting \`@test-sdk-review\` again. If it keeps failing, flag it in \`#bu-platform-engineering\`.`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
+
+      # Explicit fail so the existing failure()-gated 'Set status to failure'
+      # step (below) fires and the commit status flips to red. Without this,
+      # vpn3.continue-on-error: true would let the workflow proceed past a
+      # broken VPN into the mothership dispatch, which would itself hang or
+      # fail confusingly.
+      - name: Fail workflow after VPN failure notification
+        if: steps.vpn3.outcome == 'failure'
+        run: |
+          echo "::error::All 3 VPN connection attempts failed. PR has been notified — see comment posted above."
+          exit 1
 
       - name: Dispatch to mothership Rover Direct API
         env:
