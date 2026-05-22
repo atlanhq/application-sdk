@@ -10,13 +10,15 @@
 #   after the human dismisses theirs, so the bot could SOLO-satisfy
 #   the merge gate.
 #
-#   This workflow patches that: the moment any human-authored
-#   PR-level activity happens (comment, review submission, or
-#   review dismissal), we walk the PR's reviews and dismiss every
-#   APPROVED review by `atlan-ci` whose body starts with the
-#   experimental-reviewer signature. Net effect: bot's auto-approval
-#   only stands until a human engages — at which point the gate
-#   returns to requiring a fresh human code-owner approval.
+#   This workflow patches that: when a human posts feedback that
+#   could change the merge calculus (a top-level PR comment, a
+#   review with state `changes_requested` or `commented`, or an
+#   edit/dismissal of an existing review), we walk the PR's reviews
+#   and dismiss every APPROVED review by `atlan-ci` whose body
+#   starts with the experimental-reviewer signature. Net effect:
+#   bot's auto-approval stands until a human pushes back or asks a
+#   question — at which point the gate returns to requiring a fresh
+#   human code-owner approval.
 #
 # What it does NOT dismiss:
 #   - atlan-ci approvals posted by other flows (e.g. production
@@ -25,6 +27,10 @@
 #     to the experimental flow only.
 #   - Any review by a human reviewer.
 #   - Approvals posted by other bots (claude[bot], github-actions[bot]).
+#   - A human review submission whose state is `approved` — a human
+#     approval is a positive signal, not a reason to drop the bot's
+#     parallel approval. Only non-approval submissions (changes
+#     requested, comments) and PR-level comments trigger dismissal.
 
 name: Test SDK Review — auto-dismiss bot approval on human activity
 
@@ -51,6 +57,12 @@ jobs:
     # For issue_comment events, also require the comment is on a PR
     # (issue_comment fires for both Issues and PRs). The PR-side has
     # `github.event.issue.pull_request` populated; Issues-side does not.
+    #
+    # Also skip when a human submits an `approved` review — the human
+    # is endorsing the change, so there's no reason to retract the
+    # bot's parallel approval. `changes_requested` and `commented`
+    # review submissions, as well as edits and dismissals of any
+    # existing review, still trigger; so do top-level PR comments.
     if: >-
       (
         github.event_name == 'pull_request_review'
@@ -58,6 +70,11 @@ jobs:
       )
       && !endsWith(github.actor, '[bot]')
       && github.actor != 'atlan-ci'
+      && !(
+        github.event_name == 'pull_request_review'
+        && github.event.action == 'submitted'
+        && github.event.review.state == 'approved'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -99,3 +116,12 @@ jobs:
               -f message="$DISMISS_MESSAGE"
             echo "Dismissed atlan-ci review ${review_id} on PR #${PR_NUMBER}."
           done
+
+          # The `test-sdk-review-approved` label is owned by the mothership
+          # sandbox (see .mothership/pr-review/ORCHESTRATION.md) and travels
+          # with the approval. If we dismissed the approval, the label is
+          # stale until the next sandbox run — strip it here so the PR's
+          # label state matches its review state. `|| true` because the
+          # label may not be present (e.g. prior verdict was NEEDS_HUMAN).
+          gh pr edit "${PR_NUMBER}" --repo "${REPO}" --remove-label "test-sdk-review-approved" 2>/dev/null || true
+          echo "Removed test-sdk-review-approved label (if present) from PR #${PR_NUMBER}."

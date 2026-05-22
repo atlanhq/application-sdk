@@ -30,7 +30,11 @@ runs:
       id: openconnect-connection
       with:
         max_attempts: ${{ fromJSON(inputs.max-attempts) }}
-        timeout_minutes: 10
+        # Per-attempt budget. With --max-time 30 on the curl test below, a
+        # real attempt completes (or fails) in well under a minute, so this
+        # is a safety net — kill any attempt that wedges instead of letting
+        # it consume the original 10-min cap.
+        timeout_minutes: 5
         shell: bash
         command: |
           echo "Connecting to GlobalProtect VPN using OpenConnect..."
@@ -74,7 +78,12 @@ runs:
 
           # Initial connectivity test
           echo "Testing initial connectivity to Phoenix AI..."
-          time curl -k -sS https://phoenix-ai.atlan.com -o /dev/null
+          # --max-time 60 ensures a black-holed route (e.g. broken VPN
+          # split-tunnel) fails fast instead of burning the full retry-action
+          # timeout_minutes budget on a single hung TCP connection. 60s is
+          # comfortably above any healthy response time but well below the
+          # 5-min per-attempt cap.
+          time curl -k -sS --max-time 60 https://phoenix-ai.atlan.com -o /dev/null
 
           if [ $? -eq 0 ]; then
             echo "Initial connectivity test successful"
