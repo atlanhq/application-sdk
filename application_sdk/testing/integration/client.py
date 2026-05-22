@@ -70,6 +70,33 @@ def _to_v3_credentials(
     return pairs
 
 
+def _from_v3_credentials(
+    creds: dict[str, Any] | list[dict[str, str]],
+) -> dict[str, Any]:
+    """Inverse of ``_to_v3_credentials`` — turn a v3 pair list into a flat dict.
+
+    ``extra.<subkey>`` pairs are re-nested under a single ``extra`` dict. Dict
+    inputs pass through unchanged so callers can stay format-agnostic.
+    """
+    if isinstance(creds, dict):
+        return creds
+
+    flat: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    for pair in creds:
+        key = pair.get("key")
+        value = pair.get("value")
+        if not key:
+            continue
+        if key.startswith("extra."):
+            extra[key[len("extra.") :]] = value
+        else:
+            flat[key] = value
+    if extra:
+        flat["extra"] = extra
+    return flat
+
+
 class IntegrationTestClient:
     """Client for integration testing of the Core 3 APIs.
 
@@ -231,7 +258,11 @@ class IntegrationTestClient:
     ) -> dict[str, Any]:
         """Call the workflow start API.
 
-        Converts flat credential dicts to v3 key-value format before sending.
+        Production /start strips inline credentials and resolves them via a
+        ``credential_guid`` provisioned out-of-band (by AE/Heracles). To match
+        that, we first POST the credentials to ``/dev/local-vault`` and then
+        send only the returned guid in the start payload. Scenarios that
+        already supply ``credential_guid`` are left untouched.
 
         Args:
             args: The workflow arguments (credentials, metadata, connection).
@@ -241,11 +272,48 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response.
         """
         endpoint = endpoint_override or self.workflow_endpoint
-        # Convert credentials inside args to v3 format if present
         data = dict(args)
-        if "credentials" in data and isinstance(data["credentials"], dict):
+
+        if "credential_guid" not in data and data.get("credentials"):
+            credential_guid = self._provision_credentials(data["credentials"])
+            data["credential_guid"] = credential_guid
+            del data["credentials"]
+        elif "credentials" in data and isinstance(data["credentials"], dict):
             data["credentials"] = _to_v3_credentials(data["credentials"])
+
         return self._post(endpoint, data=data)
+
+    def _provision_credentials(
+        self,
+        credentials: dict[str, Any] | list[dict[str, str]],
+    ) -> str:
+        """Provision credentials via the dev local-vault and return the guid.
+
+        Mirrors the production AE/Heracles flow: sensitive fields land in the
+        local secret store, non-sensitive ones in object storage, and the
+        caller gets back a guid to pass to ``/start``.
+
+        Args:
+            credentials: Flat ``{key: value}`` dict or v3 ``[{key, value}]``
+                list. v3 lists are flattened back to a dict for the vault.
+
+        Returns:
+            The ``credential_guid`` issued by the vault.
+
+        Raises:
+            RuntimeError: If the vault response does not include a guid.
+        """
+        flat = _from_v3_credentials(credentials)
+        response = self._post("/dev/local-vault", data=flat)
+        guid = (response.get("data") or {}).get("credential_guid") or response.get(
+            "credential_guid"
+        )
+        if not guid:
+            raise RuntimeError(
+                f"Local-vault did not return a credential_guid. Response: {response}"
+            )
+        logger.debug("Provisioned credentials via local-vault: guid=%s", guid)
+        return guid
 
     def _call_config(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the config GET or POST API.
