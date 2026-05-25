@@ -718,6 +718,9 @@ jobs:
           RELEASE_MODEL: ${{ needs.prepare.outputs.release_model }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           GITHUB_ACTOR: ${{ github.triggering_actor }}
+          # Required by `gh api` calls below; without it the PR-author
+          # lookup silently falls back to triggering_actor.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
