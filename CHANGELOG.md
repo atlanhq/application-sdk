@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.13.2 (May 25, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.1...v3.13.2
+
+### Bug Fixes
+
+- insert [tool.uv.sources] entry when absent instead of erroring (#1860) (by @Aryamanz29 in [376def3](https://github.com/atlanhq/application-sdk/commit/376def3))
+- replace chained str.replace() with single-pass re.sub() in _prepare_sql (APP-2291) (#1863) (by @Aryamanz29 in [b918b8f](https://github.com/atlanhq/application-sdk/commit/b918b8f))
+- only pass ExternalId to sts.assume_role when non-empty [HYP-1445] (#1856) (by @tanishkhot in [3b850c0](https://github.com/atlanhq/application-sdk/commit/3b850c0))
+- unblock SDR Temporal connect — prefer IPv4 + fall back to v2 TLS env (DISTR-507) (#1857) (by @Lalit3716-atlan in [cb7dd47](https://github.com/atlanhq/application-sdk/commit/cb7dd47))
+- enrich stdlib-bridge logs with app_name & context (BLDX-1297) (#1853) (by @saig214 in [1fe5629](https://github.com/atlanhq/application-sdk/commit/1fe5629))
+
+
 ## v3.13.1 (May 22, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.0...v3.13.1
