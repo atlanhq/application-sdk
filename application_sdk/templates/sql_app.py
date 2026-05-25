@@ -72,7 +72,10 @@ from temporalio import workflow as _temporal_workflow
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
-from application_sdk.common.sql_filters import normalize_filters
+from application_sdk.common.sql_filters import (
+    normalize_filters,
+    safe_substitute_placeholders,
+)
 from application_sdk.constants import (
     APPLICATION_NAME,
     TEMPORARY_PATH,
@@ -951,11 +954,20 @@ class SqlApp(App):
                     "{exclude_table_regex}", input.temp_table_regex
                 )
 
-        sql = sql.replace("{normalized_exclude_regex}", exclude_regex)
-        sql = sql.replace("{normalized_include_regex}", include_regex)
-        sql = sql.replace("{temp_table_regex_sql}", temp_table_sql)
-
-        return sql
+        # Single-pass substitution via safe_substitute_placeholders prevents
+        # cascading: three chained str.replace() calls processed the mutating
+        # string, so a replacement value containing another placeholder's text
+        # would be re-substituted by the next call.  safe_substitute_placeholders
+        # scans the original positions exactly once — replacement values are
+        # never re-scanned (APP-2291).
+        return safe_substitute_placeholders(
+            sql,
+            {
+                "{normalized_exclude_regex}": exclude_regex,
+                "{normalized_include_regex}": include_regex,
+                "{temp_table_regex_sql}": temp_table_sql,
+            },
+        )
 
     def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """Resolve credential ref from extraction input.
