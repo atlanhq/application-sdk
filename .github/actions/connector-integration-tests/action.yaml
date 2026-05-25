@@ -52,6 +52,17 @@ description: |
   no app server — this action handles those). The connector ships its own
   native-deps action; this action handles all the connector-agnostic setup.
 
+outputs:
+  summary:
+    description: |
+      One-line pytest summary parsed from the test-output's final
+      `=== ... ===` line (e.g. "248 passed, 8 skipped in 159.91s").
+      Caller workflows can surface this in PR comments.
+    value: ${{ steps.tests.outputs.summary }}
+  exit_code:
+    description: pytest exit code from the test run.
+    value: ${{ steps.tests.outputs.exit_code }}
+
 inputs:
   app-name:
     required: true
@@ -158,6 +169,9 @@ runs:
           2>&1 | tee results/test-output.txt
         TEST_EXIT_CODE=${PIPESTATUS[0]}
         set -e
+        # Extract the pytest summary line for caller PR comments.
+        SUMMARY=$(grep -E "^=+ .* =+$" results/test-output.txt | tail -1 | sed -E 's/^=+ *//; s/ *=+$//')
+        echo "summary=${SUMMARY:-no summary parsed}" >> "$GITHUB_OUTPUT"
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit "$TEST_EXIT_CODE"
 

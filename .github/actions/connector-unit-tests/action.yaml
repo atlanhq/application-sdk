@@ -16,6 +16,14 @@ description: |
   Does NOT upload coverage to S3 — that wiring is per-app and stays in the
   caller's workflow if desired.
 
+outputs:
+  summary:
+    description: |
+      One-line pytest summary parsed from the test-output's final
+      `=== ... ===` line (e.g. "227 passed, 15 warnings in 4.01s").
+      Caller workflows can surface this in PR comments.
+    value: ${{ steps.tests.outputs.summary }}
+
 inputs:
   github-token:
     required: true
@@ -41,6 +49,7 @@ runs:
         python-version: ${{ inputs.python-version }}
 
     - name: Run unit tests with coverage
+      id: tests
       shell: bash
       # xml/html subcommands ALSO honor pyproject.toml's
       # [tool.coverage.report].fail_under. Pin them to --fail-under=0 so
@@ -48,9 +57,18 @@ runs:
       # threshold gate is the final `coverage report` step — its CLI flag
       # overrides pyproject.toml on that step.
       run: |
-        uv run coverage run -m pytest tests/unit -v
-        uv run coverage xml --fail-under=0
-        uv run coverage html --fail-under=0
+        set +e
+        uv run coverage run -m pytest tests/unit -v 2>&1 | tee /tmp/unit-test-output.txt
+        TEST_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        # Extract pytest summary line for caller PR comments.
+        SUMMARY=$(grep -E "^=+ .* =+$" /tmp/unit-test-output.txt | tail -1 | sed -E 's/^=+ *//; s/ *=+$//')
+        echo "summary=${SUMMARY:-no summary parsed}" >> "$GITHUB_OUTPUT"
+        # Always emit coverage artifacts, even if pytest failed.
+        uv run coverage xml --fail-under=0 || true
+        uv run coverage html --fail-under=0 || true
+        # Propagate pytest failure first; otherwise check coverage threshold.
+        if [ $TEST_EXIT_CODE -ne 0 ]; then exit $TEST_EXIT_CODE; fi
         uv run coverage report --fail-under=${{ inputs.fail-under }}
 
     - name: Comment coverage on PR
