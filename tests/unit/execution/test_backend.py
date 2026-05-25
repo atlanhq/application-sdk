@@ -542,18 +542,22 @@ class TestPreferV4Target:
         assert target == "[2001:db8::abcd]:443"
         assert sni == "temporal.example.com"
 
-    def test_noop_when_only_v4_returned(self) -> None:
-        # No ambiguity for the Rust resolver to get wrong — keep the
-        # hostname so downstream callers / TLS SNI behave exactly as
-        # they did before this patch was introduced.
+    def test_swaps_when_only_v4_returned(self) -> None:
+        # Even when Python's AI_ADDRCONFIG-filtered result has no AAAA
+        # (e.g. inside a Docker bridge netns with no v6 stack), the
+        # Rust connector — which doesn't use AI_ADDRCONFIG — can still
+        # get AAAA back from DNS and try it, failing with
+        # EADDRNOTAVAIL. So we always substitute the literal v4 IP
+        # when one is available; that's the only way to keep the Rust
+        # client off v6 in that case.
         with mock.patch.object(
             backend_module.socket,
             "getaddrinfo",
             return_value=_fake_addrinfo(_socket.AF_INET),
         ):
             target, sni = backend_module._prefer_v4_target("temporal.example.com:443")
-        assert target == "temporal.example.com:443"
-        assert sni is None
+        assert target == "203.0.113.10:443"
+        assert sni == "temporal.example.com"
 
     def test_noop_on_literal_ipv4(self) -> None:
         target, sni = backend_module._prefer_v4_target("203.0.113.10:443")
@@ -654,7 +658,13 @@ class TestCreateTemporalClientPrefersV4:
         assert kwargs["tls"].domain == "temporal.example.com"
 
     @pytest.mark.asyncio
-    async def test_does_not_swap_when_resolver_returns_only_v4(self) -> None:
+    async def test_swaps_even_when_resolver_returns_only_v4(self) -> None:
+        # Plaintext path: Python's AI_ADDRCONFIG-filtered result has
+        # only A, but the substitution still happens — the Rust
+        # connector doesn't apply AI_ADDRCONFIG and may still query
+        # DNS for AAAA on its own. Substituting a literal v4 IP from
+        # the start is the only thing that consistently prevents v6
+        # attempts on netns-with-no-v6 hosts.
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(
@@ -673,8 +683,8 @@ class TestCreateTemporalClientPrefersV4:
                 connect_max_attempts=1,
             )
         kwargs = connect.await_args.kwargs
-        # Hostname preserved end-to-end on v4-only resolution.
-        assert kwargs["target_host"] == "temporal.example.com:443"
+        assert kwargs["target_host"] == "203.0.113.10:443"
+        # Plaintext — no TLS to upgrade for SNI; tls stays False.
         assert kwargs["tls"] is False
 
     @pytest.mark.asyncio

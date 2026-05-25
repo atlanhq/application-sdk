@@ -315,13 +315,13 @@ def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
     fell back to v4, which is why the same hosts worked on v2 and
     break on v3.
 
-    Pre-resolving in Python with ``AI_ADDRCONFIG`` mirrors what glibc
-    does for v4-fallback-friendly clients: it returns only the address
-    families the host actually has configured. We then sort A first so
-    we always pick v4 when both are available, and fall back to v6 only
-    when v4 isn't returned. On a v4-only host we return the hostname
-    unchanged (no benefit to swapping) so existing tests and callers
-    aren't perturbed.
+    Pre-resolving in Python with ``AI_ADDRCONFIG`` returns only the
+    address families the host actually has configured. We then always
+    pick a v4 IP when one is in the result and substitute it for the
+    hostname, falling back to v6 only when no v4 is returned. The key
+    invariant: as long as ``getaddrinfo`` returns at least one v4
+    result, we hand the Rust bridge a literal v4 IP — which guarantees
+    it can't re-resolve and pick a v6 address on its own.
 
     No-op cases (return ``(target_host, None)`` unchanged):
 
@@ -330,8 +330,7 @@ def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
     * Port is missing or non-numeric (malformed input; let the caller
       fail with a real connect error rather than a parse error here).
     * ``getaddrinfo`` raises (DNS down, unknown host, etc).
-    * Only one address family is returned and it's IPv4 — no
-      ambiguity for the Rust resolver to get wrong.
+    * The resolver returns zero usable address-family entries.
     """
     host, _, port = target_host.rpartition(":")
     if not host or not port.isdigit():
@@ -360,25 +359,33 @@ def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
     if not results:
         return target_host, None
 
-    has_v6 = any(r[0] == socket.AF_INET6 for r in results)
-    if not has_v6:
-        # v4-only host — Rust bridge will resolve the same single family
-        # and there's no v6-vs-v4 ambiguity to disambiguate. Leave the
-        # hostname alone so callers and tests that don't expect IP
-        # substitution keep working.
-        return target_host, None
+    # Prefer v4 whenever a v4 address is in the resolver result.
+    #
+    # Earlier versions of this helper only swapped when the result
+    # contained BOTH A and AAAA — the assumption being that on a
+    # v4-only host (where AI_ADDRCONFIG filters out AAAA), the Rust
+    # bridge would also see only A and there's nothing to fix. That
+    # assumption was wrong in production: the Rust connector does NOT
+    # use AI_ADDRCONFIG, so it queries DNS directly and still gets
+    # AAAA even when Python's filtered result drops it. On a Docker
+    # bridge netns with no v6 stack, Python returns "A only", Rust
+    # returns "A + AAAA from DNS", tries the AAAA, and fails with
+    # EADDRNOTAVAIL. The only way to keep the Rust client off v6 in
+    # that case is to feed it a literal v4 IP from the start.
+    v4_results = [r for r in results if r[0] == socket.AF_INET]
+    if v4_results:
+        ip = v4_results[0][4][0]
+        return f"{ip}:{port}", host
 
-    # Sort A before AAAA, then pick the first. This makes us prefer v4
-    # whenever the OS returned both, which is the safe choice on any
-    # host where v6 might be half-configured.
-    results.sort(key=lambda r: 0 if r[0] == socket.AF_INET else 1)
-    family, _, _, _, sockaddr = results[0]
-    ip = sockaddr[0]
-    if family == socket.AF_INET6:
-        resolved = f"[{ip}]:{port}"
-    else:
-        resolved = f"{ip}:{port}"
-    return resolved, host
+    # No v4 available — fall back to v6. This is the legitimate
+    # v6-only host case (e.g. some k8s clusters); the Rust client
+    # would have used v6 anyway and there's no v4 to prefer.
+    v6_results = [r for r in results if r[0] == socket.AF_INET6]
+    if v6_results:
+        ip = v6_results[0][4][0]
+        return f"[{ip}]:{port}", host
+
+    return target_host, None
 
 
 def _apply_sni_domain(tls: TLSConfig | bool, sni: str) -> TLSConfig | bool:
