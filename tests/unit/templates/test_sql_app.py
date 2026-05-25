@@ -1423,8 +1423,6 @@ class TestPrepareSql:
         assert "^db{2}" in final  # quantifier intact even after connector's own sub
 
         # 4. Demonstrate WHY .format() must be avoided — it raises on {2}.
-        import pytest
-
         with pytest.raises((IndexError, KeyError)):
             prepared.format(schema_list="'s1', 's2'")
 
