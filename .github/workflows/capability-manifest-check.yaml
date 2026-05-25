@@ -32,7 +32,7 @@ name: Capability Manifest Check
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   merge_group:
 
 # Cancel in-flight runs when the PR receives a new push, so we don't
