@@ -70,6 +70,15 @@ inputs:
       The connector app name. Used as ATLAN_APPLICATION_NAME for the
       running app server. Must match the connector's pyproject.toml
       `tool.poe.tasks.start-app` ATLAN_APPLICATION_NAME (e.g., athena, postgres).
+  test-paths:
+    required: false
+    description: |
+      Space-separated pytest target paths. Default is `tests/integration/`
+      (run integration scenarios only). To run unit + integration in a
+      single pytest invocation (xdist parallelism across both layers),
+      pass `tests/unit tests/integration`. Coverage flags can be added
+      via `pytest-args`; pytest-cov is installed transiently.
+    default: "tests/integration/"
   python-version:
     required: false
     description: Python version to use.
@@ -163,7 +172,10 @@ runs:
       run: |
         mkdir -p results
         set +e
-        uv run --with pytest-xdist pytest tests/integration/ -v \
+        # pytest-cov added transiently so callers can opt in to coverage
+        # via pytest-args (e.g., `--cov=app --cov-report=xml ...`). No
+        # effect when coverage flags aren't passed.
+        uv run --with pytest-xdist --with pytest-cov pytest ${{ inputs.test-paths }} -v \
           ${{ inputs.pytest-args }} \
           --junit-xml=results/test-results.xml \
           2>&1 | tee results/test-output.txt
