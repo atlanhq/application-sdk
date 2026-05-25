@@ -294,6 +294,41 @@ class TestAppConfigFromArgsAndEnv:
         config = AppConfig.from_args_and_env(args)
         assert config.log_level == "WARNING"
 
+    def test_v2_temporal_tls_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Customer chart predating the v3 rename still sets the v2 name —
+        # the SDK should pick it up so the deployment doesn't have to be
+        # hand-edited on SDK upgrade.
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.delenv("ATLAN_TEMPORAL_TLS_ENABLED", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_TLS_ENABLED", "true")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.tls_enabled is True
+
+    def test_v3_temporal_tls_enabled_takes_precedence_over_v2(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Explicit v3 setting wins even when a stale v2 value is left in the
+        # environment — crucially including the v3=false case, so a customer
+        # migrating TLS-on → TLS-off can flip without first scrubbing the v2
+        # var from their chart.
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.setenv("ATLAN_TEMPORAL_TLS_ENABLED", "false")
+        monkeypatch.setenv("ATLAN_WORKFLOW_TLS_ENABLED", "true")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.tls_enabled is False
+
+    def test_temporal_tls_defaults_to_false_when_neither_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.delenv("ATLAN_TEMPORAL_TLS_ENABLED", raising=False)
+        monkeypatch.delenv("ATLAN_WORKFLOW_TLS_ENABLED", raising=False)
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.tls_enabled is False
+
     def test_task_queue_derived_from_app_module(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
