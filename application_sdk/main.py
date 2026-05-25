@@ -275,7 +275,17 @@ class AppConfig:
             else _env_int("ATLAN_HEALTH_PORT", 8081),
             service_name=service_name,
             # TLS
-            tls_enabled=_env_bool("ATLAN_TEMPORAL_TLS_ENABLED"),
+            # v2 compat: ATLAN_WORKFLOW_TLS_ENABLED is the legacy name; charts
+            # predating the v3 rename still set it. Fall back to the v2 name
+            # only when ATLAN_TEMPORAL_TLS_ENABLED is absent from the
+            # environment — an explicit ATLAN_TEMPORAL_TLS_ENABLED=false must
+            # still disable TLS even if a stale v2 value is left in place, so
+            # use a presence check rather than truthiness for the precedence.
+            tls_enabled=(
+                _env_bool("ATLAN_TEMPORAL_TLS_ENABLED")
+                if "ATLAN_TEMPORAL_TLS_ENABLED" in os.environ
+                else _env_bool("ATLAN_WORKFLOW_TLS_ENABLED")
+            ),
             tls_server_root_ca_cert_path=_env("ATLAN_TEMPORAL_TLS_CA_CERT_PATH"),
             tls_client_cert_path=_env("ATLAN_TEMPORAL_TLS_CLIENT_CERT_PATH"),
             tls_client_private_key_path=_env("ATLAN_TEMPORAL_TLS_CLIENT_KEY_PATH"),
