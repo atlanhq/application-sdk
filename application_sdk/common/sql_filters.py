@@ -18,6 +18,33 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
+def safe_substitute_placeholders(template: str, mapping: dict[str, str]) -> str:
+    """Single-pass placeholder substitution — replacement values are never re-scanned.
+
+    Replaces every key in *mapping* that appears in *template* using a single
+    ``re.sub`` pass.  Contrast with chained ``str.replace()`` calls, where each
+    call operates on the *mutated* string: a replacement value that happens to
+    contain the literal text of a later placeholder would be re-substituted,
+    silently corrupting the output.  ``re.sub`` with alternation scans the
+    original string positions exactly once and never re-interprets replacement
+    values (including ``\\1``/``\\g<0>`` backref sequences).
+
+    Args:
+        template: The SQL (or any string) to substitute into.
+        mapping: ``{placeholder: replacement}`` pairs.  Keys are treated as
+                 literals (``re.escape``d) so ``{`` / ``}`` in placeholder
+                 names are not special.
+
+    Returns:
+        The template with every matching key replaced by its value, in a
+        single left-to-right scan.
+    """
+    if not mapping:
+        return template
+    pattern = re.compile("|".join(re.escape(k) for k in mapping))
+    return pattern.sub(lambda m: mapping[m.group()], template)
+
+
 # ---------------------------------------------------------------------------
 # SQL injection deny-list for filter values (BLDX-518).
 #
