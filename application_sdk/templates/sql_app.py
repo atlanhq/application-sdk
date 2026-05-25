@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 from collections.abc import Callable
 from decimal import Decimal
@@ -951,9 +952,19 @@ class SqlApp(App):
                     "{exclude_table_regex}", input.temp_table_regex
                 )
 
-        sql = sql.replace("{normalized_exclude_regex}", exclude_regex)
-        sql = sql.replace("{normalized_include_regex}", include_regex)
-        sql = sql.replace("{temp_table_regex_sql}", temp_table_sql)
+        # Single-pass substitution via re.sub prevents cascading: three chained
+        # str.replace() calls process the *mutating* string, so a replacement
+        # value that happens to contain another placeholder string would be
+        # re-substituted by the next call.  re.sub with alternation scans the
+        # ORIGINAL positions exactly once — replacement values are never
+        # re-scanned (APP-2291).
+        _placeholder_map = {
+            "{normalized_exclude_regex}": exclude_regex,
+            "{normalized_include_regex}": include_regex,
+            "{temp_table_regex_sql}": temp_table_sql,
+        }
+        _pattern = re.compile("|".join(re.escape(k) for k in _placeholder_map))
+        sql = _pattern.sub(lambda m: _placeholder_map[m.group()], sql)
 
         return sql
 

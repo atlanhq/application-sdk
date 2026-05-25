@@ -1328,6 +1328,106 @@ class TestPrepareSql:
         result = app._prepare_sql(sql, input_)
         assert "{normalized_include_regex}" not in result
 
+    # ── Bug: cascading replacement (APP-2291) ────────────────────────────
+
+    def test_no_cascade_when_exclude_regex_contains_include_placeholder(self, app):
+        """Bug: chained str.replace() cascades — exclude value containing the
+        literal string '{normalized_include_regex}' gets a second replacement.
+
+        Scenario: the first str.replace() embeds '{normalized_include_regex}'
+        inside the exclude value; the second str.replace() then replaces THAT
+        occurrence too, silently rewriting the exclude pattern.
+
+        Expected: the exclude value is substituted verbatim; the embedded
+        placeholder text is treated as literal characters, not as a second
+        substitution target.
+        """
+        # exclude filter whose normalized form contains the OTHER placeholder
+        # string literally — only possible if a user passes it as a raw string
+        # (dict path strips ^$ so the literal text is preserved).
+        exclude_raw = "{normalized_include_regex}"  # a raw-string filter
+        sql = (
+            "WHERE schema NOT REGEXP '{normalized_exclude_regex}'"
+            " AND schema REGEXP '{normalized_include_regex}'"
+        )
+        input_ = _make_task_input(
+            exclude_filter=exclude_raw,
+            include_filter="^prod$",
+        )
+        result = app._prepare_sql(sql, input_)
+
+        # The exclude clause must contain the LITERAL value, not the resolved
+        # include regex.  With cascading str.replace() the exclude clause would
+        # be rewritten to '^prod$', making exclude == include — wrong.
+        assert "NOT REGEXP '{normalized_include_regex}'" in result, (
+            "exclude clause was corrupted by cascading replacement: " f"got {result!r}"
+        )
+        assert "REGEXP '^prod$'" in result  # include clause correct
+
+    def test_no_cascade_when_include_regex_contains_exclude_placeholder(self, app):
+        """Mirror of the above: include value containing the exclude placeholder
+        must not trigger a second replace on the already-substituted text."""
+        include_raw = "{normalized_exclude_regex}"
+        sql = (
+            "WHERE schema NOT REGEXP '{normalized_exclude_regex}'"
+            " AND schema REGEXP '{normalized_include_regex}'"
+        )
+        input_ = _make_task_input(
+            include_filter=include_raw,
+            exclude_filter="^temp$",
+        )
+        result = app._prepare_sql(sql, input_)
+
+        assert (
+            "REGEXP '{normalized_exclude_regex}'" in result
+        ), "include clause was corrupted by cascading replacement"
+        assert "NOT REGEXP '^temp$'" in result
+
+    # ── Bug: regex quantifiers survive into .format()-style templates (APP-2291) ─
+
+    def test_regex_quantifier_preserved_and_connector_uses_replace_not_format(
+        self, app
+    ):
+        """Regex quantifiers in substituted values are preserved in the SQL as-is
+        (correct: the DB engine needs the raw {n,m} syntax).  Connectors that
+        have their own placeholder substitution after _prepare_sql must use
+        str.replace() rather than str.format() — .format() interprets {n,m} as
+        positional argument references and raises IndexError (APP-2291).
+
+        This test pins both halves of that contract:
+          1. _prepare_sql preserves {n,m} verbatim — correct SQL behaviour.
+          2. Using .replace() for the connector's own {schema_list} works safely.
+        """
+        include_with_quantifier = (
+            "^db{2}\\.schema$"  # valid SQL-engine regex quantifier
+        )
+
+        sql = (
+            "WHERE s.name IN ({schema_list})"
+            " AND schema REGEXP '{normalized_include_regex}'"
+        )
+        input_ = _make_task_input(include_filter=include_with_quantifier)
+        prepared = app._prepare_sql(sql, input_)
+
+        # 1. The quantifier must survive verbatim so the DB engine sees it.
+        assert (
+            "^db{2}" in prepared
+        ), "_prepare_sql must not alter regex quantifiers in substituted values"
+
+        # 2. {schema_list} is untouched — connector can substitute it.
+        assert "{schema_list}" in prepared
+
+        # 3. Correct connector pattern: .replace(), not .format().
+        final = prepared.replace("{schema_list}", "'s1', 's2'")
+        assert "'s1', 's2'" in final
+        assert "^db{2}" in final  # quantifier intact even after connector's own sub
+
+        # 4. Demonstrate WHY .format() must be avoided — it raises on {2}.
+        import pytest
+
+        with pytest.raises((IndexError, KeyError)):
+            prepared.format(schema_list="'s1', 's2'")
+
 
 # ---------------------------------------------------------------------------
 # Class hierarchy
