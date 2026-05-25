@@ -46,6 +46,14 @@ better, worse, or the same?"
 - Error messages actionable? (include entity type, GUID, what went wrong)
 - Migration path clear? (deprecation warnings before removal)
 - Import depth logical? (`from application_sdk.app import App` not 5 levels deep)
+- **Docs sync?** For each `application_sdk/<area>/` prefix with
+  substantive changes in the diff, check whether the mapped
+  `docs/concepts/*.md` (per `references/dx-rules.md` §5
+  "Conceptual Doc Sync") was also touched. If not, raise a
+  `[DX] docs-drift` finding scoped PATCH unless one of the escape
+  hatches in §5 applies (internal-only change, `docs-not-needed`
+  label, deprecated module, `chore:`/`test:`/`ci:`/`build:`
+  commit scope).
 
 ### [QUAL] findings — focus on:
 - Imports inside functions (should be top-level unless lazy with justification)

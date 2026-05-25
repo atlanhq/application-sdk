@@ -300,6 +300,77 @@ Flag:
 - Missing `Raises` section when the method raises documented exceptions
 - Missing `Example` on core APIs that developers subclass/call directly
 
+### Conceptual Doc Sync (Important)
+
+Connector developers read `docs/concepts/*.md` to learn how the SDK
+fits together. When SDK source code changes, the matching conceptual
+doc has to move with it — otherwise the docs become a lie that
+silently misleads every new connector author. The mapping below is
+the canonical source (`docs/standards/documentation.md`); update
+both in lockstep.
+
+| When the PR touches... | The matching doc must be reviewed |
+|---|---|
+| `application_sdk/app/**` | `docs/concepts/apps.md` |
+| `application_sdk/execution/**` | `docs/concepts/apps.md` |
+| `application_sdk/infrastructure/**` | `docs/concepts/apps.md` (infrastructure abstraction section) |
+| `application_sdk/storage/**` | `docs/concepts/apps.md` (built-in storage tasks section) |
+| `application_sdk/templates/**` | `docs/concepts/tasks.md` |
+| `application_sdk/handler/**` | `docs/concepts/handlers.md` |
+| `application_sdk/credentials/**` | `docs/concepts/handlers.md` (credential resolution section) |
+| `application_sdk/server/**` | `docs/concepts/server.md` |
+| `application_sdk/clients/**` | `docs/concepts/clients.md` |
+| `application_sdk/contracts/**` | `docs/concepts/entry-points.md` (contract types section) |
+| `application_sdk/observability/**` | `docs/concepts/monitoring.md` |
+| `application_sdk/errors/**` | `docs/concepts/common.md` (Error Handling) AND `docs/standards/exceptions.md` |
+| `application_sdk/common/**` or `application_sdk/constants.py` | `docs/concepts/common.md` |
+| `application_sdk/transformers/**` | `docs/concepts/common.md` |
+
+**Detection heuristic** (run per PR):
+1. From the diff, collect the set of `application_sdk/<area>/` prefixes
+   that have non-test, non-`__init__.py` additions or substantive changes
+   (renames, signature changes, new public symbols, removed public
+   symbols, behavioural changes — NOT pure formatting, NOT type-only
+   edits, NOT internal helper renames invisible to consumers).
+2. For each prefix, look up the mapped doc(s) in the table.
+3. Check the diff for any touch on any mapped doc. If at least one is
+   touched → satisfied for that prefix (the agent should still skim
+   to confirm the touch is substantive, not just a typo fix).
+4. If a prefix has substantive source changes and zero touches on any
+   of its mapped docs → flag `[DX] docs-drift` for that prefix.
+
+**Escape hatches — do NOT flag when:**
+- The source change is provably internal (private helper rename, log
+  string tweak, inline comment edit, type-annotation-only diff).
+- The PR description explicitly invokes a docs-not-needed rationale
+  AND that rationale matches the code: e.g. "this is a bugfix that
+  preserves documented behaviour, no doc surface change."
+- The PR has the `docs-not-needed` label (reviewer-applied escape
+  hatch — record it in the finding's `by_design_check` field).
+- The change is in a deprecated module already documented as
+  going away — patching it does not need fresh prose.
+- The PR is `chore:`/`test:`/`ci:`/`build:` per Conventional Commits
+  (those scopes are doc-exempt by §7 of this file).
+
+**Finding shape:**
+
+```
+[DX] docs-drift: application_sdk/handler/ changed without touch on docs/concepts/handlers.md
+File: application_sdk/handler/base.py (or representative file)
+Why it matters: connector authors learn the handler API from
+  docs/concepts/handlers.md. If the surface changed but the doc
+  didn't, the next author will write to the old contract and waste
+  half a day debugging.
+Path forward: PATCH — update docs/concepts/handlers.md to reflect
+  <specific changes>. Reviewer can downgrade if the change is purely
+  internal and confirms in a comment.
+Severity: Important.
+```
+
+**Severity:** Important. Doc drift is corrosive but not blocking — the
+code works; only future-readers pay. Reviewer downgrades to LOW when
+the PR description plausibly argues "no consumer-visible change."
+
 ---
 
 ## 6. Backwards Compatibility
