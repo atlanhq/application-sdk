@@ -32,7 +32,10 @@ import warnings
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
-from application_sdk.common.sql_filters import normalize_filters
+from application_sdk.common.sql_filters import (
+    normalize_filters,
+    safe_substitute_placeholders,
+)
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
@@ -195,8 +198,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         """Substitute filter placeholders in a SQL template.
 
         Replaces ``{normalized_exclude_regex}``, ``{normalized_include_regex}``,
-        and ``{temp_table_regex_sql}`` with values derived from *input*.
-        Uses str.replace() to avoid conflicts with any other curly braces.
+        and ``{temp_table_regex_sql}`` with values derived from *input* using a
+        single-pass substitution (``safe_substitute_placeholders``) so that
+        replacement values are never re-scanned for further matches — eliminating
+        the cascading-replace hazard present in chained ``str.replace()`` calls.
 
         Warning:
             SQL templates that use these placeholders MUST wrap each substitution
@@ -204,6 +209,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             Single quotes in filter values are blocked by the SQL injection guard
             in ``_validate_no_sql_injection``. Templates that omit the surrounding
             quotes are not protected.
+
+            Connectors that perform additional placeholder substitution on the
+            returned SQL (e.g. ``{schema_list}``) must use ``str.replace()``
+            rather than ``str.format()`` — ``str.format()`` interprets regex
+            quantifiers such as ``{2}`` embedded in the substituted values as
+            positional argument references and raises ``IndexError`` (APP-2291).
         """
         # Filters can be dict (structured from AE) or str (raw regex / JSON string).
         # Dict filters are normalized via sql_filters; strings are used directly.
@@ -237,10 +248,13 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                     "{exclude_table_regex}", input.temp_table_regex
                 )
 
-        return (
-            sql.replace("{normalized_exclude_regex}", exclude_regex)
-            .replace("{normalized_include_regex}", include_regex)
-            .replace("{temp_table_regex_sql}", temp_table_sql)
+        return safe_substitute_placeholders(
+            sql,
+            {
+                "{normalized_exclude_regex}": exclude_regex,
+                "{normalized_include_regex}": include_regex,
+                "{temp_table_regex_sql}": temp_table_sql,
+            },
         )
 
     # ------------------------------------------------------------------
