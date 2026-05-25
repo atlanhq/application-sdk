@@ -73,12 +73,14 @@ inputs:
   test-paths:
     required: false
     description: |
-      Space-separated pytest target paths. Default is `tests/integration/`
-      (run integration scenarios only). To run unit + integration in a
-      single pytest invocation (xdist parallelism across both layers),
-      pass `tests/unit tests/integration`. Coverage flags can be added
-      via `pytest-args`; pytest-cov is installed transiently.
-    default: "tests/integration/"
+      Optional space-separated pytest target paths. Default is empty,
+      which means pytest auto-discovers tests from the rootdir (honors
+      `[tool.pytest.ini_options].testpaths` in `pyproject.toml` if set).
+      Override only when you need to scope to a subset of test files
+      (e.g., `tests/integration/` for integration-only runs).
+      Coverage flags can be added via `pytest-args`; pytest-cov is
+      installed transiently.
+    default: ""
   python-version:
     required: false
     description: Python version to use.
