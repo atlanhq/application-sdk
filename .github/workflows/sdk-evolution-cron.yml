@@ -22,10 +22,8 @@
 name: SDK Evolution (Nightly)
 
 on:
-  # Nightly schedule disabled — re-enable once the run produces a visible
-  # summary (Linear ticket link / GHA job summary) instead of an opaque log.
-  # schedule:
-  #   - cron: '0 2 * * *'     # 2am UTC daily
+  schedule:
+    - cron: '0 2 * * *'     # 2am UTC daily
   workflow_dispatch:
     inputs:
       scan_mode:
@@ -40,6 +38,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   trigger:
@@ -79,6 +78,7 @@ jobs:
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
       - name: Dispatch SDK Evolution to mothership Rover Direct API
+        id: dispatch
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
@@ -158,6 +158,15 @@ jobs:
 
           # SSE streaming dispatch (sync mode 504s behind mothership's nginx;
           # see test-sdk-review.yml for the full rationale).
+          #
+          # Observability: tee the raw stream to a trace file so the
+          # post-stream summary step and the always-uploaded artifact can
+          # reconstruct what the agent did. The previous "successful but
+          # opaque" run (cost $16.71, zero visible output) was the reason
+          # the schedule had been disabled.
+          TRACE_FILE=/tmp/sdk-evolution-sse-trace.log
+          : > "$TRACE_FILE"
+
           EVENT=""
           COMPLETED=0
           ERRORED=0
@@ -166,6 +175,10 @@ jobs:
           FINAL_COST=""
           FINAL_ERR_CODE=""
           FINAL_ERR_MSG=""
+          SESSION_FROM_STREAM=""
+          SANDBOX_FROM_STREAM=""
+          ACTION_COUNT=0
+          STAGES_COMPLETE=""
 
           while IFS= read -r line; do
             case "$line" in
@@ -177,16 +190,28 @@ jobs:
                 DATA="${line#data: }"
                 case "$EVENT" in
                   started)
-                    SESS=$(printf '%s' "$DATA" | jq -r '.session_id // empty' 2>/dev/null)
-                    SBX=$(printf '%s' "$DATA" | jq -r '.sandbox_id // empty' 2>/dev/null)
-                    echo "[started]   session=${SESS} sandbox=${SBX}"
+                    SESSION_FROM_STREAM=$(printf '%s' "$DATA" | jq -r '.session_id // empty' 2>/dev/null)
+                    SANDBOX_FROM_STREAM=$(printf '%s' "$DATA" | jq -r '.sandbox_id // empty' 2>/dev/null)
+                    echo "[started]   session=${SESSION_FROM_STREAM} sandbox=${SANDBOX_FROM_STREAM}"
                     ;;
                   action)
                     AN=$(printf '%s' "$DATA" | jq -r '.action_name // empty' 2>/dev/null)
                     [ -n "$AN" ] && echo "[action]    ${AN}"
+                    ACTION_COUNT=$((ACTION_COUNT + 1))
                     ;;
                   thought) : ;;
-                  response) echo "[response]  (agent posted a response)" ;;
+                  response)
+                    # ORCHESTRATION prints `[Stage N/9 complete] ...` lines
+                    # at every stage boundary; surface those (and only
+                    # those) so the GHA log shows real progress.
+                    TEXT=$(printf '%s' "$DATA" | jq -r '.text // .content // .message // empty' 2>/dev/null)
+                    [ -z "$TEXT" ] && TEXT="$DATA"
+                    STAGE_LINE=$(printf '%s' "$TEXT" | grep -oE '\[Stage [0-9]+/9 complete\].*' | head -1 || true)
+                    if [ -n "$STAGE_LINE" ]; then
+                      echo "[response]  ${STAGE_LINE}"
+                      STAGES_COMPLETE="${STAGES_COMPLETE}${STAGE_LINE}"$'\n'
+                    fi
+                    ;;
                   elicitation)
                     echo "[elicit]    sandbox requested user input — treating as error"
                     ERRORED=1
@@ -219,7 +244,26 @@ jobs:
             -X POST "${MOTHERSHIP_URL}/api/sandbox/execute" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${HARNESS_TOKEN}" \
-            -d "${PAYLOAD}" 2>&1)
+            -d "${PAYLOAD}" 2>&1 | tee "$TRACE_FILE")
+
+          # Persist signals for the post-stream summary step. Using
+          # GITHUB_OUTPUT keeps multi-line values out of env-injection
+          # paths and lets the next step read them with the standard
+          # `steps.dispatch.outputs.*` API.
+          {
+            echo "run_date=${RUN_DATE}"
+            echo "scan_mode=${SCAN_MODE}"
+            echo "final_status=${FINAL_STATUS}"
+            echo "final_cost=${FINAL_COST}"
+            echo "session_id=${SESSION_FROM_STREAM}"
+            echo "sandbox_id=${SANDBOX_FROM_STREAM}"
+            echo "action_count=${ACTION_COUNT}"
+            echo "errored=${ERRORED}"
+            echo "err_code=${FINAL_ERR_CODE}"
+            echo "err_msg=${FINAL_ERR_MSG}"
+            echo "trace_file=${TRACE_FILE}"
+            printf 'stages_complete<<STAGES_EOF\n%s\nSTAGES_EOF\n' "${STAGES_COMPLETE}"
+          } >> "$GITHUB_OUTPUT"
 
           if [ "$ERRORED" = "1" ]; then
             echo "::error::Sandbox error: code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
@@ -239,3 +283,116 @@ jobs:
           fi
 
           echo "SDK Evolution completed successfully (cost=${FINAL_COST})."
+
+      # Build a job summary readable from the GHA tab. Runs on success
+      # AND failure so the trace is observable either way — that was the
+      # whole reason this cron was disabled. `gh pr list` and the trace
+      # grep are best-effort; never fail the workflow on a missing
+      # signal — the dispatch step already decided the verdict above.
+      - name: Build job summary
+        if: always() && steps.dispatch.outputs.trace_file != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_DATE: ${{ steps.dispatch.outputs.run_date }}
+          SCAN_MODE: ${{ steps.dispatch.outputs.scan_mode }}
+          FINAL_STATUS: ${{ steps.dispatch.outputs.final_status }}
+          FINAL_COST: ${{ steps.dispatch.outputs.final_cost }}
+          SESSION_ID: ${{ steps.dispatch.outputs.session_id }}
+          SANDBOX_ID: ${{ steps.dispatch.outputs.sandbox_id }}
+          ACTION_COUNT: ${{ steps.dispatch.outputs.action_count }}
+          ERRORED: ${{ steps.dispatch.outputs.errored }}
+          ERR_CODE: ${{ steps.dispatch.outputs.err_code }}
+          ERR_MSG: ${{ steps.dispatch.outputs.err_msg }}
+          TRACE_FILE: ${{ steps.dispatch.outputs.trace_file }}
+          STAGES_COMPLETE: ${{ steps.dispatch.outputs.stages_complete }}
+        run: |
+          set -uo pipefail
+
+          # Linear ticket URLs are the most reliable artifact: the
+          # ORCHESTRATION posts them into both `action` and `response`
+          # SSE payloads, so grepping the trace catches them regardless
+          # of which event carried them. De-duplicate and cap at 25 so
+          # we don't bury the summary in a wall of links.
+          LINEAR_URLS=$(grep -oE 'linear\.app/atlan/issue/[A-Z]+-[0-9]+' "${TRACE_FILE}" 2>/dev/null \
+            | sort -u | head -25 || true)
+
+          # PRs created by this run: filter by branch prefix
+          # `auto/sdk-evolution/<RUN_DATE>/` (the orchestration's
+          # documented convention). gh pr list paginates up to --limit;
+          # 50 is plenty since a single run rarely produces more than
+          # ~10 PRs.
+          PRS_JSON=$(gh pr list \
+            --state all \
+            --limit 50 \
+            --json number,title,url,state,headRefName,createdAt \
+            2>/dev/null \
+            | jq --arg prefix "auto/sdk-evolution/${RUN_DATE}/" \
+                '[.[] | select(.headRefName | startswith($prefix))]' \
+            2>/dev/null || echo "[]")
+          PR_COUNT=$(printf '%s' "$PRS_JSON" | jq 'length' 2>/dev/null || echo "0")
+
+          # Build the summary. Use a heredoc so all the markdown lands
+          # in one append — the GHA step-summary file is just an append
+          # log.
+          {
+            echo "## SDK Evolution — ${RUN_DATE}"
+            echo ""
+            if [ "${ERRORED}" = "1" ]; then
+              echo "**Status:** ❌ failed (\`${ERR_CODE}\`)"
+              echo ""
+              echo "> ${ERR_MSG}"
+            elif [ "${FINAL_STATUS}" = "completed" ]; then
+              echo "**Status:** ✅ completed"
+            else
+              echo "**Status:** ⚠️ ${FINAL_STATUS:-unknown}"
+            fi
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Scan mode | \`${SCAN_MODE}\` |"
+            echo "| Cost (USD) | \`${FINAL_COST:-n/a}\` |"
+            echo "| Sandbox actions | \`${ACTION_COUNT}\` |"
+            echo "| Session ID | \`${SESSION_ID:-n/a}\` |"
+            echo "| Sandbox ID | \`${SANDBOX_ID:-n/a}\` |"
+            echo "| PRs created | \`${PR_COUNT}\` |"
+            echo ""
+
+            echo "### Stage completion"
+            if [ -n "${STAGES_COMPLETE}" ]; then
+              echo '```'
+              printf '%s\n' "${STAGES_COMPLETE}"
+              echo '```'
+            else
+              echo "_No \`[Stage N/9 complete]\` markers seen in the stream — the agent may have errored before printing one, or the response schema changed. Check the trace artifact._"
+            fi
+            echo ""
+
+            echo "### PRs created"
+            if [ "${PR_COUNT}" -gt 0 ]; then
+              printf '%s' "$PRS_JSON" \
+                | jq -r '.[] | "- [\(.state)] [#\(.number) \(.title)](\(.url))"'
+            else
+              echo "_No PRs with branch prefix \`auto/sdk-evolution/${RUN_DATE}/\` were found. Either the run killed all findings at the gates, or it died before Stage 6. The trace artifact has the full picture._"
+            fi
+            echo ""
+
+            echo "### Linear tickets touched"
+            if [ -n "${LINEAR_URLS}" ]; then
+              printf '%s\n' "${LINEAR_URLS}" | sed 's|^|- https://|'
+            else
+              echo "_No Linear ticket URLs found in the trace. If the run was supposed to create tickets, this points at a Stage 4 failure or a Linear proxy auth issue — open the trace artifact to confirm._"
+            fi
+            echo ""
+
+            echo "### Trace"
+            echo "The full SSE event stream is uploaded as the \`sdk-evolution-trace-${RUN_DATE}\` artifact below — that is the source of truth when this summary looks thin."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SSE trace as artifact
+        if: always() && steps.dispatch.outputs.trace_file != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sdk-evolution-trace-${{ steps.dispatch.outputs.run_date }}
+          path: ${{ steps.dispatch.outputs.trace_file }}
+          if-no-files-found: warn
+          retention-days: 30
