@@ -26,6 +26,32 @@ description: |
   pytest-xdist is installed transiently via `uv run --with pytest-xdist` so the
   caller does not need to declare it as a dependency.
 
+  ## Connectors with native dependencies
+
+  Some connectors require OS-level native libs (ODBC drivers for MSSQL/Oracle,
+  SAP JCo for SAP ERP, Kafka native clients, etc.). Install them as a
+  PRE-STEP in the caller's workflow BEFORE invoking this action — they
+  survive the action's internal re-checkout because they're installed at
+  the system level, not in the repo tree. `uv sync` (inside this action's
+  `setup-deps` call) will then find the headers/libraries when compiling
+  Python wrappers like `pyodbc`.
+
+  Example — MSSQL with ODBC 18 + FreeTDS:
+
+  ```yaml
+  steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/mssql-native-deps   # connector-local action
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.14.0
+      with:
+        app-name: mssql
+  ```
+
+  Where `./.github/actions/mssql-native-deps/action.yml` is a tiny ~15-line
+  composite action that does ONLY the apt-install steps (no Python, no Dapr,
+  no app server — this action handles those). The connector ships its own
+  native-deps action; this action handles all the connector-agnostic setup.
+
 inputs:
   app-name:
     required: true
