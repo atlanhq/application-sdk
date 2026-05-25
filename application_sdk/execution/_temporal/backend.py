@@ -288,7 +288,7 @@ def _build_tls_config(
     )
 
 
-def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
+async def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
     """Pre-resolve ``target_host`` and prefer an IPv4 address when AAAA is present.
 
     Returns ``(resolved_target, sni_hostname)``:
@@ -346,8 +346,17 @@ def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
         # Already a literal IP — no resolution to do, no SNI to preserve.
         return target_host, None
 
+    # Use ``loop.getaddrinfo`` instead of the blocking ``socket.getaddrinfo``
+    # so the resolver runs off the event loop's thread. ``create_temporal_client``
+    # is on a hot startup path that overlaps with health-probe handlers,
+    # lifespan startup hooks, and other ``create_temporal_client`` calls
+    # (worker + executor backend) — a slow DNS server blocking the loop here
+    # would stall readiness probes and any other request handlers waiting
+    # for their turn. ``loop.getaddrinfo`` delegates to a thread executor
+    # so the resolution is concurrent with the rest of startup.
+    loop = asyncio.get_running_loop()
     try:
-        results = socket.getaddrinfo(
+        results = await loop.getaddrinfo(
             host,
             int(port),
             family=socket.AF_UNSPEC,
@@ -503,7 +512,7 @@ async def create_temporal_client(
     # local only, or v6 enabled without a global route) this manifests
     # as ``Status { code: Unavailable, ... AddrNotAvailable ... }`` on
     # an AAAA record. See ``_prefer_v4_target`` for the full rationale.
-    resolved_host, sni_host = _prefer_v4_target(host)
+    resolved_host, sni_host = await _prefer_v4_target(host)
     if sni_host is not None:
         # We substituted an IP for the hostname — preserve TLS SNI so
         # the handshake still validates against the original DNS name's

@@ -517,17 +517,29 @@ def _fake_addrinfo(*families: int) -> list[tuple[int, int, int, str, tuple]]:
 
 
 class TestPreferV4Target:
-    def test_returns_v4_ip_when_both_families_present(self) -> None:
+    # The helper now uses ``loop.getaddrinfo`` (which delegates to a thread
+    # executor) rather than the blocking ``socket.getaddrinfo``, so the
+    # tests are async. ``mock.patch.object(backend_module.socket,
+    # "getaddrinfo", ...)`` still works because asyncio's
+    # ``loop.getaddrinfo`` resolves ``socket.getaddrinfo`` from the global
+    # ``socket`` module attribute at call time — the patch is on that same
+    # module attribute so the thread executor picks it up.
+
+    @pytest.mark.asyncio
+    async def test_returns_v4_ip_when_both_families_present(self) -> None:
         with mock.patch.object(
             backend_module.socket,
             "getaddrinfo",
             return_value=_fake_addrinfo(_socket.AF_INET6, _socket.AF_INET),
         ):
-            target, sni = backend_module._prefer_v4_target("temporal.example.com:443")
+            target, sni = await backend_module._prefer_v4_target(
+                "temporal.example.com:443"
+            )
         assert target == "203.0.113.10:443"
         assert sni == "temporal.example.com"
 
-    def test_returns_v6_bracketed_when_no_v4_available(self) -> None:
+    @pytest.mark.asyncio
+    async def test_returns_v6_bracketed_when_no_v4_available(self) -> None:
         # Hosts genuinely v6-only (some k8s clusters) — pass v6 through
         # so the connect can still succeed via the only family available.
         # NB: this is also the no-swap-no-SNI path being unreachable here
@@ -538,11 +550,14 @@ class TestPreferV4Target:
             "getaddrinfo",
             return_value=_fake_addrinfo(_socket.AF_INET6),
         ):
-            target, sni = backend_module._prefer_v4_target("temporal.example.com:443")
+            target, sni = await backend_module._prefer_v4_target(
+                "temporal.example.com:443"
+            )
         assert target == "[2001:db8::abcd]:443"
         assert sni == "temporal.example.com"
 
-    def test_swaps_when_only_v4_returned(self) -> None:
+    @pytest.mark.asyncio
+    async def test_swaps_when_only_v4_returned(self) -> None:
         # Even when Python's AI_ADDRCONFIG-filtered result has no AAAA
         # (e.g. inside a Docker bridge netns with no v6 stack), the
         # Rust connector — which doesn't use AI_ADDRCONFIG — can still
@@ -555,36 +570,42 @@ class TestPreferV4Target:
             "getaddrinfo",
             return_value=_fake_addrinfo(_socket.AF_INET),
         ):
-            target, sni = backend_module._prefer_v4_target("temporal.example.com:443")
+            target, sni = await backend_module._prefer_v4_target(
+                "temporal.example.com:443"
+            )
         assert target == "203.0.113.10:443"
         assert sni == "temporal.example.com"
 
-    def test_noop_on_literal_ipv4(self) -> None:
-        target, sni = backend_module._prefer_v4_target("203.0.113.10:443")
+    @pytest.mark.asyncio
+    async def test_noop_on_literal_ipv4(self) -> None:
+        target, sni = await backend_module._prefer_v4_target("203.0.113.10:443")
         assert target == "203.0.113.10:443"
         assert sni is None
 
-    def test_noop_on_literal_ipv6_bracketed(self) -> None:
-        target, sni = backend_module._prefer_v4_target("[::1]:7233")
+    @pytest.mark.asyncio
+    async def test_noop_on_literal_ipv6_bracketed(self) -> None:
+        target, sni = await backend_module._prefer_v4_target("[::1]:7233")
         assert target == "[::1]:7233"
         assert sni is None
 
-    def test_noop_on_gaierror(self) -> None:
+    @pytest.mark.asyncio
+    async def test_noop_on_gaierror(self) -> None:
         with mock.patch.object(
             backend_module.socket,
             "getaddrinfo",
             side_effect=_socket.gaierror("name or service not known"),
         ):
-            target, sni = backend_module._prefer_v4_target("nx.example.com:443")
+            target, sni = await backend_module._prefer_v4_target("nx.example.com:443")
         assert target == "nx.example.com:443"
         assert sni is None
 
-    def test_noop_on_malformed_target(self) -> None:
+    @pytest.mark.asyncio
+    async def test_noop_on_malformed_target(self) -> None:
         # No port, port is non-numeric, or empty host — caller's input
         # contract violation, let the real connect raise rather than
         # masking it with a parse error here.
         for bad in ("just-a-host", ":443", "host:notaport", ""):
-            target, sni = backend_module._prefer_v4_target(bad)
+            target, sni = await backend_module._prefer_v4_target(bad)
             assert target == bad
             assert sni is None
 
