@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import random
+import socket
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -286,6 +288,128 @@ def _build_tls_config(
     )
 
 
+def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
+    """Pre-resolve ``target_host`` and prefer an IPv4 address when AAAA is present.
+
+    Returns ``(resolved_target, sni_hostname)``:
+
+    * ``resolved_target`` — the literal ``<ip>:<port>`` to hand to the Rust
+      Temporal bridge (IPv6 results are wrapped in brackets).
+    * ``sni_hostname`` — the original DNS name when we substituted an IP,
+      else ``None``. Callers must propagate this into ``TLSConfig.domain``
+      so the TLS handshake still validates against the right cert.
+
+    Why this exists
+    ---------------
+
+    The Temporal Rust bridge resolves the target via Tokio's connector,
+    which does not iterate every address returned by the OS resolver:
+    on a host where DNS returns both A and AAAA, the bridge picks one
+    address (often AAAA first), and if that connect fails the whole
+    ``Client.connect`` raises. Two production incidents on customer
+    SDR VMs hit this — both had partial IPv6 enablement (only
+    link-local v6 configured, no global v6 route) so ``connect()`` to
+    a global IPv6 destination fast-fails with ``EADDRNOTAVAIL`` before
+    the bridge falls back to v4. The pure-Python Temporal client used
+    by the earlier SDK line iterated the full address list and silently
+    fell back to v4, which is why the same hosts worked on v2 and
+    break on v3.
+
+    Pre-resolving in Python with ``AI_ADDRCONFIG`` mirrors what glibc
+    does for v4-fallback-friendly clients: it returns only the address
+    families the host actually has configured. We then sort A first so
+    we always pick v4 when both are available, and fall back to v6 only
+    when v4 isn't returned. On a v4-only host we return the hostname
+    unchanged (no benefit to swapping) so existing tests and callers
+    aren't perturbed.
+
+    No-op cases (return ``(target_host, None)`` unchanged):
+
+    * ``target_host`` is already a literal IP (``1.2.3.4:7233`` or
+      ``[::1]:7233``).
+    * Port is missing or non-numeric (malformed input; let the caller
+      fail with a real connect error rather than a parse error here).
+    * ``getaddrinfo`` raises (DNS down, unknown host, etc).
+    * Only one address family is returned and it's IPv4 — no
+      ambiguity for the Rust resolver to get wrong.
+    """
+    host, _, port = target_host.rpartition(":")
+    if not host or not port.isdigit():
+        return target_host, None
+    # IPv6 literal targets come bracketed (``[::1]:7233``); strip for the
+    # ipaddress check, leave the original ``target_host`` to return.
+    host_stripped = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        ipaddress.ip_address(host_stripped)
+    except ValueError:
+        pass
+    else:
+        # Already a literal IP — no resolution to do, no SNI to preserve.
+        return target_host, None
+
+    try:
+        results = socket.getaddrinfo(
+            host,
+            int(port),
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_ADDRCONFIG,
+        )
+    except (socket.gaierror, ValueError):
+        return target_host, None
+    if not results:
+        return target_host, None
+
+    has_v6 = any(r[0] == socket.AF_INET6 for r in results)
+    if not has_v6:
+        # v4-only host — Rust bridge will resolve the same single family
+        # and there's no v6-vs-v4 ambiguity to disambiguate. Leave the
+        # hostname alone so callers and tests that don't expect IP
+        # substitution keep working.
+        return target_host, None
+
+    # Sort A before AAAA, then pick the first. This makes us prefer v4
+    # whenever the OS returned both, which is the safe choice on any
+    # host where v6 might be half-configured.
+    results.sort(key=lambda r: 0 if r[0] == socket.AF_INET else 1)
+    family, _, _, _, sockaddr = results[0]
+    ip = sockaddr[0]
+    if family == socket.AF_INET6:
+        resolved = f"[{ip}]:{port}"
+    else:
+        resolved = f"{ip}:{port}"
+    return resolved, host
+
+
+def _apply_sni_domain(tls: TLSConfig | bool, sni: str) -> TLSConfig | bool:
+    """Return a TLSConfig with ``domain`` set to ``sni`` for SNI validation.
+
+    Needed when we've substituted a literal IP for the original
+    hostname: without an explicit ``domain``, the Rust bridge defaults
+    SNI to the literal IP and the TLS handshake fails because the
+    server cert's SAN list doesn't include the IP. Preserves any other
+    fields already configured on the caller's TLSConfig and respects a
+    caller-supplied ``domain`` if one is already set.
+    """
+    from temporalio.service import TLSConfig  # noqa: PLC0415 — cold path
+
+    if tls is False:
+        return tls
+    if tls is True:
+        return TLSConfig(domain=sni)
+    if isinstance(tls, TLSConfig):
+        if tls.domain:
+            # Caller explicitly set SNI; respect that.
+            return tls
+        return TLSConfig(
+            server_root_ca_cert=tls.server_root_ca_cert,
+            client_cert=tls.client_cert,
+            client_private_key=tls.client_private_key,
+            domain=sni,
+        )
+    return tls
+
+
 async def create_temporal_client(
     host: str = "localhost:7233",
     namespace: str = "default",
@@ -365,8 +489,28 @@ async def create_temporal_client(
             "Connecting to Temporal (plaintext): host=%s namespace=%s", host, namespace
         )
 
+    # Pre-resolve the target hostname and prefer IPv4 when the OS
+    # resolver returns both A and AAAA. The Rust Temporal bridge picks
+    # one address from the resolver and fails the whole connect if that
+    # address is unreachable — on hosts with half-broken IPv6 (link-
+    # local only, or v6 enabled without a global route) this manifests
+    # as ``Status { code: Unavailable, ... AddrNotAvailable ... }`` on
+    # an AAAA record. See ``_prefer_v4_target`` for the full rationale.
+    resolved_host, sni_host = _prefer_v4_target(host)
+    if sni_host is not None:
+        # We substituted an IP for the hostname — preserve TLS SNI so
+        # the handshake still validates against the original DNS name's
+        # cert, not the literal IP.
+        tls_config = _apply_sni_domain(tls_config, sni_host)
+        logger.info(
+            "Pre-resolved Temporal target %s -> %s (SNI preserved as %s)",
+            host,
+            resolved_host,
+            sni_host,
+        )
+
     kwargs: dict[str, Any] = {
-        "target_host": host,
+        "target_host": resolved_host,
         "namespace": namespace,
         "tls": tls_config,
         "data_converter": data_converter
