@@ -152,6 +152,35 @@ class TestProvisionAndStartWorkflow:
         ):
             client._provision_credentials({"host": "db"})
 
+    def test_workflow_falls_back_to_inline_when_local_vault_gated_off(self):
+        """SDR testcontainer / non-LOCAL deployments gate /dev/local-vault behind 403.
+
+        The framework must not break those tests: provisioning returns None and
+        the workflow start receives credentials inline (as v3 pairs).
+        """
+        client = self._client()
+        responses = iter(
+            [
+                {"detail": "Dev-only endpoint", "_http_status": 403},
+                {"success": True, "data": {"workflow_id": "w"}},
+            ]
+        )
+        with patch.object(
+            client, "_post", side_effect=lambda *_a, **_kw: next(responses)
+        ) as post:
+            client.call_api(
+                "workflow",
+                {"credentials": {"host": "db", "username": "u"}, "metadata": {}},
+            )
+
+        assert post.call_count == 2
+        start_body = post.call_args_list[1].kwargs["data"]
+        assert "credential_guid" not in start_body
+        assert start_body["credentials"] == [
+            {"key": "host", "value": "db"},
+            {"key": "username", "value": "u"},
+        ]
+
     def test_workflow_accepts_v3_credentials_list(self):
         """Scenarios that hand-craft v3 pair lists still get flattened for vault."""
         client = self._client()

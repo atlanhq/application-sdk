@@ -260,9 +260,12 @@ class IntegrationTestClient:
 
         Production /start strips inline credentials and resolves them via a
         ``credential_guid`` provisioned out-of-band (by AE/Heracles). To match
-        that, we first POST the credentials to ``/dev/local-vault`` and then
-        send only the returned guid in the start payload. Scenarios that
-        already supply ``credential_guid`` are left untouched.
+        that locally, we POST credentials to ``/dev/local-vault`` and forward
+        only the returned guid. When local-vault is not exposed — e.g. SDR
+        testcontainer runs where the workflow resolves credentials via
+        ``agent_json`` — we fall back to sending inline credentials so those
+        scenarios stay unaffected. Scenarios that already supply
+        ``credential_guid`` skip provisioning entirely.
 
         Args:
             args: The workflow arguments (credentials, metadata, connection).
@@ -276,8 +279,11 @@ class IntegrationTestClient:
 
         if "credential_guid" not in data and data.get("credentials"):
             credential_guid = self._provision_credentials(data["credentials"])
-            data["credential_guid"] = credential_guid
-            del data["credentials"]
+            if credential_guid is not None:
+                data["credential_guid"] = credential_guid
+                del data["credentials"]
+            elif isinstance(data["credentials"], dict):
+                data["credentials"] = _to_v3_credentials(data["credentials"])
         elif "credentials" in data and isinstance(data["credentials"], dict):
             data["credentials"] = _to_v3_credentials(data["credentials"])
 
@@ -286,25 +292,41 @@ class IntegrationTestClient:
     def _provision_credentials(
         self,
         credentials: dict[str, Any] | list[dict[str, str]],
-    ) -> str:
+    ) -> str | None:
         """Provision credentials via the dev local-vault and return the guid.
 
         Mirrors the production AE/Heracles flow: sensitive fields land in the
         local secret store, non-sensitive ones in object storage, and the
         caller gets back a guid to pass to ``/start``.
 
+        When ``/dev/local-vault`` is gated off (HTTP 403 ``Dev-only endpoint``,
+        e.g. on SDR testcontainer or any non-LOCAL deployment), returns
+        ``None`` so the caller can fall back to inline credentials. Any other
+        failure raises.
+
         Args:
             credentials: Flat ``{key: value}`` dict or v3 ``[{key, value}]``
                 list. v3 lists are flattened back to a dict for the vault.
 
         Returns:
-            The ``credential_guid`` issued by the vault.
+            The ``credential_guid`` issued by the vault, or ``None`` if the
+            endpoint is gated off in this deployment.
 
         Raises:
-            RuntimeError: If the vault response does not include a guid.
+            RuntimeError: If local-vault is reachable but returns no guid.
         """
         flat = _from_v3_credentials(credentials)
         response = self._post("/dev/local-vault", data=flat)
+
+        if response.get("_http_status") == 403:
+            logger.info(
+                "local-vault gated off (%s); falling back to inline credentials. "
+                "If your workflow expects a credential_guid, set one explicitly "
+                "on the scenario.",
+                response.get("detail") or response.get("error"),
+            )
+            return None
+
         guid = (response.get("data") or {}).get("credential_guid") or response.get(
             "credential_guid"
         )
