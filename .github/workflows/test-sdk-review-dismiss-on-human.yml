@@ -116,3 +116,12 @@ jobs:
               -f message="$DISMISS_MESSAGE"
             echo "Dismissed atlan-ci review ${review_id} on PR #${PR_NUMBER}."
           done
+
+          # The `test-sdk-review-approved` label is owned by the mothership
+          # sandbox (see .mothership/pr-review/ORCHESTRATION.md) and travels
+          # with the approval. If we dismissed the approval, the label is
+          # stale until the next sandbox run — strip it here so the PR's
+          # label state matches its review state. `|| true` because the
+          # label may not be present (e.g. prior verdict was NEEDS_HUMAN).
+          gh pr edit "${PR_NUMBER}" --repo "${REPO}" --remove-label "test-sdk-review-approved" 2>/dev/null || true
+          echo "Removed test-sdk-review-approved label (if present) from PR #${PR_NUMBER}."

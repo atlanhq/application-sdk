@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.13.1 (May 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.0...v3.13.1
+
+### Bug Fixes
+
+- pre-warm SQL auth cache before parallel extract burst (BLDX-1295) (#1835) (by @Aryamanz29 in [1a13c4c](https://github.com/atlanhq/application-sdk/commit/1a13c4c))
+- replace git-cliff --bumped-version with native git log in release workflow (#1840) (by @cmgrote in [61b096d](https://github.com/atlanhq/application-sdk/commit/61b096d))
+- replace git-cliff with Python script for contract-toolkit release (#1848) (by @cmgrote in [e0b999d](https://github.com/atlanhq/application-sdk/commit/e0b999d))
+- resolve per-entrypoint output_type for /result from desc.workflow_type (#1849) (by @cmgrote in [c954afa](https://github.com/atlanhq/application-sdk/commit/c954afa))
+
+
 ## v3.13.0 (May 21, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.12.2...v3.13.0
