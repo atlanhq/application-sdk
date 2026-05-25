@@ -76,9 +76,16 @@ def generate_aws_rds_token_with_iam_role(
         sts_client = client(
             "sts", region_name=region or get_region_name_from_hostname(host)
         )
-        assumed_role = sts_client.assume_role(
-            RoleArn=role_arn, RoleSessionName=session_name, ExternalId=external_id or ""
-        )
+        # Only include ExternalId when set — AWS STS rejects an empty
+        # ExternalId (min length 2). Trust policies without an external-id
+        # requirement are valid and must not be forced to send one.
+        assume_role_kwargs: dict[str, Any] = {
+            "RoleArn": role_arn,
+            "RoleSessionName": session_name,
+        }
+        if external_id:
+            assume_role_kwargs["ExternalId"] = external_id
+        assumed_role = sts_client.assume_role(**assume_role_kwargs)
 
         credentials = assumed_role["Credentials"]
         aws_client = create_aws_client(
