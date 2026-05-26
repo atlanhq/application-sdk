@@ -224,11 +224,18 @@ class TemporalAuthManager:
         logger.info("Token refresh loop exiting")
 
     async def _do_refresh(self, client: Client) -> None:
-        """Perform a single token refresh and update the Temporal client."""
+        """Perform a single token refresh and update the Temporal client.
+
+        Sets ``rpc_metadata`` rather than ``client.api_key``: the
+        ``rpc_metadata`` setter is the documented path for rotating auth
+        headers on a running client and worker. The ``authorization`` key
+        set here takes precedence over any value passed via ``api_key`` at
+        connect time.
+        """
         access_token = await self._get_token_service().get_token(force_refresh=True)
         expires_at = self._get_token_service().current_expires_at
 
-        client.api_key = access_token
+        client.rpc_metadata = {"authorization": f"Bearer {access_token}"}
 
         logger.info(
             "Temporal auth token refreshed (expires_at=%s)", expires_at or "unknown"
