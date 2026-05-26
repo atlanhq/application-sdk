@@ -72,10 +72,15 @@ class TemporalAuthManager:
     _refresh_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _shutdown_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     # Seconds by which the server clock leads the local clock (positive = local is
-    # slow).  Derived from the JWT iat claim on each token receipt and applied in
-    # _calculate_sleep_seconds to ensure refresh fires relative to server time, not
-    # the potentially-drifted container clock.
+    # slow).  Derived from the JWT iat claim on each token receipt.
     _server_clock_offset_seconds: float = field(default=0.0, repr=False)
+    # JWT exp claim from the most-recently-issued token (Unix timestamp, server
+    # time).  Used in _calculate_sleep_seconds as the primary expiry source so
+    # that scheduling is always relative to the server's clock, not the locally-
+    # derived OAuthTokenService.current_expires_at (which is computed as
+    # datetime.now(UTC) + expires_in and will be wrong when the container clock
+    # has drifted).
+    _server_token_exp: float | None = field(default=None, repr=False)
 
     # ------------------------------------------------------------------
     # Public API
@@ -195,12 +200,19 @@ class TemporalAuthManager:
         )
 
     def _update_clock_offset(self, token: str, t_before: float, t_after: float) -> None:
-        """Derive the server–local clock offset from the JWT iat claim.
+        """Derive the server–local clock offset and expiry from JWT claims.
 
-        The iat claim is set by the OAuth server at issue time using the
-        server's (correct) clock.  Comparing it to the midpoint of the local
-        timestamps bracketing the token request gives a first-order estimate
-        of how far ahead the server clock is relative to the container clock.
+        iat is set by the OAuth server at issue time using the server's
+        (correct) clock.  Comparing it to the midpoint of the local timestamps
+        bracketing the token request gives a first-order estimate of how far
+        ahead the server clock is relative to the container clock.
+
+        exp is the server-time expiry.  Storing it separately (as
+        _server_token_exp) lets _calculate_sleep_seconds schedule refreshes
+        relative to the server's clock rather than the locally-derived
+        OAuthTokenService.current_expires_at (which is computed as
+        datetime.now(UTC) + expires_in and is wrong when the clock has
+        drifted).
 
         A positive offset means the container clock is slow (the production
         failure mode caused by VM pause/wake on SDR deployments).
@@ -220,8 +232,11 @@ class TemporalAuthManager:
                         abs(self._server_clock_offset_seconds),
                         "slow" if self._server_clock_offset_seconds > 0 else "fast",
                     )
+            exp = claims.get("exp")
+            if exp is not None:
+                self._server_token_exp = float(exp)
         except Exception:  # noqa: BLE001, S110
-            pass  # non-JWT token or decode error — keep existing offset
+            pass  # non-JWT token or decode error — keep existing values
 
     async def _refresh_loop(self, client: Client) -> None:
         """Background loop that refreshes tokens before expiry."""
@@ -319,24 +334,36 @@ class TemporalAuthManager:
     def _calculate_sleep_seconds(self) -> float:
         """Calculate how long to sleep before next refresh.
 
-        Uses the server-clock offset derived from the JWT iat claim to adjust
-        for container clock drift.  On SDR deployments the container VM can
-        fall behind real time after a host sleep/wake cycle; without this
-        correction the refresh would fire too late and the token would appear
-        expired from the Temporal server's perspective.
+        Prefers the JWT exp claim (_server_token_exp) as the expiry source
+        because it is set by the OAuth server using the server's own clock and
+        is therefore immune to container clock drift.
+
+        OAuthTokenService.current_expires_at is derived as
+        datetime.now(UTC) + expires_in using the *local* clock.  When the
+        container clock has drifted (e.g. after a VM sleep/wake cycle on an
+        SDR deployment), that value can be in the past even for a freshly-
+        issued token — causing remaining to be negative and the refresh loop
+        to spin.  Using exp directly side-steps that entirely.
+
+        Falls back to current_expires_at (with offset correction) for opaque
+        tokens that do not carry exp.  In both paths, negative remaining is
+        clamped to _MIN_REFRESH_INTERVAL_SECONDS so the loop never spins.
         """
-        expires_at = self._get_token_service().current_expires_at
-        if expires_at is None:
-            return float(_MAX_REFRESH_INTERVAL_SECONDS)
+        if self._server_token_exp is not None:
+            server_now = time.time() + self._server_clock_offset_seconds
+            remaining = self._server_token_exp - server_now
+        else:
+            expires_at = self._get_token_service().current_expires_at
+            if expires_at is None:
+                return float(_MAX_REFRESH_INTERVAL_SECONDS)
 
-        now = datetime.now(UTC)
-        if self._server_clock_offset_seconds:
-            now = now + timedelta(seconds=self._server_clock_offset_seconds)
-
-        remaining = (expires_at - now).total_seconds()
+            now = datetime.now(UTC)
+            if self._server_clock_offset_seconds:
+                now = now + timedelta(seconds=self._server_clock_offset_seconds)
+            remaining = (expires_at - now).total_seconds()
 
         if remaining <= 0:
-            return 0
+            return float(_MIN_REFRESH_INTERVAL_SECONDS)
 
         sleep = remaining / 2
         return max(
