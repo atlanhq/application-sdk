@@ -99,7 +99,7 @@
     "package": "quinn-proto",
     "severity": "HIGH",
     "reason": "Base image — Dapr Rust dependency",
-    "expires": "2026-05-23",
+    "expires": "2026-06-25",
     "added_by": "mananjain99",
     "fix_available_date": null,
     "compensating_controls": null,
