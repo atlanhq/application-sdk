@@ -247,10 +247,14 @@ class TemporalWorkflowClient(WorkflowClient):
 
                 await asyncio.sleep(refresh_interval)
 
-                # Get fresh token
+                # Get fresh token. Use rpc_metadata setter rather than
+                # client.api_key: rpc_metadata is the path Temporal documents
+                # for rotating auth headers on a running client and worker.
+                # The "authorization" key set here takes precedence over any
+                # value passed via api_key at connect time.
                 token = await self.auth_manager.get_access_token(force_refresh=True)
-                if self.client:
-                    self.client.api_key = token
+                if self.client and token:
+                    self.client.rpc_metadata = {"authorization": f"Bearer {token}"}
                 logger.info("Updated client RPC metadata with fresh token")
 
                 # Update our stored refresh interval for next iteration
