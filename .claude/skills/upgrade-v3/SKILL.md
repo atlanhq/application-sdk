@@ -1384,14 +1384,13 @@ output_prefix = str(Path(tempfile.gettempdir()))
 ```
 The interim-apps framework handles S3 mapping in production.
 
-### auto_heartbeat_seconds triggers Dapr health check
+### Heartbeat - keep the defaults
 
-The auto-heartbeater creates a `DaprClient` which blocks on Dapr health check (60s timeout). For tasks that don't need fine-grained heartbeating, omit `auto_heartbeat_seconds`:
-```python
-@task(timeout_seconds=3600)  # no auto_heartbeat_seconds
-async def my_long_task(self, input: MyInput) -> MyOutput:
-    ...
-```
+The `@task` defaults (`heartbeat_timeout_seconds=60`, `auto_heartbeat_seconds=10`) are correct. Don't disable `auto_heartbeat_seconds` to "work around" missed beats - auto-heartbeat runs as a coroutine on the same event loop as your task body, so anything that blocks the loop blocks the beats. Fix it with `self.run_in_thread(...)`, async-native libraries, or `await asyncio.sleep(0)` chunking. If you see `Event loop blocked for X seconds during task ...` in worker logs, that's this failure mode.
+
+For long tasks, raise `timeout_seconds` (the overall activity budget), not `heartbeat_timeout_seconds` (the failure-detection knob - a higher value just delays retry on a dead worker). SQL templates set `timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30` (`application_sdk/templates/sql_app.py:508`) for long extracts - precedent if your work matches.
+
+For resume-on-retry, call `self.heartbeat(HeartbeatDetails(records_done=N))` at checkpoints - auto-heartbeat is keepalive only.
 
 ### Template base classes auto-register but do not leak workflows
 
