@@ -237,9 +237,10 @@ class TemporalAuthManager:
             exp = claims.get("exp")
             if exp is not None:
                 self._server_token_exp = float(exp)  # type: ignore[arg-type]
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "Non-JWT or malformed token; clock calibration values unchanged"
+        except Exception:
+            logger.warning(
+                "Non-JWT or malformed token; clock calibration values unchanged",
+                exc_info=True,
             )
 
     async def _refresh_loop(self, client: Client) -> None:
