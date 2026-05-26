@@ -1,16 +1,13 @@
 name: Release Contract Toolkit
 
 # Fired automatically when a non-release PR that touches contract-toolkit files is
-# merged to main. Uses git-cliff --bumped-version (scoped to contract-toolkit/**
-# paths and contract-toolkit-v* tags) to auto-compute the next semver, bumps
-# contract-toolkit/src/PklProject, regenerates contract-toolkit/CHANGELOG.md,
-# and creates or updates the bump-version-contract-toolkit PR labeled
-# release:contract-toolkit. Merging that PR triggers Publish Contract Toolkit
-# (contract-toolkit-publish.yml), which handles gh-pages publish, tag, and release.
-#
-# Commit scoping: git-cliff --include-path and --tag-pattern ensure that only
-# commits touching contract-toolkit/** paths (anchored to contract-toolkit-v* tags)
-# influence the version bump — SDK-only commits are invisible to this workflow.
+# merged to main. Runs .github/scripts/contract_toolkit_release.py to compute the
+# next semver (from conventional commits touching contract-toolkit/** since the last
+# contract-toolkit-v* tag), bumps contract-toolkit/src/PklProject, prepends a new
+# entry to contract-toolkit/CHANGELOG.md, and creates or updates the
+# bump-version-contract-toolkit PR labeled release:contract-toolkit.
+# Merging that PR triggers Publish Contract Toolkit (contract-toolkit-publish.yml),
+# which handles gh-pages publish, tag, and release.
 
 on:
   pull_request:
@@ -53,169 +50,16 @@ jobs:
           chmod +x /tmp/pkl
           sudo mv /tmp/pkl /usr/local/bin/pkl
 
-      - name: Install git-cliff
-        run: |
-          set -euo pipefail
-          tmpdir="$(mktemp -d)"
-          trap 'rm -rf "$tmpdir"' EXIT
-          curl -fsSL -o "${tmpdir}/git-cliff.tar.gz" \
-            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          curl -fsSL -o "${tmpdir}/git-cliff.tar.gz.sha512" \
-            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha512"
-          expected="$(awk '{print $1}' "${tmpdir}/git-cliff.tar.gz.sha512")"
-          echo "${expected}  ${tmpdir}/git-cliff.tar.gz" | sha512sum --check
-          tar -xzf "${tmpdir}/git-cliff.tar.gz" -C "${tmpdir}/"
-          sudo install -m755 \
-            "${tmpdir}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu/git-cliff" \
-            /usr/local/bin/git-cliff
-          git-cliff --version
-        env:
-          GIT_CLIFF_VERSION: "2.13.1"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
 
-      - name: Compute next version
+      - name: Compute version, bump PklProject, update CHANGELOG
         id: versions
-        run: |
-          set -euo pipefail
-          current="$(grep -oP 'version\s*=\s*"\K[^"]+' contract-toolkit/src/PklProject)"
-
-          # Verify the expected tag exists before using it as a revision anchor.
-          # A missing tag (e.g. failed publish, or very first release) would
-          # cause git log to exit non-zero and fail the workflow under set -e.
-          if ! git rev-parse --verify "contract-toolkit-v${current}" >/dev/null 2>&1; then
-            echo "::error::Tag contract-toolkit-v${current} not found. Publish the current version first, or create the tag manually."
-            exit 1
-          fi
-
-          # Find commit messages (full body) since the last contract-toolkit-v*
-          # tag that touched contract-toolkit/** paths. We use plain git log
-          # rather than git-cliff --bumped-version because the latter silently
-          # returns empty output with --include-path across git-cliff 2.x,
-          # causing every release PR to be skipped.
-          #
-          # Full message (%B) is used so BREAKING CHANGE trailers in commit
-          # bodies are detected; subject-only (%s) would miss them.
-          unreleased_body="$(git log \
-            "contract-toolkit-v${current}..HEAD" \
-            --format='%B' \
-            -- 'contract-toolkit/**')"
-
-          unreleased_subjects="$(git log \
-            "contract-toolkit-v${current}..HEAD" \
-            --format='%s' \
-            -- 'contract-toolkit/**')"
-
-          if [ -z "$unreleased_subjects" ]; then
-            echo "No unreleased contract-toolkit commits (current: ${current})."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Conventional-commits bump rules:
-          #   BREAKING CHANGE trailer (body) or ! suffix (subject) → major
-          #   feat → minor
-          #   anything else → patch
-          if echo "$unreleased_subjects" | grep -qP '^[a-z]+(\([^)]+\))?!:' || \
-             echo "$unreleased_body"     | grep -qP '^BREAKING[ _-]CHANGE:'; then
-            bump="major"
-          elif echo "$unreleased_subjects" | grep -qP '^feat[(!:]'; then
-            bump="minor"
-          else
-            bump="patch"
-          fi
-
-          IFS='.' read -r ver_major ver_minor ver_patch <<< "$current"
-          case "$bump" in
-            major) new_version="$((ver_major + 1)).0.0" ;;
-            minor) new_version="${ver_major}.$((ver_minor + 1)).0" ;;
-            patch) new_version="${ver_major}.${ver_minor}.$((ver_patch + 1))" ;;
-          esac
-
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "old=${current}" >> "$GITHUB_OUTPUT"
-          echo "new=${new_version}" >> "$GITHUB_OUTPUT"
-          echo "tag=contract-toolkit-v${new_version}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${current} -> ${new_version} (${bump} bump)"
-
-      - name: Apply version bump to PklProject
-        if: steps.versions.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          sed -i \
-            's/version = "${{ steps.versions.outputs.old }}"/version = "${{ steps.versions.outputs.new }}"/' \
-            contract-toolkit/src/PklProject
-
-      - name: Render new release block
-        if: steps.versions.outputs.skip != 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          git cliff \
-            --config contract-toolkit/cliff.toml \
-            --unreleased \
-            --tag "${{ steps.versions.outputs.tag }}" \
-            --tag-pattern '^contract-toolkit-v[0-9].*' \
-            --include-path 'contract-toolkit/**' \
-            --github-repo "${{ github.repository }}" \
-            --strip header \
-            --output /tmp/contract-toolkit-new-block.md
-
-      - name: Merge new release block into toolkit changelog
-        if: steps.versions.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          changelog="contract-toolkit/CHANGELOG.md"
-          new_block="/tmp/contract-toolkit-new-block.md"
-
-          if [ ! -s "$new_block" ]; then
-            echo "::error::cliff produced no release-block content at ${new_block}"
-            exit 1
-          fi
-
-          # Insert the new block above the first existing "## [" version heading.
-          # If there is no existing heading yet, append at end (first release).
-          awk -v new_block_path="$new_block" '
-            BEGIN { inserted = 0 }
-            /^## \[/ && !inserted {
-              while ((getline line < new_block_path) > 0) print line
-              print ""
-              inserted = 1
-            }
-            { print }
-            END {
-              if (!inserted) {
-                while ((getline line < new_block_path) > 0) print line
-              }
-            }
-          ' "$changelog" > "${changelog}.merged"
-          mv "${changelog}.merged" "$changelog"
-
-      - name: Render release notes for PR body
-        if: steps.versions.outputs.skip != 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          git cliff \
-            --config contract-toolkit/cliff.toml \
-            --unreleased \
-            --tag "${{ steps.versions.outputs.tag }}" \
-            --tag-pattern '^contract-toolkit-v[0-9].*' \
-            --include-path 'contract-toolkit/**' \
-            --github-repo "${{ github.repository }}" \
-            --strip all \
-            --output /tmp/contract-toolkit-release-notes.md
-
-      - name: Normalize release notes whitespace
-        if: steps.versions.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          awk '
-            NF { blank=0; print; next }
-            !blank { print; blank=1 }
-          ' /tmp/contract-toolkit-release-notes.md > /tmp/contract-toolkit-release-notes.normalized.md
-          mv /tmp/contract-toolkit-release-notes.normalized.md /tmp/contract-toolkit-release-notes.md
-          sed -i '/./,$!d' /tmp/contract-toolkit-release-notes.md
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python .github/scripts/contract_toolkit_release.py
 
       - name: Sanity-build package
         if: steps.versions.outputs.skip != 'true'
@@ -235,8 +79,6 @@ jobs:
           git checkout -b "${BUMP_BRANCH}"
           git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md
           git commit -m "chore(contract-toolkit): release v${new_version}"
-          # --force-with-lease is safe: fails if another concurrent CI run pushed
-          # to this bot-managed branch, which is the correct behavior.
           git push origin "${BUMP_BRANCH}" --force-with-lease
 
           existing="$(gh pr list \
@@ -257,7 +99,7 @@ jobs:
               echo "PKL package, publishes it under contracts/ on the gh-pages"
               echo "branch, and creates the contract-toolkit-v${new_version} tag."
               echo
-              echo "## Release notes preview"
+              echo "## Release notes"
               echo
               cat /tmp/contract-toolkit-release-notes.md
             } > "$body_file"

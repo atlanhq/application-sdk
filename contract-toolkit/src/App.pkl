@@ -562,6 +562,21 @@ open class PublishNode extends DAGNode {
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
     startToCloseTimeoutSeconds = 86400
   }
+
+  /// Whether publish should read/write connection cache entries.
+  ///
+  /// Defaults to `false` as the safe base for direct use (e.g. `extraNodes`).
+  /// When this node is created via the typed `pipeline.publish` step, the
+  /// pipeline injects `true` unless the app contract overrides it explicitly
+  /// on `PublishStep.connectionCacheEnabled`. Set to `false` for any publish
+  /// node that must not write to the shared connection cache.
+  connectionCacheEnabled: Boolean = false
+
+  /// Whether publish should resolve connection cache through app storage.
+  ///
+  /// Same default and injection semantics as `connectionCacheEnabled`.
+  connectionCacheViaAppEnabled: Boolean = false
+
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -573,6 +588,8 @@ open class PublishNode extends DAGNode {
     ["connection_creation_enabled"] = true
     ["executor_enabled"] = executorEnabled
     ["connection_entity"] = "{{connection}}"
+    ["connection_cache_enabled"] = connectionCacheEnabled
+    ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
   }
   dependsOn { upstream }
 }
@@ -985,9 +1002,22 @@ open class LineagePublishNode extends DAGNode {
 
   connectionEntity: String = "{{connection}}"
 
-  connectionCacheEnabled: Boolean = true
+  /// Whether publish should read/write connection cache entries.
+  ///
+  /// Defaults to `false` for lineage publish because lineage entities
+  /// (`Process`, `ColumnProcess`) must not overwrite the connection cache that
+  /// the asset crawler built with `Database`/`Schema`/`Table` rows. Passing
+  /// `true` here causes the lineage publish to rebuild the cache from
+  /// lineage-stage data, destroying asset entries and breaking subsequent miner
+  /// runs. Set to `true` only when the lineage pipeline owns the connection
+  /// cache and no asset crawler shares it.
+  connectionCacheEnabled: Boolean = false
 
-  connectionCacheViaAppEnabled: Boolean = true
+  /// Whether publish should resolve connection cache through app storage.
+  ///
+  /// Defaults to `false` for the same reason as `connectionCacheEnabled`:
+  /// lineage publish must not write into the shared connection cache.
+  connectionCacheViaAppEnabled: Boolean = false
 
   currentStateViaAppEnabled: Boolean = true
 
@@ -1082,6 +1112,18 @@ class PublishStep {
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
     startToCloseTimeoutSeconds = 86400
   }
+
+  /// Whether the asset publish node should read/write the connection cache.
+  ///
+  /// Defaults to `true` for the typed pipeline: the crawler must write
+  /// `Database`/`Schema`/`Table` rows so downstream miners can read them.
+  /// Set to `false` explicitly when this publish step must not touch the cache.
+  connectionCacheEnabled: Boolean = true
+
+  /// Whether the asset publish node should resolve the connection cache through
+  /// app storage. Defaults to `true`. Set to `false` alongside
+  /// `connectionCacheEnabled` when the node must not touch the shared cache.
+  connectionCacheViaAppEnabled: Boolean = true
 
   /// Optional lineage-publish sub-step. When set, adds a `"lineage-publish"`
   /// node after the main publish step.
@@ -1831,6 +1873,8 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
         executorEnabled = ps.executorEnabled
         displayName = ps.displayName
         errorHandling = ps.errorHandling
+        connectionCacheEnabled = ps.connectionCacheEnabled
+        connectionCacheViaAppEnabled = ps.connectionCacheViaAppEnabled
       })
   }
   when (pipeline.publish != null && pipeline.publish!!.lineagePublish != null) {
