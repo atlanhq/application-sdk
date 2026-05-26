@@ -17,8 +17,10 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+
+import jwt
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -69,6 +71,11 @@ class TemporalAuthManager:
     _token_service: OAuthTokenService | None = field(default=None, repr=False)
     _refresh_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _shutdown_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    # Seconds by which the server clock leads the local clock (positive = local is
+    # slow).  Derived from the JWT iat claim on each token receipt and applied in
+    # _calculate_sleep_seconds to ensure refresh fires relative to server time, not
+    # the potentially-drifted container clock.
+    _server_clock_offset_seconds: float = field(default=0.0, repr=False)
 
     # ------------------------------------------------------------------
     # Public API
@@ -92,13 +99,17 @@ class TemporalAuthManager:
         )
 
         try:
+            t_before = time.time()
             access_token = await self._get_token_service().get_token(force_refresh=True)
+            t_after = time.time()
         except Exception as exc:
             from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
                 TemporalAuthTokenAcquireError,
             )
 
             raise TemporalAuthTokenAcquireError(cause=exc) from exc
+
+        self._update_clock_offset(access_token, t_before, t_after)
 
         expires_at = self._get_token_service().current_expires_at
         logger.info(
@@ -183,6 +194,35 @@ class TemporalAuthManager:
             message="Either token_url or base_url must be set", field="token_url"
         )
 
+    def _update_clock_offset(self, token: str, t_before: float, t_after: float) -> None:
+        """Derive the server–local clock offset from the JWT iat claim.
+
+        The iat claim is set by the OAuth server at issue time using the
+        server's (correct) clock.  Comparing it to the midpoint of the local
+        timestamps bracketing the token request gives a first-order estimate
+        of how far ahead the server clock is relative to the container clock.
+
+        A positive offset means the container clock is slow (the production
+        failure mode caused by VM pause/wake on SDR deployments).
+        """
+        try:
+            claims = jwt.decode(
+                token,
+                options={"verify_signature": False, "verify_exp": False},
+            )
+            iat = claims.get("iat")
+            if iat is not None:
+                local_midpoint = (t_before + t_after) / 2
+                self._server_clock_offset_seconds = float(iat) - local_midpoint
+                if abs(self._server_clock_offset_seconds) > 1:
+                    logger.debug(
+                        "Server clock offset: %.1fs (container clock is %s)",
+                        abs(self._server_clock_offset_seconds),
+                        "slow" if self._server_clock_offset_seconds > 0 else "fast",
+                    )
+        except Exception:  # noqa: BLE001, S110
+            pass  # non-JWT token or decode error — keep existing offset
+
     async def _refresh_loop(self, client: Client) -> None:
         """Background loop that refreshes tokens before expiry."""
         while not self._shutdown_event.is_set():
@@ -225,7 +265,12 @@ class TemporalAuthManager:
 
     async def _do_refresh(self, client: Client) -> None:
         """Perform a single token refresh and update the Temporal client."""
+        t_before = time.time()
         access_token = await self._get_token_service().get_token(force_refresh=True)
+        t_after = time.time()
+
+        self._update_clock_offset(access_token, t_before, t_after)
+
         expires_at = self._get_token_service().current_expires_at
 
         client.api_key = access_token
@@ -272,12 +317,22 @@ class TemporalAuthManager:
             logger.warning("Failed to emit token_refresh event", exc_info=True)
 
     def _calculate_sleep_seconds(self) -> float:
-        """Calculate how long to sleep before next refresh."""
+        """Calculate how long to sleep before next refresh.
+
+        Uses the server-clock offset derived from the JWT iat claim to adjust
+        for container clock drift.  On SDR deployments the container VM can
+        fall behind real time after a host sleep/wake cycle; without this
+        correction the refresh would fire too late and the token would appear
+        expired from the Temporal server's perspective.
+        """
         expires_at = self._get_token_service().current_expires_at
         if expires_at is None:
             return float(_MAX_REFRESH_INTERVAL_SECONDS)
 
         now = datetime.now(UTC)
+        if self._server_clock_offset_seconds:
+            now = now + timedelta(seconds=self._server_clock_offset_seconds)
+
         remaining = (expires_at - now).total_seconds()
 
         if remaining <= 0:
