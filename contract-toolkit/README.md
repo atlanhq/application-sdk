@@ -122,6 +122,12 @@ Auth form schema. Contains common fields (host, port), auth-type radio, and nest
 
 Credentials are shared — a user creates credentials once and reuses them across crawler and miner workflows.
 
+Credential `FieldSpec` values render to frontend widget schemas. For boolean
+credential checkboxes, use `fieldType = "checkbox"`; the generated JSON keeps
+`type = "boolean"` and emits `ui.widget = "checkbox"`. When a connector has
+only one valid auth mode, set `credentialAuthHidden = true` to hide the
+auth-type selector while preserving the generated default value.
+
 ### Manifest (`app/generated/manifest.json`)
 
 Automation Engine DAG template. Auto-derived from the declared workflow params and the typed `pipeline` block. Heracles substitutes `{{param}}` placeholders with form values before sending to AE.

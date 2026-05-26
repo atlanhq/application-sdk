@@ -682,6 +682,12 @@ credentialAuthWidth: Int?
 /// The frontend keeps previously-selected values visible during edit.
 credentialAuthHiddenEnumListForCreating: Listing<String>?
 
+/// Whether the auth-type radio is hidden in the credential form.
+///
+/// Use this when a connector supports exactly one auth mode and the generated
+/// default should be submitted without requiring user input.
+credentialAuthHidden: Boolean = false
+
 /// Placeholder for the hidden credential `name` field.
 credentialNamePlaceholder: String = "Host Name"
 
@@ -691,7 +697,7 @@ credentialConnectorDefault: String?
 /// Whether to emit top-level metadata keys on the credential configmap.
 credentialConfigIncludeTopLevelMetadata: Boolean = true
 
-/// Whether to emit `ui.hidden=false` on the auth-type radio.
+/// Whether to emit `ui.hidden` on the auth-type radio.
 credentialAuthIncludeHiddenFlag: Boolean = true
 
 // ---------------------------------------------------------------------------
@@ -1683,7 +1689,7 @@ local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
       ["widget"] = if (f.sensitive || f.fieldType == "password") "password"
         else if (f.fieldType == "textarea") "TextInput"
         else if (f.fieldType == "number") "inputNumber"
-        else if (f.fieldType == "checkbox") "boolean"
+        else if (f.fieldType == "checkbox") "checkbox"
         else if (f.fieldType == "select" && f.options != null && f.options!!.length <= 4) "radio"
         else if (f.fieldType == "select") "select"
         else if (f.fieldType == "inputRepeater") "inputRepeater"
@@ -2028,7 +2034,7 @@ local function renderJdbcAuthTypeField(options: Mapping<String, AuthOption>): Ma
     ["enumNames"] = new Listing { for (k in directKeys) { options[k].label } }
     ["ui"] = new Mapping {
       ["widget"] = "radio"
-      ["hidden"] = false
+      ["hidden"] = credentialAuthHidden
       ["label"] = credentialAuthTitle
       when (credentialAuthHelp != null) { ["help"] = credentialAuthHelp }
       when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
@@ -2299,7 +2305,7 @@ local function generateCredentialConfig(): Mapping<String, Any> =
           }
           ["ui"] = new Mapping {
             ["widget"] = "radio"
-            when (credentialAuthIncludeHiddenFlag) { ["hidden"] = false }
+            when (credentialAuthIncludeHiddenFlag) { ["hidden"] = credentialAuthHidden }
             ["label"] = credentialAuthTitle
             when (credentialAuthRules != null) { ["rules"] = credentialAuthRules }
             when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
