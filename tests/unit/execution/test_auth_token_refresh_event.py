@@ -524,7 +524,7 @@ class TestCalculateSleepSeconds:
         _stub_token_service(manager, expires_at=None)
         assert manager._calculate_sleep_seconds() == 300.0
 
-    def test_returns_zero_when_token_expired(self, fixed_now: datetime) -> None:
+    def test_returns_min_interval_when_token_expired(self, fixed_now: datetime) -> None:
         manager = _make_manager()
         past = fixed_now - timedelta(minutes=5)
         _stub_token_service(manager, expires_at=past)
@@ -532,7 +532,7 @@ class TestCalculateSleepSeconds:
             "application_sdk.execution._temporal.auth.datetime"
         ) as mock_datetime:
             mock_datetime.now.return_value = fixed_now
-            assert manager._calculate_sleep_seconds() == 0
+            assert manager._calculate_sleep_seconds() == 30.0
 
     def test_halves_remaining_within_bounds(self, fixed_now: datetime) -> None:
         manager = _make_manager()
