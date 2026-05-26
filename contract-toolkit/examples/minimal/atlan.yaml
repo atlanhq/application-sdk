@@ -8,11 +8,6 @@ icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
 visibility: public
 build_tag: v1
 self_deployed_runtime: false
-entrypoints:
-- name: minimal
-  display_name: Minimal Example
-  icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
-  type: connector
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true

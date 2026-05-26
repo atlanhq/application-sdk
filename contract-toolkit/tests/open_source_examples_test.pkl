@@ -151,6 +151,25 @@ facts {
     bundleApp.output.files.containsKey("atlan.yaml")
     bundleApp.output.files["atlan.yaml"].text.contains("name: crawler")
     bundleApp.output.files["atlan.yaml"].text.contains("name: miner")
+    // Multi-entrypoint apps explicitly declare `entrypoints { ... }`, so the
+    // `entrypoints:` block is emitted by default.
+    bundleApp.output.files["atlan.yaml"].text.contains("\nentrypoints:")
+  }
+
+  ["Single-entrypoint apps omit the synthesized entrypoints: block by default"] {
+    // Default `emitEntrypoints = !entrypoints.isEmpty`: when the consumer
+    // does not declare entrypoints, the toolkit synthesizes one internally
+    // for routing, but does NOT emit it to atlan.yaml. Downstream tooling
+    // (local-marketplace, frontend, Heracles) reads the absence of
+    // `entrypoints:` as the single-entrypoint signal and builds configmap
+    // URLs as `/configmaps/{name}` (not `/configmaps/{display_name}-{name}`),
+    // which is what the SDK actually serves at `app/generated/{name}.json`.
+    !minimalApp.output.files["atlan.yaml"].text.contains("\nentrypoints:")
+    !fullApp.output.files["atlan.yaml"].text.contains("\nentrypoints:")
+    !deployApp.output.files["atlan.yaml"].text.contains("\nentrypoints:")
+    !faninApp.output.files["atlan.yaml"].text.contains("\nentrypoints:")
+    !connectionRefApp.output.files["atlan.yaml"].text.contains("\nentrypoints:")
+    !publishControlsApp.output.files["atlan.yaml"].text.contains("\nentrypoints:")
   }
 
   ["Deploy example atlan.yaml includes typed KEDA, Dapr, resources, env, and deployOverrides"] {

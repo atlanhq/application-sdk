@@ -8,11 +8,6 @@ icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
 visibility: public
 build_tag: v1
 self_deployed_runtime: false
-entrypoints:
-- name: deploy
-  display_name: Deploy Config Example
-  icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
-  type: connector
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true

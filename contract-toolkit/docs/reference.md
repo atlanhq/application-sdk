@@ -270,7 +270,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 |---|---|---|---|
 | `entrypoints` | Listing<Entrypoint> | `[]` | Marketplace card / SDK entrypoint definitions. When non-empty, enables bundle mode. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
-| `emitEntrypoints` | Boolean | `true` | Emit the `entrypoints:` block. |
+| `emitEntrypoints` | Boolean | `!entrypoints.isEmpty` | Emit the `entrypoints:` block in `atlan.yaml`. Defaults to `true` when the consumer declared `entrypoints { ... }` (multi-entrypoint mode), `false` otherwise. Single-entrypoint apps suppress the block so downstream tooling (marketplace, frontend, Heracles) routes configmap fetches as `/configmaps/{name}` instead of `/configmaps/{display_name}-{name}?entrypoint={name}` — the latter 404s because the SDK only serves `app/generated/{name}.json`. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |
 
 **Entrypoint class:**
@@ -423,7 +423,7 @@ contract/app.pkl
 | `atlanYamlOverrides` | Mapping<String, Any> | `{}` | Deep overrides applied after typed fields and `metadata`. Use for exact rendered yaml control, including nested `deploy` overrides. |
 | `entrypoints` | Listing<Entrypoint> | `[]` | Marketplace card / SDK entrypoint definitions. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. Set `false` when using the bundle only for generated artifact layout / credential hoisting. |
-| `emitEntrypoints` | Boolean | `true` | Emit the `entrypoints:` block. Set `false` for marketplace paths that do not support entrypoint passthrough. |
+| `emitEntrypoints` | Boolean | `!entrypoints.isEmpty` | Emit the `entrypoints:` block. Defaults to `true` when the consumer declared `entrypoints { ... }` (multi-entrypoint mode), `false` when not. Set to `true` explicitly to force emission for the synthesized single-entrypoint case (rarely needed; primarily for backwards compatibility with consumers that still rely on the phantom block). |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. Credential configmaps are hoisted to the bundle root and deduped by filename; other files are emitted under `{entrypoint.name}/`. |
 | `additionalOutputFiles` | Mapping<String, FileOutput> | `{}` | Explicit root-level files to emit with the bundle, for example a customized `AgentConfig.pkl` output. |
 | `deploy` | Mapping<String, Any> | `{}` | Current flat deployment config. Unknown keys are passed through by local marketplace. |

@@ -150,7 +150,32 @@ atlanYamlOverrides: Mapping<String, Any> = new Mapping {}
 emitAtlanYaml: Boolean = true
 
 /// Whether to emit the `entrypoints:` block into `atlan.yaml`.
-emitEntrypoints: Boolean = true
+///
+/// Default: `!entrypoints.isEmpty` — emit only when the consumer explicitly
+/// declared `entrypoints { ... }`. For apps that don't (the common
+/// single-entrypoint case), the block is omitted.
+///
+/// Why the default is opt-in:
+///
+/// When `entrypoints` is empty, the toolkit synthesizes a single-element
+/// list from the app's own identity (see `effectiveEntrypoints` below) and
+/// — until this default flipped — emitted it as an `entrypoints:` block in
+/// `atlan.yaml`. Downstream consumers (local-marketplace, frontend, Heracles)
+/// read the presence of `entrypoints:` as the signal that the app is in
+/// multi-entrypoint mode and build URLs of the shape
+/// `/configmaps/{display_name}-{entrypoint.name}?entrypoint={name}`. The
+/// SDK only serves `app/generated/{name}.json`, not
+/// `{display_name}-{name}.json`, so the configmap fetch 404s.
+///
+/// Single-entrypoint apps should therefore not emit the block. Apps that
+/// genuinely declare multiple entrypoints (`entrypoints { ... }`) continue
+/// to emit it as before — the existing `bundle` example exercises this
+/// path and its generated `atlan.yaml` is unchanged.
+///
+/// Set this to `true` explicitly to force emission for the synthesized
+/// single-entrypoint case (rarely needed; primarily for backwards
+/// compatibility with consumers that still rely on the phantom block).
+emitEntrypoints: Boolean = !entrypoints.isEmpty
 
 /// Whether to emit `app.yaml` in the output.
 emitAppYaml: Boolean = true

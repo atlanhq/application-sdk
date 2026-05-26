@@ -8,11 +8,6 @@ icon_url: https://assets.atlan.com/assets/trino.svg
 visibility: public
 build_tag: v1
 self_deployed_runtime: false
-entrypoints:
-- name: publish-controls
-  display_name: Publish Controls Example
-  icon_url: https://assets.atlan.com/assets/trino.svg
-  type: connector
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true
