@@ -577,6 +577,21 @@ open class PublishNode extends DAGNode {
   /// Same default and injection semantics as `connectionCacheEnabled`.
   connectionCacheViaAppEnabled: Boolean = false
 
+  /// Whether publish should read/write current-state entries.
+  ///
+  /// Defaults to `false` as the safe base for direct use (e.g. `extraNodes`).
+  /// When this node is created via the typed `pipeline.publish` step, the
+  /// pipeline injects `true` from `PublishStep.currentStateEnabled`.
+  currentStateEnabled: Boolean = false
+
+  /// Whether publish should resolve current-state through app storage.
+  ///
+  /// Same default and injection semantics as `currentStateEnabled`. Set to
+  /// `true` (via `PublishStep`) so publish-app writes current-state to
+  /// app storage rather than the `-dry-run`-suffixed key, allowing the
+  /// next run to diff against a real previous state.
+  currentStateViaAppEnabled: Boolean = false
+
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -590,6 +605,8 @@ open class PublishNode extends DAGNode {
     ["connection_entity"] = "{{connection}}"
     ["connection_cache_enabled"] = connectionCacheEnabled
     ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
+    ["current_state_enabled"] = currentStateEnabled
+    ["current_state_via_app_enabled"] = currentStateViaAppEnabled
   }
   dependsOn { upstream }
 }
@@ -1124,6 +1141,20 @@ class PublishStep {
   /// app storage. Defaults to `true`. Set to `false` alongside
   /// `connectionCacheEnabled` when the node must not touch the shared cache.
   connectionCacheViaAppEnabled: Boolean = true
+
+  /// Whether the asset publish node should read/write current-state entries.
+  ///
+  /// Defaults to `true` so that every crawler run records a fresh current-state
+  /// snapshot that the next run can diff against. Set to `false` explicitly when
+  /// this publish step must not touch current-state storage.
+  currentStateEnabled: Boolean = true
+
+  /// Whether the asset publish node should resolve current-state through app
+  /// storage. Defaults to `true` so publish-app writes to the real current-state
+  /// key rather than a `-dry-run`-suffixed key, enabling incremental diffing on
+  /// subsequent runs. Set to `false` alongside `currentStateEnabled` when the
+  /// node must not write current-state at all.
+  currentStateViaAppEnabled: Boolean = true
 
   /// Optional lineage-publish sub-step. When set, adds a `"lineage-publish"`
   /// node after the main publish step.
@@ -1875,6 +1906,8 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
         errorHandling = ps.errorHandling
         connectionCacheEnabled = ps.connectionCacheEnabled
         connectionCacheViaAppEnabled = ps.connectionCacheViaAppEnabled
+        currentStateEnabled = ps.currentStateEnabled
+        currentStateViaAppEnabled = ps.currentStateViaAppEnabled
       })
   }
   when (pipeline.publish != null && pipeline.publish!!.lineagePublish != null) {

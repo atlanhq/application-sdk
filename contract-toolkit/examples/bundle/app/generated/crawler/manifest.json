@@ -37,7 +37,9 @@
           "executor_enabled": true,
           "connection_entity": "{{connection}}",
           "connection_cache_enabled": true,
-          "connection_cache_via_app_enabled": true
+          "connection_cache_via_app_enabled": true,
+          "current_state_enabled": true,
+          "current_state_via_app_enabled": true
         }
       },
       "depends_on": {
