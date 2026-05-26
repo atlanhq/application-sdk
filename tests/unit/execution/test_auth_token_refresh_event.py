@@ -61,6 +61,7 @@ def _stub_token_service(
     *,
     token: str = "stub-token",
     expires_at: datetime | None = None,
+    clock_offset_seconds: float = 0.0,
 ) -> mock.MagicMock:
     """Inject a fully-stubbed OAuthTokenService onto the manager.
 
@@ -70,6 +71,7 @@ def _stub_token_service(
     svc = mock.MagicMock(name="OAuthTokenService")
     svc.get_token = mock.AsyncMock(return_value=token)
     svc.current_expires_at = expires_at
+    svc.clock_offset_seconds = clock_offset_seconds
     manager._token_service = svc
     return svc
 
@@ -510,78 +512,14 @@ class TestStartAndShutdown:
 
 
 # ---------------------------------------------------------------------------
-# _update_clock_offset
-# ---------------------------------------------------------------------------
-
-
-def _make_fake_jwt(iat: float, exp: float) -> str:
-    """Build a minimal unsigned JWT with the given iat/exp claims."""
-    import base64
-    import json
-
-    header = (
-        base64.urlsafe_b64encode(b'{"alg":"none","typ":"JWT"}').rstrip(b"=").decode()
-    )
-    payload = (
-        base64.urlsafe_b64encode(
-            json.dumps({"iat": iat, "exp": exp, "sub": "test"}).encode()
-        )
-        .rstrip(b"=")
-        .decode()
-    )
-    return f"{header}.{payload}.fakesig"
-
-
-class TestUpdateClockOffset:
-    def test_valid_jwt_sets_offset(self) -> None:
-        manager = _make_manager()
-        now = 1_700_000_000.0
-        exp = now + 600.0
-        # Container clock is 30 s slow: local midpoint is 30 s behind server iat.
-        t_before = now - 30.5
-        t_after = now - 29.5  # midpoint = now - 30.0
-        token = _make_fake_jwt(iat=now, exp=exp)
-
-        manager._update_clock_offset(token, t_before, t_after)
-
-        assert manager._server_clock_offset_seconds == pytest.approx(30.0, abs=0.1)
-
-    def test_malformed_token_leaves_offset_unchanged(self) -> None:
-        manager = _make_manager()
-        manager._server_clock_offset_seconds = 5.0
-
-        manager._update_clock_offset("not-a-jwt", 0.0, 0.0)
-
-        assert manager._server_clock_offset_seconds == 5.0
-
-    def test_opaque_token_two_parts_leaves_offset_unchanged(self) -> None:
-        manager = _make_manager()
-        manager._server_clock_offset_seconds = 7.0
-
-        manager._update_clock_offset("only.twoparts", 0.0, 0.0)
-
-        assert manager._server_clock_offset_seconds == 7.0
-
-    def test_midpoint_used_for_offset_estimation(self) -> None:
-        manager = _make_manager()
-        server_iat = 1_000_000.0
-        t_before = 999_990.0
-        t_after = 999_994.0  # midpoint = 999_992.0 → offset = 8.0
-        token = _make_fake_jwt(iat=server_iat, exp=server_iat + 300)
-
-        manager._update_clock_offset(token, t_before, t_after)
-
-        assert manager._server_clock_offset_seconds == pytest.approx(8.0, abs=0.01)
-
-
-# ---------------------------------------------------------------------------
 # _calculate_sleep_seconds
 # ---------------------------------------------------------------------------
 
 # All tests freeze time via time.time; current_expires_at is provided as a
 # datetime whose .timestamp() is the reference point.  OAuthTokenService now
 # stores the server-issued JWT exp directly so current_expires_at is immune to
-# container clock drift; _server_clock_offset_seconds corrects any residual gap.
+# container clock drift; clock_offset_seconds from the service corrects any
+# residual gap between local time.time() and the server's wall clock.
 
 
 class TestCalculateSleepSeconds:
@@ -632,10 +570,12 @@ class TestCalculateSleepSeconds:
 
     def test_clock_offset_applied(self, frozen_ts: float) -> None:
         manager = _make_manager()
-        # Container is 30 s slow: server_now = frozen_ts + 30 → remaining = 200 → sleep = 100
-        manager._server_clock_offset_seconds = 30.0
+        # Service reports +30s offset (container 30s slow):
+        # server_now = frozen_ts + 30 → remaining = 230 - 30 = 200 → sleep = 100
         _stub_token_service(
-            manager, expires_at=datetime.fromtimestamp(frozen_ts + 230, UTC)
+            manager,
+            expires_at=datetime.fromtimestamp(frozen_ts + 230, UTC),
+            clock_offset_seconds=30.0,
         )
         with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
             mock_time.time.return_value = frozen_ts

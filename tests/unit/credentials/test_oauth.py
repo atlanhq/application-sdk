@@ -10,6 +10,10 @@ import pytest
 from application_sdk.credentials.oauth import OAuthTokenError, OAuthTokenService
 from application_sdk.credentials.types import OAuthClientCredential
 
+# ---------------------------------------------------------------------------
+# JWT helpers (shared)
+# ---------------------------------------------------------------------------
+
 
 def _cred(
     *,
@@ -283,6 +287,128 @@ def _make_jwt_access_token(exp: float, iat: float | None = None) -> str:
         base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
     )
     return f"{header}.{payload}.sig"
+
+
+# ---------------------------------------------------------------------------
+# clock_offset_seconds / _calibrate_clock_offset
+# ---------------------------------------------------------------------------
+
+
+def test_clock_offset_seconds_defaults_to_zero() -> None:
+    svc = OAuthTokenService(_cred())
+    assert svc.clock_offset_seconds == 0.0
+
+
+def test_calibrate_clock_offset_sets_offset_for_jwt() -> None:
+    """Valid JWT iat → offset = iat - local_midpoint."""
+    import base64
+    import json
+
+    server_iat = 1_700_000_000.0
+    exp = server_iat + 600.0
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"iat": server_iat, "exp": exp}).encode())
+        .rstrip(b"=")
+        .decode()
+    )
+    jwt_token = f"{header}.{payload}.sig"
+
+    svc = OAuthTokenService(_cred())
+    # Container clock 30 s slow: local midpoint = server_iat - 30 → offset = +30
+    svc._calibrate_clock_offset(
+        jwt_token, t_before=server_iat - 30.5, t_after=server_iat - 29.5
+    )
+
+    assert svc.clock_offset_seconds == pytest.approx(30.0, abs=0.1)
+
+
+def test_calibrate_clock_offset_skips_opaque_token() -> None:
+    """Opaque (non-JWT) token leaves existing offset unchanged."""
+    svc = OAuthTokenService(_cred())
+    svc._clock_offset_seconds = 5.0
+
+    svc._calibrate_clock_offset("opaque-token", t_before=0.0, t_after=0.0)
+
+    assert svc.clock_offset_seconds == 5.0
+
+
+def test_calibrate_clock_offset_skips_when_no_iat() -> None:
+    """JWT without iat claim leaves existing offset unchanged."""
+    import base64
+    import json
+
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"exp": 1_700_000_600}).encode())
+        .rstrip(b"=")
+        .decode()
+    )
+    jwt_no_iat = f"{header}.{payload}.sig"
+
+    svc = OAuthTokenService(_cred())
+    svc._clock_offset_seconds = 3.0
+    svc._calibrate_clock_offset(jwt_no_iat, t_before=0.0, t_after=0.0)
+
+    assert svc.clock_offset_seconds == 3.0
+
+
+@pytest.mark.anyio
+async def test_exchange_calibrates_clock_offset_from_jwt_iat() -> None:
+    """After _exchange, clock_offset_seconds reflects the JWT iat vs local time."""
+    server_iat = 1_700_000_030.0
+    jwt_token = _make_jwt_access_token(exp=server_iat + 600, iat=server_iat)
+
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"access_token": jwt_token, "expires_in": 600}
+
+    with (
+        patch("application_sdk.credentials.oauth.time") as mock_time,
+        patch("httpx.AsyncClient") as mock_client_cls,
+    ):
+        # Local clock is 30 s slow: time.time() = server_iat - 30
+        mock_time.time.return_value = server_iat - 30.0
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=resp)
+        mock_client_cls.return_value = mock_client
+
+        svc = OAuthTokenService(_cred())
+        await svc.get_token(force_refresh=True)
+
+    # iat=1_700_000_030, local_midpoint=1_700_000_000 → offset = +30
+    assert svc.clock_offset_seconds == pytest.approx(30.0, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# _needs_refresh with clock offset
+# ---------------------------------------------------------------------------
+
+
+def test_needs_refresh_applies_clock_offset() -> None:
+    """_needs_refresh uses server_now = local_now + offset so a slow container
+    clock does not cause it to hold onto a token the server already rejects."""
+    fixed_now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    expires_at = fixed_now + timedelta(seconds=120)
+
+    cred = _cred(access_token="tok", expires_at=expires_at.isoformat())
+    svc = OAuthTokenService(cred)
+
+    with patch("application_sdk.credentials.oauth.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        mock_dt.fromisoformat = datetime.fromisoformat
+        mock_dt.fromtimestamp = datetime.fromtimestamp
+
+        # No offset: server_now = fixed_now → 120s remaining > 60s buffer → False
+        svc._clock_offset_seconds = 0.0
+        assert svc._needs_refresh() is False
+
+        # Offset +70s: server_now = fixed_now + 70s → 50s remaining < 60s buffer → True
+        svc._clock_offset_seconds = 70.0
+        assert svc._needs_refresh() is True
 
 
 @pytest.mark.anyio

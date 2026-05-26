@@ -7,15 +7,15 @@ Manages OAuth token lifecycle for long-running Temporal worker connections:
 
 Token exchange is delegated to ``credentials.oauth.OAuthTokenService``; this
 module owns only the Temporal-specific lifecycle (background loop, client
-api_key update, event emission).
+api_key update, event emission).  Clock-offset calibration and drift
+correction live in ``OAuthTokenService`` and are consumed here via the
+``clock_offset_seconds`` property.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
-import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -65,15 +65,17 @@ class TemporalAuthManager:
     long-running workers connected.  Token exchange is handled by an
     internal ``OAuthTokenService``; this class owns the Temporal-specific
     concerns (background loop timing, ``client.api_key`` update).
+
+    Clock-offset calibration is delegated to ``OAuthTokenService``.
+    ``_calculate_sleep_seconds`` reads ``clock_offset_seconds`` from the
+    service to correct for container clock drift without reinventing the
+    calibration logic here.
     """
 
     config: TemporalAuthConfig
     _token_service: OAuthTokenService | None = field(default=None, repr=False)
     _refresh_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _shutdown_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    # Seconds by which the server clock leads the local clock (positive = local is
-    # slow).  Derived from the JWT iat claim on each token receipt.
-    _server_clock_offset_seconds: float = field(default=0.0, repr=False)
 
     # ------------------------------------------------------------------
     # Public API
@@ -97,17 +99,13 @@ class TemporalAuthManager:
         )
 
         try:
-            t_before = time.time()
             access_token = await self._get_token_service().get_token(force_refresh=True)
-            t_after = time.time()
         except Exception as exc:
             from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
                 TemporalAuthTokenAcquireError,
             )
 
             raise TemporalAuthTokenAcquireError(cause=exc) from exc
-
-        self._update_clock_offset(access_token, t_before, t_after)
 
         expires_at = self._get_token_service().current_expires_at
         logger.info(
@@ -192,43 +190,6 @@ class TemporalAuthManager:
             message="Either token_url or base_url must be set", field="token_url"
         )
 
-    def _update_clock_offset(self, token: str, t_before: float, t_after: float) -> None:
-        """Derive the server–local clock offset from the JWT iat claim.
-
-        iat is set by the OAuth server at issue time using the server's
-        (correct) clock.  Comparing it to the midpoint of the local timestamps
-        bracketing the token request gives a first-order estimate of how far
-        ahead the server clock is relative to the container clock.
-
-        A positive offset means the container clock is slow (the production
-        failure mode caused by VM pause/wake on SDR deployments).
-
-        The exp claim is now stored directly in OAuthTokenService.current_expires_at
-        via _parse_jwt_exp in _exchange, so it does not need to be tracked here.
-        """
-        try:
-            parts = token.split(".")
-            if len(parts) != 3:
-                return
-            # base64url-decode the payload — no signature verification needed
-            padded = parts[1] + "=" * (-len(parts[1]) % 4)
-            claims: dict[str, object] = json.loads(base64.urlsafe_b64decode(padded))
-            iat = claims.get("iat")
-            if iat is not None:
-                local_midpoint = (t_before + t_after) / 2
-                self._server_clock_offset_seconds = float(iat) - local_midpoint  # type: ignore[arg-type]
-                if abs(self._server_clock_offset_seconds) > 1:
-                    logger.debug(
-                        "Server clock offset: %.1fs (container clock is %s)",
-                        abs(self._server_clock_offset_seconds),
-                        "slow" if self._server_clock_offset_seconds > 0 else "fast",
-                    )
-        except Exception:
-            logger.warning(
-                "Non-JWT or malformed token; clock calibration values unchanged",
-                exc_info=True,
-            )
-
     async def _refresh_loop(self, client: Client) -> None:
         """Background loop that refreshes tokens before expiry."""
         while not self._shutdown_event.is_set():
@@ -271,12 +232,7 @@ class TemporalAuthManager:
 
     async def _do_refresh(self, client: Client) -> None:
         """Perform a single token refresh and update the Temporal client."""
-        t_before = time.time()
         access_token = await self._get_token_service().get_token(force_refresh=True)
-        t_after = time.time()
-
-        self._update_clock_offset(access_token, t_before, t_after)
-
         expires_at = self._get_token_service().current_expires_at
 
         client.api_key = access_token
@@ -325,20 +281,21 @@ class TemporalAuthManager:
     def _calculate_sleep_seconds(self) -> float:
         """Calculate how long to sleep before next refresh.
 
-        OAuthTokenService.current_expires_at now stores the server-issued JWT
-        exp claim (set via _parse_jwt_exp in OAuthTokenService._exchange), so
-        it is immune to container clock drift.  The iat-derived
-        _server_clock_offset_seconds is applied on top to account for any
-        residual gap between local time.time() and the server's wall clock.
+        ``OAuthTokenService.current_expires_at`` stores the server-issued JWT
+        exp claim (immune to container clock drift).
+        ``OAuthTokenService.clock_offset_seconds`` is the iat-derived
+        server–local offset calibrated on each exchange, so
+        ``time.time() + offset ≈ server_now`` even after a host sleep/wake cycle.
 
-        Negative remaining is clamped to _MIN_REFRESH_INTERVAL_SECONDS so the
-        loop never spins against the token endpoint.
+        Negative remaining is clamped to ``_MIN_REFRESH_INTERVAL_SECONDS`` so
+        the loop never spins against the token endpoint.
         """
-        expires_at = self._get_token_service().current_expires_at
+        svc = self._get_token_service()
+        expires_at = svc.current_expires_at
         if expires_at is None:
             return float(_MAX_REFRESH_INTERVAL_SECONDS)
 
-        server_now = time.time() + self._server_clock_offset_seconds
+        server_now = time.time() + svc.clock_offset_seconds
         remaining = expires_at.timestamp() - server_now
 
         if remaining <= 0:

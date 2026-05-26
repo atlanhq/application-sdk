@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -395,29 +395,8 @@ _CLOCK_SKEW_SECONDS = 60  # Simulate container clock 60 s behind real time
 _SKEW_OBSERVE_AT = _SKEW_TOKEN_TTL // 2 + 5  # 35 s
 
 
-class _ServerClockMockTokenService:
-    """Issues tokens using the real (server-correct) clock.
-
-    Simulates an OAuth server whose wall clock is correct.  The container's
-    own clock may be skewed, but the token's iat/exp claims are always set
-    with real time — matching production behaviour.
-    """
-
-    def __init__(self, private_key: bytes) -> None:
-        self._private_key = private_key
-        self._call_count = 0
-        self.current_expires_at: datetime | None = None
-
-    async def get_token(self, *, force_refresh: bool = False) -> str:
-        self._call_count += 1
-        now_real = int(time.time())  # real clock — NOT affected by the patch
-        exp = now_real + _SKEW_TOKEN_TTL
-        self.current_expires_at = datetime.fromtimestamp(exp, tz=UTC)
-        return _issue_rs256_jwt(self._private_key, _SKEW_TOKEN_TTL)
-
-
 async def test_iat_clock_offset_corrects_skewed_refresh_timing() -> None:
-    """TemporalAuthManager detects container clock skew via JWT iat and corrects
+    """OAuthTokenService detects container clock skew via JWT iat and corrects
     the refresh schedule so the token is rotated before it expires server-side.
 
     Production failure mode
@@ -435,106 +414,109 @@ async def test_iat_clock_offset_corrects_skewed_refresh_timing() -> None:
 
     How the fix works
     -----------------
-    After calling get_token(), _do_refresh records the local clock at receipt
-    and reads the JWT's iat claim (set by the OAuth server at issue time):
+    OAuthTokenService._exchange brackets the HTTP call with local time.time()
+    values and reads the JWT iat claim (set by the OAuth server with the
+    server's correct clock):
 
-        offset = iat - local_time_at_receipt  # positive when container is slow
+        offset = iat - local_midpoint  # positive when container is slow
 
-    _calculate_sleep_seconds then adjusts:
+    _calculate_sleep_seconds in TemporalAuthManager then adjusts:
 
-        adjusted_now = local_now + offset  ≈ server_now
+        server_now = local_now + svc.clock_offset_seconds  ≈ server_now
 
-    and computes remaining = exp - adjusted_now = TTL (correct).
+    and computes remaining = exp - server_now = TTL (correct).
 
     Test setup
     ----------
-    Token TTL: {_SKEW_TOKEN_TTL}s (OAuth server — real clock)
+    Token TTL: {_SKEW_TOKEN_TTL}s (mock OAuth server — real clock)
     Simulated skew: {_CLOCK_SKEW_SECONDS}s (container clock is this many seconds slow)
     Observe at: t = {_SKEW_OBSERVE_AT}s
 
-    The patch covers both time.time and datetime.now in the auth module and
-    includes acquire_initial_token, so _update_clock_offset sees the asymmetry
-    on the very first token receipt:
-        offset = iat (real) - slow_time.time() = +{_CLOCK_SKEW_SECONDS}s
+    Both credentials.oauth.time and auth.time are patched to simulate the slow
+    container clock.  The mock HTTP backend issues JWTs with real-time iat/exp
+    (server-correct), matching the production asymmetry: container drifted,
+    OAuth server correct.
 
     Without fix: offset not applied → remaining = TTL + SKEW = {_SKEW_TOKEN_TTL + _CLOCK_SKEW_SECONDS}s
                  sleep = max(30, min({(_SKEW_TOKEN_TTL + _CLOCK_SKEW_SECONDS) // 2}, 300)) = {min((_SKEW_TOKEN_TTL + _CLOCK_SKEW_SECONDS) // 2, 300)}s
-                 → first refresh has NOT yet fired at t={_SKEW_OBSERVE_AT}s (call_count == 1)
+                 → first refresh has NOT yet fired at t={_SKEW_OBSERVE_AT}s (http_call_count == 1)
     With fix:    offset applied → remaining = TTL = {_SKEW_TOKEN_TTL}s
                  sleep = max(30, min({_SKEW_TOKEN_TTL // 2}, 300)) = {max(30, min(_SKEW_TOKEN_TTL // 2, 300))}s
-                 → first refresh HAS fired by t={_SKEW_OBSERVE_AT}s (call_count >= 2)
+                 → first refresh HAS fired by t={_SKEW_OBSERVE_AT}s (http_call_count >= 2)
 
-    This test is self-contained: it generates its own RSA key and uses a mock
-    Temporal client, so it runs in CI without the Docker JWT-auth stack.
+    This test is self-contained: it uses a mock Temporal client and a mock HTTP
+    backend, so it runs in CI without the Docker JWT-auth stack.
     """
-    from unittest.mock import MagicMock
+    import base64
+    import json
+    from unittest.mock import AsyncMock, MagicMock
 
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
+    real_time_time = time.time
+    http_call_count = [0]
 
-    pk_obj = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    pk = pk_obj.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
+    def _make_jwt_response() -> dict:
+        """Issue a JWT with real (server-accurate) iat/exp."""
+        now_real = int(real_time_time())
+        exp = now_real + _SKEW_TOKEN_TTL
+        iat = now_real
+        header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+        payload_bytes = json.dumps({"iat": iat, "exp": exp}).encode()
+        payload = base64.urlsafe_b64encode(payload_bytes).rstrip(b"=").decode()
+        token = f"{header}.{payload}.sig"
+        return {"access_token": token, "expires_in": _SKEW_TOKEN_TTL}
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.side_effect = lambda: (
+        http_call_count.__setitem__(0, http_call_count[0] + 1) or _make_jwt_response()
     )
 
-    token_svc = _ServerClockMockTokenService(pk)
+    mock_http = AsyncMock()
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=False)
+    mock_http.post = AsyncMock(return_value=mock_resp)
 
+    # Real TemporalAuthManager with real OAuthTokenService (no injection).
+    # Calibration happens inside OAuthTokenService._exchange, which is exercised
+    # on every get_token(force_refresh=True) call via the mock HTTP backend.
     manager = TemporalAuthManager(
         config=TemporalAuthConfig(
             client_id="test",
             client_secret="test",
-            token_url="http://localhost:0/unused",
+            token_url="https://mock-oauth.example.com/token",
         )
     )
-    manager._token_service = token_svc
 
-    # Temporal client is a passive recipient of api_key updates — a MagicMock
-    # is sufficient; no real Temporal server or JWT enforcement needed.
+    # Temporal client is a passive recipient of api_key updates.
     client = MagicMock()
 
-    # Patch both time.time and datetime.now inside the auth module to simulate
-    # a container clock that is _CLOCK_SKEW_SECONDS behind real time.
-    #
-    # acquire_initial_token is called INSIDE the patch so that the very first
-    # _update_clock_offset call sees: iat (real, from OAuth server) vs
-    # time.time() (slow, patched) → offset = +_CLOCK_SKEW_SECONDS.
-    #
-    # _ServerClockMockTokenService.get_token uses the test-module's time.time
-    # (unpatched), so iat/exp in issued tokens remain server-correct, matching
-    # the production asymmetry: container clock drifted, OAuth server correct.
-    real_time_time = time.time
-    real_datetime_now = datetime.now
-
-    def slow_time_time() -> float:
+    def slow_time() -> float:
         return real_time_time() - _CLOCK_SKEW_SECONDS
 
-    def slow_datetime_now(tz: object = None) -> datetime:
-        return real_datetime_now(tz) - timedelta(seconds=_CLOCK_SKEW_SECONDS)  # type: ignore[arg-type]
-
     with (
-        patch("application_sdk.execution._temporal.auth.time") as mock_time,
-        patch("application_sdk.execution._temporal.auth.datetime") as mock_dt,
+        patch("application_sdk.credentials.oauth.time") as mock_cred_time,
+        patch("application_sdk.execution._temporal.auth.time") as mock_auth_time,
+        patch("httpx.AsyncClient", return_value=mock_http),
     ):
-        mock_time.time.side_effect = slow_time_time
-        mock_dt.now.side_effect = slow_datetime_now
-        mock_dt.fromtimestamp = datetime.fromtimestamp
+        mock_cred_time.time.side_effect = slow_time
+        mock_auth_time.time.side_effect = slow_time
 
+        # acquire_initial_token calls _exchange (with slow local clock) which
+        # sees iat (real) vs t_before/t_after (slow) → offset = +_CLOCK_SKEW_SECONDS.
         await manager.acquire_initial_token()
         manager.start_background_refresh(client)
         await asyncio.sleep(_SKEW_OBSERVE_AT)
 
     try:
-        assert token_svc._call_count >= 2, (
-            f"Token service called only {token_svc._call_count} time(s) after "
+        assert http_call_count[0] >= 2, (
+            f"HTTP token endpoint called only {http_call_count[0]} time(s) after "
             f"{_SKEW_OBSERVE_AT}s. "
             f"Without clock-offset calibration the refresh sleeps "
             f"({_SKEW_TOKEN_TTL}+{_CLOCK_SKEW_SECONDS})/2 = "
             f"{(_SKEW_TOKEN_TTL + _CLOCK_SKEW_SECONDS) // 2}s, so it has not "
             f"fired yet. "
-            "Fix: derive server clock offset from JWT iat in _do_refresh and "
-            "apply it in _calculate_sleep_seconds."
+            "Fix: derive server clock offset from JWT iat in OAuthTokenService._exchange "
+            "and apply it via clock_offset_seconds in _calculate_sleep_seconds."
         )
     finally:
         await manager.shutdown()
