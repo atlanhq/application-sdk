@@ -13,14 +13,14 @@ api_key update, event emission).
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import json
 import os
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
-
-import jwt
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -218,14 +218,16 @@ class TemporalAuthManager:
         failure mode caused by VM pause/wake on SDR deployments).
         """
         try:
-            claims = jwt.decode(
-                token,
-                options={"verify_signature": False, "verify_exp": False},
-            )
+            parts = token.split(".")
+            if len(parts) != 3:
+                return
+            # base64url-decode the payload — no signature verification needed
+            padded = parts[1] + "=" * (-len(parts[1]) % 4)
+            claims: dict[str, object] = json.loads(base64.urlsafe_b64decode(padded))
             iat = claims.get("iat")
             if iat is not None:
                 local_midpoint = (t_before + t_after) / 2
-                self._server_clock_offset_seconds = float(iat) - local_midpoint
+                self._server_clock_offset_seconds = float(iat) - local_midpoint  # type: ignore[arg-type]
                 if abs(self._server_clock_offset_seconds) > 1:
                     logger.debug(
                         "Server clock offset: %.1fs (container clock is %s)",
@@ -234,9 +236,9 @@ class TemporalAuthManager:
                     )
             exp = claims.get("exp")
             if exp is not None:
-                self._server_token_exp = float(exp)
+                self._server_token_exp = float(exp)  # type: ignore[arg-type]
         except Exception:  # noqa: BLE001, S110
-            pass  # non-JWT token or decode error — keep existing values
+            pass  # non-JWT token or malformed payload — keep existing values
 
     async def _refresh_loop(self, client: Client) -> None:
         """Background loop that refreshes tokens before expiry."""
