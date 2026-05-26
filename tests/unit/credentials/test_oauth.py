@@ -263,3 +263,75 @@ def test_current_expires_at_returns_none_on_bad_iso() -> None:
     cred = _cred(access_token="tok", expires_at="not-a-date")
     svc = OAuthTokenService(cred)
     assert svc.current_expires_at is None
+
+
+# ---------------------------------------------------------------------------
+# _exchange — JWT exp used as expires_at
+# ---------------------------------------------------------------------------
+
+
+def _make_jwt_access_token(exp: float, iat: float | None = None) -> str:
+    """Build a minimal fake JWT with the given exp (and optional iat) claims."""
+    import base64
+    import json
+
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    claims: dict[str, object] = {"exp": exp}
+    if iat is not None:
+        claims["iat"] = iat
+    payload = (
+        base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+    )
+    return f"{header}.{payload}.sig"
+
+
+@pytest.mark.anyio
+async def test_exchange_uses_jwt_exp_for_expires_at() -> None:
+    """When the token is a JWT, expires_at is taken from the server-issued exp
+    claim rather than datetime.now(UTC)+expires_in, making it immune to local
+    clock drift."""
+    server_exp = 1_700_010_000.0
+    jwt_token = _make_jwt_access_token(exp=server_exp)
+
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"access_token": jwt_token, "expires_in": 600}
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=resp)
+        mock_client_cls.return_value = mock_client
+
+        svc = OAuthTokenService(_cred())
+        await svc.get_token(force_refresh=True)
+
+    result = svc.current_expires_at
+    assert result is not None
+    assert result == datetime.fromtimestamp(server_exp, UTC)
+
+
+@pytest.mark.anyio
+async def test_exchange_falls_back_to_expires_in_for_opaque_token() -> None:
+    """Opaque tokens (no JWT exp) fall back to the expires_in-based calculation."""
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"access_token": "opaque-token", "expires_in": 600}
+
+    before = datetime.now(UTC)
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=resp)
+        mock_client_cls.return_value = mock_client
+
+        svc = OAuthTokenService(_cred())
+        await svc.get_token(force_refresh=True)
+    after = datetime.now(UTC)
+
+    result = svc.current_expires_at
+    assert result is not None
+    # Should be ~600 s from now, not the JWT exp
+    assert before + timedelta(seconds=599) <= result <= after + timedelta(seconds=601)

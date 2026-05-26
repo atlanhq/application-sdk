@@ -19,6 +19,8 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
@@ -30,6 +32,24 @@ logger = get_logger(__name__)
 
 # Refresh the token this many seconds before it actually expires.
 _EXPIRY_BUFFER_SECONDS = 60
+
+
+def _parse_jwt_exp(token: str) -> float | None:
+    """Extract the exp claim from a JWT payload, or None for opaque tokens.
+
+    Uses the server-issued exp rather than locally-computed now()+expires_in so
+    that current_expires_at is immune to container clock drift on sleep/wake.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        claims: dict[str, object] = json.loads(base64.urlsafe_b64decode(padded))
+        exp = claims.get("exp")
+        return float(exp) if exp is not None else None  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class OAuthTokenError(AuthError):
@@ -189,11 +209,18 @@ class OAuthTokenService:
             )
 
         expires_in = body.get("expires_in")
-        expires_at = ""
-        if expires_in is not None:
+        exp_ts = _parse_jwt_exp(access_token)
+        if exp_ts is not None:
+            # Prefer the server-issued exp claim: it is set by the OAuth server
+            # using the server's own clock and is immune to container clock drift
+            # (e.g. after a VM sleep/wake cycle).
+            expires_at = datetime.fromtimestamp(exp_ts, UTC).isoformat()
+        elif expires_in is not None:
             expires_at = (
                 datetime.now(UTC) + timedelta(seconds=int(expires_in))
             ).isoformat()
+        else:
+            expires_at = ""
 
         logger.debug("OAuth token acquired, expires_at=%s", expires_at or "unknown")
         return self._base.with_new_token(

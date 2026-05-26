@@ -9,7 +9,7 @@ runtime in production.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest import mock
 
 import pytest
@@ -533,12 +533,11 @@ def _make_fake_jwt(iat: float, exp: float) -> str:
 
 
 class TestUpdateClockOffset:
-    def test_valid_jwt_sets_offset_and_exp(self) -> None:
+    def test_valid_jwt_sets_offset(self) -> None:
         manager = _make_manager()
         now = 1_700_000_000.0
         exp = now + 600.0
-        # Simulate t_before/t_after bracketing the request; container clock is
-        # 30 s slow, so local midpoint is 30 s behind the server's iat.
+        # Container clock is 30 s slow: local midpoint is 30 s behind server iat.
         t_before = now - 30.5
         t_after = now - 29.5  # midpoint = now - 30.0
         token = _make_fake_jwt(iat=now, exp=exp)
@@ -546,17 +545,14 @@ class TestUpdateClockOffset:
         manager._update_clock_offset(token, t_before, t_after)
 
         assert manager._server_clock_offset_seconds == pytest.approx(30.0, abs=0.1)
-        assert manager._server_token_exp == exp
 
     def test_malformed_token_leaves_offset_unchanged(self) -> None:
         manager = _make_manager()
         manager._server_clock_offset_seconds = 5.0
-        manager._server_token_exp = 999.0
 
         manager._update_clock_offset("not-a-jwt", 0.0, 0.0)
 
         assert manager._server_clock_offset_seconds == 5.0
-        assert manager._server_token_exp == 999.0
 
     def test_opaque_token_two_parts_leaves_offset_unchanged(self) -> None:
         manager = _make_manager()
@@ -582,90 +578,68 @@ class TestUpdateClockOffset:
 # _calculate_sleep_seconds
 # ---------------------------------------------------------------------------
 
+# All tests freeze time via time.time; current_expires_at is provided as a
+# datetime whose .timestamp() is the reference point.  OAuthTokenService now
+# stores the server-issued JWT exp directly so current_expires_at is immune to
+# container clock drift; _server_clock_offset_seconds corrects any residual gap.
+
 
 class TestCalculateSleepSeconds:
     @pytest.fixture
-    def fixed_now(self) -> datetime:
-        return datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    def frozen_ts(self) -> float:
+        return 1_700_000_000.0
 
     def test_returns_max_when_expires_at_is_none(self) -> None:
         manager = _make_manager()
         _stub_token_service(manager, expires_at=None)
         assert manager._calculate_sleep_seconds() == 300.0
 
-    def test_returns_min_interval_when_token_expired(self, fixed_now: datetime) -> None:
+    def test_returns_min_when_expired(self, frozen_ts: float) -> None:
         manager = _make_manager()
-        past = fixed_now - timedelta(minutes=5)
-        _stub_token_service(manager, expires_at=past)
-        with mock.patch(
-            "application_sdk.execution._temporal.auth.datetime"
-        ) as mock_datetime:
-            mock_datetime.now.return_value = fixed_now
+        _stub_token_service(
+            manager, expires_at=datetime.fromtimestamp(frozen_ts - 300, UTC)
+        )
+        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
+            mock_time.time.return_value = frozen_ts
             assert manager._calculate_sleep_seconds() == 30.0
 
-    def test_halves_remaining_within_bounds(self, fixed_now: datetime) -> None:
+    def test_halves_remaining_within_bounds(self, frozen_ts: float) -> None:
         manager = _make_manager()
-        future = fixed_now + timedelta(seconds=200)
-        _stub_token_service(manager, expires_at=future)
-        with mock.patch(
-            "application_sdk.execution._temporal.auth.datetime"
-        ) as mock_datetime:
-            mock_datetime.now.return_value = fixed_now
+        _stub_token_service(
+            manager, expires_at=datetime.fromtimestamp(frozen_ts + 200, UTC)
+        )
+        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
+            mock_time.time.return_value = frozen_ts
             assert manager._calculate_sleep_seconds() == 100.0
 
-    def test_clamped_to_min(self, fixed_now: datetime) -> None:
+    def test_clamped_to_min(self, frozen_ts: float) -> None:
         manager = _make_manager()
-        future = fixed_now + timedelta(seconds=20)
-        _stub_token_service(manager, expires_at=future)
-        with mock.patch(
-            "application_sdk.execution._temporal.auth.datetime"
-        ) as mock_datetime:
-            mock_datetime.now.return_value = fixed_now
+        _stub_token_service(
+            manager, expires_at=datetime.fromtimestamp(frozen_ts + 20, UTC)
+        )
+        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
+            mock_time.time.return_value = frozen_ts
             assert manager._calculate_sleep_seconds() == 30.0
 
-    def test_clamped_to_max(self, fixed_now: datetime) -> None:
+    def test_clamped_to_max(self, frozen_ts: float) -> None:
         manager = _make_manager()
-        future = fixed_now + timedelta(hours=1)
-        _stub_token_service(manager, expires_at=future)
-        with mock.patch(
-            "application_sdk.execution._temporal.auth.datetime"
-        ) as mock_datetime:
-            mock_datetime.now.return_value = fixed_now
+        _stub_token_service(
+            manager, expires_at=datetime.fromtimestamp(frozen_ts + 3600, UTC)
+        )
+        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
+            mock_time.time.return_value = frozen_ts
             assert manager._calculate_sleep_seconds() == 300.0
 
-    def test_server_token_exp_used_as_primary_expiry(self) -> None:
+    def test_clock_offset_applied(self, frozen_ts: float) -> None:
         manager = _make_manager()
-        _stub_token_service(manager, expires_at=None)  # local expiry absent
-        local_now = 1_000_000.0
-        manager._server_token_exp = local_now + 200.0  # 200 s remaining
-        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
-            mock_time.time.return_value = local_now
-            result = manager._calculate_sleep_seconds()
-        # remaining=200 → sleep=100, within [30, 300]
-        assert result == pytest.approx(100.0)
-
-    def test_server_token_exp_applies_clock_offset(self) -> None:
-        manager = _make_manager()
-        _stub_token_service(manager, expires_at=None)
-        local_now = 1_000_000.0
-        # Container clock is 30 s slow; server_now = local_now + 30
+        # Container is 30 s slow: server_now = frozen_ts + 30 → remaining = 200 → sleep = 100
         manager._server_clock_offset_seconds = 30.0
-        manager._server_token_exp = local_now + 230.0  # 200 s from server_now
+        _stub_token_service(
+            manager, expires_at=datetime.fromtimestamp(frozen_ts + 230, UTC)
+        )
         with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
-            mock_time.time.return_value = local_now
-            result = manager._calculate_sleep_seconds()
-        # server_now = 1_000_030 → remaining = exp - server_now = 200 → sleep=100
-        assert result == pytest.approx(100.0)
-
-    def test_server_token_exp_expired_returns_min(self) -> None:
-        manager = _make_manager()
-        _stub_token_service(manager, expires_at=None)
-        local_now = 1_000_000.0
-        manager._server_token_exp = local_now - 60.0  # already expired
-        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
-            mock_time.time.return_value = local_now
-            result = manager._calculate_sleep_seconds()
-        assert result == 30.0
+            mock_time.time.return_value = frozen_ts
+            assert manager._calculate_sleep_seconds() == pytest.approx(100.0)
 
 
 # ---------------------------------------------------------------------------
