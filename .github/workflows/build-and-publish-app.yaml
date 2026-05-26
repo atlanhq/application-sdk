@@ -372,6 +372,7 @@ jobs:
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
       entrypoints: ${{ steps.manifest.outputs.entrypoints }}
+      app_configs:      ${{ steps.app_configs.outputs.app_configs }}
       branch:           ${{ steps.tags.outputs.branch }}
       image_tag:        ${{ steps.tags.outputs.image_tag }}
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
@@ -438,6 +439,41 @@ jobs:
             echo "::error::publish=true but APP_PUBLISH_TOKEN secret is not set in this repo."
             exit 1
           fi
+
+      - name: Read app/generated/ for app_configs
+        # Glob the connector form JSON files the app ships under app/generated/
+        # and emit them as a single base64-encoded JSON blob. Base64 keeps the
+        # value inert to Kong's bluemonday XSS plugin on the upstream
+        # /marketplace/publish route (the raw JSON contains chars like
+        # `<account-id>`, `>`, PEM markers, and Jinja `{% %}` that trip it).
+        # GM decodes the field in its VersionBody validator. Apps that don't
+        # ship app/generated/ produce an empty output and the publish step
+        # omits the field entirely.
+        id: app_configs
+        run: |
+          python3 - <<'PYEOF'
+          import base64, json, os, pathlib, sys
+          generated_dir = pathlib.Path("app/generated")
+          form_files = {}
+          if generated_dir.is_dir():
+              for f in sorted(generated_dir.rglob("*.json")):
+                  try:
+                      form_files[f.name] = json.loads(f.read_text())
+                  except json.JSONDecodeError as e:
+                      # Hard-fail with a GitHub Actions error annotation. Silently
+                      # dropping the file would publish an app_configs missing a
+                      # connector form, which surfaces later as a broken install
+                      # on tenants. Better to block the publish here.
+                      print(f"::error file={f}::Invalid JSON in connector form: {e}")
+                      sys.exit(1)
+          if form_files:
+              value = base64.b64encode(json.dumps(form_files).encode("utf-8")).decode("ascii")
+          else:
+              value = ""
+          print(f"[app_configs] found {len(form_files)} files: {list(form_files.keys())}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              print(f"app_configs={value}", file=fh)
+          PYEOF
 
       - name: Compute image tags
         id: tags
@@ -716,6 +752,7 @@ jobs:
           TENANTS: ${{ inputs.tenants }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_MODEL: ${{ needs.prepare.outputs.release_model }}
+          APP_CONFIGS: ${{ needs.prepare.outputs.app_configs }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           GITHUB_ACTOR: ${{ github.triggering_actor }}
         run: |
@@ -842,6 +879,12 @@ jobs:
 
           if release_model:
               body["release_model"] = release_model
+
+          # Base64-encoded JSON blob of connector form files (see prepare job).
+          # GM's VersionBody validator decodes this back to the JSON string.
+          app_configs = os.environ.get("APP_CONFIGS", "").strip()
+          if app_configs:
+              body["app_configs"] = app_configs
 
           print(json.dumps(body))
           PYEOF
