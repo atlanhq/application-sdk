@@ -1386,7 +1386,7 @@ The interim-apps framework handles S3 mapping in production.
 
 ### Heartbeat - keep the defaults
 
-The `@task` defaults (`heartbeat_timeout_seconds=60`, `auto_heartbeat_seconds=10`) are correct. Don't disable `auto_heartbeat_seconds` to "work around" missed beats - auto-heartbeat runs as a coroutine on the same event loop as your task body, so anything that blocks the loop blocks the beats. Fix it with `self.run_in_thread(...)`, async-native libraries, or `await asyncio.sleep(0)` chunking. If you see `Event loop blocked for X seconds during task ...` in worker logs, that's this failure mode.
+The `@task` defaults (`heartbeat_timeout_seconds=60`, `auto_heartbeat_seconds=10`) are correct. Don't disable `auto_heartbeat_seconds` to "work around" missed beats - auto-heartbeat runs as a coroutine on the same event loop as your task body, so anything that blocks the loop blocks the beats. Fix it with async-native libraries (preferred), `self.run_in_thread(...)` (if async-native is impossible), or `await asyncio.sleep(0)` chunking. If you see `Event loop blocked for X seconds during task ...` in worker logs, that's this failure mode.
 
 For long tasks, raise `timeout_seconds` (the overall activity budget), not `heartbeat_timeout_seconds` (the failure-detection knob - a higher value just delays retry on a dead worker). SQL templates set `timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30` (`application_sdk/templates/sql_app.py:508`) for long extracts - precedent if your work matches.
 
