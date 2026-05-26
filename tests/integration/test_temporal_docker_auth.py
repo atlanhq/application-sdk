@@ -416,9 +416,7 @@ class _ServerClockMockTokenService:
         return _issue_rs256_jwt(self._private_key, _SKEW_TOKEN_TTL)
 
 
-async def test_iat_clock_offset_corrects_skewed_refresh_timing(
-    private_key: bytes,
-) -> None:
+async def test_iat_clock_offset_corrects_skewed_refresh_timing() -> None:
     """TemporalAuthManager detects container clock skew via JWT iat and corrects
     the refresh schedule so the token is rotated before it expires server-side.
 
@@ -465,8 +463,22 @@ async def test_iat_clock_offset_corrects_skewed_refresh_timing(
     With fix:    offset applied → remaining = TTL = {_SKEW_TOKEN_TTL}s
                  sleep = max(30, min({_SKEW_TOKEN_TTL // 2}, 300)) = {max(30, min(_SKEW_TOKEN_TTL // 2, 300))}s
                  → first refresh HAS fired by t={_SKEW_OBSERVE_AT}s (call_count >= 2)
+
+    This test is self-contained: it generates its own RSA key and uses a mock
+    Temporal client, so it runs in CI without the Docker JWT-auth stack.
     """
-    pk = private_key
+    from unittest.mock import MagicMock
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    pk_obj = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pk = pk_obj.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
     token_svc = _ServerClockMockTokenService(pk)
 
     manager = TemporalAuthManager(
@@ -477,6 +489,10 @@ async def test_iat_clock_offset_corrects_skewed_refresh_timing(
         )
     )
     manager._token_service = token_svc
+
+    # Temporal client is a passive recipient of api_key updates — a MagicMock
+    # is sufficient; no real Temporal server or JWT enforcement needed.
+    client = MagicMock()
 
     # Patch both time.time and datetime.now inside the auth module to simulate
     # a container clock that is _CLOCK_SKEW_SECONDS behind real time.
@@ -505,8 +521,7 @@ async def test_iat_clock_offset_corrects_skewed_refresh_timing(
         mock_dt.now.side_effect = slow_datetime_now
         mock_dt.fromtimestamp = datetime.fromtimestamp
 
-        initial_token = await manager.acquire_initial_token()
-        client = await Client.connect(_TEMPORAL_HOST, tls=False, api_key=initial_token)
+        await manager.acquire_initial_token()
         manager.start_background_refresh(client)
         await asyncio.sleep(_SKEW_OBSERVE_AT)
 
