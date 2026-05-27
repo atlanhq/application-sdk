@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-05-27",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -618,6 +618,28 @@
     "reason": "Upstream fix available but need immediate unblock for v2.x.x releases for SDR locked app releases.",
     "expires": "2026-06-09",
     "added_by": "adityachoudhury-cloud",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2025-13836": {
+    "package": "python (stdlib)",
+    "severity": "HIGH",
+    "reason": "Base image - Python stdlib HTTP client OOM/DoS: unbounded Content-Length response body read allows a malicious server to exhaust memory. No fix in current Chainguard Wolfi python base; upstream fix in CPython 3.10.20/3.11.15/3.12.13/3.13.11 pending distro rebuild. Reported by atlan-alloydb-postgres-app daily-cert scan (SEC-1877).",
+    "expires": "2026-06-26",
+    "added_by": "claude",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2025-69421": {
+    "package": "openssl",
+    "severity": "HIGH",
+    "reason": "Base image - OpenSSL PKCS#12 NULL pointer dereference in PKCS12_item_decrypt_d2i_ex(), DoS when processing malformed PKCS#12 files. No fix in current Chainguard Wolfi openssl package; upstream fix in OpenSSL 3.0.19/3.3.6/3.4.4/3.5.5 pending distro rebuild. Reported by atlan-alloydb-postgres-app daily-cert scan (SEC-1877).",
+    "expires": "2026-06-26",
+    "added_by": "claude",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
