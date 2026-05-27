@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "NEEDS REVIEW — package not reported by scanner",
+    "severity": "HIGH",
+    "reason": "NEEDS REVIEW: No upstream fix available as of 2026-05-27. SEC team must fill in package context and verify applicability before merging.",
+    "expires": "2026-06-26",
+    "added_by": "securityclaw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "NEEDS REVIEW — package not reported by scanner",
+    "severity": "HIGH",
+    "reason": "NEEDS REVIEW: No upstream fix available as of 2026-05-27. SEC team must fill in package context and verify applicability before merging.",
+    "expires": "2026-06-26",
+    "added_by": "securityclaw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "NEEDS REVIEW — package not reported by scanner",
+    "severity": "HIGH",
+    "reason": "NEEDS REVIEW: No upstream fix available as of 2026-05-27. SEC team must fill in package context and verify applicability before merging.",
+    "expires": "2026-06-26",
+    "added_by": "securityclaw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
