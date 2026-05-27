@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-05-27",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -618,6 +618,17 @@
     "reason": "Upstream fix available but need immediate unblock for v2.x.x releases for SDR locked app releases.",
     "expires": "2026-06-09",
     "added_by": "adityachoudhury-cloud",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-45186": {
+    "package": "unknown (scanner did not report package name \u2014 see SEC-3779)",
+    "severity": "HIGH",
+    "reason": "Release-time scan on ghcr.io/atlanhq/atlan-priority-metadata-propagator-app:main-6debf57 flagged this CVE with no package metadata populated by the scanner. No fix available upstream (ticket reports 'no fix yet'). Allowlisted to unblock release; package identity requires manual investigation before expiry. Ref: SEC-3779.",
+    "expires": "2026-06-26",
+    "added_by": "mothership-bot",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
