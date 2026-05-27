@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -271,6 +272,7 @@ def create_worker(
     graceful_shutdown_timeout_seconds: int | None = None,
     interceptors: list[TemporalInterceptor] | None = None,
     enable_pushgateway: bool = False,
+    extra_workflows: Sequence[type] | None = None,
 ) -> AppWorker:
     """Create a Temporal worker for registered Apps.
 
@@ -315,6 +317,11 @@ def create_worker(
             performs a final push on exit. Combined deployments (server +
             worker in one process) should leave this False so /metrics
             doesn't double-count.
+        extra_workflows: Hand-rolled ``@workflow.defn`` classes to register
+            alongside the SDK-generated App workflows. Use when a caller has
+            a workflow whose shape doesn't fit the App entry-point pattern —
+            e.g. a generic single-activity dispatcher driven dynamically by
+            an LLM agent — and still needs it served by the same worker.
 
     Returns:
         AppWorker wrapping a configured Temporal Worker (not yet started).
@@ -329,6 +336,8 @@ def create_worker(
         await worker.run()
     """
     app_workflows = get_all_app_workflows()
+    if extra_workflows:
+        app_workflows = [*app_workflows, *extra_workflows]
     task_activities = get_all_task_activities()
 
     if enable_sdr and handler is not None:
