@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "unknown (scanner did not attribute a package)",
+    "severity": "HIGH",
+    "reason": "Confluence-connector daily scan \u2014 no fix available; package attribution not provided by scanner. Base image origin inferred from scan context.",
+    "expires": "2026-06-26",
+    "added_by": "claude-mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "unknown (scanner did not attribute a package)",
+    "severity": "HIGH",
+    "reason": "Confluence-connector daily scan \u2014 no fix available; package attribution not provided by scanner. Base image origin inferred from scan context.",
+    "expires": "2026-06-26",
+    "added_by": "claude-mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "unknown (scanner did not attribute a package)",
+    "severity": "HIGH",
+    "reason": "Confluence-connector daily scan \u2014 no fix available; package attribution not provided by scanner. Base image origin inferred from scan context.",
+    "expires": "2026-06-26",
+    "added_by": "claude-mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
