@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-05-27",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -621,6 +621,17 @@
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-45186": {
+    "package": "unknown — empty package metadata at scan time",
+    "severity": "HIGH",
+    "reason": "Scanner gap — CVE published before NVD/OSV package mapping available. Cert scanner reports empty package and version fields fleet-wide (20+ apps affected in same scan batch). False positive: no package attribution means no actionable remediation. Re-evaluate when NVD publishes package mapping.",
+    "expires": "2026-06-21",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry or NVD package attribution published",
     "exposure_assessment": null
   }
 }
