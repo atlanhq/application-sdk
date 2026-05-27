@@ -319,8 +319,7 @@ class AppConfig:
             max_concurrent_storage_transfers=_env_int(
                 "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
             ),
-            workflow_max_timeout_hours=_env_int("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", 0)
-            or None,
+            workflow_max_timeout_hours=_parse_workflow_max_timeout_hours(),
         )
 
 
@@ -577,6 +576,19 @@ def _env_int(key: str, default: int = 0) -> int:
             exc_info=True,
         )
         return default
+
+
+def _parse_workflow_max_timeout_hours() -> int | None:
+    """Parse ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS, returning None for unset or non-positive values."""
+    hours = _env_int("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", 0)
+    if hours <= 0:
+        if hours < 0:
+            logger.warning(
+                "ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS=%d is non-positive; ignoring.",
+                hours,
+            )
+        return None
+    return hours
 
 
 def _build_dev_config(

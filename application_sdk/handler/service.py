@@ -1653,6 +1653,11 @@ def create_app_handler_service(
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
+                execution_timeout=(
+                    timedelta(hours=_workflow_config.workflow_max_timeout_hours)
+                    if _workflow_config.workflow_max_timeout_hours
+                    else None
+                ),
             )
             return JSONResponse(
                 content={
