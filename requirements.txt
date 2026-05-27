@@ -54,6 +54,7 @@ coverage==7.13.5
 cryptography==48.0.0
     # via
     #   authlib
+    #   pyjwt
     #   trustme
 distlib==0.4.0
     # via virtualenv
@@ -253,6 +254,7 @@ pygments==2.20.0
     # via
     #   pytest
     #   rich
+pyjwt==2.12.1
 pytest==9.0.3
     # via
     #   pytest-asyncio
