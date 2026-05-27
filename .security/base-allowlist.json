@@ -622,5 +622,16 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-25537": {
+    "package": "unknown (scanner metadata gap)",
+    "severity": "HIGH",
+    "reason": "Base image - OS-layer component; package metadata not resolved by Trivy/Snyk (known scanner gap). Fleet-wide issue affecting all SDK-based apps on application-sdk-main. No upstream fix available. Tracked fleet-wide in SEC-1824.",
+    "expires": "2026-06-26",
+    "added_by": "mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
