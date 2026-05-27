@@ -215,7 +215,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.13.2"
+version = "3.13.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -314,6 +314,7 @@ test = [
     { name = "coverage" },
     { name = "hypothesis" },
     { name = "mock" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -393,6 +394,7 @@ test = [
     { name = "coverage", specifier = ">=7.6.1,<8.0.0" },
     { name = "hypothesis", specifier = ">=6.114.0,<7.0.0" },
     { name = "mock", specifier = ">=5.1.0,<6.0.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
     { name = "pytest", specifier = ">=8.3.3,<10.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.26.0,<1.4.0" },
     { name = "pytest-timeout", specifier = ">=2.3.0,<3.0.0" },
