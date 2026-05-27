@@ -33,6 +33,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from application_sdk.common._env import env_int as _env_int
 from application_sdk.discovery import (
     load_app_class,
     load_handler_class,
@@ -554,28 +555,6 @@ def _derive_task_queue(app_module: str) -> str:
     if app_name:
         return app_name
     return f"{_derive_service_name(app_module)}-queue"
-
-
-def _env_int(key: str, default: int = 0) -> int:
-    """Read an int env var, returning ``default`` when unset, empty, or unparsable.
-
-    A malformed value like ``ATLAN_HANDLER_PORT="not-a-number"`` falls through
-    to the next key instead of crashing startup.
-    """
-    val = os.environ.get(key)
-    if not val:
-        return default
-    try:
-        return int(val)
-    except ValueError:
-        logger.warning(
-            "Ignoring non-integer env var %s=%r; falling back to default %d",
-            key,
-            val,
-            default,
-            exc_info=True,
-        )
-        return default
 
 
 def _parse_workflow_max_timeout_hours() -> int | None:

@@ -408,6 +408,8 @@ class TestTaskEnvVarDefaults:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A non-integer env var value falls back to the hardcoded default."""
+        from application_sdk.common._env import env_int
+
         monkeypatch.setenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", "not-a-number")
-        result = self._task_module()._env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
+        result = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
         assert result == 60

@@ -16,13 +16,12 @@ Tasks support heartbeating for long-running operations:
 """
 
 import inspect
-import logging
-import os
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast, get_type_hints, overload
 
+from application_sdk.common._env import env_int
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import CONTRACT_VALIDATION, ErrorCode
 from application_sdk.errors.leaves import InvalidInputError
@@ -32,36 +31,14 @@ if TYPE_CHECKING:
 
 F = TypeVar("F", bound=Callable[..., Any])
 
-logger = logging.getLogger(__name__)
-
 # Sentinel for "use default" - allows None to mean "disable"
 _USE_DEFAULT = object()
-
-
-def _env_int(key: str, default: int) -> int:
-    """Read an int env var, returning ``default`` when unset, empty, or unparsable."""
-    val = os.environ.get(key)
-    if not val:
-        return default
-    try:
-        return int(val)
-    except ValueError:
-        logger.warning(
-            "Ignoring non-integer env var %s=%r; falling back to default %d",
-            key,
-            val,
-            default,
-        )
-        return default
-
 
 # Env-var-driven defaults for @task timeouts. Read once at import time so the
 # value is stable for the process lifetime (same pattern as constants.py).
 # Apps that need a different per-task value pass it explicitly to @task().
-_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = _env_int(
-    "ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60
-)
-_DEFAULT_TIMEOUT_SECONDS: int = _env_int("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 600)
+_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
+_DEFAULT_TIMEOUT_SECONDS: int = env_int("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 600)
 
 # Type alias for methods with single Input param returning Output
 TaskMethod = Callable[..., Any]
@@ -363,9 +340,9 @@ def task(
     Raises:
         TaskContractError: If the method doesn't follow the contract pattern.
     """
-    # Resolve sentinel values to defaults — evaluated at decoration time so that
-    # process-level env-var overrides (e.g. ATLAN_HEARTBEAT_TIMEOUT_SECONDS) are
-    # picked up even when the module-level constants were patched after import.
+    # Resolve sentinels at decoration time so test-side monkeypatching of
+    # _DEFAULT_* constants takes effect on subsequent @task uses; env-var values
+    # themselves are read once at module import via env_int().
     resolved_timeout: int = (
         _DEFAULT_TIMEOUT_SECONDS
         if timeout_seconds is _USE_DEFAULT
