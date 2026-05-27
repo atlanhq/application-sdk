@@ -33,6 +33,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from application_sdk.common._env import env_int as _env_int
 from application_sdk.discovery import (
     load_app_class,
     load_handler_class,
@@ -181,6 +182,12 @@ class AppConfig:
     """Maximum concurrent object-store uploads/downloads.
     Reads same env var as constants.MAX_CONCURRENT_STORAGE_TRANSFERS."""
 
+    workflow_max_timeout_hours: int | None = None
+    """Maximum workflow execution timeout in hours. When set, passed as
+    execution_timeout to Temporal on every /workflows/v1/start call.
+    Reads env var ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS. None means no SDK-level
+    ceiling (Temporal namespace default applies)."""
+
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
         if not self.task_queue and self.app_module:
@@ -313,6 +320,7 @@ class AppConfig:
             max_concurrent_storage_transfers=_env_int(
                 "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
             ),
+            workflow_max_timeout_hours=_parse_workflow_max_timeout_hours(),
         )
 
 
@@ -549,26 +557,17 @@ def _derive_task_queue(app_module: str) -> str:
     return f"{_derive_service_name(app_module)}-queue"
 
 
-def _env_int(key: str, default: int = 0) -> int:
-    """Read an int env var, returning ``default`` when unset, empty, or unparsable.
-
-    A malformed value like ``ATLAN_HANDLER_PORT="not-a-number"`` falls through
-    to the next key instead of crashing startup.
-    """
-    val = os.environ.get(key)
-    if not val:
-        return default
-    try:
-        return int(val)
-    except ValueError:
-        logger.warning(
-            "Ignoring non-integer env var %s=%r; falling back to default %d",
-            key,
-            val,
-            default,
-            exc_info=True,
-        )
-        return default
+def _parse_workflow_max_timeout_hours() -> int | None:
+    """Parse ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS, returning None for unset or non-positive values."""
+    hours = _env_int("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", 0)
+    if hours <= 0:
+        if hours < 0:
+            logger.warning(
+                "ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS=%d is non-positive; ignoring.",
+                hours,
+            )
+        return None
+    return hours
 
 
 def _build_dev_config(
@@ -964,6 +963,7 @@ def run_handler_mode(config: AppConfig) -> None:
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
+        workflow_max_timeout_hours=config.workflow_max_timeout_hours,
     )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1125,6 +1125,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_scopes=config.auth_scopes,
         enable_temporal_core_metrics=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
+        workflow_max_timeout_hours=config.workflow_max_timeout_hours,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
