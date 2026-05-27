@@ -142,14 +142,10 @@ async def test_trust_anchor_arn_raises(tmp_path):
 async def test_assume_role_wires_up(tmp_path):
     """assumeRoleArn creates the STS credential provider without error.
 
-    Requires boto3 (iam_auth extra). The actual STS call may fail if the role
-    does not exist in this account — that is acceptable: the binding wiring is
-    what this test validates, not IAM policy configuration.
+    boto3 is a core dependency. The actual STS call may fail if the role does
+    not exist in this account — that is acceptable: the binding wiring is what
+    this test validates, not IAM policy configuration.
     """
-    pytest.importorskip(
-        "boto3",
-        reason="boto3 required for assumeRoleArn test (uv sync --extra iam_auth)",
-    )
     write_dapr_component(
         tmp_path / "components",
         name="s3-sts-store",

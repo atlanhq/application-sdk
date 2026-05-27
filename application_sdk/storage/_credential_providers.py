@@ -22,6 +22,7 @@ def make_s3_assume_role_provider(
     region: str | None = None,
     base_access_key: str | None = None,
     base_secret_key: str | None = None,
+    base_session_token: str | None = None,
     external_id: str | None = None,
 ) -> Any:
     """Return an obstore S3CredentialProvider that calls STS::AssumeRole.
@@ -30,9 +31,10 @@ def make_s3_assume_role_provider(
 
     When *base_access_key* / *base_secret_key* are supplied they are used as
     the base credentials for the STS call (e.g., an operator-supplied IAM
-    user with ``sts:AssumeRole`` permission).  When omitted the boto3 session
-    uses its own default credential chain (instance profile, env vars, etc.)
-    for the STS call.
+    user with ``sts:AssumeRole`` permission).  *base_session_token* is
+    required when those base credentials are themselves temporary (STS-derived).
+    When all three are omitted the boto3 session falls back to its default
+    credential chain (instance profile, env vars, etc.) for the STS call.
     """
     session_kwargs: dict[str, Any] = {}
     if region:
@@ -40,6 +42,8 @@ def make_s3_assume_role_provider(
     if base_access_key and base_secret_key:
         session_kwargs["aws_access_key_id"] = base_access_key
         session_kwargs["aws_secret_access_key"] = base_secret_key
+        if base_session_token:
+            session_kwargs["aws_session_token"] = base_session_token
 
     session = boto3.Session(**session_kwargs)
 

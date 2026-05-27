@@ -122,6 +122,227 @@ def _parse_dapr_metadata(metadata_list: list[dict[str, str]]) -> dict[str, str]:
     }
 
 
+def _build_s3_config(
+    name: str,
+    meta: dict[str, str],
+    sdk_client_options: dict[str, object],
+) -> tuple[str, dict[str, str], dict[str, object], object]:
+    """Translate S3 Dapr binding metadata into obstore S3Store constructor args.
+
+    Returns *(bucket, config, client_options, credential_provider)*.
+    """
+    from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
+
+    bucket = meta.get("bucket", "")
+    config: dict[str, str] = {}
+    client_options: dict[str, object] = dict(sdk_client_options)
+    credential_provider = None
+
+    if _nonempty(meta, "region"):
+        config["aws_region"] = meta["region"]
+    if _nonempty(meta, "endpoint"):
+        config["aws_endpoint"] = meta["endpoint"]
+        client_options["user_agent"] = "aws-sdk-go-v2 atlan-application-sdk"
+    if _coerce_bool(meta.get("forcePathStyle", "")):
+        config["aws_virtual_hosted_style_request"] = "false"
+    if _coerce_bool(meta.get("disableSSL", "")):
+        client_options["allow_http"] = True
+    if _coerce_bool(meta.get("insecureSSL", "")):
+        client_options["allow_invalid_certificates"] = True
+        _get_logger().warning(
+            "insecureSSL=true disables certificate verification for S3 binding '%s'",
+            name,
+        )
+
+    if _nonempty(meta, "trustAnchorArn"):
+        raise StorageConfigError(
+            f"[{name}] IAM Roles Anywhere (trustAnchorArn) is not yet supported; "
+            "use assumeRoleArn for STS or omit credentials for IRSA / instance-profile auth"
+        )
+
+    if _nonempty(meta, "assumeRoleArn"):
+        from application_sdk.storage._credential_providers import (  # noqa: PLC0415
+            make_s3_assume_role_provider,
+        )
+
+        base_access_key = _nonempty(meta, "accessKey") or None
+        base_secret_key = _nonempty(meta, "secretKey") or None
+        base_session_token = _nonempty(meta, "sessionToken") or None
+        if bool(base_access_key) != bool(base_secret_key):
+            _get_logger().warning(
+                "S3 binding '%s': assumeRoleArn requires both accessKey and "
+                "secretKey for base credentials; only one was set — "
+                "accessKey, secretKey, and sessionToken all ignored",
+                name,
+            )
+            base_access_key = None
+            base_secret_key = None
+            base_session_token = None
+
+        credential_provider = make_s3_assume_role_provider(
+            role_arn=meta["assumeRoleArn"],
+            session_name=_nonempty(meta, "sessionName") or "atlan-application-sdk",
+            region=_nonempty(meta, "region") or None,
+            base_access_key=base_access_key,
+            base_secret_key=base_secret_key,
+            base_session_token=base_session_token,
+        )
+    else:
+        if _nonempty(meta, "accessKey"):
+            config["aws_access_key_id"] = meta["accessKey"]
+        if _nonempty(meta, "secretKey"):
+            config["aws_secret_access_key"] = meta["secretKey"]
+        if _nonempty(meta, "sessionToken"):
+            config["aws_session_token"] = meta["sessionToken"]
+
+    return bucket, config, client_options, credential_provider
+
+
+def _build_azure_config(
+    name: str,
+    meta: dict[str, str],
+    sdk_client_options: dict[str, object],
+) -> tuple[str, dict[str, str], dict[str, object], object]:
+    """Translate Azure Blob Dapr binding metadata into obstore AzureStore constructor args.
+
+    Returns *(container, config, client_options, credential_provider)*.
+    """
+    from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
+
+    account = meta.get("accountName", "")
+    container = meta.get("containerName", "")
+    az_config: dict[str, str] = {}
+    az_client_options: dict[str, object] = dict(sdk_client_options)
+    az_credential_provider = None
+
+    if account:
+        az_config["azure_storage_account_name"] = account
+    if _nonempty(meta, "endpoint"):
+        az_config["azure_storage_endpoint"] = meta["endpoint"]
+        if meta["endpoint"].startswith("http://"):
+            az_client_options["allow_http"] = True
+    if _coerce_bool(meta.get("useEmulator", "")):
+        az_config["azure_storage_use_emulator"] = "true"
+        az_client_options["allow_http"] = True
+
+    if _nonempty(meta, "azureEnvironment"):
+        env_name = meta["azureEnvironment"]
+        host = _AZURE_AUTHORITY_HOSTS.get(env_name)
+        if host is None:
+            raise StorageConfigError(
+                f"Unknown azureEnvironment {env_name!r}. "
+                f"Valid values: {', '.join(_AZURE_AUTHORITY_HOSTS)}"
+            )
+        az_config["azure_storage_authority_host"] = host
+
+    tenant_id = _nonempty(meta, "azureTenantId", "tenantId")
+    client_id = _nonempty(meta, "azureClientId", "clientId")
+    client_secret = _nonempty(meta, "azureClientSecret")
+    account_key = _nonempty(meta, "accountKey")
+    sas_token = _nonempty(meta, "sasToken", "sasKey")
+    cert_data = _nonempty(meta, "azureCertificate")
+    cert_file = _nonempty(meta, "azureCertificateFile")
+    cert_password = _nonempty(meta, "azureCertificatePassword")
+
+    # Warn when an operator accidentally configures more than one mutually
+    # exclusive auth mode — only the highest-priority one takes effect.
+    _active_az_modes = sum(
+        [
+            bool(account_key),
+            bool(sas_token),
+            bool(cert_data or cert_file),
+            bool(tenant_id and client_id and client_secret),
+            bool(tenant_id and client_id and not client_secret),
+            bool(client_id and not tenant_id and not client_secret),
+        ]
+    )
+    if _active_az_modes > 1:
+        _get_logger().warning(
+            "Azure binding '%s': multiple auth modes detected; "
+            "using highest-priority "
+            "(accountKey > sasToken > cert > service-principal > "
+            "workload-identity > managed-identity)",
+            name,
+        )
+
+    if account_key:
+        az_config["azure_storage_account_key"] = account_key
+    elif sas_token:
+        az_config["azure_storage_sas_key"] = sas_token
+    elif cert_data or cert_file:
+        if not tenant_id or not client_id:
+            raise StorageConfigError(
+                f"[{name}] Azure certificate auth requires azureTenantId and azureClientId"
+            )
+        from application_sdk.storage._credential_providers import (  # noqa: PLC0415
+            make_azure_certificate_provider,
+        )
+
+        # azureCertificate must be PEM text; for binary PFX supply
+        # azureCertificateFile pointing to a file on disk instead.
+        az_credential_provider = make_azure_certificate_provider(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            certificate_path=cert_file or None,
+            certificate_data=cert_data.encode() if cert_data else None,
+            certificate_password=cert_password or None,
+            authority_host=az_config.get("azure_storage_authority_host"),
+        )
+    elif tenant_id and client_id and client_secret:
+        az_config["azure_storage_tenant_id"] = tenant_id
+        az_config["azure_storage_client_id"] = client_id
+        az_config["azure_storage_client_secret"] = client_secret
+    elif tenant_id and client_id:
+        # AKS Workload Identity: the AAD webhook injects AZURE_FEDERATED_TOKEN_FILE;
+        # obstore picks it up when tenant_id + client_id are set with no secret.
+        az_config["azure_storage_tenant_id"] = tenant_id
+        az_config["azure_storage_client_id"] = client_id
+        if _nonempty(meta, "azureFederatedTokenFile"):
+            az_config["azure_storage_federated_token_file"] = meta[
+                "azureFederatedTokenFile"
+            ]
+    elif client_id:
+        az_config["azure_storage_client_id"] = client_id
+
+    if _nonempty(meta, "msiEndpoint"):
+        az_config["azure_storage_msi_endpoint"] = meta["msiEndpoint"]
+    if _nonempty(meta, "msiResourceId"):
+        az_config["azure_storage_msi_resource_id"] = meta["msiResourceId"]
+
+    return container, az_config, az_client_options, az_credential_provider
+
+
+def _build_gcs_config(
+    meta: dict[str, str],
+) -> tuple[str, dict[str, str]]:
+    """Translate GCS Dapr binding metadata into obstore GCSStore constructor args.
+
+    Returns *(bucket, config)*.
+    """
+    import orjson  # noqa: PLC0415 — defensive: keep inline
+
+    bucket = meta.get("bucket", "")
+    gcs_config: dict[str, str] = {}
+
+    # Build service-account JSON only when actual credential material is
+    # supplied.  ``project_id`` alone is not credential material — daprd's
+    # gcp-bucket binding schema requires ``project_id`` in component
+    # metadata even on the ADC path (Workload Identity / GKE metadata
+    # server / GOOGLE_APPLICATION_CREDENTIALS), so a config containing
+    # only ``bucket`` + ``project_id`` must fall through to ADC rather
+    # than be synthesised into a partial SA JSON that obstore would
+    # reject for missing ``private_key``.
+    if any(meta.get(f) for f in ("private_key", "private_key_id")):
+        sa_data = {k: meta[k] for k in GCS_SERVICE_ACCOUNT_FIELDS if k in meta}
+        # Normalize escaped newlines in private_key PEM blocks — Helm
+        # templating from K8s secrets can produce literal two-char "\n".
+        if "private_key" in sa_data:
+            sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
+        gcs_config["google_service_account_key"] = orjson.dumps(sa_data).decode()
+
+    return bucket, gcs_config
+
+
 def create_store_from_binding(
     name: str,
     *,
@@ -224,64 +445,9 @@ def create_store_from_binding(
     if store_kind == "s3":
         from obstore.store import S3Store  # noqa: PLC0415 — defensive: keep inline
 
-        bucket = meta.get("bucket", "")
-        config: dict[str, str] = {}
-        client_options: dict[str, object] = dict(sdk_client_options)
-        credential_provider = None
-
-        if _nonempty(meta, "region"):
-            config["aws_region"] = meta["region"]
-        if _nonempty(meta, "endpoint"):
-            config["aws_endpoint"] = meta["endpoint"]
-            client_options["user_agent"] = "aws-sdk-go-v2 atlan-application-sdk"
-        if _coerce_bool(meta.get("forcePathStyle", "")):
-            config["aws_virtual_hosted_style_request"] = "false"
-        if _coerce_bool(meta.get("disableSSL", "")):
-            client_options["allow_http"] = True
-        if _coerce_bool(meta.get("insecureSSL", "")):
-            client_options["allow_invalid_certificates"] = True
-            _get_logger().warning(
-                "insecureSSL=true disables certificate verification for S3 binding '%s'",
-                name,
-            )
-
-        if _nonempty(meta, "trustAnchorArn"):
-            raise StorageConfigError(
-                "IAM Roles Anywhere (trustAnchorArn) is not yet supported; "
-                "use assumeRoleArn for STS or omit credentials for IRSA / instance-profile auth"
-            )
-
-        if _nonempty(meta, "assumeRoleArn"):
-            from application_sdk.storage._credential_providers import (  # noqa: PLC0415
-                make_s3_assume_role_provider,
-            )
-
-            base_access_key = _nonempty(meta, "accessKey") or None
-            base_secret_key = _nonempty(meta, "secretKey") or None
-            if bool(base_access_key) != bool(base_secret_key):
-                _get_logger().warning(
-                    "S3 binding '%s': assumeRoleArn requires both accessKey and "
-                    "secretKey for base credentials; only one was set — both ignored",
-                    name,
-                )
-                base_access_key = None
-                base_secret_key = None
-
-            credential_provider = make_s3_assume_role_provider(
-                role_arn=meta["assumeRoleArn"],
-                session_name=_nonempty(meta, "sessionName") or "atlan-application-sdk",
-                region=_nonempty(meta, "region") or None,
-                base_access_key=base_access_key,
-                base_secret_key=base_secret_key,
-            )
-        else:
-            if _nonempty(meta, "accessKey"):
-                config["aws_access_key_id"] = meta["accessKey"]
-            if _nonempty(meta, "secretKey"):
-                config["aws_secret_access_key"] = meta["secretKey"]
-            if _nonempty(meta, "sessionToken"):
-                config["aws_session_token"] = meta["sessionToken"]
-
+        bucket, config, client_options, credential_provider = _build_s3_config(
+            name, meta, sdk_client_options
+        )
         log_obstore_config(
             "s3", client_options=client_options, retry_config=sdk_retry_config
         )
@@ -296,107 +462,9 @@ def create_store_from_binding(
     if store_kind == "azure":
         from obstore.store import AzureStore  # noqa: PLC0415 — defensive: keep inline
 
-        account = meta.get("accountName", "")
-        container = meta.get("containerName", "")
-        az_config: dict[str, str] = {}
-        az_client_options: dict[str, object] = dict(sdk_client_options)
-        az_credential_provider = None
-
-        if account:
-            az_config["azure_storage_account_name"] = account
-        if _nonempty(meta, "endpoint"):
-            az_config["azure_storage_endpoint"] = meta["endpoint"]
-            if meta["endpoint"].startswith("http://"):
-                az_client_options["allow_http"] = True
-        if _coerce_bool(meta.get("useEmulator", "")):
-            az_config["azure_storage_use_emulator"] = "true"
-            az_client_options["allow_http"] = True
-
-        if _nonempty(meta, "azureEnvironment"):
-            env_name = meta["azureEnvironment"]
-            host = _AZURE_AUTHORITY_HOSTS.get(env_name)
-            if host is None:
-                raise StorageConfigError(
-                    f"Unknown azureEnvironment {env_name!r}. "
-                    f"Valid values: {', '.join(_AZURE_AUTHORITY_HOSTS)}"
-                )
-            az_config["azure_storage_authority_host"] = host
-
-        tenant_id = _nonempty(meta, "azureTenantId", "tenantId")
-        client_id = _nonempty(meta, "azureClientId", "clientId")
-        client_secret = _nonempty(meta, "azureClientSecret")
-        account_key = _nonempty(meta, "accountKey")
-        sas_token = _nonempty(meta, "sasToken", "sasKey")
-        cert_data = _nonempty(meta, "azureCertificate")
-        cert_file = _nonempty(meta, "azureCertificateFile")
-        cert_password = _nonempty(meta, "azureCertificatePassword")
-
-        # Warn when an operator accidentally configures more than one mutually
-        # exclusive auth mode — only the highest-priority one takes effect.
-        _active_az_modes = sum(
-            [
-                bool(account_key),
-                bool(sas_token),
-                bool(cert_data or cert_file),
-                bool(tenant_id and client_id and client_secret),
-                bool(tenant_id and client_id and not client_secret),
-                bool(client_id and not tenant_id and not client_secret),
-            ]
+        container, az_config, az_client_options, az_credential_provider = (
+            _build_azure_config(name, meta, sdk_client_options)
         )
-        if _active_az_modes > 1:
-            _get_logger().warning(
-                "Azure binding '%s': multiple auth modes detected; "
-                "using highest-priority "
-                "(accountKey > sasToken > cert > service-principal > "
-                "workload-identity > managed-identity)",
-                name,
-            )
-
-        if account_key:
-            az_config["azure_storage_account_key"] = account_key
-        elif sas_token:
-            az_config["azure_storage_sas_key"] = sas_token
-        elif cert_data or cert_file:
-            if not tenant_id or not client_id:
-                raise StorageConfigError(
-                    f"Azure certificate auth for binding '{name}' requires "
-                    "azureTenantId and azureClientId"
-                )
-            from application_sdk.storage._credential_providers import (  # noqa: PLC0415
-                make_azure_certificate_provider,
-            )
-
-            # azureCertificate must be PEM text; for binary PFX supply
-            # azureCertificateFile pointing to a file on disk instead.
-            az_credential_provider = make_azure_certificate_provider(
-                tenant_id=tenant_id,
-                client_id=client_id,
-                certificate_path=cert_file or None,
-                certificate_data=cert_data.encode() if cert_data else None,
-                certificate_password=cert_password or None,
-                authority_host=az_config.get("azure_storage_authority_host"),
-            )
-        elif tenant_id and client_id and client_secret:
-            az_config["azure_storage_tenant_id"] = tenant_id
-            az_config["azure_storage_client_id"] = client_id
-            az_config["azure_storage_client_secret"] = client_secret
-        elif tenant_id and client_id:
-            # AKS Workload Identity: the AAD webhook injects AZURE_FEDERATED_TOKEN_FILE;
-            # obstore picks it up when tenant_id + client_id are set with no secret.
-            az_config["azure_storage_tenant_id"] = tenant_id
-            az_config["azure_storage_client_id"] = client_id
-            if _nonempty(meta, "azureFederatedTokenFile"):
-                az_config["azure_storage_federated_token_file"] = meta[
-                    "azureFederatedTokenFile"
-                ]
-        elif client_id:
-            az_config["azure_storage_client_id"] = client_id
-
-        if _nonempty(meta, "msiEndpoint"):
-            az_config["azure_storage_msi_endpoint"] = meta["msiEndpoint"]
-        if _nonempty(meta, "msiResourceId"):
-            az_config["azure_storage_msi_resource_id"] = meta["msiResourceId"]
-
         log_obstore_config(
             "azure", client_options=az_client_options, retry_config=sdk_retry_config
         )
@@ -409,28 +477,9 @@ def create_store_from_binding(
         )
 
     if store_kind == "gcs":
-        import orjson  # noqa: PLC0415 — defensive: keep inline
         from obstore.store import GCSStore  # noqa: PLC0415 — defensive: keep inline
 
-        bucket = meta.get("bucket", "")
-        gcs_config: dict[str, str] = {}
-
-        # Build service-account JSON only when actual credential material is
-        # supplied.  ``project_id`` alone is not credential material — daprd's
-        # gcp-bucket binding schema requires ``project_id`` in component
-        # metadata even on the ADC path (Workload Identity / GKE metadata
-        # server / GOOGLE_APPLICATION_CREDENTIALS), so a config containing
-        # only ``bucket`` + ``project_id`` must fall through to ADC rather
-        # than be synthesised into a partial SA JSON that obstore would
-        # reject for missing ``private_key``.
-        if any(meta.get(f) for f in ("private_key", "private_key_id")):
-            sa_data = {k: meta[k] for k in GCS_SERVICE_ACCOUNT_FIELDS if k in meta}
-            # Normalize escaped newlines in private_key PEM blocks — Helm
-            # templating from K8s secrets can produce literal two-char "\n".
-            if "private_key" in sa_data:
-                sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
-            gcs_config["google_service_account_key"] = orjson.dumps(sa_data).decode()
-
+        bucket, gcs_config = _build_gcs_config(meta)
         log_obstore_config(
             "gcs", client_options=sdk_client_options, retry_config=sdk_retry_config
         )
