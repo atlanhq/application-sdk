@@ -256,12 +256,23 @@ def create_store_from_binding(
                 make_s3_assume_role_provider,
             )
 
+            base_access_key = _nonempty(meta, "accessKey") or None
+            base_secret_key = _nonempty(meta, "secretKey") or None
+            if bool(base_access_key) != bool(base_secret_key):
+                _get_logger().warning(
+                    "S3 binding '%s': assumeRoleArn requires both accessKey and "
+                    "secretKey for base credentials; only one was set — both ignored",
+                    name,
+                )
+                base_access_key = None
+                base_secret_key = None
+
             credential_provider = make_s3_assume_role_provider(
                 role_arn=meta["assumeRoleArn"],
                 session_name=_nonempty(meta, "sessionName") or "atlan-application-sdk",
                 region=_nonempty(meta, "region") or None,
-                base_access_key=_nonempty(meta, "accessKey") or None,
-                base_secret_key=_nonempty(meta, "secretKey") or None,
+                base_access_key=base_access_key,
+                base_secret_key=base_secret_key,
             )
         else:
             if _nonempty(meta, "accessKey"):
@@ -320,15 +331,43 @@ def create_store_from_binding(
         cert_file = _nonempty(meta, "azureCertificateFile")
         cert_password = _nonempty(meta, "azureCertificatePassword")
 
+        # Warn when an operator accidentally configures more than one mutually
+        # exclusive auth mode — only the highest-priority one takes effect.
+        _active_az_modes = sum(
+            [
+                bool(account_key),
+                bool(sas_token),
+                bool(cert_data or cert_file),
+                bool(tenant_id and client_id and client_secret),
+                bool(tenant_id and client_id and not client_secret),
+                bool(client_id and not tenant_id and not client_secret),
+            ]
+        )
+        if _active_az_modes > 1:
+            _get_logger().warning(
+                "Azure binding '%s': multiple auth modes detected; "
+                "using highest-priority "
+                "(accountKey > sasToken > cert > service-principal > "
+                "workload-identity > managed-identity)",
+                name,
+            )
+
         if account_key:
             az_config["azure_storage_account_key"] = account_key
         elif sas_token:
             az_config["azure_storage_sas_key"] = sas_token
         elif cert_data or cert_file:
+            if not tenant_id or not client_id:
+                raise StorageConfigError(
+                    f"Azure certificate auth for binding '{name}' requires "
+                    "azureTenantId and azureClientId"
+                )
             from application_sdk.storage._credential_providers import (  # noqa: PLC0415
                 make_azure_certificate_provider,
             )
 
+            # azureCertificate must be PEM text; for binary PFX supply
+            # azureCertificateFile pointing to a file on disk instead.
             az_credential_provider = make_azure_certificate_provider(
                 tenant_id=tenant_id,
                 client_id=client_id,

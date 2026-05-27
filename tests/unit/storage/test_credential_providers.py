@@ -101,11 +101,8 @@ class TestMakeS3AssumeRoleProvider:
 
     def test_missing_boto3_raises_config_error(self) -> None:
         with patch.dict("sys.modules", {"boto3": None, "obstore.auth.boto3": None}):
-            from importlib import reload
-
             import application_sdk.storage._credential_providers as cp
 
-            reload(cp)
             with pytest.raises((StorageConfigError, ImportError)):
                 cp.make_s3_assume_role_provider(role_arn="arn:aws:iam::123:role/R")
 
@@ -190,11 +187,8 @@ class TestMakeAzureCertificateProvider:
             "sys.modules",
             {"azure.identity": None, "obstore.auth.azure": None},
         ):
-            from importlib import reload
-
             import application_sdk.storage._credential_providers as cp
 
-            reload(cp)
             with pytest.raises((StorageConfigError, ImportError)):
                 cp.make_azure_certificate_provider(
                     tenant_id="tid",

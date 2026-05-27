@@ -394,6 +394,46 @@ class TestS3AssumeRole:
         with pytest.raises(StorageConfigError, match="IAM Roles Anywhere"):
             create_store_from_binding("objectstore", components_dir=components_dir)
 
+    @patch("obstore.auth.boto3.StsCredentialProvider")
+    @patch("boto3.Session")
+    @patch("obstore.store.S3Store")
+    def test_partial_base_creds_warns_and_ignores(
+        self,
+        mock_s3_cls: MagicMock,
+        mock_session_cls: MagicMock,
+        mock_sts_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Only accessKey (no secretKey) with assumeRoleArn → warning, both dropped."""
+        mock_s3_cls.return_value = MagicMock()
+        mock_sts_cls.return_value = MagicMock()
+        mock_session_cls.return_value = MagicMock()
+
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {
+                "bucket": "b",
+                "assumeRoleArn": "arn:aws:iam::123:role/R",
+                "accessKey": "AK",
+                # secretKey intentionally omitted
+            },
+        )
+        with patch("application_sdk.storage.binding._get_logger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args.args[0]
+        assert "accessKey" in warning_msg or "base credentials" in warning_msg
+
+        # Both base creds must be absent from the Session call
+        session_kwargs = mock_session_cls.call_args.kwargs
+        assert "aws_access_key_id" not in session_kwargs
+        assert "aws_secret_access_key" not in session_kwargs
+
 
 class TestS3SecretKeyRef:
     @patch("obstore.store.S3Store")
@@ -786,6 +826,53 @@ class TestAzureCertificateProvider:
             pytest.raises((StorageConfigError, ImportError)),
         ):
             create_store_from_binding("objectstore", components_dir=components_dir)
+
+    def test_cert_without_tenant_and_client_id_raises(self, tmp_path: Path) -> None:
+        """azureCertificateFile without azureTenantId/azureClientId → StorageConfigError."""
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.azure.blobstorage",
+            {
+                "accountName": "acct",
+                "containerName": "ctr",
+                "azureCertificateFile": "/certs/app.pfx",
+                # tenant and client IDs intentionally omitted
+            },
+        )
+        with pytest.raises(StorageConfigError, match="azureTenantId and azureClientId"):
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+    @patch("obstore.store.AzureStore")
+    def test_multiple_auth_modes_logs_warning(
+        self, mock_az_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """accountKey + service-principal fields both set → warning logged."""
+        mock_az_cls.return_value = MagicMock()
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.azure.blobstorage",
+            {
+                "accountName": "acct",
+                "containerName": "ctr",
+                "accountKey": "key123",
+                "azureTenantId": "tid",
+                "azureClientId": "cid",
+                "azureClientSecret": "secret",
+            },
+        )
+        with patch("application_sdk.storage.binding._get_logger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        mock_logger.warning.assert_called_once()
+        assert "multiple auth modes" in mock_logger.warning.call_args.args[0]
+
+        # accountKey takes priority — key must appear in config
+        config = mock_az_cls.call_args.kwargs.get("config") or {}
+        assert config.get("azure_storage_account_key") == "key123"
 
 
 class TestAzureMsiExtras:
