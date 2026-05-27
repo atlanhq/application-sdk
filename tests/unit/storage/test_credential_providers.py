@@ -1,16 +1,12 @@
-"""Unit tests for _credential_providers (mocked dependencies)."""
+"""Unit tests for _credential_providers."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from application_sdk.storage.errors import StorageConfigError
-
 
 class TestMakeS3AssumeRoleProvider:
-    @patch("obstore.auth.boto3.StsCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
     @patch("boto3.Session")
     def test_returns_sts_credential_provider(
         self, mock_session_cls: MagicMock, mock_sts_cls: MagicMock
@@ -38,7 +34,7 @@ class TestMakeS3AssumeRoleProvider:
         )
         assert result is mock_provider
 
-    @patch("obstore.auth.boto3.StsCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
     @patch("boto3.Session")
     def test_base_credentials_passed_to_session(
         self, mock_session_cls: MagicMock, mock_sts_cls: MagicMock
@@ -62,7 +58,7 @@ class TestMakeS3AssumeRoleProvider:
         assert session_kwargs["aws_secret_access_key"] == "SK"
         assert session_kwargs["region_name"] == "eu-west-1"
 
-    @patch("obstore.auth.boto3.StsCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
     @patch("boto3.Session")
     def test_external_id_forwarded_to_sts(
         self, mock_session_cls: MagicMock, mock_sts_cls: MagicMock
@@ -82,7 +78,7 @@ class TestMakeS3AssumeRoleProvider:
         sts_kwargs = mock_sts_cls.call_args.kwargs
         assert sts_kwargs["ExternalId"] == "ext-123"
 
-    @patch("obstore.auth.boto3.StsCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
     @patch("boto3.Session")
     def test_no_region_skips_region_kwarg(
         self, mock_session_cls: MagicMock, mock_sts_cls: MagicMock
@@ -99,17 +95,10 @@ class TestMakeS3AssumeRoleProvider:
         session_kwargs = mock_session_cls.call_args.kwargs
         assert "region_name" not in session_kwargs
 
-    def test_missing_boto3_raises_config_error(self) -> None:
-        with patch.dict("sys.modules", {"boto3": None, "obstore.auth.boto3": None}):
-            import application_sdk.storage._credential_providers as cp
-
-            with pytest.raises((StorageConfigError, ImportError)):
-                cp.make_s3_assume_role_provider(role_arn="arn:aws:iam::123:role/R")
-
 
 class TestMakeAzureCertificateProvider:
-    @patch("obstore.auth.azure.AzureCredentialProvider")
-    @patch("azure.identity.CertificateCredential")
+    @patch("application_sdk.storage._credential_providers.AzureCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.CertificateCredential")
     def test_certificate_path_creates_provider(
         self, mock_cert_cred: MagicMock, mock_az_prov: MagicMock
     ) -> None:
@@ -138,8 +127,8 @@ class TestMakeAzureCertificateProvider:
         mock_az_prov.assert_called_once_with(credential=mock_cred_instance)
         assert result is mock_provider
 
-    @patch("obstore.auth.azure.AzureCredentialProvider")
-    @patch("azure.identity.CertificateCredential")
+    @patch("application_sdk.storage._credential_providers.AzureCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.CertificateCredential")
     def test_certificate_data_passed_correctly(
         self, mock_cert_cred: MagicMock, mock_az_prov: MagicMock
     ) -> None:
@@ -160,8 +149,8 @@ class TestMakeAzureCertificateProvider:
         assert kwargs["certificate_data"] == b"CERT_BYTES"
         assert "certificate_path" not in kwargs
 
-    @patch("obstore.auth.azure.AzureCredentialProvider")
-    @patch("azure.identity.CertificateCredential")
+    @patch("application_sdk.storage._credential_providers.AzureCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.CertificateCredential")
     def test_authority_host_forwarded(
         self, mock_cert_cred: MagicMock, mock_az_prov: MagicMock
     ) -> None:
@@ -181,17 +170,3 @@ class TestMakeAzureCertificateProvider:
 
         kwargs = mock_cert_cred.call_args.kwargs
         assert kwargs["authority"] == "https://login.chinacloudapi.cn"
-
-    def test_missing_azure_identity_raises_config_error(self) -> None:
-        with patch.dict(
-            "sys.modules",
-            {"azure.identity": None, "obstore.auth.azure": None},
-        ):
-            import application_sdk.storage._credential_providers as cp
-
-            with pytest.raises((StorageConfigError, ImportError)):
-                cp.make_azure_certificate_provider(
-                    tenant_id="tid",
-                    client_id="cid",
-                    certificate_path="/c.pfx",
-                )

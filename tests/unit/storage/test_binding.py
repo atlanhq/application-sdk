@@ -347,7 +347,7 @@ class TestS3BehaviorKnobs:
 
 
 class TestS3AssumeRole:
-    @patch("obstore.auth.boto3.StsCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
     @patch("boto3.Session")
     @patch("obstore.store.S3Store")
     def test_assume_role_sets_credential_provider(
@@ -394,7 +394,7 @@ class TestS3AssumeRole:
         with pytest.raises(StorageConfigError, match="IAM Roles Anywhere"):
             create_store_from_binding("objectstore", components_dir=components_dir)
 
-    @patch("obstore.auth.boto3.StsCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
     @patch("boto3.Session")
     @patch("obstore.store.S3Store")
     def test_partial_base_creds_warns_and_ignores(
@@ -766,8 +766,8 @@ class TestAzureEndpointAndEmulator:
 
 
 class TestAzureCertificateProvider:
-    @patch("obstore.auth.azure.AzureCredentialProvider")
-    @patch("azure.identity.CertificateCredential")
+    @patch("application_sdk.storage._credential_providers.AzureCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.CertificateCredential")
     @patch("obstore.store.AzureStore")
     def test_cert_file_creates_provider(
         self,
@@ -805,27 +805,6 @@ class TestAzureCertificateProvider:
         kw = mock_az_cls.call_args.kwargs
         assert kw["credential_provider"] is not None
         assert "azure_storage_account_key" not in (kw.get("config") or {})
-
-    def test_missing_azure_identity_raises_config_error(self, tmp_path: Path) -> None:
-        components_dir = _write_component(
-            tmp_path,
-            "objectstore",
-            "bindings.azure.blobstorage",
-            {
-                "accountName": "acct",
-                "containerName": "ctr",
-                "azureTenantId": "tid",
-                "azureClientId": "cid",
-                "azureCertificateFile": "/certs/app.pfx",
-            },
-        )
-        with (
-            patch.dict(
-                "sys.modules", {"azure.identity": None, "obstore.auth.azure": None}
-            ),
-            pytest.raises((StorageConfigError, ImportError)),
-        ):
-            create_store_from_binding("objectstore", components_dir=components_dir)
 
     def test_cert_without_tenant_and_client_id_raises(self, tmp_path: Path) -> None:
         """azureCertificateFile without azureTenantId/azureClientId → StorageConfigError."""

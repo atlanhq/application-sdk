@@ -1,17 +1,18 @@
 """obstore credential-provider factories for Dapr binding auth modes that
 obstore doesn't natively handle via static config keys.
 
-All factories guard their optional-dependency imports and raise
-StorageConfigError with install instructions if the dependency is absent.
-
-Requires extras:
-  - ``make_s3_assume_role_provider``: ``pip install atlan-application-sdk[iam_auth]``
-  - ``make_azure_certificate_provider``: ``pip install atlan-application-sdk[azure]``
+``boto3`` and ``azure-identity`` are core SDK dependencies, so these factories
+are always available regardless of which extras a connector installs.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+import boto3
+from azure.identity import CertificateCredential
+from obstore.auth.azure import AzureCredentialProvider
+from obstore.auth.boto3 import StsCredentialProvider
 
 
 def make_s3_assume_role_provider(
@@ -26,7 +27,6 @@ def make_s3_assume_role_provider(
     """Return an obstore S3CredentialProvider that calls STS::AssumeRole.
 
     Wraps ``obstore.auth.boto3.StsCredentialProvider``.
-    Requires ``pip install atlan-application-sdk[iam_auth]``.
 
     When *base_access_key* / *base_secret_key* are supplied they are used as
     the base credentials for the STS call (e.g., an operator-supplied IAM
@@ -34,16 +34,6 @@ def make_s3_assume_role_provider(
     uses its own default credential chain (instance profile, env vars, etc.)
     for the STS call.
     """
-    try:
-        import boto3  # noqa: PLC0415
-        from obstore.auth.boto3 import StsCredentialProvider  # noqa: PLC0415
-    except ImportError as exc:
-        from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
-
-        raise StorageConfigError(
-            "assumeRoleArn requires boto3: pip install atlan-application-sdk[iam_auth]"
-        ) from exc
-
     session_kwargs: dict[str, Any] = {}
     if region:
         session_kwargs["region_name"] = region
@@ -76,21 +66,11 @@ def make_azure_certificate_provider(
 
     Wraps ``azure.identity.CertificateCredential`` in
     ``obstore.auth.azure.AzureCredentialProvider``.
-    Requires ``pip install atlan-application-sdk[azure]``.
 
     Supply exactly one of *certificate_path* (path to a PFX/PEM file) or
-    *certificate_data* (PFX/PEM bytes).
+    *certificate_data* (PEM bytes — see ``azureCertificate`` in the Dapr component
+    YAML; for binary PFX use ``azureCertificateFile`` instead).
     """
-    try:
-        from azure.identity import CertificateCredential  # noqa: PLC0415
-        from obstore.auth.azure import AzureCredentialProvider  # noqa: PLC0415
-    except ImportError as exc:
-        from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
-
-        raise StorageConfigError(
-            "Azure certificate auth requires: pip install atlan-application-sdk[azure]"
-        ) from exc
-
     cred_kwargs: dict[str, Any] = {
         "tenant_id": tenant_id,
         "client_id": client_id,

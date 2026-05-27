@@ -219,6 +219,8 @@ version = "3.13.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "azure-identity" },
+    { name = "boto3" },
     { name = "fastapi", extra = ["standard"] },
     { name = "httpx-retries" },
     { name = "loguru" },
@@ -324,9 +326,11 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0,<4.0.0" },
+    { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
     { name = "azure-storage-file-datalake", marker = "extra == 'azure'", specifier = ">=12.19.0" },
+    { name = "boto3", specifier = ">=1.38.6,<2.0.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6,<2.0.0" },
     { name = "daft", marker = "extra == 'daft'", specifier = "==0.7.3" },
     { name = "daft", marker = "extra == 'incremental'", specifier = "==0.7.3" },
