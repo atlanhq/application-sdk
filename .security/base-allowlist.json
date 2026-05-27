@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "python:3.11-slim (Debian) — package metadata not emitted by scanner",
+    "severity": "HIGH",
+    "reason": "service-now-frontend-app base image OS-layer CVE (ghcr.io/atlanhq/service-now-frontend-app:main-ea5bc4e). No upstream fix available as of 2026-05-27. Scanner did not populate package/version metadata — tracked in SEC-3655.",
+    "expires": "2026-06-26",
+    "added_by": "mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "python:3.11-slim (Debian) — package metadata not emitted by scanner",
+    "severity": "HIGH",
+    "reason": "service-now-frontend-app base image OS-layer CVE (ghcr.io/atlanhq/service-now-frontend-app:main-ea5bc4e). No upstream fix available as of 2026-05-27. Scanner did not populate package/version metadata — tracked in SEC-3655.",
+    "expires": "2026-06-26",
+    "added_by": "mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "python:3.11-slim (Debian) — package metadata not emitted by scanner",
+    "severity": "HIGH",
+    "reason": "service-now-frontend-app base image OS-layer CVE (ghcr.io/atlanhq/service-now-frontend-app:main-ea5bc4e). No upstream fix available as of 2026-05-27. Scanner did not populate package/version metadata — tracked in SEC-3655.",
+    "expires": "2026-06-26",
+    "added_by": "mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
