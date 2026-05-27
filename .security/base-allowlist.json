@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "base image (package attribution unavailable from scanner)",
+    "severity": "HIGH",
+    "reason": "Base image - discovered on confluence-connector image (SEC-3823). Package not attributed by scanner; no upstream fix available as of 2026-05-27. Review at expiry.",
+    "expires": "2026-06-26",
+    "added_by": "claude-security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "base image (package attribution unavailable from scanner)",
+    "severity": "HIGH",
+    "reason": "Base image - discovered on confluence-connector image (SEC-3823). Package not attributed by scanner; no upstream fix available as of 2026-05-27. Review at expiry.",
+    "expires": "2026-06-26",
+    "added_by": "claude-security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "base image (package attribution unavailable from scanner)",
+    "severity": "HIGH",
+    "reason": "Base image - discovered on confluence-connector image (SEC-3823). Package not attributed by scanner; no upstream fix available as of 2026-05-27. Review at expiry.",
+    "expires": "2026-06-26",
+    "added_by": "claude-security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
