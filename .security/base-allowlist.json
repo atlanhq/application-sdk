@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "python:3.11-slim base image (service-now-frontend-app)",
+    "severity": "HIGH",
+    "reason": "No fix available. Detected in service-now-frontend-app image scan (SEC-3819). Package info not reported by scanner; scoped to python:3.11-slim Debian base. Review at expiry for upstream patch availability.",
+    "expires": "2026-06-26",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "python:3.11-slim base image (service-now-frontend-app)",
+    "severity": "HIGH",
+    "reason": "No fix available. Detected in service-now-frontend-app image scan (SEC-3819). Package info not reported by scanner; scoped to python:3.11-slim Debian base. Review at expiry for upstream patch availability.",
+    "expires": "2026-06-26",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "python:3.11-slim base image (service-now-frontend-app)",
+    "severity": "HIGH",
+    "reason": "No fix available. Detected in service-now-frontend-app image scan (SEC-3819). Package info not reported by scanner; scoped to python:3.11-slim Debian base. Review at expiry for upstream patch availability.",
+    "expires": "2026-06-26",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
