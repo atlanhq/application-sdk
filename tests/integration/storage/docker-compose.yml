@@ -3,7 +3,7 @@ services:
   # Credentials: access key "minio", secret key "minio123"
   # S3 API: http://localhost:9000   Console: http://localhost:9001
   minio:
-    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    image: minio/minio:RELEASE.2025-10-15T17-29-55Z
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -20,7 +20,7 @@ services:
   # mc — MinIO client that creates the test bucket once MinIO is healthy.
   # Runs once and exits; restart: on-failure handles transient startup races.
   minio-setup:
-    image: minio/mc:RELEASE.2024-11-17T19-35-25Z
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
       minio:
         condition: service_healthy
@@ -36,7 +36,7 @@ services:
   # Default account: devstoreaccount1
   # Blob endpoint: http://localhost:10000/devstoreaccount1
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:3.32.0
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
     ports:
       - "10000:10000"
       - "10001:10001"
