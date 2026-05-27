@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "unknown (service-now-frontend-app daily scan - package not reported by scanner)",
+    "severity": "HIGH",
+    "reason": "Daily cert scan on service-now-frontend-app:main-b1c223a (release 019d8950). Scanner did not report package attribution. No fix available. Allowlisted pending package identification and upstream fix.",
+    "expires": "2026-06-26",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "unknown (service-now-frontend-app daily scan - package not reported by scanner)",
+    "severity": "HIGH",
+    "reason": "Daily cert scan on service-now-frontend-app:main-b1c223a (release 019d8950). Scanner did not report package attribution. No fix available. Allowlisted pending package identification and upstream fix.",
+    "expires": "2026-06-26",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "unknown (service-now-frontend-app daily scan - package not reported by scanner)",
+    "severity": "HIGH",
+    "reason": "Daily cert scan on service-now-frontend-app:main-b1c223a (release 019d8950). Scanner did not report package attribution. No fix available. Allowlisted pending package identification and upstream fix.",
+    "expires": "2026-06-26",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
