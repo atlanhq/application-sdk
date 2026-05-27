@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-05-27",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -618,6 +618,39 @@
     "reason": "Upstream fix available but need immediate unblock for v2.x.x releases for SDR locked app releases.",
     "expires": "2026-06-09",
     "added_by": "adityachoudhury-cloud",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "unknown (package data not captured by scanner)",
+    "severity": "HIGH",
+    "reason": "Base image - no fix available. Package metadata missing from daily-cert scan output for ghcr.io/atlanhq/slack-connector:main-d4cf2c9. Review at expiry for upstream fix availability and scanner data completeness.",
+    "expires": "2026-06-26",
+    "added_by": "claude",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "unknown (package data not captured by scanner)",
+    "severity": "HIGH",
+    "reason": "Base image - no fix available. Package metadata missing from daily-cert scan output for ghcr.io/atlanhq/slack-connector:main-d4cf2c9. Review at expiry for upstream fix availability and scanner data completeness.",
+    "expires": "2026-06-26",
+    "added_by": "claude",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "unknown (package data not captured by scanner)",
+    "severity": "HIGH",
+    "reason": "Base image - no fix available. Package metadata missing from daily-cert scan output for ghcr.io/atlanhq/slack-connector:main-d4cf2c9. Review at expiry for upstream fix availability and scanner data completeness.",
+    "expires": "2026-06-26",
+    "added_by": "claude",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
