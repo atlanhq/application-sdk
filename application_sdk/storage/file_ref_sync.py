@@ -136,7 +136,11 @@ def has_refs_to_materialize(data: Any) -> bool:
 
 
 async def _replace_refs(
-    data: Any, store: ObjectStore, mode: str, output_path: str | None = None
+    data: Any,
+    store: ObjectStore,
+    mode: str,
+    output_path: str | None = None,
+    local_dir: str | None = None,
 ) -> Any:
     """Replace FileReference instances in a data tree using concurrent execution.
 
@@ -203,7 +207,7 @@ async def _replace_refs(
                 if key not in _factories:
                     _ref = node
                     _factories[key] = lambda r=_ref: materialize_file_reference(
-                        store, r
+                        store, r, local_dir=local_dir
                     )
                     _winners[key] = node
             return
@@ -321,7 +325,9 @@ async def persist_file_refs(
     return await _replace_refs(data, store, "persist", output_path=output_path)
 
 
-async def materialize_file_refs(store: ObjectStore, data: Any) -> Any:
+async def materialize_file_refs(
+    store: ObjectStore, data: Any, *, local_dir: str | None = None
+) -> Any:
     """Download all durable FileReferences in *data* to local temp files.
 
     Handles:
@@ -336,4 +342,4 @@ async def materialize_file_refs(store: ObjectStore, data: Any) -> Any:
         New object tree with all durable FileReferences replaced by local
         ones (``local_path`` set, ``.sha256`` sidecar written).
     """
-    return await _replace_refs(data, store, "materialize")
+    return await _replace_refs(data, store, "materialize", local_dir=local_dir)

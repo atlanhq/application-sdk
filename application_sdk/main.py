@@ -30,7 +30,7 @@ import faulthandler
 import os
 import signal
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from application_sdk.common._env import env_int as _env_int
@@ -816,6 +816,11 @@ async def run_worker_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
+    # Stash the connected Temporal client on the infra context so activity-side
+    # code (the local-file GC sweep) can reach it. The client doesn't exist when
+    # the context is first built, and the context is frozen — so re-set a copy.
+    set_infrastructure(replace(infra, _temporal_client=client))
+
     # Discover the app's Handler so SDR workflows can be registered on the
     # worker.  When no Handler is found, create_worker silently skips SDR.
     handler_class_for_sdr = load_handler_class(
@@ -1073,6 +1078,11 @@ async def run_combined_mode(config: AppConfig) -> None:
     if auth_manager is not None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
+
+    # Stash the connected Temporal client on the infra context so activity-side
+    # code (the local-file GC sweep) can reach it. The client doesn't exist when
+    # the context is first built, and the context is frozen — so re-set a copy.
+    set_infrastructure(replace(infra, _temporal_client=client))
 
     # Discover the handler before building the worker so the same instance
     # serves both the HTTP service and the SDR Temporal workflows.

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
+    from temporalio.client import Client
 
     from application_sdk.infrastructure.bindings import Binding
     from application_sdk.infrastructure.secrets import SecretStore
@@ -35,6 +36,12 @@ class InfrastructureContext:
 
     The optional ``_dapr_client`` field holds the shared ``AsyncDaprClient``
     so it can be closed on shutdown via :func:`close_infrastructure`.
+
+    The optional ``_temporal_client`` field holds the worker's connected Temporal
+    client, stashed at startup so activity-side code (e.g. the local-file GC
+    sweep) can reach it via :func:`get_temporal_client` without threading a
+    client through every call. Its lifecycle is owned by the worker bootstrap,
+    not by :func:`close_infrastructure`.
     """
 
     state_store: StateStore | None = field(default=None)
@@ -42,6 +49,7 @@ class InfrastructureContext:
     storage: ObjectStore | None = field(default=None)
     event_binding: Binding | None = field(default=None)
     _dapr_client: Any = field(default=None, repr=False)
+    _temporal_client: Any = field(default=None, repr=False)
 
 
 _infrastructure: InfrastructureContext | None = None
@@ -54,6 +62,19 @@ def get_infrastructure() -> InfrastructureContext | None:
         Current InfrastructureContext, or None if not set.
     """
     return _infrastructure
+
+
+def get_temporal_client() -> Client | None:
+    """Return the Temporal client stashed on the current infrastructure context.
+
+    Populated at worker startup (see ``main.py``) so activity-side code can reach
+    the connected client without it being threaded through every call. Returns
+    ``None`` when no context is set, or when no client was stashed (e.g.
+    server-only or non-Temporal contexts) — callers should treat ``None`` as
+    "no client available" and fall back accordingly.
+    """
+    ctx = _infrastructure
+    return ctx._temporal_client if ctx is not None else None
 
 
 def set_infrastructure(ctx: InfrastructureContext) -> None:

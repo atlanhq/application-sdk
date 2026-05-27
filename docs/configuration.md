@@ -18,6 +18,9 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 | `ATLAN_DOMAIN_NAME` | `atlan.com` | Tenant domain name. |
 | `ATLAN_TEMPORARY_PATH` | `./local/tmp/` | Path for intermediate files during processing. |
 | `ATLAN_CLEANUP_BASE_PATHS` | _(empty)_ | Comma-separated object-store prefixes cleaned up by `cleanup_files()`. Defaults to the workflow-scoped run path when unset. |
+| `ATLAN_LOCAL_FILE_REF_ROOT` | `{ATLAN_TEMPORARY_PATH}/file_refs_local` | Root for run-scoped local scratch written via `App.local_run_dir()`. Its `{workflow_id}/{run_id}/` layout drives automatic cross-worker cleanup. |
+| `ATLAN_ENABLE_LOCAL_GC` | `true` | Kill-switch for the deterministic cross-worker cleanup of finished runs' local scratch. Set `false` to disable the sweep. |
+| `ATLAN_LOCAL_GC_MAX_DESCRIBES_PER_SWEEP` | `50` | Upper bound on Temporal status checks issued per cleanup sweep (bounds frontend load; remaining run dirs are handled by the next sweep). |
 | `ATLAN_CONTRACT_GENERATED_DIR` | `app/generated` | Directory for generated contract JSON (configmaps, manifest). In Docker (`WORKDIR=/app`) this resolves to `/app/app/generated`. |
 | `ATLAN_FRONTEND_ASSETS_PATH` | `app/generated/frontend/static` | Path to static frontend assets served by the handler. |
 

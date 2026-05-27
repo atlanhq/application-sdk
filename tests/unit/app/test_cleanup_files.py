@@ -91,13 +91,13 @@ class TestCleanupFiles:
         (test_dir / "some-file.txt").write_text("data")
 
         app = _CleanupApp()
-        with mock.patch(
-            "application_sdk.app.base.TaskStateAccessor.get", return_value=None
+        with (
+            mock.patch(
+                "application_sdk.app.base.TaskStateAccessor.get", return_value=None
+            ),
+            mock.patch("application_sdk.constants.CLEANUP_BASE_PATHS", [str(test_dir)]),
         ):
-            with mock.patch(
-                "application_sdk.constants.CLEANUP_BASE_PATHS", [str(test_dir)]
-            ):
-                result = await app.cleanup_files(CleanupInput())
+            result = await app.cleanup_files(CleanupInput())
 
         assert not test_dir.exists()
         assert result.path_results[str(test_dir)] is True
@@ -107,11 +107,13 @@ class TestCleanupFiles:
         missing = str(tmp_path / "nonexistent")
 
         app = _CleanupApp()
-        with mock.patch(
-            "application_sdk.app.base.TaskStateAccessor.get", return_value=None
+        with (
+            mock.patch(
+                "application_sdk.app.base.TaskStateAccessor.get", return_value=None
+            ),
+            mock.patch("application_sdk.constants.CLEANUP_BASE_PATHS", [missing]),
         ):
-            with mock.patch("application_sdk.constants.CLEANUP_BASE_PATHS", [missing]):
-                result = await app.cleanup_files(CleanupInput())
+            result = await app.cleanup_files(CleanupInput())
 
         assert result.path_results[missing] is True
 
@@ -153,14 +155,60 @@ class TestCleanupFiles:
         ref = FileReference(local_path=str(f), storage_path="artifacts/locked")
 
         app = _CleanupApp()
-        with mock.patch(
-            "application_sdk.app.base.TaskStateAccessor.get",
-            return_value={ref},
+        with (
+            mock.patch(
+                "application_sdk.app.base.TaskStateAccessor.get",
+                return_value={ref},
+            ),
+            mock.patch("os.remove", side_effect=OSError("permission denied")),
         ):
-            with mock.patch("os.remove", side_effect=OSError("permission denied")):
-                result = await app.cleanup_files(
-                    CleanupInput(extra_paths=["nonexistent-dir"])
-                )
+            result = await app.cleanup_files(
+                CleanupInput(extra_paths=["nonexistent-dir"])
+            )
 
         # Error is captured — task does not raise
         assert result.path_results[str(f)] is False
+
+    @pytest.mark.asyncio
+    async def test_invokes_local_gc_sweep(self, monkeypatch: Any) -> None:
+        """cleanup_files runs the belt-and-braces cross-worker GC sweep."""
+        app = _CleanupApp()
+        called: list[bool] = []
+
+        async def _fake_sweep() -> None:
+            called.append(True)
+
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.activities._maybe_sweep_local_file_refs",
+            _fake_sweep,
+        )
+        with mock.patch(
+            "application_sdk.app.base.TaskStateAccessor.get", return_value=None
+        ):
+            await app.cleanup_files(CleanupInput(extra_paths=["nonexistent-dir"]))
+
+        assert called == [True]
+
+    @pytest.mark.asyncio
+    async def test_sweep_respects_kill_switch(self, monkeypatch: Any) -> None:
+        """With the kill-switch off, no real sweep runs even via cleanup_files."""
+        app = _CleanupApp()
+        monkeypatch.setattr("application_sdk.constants.ENABLE_LOCAL_GC", False)
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.context.get_temporal_client",
+            lambda: object(),
+        )
+        swept: list[bool] = []
+
+        async def _fake_sweep(*a: Any, **k: Any) -> None:
+            swept.append(True)
+
+        monkeypatch.setattr(
+            "application_sdk.storage.local_gc.sweep_local_file_refs", _fake_sweep
+        )
+        with mock.patch(
+            "application_sdk.app.base.TaskStateAccessor.get", return_value=None
+        ):
+            await app.cleanup_files(CleanupInput(extra_paths=["nonexistent-dir"]))
+
+        assert swept == []

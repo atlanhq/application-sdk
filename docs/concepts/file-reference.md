@@ -288,6 +288,75 @@ Both fields end up with the same `local_path` after materialization. A
 `file_ref.materialize.dedup_hit` DEBUG event is emitted for the second ref. You
 do not need to deduplicate manually.
 
+### Run-Scoped Local Scratch and Automatic Cleanup
+
+`FileReference` covers files you pass between tasks. Apps sometimes also write
+their *own* scratch files on local disk — intermediate working files the app
+manages directly. Two things make cleaning these up reliably hard:
+
+- A workflow fans its activities across several workers (scale-out, or a retry
+  on a different pod). Each worker that wrote or downloaded a file holds a
+  *local* copy. `cleanup_files` runs as a single activity on a single worker and
+  reads in-process tracking — it cannot reach copies on the other workers, so
+  they are orphaned.
+- The implicit safety net is ephemeral pod storage (a restart reclaims the temp
+  dir). That assumption breaks when the temp dir is backed by a persistent
+  volume — orphans then accumulate across restarts.
+
+#### `App.local_run_dir()`
+
+Write run-scoped scratch under the directory returned by `local_run_dir()`:
+
+```python
+@task
+async def parse(self, input: ParseInput) -> ParseOutput:
+    scratch = self.local_run_dir() / "working_set.json"
+    scratch.write_text(build_working_set())
+    return ParseOutput(working_set=FileReference.from_local(scratch))
+```
+
+`local_run_dir()` returns (and creates) a directory of the form:
+
+```
+{LOCAL_FILE_REF_ROOT}/{workflow_id}/{run_id}/
+```
+
+Encoding the workflow and run ids in the path is what makes automatic cleanup
+possible — the directory layout *is* the cleanup registry. It must be called
+from inside a `@task` (activity) context, where those ids are available.
+
+#### Automatic Cross-Worker Cleanup
+
+When enabled (the default), each worker reclaims finished runs' local scratch as
+it works: it walks `LOCAL_FILE_REF_ROOT`, and for each `{workflow_id}/{run_id}`
+directory asks Temporal whether that run is over. Terminal runs (completed,
+failed, cancelled, terminated, timed-out, continued-as-new — or no longer known
+to Temporal) have their directory removed; `RUNNING` runs are left untouched.
+
+This is coordination-free and self-healing: every worker cleans its *own* disk
+by querying the authoritative run status, so a worker that holds an orphaned
+copy reclaims it the next time it runs any activity. The sweep is bounded per
+activity and never fails the activity.
+
+SDK auto-materialised `FileReference` downloads also land under this root, so
+they are covered by the same cleanup, in addition to the existing per-run
+`cleanup_files` behaviour.
+
+#### Migration
+
+If your app maintains its own scratch directory and a manual cleanup step (for
+example, an `rmtree` of a fixed path at the end of every run), switch the writes
+to `local_run_dir()` and drop the manual cleanup — the SDK then reclaims that
+scratch deterministically across workers.
+
+#### Configuration
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `ATLAN_ENABLE_LOCAL_GC` | `true` | Kill-switch for the automatic sweep. Set `false` to disable it instantly. |
+| `ATLAN_LOCAL_FILE_REF_ROOT` | `{ATLAN_TEMPORARY_PATH}/file_refs_local` | Root directory for run-scoped local scratch. |
+| `ATLAN_LOCAL_GC_MAX_DESCRIBES_PER_SWEEP` | `50` | Upper bound on Temporal status checks per sweep (bounds frontend load). |
+
 ---
 
 ## Part 2 — App.upload()

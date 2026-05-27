@@ -578,9 +578,9 @@ class TestActivityFnExecution:
                 "application_sdk.infrastructure.context.get_infrastructure",
                 return_value=None,
             ),
+            pytest.raises(ApplicationError) as exc_info,
         ):
-            with pytest.raises(ApplicationError) as exc_info:
-                await activity_fn(ctx, _AfnIn(name="x"))
+            await activity_fn(ctx, _AfnIn(name="x"))
         # ApplicationError should be flagged non-retryable.
         assert exc_info.value.non_retryable is True
 
@@ -617,9 +617,9 @@ class TestActivityFnExecution:
                 "application_sdk.infrastructure.context.get_infrastructure",
                 return_value=None,
             ),
+            pytest.raises(ValueError, match="ordinary failure"),
         ):
-            with pytest.raises(ValueError, match="ordinary failure"):
-                await activity_fn(ctx, _AfnIn(name="x"))
+            await activity_fn(ctx, _AfnIn(name="x"))
 
     @pytest.mark.asyncio
     async def test_starts_and_stops_auto_heartbeat_loop(self) -> None:
@@ -690,3 +690,140 @@ class TestActivityFnExecution:
         ):
             result = await activity_fn(ctx, _AfnIn(name="i"))
         assert result.greeting == "hi i"
+
+
+# --------------------------------------------------------------------------- #
+# Local-file GC wiring (interceptor helpers)                                  #
+# --------------------------------------------------------------------------- #
+
+
+class TestLocalGcDirForActivity:
+    """_local_gc_dir_for_activity(): the local_dir for auto-materialised refs."""
+
+    def test_returns_none_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("application_sdk.constants.ENABLE_LOCAL_GC", False)
+        with mock.patch.object(
+            activities_module.activity,
+            "info",
+            return_value=mock.MagicMock(workflow_id="wf", workflow_run_id="run"),
+        ):
+            assert activities_module._local_gc_dir_for_activity() is None
+
+    def test_returns_none_when_ids_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("application_sdk.constants.ENABLE_LOCAL_GC", True)
+        with mock.patch.object(
+            activities_module.activity,
+            "info",
+            return_value=mock.MagicMock(workflow_id=None, workflow_run_id="run"),
+        ):
+            assert activities_module._local_gc_dir_for_activity() is None
+
+    def test_returns_run_scoped_dir_when_enabled(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("application_sdk.constants.ENABLE_LOCAL_GC", True)
+        monkeypatch.setattr(
+            "application_sdk.constants.LOCAL_FILE_REF_ROOT", str(tmp_path)
+        )
+        with mock.patch.object(
+            activities_module.activity,
+            "info",
+            return_value=mock.MagicMock(workflow_id="wf", workflow_run_id="run"),
+        ):
+            result = activities_module._local_gc_dir_for_activity()
+        assert result == str(tmp_path / "wf" / "run")
+
+
+class TestMaybeSweepLocalFileRefs:
+    """_maybe_sweep_local_file_refs(): best-effort, gated, never raises."""
+
+    @pytest.mark.asyncio
+    async def test_noop_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("application_sdk.constants.ENABLE_LOCAL_GC", False)
+        swept = []
+
+        async def _fake_sweep(*a, **k):
+            swept.append(True)
+
+        monkeypatch.setattr(
+            "application_sdk.storage.local_gc.sweep_local_file_refs", _fake_sweep
+        )
+        await activities_module._maybe_sweep_local_file_refs()
+        assert swept == []
+
+    @pytest.mark.asyncio
+    async def test_noop_when_no_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("application_sdk.constants.ENABLE_LOCAL_GC", True)
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.context.get_temporal_client",
+            lambda: None,
+        )
+        swept = []
+
+        async def _fake_sweep(*a, **k):
+            swept.append(True)
+
+        monkeypatch.setattr(
+            "application_sdk.storage.local_gc.sweep_local_file_refs", _fake_sweep
+        )
+        await activities_module._maybe_sweep_local_file_refs()
+        assert swept == []
+
+    @pytest.mark.asyncio
+    async def test_sweeps_with_stashed_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("application_sdk.constants.ENABLE_LOCAL_GC", True)
+        monkeypatch.setattr(
+            "application_sdk.constants.LOCAL_GC_MAX_DESCRIBES_PER_SWEEP", 7
+        )
+        client = object()
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.context.get_temporal_client",
+            lambda: client,
+        )
+        captured: dict = {}
+
+        async def _fake_sweep(c, *, current_run_id, max_describes):
+            captured.update(
+                client=c, current_run_id=current_run_id, max_describes=max_describes
+            )
+
+        monkeypatch.setattr(
+            "application_sdk.storage.local_gc.sweep_local_file_refs", _fake_sweep
+        )
+        with mock.patch.object(
+            activities_module.activity,
+            "info",
+            return_value=mock.MagicMock(workflow_run_id="run-9"),
+        ):
+            await activities_module._maybe_sweep_local_file_refs()
+        assert captured == {
+            "client": client,
+            "current_run_id": "run-9",
+            "max_describes": 7,
+        }
+
+    @pytest.mark.asyncio
+    async def test_swallows_sweep_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("application_sdk.constants.ENABLE_LOCAL_GC", True)
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.context.get_temporal_client",
+            lambda: object(),
+        )
+
+        async def _boom(*a, **k):
+            raise RuntimeError("temporal unreachable")
+
+        monkeypatch.setattr(
+            "application_sdk.storage.local_gc.sweep_local_file_refs", _boom
+        )
+        with mock.patch.object(
+            activities_module.activity,
+            "info",
+            return_value=mock.MagicMock(workflow_run_id="run-9"),
+        ):
+            # Must not raise — a sweep failure can never fail the activity.
+            await activities_module._maybe_sweep_local_file_refs()

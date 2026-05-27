@@ -13,6 +13,7 @@ from abc import ABC
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, ClassVar, Literal, Never, TypeVar, cast, get_type_hints
 from uuid import UUID
 
@@ -702,6 +703,41 @@ class App(ABC):
         """Get the correlation ID."""
         return self.context.correlation_id
 
+    def local_run_dir(self) -> Path:
+        """Return the run-scoped local scratch root, creating it if needed.
+
+        Layout: ``{LOCAL_FILE_REF_ROOT}/{sanitized_workflow_id}/{run_id}/``.
+
+        Write per-run scratch here (then wrap it in
+        :meth:`FileReference.from_local`) so it is reachable by the deterministic
+        cross-worker GC sweep — see :mod:`application_sdk.storage.local_gc`. The
+        directory path encodes both keys the sweep needs (``workflow_id`` and
+        ``run_id``), so no separate registry has to be kept consistent.
+
+        Must be called from within a ``@task`` (activity) context, where the
+        current workflow/run ids are available via ``activity.info()``.
+
+        Returns:
+            Path to the run-scoped directory (created with ``parents=True``).
+
+        Raises:
+            AppContextError: If called outside an activity context, where the
+                workflow/run ids are unavailable.
+        """
+        from application_sdk.storage.local_gc import (  # noqa: PLC0415 — lazy: avoids importing the storage GC module at app-class import time
+            run_scoped_dir,
+        )
+
+        info = activity.info()
+        workflow_id = info.workflow_id
+        run_id = info.workflow_run_id
+        if not workflow_id or not run_id:
+            raise AppContextError(
+                "local_run_dir() requires an activity context with a "
+                "workflow_id and run_id"
+            )
+        return run_scoped_dir(workflow_id, run_id, create=True)
+
     def is_cancelled(self) -> bool:
         """Check if execution has been cancelled."""
         return self.context.is_cancelled()
@@ -1130,6 +1166,15 @@ class App(ABC):
                     exc_info=True,
                 )
                 path_results[base_path] = False
+
+        # 3. Belt-and-braces end-of-run sweep: reclaim *other* finished runs'
+        # run-scoped local scratch too. Gated + best-effort inside the helper
+        # (no-op when the kill-switch is off or no Temporal client is stashed).
+        from application_sdk.execution._temporal.activities import (  # noqa: PLC0415 — lazy: execution/__init__.py imports app.base, so import at call time
+            _maybe_sweep_local_file_refs,
+        )
+
+        await _maybe_sweep_local_file_refs()
 
         return CleanupOutput(path_results=path_results)
 

@@ -420,3 +420,84 @@ async def test_zero_row_extract_emits_no_raw_file(store, tmp_path):
 
     assert result.total_record_count == 0
     assert result.raw_file is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-worker local GC: materialize into run-scoped scratch, then reclaim it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_local_gc_reclaims_finished_run_scratch(store, tmp_path):
+    """A worker materialises a durable ref into its run-scoped scratch; a later
+    sweep reclaims that scratch once Temporal reports the run terminal, while a
+    still-RUNNING run's scratch survives.
+
+    Exercises the real chain end-to-end against a local obstore — ``run_scoped_dir``
+    → ``materialize_file_reference(local_dir=...)`` → ``sweep_local_file_refs`` —
+    with only the Temporal client faked (consistent with this module's no-Temporal
+    approach). This is the cross-worker GC contract: a worker reclaims *another*
+    run's local copy by querying the authoritative run status.
+    """
+    from temporalio.client import WorkflowExecutionStatus
+
+    from application_sdk.storage.local_gc import run_scoped_dir, sweep_local_file_refs
+
+    # Upload a local file so we have a durable ref to materialise.
+    src = tmp_path / "io_pairs.json"
+    src.write_text(json.dumps([{"q": "select 1"}]))
+    durable = await persist_file_reference(
+        store, FileReference(local_path=str(src), is_durable=False)
+    )
+    assert durable.storage_path is not None
+
+    # "Worker B" materialises it into the run-scoped scratch for a finished run.
+    root = tmp_path / "file_refs_local"
+    done_dir = run_scoped_dir("wf-gc", "run-done", root=str(root))
+    materialised = await materialize_file_reference(
+        store,
+        FileReference(
+            is_durable=True, storage_path=durable.storage_path, local_path=None
+        ),
+        local_dir=str(done_dir),
+    )
+    assert materialised.local_path is not None
+    assert materialised.local_path.startswith(str(done_dir))
+    assert done_dir.exists()
+
+    # A second run is still RUNNING and has its own scratch.
+    live_dir = run_scoped_dir("wf-gc", "run-live", root=str(root))
+    live_dir.mkdir(parents=True)
+    (live_dir / "io_pairs.json").write_text("[]")
+
+    # A third worker sweeps: describe() drives delete (terminal) vs keep (running).
+    class _FakeHandle:
+        def __init__(self, status: WorkflowExecutionStatus) -> None:
+            self._status = status
+
+        async def describe(self) -> Any:
+            return type("Desc", (), {"status": self._status})()
+
+    class _FakeClient:
+        def __init__(self, by_run: dict[str, WorkflowExecutionStatus]) -> None:
+            self._by_run = by_run
+
+        def get_workflow_handle(
+            self, workflow_id: str, *, run_id: str | None = None
+        ) -> _FakeHandle:
+            return _FakeHandle(self._by_run[run_id])
+
+    client = _FakeClient(
+        {
+            "run-done": WorkflowExecutionStatus.COMPLETED,
+            "run-live": WorkflowExecutionStatus.RUNNING,
+        }
+    )
+    result = await sweep_local_file_refs(
+        client, current_run_id="run-other", max_describes=50, root=str(root)
+    )
+
+    assert not done_dir.exists()  # terminal run's scratch reclaimed
+    assert live_dir.exists()  # running run's scratch preserved
+    assert str(done_dir) in result.deleted
+    assert str(live_dir) in result.kept

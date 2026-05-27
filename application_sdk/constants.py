@@ -118,6 +118,24 @@ CLEANUP_BASE_PATHS = [
 # Key used to store tracked FileReference objects in _app_state during a workflow run
 TRACKED_FILE_REFS_KEY = "_tracked_file_refs"
 
+# Run-scoped local root for FileReference scratch. The directory layout under this
+# root — {workflow_id}/{run_id}/ — IS the GC registry: a sweep walks it and asks
+# Temporal whether each run is over (see storage/local_gc.py). Apps write run-scoped
+# scratch under App.local_run_dir() so SDK-chosen paths are GC-discoverable too.
+LOCAL_FILE_REF_ROOT = os.getenv(
+    "ATLAN_LOCAL_FILE_REF_ROOT", os.path.join(TEMPORARY_PATH, "file_refs_local")
+)
+
+# Kill-switch for deterministic cross-worker local FileReference GC. Default on;
+# set ATLAN_ENABLE_LOCAL_GC=false to disable the sweep instantly.
+ENABLE_LOCAL_GC = os.getenv("ATLAN_ENABLE_LOCAL_GC", "true").lower() == "true"
+
+# Upper bound on Temporal describe() RPCs issued per local-GC sweep, to bound
+# frontend load. Run dirs not examined this sweep are handled by the next one.
+LOCAL_GC_MAX_DESCRIBES_PER_SWEEP = int(
+    os.getenv("ATLAN_LOCAL_GC_MAX_DESCRIBES_PER_SWEEP", "50")
+)
+
 # Object-store prefixes that must never be deleted by cleanup_storage.
 # These store cross-run persistent state (connection configs, incremental markers, etc.)
 PROTECTED_STORAGE_PREFIXES = ("persistent-artifacts/",)

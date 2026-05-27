@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.infrastructure.context import InfrastructureContext
 from application_sdk.main import (
     AppConfig,
     _create_infrastructure,
@@ -987,9 +988,8 @@ class TestRunWorkerMode:
     @pytest.fixture
     def worker_patches(self):
         """Patch the worker-mode collaborators."""
-        infra = MagicMock()
-        infra.secret_store = MagicMock()
-        infra.storage = MagicMock()
+        # A real (frozen) context so main.py's dataclasses.replace() stash works.
+        infra = InfrastructureContext(secret_store=MagicMock(), storage=MagicMock())
 
         with (
             patch(
@@ -1064,7 +1064,11 @@ class TestRunWorkerMode:
         with patch.object(asyncio.Event, "wait", new=AsyncMock(return_value=None)):
             await run_worker_mode(cfg)
 
-        worker_patches["set_infra"].assert_called_once()
+        # set_infrastructure is called twice: once with the base context, then
+        # again to stash the connected Temporal client for activity-side GC.
+        assert worker_patches["set_infra"].call_count == 2
+        stashed = worker_patches["set_infra"].call_args_list[1].args[0]
+        assert stashed._temporal_client is worker_patches["create_client"].return_value
         worker_patches["create_client"].assert_awaited_once()
         worker_patches["close_infra"].assert_awaited_once()
         worker_patches["health"].assert_called_once()
@@ -1260,9 +1264,8 @@ class TestRunCombinedMode:
 
     @pytest.fixture
     def combined_patches(self):
-        infra = MagicMock()
-        infra.secret_store = MagicMock()
-        infra.storage = MagicMock()
+        # A real (frozen) context so main.py's dataclasses.replace() stash works.
+        infra = InfrastructureContext(secret_store=MagicMock(), storage=MagicMock())
 
         # uvicorn: serve() is awaitable and returns immediately
         uvicorn_server = MagicMock()
@@ -1342,9 +1345,7 @@ class TestRunCombinedMode:
 
     async def test_reuses_existing_infrastructure(self, combined_patches) -> None:
         """If infra is already set, _create_infrastructure must NOT be called."""
-        existing = MagicMock()
-        existing.secret_store = MagicMock()
-        existing.storage = MagicMock()
+        existing = InfrastructureContext(secret_store=MagicMock(), storage=MagicMock())
         cfg = AppConfig(mode="combined", app_module="pkg:FakeApp")
         with (
             patch(
@@ -1769,9 +1770,8 @@ class TestRunCombinedAuth:
 
     async def test_auth_enabled_acquires_token_and_shuts_down(self) -> None:
         """When auth_enabled, TemporalAuthManager is acquired + shutdown."""
-        infra = MagicMock()
-        infra.secret_store = MagicMock()
-        infra.storage = MagicMock()
+        # A real (frozen) context so main.py's dataclasses.replace() stash works.
+        infra = InfrastructureContext(secret_store=MagicMock(), storage=MagicMock())
 
         uvicorn_server = MagicMock()
         uvicorn_server.serve = AsyncMock(return_value=None)

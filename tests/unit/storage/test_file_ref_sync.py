@@ -172,6 +172,33 @@ class TestPersistAndMaterialize:
         assert open(materialised.ref.local_path, "rb").read() == content
         os.unlink(materialised.ref.local_path)
 
+    async def test_materialize_writes_under_local_dir(self, tmp_path: Path) -> None:
+        """local_dir threads through to the download so auto-materialised refs
+        land under the run-scoped GC root."""
+        store = create_memory_store()
+        content = b"scoped content"
+        path = _make_local_file(content)
+        try:
+            output = _TaskOutput(ref=FileReference(local_path=path, is_durable=False))
+            persisted = await persist_file_refs(store, output)
+            storage_path = persisted.ref.storage_path
+        finally:
+            os.unlink(path)
+
+        remote_input = _TaskInput(
+            ref=FileReference(
+                is_durable=True, storage_path=storage_path, local_path=None
+            )
+        )
+        local_dir = str(tmp_path / "wf" / "run")
+        materialised = await materialize_file_refs(
+            store, remote_input, local_dir=local_dir
+        )
+        assert materialised.ref.local_path is not None
+        assert materialised.ref.local_path.startswith(local_dir)
+        assert os.path.exists(materialised.ref.local_path)
+        os.unlink(materialised.ref.local_path)
+
     async def test_persist_noop_for_durable_ref(self) -> None:
         store = create_memory_store()
         ref = FileReference(is_durable=True, storage_path="file_refs/existing")

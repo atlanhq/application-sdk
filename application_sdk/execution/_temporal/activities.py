@@ -71,6 +71,64 @@ def _track_file_refs(workflow_id: str, *refs: FileReference) -> None:
         tracked.update(refs)
 
 
+def _local_gc_dir_for_activity() -> str | None:
+    """Run-scoped local dir for the current activity, or ``None``.
+
+    Returned as the ``local_dir`` for auto-materialised FileReferences so the
+    SDK's downloaded copies land under the GC-discoverable run-scoped root (see
+    :mod:`application_sdk.storage.local_gc`). ``None`` when the local-GC
+    kill-switch is off or the workflow/run ids are unavailable — callers then
+    fall back to a bare temp file (unchanged legacy behaviour).
+    """
+    from application_sdk.constants import ENABLE_LOCAL_GC  # noqa: PLC0415
+
+    if not ENABLE_LOCAL_GC:
+        return None
+    info = activity.info()
+    if not info.workflow_id or not info.workflow_run_id:
+        return None
+    from application_sdk.storage.local_gc import run_scoped_dir  # noqa: PLC0415
+
+    return str(run_scoped_dir(info.workflow_id, info.workflow_run_id))
+
+
+async def _maybe_sweep_local_file_refs() -> None:
+    """Best-effort: GC this worker's finished-run local scratch. Never raises.
+
+    Each worker self-GCs its own filesystem by asking Temporal which runs are
+    over — coordination-free and bounded (``LOCAL_GC_MAX_DESCRIBES_PER_SWEEP``)
+    per activity. Skips silently when the kill-switch is off or no Temporal
+    client was stashed on the infra context (e.g. non-Temporal / dev contexts).
+    A sweep failure must never fail the activity, so all errors are swallowed.
+    """
+    try:
+        from application_sdk.constants import (  # noqa: PLC0415
+            ENABLE_LOCAL_GC,
+            LOCAL_GC_MAX_DESCRIBES_PER_SWEEP,
+        )
+
+        if not ENABLE_LOCAL_GC:
+            return
+        from application_sdk.infrastructure.context import (  # noqa: PLC0415
+            get_temporal_client,
+        )
+
+        client = get_temporal_client()
+        if client is None:
+            return
+        from application_sdk.storage.local_gc import (  # noqa: PLC0415
+            sweep_local_file_refs,
+        )
+
+        await sweep_local_file_refs(
+            client,
+            current_run_id=activity.info().workflow_run_id or "",
+            max_describes=LOCAL_GC_MAX_DESCRIBES_PER_SWEEP,
+        )
+    except Exception:
+        logger.warning("local_gc: sweep failed (non-fatal)", exc_info=True)
+
+
 def create_activity_from_task(
     task_metadata: TaskMetadata,
 ) -> Callable[..., Any]:
@@ -177,8 +235,12 @@ def create_activity_from_task(
             store = infra.storage if infra is not None else None
 
             # Materialise any durable FileReferences in the input before the task runs.
+            # Auto-materialised copies land under the run-scoped GC root so they
+            # are reclaimable by the cross-worker sweep.
             if store is not None and has_refs_to_materialize(input_data):
-                input_data = await materialize_file_refs(store, input_data)
+                input_data = await materialize_file_refs(
+                    store, input_data, local_dir=_local_gc_dir_for_activity()
+                )
 
             result = await task_method(input_data)
 
@@ -206,6 +268,10 @@ def create_activity_from_task(
             all_refs = _find_file_refs(input_data) + _find_file_refs(result)
             if all_refs:
                 _track_file_refs(activity.info().workflow_id, *all_refs)
+
+            # Self-GC this worker's finished-run local scratch as it works —
+            # deterministic, bounded, coordination-free (no-op when disabled).
+            await _maybe_sweep_local_file_refs()
 
             return cast("Output", result)
 
