@@ -80,10 +80,14 @@ class TestGCSStoreCredentials:
         assert sa_json["universe_domain"] == "googleapis.com"
 
     @patch("obstore.store.GCSStore")
-    def test_no_sa_fields_passes_empty_config(
+    def test_no_sa_fields_passes_none_config(
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
-        """When no SA fields are present (local dev / ADC), config should be empty."""
+        """When no SA fields are present (local dev / ADC), config must be None.
+
+        Passing an empty dict prevents obstore from following its ADC chain,
+        so the bucket-only case must collapse to ``config=None``.
+        """
         components_dir = _write_component(
             tmp_path, "objectstore", "bindings.gcs", {"bucket": "dev-bucket"}
         )
@@ -93,14 +97,47 @@ class TestGCSStoreCredentials:
 
         call_kwargs = mock_gcs_cls.call_args
         assert call_kwargs.kwargs["bucket"] == "dev-bucket"
-        config = call_kwargs.kwargs["config"]
-        assert config == {} or config is None or "service_account_key" not in config
+        assert call_kwargs.kwargs["config"] is None
 
     @patch("obstore.store.GCSStore")
-    def test_partial_sa_fields_only_includes_present(
+    def test_project_id_only_uses_adc(
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
-        partial_meta = {"bucket": "b", "project_id": "proj", "client_email": "e@x.com"}
+        """bucket + project_id (the WIF / ADC config) must NOT synthesise a SA JSON.
+
+        daprd's gcp-bucket binding requires ``project_id`` in component
+        metadata even on the ADC path.  The previous behaviour treated any
+        SA-field presence — including ``project_id`` alone — as a trigger
+        to build a partial SA JSON, which obstore then rejected with
+        ``missing field 'private_key'``.  After the fix, only credential
+        fields trigger key construction; this config falls through to ADC.
+        """
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.gcp.bucket",
+            {"bucket": "wif-bucket", "project_id": "wif-project"},
+        )
+        mock_gcs_cls.return_value = MagicMock()
+
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        call_kwargs = mock_gcs_cls.call_args
+        assert call_kwargs.kwargs["bucket"] == "wif-bucket"
+        assert call_kwargs.kwargs["config"] is None
+
+    @patch("obstore.store.GCSStore")
+    def test_partial_metadata_without_credentials_uses_adc(
+        self, mock_gcs_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """Any non-credential SA fields (project_id, client_email, type) must
+        still fall through to ADC unless private_key / private_key_id is set."""
+        partial_meta = {
+            "bucket": "b",
+            "type": "service_account",
+            "project_id": "proj",
+            "client_email": "e@x.com",
+        }
         components_dir = _write_component(
             tmp_path, "objectstore", "bindings.gcs", partial_meta
         )
@@ -108,10 +145,28 @@ class TestGCSStoreCredentials:
 
         create_store_from_binding("objectstore", components_dir=components_dir)
 
+        assert mock_gcs_cls.call_args.kwargs["config"] is None
+
+    @patch("obstore.store.GCSStore")
+    def test_private_key_id_alone_triggers_sa_json(
+        self, mock_gcs_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """Either credential field is sufficient to trigger SA-JSON construction."""
+        meta = {
+            "bucket": "b",
+            "project_id": "proj",
+            "private_key_id": "kid-1",
+            "client_email": "e@x.com",
+        }
+        components_dir = _write_component(tmp_path, "objectstore", "bindings.gcs", meta)
+        mock_gcs_cls.return_value = MagicMock()
+
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
         sa_json = orjson.loads(
             mock_gcs_cls.call_args.kwargs["config"]["service_account_key"]
         )
-        assert set(sa_json.keys()) == {"project_id", "client_email"}
+        assert set(sa_json.keys()) == {"project_id", "private_key_id", "client_email"}
 
     @patch("obstore.store.GCSStore")
     def test_private_key_newlines_normalized(

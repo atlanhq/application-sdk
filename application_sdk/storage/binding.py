@@ -212,10 +212,16 @@ def create_store_from_binding(
         bucket = meta.get("bucket", "")
         gcs_config: dict[str, str] = {}
 
-        # Build service account JSON from Dapr component metadata fields
-        # (injected from gcp-service-account-creds secret via Helm).
-        sa_data = {k: meta[k] for k in GCS_SERVICE_ACCOUNT_FIELDS if k in meta}
-        if sa_data:
+        # Build service-account JSON only when actual credential material is
+        # supplied.  ``project_id`` alone is not credential material — daprd's
+        # gcp-bucket binding schema requires ``project_id`` in component
+        # metadata even on the ADC path (Workload Identity / GKE metadata
+        # server / GOOGLE_APPLICATION_CREDENTIALS), so a config containing
+        # only ``bucket`` + ``project_id`` must fall through to ADC rather
+        # than be synthesised into a partial SA JSON that obstore would
+        # reject for missing ``private_key``.
+        if any(meta.get(f) for f in ("private_key", "private_key_id")):
+            sa_data = {k: meta[k] for k in GCS_SERVICE_ACCOUNT_FIELDS if k in meta}
             # Normalize escaped newlines in private_key PEM blocks — Helm
             # templating from K8s secrets can produce literal two-char "\n".
             if "private_key" in sa_data:
@@ -227,7 +233,9 @@ def create_store_from_binding(
         )
         return GCSStore(
             bucket=bucket,
-            config=gcs_config,
+            # Pass ``None`` (not {}) when no key was supplied so obstore uses
+            # Application Default Credentials.  Mirrors storage/cloud.py.
+            config=gcs_config if gcs_config else None,
             client_options=sdk_client_options,
             retry_config=sdk_retry_config,
         )
