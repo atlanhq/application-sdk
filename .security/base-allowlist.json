@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2025-4641": {
+    "package": "unknown (blank scan metadata — logan-talend-app Java dependency)",
+    "severity": "CRITICAL",
+    "reason": "Scanner gap — no package or advisory DB mapping in trivy output for ghcr.io/atlanhq/logan-talend-app:0.0.18. Java partner-app (Logan Data); source repo not accessible for dep-fix. Allowlisting pending package identification and upstream patch. Tracked in SEC-1868.",
+    "expires": "2026-06-11",
+    "added_by": "mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2025-48924": {
+    "package": "commons-lang3 (Apache Commons Lang — logan-talend-app Java dependency)",
+    "severity": "HIGH",
+    "reason": "Partner-app (Logan Data / logan-talend-app) Java dependency. Fix available in commons-lang3 3.18.0, but source repo is managed by external partner and not accessible for dep-bump PR. Allowlisting to unblock release; partner team must upgrade to 3.18.0. Tracked in SEC-1868.",
+    "expires": "2026-06-26",
+    "added_by": "mothership",
+    "fix_available_date": "2026-05-27",
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2025-8671": {
+    "package": "unknown (blank scan metadata — logan-talend-app Java dependency)",
+    "severity": "HIGH",
+    "reason": "Scanner gap — no package or advisory DB mapping in trivy output for ghcr.io/atlanhq/logan-talend-app:0.0.18. Java partner-app (Logan Data); source repo not accessible for dep-fix. Allowlisting pending package identification and upstream patch. Tracked in SEC-1868.",
+    "expires": "2026-06-26",
+    "added_by": "mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
