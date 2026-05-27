@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.13.3 (May 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.2...v3.13.3
+
+### Features
+
+- rewrite heartbeat guidance (ARUN-764) (#1868) (by @tczhao in [bb83566](https://github.com/atlanhq/application-sdk/commit/bb83566))
+
+### Bug Fixes
+
+- correct token refresh scheduling for container clock drift (#1874) (by @cmgrote in [2f6cef7](https://github.com/atlanhq/application-sdk/commit/2f6cef7))
+
+
 ## v3.13.2 (May 25, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.1...v3.13.2

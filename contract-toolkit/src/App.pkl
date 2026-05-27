@@ -569,19 +569,48 @@ open class PublishNode extends DAGNode {
     startToCloseTimeoutSeconds = 86400
   }
 
-  /// Whether publish should read/write connection cache entries.
+  /// Whether publish should build and upload the connection-cache index after writing assets.
+  ///
+  /// When `true`, publish reads the transformed crawl output and builds a SQLite
+  /// index mapping every entity in the connection (`typeName` + `qualifiedName` →
+  /// metadata), then uploads it as a single file. This index lets other workflows
+  /// (miners, BI/dbt lineage builders) resolve asset identifiers by qualified name
+  /// without re-crawling the source system.
   ///
   /// Defaults to `false` as the safe base for direct use (e.g. `extraNodes`).
   /// When this node is created via the typed `pipeline.publish` step, the
   /// pipeline injects `true` unless the app contract overrides it explicitly
-  /// on `PublishStep.connectionCacheEnabled`. Set to `false` for any publish
-  /// node that must not write to the shared connection cache.
+  /// on `PublishStep.connectionCacheEnabled`. Must be `false` for any publish
+  /// node that must not overwrite the shared connection-cache index (e.g. lineage publish).
   connectionCacheEnabled: Boolean = false
 
-  /// Whether publish should resolve connection cache through app storage.
+  /// App-level gate for the connection-cache activity, paired with `connectionCacheEnabled`.
   ///
-  /// Same default and injection semantics as `connectionCacheEnabled`.
+  /// Both flags must be `true` for the connection-cache index to be built and
+  /// uploaded. Same default and injection semantics as `connectionCacheEnabled`.
   connectionCacheViaAppEnabled: Boolean = false
+
+  /// Whether publish should package and upload the current-state snapshot after writing assets.
+  ///
+  /// When `true`, publish packages the transformed crawl output into a compressed
+  /// archive and uploads it to the current-state path. This snapshot is the
+  /// authoritative "what Atlan currently knows about this connection" baseline;
+  /// downstream consumers (e.g. the current-state syncer and on-demand asset caches)
+  /// read it to get an up-to-date view without re-crawling.
+  ///
+  /// Defaults to `false` as the safe base for direct use (e.g. `extraNodes`).
+  /// When this node is created via the typed `pipeline.publish` step, the
+  /// pipeline injects `true` from `PublishStep.currentStateEnabled`.
+  currentStateEnabled: Boolean = false
+
+  /// App-level gate for the current-state activity, paired with `currentStateEnabled`.
+  ///
+  /// Both flags must be `true` for the current-state snapshot to be written.
+  /// Same default and injection semantics as `currentStateEnabled`. When `true`
+  /// (via `PublishStep`), publish writes to the real current-state path so the
+  /// next run can diff against it; when `false`, the snapshot is either skipped
+  /// or written to a dry-run path.
+  currentStateViaAppEnabled: Boolean = false
 
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
@@ -596,6 +625,8 @@ open class PublishNode extends DAGNode {
     ["connection_entity"] = "{{connection}}"
     ["connection_cache_enabled"] = connectionCacheEnabled
     ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
+    ["current_state_enabled"] = currentStateEnabled
+    ["current_state_via_app_enabled"] = currentStateViaAppEnabled
   }
   dependsOn { upstream }
 }
@@ -1008,23 +1039,30 @@ open class LineagePublishNode extends DAGNode {
 
   connectionEntity: String = "{{connection}}"
 
-  /// Whether publish should read/write connection cache entries.
+  /// Whether lineage publish should build and upload the connection-cache index.
   ///
-  /// Defaults to `false` for lineage publish because lineage entities
-  /// (`Process`, `ColumnProcess`) must not overwrite the connection cache that
-  /// the asset crawler built with `Database`/`Schema`/`Table` rows. Passing
-  /// `true` here causes the lineage publish to rebuild the cache from
-  /// lineage-stage data, destroying asset entries and breaking subsequent miner
-  /// runs. Set to `true` only when the lineage pipeline owns the connection
-  /// cache and no asset crawler shares it.
+  /// Defaults to `false` because the connection-cache index (SQLite, mapping
+  /// `typeName` + `qualifiedName` → metadata) is built from asset entities
+  /// (`Database`/`Schema`/`Table`). Writing it from lineage-stage data
+  /// (`Process`/`ColumnProcess`) would overwrite the asset crawler's index and
+  /// break downstream workflows (miners, BI/dbt lineage builders) that rely on
+  /// it for qualified-name lookups. Set to `true` only when the lineage pipeline
+  /// owns the entire connection cache and no asset crawler shares it.
   connectionCacheEnabled: Boolean = false
 
-  /// Whether publish should resolve connection cache through app storage.
+  /// App-level gate for the connection-cache activity, paired with `connectionCacheEnabled`.
   ///
-  /// Defaults to `false` for the same reason as `connectionCacheEnabled`:
-  /// lineage publish must not write into the shared connection cache.
+  /// Defaults to `false` for the same reason: lineage publish must not overwrite
+  /// the shared connection-cache index built by the asset crawler.
   connectionCacheViaAppEnabled: Boolean = false
 
+  /// App-level gate for the current-state activity.
+  ///
+  /// When `true`, publish packages the transformed crawl output into a compressed
+  /// archive and uploads it to the current-state path — the authoritative
+  /// "what Atlan currently knows about this connection" baseline read by downstream
+  /// consumers (e.g. the current-state syncer and on-demand asset caches).
+  /// Defaults to `true` so lineage runs keep the baseline current.
   currentStateViaAppEnabled: Boolean = true
 
   cacheNamespace: String = "lineage"
@@ -1119,17 +1157,47 @@ class PublishStep {
     startToCloseTimeoutSeconds = 86400
   }
 
-  /// Whether the asset publish node should read/write the connection cache.
+  /// Whether the asset publish node should build and upload the connection-cache index.
   ///
-  /// Defaults to `true` for the typed pipeline: the crawler must write
-  /// `Database`/`Schema`/`Table` rows so downstream miners can read them.
-  /// Set to `false` explicitly when this publish step must not touch the cache.
+  /// When `true`, publish reads the transformed crawl output and builds a SQLite
+  /// index mapping every entity in the connection (`typeName` + `qualifiedName` →
+  /// metadata), then uploads it as a single file. This index lets downstream
+  /// workflows (miners, BI/dbt lineage builders) resolve asset identifiers by
+  /// qualified name without re-crawling.
+  ///
+  /// Defaults to `true` for asset crawlers: the `Database`/`Schema`/`Table` rows
+  /// they produce are exactly what populates this index. Set to `false` explicitly
+  /// when this publish step must not overwrite the shared connection-cache index.
   connectionCacheEnabled: Boolean = true
 
-  /// Whether the asset publish node should resolve the connection cache through
-  /// app storage. Defaults to `true`. Set to `false` alongside
-  /// `connectionCacheEnabled` when the node must not touch the shared cache.
+  /// App-level gate for the connection-cache activity, paired with `connectionCacheEnabled`.
+  ///
+  /// Both flags must be `true` for the connection-cache index to be built and
+  /// uploaded. Defaults to `true`. Set to `false` alongside `connectionCacheEnabled`
+  /// when the node must not touch the shared index.
   connectionCacheViaAppEnabled: Boolean = true
+
+  /// Whether the asset publish node should package and upload the current-state snapshot.
+  ///
+  /// When `true`, publish packages the transformed crawl output into a compressed
+  /// archive and uploads it to the current-state path. This snapshot is the
+  /// authoritative "what Atlan currently knows about this connection" baseline;
+  /// downstream consumers (e.g. the current-state syncer and on-demand asset caches)
+  /// read it to get an up-to-date view without re-crawling.
+  ///
+  /// Defaults to `true` so every crawler run records a fresh baseline that the
+  /// next run can diff against. Set to `false` explicitly when this publish step
+  /// must not write to current-state storage.
+  currentStateEnabled: Boolean = true
+
+  /// App-level gate for the current-state activity, paired with `currentStateEnabled`.
+  ///
+  /// Both flags must be `true` for the current-state snapshot to be written.
+  /// Defaults to `true` so publish writes to the real current-state path rather
+  /// than a dry-run path, enabling incremental diffing on subsequent runs. Set to
+  /// `false` alongside `currentStateEnabled` when the node must not write
+  /// current-state at all.
+  currentStateViaAppEnabled: Boolean = true
 
   /// Optional lineage-publish sub-step. When set, adds a `"lineage-publish"`
   /// node after the main publish step.
@@ -1881,6 +1949,8 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
         errorHandling = ps.errorHandling
         connectionCacheEnabled = ps.connectionCacheEnabled
         connectionCacheViaAppEnabled = ps.connectionCacheViaAppEnabled
+        currentStateEnabled = ps.currentStateEnabled
+        currentStateViaAppEnabled = ps.currentStateViaAppEnabled
       })
   }
   when (pipeline.publish != null && pipeline.publish!!.lineagePublish != null) {
