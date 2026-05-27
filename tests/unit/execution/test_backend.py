@@ -644,6 +644,13 @@ class TestApplySniDomain:
 
 
 class TestCreateTemporalClientPrefersV4:
+    # All three end-to-end tests below explicitly patch
+    # ``backend_module.ENABLE_ATLAN_UPLOAD`` to True because the
+    # resolver substitution is now gated on SDR mode (the env-driven
+    # flag). Internal-Atlan-service flows leave it False and keep the
+    # hostname intact for re-resolution on reconnect — covered by the
+    # ``TestCreateTemporalClientNonSdrMode`` class below.
+
     @pytest.mark.asyncio
     async def test_substitutes_v4_ip_and_preserves_sni_for_tls(self) -> None:
         """End-to-end: when the resolver returns both v4 and v6 and TLS
@@ -653,6 +660,7 @@ class TestCreateTemporalClientPrefersV4:
 
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", True),
             mock.patch.object(
                 backend_module.socket,
                 "getaddrinfo",
@@ -688,6 +696,7 @@ class TestCreateTemporalClientPrefersV4:
         # attempts on netns-with-no-v6 hosts.
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", True),
             mock.patch.object(
                 backend_module.socket,
                 "getaddrinfo",
@@ -714,6 +723,7 @@ class TestCreateTemporalClientPrefersV4:
         # stays False because there's no handshake to preserve SNI for.
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", True),
             mock.patch.object(
                 backend_module.socket,
                 "getaddrinfo",
@@ -733,3 +743,108 @@ class TestCreateTemporalClientPrefersV4:
         kwargs = connect.await_args.kwargs
         assert kwargs["target_host"] == "203.0.113.10:443"
         assert kwargs["tls"] is False
+
+
+class TestCreateTemporalClientNonSdrMode:
+    # Internal Atlan services connect to Temporal via in-cluster Service
+    # DNS (e.g. ``temporal-frontend.temporal.svc.cluster.local``). The
+    # ClusterIP can change if the Service object is recreated (Helm
+    # reapply, namespace rebuild), and the Rust bridge holds a literal-IP
+    # target across reconnects — so pinning the IP at connect time would
+    # cause stale-IP connect failures later. These tests pin
+    # ``ENABLE_ATLAN_UPLOAD`` to False and confirm the SDK keeps the
+    # hostname intact so the bridge re-resolves DNS on each reconnect.
+
+    @pytest.mark.asyncio
+    async def test_hostname_preserved_when_not_sdr_dual_stack(self) -> None:
+        with (
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", False),
+            # Resolver still returns both families — this should NOT
+            # trigger any swap because we're not in SDR mode.
+            mock.patch.object(
+                backend_module.socket,
+                "getaddrinfo",
+                return_value=_fake_addrinfo(_socket.AF_INET6, _socket.AF_INET),
+            ),
+            mock.patch.object(
+                backend_module.Client,
+                "connect",
+                new=mock.AsyncMock(return_value=mock.MagicMock()),
+            ) as connect,
+        ):
+            await create_temporal_client(
+                host="temporal-frontend.temporal.svc.cluster.local:7233",
+                connect_max_attempts=1,
+            )
+        kwargs = connect.await_args.kwargs
+        # Hostname preserved end-to-end so the Rust bridge re-resolves
+        # on every reconnect.
+        assert (
+            kwargs["target_host"] == "temporal-frontend.temporal.svc.cluster.local:7233"
+        )
+        assert kwargs["tls"] is False
+
+    @pytest.mark.asyncio
+    async def test_tls_unchanged_when_not_sdr(self) -> None:
+        """When not in SDR mode, ``tls=True`` is NOT upgraded to a
+        TLSConfig with a SNI domain — because we never substituted an
+        IP, the original hostname continues to drive SNI on each
+        Rust-bridge reconnect."""
+        with (
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", False),
+            mock.patch.object(
+                backend_module.socket,
+                "getaddrinfo",
+                return_value=_fake_addrinfo(_socket.AF_INET6, _socket.AF_INET),
+            ),
+            mock.patch(
+                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                return_value=None,
+            ),
+            mock.patch.object(
+                backend_module.Client,
+                "connect",
+                new=mock.AsyncMock(return_value=mock.MagicMock()),
+            ) as connect,
+        ):
+            await create_temporal_client(
+                host="temporal-frontend.temporal.svc.cluster.local:7233",
+                tls_enabled=True,
+                connect_max_attempts=1,
+            )
+        kwargs = connect.await_args.kwargs
+        assert (
+            kwargs["target_host"] == "temporal-frontend.temporal.svc.cluster.local:7233"
+        )
+        # ``tls=True`` stays as-is — no TLSConfig upgrade because we
+        # didn't substitute an IP, so SNI naturally tracks the hostname.
+        assert kwargs["tls"] is True
+
+    @pytest.mark.asyncio
+    async def test_resolver_helper_is_not_called_when_not_sdr(self) -> None:
+        # Direct evidence the resolver short-circuits before
+        # ``getaddrinfo`` runs at all when we're not in SDR mode. Catches
+        # accidental regressions where someone moves the gate the wrong
+        # side of the call.
+        getaddrinfo_mock = mock.MagicMock(
+            return_value=_fake_addrinfo(_socket.AF_INET6, _socket.AF_INET)
+        )
+        with (
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", False),
+            mock.patch.object(
+                backend_module.socket, "getaddrinfo", new=getaddrinfo_mock
+            ),
+            mock.patch.object(
+                backend_module.Client,
+                "connect",
+                new=mock.AsyncMock(return_value=mock.MagicMock()),
+            ),
+        ):
+            await create_temporal_client(
+                host="internal-temporal.svc.cluster.local:7233",
+                connect_max_attempts=1,
+            )
+        assert getaddrinfo_mock.call_count == 0
