@@ -50,13 +50,37 @@ class TestMakeS3AssumeRoleProvider:
             role_arn="arn:aws:iam::123:role/MyRole",
             base_access_key="AK",
             base_secret_key="SK",
+            base_session_token="TOK",
             region="eu-west-1",
         )
 
         session_kwargs = mock_session_cls.call_args.kwargs
         assert session_kwargs["aws_access_key_id"] == "AK"
         assert session_kwargs["aws_secret_access_key"] == "SK"
+        assert session_kwargs["aws_session_token"] == "TOK"
         assert session_kwargs["region_name"] == "eu-west-1"
+
+    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
+    @patch("boto3.Session")
+    def test_base_session_token_omitted_without_key_pair(
+        self, mock_session_cls: MagicMock, mock_sts_cls: MagicMock
+    ) -> None:
+        from application_sdk.storage._credential_providers import (
+            make_s3_assume_role_provider,
+        )
+
+        mock_session_cls.return_value = MagicMock()
+        mock_sts_cls.return_value = MagicMock()
+
+        make_s3_assume_role_provider(
+            role_arn="arn:aws:iam::123:role/MyRole",
+            base_session_token="TOK",
+            # No base_access_key / base_secret_key — token alone is meaningless
+        )
+
+        session_kwargs = mock_session_cls.call_args.kwargs
+        assert "aws_session_token" not in session_kwargs
+        assert "aws_access_key_id" not in session_kwargs
 
     @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
     @patch("boto3.Session")

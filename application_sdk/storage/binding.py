@@ -230,7 +230,7 @@ def _build_azure_config(
         host = _AZURE_AUTHORITY_HOSTS.get(env_name)
         if host is None:
             raise StorageConfigError(
-                f"Unknown azureEnvironment {env_name!r}. "
+                f"[{name}] Unknown azureEnvironment {env_name!r}. "
                 f"Valid values: {', '.join(_AZURE_AUTHORITY_HOSTS)}"
             )
         az_config["azure_storage_authority_host"] = host
@@ -429,67 +429,48 @@ def create_store_from_binding(
 
         return create_local_store(root_path)
 
-    # BLDX-1155: every store gets the SDK-default ClientConfig + RetryConfig
-    # so timeouts and pool sizes are sized for GB-class transfers, not for
-    # small objects.  Without this, S3Store falls back to obstore's small-
-    # object defaults (30 s timeout) and 100 MB+ downloads time out mid-stream.
+    # BLDX-1155: every store gets the SDK-default ClientConfig + RetryConfig so
+    # timeouts and pool sizes are sized for GB-class transfers.  Store creation
+    # (including logging and retry wiring) is delegated to make_*_store in
+    # _obstore_config.py — the single source of truth shared with cloud.py.
     from application_sdk.storage._obstore_config import (  # noqa: PLC0415
-        log_obstore_config,
+        make_azure_store,
+        make_gcs_store,
+        make_s3_store,
         obstore_client_options,
-        obstore_retry_config,
     )
 
     sdk_client_options = obstore_client_options()
-    sdk_retry_config = obstore_retry_config()
 
     if store_kind == "s3":
-        from obstore.store import S3Store  # noqa: PLC0415 — defensive: keep inline
-
         bucket, config, client_options, credential_provider = _build_s3_config(
             name, meta, sdk_client_options
         )
-        log_obstore_config(
-            "s3", client_options=client_options, retry_config=sdk_retry_config
-        )
-        return S3Store(
-            bucket=bucket,
-            config=config if config else None,
+        return make_s3_store(
+            bucket,
+            config if config else None,
             client_options=client_options,
-            retry_config=sdk_retry_config,
             credential_provider=credential_provider,
         )
 
     if store_kind == "azure":
-        from obstore.store import AzureStore  # noqa: PLC0415 — defensive: keep inline
-
         container, az_config, az_client_options, az_credential_provider = (
             _build_azure_config(name, meta, sdk_client_options)
         )
-        log_obstore_config(
-            "azure", client_options=az_client_options, retry_config=sdk_retry_config
-        )
-        return AzureStore(
-            container_name=container,
-            config=az_config if az_config else None,
+        return make_azure_store(
+            container,
+            az_config if az_config else None,
             client_options=az_client_options,
-            retry_config=sdk_retry_config,
             credential_provider=az_credential_provider,
         )
 
     if store_kind == "gcs":
-        from obstore.store import GCSStore  # noqa: PLC0415 — defensive: keep inline
-
         bucket, gcs_config = _build_gcs_config(meta)
-        log_obstore_config(
-            "gcs", client_options=sdk_client_options, retry_config=sdk_retry_config
-        )
-        return GCSStore(
-            bucket=bucket,
-            # Pass ``None`` (not {}) when no key was supplied so obstore uses
-            # Application Default Credentials.  Mirrors storage/cloud.py.
-            config=gcs_config if gcs_config else None,
+        return make_gcs_store(
+            bucket,
+            # Pass ``None`` (not {}) so obstore uses Application Default Credentials.
+            gcs_config if gcs_config else None,
             client_options=sdk_client_options,
-            retry_config=sdk_retry_config,
         )
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")

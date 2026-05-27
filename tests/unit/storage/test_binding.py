@@ -417,7 +417,8 @@ class TestS3AssumeRole:
                 "bucket": "b",
                 "assumeRoleArn": "arn:aws:iam::123:role/R",
                 "accessKey": "AK",
-                # secretKey intentionally omitted
+                "sessionToken": "STOKEN",
+                # secretKey intentionally omitted — triggers the partial-creds path
             },
         )
         with patch("application_sdk.storage.binding._get_logger") as mock_get_logger:
@@ -429,10 +430,11 @@ class TestS3AssumeRole:
         warning_msg = mock_logger.warning.call_args.args[0]
         assert "accessKey" in warning_msg or "base credentials" in warning_msg
 
-        # Both base creds must be absent from the Session call
+        # All three base creds (key, secret, token) must be absent from the Session call
         session_kwargs = mock_session_cls.call_args.kwargs
         assert "aws_access_key_id" not in session_kwargs
         assert "aws_secret_access_key" not in session_kwargs
+        assert "aws_session_token" not in session_kwargs
 
 
 class TestS3SecretKeyRef:
