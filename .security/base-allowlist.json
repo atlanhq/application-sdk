@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "(unknown — package not reported by scanner; SEC team must verify)",
+    "severity": "HIGH",
+    "reason": "PLACEHOLDER — SEC team must complete this field before merging. No upstream fix available as of 2026-05-27 (daily-cert scan SEC-3556 on atlan-abcr-lineage-app-main:a8bedefabcd).",
+    "expires": "2026-06-26",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "(unknown — package not reported by scanner; SEC team must verify)",
+    "severity": "HIGH",
+    "reason": "PLACEHOLDER — SEC team must complete this field before merging. No upstream fix available as of 2026-05-27 (daily-cert scan SEC-3556 on atlan-abcr-lineage-app-main:a8bedefabcd).",
+    "expires": "2026-06-26",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "(unknown — package not reported by scanner; SEC team must verify)",
+    "severity": "HIGH",
+    "reason": "PLACEHOLDER — SEC team must complete this field before merging. No upstream fix available as of 2026-05-27 (daily-cert scan SEC-3556 on atlan-abcr-lineage-app-main:a8bedefabcd).",
+    "expires": "2026-06-26",
+    "added_by": "security-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
