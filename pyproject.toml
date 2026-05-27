@@ -215,10 +215,12 @@ reportInvalidTypeForm = "warning"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-m 'not integration and not e2e'"
+addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration'"
 markers = [
     "integration: tests requiring local Temporal server",
     "e2e: tests requiring a live K8s cluster",
+    "s3_integration: tests requiring a running S3-compatible emulator (MinIO)",
+    "azure_integration: tests requiring a running Azure Blob Storage emulator (Azurite)",
 ]
 
 [tool.coverage.run]
