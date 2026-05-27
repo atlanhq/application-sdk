@@ -3519,6 +3519,80 @@ class TestStartWorkflowExtras:
             patcher.stop()
 
 
+class TestStartWorkflowExecutionTimeout:
+    """Tests for execution_timeout wiring in /workflows/v1/start."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _wire(self, app_cls, workflow_max_timeout_hours=None):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="timeout-test",
+            app_class=app_cls,
+            temporal_host="temporal:7233",
+            workflow_max_timeout_hours=workflow_max_timeout_hours,
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-id"
+        mock_handle.result_run_id = "run-id"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        return TestClient(svc, raise_server_exceptions=False), mock_client, patcher
+
+    def test_execution_timeout_set_when_configured(self) -> None:
+        """execution_timeout is passed to start_workflow when workflow_max_timeout_hours is set."""
+        from datetime import timedelta
+
+        from application_sdk.app.base import App
+
+        class _TApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, mock_client, patcher = self._wire(_TApp, workflow_max_timeout_hours=48)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] == timedelta(hours=48)
+        finally:
+            patcher.stop()
+
+    def test_execution_timeout_none_when_not_configured(self) -> None:
+        """execution_timeout is None when workflow_max_timeout_hours is not set."""
+        from application_sdk.app.base import App
+
+        class _TApp2(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, mock_client, patcher = self._wire(_TApp2)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] is None
+        finally:
+            patcher.stop()
+
+
 class TestUploadFileEndpoint:
     """Tests for POST /workflows/v1/file."""
 
@@ -3777,6 +3851,78 @@ class TestEventTriggerEndpoint:
                 response = client.post("/events/v1/event/t1", json={"data": {}})
             assert response.status_code == 500
             assert response.json()["status"] == "RETRY"
+        finally:
+            self._teardown()
+
+    def test_event_execution_timeout_set_when_configured(self) -> None:
+        """execution_timeout is passed to start_workflow on the event route when configured."""
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+                workflow_max_timeout_hours=48,
+            )
+            mock_client = MagicMock()
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-id"
+            mock_handle.result_run_id = "run-id"
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post("/events/v1/event/t1", json={})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] == timedelta(hours=48)
+        finally:
+            self._teardown()
+
+    def test_event_execution_timeout_none_when_not_configured(self) -> None:
+        """execution_timeout is None on the event route when workflow_max_timeout_hours is unset."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            mock_client = MagicMock()
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-id"
+            mock_handle.result_run_id = "run-id"
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post("/events/v1/event/t1", json={})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] is None
         finally:
             self._teardown()
 
