@@ -16,6 +16,7 @@ Tasks support heartbeating for long-running operations:
 """
 
 import inspect
+import logging
 import os
 import warnings
 from collections.abc import Callable
@@ -31,18 +32,36 @@ if TYPE_CHECKING:
 
 F = TypeVar("F", bound=Callable[..., Any])
 
+logger = logging.getLogger(__name__)
+
 # Sentinel for "use default" - allows None to mean "disable"
 _USE_DEFAULT = object()
+
+
+def _env_int(key: str, default: int) -> int:
+    """Read an int env var, returning ``default`` when unset, empty, or unparsable."""
+    val = os.environ.get(key)
+    if not val:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        logger.warning(
+            "Ignoring non-integer env var %s=%r; falling back to default %d",
+            key,
+            val,
+            default,
+        )
+        return default
+
 
 # Env-var-driven defaults for @task timeouts. Read once at import time so the
 # value is stable for the process lifetime (same pattern as constants.py).
 # Apps that need a different per-task value pass it explicitly to @task().
-_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = int(
-    os.getenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", "60")
+_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = _env_int(
+    "ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60
 )
-_DEFAULT_TIMEOUT_SECONDS: int = int(
-    os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", "600")
-)
+_DEFAULT_TIMEOUT_SECONDS: int = _env_int("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 600)
 
 # Type alias for methods with single Input param returning Output
 TaskMethod = Callable[..., Any]
@@ -254,7 +273,7 @@ def task(
     *,
     name: str | None = None,
     description: str = "",
-    timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
+    timeout_seconds: int | object = _USE_DEFAULT,
     retry_policy: "RetryPolicy | None" = None,
     retry_max_attempts: int = 3,
     retry_max_interval_seconds: int = 30,
@@ -340,7 +359,14 @@ def task(
     Raises:
         TaskContractError: If the method doesn't follow the contract pattern.
     """
-    # Resolve sentinel values to defaults
+    # Resolve sentinel values to defaults — evaluated at decoration time so that
+    # process-level env-var overrides (e.g. ATLAN_HEARTBEAT_TIMEOUT_SECONDS) are
+    # picked up even when the module-level constants were patched after import.
+    resolved_timeout: int = (
+        _DEFAULT_TIMEOUT_SECONDS
+        if timeout_seconds is _USE_DEFAULT
+        else cast("int", timeout_seconds)
+    )
     resolved_heartbeat_timeout: int | None = (
         _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS
         if heartbeat_timeout_seconds is _USE_DEFAULT
@@ -366,7 +392,7 @@ def task(
             output_type=output_type,
             app_name="",  # Will be set by App registration
             description=description or fn.__doc__ or "",
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=resolved_timeout,
             retry_policy=retry_policy,
             retry_max_attempts=retry_max_attempts,
             retry_max_interval_seconds=retry_max_interval_seconds,

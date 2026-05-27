@@ -972,6 +972,7 @@ def run_handler_mode(config: AppConfig) -> None:
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
+        workflow_max_timeout_hours=config.workflow_max_timeout_hours,
     )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed

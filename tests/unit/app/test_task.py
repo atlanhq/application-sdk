@@ -336,3 +336,78 @@ class TestTaskRetryPolicy:
         metadata = get_task_metadata(MyApp.my_task)
         assert metadata is not None
         assert metadata.retry_policy is None
+
+
+# =============================================================================
+# Env-var-driven defaults
+# =============================================================================
+
+
+class TestTaskEnvVarDefaults:
+    """Tests for env-var-driven timeout defaults."""
+
+    @staticmethod
+    def _task_module():
+        import sys
+
+        # application_sdk/app/__init__.py re-exports `task` as an attribute,
+        # so `import application_sdk.app.task as m` gives the function, not the
+        # module. sys.modules always holds the real module object.
+        return sys.modules["application_sdk.app.task"]
+
+    def test_heartbeat_timeout_from_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ATLAN_HEARTBEAT_TIMEOUT_SECONDS overrides heartbeat_timeout_seconds default."""
+        monkeypatch.setattr(
+            self._task_module(), "_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS", 300
+        )
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.heartbeat_timeout_seconds == 300
+
+    def test_start_to_close_timeout_from_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS overrides timeout_seconds default."""
+        monkeypatch.setattr(self._task_module(), "_DEFAULT_TIMEOUT_SECONDS", 1800)
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.timeout_seconds == 1800
+
+    def test_explicit_task_param_overrides_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit @task parameter takes precedence over env-var default."""
+        monkeypatch.setattr(
+            self._task_module(), "_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS", 300
+        )
+
+        class MyApp:
+            @task(heartbeat_timeout_seconds=120)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.heartbeat_timeout_seconds == 120
+
+    def test_invalid_env_var_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-integer env var value falls back to the hardcoded default."""
+        monkeypatch.setenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", "not-a-number")
+        result = self._task_module()._env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
+        assert result == 60
