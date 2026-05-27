@@ -338,7 +338,9 @@ def task(
         func: The function to decorate (when used without parentheses).
         name: Override the task name (defaults to function name).
         description: Human-readable description.
-        timeout_seconds: Activity timeout (default 10 minutes).
+        timeout_seconds: Activity timeout in seconds. Defaults to
+            ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS`` env var, or 600 s (10 min)
+            if unset. Explicit values take precedence over the env var.
         retry_policy: Full retry policy. When provided, takes precedence over
             retry_max_attempts and retry_max_interval_seconds.
         retry_max_attempts: Maximum retry attempts (default 3). Ignored when
@@ -346,9 +348,11 @@ def task(
         retry_max_interval_seconds: Maximum interval between retries in seconds.
             Caps exponential backoff to prevent very long waits. Default: 30 seconds.
             Ignored when retry_policy is provided.
-        heartbeat_timeout_seconds: Heartbeat timeout - if no heartbeat is received
-            within this window, Temporal restarts the activity. Set to None to
-            disable heartbeating entirely. Default: 60 seconds.
+        heartbeat_timeout_seconds: Heartbeat timeout in seconds — if no heartbeat
+            is received within this window, Temporal restarts the activity. Set to
+            None to disable heartbeating entirely. Defaults to
+            ``ATLAN_HEARTBEAT_TIMEOUT_SECONDS`` env var, or 60 s if unset.
+            Explicit values take precedence over the env var.
         auto_heartbeat_seconds: Auto-heartbeat interval - framework sends
             heartbeats at this rate in a background task. Set to None to disable
             auto-heartbeating (manual only). Default: 10 seconds (~1/6 of timeout).
