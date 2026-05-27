@@ -779,11 +779,13 @@ class TestAzureCertificateProvider:
                 "azureCertificateFile": "/certs/app.pfx",
             },
         )
-        with patch.dict(
-            "sys.modules", {"azure.identity": None, "obstore.auth.azure": None}
+        with (
+            patch.dict(
+                "sys.modules", {"azure.identity": None, "obstore.auth.azure": None}
+            ),
+            pytest.raises((StorageConfigError, ImportError)),
         ):
-            with pytest.raises((StorageConfigError, ImportError)):
-                create_store_from_binding("objectstore", components_dir=components_dir)
+            create_store_from_binding("objectstore", components_dir=components_dir)
 
 
 class TestAzureMsiExtras:

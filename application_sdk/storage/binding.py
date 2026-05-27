@@ -386,6 +386,8 @@ def create_store_from_binding(
         # reject for missing ``private_key``.
         if any(meta.get(f) for f in ("private_key", "private_key_id")):
             sa_data = {k: meta[k] for k in GCS_SERVICE_ACCOUNT_FIELDS if k in meta}
+            # Normalize escaped newlines in private_key PEM blocks — Helm
+            # templating from K8s secrets can produce literal two-char "\n".
             if "private_key" in sa_data:
                 sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
             gcs_config["google_service_account_key"] = orjson.dumps(sa_data).decode()
@@ -395,6 +397,8 @@ def create_store_from_binding(
         )
         return GCSStore(
             bucket=bucket,
+            # Pass ``None`` (not {}) when no key was supplied so obstore uses
+            # Application Default Credentials.  Mirrors storage/cloud.py.
             config=gcs_config if gcs_config else None,
             client_options=sdk_client_options,
             retry_config=sdk_retry_config,
