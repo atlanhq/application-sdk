@@ -134,11 +134,14 @@ class TestPersistFileReference:
         assert a_side.decode().strip() == _hash_bytes(b"a")
 
     async def test_retained_tier_requires_run_prefix(self, store, tmp_path) -> None:
+        from application_sdk.contracts.types_errors import RunPrefixRequiredError
+
         f = tmp_path / "data.bin"
         f.write_bytes(b"x")
         ref = FileReference(local_path=str(f), tier=StorageTier.RETAINED)
-        with pytest.raises(ValueError):
+        with pytest.raises(RunPrefixRequiredError) as exc_info:
             await persist_file_reference(store, ref)
+        assert exc_info.value.code == "INVALID_INPUT_RUN_PREFIX_REQUIRED"
 
     async def test_retained_tier_with_output_path(self, store, tmp_path) -> None:
         f = tmp_path / "data.bin"
@@ -362,6 +365,34 @@ class TestMaterializeFileReference:
         assert result.local_path is not None
         # Cleanup
         Path(result.local_path).joinpath("x.txt").unlink(missing_ok=True)
+
+    async def test_directory_materialize_path_traversal_rejected(
+        self, store, tmp_path
+    ) -> None:
+        """A listed key containing ``..`` must not write outside *local_path*.
+
+        obstore rejects ``..`` keys on put, so we patch ``list_keys`` to plant
+        a hostile listing and assert the containment guard fires before any
+        write happens (issue #1694).
+        """
+        from unittest.mock import AsyncMock
+
+        local_dir = tmp_path / "out"
+        canary = tmp_path / "canary.txt"
+        ref = FileReference(
+            local_path=str(local_dir),
+            is_durable=True,
+            storage_path="dirkey",
+        )
+        with (
+            patch(
+                "application_sdk.storage.batch.list_keys",
+                new=AsyncMock(return_value=["dirkey/../../canary.txt"]),
+            ),
+            pytest.raises(StorageError, match="Path traversal"),
+        ):
+            await materialize_file_reference(store, ref)
+        assert not canary.exists()
 
 
 # ---------------------------------------------------------------------------

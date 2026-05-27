@@ -1,26 +1,29 @@
 # App Contract Toolkit — Reference Documentation
 
-One `.pkl` contract generates all configuration artifacts for an Atlan native app: workflow config, credential config, AE manifest, and typed Python dataclass. Multi-entrypoint native apps (e.g., crawler + miner) can use `NativeAppBundle.pkl` to render `atlan.yaml` and inline multiple `NativeApp.pkl` entrypoint contracts into the SDK's generated layout.
+One `app.pkl` contract generates every artifact for an Atlan native app: `atlan.yaml`, `app.yaml`, workflow config, credential config, AE manifest, and typed Python input model. The v0.10.0 canonical template is `App.pkl` — one `amends` line, one `pkl eval`, everything emitted at the repo root.
 
 ## Architecture
 
 ```
 contract/app.pkl (developer writes)
     │
-    ├─▶ {name}.json                  — Workflow config (setup form)
-    ├─▶ atlan-connectors-{name}.json — Credential config (auth form)
-    ├─▶ manifest.json                — AE DAG (extract → publish)
-    └─▶ input.py                     — Python Pydantic Input class
+    ├─▶ atlan.yaml                        — Marketplace manifest (repo root)
+    ├─▶ app.yaml                          — SDR CI shim (repo root)
+    ├─▶ app/generated/{name}.json         — Workflow config (setup form)
+    ├─▶ app/generated/atlan-connectors-{name}.json  — Credential config
+    ├─▶ app/generated/manifest.json       — AE DAG
+    └─▶ app/generated/_input.py           — Python AppInputContract
 ```
 
 **Consumption flow:**
 ```
-PKL generates → SDK serves at /workflows/v1/configmap/{id}
-             → SDK wraps in K8s ConfigMap format
-             → Frontend JSON.parse(data.data.config)
-             → Renders setup wizard with steps/properties/anyOf
-             → User submits → Heracles substitutes {{params}} in manifest
-             → AE orchestrates DAG
+pkl eval -m . contract/app.pkl
+    → SDK serves at /workflows/v1/configmap/{id}
+    → SDK wraps in K8s ConfigMap format
+    → Frontend JSON.parse(data.data.config)
+    → Renders setup wizard with steps/properties/anyOf
+    → User submits → Heracles substitutes {{params}} in manifest
+    → AE orchestrates DAG
 ```
 
 ---
@@ -39,7 +42,7 @@ amends "pkl:Project"
 
 dependencies {
   ["app-contract-toolkit"] {
-    uri = "package://atlanhq.github.io/application-sdk/app-contract-toolkit/app-contract-toolkit@<LATEST_VERSION>"
+    uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<LATEST_VERSION>"
   }
 }
 ```
@@ -52,26 +55,269 @@ cd contract && pkl project resolve
 To bump an existing project to the latest toolkit version, update the version in `PklProject`, then re-resolve:
 ```bash
 # Update version in PklProject, then:
-cd contract && pkl project resolve && pkl eval -m generated app.pkl
+cd contract && pkl project resolve && cd ..
+pkl eval -m . contract/app.pkl
 ```
 
-### app.pkl Imports
+### app.pkl — single amend line (v0.10.0+)
 
 ```pkl
-amends "@app-contract-toolkit/NativeApp.pkl"
-import "@app-contract-toolkit/Config.pkl"
+amends "@app-contract-toolkit/App.pkl"
 import "@app-contract-toolkit/Connectors.pkl"
 ```
 
-### Generate
+`Connectors.pkl` must be imported explicitly by consuming contracts. All other domain classes and widget types are available directly (no extra `import` lines needed).
+
+### Generate (run from the **app repo root**)
 
 ```bash
-cd contract && pkl eval -m generated app.pkl
+pkl eval -m . contract/app.pkl
 ```
+
+Output files carry full paths relative to the repo root (`atlan.yaml`, `app.yaml`, `app/generated/…`) so a single invocation lays everything down in the right place.
 
 ---
 
-## NativeApp.pkl — Base Module
+## App.pkl — Canonical Template (v0.10.0+)
+
+The single entry point for all new native app contracts. Supersedes `NativeApp.pkl` and `NativeAppBundle.pkl`.
+
+### App Metadata
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `name` | String | required | App slug (e.g. `"snowflake"`). Drives configmap names, task queues, file names. |
+| `displayName` | String | `name.capitalize()` | UI display name. |
+| `connector` | Connectors.Type? | null | Connector from the registry. Required when `hasCredentialConfig = true`. |
+| `icon` | String | required | Icon URL. |
+| `docsUrl` | String | `""` | Documentation link. |
+| `logo` | String | `icon` | Logo URL. |
+| `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
+| `type` | String | `"connector"` | Marketplace type. |
+| `visibility` | String | `"public"` | Marketplace visibility. |
+| `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
+| `selfDeployedRuntime` | Boolean | `false` | Emitted as `self_deployed_runtime`. |
+
+### Workflow & Manifest
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `workflowType` | String | `""` | Python App class name in PascalCase. Auto-converted to kebab-case. Either this or `workflowTypeOverride` must be set. |
+| `workflowTypeOverride` | String? | null | Explicit workflow type (used as-is, overrides `workflowType`). |
+| `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
+
+### Pipeline Block
+
+The typed `pipeline` block replaces per-flag properties. Each step is nullable to opt out.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `pipeline.extract` | ExtractStep? | `new ExtractStep {}` | Extract node. `name` and `displayName` overridable. Null to omit (rare). |
+| `pipeline.parseQueries` | ParseQueriesStep? | null | Query Intelligence node (default-off). |
+| `pipeline.popularity` | PopularityStep? | null | Popularity node (default-off). |
+| `pipeline.lineage` | LineageStep? | null | Lineage app node (default-off). |
+| `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 24h `startToCloseTimeoutSeconds`. Set null for utility apps. |
+| `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom nodes outside the typed pipeline. `"publish"` key replaces auto-generated publish. |
+
+**Pipeline step classes:**
+
+```pkl
+class ExtractStep {
+  name: String = "extract"               // override for non-extract apps (e.g. "apply")
+  displayName: String = "Extract"        // compact AE step label
+  errorHandling: ErrorHandlingConfig?    // retry / timeout policy
+}
+
+class ParseQueriesStep {                 // wraps QueryIntelligenceNode
+  // all QueryIntelligenceNode fields available here
+  vendorName: String?
+  vendorKey: String?
+  sqlKey: String                         // required
+  // ... (see QueryIntelligenceNode below for full field list)
+  errorHandling: ErrorHandlingConfig?
+}
+
+class PopularityStep {                   // wraps PopularityNode
+  tenantId: String                       // required
+  parsedDataPrefix: String               // required
+  minedDataPrefix: String                // required
+  connectionCachePath: String            // required
+  outputPrefix: String                   // required
+  // ... (see PopularityNode below for full field list)
+  errorHandling: ErrorHandlingConfig?
+}
+
+class LineageStep {                      // wraps LineageNode
+  connectorName: String                  // required
+  sqlUnquotedCase: String                // required
+  ignoreAllCase: Boolean                 // required
+  // ... (see LineageNode below for full field list)
+  errorHandling: ErrorHandlingConfig?
+}
+
+class PublishStep {
+  executorEnabled: Boolean|String = true
+  includeInputFields: Boolean = true     // generates output_dir/load_to_atlan/publish_dry_run in _input.py
+  lineagePublish: LineagePublishStep?    // opt-in lineage publish (default-off)
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400  // 24h default — AE's 2h is too tight for large tenants
+  }
+}
+
+class LineagePublishStep {               // wraps LineagePublishNode
+  // ... (see LineagePublishNode below for full field list)
+  errorHandling: ErrorHandlingConfig?
+}
+```
+
+**Migration from old API:**
+
+| Old property | New pipeline equivalent |
+|---|---|
+| `hasPublishStep = false` | `pipeline.publish = null` |
+| `hasPublishInputFields = false` | `pipeline.publish.includeInputFields = false` |
+| `publishExecutorEnabled = "{{x}}"` | `pipeline.publish.executorEnabled = "{{x}}"` |
+| `extractActivityDisplayName = "Apply"` | `pipeline.extract.displayName = "Apply"` |
+| `extractNodeErrorHandling = ...` | `pipeline.extract.errorHandling = ...` |
+| `publishNodeErrorHandling = ...` | `pipeline.publish.errorHandling = ...` |
+| `extraNodes { ["qi"] = new QueryIntelligenceNode { ... } }` | `pipeline.parseQueries = new ParseQueriesStep { ... }` |
+| `extraNodes { ["popularity"] = new PopularityNode { ... } }` | `pipeline.popularity = new PopularityStep { ... }` |
+| `extraNodes { ["lineage-app"] = new LineageNode { ... } }` | `pipeline.lineage = new LineageStep { ... }` |
+| `extraNodes { ["lineage-publish"] = new LineagePublishNode { ... } }` | `pipeline.publish.lineagePublish = new LineagePublishStep { ... }` |
+
+### Credential Config
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `hasCredentialConfig` | Boolean | `true` | Whether to generate credential JSON. |
+| `connectorConfigName` | String | `"atlan-connectors-{name}"` | Credential configmap name. Override to share credentials across entrypoints. |
+| `credentialConnectorType` | String | `"rest"` | Default connector type (`"jdbc"`, `"rest"`). |
+| `credentialCommonFields` | Listing<CredentialFieldEntry> | `[]` | Fields shared across all auth types. |
+| `credentialSharedExtraFields` | Listing<CredentialFieldEntry> | `[]` | Fields under shared top-level `extra`. |
+| `credentialAuthOptions` | Mapping<String, AuthOption>? | null | Auth type options. |
+| `credentialAuthTitle` | String | `"Authentication"` | Auth radio label. |
+| `credentialAuthDefault` | String? | null | Default auth type (defaults to first key). |
+| `credentialAuthRules` | Listing<ValidationRule>? | null | Validation rules for auth-type radio. |
+| `credentialAuthPlaceholder` | String? | null | Placeholder for auth-type radio. |
+| `credentialAuthHelp` | String? | null | Tooltip below auth-type radio. |
+| `credentialAuthWidth` | Int? | null | Grid width for auth-type radio. |
+| `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type values hidden during credential creation. |
+| `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for hidden credential `name` field. |
+| `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
+
+### Workflow Config
+
+| Property | Type | Description |
+|---|---|---|
+| `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
+
+### Deploy Block
+
+The typed `deploy` block replaces the legacy free-form mapping.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `deploy.executionMode` | String | `"native"` | Execution mode. |
+| `deploy.splitDeployment` | Boolean | `true` | Emitted as `splitDeploymentEnabled`. |
+| `deploy.replicaCount` | Int? | null | Honoured only when `keda.enabled = false`. |
+| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles. |
+| `deploy.keda` | KedaConfig | `new KedaConfig {}` | KEDA autoscaling config. |
+| `deploy.resources` | ResourceConfig? | null | Kubernetes resource requests/limits. |
+| `deploy.env` | Mapping<String, String> | `{}` | Static container environment variables. |
+| `deployOverrides` | Mapping<String, Any> | `{}` | Deep-merged on top of the rendered deploy section (VPA, extraVolumes, securityContext, etc.). |
+
+**DaprComponents:**
+
+```pkl
+class DaprComponents {
+  objectstore: Boolean = false
+  secretstore: Boolean = false
+  statestore: Boolean = false
+  eventstore: Boolean = false
+  subscription: Boolean = false
+  configurationstore: Boolean = false
+  lock: Boolean = false
+}
+```
+
+**KedaConfig:**
+
+```pkl
+class KedaConfig {
+  enabled: Boolean = true
+  minReplicaCount: Int = 0
+  temporal: KedaTemporalConfig = new { targetQueueSize = 5 }
+}
+class KedaTemporalConfig { targetQueueSize: Int }
+```
+
+Note: `targetQueueSize` must be set via `keda.temporal.targetQueueSize`, not `keda.targetQueueSize`.
+
+**ResourceConfig:**
+
+```pkl
+class ResourceConfig {
+  requests: Mapping<String, String>
+  limits: Mapping<String, String>
+}
+```
+
+### Multi-Entrypoint Bundle
+
+Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-entrypoint contracts are separate files that each `amend App.pkl`.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `entrypoints` | Listing<Entrypoint> | `[]` | Marketplace card / SDK entrypoint definitions. When non-empty, enables bundle mode. |
+| `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
+| `emitEntrypoints` | Boolean | `true` | Emit the `entrypoints:` block. |
+| `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |
+
+**Entrypoint class:**
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `name` | String | required | SDK entrypoint key and generated subfolder (`crawler`, `miner`). |
+| `displayName` | String | `name.capitalize()` | Card display name. |
+| `description` | String? | null | Card description. |
+| `icon` | String? | null | Card icon. |
+| `type` | String | `"connector"` | Card type. |
+| `source` | String? | null | Source slug. |
+| `sourceCategory` | String? | null | Source category. |
+| `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
+
+Bundle output layout:
+```
+atlan.yaml                              # bundle-level (entrypoints listed)
+app.yaml
+app/generated/
+├── atlan-connectors-{shared}.json      # hoisted from entrypoints, deduped by filename
+├── {entrypoint1}/
+│   ├── __init__.py
+│   ├── {name}.json
+│   ├── manifest.json
+│   └── _input.py
+└── {entrypoint2}/
+    └── ...
+```
+
+Credential files are hoisted by matching `connectorConfigName`. If two entrypoints produce the same filename with different content, generation fails — use unique `connectorConfigName` values for genuinely different credentials.
+
+### Other App.pkl Properties
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `workflowConfigName` | String | `name` | Workflow configmap name / output filename. |
+| `credentialFieldName` | String? | `"{name}_credential"` | Credential ref field in Input class. Null to omit. |
+| `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. |
+| `publishTagPipelineEnabled` | Boolean\|String? | auto | Value for `PublishNode`'s `tag_pipeline_enabled`. Auto-wired when `enable-tags` or `enable-tag-sync` is in the form. |
+| `publishTagAttachmentsPrefix` | String? | auto | Value for `PublishNode`'s `tag_attachments_prefix`. |
+
+---
+
+## Legacy: NativeApp.pkl — Base Module (pre-v0.10.0)
+
+> **Deprecated.** New contracts should amend `App.pkl`. `NativeApp.pkl` remains resolvable for existing apps during the v0.10.x transition period; the hard cutover is planned for v1.0.
 
 Developers amend this module. It defines the app's identity, credentials, workflow form, and manifest.
 
@@ -102,14 +348,12 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `extractActivityDisplayName` | String? | null | Optional override for the built-in extract node's `activity_display_name`. Defaults to `"Extract {displayName} Metadata"`. Use this for long app display names that need compact AE step labels. Only changes the human-readable step label; node id, workflow type, task queue, app name, and args are unchanged. |
 | `publishActivityDisplayName` | String? | null | Optional override for the built-in default publish node's `activity_display_name`. Defaults to `"Publish to Atlas"`. Applies only when the toolkit generates the default publish node; for `extraNodes["publish"]`, set `displayName` on that `PublishNode`. |
 | `extractNodeErrorHandling` | ErrorHandlingConfig? | null | Optional workflow-safe retry / timeout policy for the built-in extract node. Use `startToCloseTimeoutSeconds` to raise AE's child workflow execution timeout. `heartbeatTimeoutSeconds` is invalid because the built-in extract node renders `activity_name = "execute_workflow"` and AE treats it as a workflow node. |
-| `publishNodeErrorHandling` | ErrorHandlingConfig? | null | Optional workflow-safe retry / timeout policy for the toolkit-generated default publish node. Applies only when the toolkit creates publish; for `extraNodes["publish"]`, set `errorHandling` on that `PublishNode`. `heartbeatTimeoutSeconds` is invalid for the default publish node. |
+| `publishNodeErrorHandling` | ErrorHandlingConfig? | `startToCloseTimeoutSeconds = 86400` (24h) | Workflow-safe retry / timeout policy for the toolkit-generated default publish node. Defaults to 24h so connectors don't silently inherit AE's 2h default. Override as needed. For `extraNodes["publish"]`, set `errorHandling` on that `PublishNode` directly (it also defaults to 24h). `heartbeatTimeoutSeconds` is invalid for the default publish node. |
 | `credentialFieldName` | String? | `"{name}_credential"` | Credential ref field in Input class. Null to omit. |
 | `workflowConfigName` | String | `name` | Workflow configmap name / output filename. |
 | `additionalOutputFiles` | Mapping<String, FileOutput> | `{}` | Explicit opt-in files to emit with this contract, for example a customized `AgentConfig.pkl` output. |
 | `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom DAG nodes. Use `DAGNode` for arbitrary workflows, `PublishNode` for the standard Atlas publish step, `QueryIntelligenceNode` for native QI, `PopularityNode` for popularity metrics, `LineageNode` for the Lineage app, or `LineagePublishNode` for lineage publish. Key `"publish"` replaces auto-generated publish. |
 | `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. These remain top-level in either manifest shape. |
-| `flatManifestArgs` | Boolean | `true` | When `true`, all workflow params are emitted as top-level keys in `args` with no `metadata` wrapper, matching generated SDK v3 `_input.py` fields. Set to `false` only for legacy workflows that intentionally read `args.metadata`. |
-| `manifestMetadataArgs` | Mapping<String, String>? | null | Optional explicit mapping of legacy `args.metadata` key → workflow form field when `flatManifestArgs = false`. |
 
 ### Credential Config
 
@@ -130,8 +374,6 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for the hidden credential `name` field. |
 | `credentialConnectorDefault` | String? | null | Optional default for the hidden credential `connector` field. |
-| `credentialConfigIncludeTopLevelMetadata` | Boolean | `true` | Emits top-level credential config metadata (`icon`, `helpdeskLink`, `logo`, `connector`, `defaultConnectorType`). Set `false` only for legacy parity. |
-| `credentialAuthIncludeHiddenFlag` | Boolean | `true` | Emits `ui.hidden=false` on the auth-type radio. Set `false` only for legacy parity. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. When set, every `credentialAuthOptions` entry must be a `JDBCUrlAuthOption`. See [AdvancedJDBCUrlGroup](#advancedjdbcurlgroup--hostrlarrowurl-jdbc-credential-form). |
 
 ### Workflow Config
@@ -139,11 +381,12 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | Property | Type | Description |
 |---|---|---|
 | `uiConfig` | Config.UIConfig | Setup form definition with tasks, rules. |
-| `workflowConfigIncludeTopLevelMetadata` | Boolean | Emits top-level workflow config metadata (`id`, `name`, `logo`). Set `false` only for legacy parity. |
 
 ---
 
-## NativeAppBundle.pkl — Multi-Entrypoint Bundle
+## Legacy: NativeAppBundle.pkl — Multi-Entrypoint Bundle (pre-v0.10.0)
+
+> **Deprecated.** Multi-entrypoint bundle support is now built into `App.pkl` via the `entrypoints` block. `NativeAppBundle.pkl` remains resolvable for existing apps during the v0.10.x transition period; the hard cutover is planned for v1.0.
 
 Use `NativeAppBundle.pkl` when one deployed native app exposes multiple marketplace cards / SDK entrypoints from the same service. The bundle owns deployment and marketplace metadata, while each entrypoint still uses a normal `NativeApp.pkl` contract for workflow config, credentials, manifest, and `_input.py`. Entry contracts can be amended inline in the same `app.pkl`.
 
@@ -172,10 +415,8 @@ contract/app.pkl
 | `displayName` | String | `name.capitalize()` | App display name emitted as `display_name`. |
 | `creatorOrg` | String? | null | Optional `creator_org`. |
 | `type` | String | `"connector"` | Root marketplace type. |
-| `executionMode` | String? | null | Optional top-level `execution_mode`. Current app yaml files may also use `deploy.execution_mode`. |
 | `iconUrl` | String? | null | Root `icon_url`. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
-| `argoPackageNames` | Listing<String> | `[]` | Emitted as `argo_package_names`. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `false` | Emitted as `self_deployed_runtime`. |
 | `metadata` | Mapping<String, Any> | `{}` | Extra top-level `atlan.yaml` fields. |

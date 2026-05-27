@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import UploadFile
 
+from application_sdk.common.errors import JsonParseError, ResponseKeyMissingError
 from application_sdk.common.utils import download_file_from_upload_response
 from application_sdk.server.fastapi.models import FileUploadResponse
 from application_sdk.server.fastapi.utils import (
@@ -579,13 +580,13 @@ class TestDownloadFileFromUploadResponse:
         assert result.endswith("workflow_file_upload/abc123.csv")
 
     async def test_download_missing_key_error(self):
-        """Test that ValueError is raised when 'key' is missing from dict."""
-        with pytest.raises(ValueError, match="missing required 'key' field"):
+        """Test that ResponseKeyMissingError is raised when 'key' is missing from dict."""
+        with pytest.raises(ResponseKeyMissingError):
             await download_file_from_upload_response({"id": "abc123"})
 
     async def test_download_invalid_json_error(self):
-        """Test that ValueError is raised for invalid JSON string."""
-        with pytest.raises(ValueError, match="Invalid JSON string"):
+        """Test that JsonParseError is raised for invalid JSON string."""
+        with pytest.raises(JsonParseError):
             await download_file_from_upload_response("not valid json")
 
     @patch("application_sdk.common.utils.download_file")

@@ -12,6 +12,7 @@ paths so a renamed symbol fails the test.
 
 from __future__ import annotations
 
+import socket as _socket
 from datetime import timedelta
 from typing import Any
 from unittest import mock
@@ -21,6 +22,12 @@ import pytest
 # These tests intentionally import a private Temporal backend module because
 # they verify internal client/runtime wiring that is not exposed publicly.
 from application_sdk.execution._temporal import backend as backend_module
+from application_sdk.execution._temporal._backend_errors import (
+    MtlsConfigError,
+    TemporalConnectError,
+    TlsCertFileNotFoundError,
+    UnknownEntryPointError,
+)
 from application_sdk.execution._temporal.backend import (
     TemporalExecutorBackend,
     _build_tls_config,
@@ -134,7 +141,7 @@ class TestTemporalExecutorBackendExecute:
         backend = TemporalExecutorBackend(client=client)
         app_cls = _make_app_cls(name="noeps", entry_points={"a": mock.MagicMock()})
         ctx = mock.MagicMock(app_name="noeps", correlation_id="c")
-        with pytest.raises(ValueError, match="Unknown entry point"):
+        with pytest.raises(UnknownEntryPointError):
             await backend.execute(
                 app_cls,
                 _make_input_data(),
@@ -243,21 +250,21 @@ class TestBuildTlsConfig:
         assert cfg.server_root_ca_cert == b"-----CA-----"
 
     def test_raises_when_root_ca_missing(self, tmp_path: Any) -> None:
-        with pytest.raises(FileNotFoundError, match="root CA"):
+        with pytest.raises(TlsCertFileNotFoundError):
             _build_tls_config(server_root_ca_cert_path=str(tmp_path / "missing.pem"))
 
     def test_raises_when_client_cert_without_key(self, tmp_path: Any) -> None:
-        with pytest.raises(ValueError, match="mTLS requires both"):
+        with pytest.raises(MtlsConfigError):
             _build_tls_config(client_cert_path=str(tmp_path / "client.pem"))
 
     def test_raises_when_client_key_without_cert(self, tmp_path: Any) -> None:
-        with pytest.raises(ValueError, match="mTLS requires both"):
+        with pytest.raises(MtlsConfigError):
             _build_tls_config(client_private_key_path=str(tmp_path / "key.pem"))
 
     def test_raises_when_client_cert_missing(self, tmp_path: Any) -> None:
         key = tmp_path / "k.pem"
         key.write_bytes(b"key")
-        with pytest.raises(FileNotFoundError, match="client cert"):
+        with pytest.raises(TlsCertFileNotFoundError):
             _build_tls_config(
                 client_cert_path=str(tmp_path / "missing-cert.pem"),
                 client_private_key_path=str(key),
@@ -266,7 +273,7 @@ class TestBuildTlsConfig:
     def test_raises_when_client_key_missing(self, tmp_path: Any) -> None:
         cert = tmp_path / "c.pem"
         cert.write_bytes(b"cert")
-        with pytest.raises(FileNotFoundError, match="client private key"):
+        with pytest.raises(TlsCertFileNotFoundError):
             _build_tls_config(
                 client_cert_path=str(cert),
                 client_private_key_path=str(tmp_path / "missing-key.pem"),
@@ -380,12 +387,25 @@ class TestCreateTemporalClient:
         assert tls_arg is not False
 
     @pytest.mark.asyncio
-    async def test_tls_with_no_paths_and_no_custom_ca_uses_true(self) -> None:
+    async def test_tls_with_no_paths_and_no_custom_ca_enables_tls(self) -> None:
+        """tls=True is the historical no-config TLS shape; the v4-preferring
+        pre-resolver may upgrade it to TLSConfig(domain=<original>) to
+        preserve SNI when it substitutes an IP for the hostname, so the
+        assertion is permissive about the exact representation."""
+        from temporalio.service import TLSConfig
+
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch(
                 "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=None,
+            ),
+            # Force the no-op resolver path so the assertion isn't sensitive
+            # to whether the test host actually has working IPv6.
+            mock.patch.object(
+                backend_module,
+                "_prefer_v4_target",
+                side_effect=lambda h: (h, None),
             ),
             mock.patch.object(
                 backend_module.Client,
@@ -394,7 +414,8 @@ class TestCreateTemporalClient:
             ) as connect,
         ):
             await create_temporal_client(tls_enabled=True, connect_max_attempts=1)
-        assert connect.await_args.kwargs["tls"] is True
+        tls_arg = connect.await_args.kwargs["tls"]
+        assert tls_arg is True or isinstance(tls_arg, TLSConfig)
 
     @pytest.mark.asyncio
     async def test_tls_with_explicit_cert_path_calls_build_tls_config(
@@ -455,9 +476,260 @@ class TestCreateTemporalClient:
             mock.patch.object(backend_module.Client, "connect", new=connect_mock),
             mock.patch.object(backend_module.asyncio, "sleep", new=mock.AsyncMock()),
         ):
-            with pytest.raises(RuntimeError, match="Failed to connect to Temporal"):
+            with pytest.raises(TemporalConnectError):
                 await create_temporal_client(
                     connect_max_attempts=2,
                     connect_retry_delay_seconds=0.0,
                 )
         assert connect_mock.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# _prefer_v4_target / _apply_sni_domain (IPv6-fallback safety net)
+#
+# These guard against a v3-vs-v2 regression seen on two SDR customer VMs:
+# both hosts had half-broken IPv6 (link-local only, no global v6 route).
+# v2 SDK's pure-Python client iterated every getaddrinfo result and
+# silently fell back to v4; the v3 Rust bridge picks one address from
+# the resolver and fails the whole connect if that address is v6 on
+# such a host. Pre-resolving in Python lets us prefer v4 when both
+# families are returned, while preserving TLS SNI via TLSConfig.domain.
+# ---------------------------------------------------------------------------
+
+
+def _fake_addrinfo(*families: int) -> list[tuple[int, int, int, str, tuple]]:
+    """Build a getaddrinfo-shaped result with the given AF_INET / AF_INET6 entries."""
+    out: list[tuple[int, int, int, str, tuple]] = []
+    for fam in families:
+        if fam == _socket.AF_INET:
+            out.append((fam, _socket.SOCK_STREAM, 6, "", ("203.0.113.10", 443)))
+        else:
+            out.append(
+                (
+                    fam,
+                    _socket.SOCK_STREAM,
+                    6,
+                    "",
+                    ("2001:db8::abcd", 443, 0, 0),
+                )
+            )
+    return out
+
+
+class TestPreferV4Target:
+    # The helper now uses ``loop.getaddrinfo`` (which delegates to a thread
+    # executor) rather than the blocking ``socket.getaddrinfo``, so the
+    # tests are async. ``mock.patch.object(backend_module.socket,
+    # "getaddrinfo", ...)`` still works because asyncio's
+    # ``loop.getaddrinfo`` resolves ``socket.getaddrinfo`` from the global
+    # ``socket`` module attribute at call time — the patch is on that same
+    # module attribute so the thread executor picks it up.
+
+    @pytest.mark.asyncio
+    async def test_returns_v4_ip_when_both_families_present(self) -> None:
+        with mock.patch.object(
+            backend_module.socket,
+            "getaddrinfo",
+            return_value=_fake_addrinfo(_socket.AF_INET6, _socket.AF_INET),
+        ):
+            target, sni = await backend_module._prefer_v4_target(
+                "temporal.example.com:443"
+            )
+        assert target == "203.0.113.10:443"
+        assert sni == "temporal.example.com"
+
+    @pytest.mark.asyncio
+    async def test_returns_v6_bracketed_when_no_v4_available(self) -> None:
+        # Hosts genuinely v6-only (some k8s clusters) — pass v6 through
+        # so the connect can still succeed via the only family available.
+        # NB: this is also the no-swap-no-SNI path being unreachable here
+        # because has_v6 is True and v4 is absent — we explicitly fall
+        # through to "pick v6" because there's no v4 to prefer.
+        with mock.patch.object(
+            backend_module.socket,
+            "getaddrinfo",
+            return_value=_fake_addrinfo(_socket.AF_INET6),
+        ):
+            target, sni = await backend_module._prefer_v4_target(
+                "temporal.example.com:443"
+            )
+        assert target == "[2001:db8::abcd]:443"
+        assert sni == "temporal.example.com"
+
+    @pytest.mark.asyncio
+    async def test_swaps_when_only_v4_returned(self) -> None:
+        # Even when Python's AI_ADDRCONFIG-filtered result has no AAAA
+        # (e.g. inside a Docker bridge netns with no v6 stack), the
+        # Rust connector — which doesn't use AI_ADDRCONFIG — can still
+        # get AAAA back from DNS and try it, failing with
+        # EADDRNOTAVAIL. So we always substitute the literal v4 IP
+        # when one is available; that's the only way to keep the Rust
+        # client off v6 in that case.
+        with mock.patch.object(
+            backend_module.socket,
+            "getaddrinfo",
+            return_value=_fake_addrinfo(_socket.AF_INET),
+        ):
+            target, sni = await backend_module._prefer_v4_target(
+                "temporal.example.com:443"
+            )
+        assert target == "203.0.113.10:443"
+        assert sni == "temporal.example.com"
+
+    @pytest.mark.asyncio
+    async def test_noop_on_literal_ipv4(self) -> None:
+        target, sni = await backend_module._prefer_v4_target("203.0.113.10:443")
+        assert target == "203.0.113.10:443"
+        assert sni is None
+
+    @pytest.mark.asyncio
+    async def test_noop_on_literal_ipv6_bracketed(self) -> None:
+        target, sni = await backend_module._prefer_v4_target("[::1]:7233")
+        assert target == "[::1]:7233"
+        assert sni is None
+
+    @pytest.mark.asyncio
+    async def test_noop_on_gaierror(self) -> None:
+        with mock.patch.object(
+            backend_module.socket,
+            "getaddrinfo",
+            side_effect=_socket.gaierror("name or service not known"),
+        ):
+            target, sni = await backend_module._prefer_v4_target("nx.example.com:443")
+        assert target == "nx.example.com:443"
+        assert sni is None
+
+    @pytest.mark.asyncio
+    async def test_noop_on_malformed_target(self) -> None:
+        # No port, port is non-numeric, or empty host — caller's input
+        # contract violation, let the real connect raise rather than
+        # masking it with a parse error here.
+        for bad in ("just-a-host", ":443", "host:notaport", ""):
+            target, sni = await backend_module._prefer_v4_target(bad)
+            assert target == bad
+            assert sni is None
+
+
+class TestApplySniDomain:
+    def test_returns_false_unchanged(self) -> None:
+        # Plaintext connections don't have a TLS handshake to validate,
+        # so SNI is irrelevant — propagate False through unchanged.
+        assert backend_module._apply_sni_domain(False, "temporal.example.com") is False
+
+    def test_upgrades_true_to_tlsconfig_with_domain(self) -> None:
+        from temporalio.service import TLSConfig
+
+        result = backend_module._apply_sni_domain(True, "temporal.example.com")
+        assert isinstance(result, TLSConfig)
+        assert result.domain == "temporal.example.com"
+
+    def test_preserves_existing_tlsconfig_fields_and_sets_domain(self) -> None:
+        from temporalio.service import TLSConfig
+
+        existing = TLSConfig(server_root_ca_cert=b"--CA--")
+        result = backend_module._apply_sni_domain(existing, "temporal.example.com")
+        assert isinstance(result, TLSConfig)
+        assert result.server_root_ca_cert == b"--CA--"
+        assert result.domain == "temporal.example.com"
+
+    def test_respects_caller_supplied_domain(self) -> None:
+        # When the caller passed --tls-domain (or otherwise built a
+        # TLSConfig with an explicit SNI), we must not silently
+        # overwrite their choice with the auto-derived hostname.
+        from temporalio.service import TLSConfig
+
+        existing = TLSConfig(domain="explicit.override.example")
+        result = backend_module._apply_sni_domain(existing, "temporal.example.com")
+        assert result is existing
+
+
+class TestCreateTemporalClientPrefersV4:
+    @pytest.mark.asyncio
+    async def test_substitutes_v4_ip_and_preserves_sni_for_tls(self) -> None:
+        """End-to-end: when the resolver returns both v4 and v6 and TLS
+        is enabled, Client.connect receives the v4 IP as target_host and
+        a TLSConfig whose domain matches the original hostname."""
+        from temporalio.service import TLSConfig
+
+        with (
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.socket,
+                "getaddrinfo",
+                return_value=_fake_addrinfo(_socket.AF_INET6, _socket.AF_INET),
+            ),
+            mock.patch(
+                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                return_value=None,
+            ),
+            mock.patch.object(
+                backend_module.Client,
+                "connect",
+                new=mock.AsyncMock(return_value=mock.MagicMock()),
+            ) as connect,
+        ):
+            await create_temporal_client(
+                host="temporal.example.com:443",
+                tls_enabled=True,
+                connect_max_attempts=1,
+            )
+        kwargs = connect.await_args.kwargs
+        assert kwargs["target_host"] == "203.0.113.10:443"
+        assert isinstance(kwargs["tls"], TLSConfig)
+        assert kwargs["tls"].domain == "temporal.example.com"
+
+    @pytest.mark.asyncio
+    async def test_swaps_even_when_resolver_returns_only_v4(self) -> None:
+        # Plaintext path: Python's AI_ADDRCONFIG-filtered result has
+        # only A, but the substitution still happens — the Rust
+        # connector doesn't apply AI_ADDRCONFIG and may still query
+        # DNS for AAAA on its own. Substituting a literal v4 IP from
+        # the start is the only thing that consistently prevents v6
+        # attempts on netns-with-no-v6 hosts.
+        with (
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.socket,
+                "getaddrinfo",
+                return_value=_fake_addrinfo(_socket.AF_INET),
+            ),
+            mock.patch.object(
+                backend_module.Client,
+                "connect",
+                new=mock.AsyncMock(return_value=mock.MagicMock()),
+            ) as connect,
+        ):
+            await create_temporal_client(
+                host="temporal.example.com:443",
+                connect_max_attempts=1,
+            )
+        kwargs = connect.await_args.kwargs
+        assert kwargs["target_host"] == "203.0.113.10:443"
+        # Plaintext — no TLS to upgrade for SNI; tls stays False.
+        assert kwargs["tls"] is False
+
+    @pytest.mark.asyncio
+    async def test_plaintext_target_swap_does_not_touch_tls(self) -> None:
+        # Plaintext connect with both v4 and v6 — target swaps, but tls
+        # stays False because there's no handshake to preserve SNI for.
+        with (
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.socket,
+                "getaddrinfo",
+                return_value=_fake_addrinfo(_socket.AF_INET6, _socket.AF_INET),
+            ),
+            mock.patch.object(
+                backend_module.Client,
+                "connect",
+                new=mock.AsyncMock(return_value=mock.MagicMock()),
+            ) as connect,
+        ):
+            await create_temporal_client(
+                host="temporal.example.com:443",
+                tls_enabled=False,
+                connect_max_attempts=1,
+            )
+        kwargs = connect.await_args.kwargs
+        assert kwargs["target_host"] == "203.0.113.10:443"
+        assert kwargs["tls"] is False

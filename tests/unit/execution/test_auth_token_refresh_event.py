@@ -9,12 +9,16 @@ runtime in production.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest import mock
 
 import pytest
 
 from application_sdk.contracts.events import ApplicationEventNames, EventTypes
+from application_sdk.execution._temporal._activity_errors import (
+    TemporalAuthConfigError,
+    TemporalAuthTokenAcquireError,
+)
 from application_sdk.execution._temporal.auth import (
     TemporalAuthConfig,
     TemporalAuthManager,
@@ -57,6 +61,7 @@ def _stub_token_service(
     *,
     token: str = "stub-token",
     expires_at: datetime | None = None,
+    clock_offset_seconds: float = 0.0,
 ) -> mock.MagicMock:
     """Inject a fully-stubbed OAuthTokenService onto the manager.
 
@@ -66,6 +71,7 @@ def _stub_token_service(
     svc = mock.MagicMock(name="OAuthTokenService")
     svc.get_token = mock.AsyncMock(return_value=token)
     svc.current_expires_at = expires_at
+    svc.clock_offset_seconds = clock_offset_seconds
     manager._token_service = svc
     return svc
 
@@ -289,7 +295,7 @@ class TestResolveTokenUrl:
 
     def test_raises_when_neither_set(self) -> None:
         manager = _make_manager(token_url="", base_url="")
-        with pytest.raises(ValueError, match="token_url or base_url"):
+        with pytest.raises(TemporalAuthConfigError):
             manager._resolve_token_url()
 
 
@@ -379,7 +385,7 @@ class TestAcquireInitialToken:
         svc = _stub_token_service(manager)
         svc.get_token = mock.AsyncMock(side_effect=ValueError("bad creds"))
 
-        with pytest.raises(RuntimeError, match="Failed to acquire initial"):
+        with pytest.raises(TemporalAuthTokenAcquireError):
             await manager.acquire_initial_token()
 
     @pytest.mark.asyncio
@@ -399,7 +405,7 @@ class TestAcquireInitialToken:
         svc = _stub_token_service(manager)
         svc.get_token = mock.AsyncMock(side_effect=original)
 
-        with pytest.raises(RuntimeError) as ei:
+        with pytest.raises(TemporalAuthTokenAcquireError) as ei:
             await manager.acquire_initial_token()
 
         assert ei.value.__cause__ is original
@@ -509,56 +515,71 @@ class TestStartAndShutdown:
 # _calculate_sleep_seconds
 # ---------------------------------------------------------------------------
 
+# All tests freeze time via time.time; current_expires_at is provided as a
+# datetime whose .timestamp() is the reference point.  OAuthTokenService now
+# stores the server-issued JWT exp directly so current_expires_at is immune to
+# container clock drift; clock_offset_seconds from the service corrects any
+# residual gap between local time.time() and the server's wall clock.
+
 
 class TestCalculateSleepSeconds:
     @pytest.fixture
-    def fixed_now(self) -> datetime:
-        return datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    def frozen_ts(self) -> float:
+        return 1_700_000_000.0
 
     def test_returns_max_when_expires_at_is_none(self) -> None:
         manager = _make_manager()
         _stub_token_service(manager, expires_at=None)
         assert manager._calculate_sleep_seconds() == 300.0
 
-    def test_returns_zero_when_token_expired(self, fixed_now: datetime) -> None:
+    def test_returns_min_when_expired(self, frozen_ts: float) -> None:
         manager = _make_manager()
-        past = fixed_now - timedelta(minutes=5)
-        _stub_token_service(manager, expires_at=past)
-        with mock.patch(
-            "application_sdk.execution._temporal.auth.datetime"
-        ) as mock_datetime:
-            mock_datetime.now.return_value = fixed_now
-            assert manager._calculate_sleep_seconds() == 0
-
-    def test_halves_remaining_within_bounds(self, fixed_now: datetime) -> None:
-        manager = _make_manager()
-        future = fixed_now + timedelta(seconds=200)
-        _stub_token_service(manager, expires_at=future)
-        with mock.patch(
-            "application_sdk.execution._temporal.auth.datetime"
-        ) as mock_datetime:
-            mock_datetime.now.return_value = fixed_now
-            assert manager._calculate_sleep_seconds() == 100.0
-
-    def test_clamped_to_min(self, fixed_now: datetime) -> None:
-        manager = _make_manager()
-        future = fixed_now + timedelta(seconds=20)
-        _stub_token_service(manager, expires_at=future)
-        with mock.patch(
-            "application_sdk.execution._temporal.auth.datetime"
-        ) as mock_datetime:
-            mock_datetime.now.return_value = fixed_now
+        _stub_token_service(
+            manager, expires_at=datetime.fromtimestamp(frozen_ts - 300, UTC)
+        )
+        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
+            mock_time.time.return_value = frozen_ts
             assert manager._calculate_sleep_seconds() == 30.0
 
-    def test_clamped_to_max(self, fixed_now: datetime) -> None:
+    def test_halves_remaining_within_bounds(self, frozen_ts: float) -> None:
         manager = _make_manager()
-        future = fixed_now + timedelta(hours=1)
-        _stub_token_service(manager, expires_at=future)
-        with mock.patch(
-            "application_sdk.execution._temporal.auth.datetime"
-        ) as mock_datetime:
-            mock_datetime.now.return_value = fixed_now
+        _stub_token_service(
+            manager, expires_at=datetime.fromtimestamp(frozen_ts + 200, UTC)
+        )
+        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
+            mock_time.time.return_value = frozen_ts
+            assert manager._calculate_sleep_seconds() == 100.0
+
+    def test_clamped_to_min(self, frozen_ts: float) -> None:
+        manager = _make_manager()
+        _stub_token_service(
+            manager, expires_at=datetime.fromtimestamp(frozen_ts + 20, UTC)
+        )
+        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
+            mock_time.time.return_value = frozen_ts
+            assert manager._calculate_sleep_seconds() == 30.0
+
+    def test_clamped_to_max(self, frozen_ts: float) -> None:
+        manager = _make_manager()
+        _stub_token_service(
+            manager, expires_at=datetime.fromtimestamp(frozen_ts + 3600, UTC)
+        )
+        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
+            mock_time.time.return_value = frozen_ts
             assert manager._calculate_sleep_seconds() == 300.0
+
+    def test_clock_offset_applied(self, frozen_ts: float) -> None:
+        manager = _make_manager()
+        # Service reports +30s offset (container 30s slow):
+        # server_now = frozen_ts + 30 → remaining = 230 - 30 = 200 → sleep = 100
+        _stub_token_service(
+            manager,
+            expires_at=datetime.fromtimestamp(frozen_ts + 230, UTC),
+            clock_offset_seconds=30.0,
+        )
+        with mock.patch("application_sdk.execution._temporal.auth.time") as mock_time:
+            mock_time.time.return_value = frozen_ts
+            assert manager._calculate_sleep_seconds() == pytest.approx(100.0)
 
 
 # ---------------------------------------------------------------------------

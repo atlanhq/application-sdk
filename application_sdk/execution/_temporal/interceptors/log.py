@@ -66,8 +66,12 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
     Walks ``__cause__`` and ``__context__`` looking for either:
       * an :class:`application_sdk.errors.base.AppError` (raised directly), or
       * a ``temporalio.exceptions.ApplicationError`` whose first ``details``
-        entry is a :class:`application_sdk.errors.wire.FailureDetails` (the
-        shape emitted by the SDK's activity wrapper for ``AppError`` subclasses).
+        entry carries the :class:`application_sdk.errors.wire.FailureDetails`
+        envelope — either as a live model (activity side, before serde) or as
+        a deserialized mapping (workflow side, after activity → workflow
+        boundary, where ``pydantic_data_converter`` round-trips the envelope
+        as JSON and ``ApplicationError.details`` is reconstructed without
+        the typed model since ``details`` is annotated ``Sequence[Any]``).
 
     Returns ``{"failure.category", "failure.audience", "failure.code"}`` —
     OTel attribute keys that ride the ``failure.`` passthrough prefix in
@@ -89,14 +93,36 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
             }
         if isinstance(current, _TemporalApplicationError):
             for detail in getattr(current, "details", None) or ():
-                if isinstance(detail, FailureDetails):
-                    return {
-                        "failure.category": detail.category.value,
-                        "failure.audience": detail.audience.value,
-                        "failure.code": detail.code,
-                    }
+                attrs = _failure_details_from_detail(detail)
+                if attrs:
+                    return attrs
         current = current.__cause__ or current.__context__
     return {}
+
+
+def _failure_details_from_detail(detail: Any) -> dict[str, str]:
+    """Recover ``{category, audience, code}`` from one ``ApplicationError.details`` entry.
+
+    Accepts either a live :class:`FailureDetails` Pydantic model (activity side,
+    pre-serde) or a plain dict (workflow side, post-serde — Temporal's
+    ``pydantic_data_converter`` returns raw JSON objects for ``Sequence[Any]``
+    fields). Returns an empty dict for any other shape.
+    """
+    if not isinstance(detail, (FailureDetails, dict)):
+        return {}
+    try:
+        fd = (
+            detail
+            if isinstance(detail, FailureDetails)
+            else FailureDetails.model_validate(detail)
+        )
+        return {
+            "failure.category": fd.category.value,
+            "failure.audience": fd.audience.value,
+            "failure.code": fd.code,
+        }
+    except Exception:
+        return {}
 
 
 _HEADER_CORRELATION_ID = "x-correlation-id"
@@ -217,15 +243,68 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "Failed to read correlation header in workflow", exc_info=True
             )
 
-        # Priority 3: top-level workflow — generate a fresh correlation ID.
+        # Priority 3: legacy args-based propagation. The pre-v3
+        # CorrelationContextInterceptor read ``correlation_id`` from the
+        # first workflow argument when it was a dict; many existing callers
+        # (notably the automation-engine on SDK 2.8.7) still rely on this
+        # convention and have no way to inject memo / header on workflow
+        # start. Reading args here keeps those callers' correlation chains
+        # intact without forcing each one to migrate immediately.
+        #
+        # Three shapes covered, in order:
+        #   1. ``args[0]`` is a ``dict`` → ``correlation_id`` key. Plain
+        #      dict-shaped configs (AE 2.8.7, scripted starts, tests).
+        #   2. ``args[0]`` is a typed object (Pydantic model, dataclass,
+        #      namespace) with a ``correlation_id`` attribute. Catches v3
+        #      SDK-generated workflow wrappers whose ``run(input: Input)``
+        #      converted the caller's dict into a typed Input before the
+        #      interceptor was called.
+        #   3. ``args[0]`` is a Pydantic v2 model with ``extra='allow'`` and
+        #      ``correlation_id`` ended up in ``__pydantic_extra__`` because
+        #      the field wasn't declared on the model. Pydantic still
+        #      preserves it on the instance even though it's not a typed
+        #      attribute.
+        #
+        # Falls through silently for any other shape — primitives, models
+        # without the field and ``extra='ignore'`` (default), etc. Those
+        # callers should use memo / header at start time, which are the
+        # preferred OTel-aligned channels.
+        try:
+            if input.args:
+                first = input.args[0]
+                cid: str | None = None
+                if isinstance(first, dict):
+                    cid = first.get("correlation_id")
+                else:
+                    raw = getattr(first, "correlation_id", None)
+                    if not raw:
+                        extras = getattr(first, "__pydantic_extra__", None)
+                        if isinstance(extras, dict):
+                            raw = extras.get("correlation_id")
+                    if raw:
+                        cid = str(raw)
+                if cid:
+                    return str(cid)
+        except Exception:
+            logger.warning(
+                "Failed to read correlation_id from workflow args", exc_info=True
+            )
+
+        # Priority 4: top-level workflow — generate a fresh correlation ID.
         return str(uuid4())
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        # During Temporal replay the workflow code re-executes for determinism;
-        # observability events would double-count, so we skip everything.
-        if workflow.unsafe.is_replaying():
-            return await self.next.execute_workflow(input)
-
+        # State setup (ContextVars + interceptor-instance attrs) must run on
+        # every replay, not just the first execution: the outbound interceptor
+        # reads ``self._correlation_id`` / ``self._parent_*`` to inject
+        # ``x-correlation-id`` and ``atlan-parent-*`` headers on workflow-issued
+        # commands. A fresh worker that picks up an in-flight workflow rebuilds
+        # state by replaying history with ``is_replaying() == True``; if we
+        # short-circuit here, those instance attrs stay at their ``__init__``
+        # defaults and outbound commands issued post-replay lose the headers,
+        # breaking the correlation chain at child-workflow / activity calls.
+        # Only the side-effectful log emission (workflow.started /
+        # workflow.ended) is gated on ``is_replaying()`` to avoid double-count.
         info = workflow.info()
         parent = getattr(info, "parent", None)
         self._parent_workflow_id = (parent.workflow_id if parent else "") or ""
@@ -248,6 +327,9 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         correlation_id = self._resolve_correlation_id(input)
         self._correlation_id = correlation_id
         set_correlation_context(CorrelationContext(correlation_id=correlation_id))
+
+        if workflow.unsafe.is_replaying():
+            return await self.next.execute_workflow(input)
 
         identity: dict[str, str | int | float] = {
             "temporal.workflow.id": info.workflow_id or "",

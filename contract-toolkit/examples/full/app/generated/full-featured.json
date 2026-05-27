@@ -1,0 +1,219 @@
+{
+  "id": "full-featured",
+  "name": "Full-Featured Example",
+  "logo": "https://assets.atlan.com/assets/fullscreen-open.svg",
+  "config": {
+    "properties": {
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "credentialType": "atlan-connectors-full-featured",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      },
+      "include_filter": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Include filter",
+          "hidden": false,
+          "help": "Comma-separated list of schemas to include (leave blank for all).",
+          "placeholder": "",
+          "grid": 8
+        }
+      },
+      "output_format": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Output format",
+          "hidden": false,
+          "help": "Format for extracted metadata files.",
+          "grid": 8
+        },
+        "default": "parquet",
+        "enum": [
+          "parquet",
+          "json"
+        ],
+        "enumNames": [
+          "Parquet",
+          "JSON"
+        ]
+      },
+      "max_results": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Max results",
+          "hidden": false,
+          "help": "Cap on assets returned per schema.",
+          "grid": 4,
+          "rules": [
+            {
+              "type": "number",
+              "required": false,
+              "min": 1,
+              "message": "Must be at least 1."
+            }
+          ]
+        },
+        "default": 500
+      },
+      "enable_lineage": {
+        "type": "boolean",
+        "required": false,
+        "ui": {
+          "widget": "boolean",
+          "label": "Enable lineage parsing",
+          "hidden": false,
+          "help": "Parse query history for column-level lineage.",
+          "grid": 4
+        },
+        "default": false
+      },
+      "load-to-atlan": {
+        "type": "boolean",
+        "required": false,
+        "ui": {
+          "widget": "boolean",
+          "label": "Publish to Atlan",
+          "hidden": false,
+          "help": "Publish extracted assets; uncheck for a dry run.",
+          "grid": 4
+        },
+        "default": true
+      },
+      "log_level": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "select",
+          "label": "Log level",
+          "hidden": false,
+          "help": "Verbosity for the extraction run.",
+          "grid": 4,
+          "mode": ""
+        },
+        "default": "INFO",
+        "enum": [
+          "INFO",
+          "DEBUG",
+          "WARNING"
+        ],
+        "enumNames": [
+          "Info",
+          "Debug",
+          "Warning"
+        ]
+      },
+      "lineage_depth": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Lineage depth",
+          "hidden": false,
+          "help": "How many hops of upstream lineage to resolve (required when lineage is on).",
+          "grid": 4
+        },
+        "default": 3
+      },
+      "schemas": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "sqltree",
+          "label": "Schemas to include",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "connectorConfigName": "atlan-connectors-full-featured",
+          "credential": "credential-guid",
+          "sql": "show atlan schemas",
+          "schemaExcludePattern": [
+            "information_schema"
+          ],
+          "description": "Select schemas from which to extract metadata."
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "enable_lineage": {
+            "const": "true"
+          }
+        },
+        "required": [
+          "lineage_depth"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      },
+      {
+        "title": "Configuration",
+        "description": "",
+        "id": "configuration",
+        "properties": [
+          "include_filter",
+          "output_format",
+          "max_results",
+          "enable_lineage",
+          "load-to-atlan",
+          "log_level",
+          "lineage_depth"
+        ]
+      },
+      {
+        "title": "Schema selection",
+        "description": "",
+        "id": "schema_selection",
+        "properties": [
+          "schemas"
+        ]
+      }
+    ]
+  }
+}

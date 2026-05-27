@@ -3,8 +3,31 @@
 All notable changes to this project are documented here.
 
 Release notes are generated from [conventional commit](https://www.conventionalcommits.org/)
-messages. Every merge to `main` produces either a patch, minor, or major release —
-see the version-bump logic in `.github/workflows/release.yml`.
+messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
+updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
+
+## [0.10.2] - 2026-05-27
+
+### Bug fixes
+
+- add current_state_enabled + current_state_via_app_enabled to PublishNode and PublishStep (#1866) ([318af06](https://github.com/atlanhq/application-sdk/commit/318af06))
+
+## [0.10.1] - 2026-05-22
+
+### Bug fixes
+
+- default connection cache to true/false for PublishNode/LineagePublishNode (#1850) ([dd49f65](https://github.com/atlanhq/application-sdk/commit/dd49f65))
+- default splitDeployment and keda.enabled to true (#1837) ([772fa4c](https://github.com/atlanhq/application-sdk/commit/772fa4c))
+
+## [0.10.0] - 2026-05-21
+
+### Features
+
+- Consolidate to single `App.pkl` template; legacy modules (`NativeApp.pkl`, `NativeAppBundle.pkl`, `Renderers.pkl`) retained as frozen reference material ([#1814](https://github.com/atlanhq/application-sdk/pull/1814))
+
+### Bug fixes
+
+- Read `.default` uniformly in `getInputPyField` so optional fields with explicit defaults render correctly in generated `_input.py` ([#1803](https://github.com/atlanhq/application-sdk/pull/1803))
 
 ## [0.9.5] - 2026-05-07
 

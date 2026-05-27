@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
+from application_sdk.common.aws_utils_errors import (
+    AwsAssumeRoleError,
+    AwsClientCreationError,
+    AwsCredentialSourceConflictError,
+    AwsCredentialSourceMissingError,
+    AwsRdsTokenError,
+    AwsRegionNotFoundError,
+)
 from application_sdk.constants import AWS_SESSION_NAME
 
 if TYPE_CHECKING:
@@ -32,7 +40,7 @@ def get_region_name_from_hostname(hostname: str) -> str:
     match = re.search(r"-([a-z]{2}-[a-z]+-\d)\.", hostname)
     if match:
         return match.group(1)
-    raise ValueError("Could not find valid AWS region from hostname")
+    raise AwsRegionNotFoundError()
 
 
 def generate_aws_rds_token_with_iam_role(
@@ -68,9 +76,16 @@ def generate_aws_rds_token_with_iam_role(
         sts_client = client(
             "sts", region_name=region or get_region_name_from_hostname(host)
         )
-        assumed_role = sts_client.assume_role(
-            RoleArn=role_arn, RoleSessionName=session_name, ExternalId=external_id or ""
-        )
+        # Only include ExternalId when set — AWS STS rejects an empty
+        # ExternalId (min length 2). Trust policies without an external-id
+        # requirement are valid and must not be forced to send one.
+        assume_role_kwargs: dict[str, Any] = {
+            "RoleArn": role_arn,
+            "RoleSessionName": session_name,
+        }
+        if external_id:
+            assume_role_kwargs["ExternalId"] = external_id
+        assumed_role = sts_client.assume_role(**assume_role_kwargs)
 
         credentials = assumed_role["Credentials"]
         aws_client = create_aws_client(
@@ -84,7 +99,7 @@ def generate_aws_rds_token_with_iam_role(
         return token
 
     except ClientError as e:
-        raise Exception(f"Failed to assume role: {str(e)}") from e
+        raise AwsAssumeRoleError(cause=e) from e
 
 
 def generate_aws_rds_token_with_iam_user(
@@ -122,10 +137,10 @@ def generate_aws_rds_token_with_iam_user(
         )
         return token
     except Exception as e:
-        raise Exception(f"Failed to get user credentials: {str(e)}") from e
+        raise AwsRdsTokenError(cause=e) from e
 
 
-def get_cluster_identifier(aws_client) -> Optional[str]:
+def get_cluster_identifier(aws_client) -> str | None:
     """
     Retrieve the cluster identifier from AWS Redshift clusters.
 
@@ -149,7 +164,7 @@ def get_cluster_identifier(aws_client) -> Optional[str]:
     return None
 
 
-def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
+def create_aws_session(credentials: dict[str, Any]) -> boto3.Session:
     """
     Create a boto3 session with AWS credentials.
 
@@ -175,8 +190,8 @@ def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
 
 
 def get_cluster_credentials(
-    aws_client, credentials: Dict[str, Any], extra: Dict[str, Any]
-) -> Dict[str, str]:
+    aws_client, credentials: dict[str, Any], extra: dict[str, Any]
+) -> dict[str, str]:
     """
     Retrieve cluster credentials using IAM authentication.
 
@@ -200,8 +215,8 @@ def get_cluster_credentials(
 def create_aws_client(
     service: str,
     region: str,
-    session: Optional[boto3.Session] = None,
-    temp_credentials: Optional[Dict[str, str]] = None,
+    session: boto3.Session | None = None,
+    temp_credentials: dict[str, str] | None = None,
     use_default_credentials: bool = False,
 ) -> Any:
     """
@@ -220,8 +235,9 @@ def create_aws_client(
         AWS client instance
 
     Raises:
-        ValueError: If invalid credential combination is provided
-        Exception: If client creation fails
+        AwsCredentialSourceMissingError: If no credential source is provided
+        AwsCredentialSourceConflictError: If more than one credential source is provided
+        AwsClientCreationError: If client creation fails
 
     Examples:
         Using temporary credentials::
@@ -259,9 +275,9 @@ def create_aws_client(
     )
 
     if credential_sources == 0:
-        raise ValueError("At least one credential source must be provided")
+        raise AwsCredentialSourceMissingError()
     if credential_sources > 1:
-        raise ValueError("Only one credential source should be provided at a time")
+        raise AwsCredentialSourceConflictError()
 
     import boto3  # noqa: PLC0415 — optional dep: boto3
 
@@ -300,14 +316,14 @@ def create_aws_client(
             return boto3.client(service, region_name=region)  # type: ignore
 
     except Exception as e:
-        raise Exception(f"Failed to create {service} client: {str(e)}") from e
+        raise AwsClientCreationError(service=service, cause=e) from e
 
 
 def create_engine_url(
     drivername: str,
-    credentials: Dict[str, Any],
-    cluster_credentials: Dict[str, str],
-    extra: Dict[str, Any],
+    credentials: dict[str, Any],
+    cluster_credentials: dict[str, str],
+    extra: dict[str, Any],
 ) -> URL:
     """
     Create SQLAlchemy engine URL for Redshift connection.

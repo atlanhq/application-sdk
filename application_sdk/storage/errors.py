@@ -15,6 +15,7 @@ from typing import ClassVar
 
 from application_sdk.errors import (
     STORAGE_CONFIG,
+    STORAGE_EMPTY_UPLOAD,
     STORAGE_NOT_FOUND,
     STORAGE_OPERATION,
     STORAGE_PERMISSION,
@@ -23,9 +24,11 @@ from application_sdk.errors import (
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AppPermissionDeniedError,
+    DataIntegrityError,
     DependencyUnavailableError,
     InvalidInputError,
     NotFoundError,
+    PreconditionError,
 )
 
 
@@ -195,6 +198,74 @@ class StorageConfigError(InvalidInputError, StorageError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
+        if self.cause:
+            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+        return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class UnsafeUploadPathError(InvalidInputError):
+    """Upload path is blocked — sensitive path, traversal, or user-defined block list."""
+
+    code: ClassVar[str] = "INVALID_INPUT_UPLOAD_PATH_UNSAFE"
+    message: str = "Upload path blocked"
+    field: str | None = "path"
+    unsafe_path: str | None = None
+
+
+@dataclass(kw_only=True)
+class ObjectStoreNotProvidedError(PreconditionError):
+    """No object store is available — must pass store= or configure infrastructure."""
+
+    code: ClassVar[str] = "PRECONDITION_OBJECT_STORE_NOT_PROVIDED"
+    message: str = (
+        "No ObjectStore provided and no infrastructure storage is configured. "
+        "Pass store= explicitly or call set_infrastructure() with a storage store."
+    )
+    resource: str | None = "object_store"
+
+
+@dataclass(kw_only=True)
+class StorageEmptyUploadError(DataIntegrityError, StorageError):
+    """Directory upload found zero files when raise_on_empty=True.
+
+    Categorical parent is ``DataIntegrityError`` (category=DATA_INTEGRITY,
+    audience=APP_OWNER, retryable=False); domain parent is ``StorageError``
+    so ``except StorageError:`` catch blocks still fire.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_EMPTY_UPLOAD
+    code: ClassVar[str] = "STORAGE_EMPTY_UPLOAD"
+    category: ClassVar[FailureCategory] = FailureCategory.DATA_INTEGRITY
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+    local_path: str | None = None
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        local_path: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        DataIntegrityError.__init__(self, message=message, cause=cause)
+        self.local_path = local_path
+        self._error_code = error_code
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return (
+            self._error_code
+            if self._error_code is not None
+            else self.DEFAULT_ERROR_CODE
+        )
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        if self.local_path:
+            parts.append(f"local_path={self.local_path}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)

@@ -1,4 +1,5 @@
 import os
+import warnings
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Union
 
@@ -21,7 +22,6 @@ if TYPE_CHECKING:
     import daft
     import pandas as pd
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.storage.formats import Reader, Writer
 
 logger = get_logger(__name__)
@@ -83,14 +83,26 @@ class JsonFileReader(Reader):
         Raises:
             ValueError: When path is not provided or when single file path is combined with file_names
         """
+        warnings.warn(
+            "JsonFileReader is deprecated and will be removed in v4.0. "
+            "Migrate now: declare the upstream artifact as a FileReference "
+            "field on your task's typed Input — the SDK's activity "
+            "interceptor auto-materialises it to a local path before the "
+            "task runs (with sha256 sidecar verification + parallel "
+            "transfers), then read it directly with orjson / json. See "
+            "docs/agents/coding-standards.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.extension = JSON_FILE_EXTENSION
 
         # Validate that single file path and file_names are not both specified
         if path.endswith(self.extension) and file_names:
-            raise ValueError(
-                f"Cannot specify both a single file path ('{path}') and file_names filter. "
-                f"Either provide a directory path with file_names, or specify the exact file path without file_names."
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                SingleFilePathWithFileNamesError,
             )
+
+            raise SingleFilePathWithFileNamesError(path=path)
 
         # Initialise the Reader base class so `_is_closed` and
         # `_downloaded_files` are per-instance state (not shared via the old
@@ -112,14 +124,22 @@ class JsonFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot read from a closed reader")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                ReaderClosedError,
+            )
+
+            raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
         elif self.dataframe_type == DataframeType.daft:
             return await self._get_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     def read_batches(
         self,
@@ -134,14 +154,22 @@ class JsonFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot read from a closed reader")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                ReaderClosedError,
+            )
+
+            raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
         elif self.dataframe_type == DataframeType.daft:
             return self._get_batched_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     async def _get_batched_dataframe(
         self,
@@ -167,7 +195,11 @@ class JsonFileReader(Reader):
                 for chunk in json_reader_obj:
                     yield chunk
         except Exception as e:
-            raise rewrap(e, "Error reading batched data from JSON") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_dataframe(self) -> "pd.DataFrame":
         """Read the data from the JSON files and return as a single pandas dataframe."""
@@ -188,7 +220,11 @@ class JsonFileReader(Reader):
             )
 
         except Exception as e:
-            raise rewrap(e, "Error reading data from JSON") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_batched_daft_dataframe(
         self,
@@ -209,7 +245,11 @@ class JsonFileReader(Reader):
             for json_file in json_files:
                 yield daft.read_json(json_file, _chunk_size=self.chunk_size)
         except Exception as e:
-            raise rewrap(e, "Error reading batched data from JSON using daft") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
     async def _get_daft_dataframe(self) -> "daft.DataFrame":
         """Read the data from the JSON files and return as a single daft dataframe."""
@@ -227,7 +267,11 @@ class JsonFileReader(Reader):
             # Use the discovered/downloaded files directly
             return daft.read_json(json_files)
         except Exception as e:
-            raise rewrap(e, "Error reading data from JSON using daft") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatReadError,
+            )
+
+            raise FormatReadError(cause=e) from e
 
 
 class JsonFileWriter(Writer):
@@ -289,6 +333,23 @@ class JsonFileWriter(Writer):
                 Defaults to False.
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
+        # JsonFileWriter is on the v4.0 removal path. We surface a
+        # DeprecationWarning here to push callers onto FileReference *now*
+        # rather than waiting for v4.0 to break them — the new pattern is
+        # already supported, fully optimised, and copy-paste documented.
+        warnings.warn(
+            "JsonFileWriter is deprecated and will be removed in v4.0. "
+            "Migrate now: use application_sdk.storage.rolling.RollingFileWriter "
+            "(time-based rollover, heartbeat-friendly) or write JSON locally "
+            "(orjson.dumps + open(path, 'wb')) and return a FileReference "
+            "for the output directory — the Temporal activity interceptor "
+            "persists it with SHA-256 sidecars and parallel transfers, no "
+            "caller-side upload code needed. See the 'Replacing "
+            "ParquetFileWriter / JsonFileWriter' section in "
+            "docs/agents/coding-standards.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.path = path
         self.typename = typename
         self.chunk_start = chunk_start
@@ -314,7 +375,11 @@ class JsonFileWriter(Writer):
         self._statistics = None
 
         if not self.path:
-            raise ValueError("path is required")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatPathRequiredError,
+            )
+
+            raise FormatPathRequiredError()
 
         if typename:
             self.path = os.path.join(self.path, typename)

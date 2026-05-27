@@ -155,6 +155,25 @@ class _RoutingOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-
     result: str = ""
 
 
+# Contracts for TestGetResultMultiEntrypointOutputType — must be at module
+# level because get_type_hints() resolves annotation strings against module
+# globals when 'from __future__ import annotations' is active.
+class _AlphaInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    pass
+
+
+class _AlphaOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    alpha_field: str = ""
+
+
+class _BetaInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    pass
+
+
+class _BetaOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    beta_field: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Helper: create test client
 # ---------------------------------------------------------------------------
@@ -354,9 +373,12 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["success"] is True
+        # _TestHandler returns no checks, so envelope success is false
+        # (envelope success now means "preflight produced checks" — a handler
+        # that returns zero checks is treated as a preflight-system failure
+        # so the widget falls back to the top-level "Check failed" path).
+        assert body["success"] is False
         # v2 format: data is a dict of check results keyed by camelCase name.
-        # _TestHandler returns no checks, so data is empty.
         assert body["data"] == {}
         assert body["message"] == "ready"
 
@@ -422,6 +444,265 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 200
         assert received == [{}]
+
+    # ------------------------------------------------------------------
+    # Per-check v2-shape fields (DBBI-665 / WARE-1250 / finishes BLDX-901)
+    # ------------------------------------------------------------------
+    #
+    # The SageV2 widget at
+    # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
+    # renders ``checkResult.success ? successMessage : failureMessage`` with
+    # no fallback to ``message``. PR #1228 (BLDX-901) finished two of the
+    # three sub-mismatches but dropped this rename; these tests pin the
+    # finished shape so it does not regress again.
+
+    def test_preflight_check_emits_v2_success_fields(self) -> None:
+        """A passing check carries the message in successMessage; failureMessage is empty."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.READY,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=True,
+                            message="API version 3.17 is supported",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+        entry = body["data"]["apiVersion"]
+        assert entry["success"] is True
+        assert entry["message"] == "API version 3.17 is supported"
+        assert entry["successMessage"] == "API version 3.17 is supported"
+        assert entry["failureMessage"] == ""
+
+    def test_preflight_check_emits_v2_failure_fields(self) -> None:
+        """A failing check carries the message in failureMessage; successMessage is empty.
+
+        This is the DBBI-665 / IEEE case — without ``failureMessage`` the
+        SageV2 widget renders an empty "Hide details" panel even though the
+        handler set a real message on the check.
+        """
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="Metadata GraphQL API returned no sites",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+        entry = body["data"]["metadataAPI"]
+        assert entry["success"] is False
+        assert entry["message"] == "Metadata GraphQL API returned no sites"
+        assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
+        assert entry["successMessage"] == ""
+
+    def test_preflight_check_multiple_checks_v2_fields_per_check(self) -> None:
+        """Mixed pass/fail set — each check entry carries its own v2 fields."""
+
+        class _ThreeChecks(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.PARTIAL,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=True,
+                            message="API version 3.17 is supported",
+                        ),
+                        PreflightCheck(
+                            name="viewCapability",
+                            passed=True,
+                            message="Projects accessible — 5 project(s) found",
+                        ),
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="Metadata GraphQL API returned 404",
+                        ),
+                    ],
+                )
+
+        client = _make_client(handler=_ThreeChecks())
+        data = client.post("/workflows/v1/check", json={"credentials": []}).json()[
+            "data"
+        ]
+
+        assert data["apiVersion"]["successMessage"].startswith("API version")
+        assert data["apiVersion"]["failureMessage"] == ""
+        assert data["viewCapability"]["successMessage"].startswith("Projects")
+        assert data["viewCapability"]["failureMessage"] == ""
+        assert data["metadataAPI"]["failureMessage"] == (
+            "Metadata GraphQL API returned 404"
+        )
+        assert data["metadataAPI"]["successMessage"] == ""
+        # ``message`` is preserved on every entry for any v3-shape consumer.
+        for name in ("apiVersion", "viewCapability", "metadataAPI"):
+            assert data[name]["message"]
+
+    def test_preflight_check_empty_message_yields_empty_v2_fields(self) -> None:
+        """A check with no message yields empty strings in all message fields."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[PreflightCheck(name="connectivity", passed=False)],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        entry = client.post("/workflows/v1/check", json={"credentials": []}).json()[
+            "data"
+        ]["connectivity"]
+        assert entry["success"] is False
+        assert entry["message"] == ""
+        assert entry["successMessage"] == ""
+        assert entry["failureMessage"] == ""
+
+    # ------------------------------------------------------------------
+    # Envelope ``success`` reports preflight execution, not per-check pass
+    # (DBBI-665 root cause).
+    # ------------------------------------------------------------------
+    #
+    # The previous behaviour ``success = (status == READY)`` made every
+    # PARTIAL/NOT_READY response surface as a blank "Check failed" panel
+    # because SageV2.vue:249 short-circuits on ``!response.success`` and
+    # never iterates the per-check data. These tests pin the new contract:
+    # envelope success is true as long as preflight produced any checks.
+
+    def test_preflight_envelope_success_true_when_all_checks_pass(self) -> None:
+        """Status READY → envelope success true (regression guard)."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.READY,
+                    checks=[
+                        PreflightCheck(name="apiVersion", passed=True, message="ok")
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_OneCheck())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is True
+
+    def test_preflight_envelope_success_true_when_a_check_fails(self) -> None:
+        """Status NOT_READY → envelope success TRUE so SageV2 still renders per-check rows.
+
+        This is the DBBI-665 case: previously a failed check forced envelope
+        success=false, which made the widget skip the per-check loop entirely
+        and show a blank "Hide details" panel. Pinning envelope success=true
+        whenever checks ran lets the per-check rows render.
+        """
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=False,
+                            message="Could not connect to Tableau",
+                        )
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_OneCheck())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is True
+        # Per-check detail is still on the wire so the widget can render it.
+        assert body["data"]["apiVersion"]["success"] is False
+        assert body["data"]["apiVersion"]["failureMessage"] == (
+            "Could not connect to Tableau"
+        )
+
+    def test_preflight_envelope_success_true_on_partial_status(self) -> None:
+        """Status PARTIAL → envelope success TRUE.
+
+        Mixed pass/fail must surface to the UI; a single failing check
+        cannot collapse the entire response.
+        """
+
+        class _Mixed(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.PARTIAL,
+                    checks=[
+                        PreflightCheck(name="apiVersion", passed=True, message="ok"),
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="GraphQL 404",
+                        ),
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_Mixed())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is True
+        assert body["data"]["apiVersion"]["success"] is True
+        assert body["data"]["metadataAPI"]["failureMessage"] == "GraphQL 404"
+
+    def test_preflight_envelope_success_false_when_no_checks_run(self) -> None:
+        """No checks emitted → envelope success FALSE — preflight-system failure.
+
+        A handler that returns zero checks signals that preflight itself
+        couldn't execute (e.g. the client failed to construct). The widget
+        falls back to the top-level "Check failed" branch — same UX as a
+        thrown exception, just without the 500.
+        """
+
+        class _ZeroChecks(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[],
+                    message="couldn't build client",
+                )
+
+        body = (
+            _make_client(handler=_ZeroChecks())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is False
+        assert body["data"] == {}
 
 
 class TestMetadataEndpoint:
@@ -2861,7 +3142,10 @@ class TestGetResultEndpoint:
 
         try:
             svc = self._setup()
+            desc = MagicMock()
+            desc.workflow_type = "res-test"  # single implicit entrypoint
             mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
             with (
@@ -2893,7 +3177,10 @@ class TestGetResultEndpoint:
 
         try:
             svc = self._setup()
+            desc = MagicMock()
+            desc.workflow_type = "res-test"
             mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
             with (
@@ -2955,6 +3242,155 @@ class TestGetResultEndpoint:
         client = _make_client()
         response = client.get("/workflows/v1/status/wf-1/run-1")
         assert response.status_code == 503
+
+
+class TestGetResultMultiEntrypointOutputType:
+    """Regression: /result must resolve per-entrypoint output_type from
+    desc.workflow_type, not use the app's first-registered type or None.
+
+    Original bug: _output_type on the App class was set to the first entry
+    point's Output type (alphabetically via dir()), so any workflow that ran
+    a different entry point would be deserialised with the wrong schema.
+
+    The fix uses desc.workflow_type (e.g. "app-name:beta") to look up the
+    correct EntryPointMetadata and pass its output_type to _get_workflow_result.
+    """
+
+    def _setup(self):
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+        class _MultiEpApp(App):
+            name = "multi-ep-test"
+
+            @entrypoint
+            async def alpha(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint
+            async def beta(self, input: _BetaInput) -> _BetaOutput:
+                return _BetaOutput()
+
+        return create_app_handler_service(
+            _TestHandler(),
+            app_name="multi-ep-test",
+            app_class=_MultiEpApp,
+            temporal_host="temporal:7233",
+        )
+
+    def _teardown(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @pytest.mark.parametrize(
+        "ep_name,expected_output_type",
+        [
+            ("alpha", _AlphaOutput),
+            ("beta", _BetaOutput),
+        ],
+    )
+    def test_result_completed_resolves_per_entrypoint_output_type(
+        self, ep_name: str, expected_output_type: type
+    ) -> None:
+        """Polling path: output_type passed to _get_workflow_result must match
+        the entrypoint encoded in desc.workflow_type, not the app's
+        first-registered type (_AlphaOutput) and not None."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+
+            desc = MagicMock()
+            desc.status.name = "COMPLETED"
+            desc.workflow_type = f"multi-ep-test:{ep_name}"
+
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+            captured: list[type | None] = []
+
+            async def _spy(client, *, workflow_id, output_type):
+                captured.append(output_type)
+                return {"result_field": "ok"}
+
+            with (
+                patch(
+                    "application_sdk.handler.service._get_temporal_client",
+                    new=AsyncMock(return_value=mock_client),
+                ),
+                patch(
+                    "application_sdk.handler.service._get_workflow_result",
+                    side_effect=_spy,
+                ),
+            ):
+                client = TestClient(svc)
+                response = client.get(f"/workflows/v1/result/wf-{ep_name}")
+
+            assert response.status_code == 200
+            assert len(captured) == 1
+            assert captured[0] is expected_output_type, (
+                f"For entrypoint {ep_name!r} expected output_type="
+                f"{expected_output_type.__name__!r}, got {captured[0]!r}. "
+                "The /result endpoint must resolve per-entrypoint output_type "
+                "from desc.workflow_type, not use the app-level first-registered "
+                "type or None."
+            )
+        finally:
+            self._teardown()
+
+    def test_result_wait_resolves_per_entrypoint_output_type(self) -> None:
+        """wait=True path: describe() must be called to obtain workflow_type
+        so the correct output_type can be resolved before waiting."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+
+            desc = MagicMock()
+            desc.workflow_type = "multi-ep-test:beta"
+
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+            captured: list[type | None] = []
+
+            async def _spy(client, *, workflow_id, output_type):
+                captured.append(output_type)
+                return {"result_field": "ok"}
+
+            with (
+                patch(
+                    "application_sdk.handler.service._get_temporal_client",
+                    new=AsyncMock(return_value=mock_client),
+                ),
+                patch(
+                    "application_sdk.handler.service._get_workflow_result",
+                    side_effect=_spy,
+                ),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/result/wf-beta-wait?wait=true")
+
+            assert response.status_code == 200
+            assert len(captured) == 1
+            assert captured[0] is _BetaOutput, (
+                f"For wait=True + 'beta' entrypoint expected output_type=_BetaOutput, "
+                f"got {captured[0]!r}. "
+                "The wait=True path must call describe() and resolve output_type "
+                "from desc.workflow_type."
+            )
+        finally:
+            self._teardown()
 
 
 class TestStartWorkflowExtras:
@@ -3522,7 +3958,7 @@ class TestWorkflowClientConfig:
         class _Cls:
             pass
 
-        cfg = WorkflowClientConfig(host="t:7233", app_class=_Cls)  # type: ignore[arg-type]
+        cfg = WorkflowClientConfig(host="t:7233", app_class=_Cls, app_name="test-app")  # type: ignore[arg-type]
         assert cfg.is_configured() is True
 
 

@@ -5,7 +5,7 @@ This module contains the base classes and models for all events in the applicati
 
 from abc import ABC
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,7 @@ from application_sdk.constants import (
     RELEASE_ID,
     WORKER_START_EVENT_VERSION,
 )
+from application_sdk.version import __version__ as _SDK_VERSION
 
 
 class EventTypes(Enum):
@@ -51,6 +52,9 @@ class EventMetadata(BaseModel):
     Attributes:
         application_name: Name of the application the event belongs to.
         release_id: Release UUID from Global Marketplace (empty if not injected).
+        sdk_version: Installed application-sdk version of the running process
+            (from ``application_sdk.__version__``). Always populated — does not
+            depend on any env var being injected at image build time.
         created_timestamp: Timestamp when the event was created.
         workflow_type: Type of the workflow.
         workflow_id: ID of the workflow.
@@ -64,6 +68,7 @@ class EventMetadata(BaseModel):
 
     application_name: str = Field(init=True, default=APPLICATION_NAME)
     release_id: str = Field(init=True, default=RELEASE_ID)
+    sdk_version: str = Field(init=True, default=_SDK_VERSION)
     created_timestamp: int = Field(init=True, default=0)
 
     # Workflow information
@@ -109,7 +114,7 @@ class Consumes(BaseModel):
     event_type: str = Field(alias="eventType")
     event_name: str = Field(alias="eventName")
     version: str = Field()
-    filters: List[EventFilter] = Field(init=True, default=[])
+    filters: list[EventFilter] = Field(init=True, default=[])
 
 
 class EventRegistration(BaseModel):
@@ -120,8 +125,8 @@ class EventRegistration(BaseModel):
         produces: List of events to produce.
     """
 
-    consumes: List[Consumes] = Field(init=True, default=[])
-    produces: List[Dict[str, Any]] = Field(init=True, default=[])
+    consumes: list[Consumes] = Field(init=True, default=[])
+    produces: list[dict[str, Any]] = Field(init=True, default=[])
 
 
 class Event(BaseModel, ABC):
@@ -139,7 +144,7 @@ class Event(BaseModel, ABC):
     event_type: str
     event_name: str
 
-    data: Dict[str, Any]
+    data: dict[str, Any]
 
     def get_topic_name(self):
         """Get the topic name for this event.
@@ -167,6 +172,8 @@ class WorkerStartEventData(BaseModel):
         port: Port number of the Temporal server.
         connection_string: Connection string for the Temporal server.
         max_concurrent_activities: Maximum number of concurrent activities.
+        max_concurrent_workflow_tasks: Maximum number of in-flight workflow
+            task pollers. ``None`` means Temporal's default applies.
         workflow_count: Number of workflow classes registered.
         activity_count: Number of activity functions registered.
         app_version: Semantic version of the app release (ATLAN_APPLICATION_VERSION).
@@ -185,10 +192,11 @@ class WorkerStartEventData(BaseModel):
     host: str
     port: str
     connection_string: str
-    max_concurrent_activities: Optional[int]
+    max_concurrent_activities: int | None
+    max_concurrent_workflow_tasks: int | None = None
     workflow_count: int
     activity_count: int
-    build_id: Optional[str] = None
+    build_id: str | None = None
     use_worker_versioning: bool = False
     app_version: str = ""
     release_id: str = ""

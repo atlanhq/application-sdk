@@ -25,6 +25,7 @@ on:
     types: [synchronize, reopened]
   pull_request_review:
     types: [submitted]
+  merge_group:
 
 jobs:
   check-approval:

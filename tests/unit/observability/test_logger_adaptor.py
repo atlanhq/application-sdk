@@ -3,6 +3,7 @@ import warnings
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -1564,8 +1565,13 @@ class TestProcessRecord:
     def test_unsupported_type_raises_value_error(
         self, logger_adapter: AtlanLoggerAdapter
     ):
-        with pytest.raises(ValueError):
+        from application_sdk.observability.logger_adaptor_errors import (
+            UnsupportedLogRecordError,
+        )
+
+        with pytest.raises(UnsupportedLogRecordError) as exc_info:
             logger_adapter.process_record(12345)
+        assert exc_info.value.code == "INTERNAL_LOGGER_UNSUPPORTED_RECORD_FORMAT"
 
     def test_loguru_like_record_is_normalized(self, logger_adapter: AtlanLoggerAdapter):
         msg = mock.MagicMock()
@@ -1809,12 +1815,19 @@ class TestInterceptHandlerStdlibBridge:
         bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
         assert bind_kwargs["logger_name"] == "real_logger"
 
-    def test_record_with_no_extras_only_forwards_logger_name(self) -> None:
+    def test_record_with_no_extras_does_not_leak_builtin_record_fields(
+        self,
+    ) -> None:
         """A vanilla stdlib log call (no ``extra=``) shouldn't accidentally
-        forward built-in record attributes as caller fields."""
+        forward built-in ``LogRecord`` attributes (``name``, ``msg``,
+        ``levelname`` etc.) as caller fields. SDK-injected enrichment
+        (``logger_name``, ``app_name``, …) is expected to be present."""
         import logging
 
-        from application_sdk.observability.logger_adaptor import InterceptHandler
+        from application_sdk.observability.logger_adaptor import (
+            _LOGRECORD_RESERVED_ATTRS,
+            InterceptHandler,
+        )
 
         handler = InterceptHandler()
         record = logging.LogRecord(
@@ -1833,8 +1846,133 @@ class TestInterceptHandlerStdlibBridge:
             handler.emit(record)
 
         bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
-        # Only the SDK-injected key, no spurious built-in record fields.
-        assert bind_kwargs == {"logger_name": "vanilla"}
+        # SDK-injected fields are present.
+        assert bind_kwargs["logger_name"] == "vanilla"
+        assert "app_name" in bind_kwargs
+        # No built-in LogRecord field leaked through as a caller extra.
+        leaked = set(bind_kwargs) & _LOGRECORD_RESERVED_ATTRS
+        assert leaked == set(), f"built-in record fields leaked to bind: {leaked}"
+
+    @staticmethod
+    def _emit(name: str = "third_party") -> dict[str, Any]:
+        """Emit a vanilla stdlib record through ``InterceptHandler`` and
+        return the kwargs that the bridge bound on the loguru record."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name=name,
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="m",
+            args=(),
+            exc_info=None,
+        )
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            handler.emit(record)
+        return mock_log.opt.return_value.bind.call_args.kwargs
+
+    def test_stdlib_emit_injects_app_name(self) -> None:
+        """Stdlib bridge must inject ``app_name`` so third-party / library
+        logs (httpx, boto3, …) are attributable in OTLP — this is the
+        :issue:`BLDX-1297` regression: 17.6M log rows landed in central LH
+        with ``app_name=None`` because the bridge skipped enrichment."""
+        from application_sdk.constants import APPLICATION_NAME
+
+        bind_kwargs = self._emit()
+
+        assert bind_kwargs["app_name"] == APPLICATION_NAME
+
+    def test_stdlib_emit_injects_workflow_context(self) -> None:
+        """Stdlib log inside a Temporal workflow must carry workflow_id,
+        workflow_run_id, etc. — matching the SDK adapter path."""
+        set_execution_context(
+            ExecutionContext(
+                execution_type="workflow",
+                workflow_id="wf-123",
+                workflow_run_id="run-abc",
+                workflow_type="t",
+                namespace="ns",
+                task_queue="q",
+                attempt=1,
+            )
+        )
+        try:
+            bind_kwargs = self._emit()
+
+            assert bind_kwargs["workflow_id"] == "wf-123"
+            assert bind_kwargs["workflow_run_id"] == "run-abc"
+            assert bind_kwargs["task_queue"] == "q"
+        finally:
+            set_execution_context(ExecutionContext())
+
+    def test_stdlib_emit_injects_correlation_and_trace_id(self) -> None:
+        """Stdlib log must pick up ``correlation_id`` / ``trace_id`` from the
+        correlation ContextVar — same as the SDK adapter."""
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.correlation_context"
+        ) as mock_corr_context:
+            mock_corr_context.get.return_value = {
+                "trace_id": "trace-xyz",
+                "correlation_id": "corr-abc",
+                "atlan-workflow-name": "publish",
+                "tenant.id": "cars-vc",
+                "temporal.task_queue": "q",
+                # Empty / falsy values must be filtered out.
+                "atlan-empty": "",
+            }
+            bind_kwargs = self._emit()
+
+        assert bind_kwargs["trace_id"] == "trace-xyz"
+        assert bind_kwargs["correlation_id"] == "corr-abc"
+        assert bind_kwargs["atlan-workflow-name"] == "publish"
+        assert bind_kwargs["tenant.id"] == "cars-vc"
+        assert bind_kwargs["temporal.task_queue"] == "q"
+        assert "atlan-empty" not in bind_kwargs
+
+    def test_caller_extra_app_name_wins_over_injection(self) -> None:
+        """A caller passing ``extra={"app_name": "custom"}`` must keep its
+        value — auto-injection only fills gaps (``setdefault``)."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name="caller",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="m",
+            args=(),
+            exc_info=None,
+        )
+        record.app_name = "explicit-override"
+        record.correlation_id = "caller-corr"
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.correlation_context"
+        ) as mock_corr_context:
+            mock_corr_context.get.return_value = {
+                "correlation_id": "context-corr",
+                "trace_id": "context-trace",
+            }
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.logger"
+            ) as mock_log:
+                handler.emit(record)
+
+        bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
+        # Caller wins.
+        assert bind_kwargs["app_name"] == "explicit-override"
+        assert bind_kwargs["correlation_id"] == "caller-corr"
+        # But the auto-fill still adds anything the caller didn't specify.
+        assert bind_kwargs["trace_id"] == "context-trace"
 
 
 class TestSecondaryWorkflowLogsExporter:

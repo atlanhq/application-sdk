@@ -27,6 +27,10 @@ ALLOWLIST_PATH = ".security/base-allowlist.json"
 DEFAULT_POLICY = {"CRITICAL": 15, "HIGH": 30}
 REQUIRED_FIELDS = ["package", "severity", "reason", "expires", "added_by"]
 
+# F-cross.2 compliance fields. Optional during the migration window; promoted
+# to required once all entries are filled in.
+VALID_TRIGGERS = ("fix_released", "quarterly", "expiry", "kev_listed")
+
 
 def main() -> int:
     try:
@@ -90,6 +94,29 @@ def main() -> int:
             errors.append(
                 f"{cve_id} ({severity}): expires {expires_str} is {days_from_now} days away "
                 f"— max allowed for {severity} is {max_days} days (by {max_date})"
+            )
+
+        # 5. Compliance fields — type-check when present, not required yet.
+        trig = entry.get("re_evaluation_trigger")
+        if trig is not None and trig not in VALID_TRIGGERS:
+            errors.append(
+                f"{cve_id}: re_evaluation_trigger '{trig}' must be one of "
+                f"{VALID_TRIGGERS}"
+            )
+
+        fad = entry.get("fix_available_date")
+        if fad:  # None / empty string allowed during migration
+            try:
+                datetime.strptime(fad, "%Y-%m-%d")
+            except ValueError:
+                errors.append(
+                    f"{cve_id}: fix_available_date '{fad}' must be YYYY-MM-DD"
+                )
+
+        sup = entry.get("suppressed")
+        if sup is not None and not isinstance(sup, bool):
+            errors.append(
+                f"{cve_id}: suppressed must be a bool, got {type(sup).__name__}"
             )
 
     if errors:

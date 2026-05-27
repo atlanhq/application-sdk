@@ -30,7 +30,7 @@ def _duckdb_or_skip():
     """Lazy import of duckdb (top-level import breaks under coverage tracing
     because of duckdb's native ``_duckdb`` extension package)."""
     try:
-        import duckdb  # noqa: PLC0415
+        import duckdb
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"duckdb unavailable: {exc}")
     return duckdb
@@ -172,24 +172,26 @@ class TestGetBackfillTablesDiff:
         was narrowed to ``except ValueError`` so DuckDB / SQL / disk
         errors surface to the caller instead of returning silent ``None``.
         """
-        with patch(
-            "application_sdk.common.incremental.column_extraction.backfill."
-            "DuckDBConnectionManager",
-            side_effect=RuntimeError("boom"),
+        with (
+            patch(
+                "application_sdk.common.incremental.column_extraction.backfill."
+                "DuckDBConnectionManager",
+                side_effect=RuntimeError("boom"),
+            ),
+            tempfile.TemporaryDirectory() as tmp,
         ):
-            with tempfile.TemporaryDirectory() as tmp:
-                current = Path(tmp) / "current"
-                previous = Path(tmp) / "previous"
-                _write_jsonl(
-                    current / "table" / "chunk-0.json",
-                    [_table_record("db/s/t1")],
-                )
-                _write_jsonl(
-                    previous / "table" / "chunk-0.json",
-                    [_table_record("db/s/t1")],
-                )
-                with pytest.raises(RuntimeError, match="boom"):
-                    get_backfill_tables(current, previous)
+            current = Path(tmp) / "current"
+            previous = Path(tmp) / "previous"
+            _write_jsonl(
+                current / "table" / "chunk-0.json",
+                [_table_record("db/s/t1")],
+            )
+            _write_jsonl(
+                previous / "table" / "chunk-0.json",
+                [_table_record("db/s/t1")],
+            )
+            with pytest.raises(RuntimeError, match="boom"):
+                get_backfill_tables(current, previous)
 
 
 # ---------------------------------------------------------------------------
@@ -301,16 +303,19 @@ class TestLoadTablesToDuckDB:
             finally:
                 conn.close()
 
-    def test_oserror_during_glob_is_rewrapped(self):
-        """OSError when scanning JSON files is rewrapped via rewrap()."""
+    def test_oserror_during_glob_raises_json_scan_error(self):
+        """OSError when scanning JSON files is raised as JsonScanError."""
+        from application_sdk.common.incremental.incremental_errors import JsonScanError
+
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "base"
             (base / "table").mkdir(parents=True)
             conn = _connect()
             try:
                 with patch.object(Path, "glob", side_effect=OSError("disk gone")):
-                    with pytest.raises(Exception, match="Failed to scan JSON files"):
+                    with pytest.raises(JsonScanError) as excinfo:
                         _load_tables_to_duckdb(conn, base, "t_oserr")
+                assert excinfo.value.code == "INTERNAL_INCREMENTAL_JSON_SCAN"
             finally:
                 conn.close()
 

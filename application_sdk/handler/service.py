@@ -54,6 +54,8 @@ from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+from application_sdk.errors import AppError
+from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -63,13 +65,38 @@ from application_sdk.handler.contracts import (
     HandlerCredential,
     MetadataInput,
     PreflightInput,
-    PreflightStatus,
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
+from application_sdk.handler.service_errors import (
+    InvalidConfigIdError,
+    InvalidConfigTypeError,
+    TempPathEscapeError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+_CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
+    FailureCategory.AUTH: 401,
+    FailureCategory.PERMISSION: 403,
+    FailureCategory.NOT_FOUND: 404,
+    FailureCategory.ALREADY_EXISTS: 409,
+    FailureCategory.INVALID_INPUT: 400,
+    FailureCategory.PRECONDITION: 412,
+    FailureCategory.RATE_LIMITED: 429,
+    FailureCategory.TIMEOUT: 504,
+    FailureCategory.DEPENDENCY_UNAVAILABLE: 503,
+    FailureCategory.RESOURCE_EXHAUSTED: 503,
+    FailureCategory.DATA_INTEGRITY: 500,
+    FailureCategory.INTERNAL: 500,
+    FailureCategory.UNIMPLEMENTED: 501,
+    FailureCategory.CANCELLED: 499,  # client-closed-request (nginx convention)
+}
+
+
+def _app_error_to_http_status(exc: AppError) -> int:
+    return _CATEGORY_TO_HTTP.get(exc.category, 500)
 
 
 def _record_proxy_failure(
@@ -249,6 +276,56 @@ async def _get_workflow_result(
     return {}
 
 
+def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
+    """Resolve the correct Output type for a workflow from its Temporal type name.
+
+    Temporal workflow type names are ``"app-name"`` for the implicit (single)
+    entry point and ``"app-name:entrypoint-name"`` for explicit named entry
+    points.  We parse the entry-point suffix, look it up in AppRegistry, and
+    return its declared ``output_type`` so the caller can pass it to
+    ``get_workflow_handle(result_type=…)`` for typed deserialisation.
+
+    Returns ``None`` when the entry point cannot be resolved (e.g. missing
+    registry entry, external workflow); the caller falls back to untyped
+    deserialisation via ``_get_workflow_result``'s own fallback path.
+    """
+    if _workflow_config.app_class is None:
+        return None
+    app_cls_name = _workflow_config.app_name
+    if not app_cls_name:
+        return None
+
+    from application_sdk.app.registry import (  # noqa: PLC0415
+        AppNotFoundError,
+        AppRegistry,
+    )
+
+    try:
+        app_meta = AppRegistry.get_instance().get(app_cls_name)
+    except AppNotFoundError:
+        return None
+
+    if ":" in workflow_type_name:
+        prefix, ep_name = workflow_type_name.split(":", 1)
+        if prefix != app_cls_name:
+            return None  # workflow belongs to a different app
+        ep = app_meta.entry_points.get(ep_name)
+    else:
+        if workflow_type_name != app_cls_name:
+            return None  # workflow belongs to a different app
+        # Implicit single-entrypoint (backward-compat run() path)
+        ep = next((e for e in app_meta.entry_points.values() if e.implicit), None)
+        if ep is None and len(app_meta.entry_points) == 1:
+            ep = next(iter(app_meta.entry_points.values()))
+            logger.debug(
+                "Resolved output_type via single-entrypoint fallback for workflow_type=%s ep=%s",
+                workflow_type_name,
+                ep.name,
+            )
+
+    return ep.output_type if ep else None
+
+
 # ---------------------------------------------------------------------------
 # Workflow client config and singleton
 # ---------------------------------------------------------------------------
@@ -261,6 +338,7 @@ class WorkflowClientConfig:
     host: str = ""
     namespace: str = "default"
     task_queue: str = ""
+    app_name: str = ""
     app_class: type[App] | None = dataclasses.field(default=None, repr=False)
     data_converter: DataConverter | None = dataclasses.field(default=None, repr=False)
 
@@ -284,7 +362,7 @@ class WorkflowClientConfig:
     prometheus_bind_address: str = ""
 
     def is_configured(self) -> bool:
-        return bool(self.host and self.app_class)
+        return bool(self.host and self.app_class and self.app_name)
 
 
 _temporal_client: Client | None = None
@@ -322,7 +400,7 @@ def _validated_temp_path(path: str) -> str:
     tmp_root = os.path.realpath(tempfile.gettempdir())
     real = os.path.realpath(path)
     if real != tmp_root and not real.startswith(tmp_root + os.sep):
-        raise ValueError("Temp file path escapes system temp directory")
+        raise TempPathEscapeError()
     return real
 
 
@@ -469,6 +547,7 @@ def create_app_handler_service(
         host=temporal_host,
         namespace=temporal_namespace,
         task_queue=task_queue or f"{app_name}-queue",
+        app_name=getattr(app_class, "_app_name", "") if app_class is not None else "",
         app_class=app_class,
         data_converter=data_converter,
         tls_enabled=tls_enabled,
@@ -583,6 +662,11 @@ def create_app_handler_service(
                     ),
                 )
             except HandlerError as e:
+                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+                # AppError subclass caught here first so http_status is preserved.
+                # Remove once all connector subclasses raise typed AppError leaves.
+                # Tracked alongside the Handler abstract-method contract migration.
+                # See typed-error-prescription.md §5 (HandlerError row).
                 logger.error(
                     "Auth test failed for app %s (request %s): %s",
                     app_name,
@@ -591,6 +675,19 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                # Forward-looking: typed AppError leaves from connectors that raise
+                # non-HandlerError typed errors (already migrated).
+                logger.error(
+                    "Auth test failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=str(e)
+                ) from None
             except Exception as e:
                 logger.error(
                     "Auth test failed unexpectedly for app %s (request %s): %s",
@@ -633,24 +730,57 @@ def create_app_handler_service(
                 )
                 # Build v2-compatible response: each check becomes a top-level
                 # key in data so the frontend can iterate check names directly.
-                # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
+                # v2 format: {"authenticationCheck": {"success": true,
+                # "successMessage": "...", "failureMessage": "..."}, ...}.
+                #
+                # The SageV2 widget at
+                # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
+                # renders ``checkResult.success ? successMessage :
+                # failureMessage`` with no fallback to ``message``, so omitting
+                # those fields leaves the detail panel blank on a failed check
+                # (DBBI-665, WARE-1250). ``message`` is retained so any
+                # consumer already reading the v3 field keeps working.
+                #
+                # This finishes the third sub-mismatch from BLDX-901; PR #1228
+                # converted ``checks`` → camelCase keys and ``passed`` →
+                # ``success`` but left the message-field rename.
                 v2_data: dict[str, Any] = {}
                 for check in result.checks:
                     # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
                     key = check.name[0].lower() + check.name[1:]
+                    msg = check.message or ""
                     v2_data[key] = {
                         "success": check.passed,
-                        "message": check.message or "",
+                        "message": msg,
+                        "successMessage": msg if check.passed else "",
+                        "failureMessage": "" if check.passed else msg,
                     }
+                # Envelope ``success`` reports whether preflight executed at
+                # all, not whether every check passed — per-check pass/fail
+                # belongs in ``data.<check>.success``. The SageV2 widget at
+                # SageV2.vue:249 short-circuits on ``!response.success`` and
+                # skips the per-check render loop entirely, so collapsing
+                # envelope success to ``status == READY`` (the previous
+                # behaviour) made every PARTIAL/NOT_READY response surface
+                # as "Check failed" with a blank "Hide details" panel
+                # (DBBI-665). Tying envelope success to "any check ran"
+                # keeps it false when the handler produced no checks (a
+                # genuine preflight-system failure) and lets the widget
+                # render per-check rows otherwise.
                 return JSONResponse(
                     content=_wrap_response(
                         v2_data,
                         message=result.message
                         or f"Preflight check {result.status.value}",
-                        success=result.status == PreflightStatus.READY,
+                        success=len(result.checks) > 0,
                     )
                 )
             except HandlerError as e:
+                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+                # AppError subclass caught here first so http_status is preserved.
+                # Remove once all connector subclasses raise typed AppError leaves.
+                # Tracked alongside the Handler abstract-method contract migration.
+                # See typed-error-prescription.md §5 (HandlerError row).
                 logger.error(
                     "Preflight check failed for app %s (request %s): %s",
                     app_name,
@@ -659,6 +789,19 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                # Forward-looking: typed AppError leaves from connectors that raise
+                # non-HandlerError typed errors (already migrated).
+                logger.error(
+                    "Preflight check failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=str(e)
+                ) from None
             except Exception as e:
                 logger.error(
                     "Preflight check failed unexpectedly for app %s (request %s): %s",
@@ -709,6 +852,11 @@ def create_app_handler_service(
                 # frontend filter widgets to render empty dropdowns
                 return JSONResponse(content=_wrap_response(data))
             except HandlerError as e:
+                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+                # AppError subclass caught here first so http_status is preserved.
+                # Remove once all connector subclasses raise typed AppError leaves.
+                # Tracked alongside the Handler abstract-method contract migration.
+                # See typed-error-prescription.md §5 (HandlerError row).
                 logger.error(
                     "Metadata fetch failed for app %s (request %s): %s",
                     app_name,
@@ -717,6 +865,19 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+            except AppError as e:
+                # Forward-looking: typed AppError leaves from connectors that raise
+                # non-HandlerError typed errors (already migrated).
+                logger.error(
+                    "Metadata fetch failed for app %s (request %s): %s",
+                    app_name,
+                    context.request_id_str,
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=str(e)
+                ) from None
             except Exception as e:
                 logger.error(
                     "Metadata fetch failed unexpectedly for app %s (request %s): %s",
@@ -774,7 +935,7 @@ def create_app_handler_service(
             # Deferred to avoid a circular import at module load time.
             from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
 
-            app_meta = AppRegistry.get_instance().get(app_cls._app_name)  # type: ignore[attr-defined]
+            app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
             entry_points = app_meta.entry_points
 
             if selected_entrypoint:
@@ -810,9 +971,9 @@ def create_app_handler_service(
 
             input_type = ep.input_type
             workflow_name = (
-                app_cls._app_name  # type: ignore[attr-defined]
+                _workflow_config.app_name
                 if ep.implicit
-                else f"{app_cls._app_name}:{ep.name}"  # type: ignore[attr-defined]
+                else f"{_workflow_config.app_name}:{ep.name}"
             )
 
             if input_type is None:
@@ -958,9 +1119,14 @@ def create_app_handler_service(
 
             if wait:
                 try:
-                    output_type = getattr(
-                        _workflow_config.app_class, "_output_type", None
-                    )
+                    desc = await handle.describe()
+                    output_type = _resolve_output_type_for_workflow(desc.workflow_type)
+                    if output_type is None:
+                        logger.warning(
+                            "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
+                            workflow_id,
+                            desc.workflow_type,
+                        )
                     result_data = await _get_workflow_result(
                         client, workflow_id=workflow_id, output_type=output_type
                     )
@@ -1027,9 +1193,13 @@ def create_app_handler_service(
                 )
             elif status == "COMPLETED":
                 try:
-                    output_type = getattr(
-                        _workflow_config.app_class, "_output_type", None
-                    )
+                    output_type = _resolve_output_type_for_workflow(desc.workflow_type)
+                    if output_type is None:
+                        logger.warning(
+                            "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
+                            workflow_id,
+                            desc.workflow_type,
+                        )
                     result_data = await _get_workflow_result(
                         client, workflow_id=workflow_id, output_type=output_type
                     )
@@ -1184,9 +1354,9 @@ def create_app_handler_service(
         Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
         """
         if not _CONFIG_KEY_RE.match(config_id):
-            raise ValueError(f"Invalid config_id: {config_id!r}")
+            raise InvalidConfigIdError(config_id=config_id)
         if not _CONFIG_KEY_RE.match(config_type):
-            raise ValueError(f"Invalid config_type: {config_type!r}")
+            raise InvalidConfigTypeError(config_type=config_type)
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app paths
             APPLICATION_NAME,
         )
@@ -1339,7 +1509,7 @@ def create_app_handler_service(
             try:
                 os.unlink(safe_tmp_path)
             except FileNotFoundError:
-                pass
+                pass  # temp file already removed — nothing to clean up
 
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         response_obj = FileUploadResponse(
@@ -1441,6 +1611,9 @@ def create_app_handler_service(
         try:
             body = await request.json()
         except Exception:
+            # Log details server-side; the HTTPException intentionally hides the
+            # parse internals from the client (avoid leaking file/line/offset).
+            logger.warning("Failed to parse JSON request body", exc_info=True)
             raise HTTPException(status_code=400, detail="Invalid JSON body") from None
 
         try:
@@ -1466,7 +1639,7 @@ def create_app_handler_service(
             input_data.workflow_id = workflow_id
 
             handle = await client.start_workflow(
-                app_cls._app_name,  # type: ignore[attr-defined]
+                _workflow_config.app_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
@@ -1677,7 +1850,7 @@ def create_app_handler_service(
                 try:
                     os.unlink(tmp_path)
                 except OSError:
-                    pass
+                    pass  # temp file unlink failed; best-effort cleanup, not fatal
 
         # Write non-sensitive fields to object storage
         non_sensitive["credentialSource"] = non_sensitive.get(

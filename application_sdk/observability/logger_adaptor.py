@@ -32,6 +32,9 @@ from application_sdk.constants import (
     SERVICE_NAME,
 )
 from application_sdk.observability.context import correlation_context, request_context
+from application_sdk.observability.logger_adaptor_errors import (
+    UnsupportedLogRecordError,
+)
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.utils import (
     build_otel_resource,
@@ -131,6 +134,10 @@ _PREFIXES_PASSTHROUGH = (
     "otel.",  # OTel semconv: otel.status_code
     "temporal.",  # SDK convention: temporal.workflow.id, etc.
     "tenant.",
+    "workflow_run.",  # AE convention: workflow_run.terminated / workflow_run.node
+    # events emitted from AutomationEngineWorkflow's finally block,
+    # carrying typed FailureDetails (category, code, audience,
+    # retryable, evidence) projected from the cause chain.
 )
 
 
@@ -260,6 +267,68 @@ _LOGRECORD_RESERVED_ATTRS: frozenset[str] = frozenset(
 )
 
 
+def _apply_atlan_context(kwargs: dict[str, Any], *, prefer_caller: bool) -> None:
+    """Inject request / workflow / correlation context into log ``kwargs``.
+
+    Called by both :meth:`AtlanLoggerAdapter.process` (the SDK-adapter path)
+    and :meth:`InterceptHandler.emit` (the stdlib-bridge path) so that every
+    log record — SDK-emitted or stdlib / third-party — carries the same Atlan
+    context fields (``app_name``, ``request_id``, workflow / activity context,
+    ``trace_id`` / ``correlation_id``, ``atlan-`` / ``temporal.`` / ``tenant.``
+    prefixed headers).
+
+    Args:
+        kwargs: Mutable dict of log kwargs (these become loguru ``extra``).
+        prefer_caller: If ``True``, only fill keys that aren't already present —
+            caller-supplied ``extra={...}`` wins over auto-injection. Used by
+            the stdlib-bridge path. If ``False``, overwrite existing keys —
+            the legacy SDK-adapter behaviour.
+    """
+    assign = kwargs.setdefault if prefer_caller else kwargs.__setitem__
+
+    ctx = request_context.get()
+    if ctx and "request_id" in ctx:
+        assign("request_id", ctx["request_id"])
+
+    workflow_context = get_workflow_context()
+    if (
+        workflow_context.get("in_workflow") == "true"
+        or workflow_context.get("in_activity") == "true"
+    ):
+        if prefer_caller:
+            for k, v in workflow_context.items():
+                kwargs.setdefault(k, v)
+        else:
+            kwargs.update(workflow_context)
+
+    # Add correlation context (atlan-, temporal., tenant. prefixed keys,
+    # trace_id, correlation_id) to kwargs.
+    corr_ctx = correlation_context.get()
+    if corr_ctx:
+        if corr_ctx.get("trace_id"):
+            assign("trace_id", str(corr_ctx["trace_id"]))
+        if corr_ctx.get("correlation_id"):
+            assign("correlation_id", str(corr_ctx["correlation_id"]))
+        for key, value in corr_ctx.items():
+            if key.startswith(("atlan-", "temporal.", "tenant.")) and value:
+                if isinstance(value, (bool, int, float, str, bytes)):
+                    assign(key, value)
+                else:
+                    assign(key, str(value))
+
+    # Bridge: if legacy correlation_context dict didn't supply correlation_id,
+    # read from v3 CorrelationContext ContextVar (set by the v3
+    # CorrelationContextInterceptor).
+    if "correlation_id" not in kwargs:
+        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+            get_correlation_context,
+        )
+
+        v3_ctx = get_correlation_context()
+        if v3_ctx and v3_ctx.correlation_id:
+            kwargs["correlation_id"] = v3_ctx.correlation_id
+
+
 class InterceptHandler(logging.Handler):
     """Bridge Python's stdlib logging into loguru, preserving ``extra={...}``.
 
@@ -291,7 +360,7 @@ class InterceptHandler(logging.Handler):
         # Forward caller-supplied ``extra={...}``. Python's stdlib spreads
         # ``extra`` directly into ``record.__dict__``; the delta vs. a blank
         # LogRecord is exactly what the caller passed.
-        logger_extras: dict[str, object] = {
+        logger_extras: dict[str, Any] = {
             k: v
             for k, v in record.__dict__.items()
             if k not in _LOGRECORD_RESERVED_ATTRS
@@ -299,6 +368,13 @@ class InterceptHandler(logging.Handler):
         # SDK convention: ``logger_name`` always tracks ``record.name``.
         # Set last so callers can't shadow it via ``extra``.
         logger_extras["logger_name"] = record.name
+        # Mirror :meth:`AtlanLoggerAdapter.process` enrichment so stdlib /
+        # third-party log records (httpx, boto3, ``logging.getLogger(__name__)``)
+        # carry the same Atlan context as SDK-adapter records. ``prefer_caller``
+        # / ``setdefault`` preserves any field the caller explicitly set via
+        # ``extra={"app_name": "X", ...}``.
+        logger_extras.setdefault("app_name", APPLICATION_NAME)
+        _apply_atlan_context(logger_extras, prefer_caller=True)
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()
@@ -373,6 +449,17 @@ class _LazyLoggerProxy:
             self._logger.critical(msg, **kwargs)
         except Exception:
             logging.error("Error in lazy critical logging", exc_info=True)
+
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Dispatch to the named level method matching stdlib integer *level*."""
+        if level >= logging.ERROR:
+            self.error(msg, *args, **kwargs)
+        elif level >= logging.WARNING:
+            self.warning(msg, *args, **kwargs)
+        elif level >= logging.INFO:
+            self.info(msg, *args, **kwargs)
+        else:
+            self.debug(msg, *args, **kwargs)
 
 
 class AtlanLoggerAdapter(AtlanObservability[Any]):
@@ -606,7 +693,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         if isinstance(record, dict):
             return record
 
-        raise ValueError(f"Unsupported record format: {type(record)}")
+        raise UnsupportedLogRecordError(observed_type=type(record).__name__)
 
     def export_record(self, record: Any) -> None:
         """Export a log record to external systems.
@@ -701,52 +788,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         """
         kwargs["logger_name"] = self.logger_name
         kwargs["app_name"] = APPLICATION_NAME
-
-        # Get request context
-        ctx = request_context.get()
-        if ctx and "request_id" in ctx:
-            kwargs["request_id"] = ctx["request_id"]
-
-        workflow_context = get_workflow_context()
-
-        if (
-            workflow_context.get("in_workflow") == "true"
-            or workflow_context.get("in_activity") == "true"
-        ):
-            kwargs.update(workflow_context)
-
-        # Add correlation context (atlan-, temporal., tenant. prefixed keys, trace_id, correlation_id) to kwargs
-        corr_ctx = correlation_context.get()
-        if corr_ctx:
-            # Add trace_id if present (for log format display)
-            if corr_ctx.get("trace_id"):
-                kwargs["trace_id"] = str(corr_ctx["trace_id"])
-            # Add correlation_id if present (AppWorkflowRun GUID for e2e correlation)
-            if corr_ctx.get("correlation_id"):
-                kwargs["correlation_id"] = str(corr_ctx["correlation_id"])
-            # Add atlan-* headers for OTEL
-            for key, value in corr_ctx.items():
-                if (
-                    key.startswith("atlan-")
-                    or key.startswith("temporal.")
-                    or key.startswith("tenant.")
-                ) and value:
-                    if isinstance(value, (bool, int, float, str, bytes)):
-                        kwargs[key] = value
-                    else:
-                        kwargs[key] = str(value)
-
-        # Bridge: if legacy correlation_context dict is empty, read from v3
-        # CorrelationContext ContextVar (set by the v3 CorrelationContextInterceptor).
-        if "correlation_id" not in kwargs:
-            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
-                get_correlation_context,
-            )
-
-            v3_ctx = get_correlation_context()
-            if v3_ctx and v3_ctx.correlation_id:
-                kwargs["correlation_id"] = v3_ctx.correlation_id
-
+        # Enrichment is shared with :class:`InterceptHandler` so stdlib-bridged
+        # records carry the same Atlan context; see :func:`_apply_atlan_context`.
+        # ``prefer_caller=False`` preserves the historic SDK-adapter behaviour
+        # of overwriting any caller-supplied value with the live context.
+        _apply_atlan_context(kwargs, prefer_caller=False)
         return msg, kwargs
 
     def debug(self, msg: str, *args: Any, **kwargs: Any):
@@ -876,6 +922,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         except Exception:
             logging.error("Error in critical logging", exc_info=True)
             self._sync_flush()
+
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Dispatch to the named level method matching stdlib integer *level*.
+
+        Accepts the same stdlib ``logging.DEBUG`` / ``logging.INFO`` /
+        ``logging.WARNING`` / ``logging.ERROR`` integer constants so callers
+        can vary the level at runtime without building a dispatch table
+        themselves.
+        """
+        if level >= logging.ERROR:
+            self.error(msg, *args, **kwargs)
+        elif level >= logging.WARNING:
+            self.warning(msg, *args, **kwargs)
+        elif level >= logging.INFO:
+            self.info(msg, *args, **kwargs)
+        else:
+            self.debug(msg, *args, **kwargs)
 
     def opt(
         self, *, lazy: bool = False, **loguru_opt_kwargs: Any

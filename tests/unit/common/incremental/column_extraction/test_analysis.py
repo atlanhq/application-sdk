@@ -79,7 +79,7 @@ class TestGetTablesNeedingColumnExtraction:
     def test_missing_table_subdir_raises(self, tmp_path) -> None:
         # transformed/ but no transformed/table/ subdir
         (tmp_path / "transformed").mkdir()
-        with pytest.raises(Exception):  # rewrap wraps FileNotFoundError
+        with pytest.raises(Exception):  # DaftAnalysisError wraps FileNotFoundError
             get_tables_needing_column_extraction(tmp_path / "transformed")
 
     def test_empty_table_subdir_raises(self, tmp_path) -> None:

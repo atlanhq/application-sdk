@@ -1,68 +1,106 @@
 amends "pkl:test"
 
+import "../examples/bundle/app.pkl" as bundleApp
 import "../examples/connection-ref/app.pkl" as connectionRefApp
+import "../examples/deploy/app.pkl" as deployApp
 import "../examples/fanin/app.pkl" as faninApp
-import "../examples/openapi/app.pkl" as openapiApp
-import "../examples/postgres/app.pkl" as postgresApp
+import "../examples/full/app.pkl" as fullApp
+import "../examples/minimal/app.pkl" as minimalApp
 import "../examples/publish-controls/app.pkl" as publishControlsApp
-import "../examples/trino/app.pkl" as trinoApp
 
-local connectionRefWorkflowJson: String = connectionRefApp.output.files["connection-ref.json"].text
-local connectionRefManifestJson: String = connectionRefApp.output.files["manifest.json"].text
-local faninManifestJson: String = faninApp.output.files["manifest.json"].text
+local connectionRefWorkflowJson: String = connectionRefApp.output.files["app/generated/connection-ref.json"].text
+local connectionRefManifestJson: String = connectionRefApp.output.files["app/generated/manifest.json"].text
+local faninManifestJson: String = faninApp.output.files["app/generated/manifest.json"].text
 
-local openapiWorkflowJson: String = openapiApp.output.files["openapi.json"].text
-local openapiObjectStoreCredentialJson: String = openapiApp.output.files["csa-connectors-objectstore.json"].text
-local openapiManifestJson: String = openapiApp.output.files["manifest.json"].text
-local postgresWorkflowJson: String = postgresApp.output.files["postgres.json"].text
-local postgresCredentialJson: String = postgresApp.output.files["atlan-connectors-postgres.json"].text
-local postgresManifestJson: String = postgresApp.output.files["manifest.json"].text
-local publishControlsManifestJson: String = publishControlsApp.output.files["manifest.json"].text
-local publishControlsInputPy: String = publishControlsApp.output.files["_input.py"].text
-local trinoWorkflowJson: String = trinoApp.output.files["trino.json"].text
-local trinoCredentialJson: String = trinoApp.output.files["atlan-connectors-trino.json"].text
+local fullWorkflowJson: String = fullApp.output.files["app/generated/full-featured.json"].text
+local fullCredentialJson: String = fullApp.output.files["app/generated/atlan-connectors-full-featured.json"].text
+local fullManifestJson: String = fullApp.output.files["app/generated/manifest.json"].text
+local fullInputPy: String = fullApp.output.files["app/generated/_input.py"].text
+
+local minimalWorkflowJson: String = minimalApp.output.files["app/generated/minimal.json"].text
+local minimalManifestJson: String = minimalApp.output.files["app/generated/manifest.json"].text
+local minimalInputPy: String = minimalApp.output.files["app/generated/_input.py"].text
+
+local publishControlsManifestJson: String = publishControlsApp.output.files["app/generated/manifest.json"].text
+local publishControlsInputPy: String = publishControlsApp.output.files["app/generated/_input.py"].text
 
 facts {
-  ["OpenAPI emits workflow and object-store credential configmaps"] {
-    openapiApp.output.files.containsKey("openapi.json")
-    openapiApp.output.files.containsKey("csa-connectors-objectstore.json")
-    openapiWorkflowJson.contains("\"widget\": \"credential\"")
-    openapiWorkflowJson.contains("\"credentialType\": \"csa-connectors-objectstore\"")
-    openapiObjectStoreCredentialJson.contains("\"Cloud object store\"")
-    openapiObjectStoreCredentialJson.contains("\"s3\"")
-    openapiObjectStoreCredentialJson.contains("\"gcs\"")
-    openapiObjectStoreCredentialJson.contains("\"adls\"")
+  ["Minimal example generates all standard output files"] {
+    minimalApp.output.files.containsKey("app/generated/minimal.json")
+    minimalApp.output.files.containsKey("app/generated/manifest.json")
+    minimalApp.output.files.containsKey("app/generated/_input.py")
+    minimalApp.output.files.containsKey("atlan.yaml")
+    minimalApp.output.files.containsKey("app.yaml")
+    // No credential configmap — hasCredentialConfig = false
+    !minimalApp.output.files.containsKey("app/generated/atlan-connectors-minimal.json")
+    // workflowType defaults to PascalCase of name ("minimal" → "Minimal" → "minimal")
+    minimalManifestJson.contains("\"workflow_type\": \"minimal\"")
   }
 
-  ["OpenAPI preserves URL and cloud import conditional requirements"] {
-    openapiWorkflowJson.contains("\"const\": \"URL\"")
-    openapiWorkflowJson.contains("\"spec_url\"")
-    openapiWorkflowJson.contains("\"const\": \"CLOUD\"")
-    openapiWorkflowJson.contains("\"cloud_source\"")
-    openapiWorkflowJson.contains("\"spec_prefix\"")
-    openapiWorkflowJson.contains("\"spec_key\"")
+  ["Minimal example pipeline: only extract, no publish"] {
+    minimalManifestJson.contains("\"extract\":")
+    !minimalManifestJson.contains("\"publish\":")
+    !minimalManifestJson.contains("\"qi\":")
+    !minimalManifestJson.contains("\"popularity\":")
+    !minimalManifestJson.contains("\"lineage\":")
   }
 
-  ["OpenAPI manifest uses the native openapi workflow type"] {
-    openapiManifestJson.contains("\"workflow_type\": \"openapi\"")
-    openapiManifestJson.contains("\"cloud_source\": \"{{cloud_source}}\"")
+  ["Minimal example omits publish input fields"] {
+    !minimalInputPy.contains("output_dir:")
+    !minimalInputPy.contains("load_to_atlan:")
   }
 
-  ["Trino remains the generic SQL connector example"] {
-    trinoWorkflowJson.contains("\"widget\": \"sqltree\"")
-    trinoWorkflowJson.contains("\"connectorConfigName\": \"atlan-connectors-trino\"")
-    trinoCredentialJson.contains("\"connector\": \"trino\"")
-    trinoCredentialJson.contains("\"jwt\"")
+  ["Full example demonstrates JDBC URL auth with two auth options"] {
+    fullCredentialJson.contains("\"AdvancedJDBCUrlGroup\"")
+    fullCredentialJson.contains("\"connectBy\"")
+    fullCredentialJson.contains("\"jdbcUrl\"")
+    fullCredentialJson.contains("\"basic\"")
+    fullCredentialJson.contains("\"token\"")
   }
 
-  ["Postgres emits a basic open-source SQL datasource contract"] {
-    postgresWorkflowJson.contains("\"widget\": \"sqltree\"")
-    postgresWorkflowJson.contains("information_schema.schemata")
-    postgresWorkflowJson.contains("\"connectorConfigName\": \"atlan-connectors-postgres\"")
-    postgresCredentialJson.contains("\"connector\": \"postgres\"")
-    postgresCredentialJson.contains("\"defaultConnectorType\": \"jdbc\"")
-    postgresCredentialJson.contains("\"__enable_ssl\"")
-    postgresManifestJson.contains("\"workflow_type\": \"PostgresMetadataExtractionWorkflow\"")
+  ["Full example pipeline: extract with custom displayName, parseQueries, publish"] {
+    fullManifestJson.contains("\"activity_display_name\": \"Discover\"")
+    // qi node is present (pipeline.parseQueries wired)
+    fullManifestJson.contains("\"qi\":")
+    fullManifestJson.contains("\"start_to_close_timeout_seconds\": 14400")
+    fullManifestJson.contains("\"executor_enabled\": \"{{load-to-atlan}}\"")
+  }
+
+  ["Full example emits a custom extraNode outside the typed pipeline"] {
+    fullManifestJson.contains("\"notify\":")
+    fullManifestJson.contains("\"workflow_type\": \"NotifyWorkflow\"")
+    // notify depends on publish
+    fullManifestJson.contains("\"node_id\": \"publish\"")
+  }
+
+  ["Full example uiConfig includes diverse widget types"] {
+    // TextInput → "input", Radio, NumericInput, BooleanInput, DropDown → "select", SqlTree → "sqltree"
+    fullWorkflowJson.contains("\"widget\": \"input\"")
+    fullWorkflowJson.contains("\"widget\": \"radio\"")
+    fullWorkflowJson.contains("\"widget\": \"inputNumber\"")
+    fullWorkflowJson.contains("\"widget\": \"boolean\"")
+    fullWorkflowJson.contains("\"widget\": \"select\"")
+    fullWorkflowJson.contains("\"widget\": \"sqltree\"")
+  }
+
+  ["SqlTree generates a bounded dict[str, str] SDK input, not dict[str, Any]"] {
+    // dict[str, str] avoids the SDK's AAF-CTR-002 rejection of Any-valued dicts.
+    // MaxItems(1000) bounds the number of schema entries.
+    fullInputPy.contains("dict[str, str], MaxItems(1000)")
+    !fullInputPy.contains("dict[str, Any]")
+  }
+
+  ["Full example UIRules wire conditional field requirements"] {
+    fullWorkflowJson.contains("\"anyOf\"")
+    fullWorkflowJson.contains("\"enable_lineage\"")
+    fullWorkflowJson.contains("\"lineage_depth\"")
+  }
+
+  ["Full example generates load-to-atlan SDK input for publish toggle"] {
+    fullInputPy.contains("load_to_atlan: bool = True")
+    // Form widget + publish scaffold overlap must not produce a duplicate class member.
+    // Expected occurrences: once in _config_hash_exclude, once as the field → split length 3.
+    fullInputPy.split("load_to_atlan").length == 3
   }
 
   ["ConnectionRef example uses public connector filters"] {
@@ -80,6 +118,8 @@ facts {
     faninManifestJson.contains("\"node_id\": \"left\"")
     faninManifestJson.contains("\"node_id\": \"right\"")
     faninManifestJson.contains("\"or_conditions\"")
+    // Default publish node ships a 24h timeout to avoid silently inheriting AE's 2h default.
+    faninManifestJson.contains("\"start_to_close_timeout_seconds\": 86400")
   }
 
   ["Publish controls example keeps explicit publish toggle behavior"] {
@@ -90,4 +130,48 @@ facts {
     publishControlsInputPy.contains("load_to_atlan: bool = True")
     !publishControlsInputPy.contains("publish_dry_run")
   }
+
+  ["Bundle example generates per-entrypoint artifacts under named subfolders"] {
+    bundleApp.output.files.containsKey("app/generated/crawler/crawler.json")
+    bundleApp.output.files.containsKey("app/generated/crawler/manifest.json")
+    bundleApp.output.files.containsKey("app/generated/crawler/_input.py")
+    bundleApp.output.files.containsKey("app/generated/miner/miner.json")
+    bundleApp.output.files.containsKey("app/generated/miner/manifest.json")
+    bundleApp.output.files.containsKey("app/generated/miner/_input.py")
+  }
+
+  ["Bundle example hoists shared credential configmap to app/generated root"] {
+    bundleApp.output.files.containsKey("app/generated/atlan-connectors-bundle.json")
+    // Credential file must NOT appear inside the per-entrypoint subfolder
+    !bundleApp.output.files.containsKey("app/generated/crawler/atlan-connectors-bundle.json")
+    !bundleApp.output.files.containsKey("app/generated/miner/atlan-connectors-bundle.json")
+  }
+
+  ["Bundle atlan.yaml lists both entrypoints"] {
+    bundleApp.output.files.containsKey("atlan.yaml")
+    bundleApp.output.files["atlan.yaml"].text.contains("name: crawler")
+    bundleApp.output.files["atlan.yaml"].text.contains("name: miner")
+  }
+
+  ["Deploy example atlan.yaml includes typed KEDA, Dapr, resources, env, and deployOverrides"] {
+    deployApp.output.files.containsKey("atlan.yaml")
+    local deployYaml: String = deployApp.output.files["atlan.yaml"].text
+    // execution_mode at top level (read by global-marketplace and atlan-local-marketplace-app)
+    deployYaml.contains("execution_mode: native")
+    // KEDA settings
+    deployYaml.contains("enabled: true")
+    deployYaml.contains("targetQueueSize: 10")
+    // Dapr — enabled components
+    deployYaml.contains("objectstore: true")
+    deployYaml.contains("secretstore: true")
+    // Resources
+    deployYaml.contains("cpu: 500m")
+    deployYaml.contains("memory: 4Gi")
+    // Env
+    deployYaml.contains("LOG_LEVEL: INFO")
+    // deployOverrides deep-merged (VPA)
+    deployYaml.contains("verticalPodAutoscaler:")
+    deployYaml.contains("updateMode: Auto")
+  }
+
 }

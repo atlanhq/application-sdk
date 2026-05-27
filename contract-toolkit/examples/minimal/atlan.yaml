@@ -1,0 +1,31 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: minimal
+display_name: Minimal Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: false
+entrypoints:
+- name: minimal
+  display_name: Minimal Example
+  icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+  type: connector
+deploy:
+  execution_mode: native
+  splitDeploymentEnabled: true
+  dapr:
+    objectstore: false
+    secretstore: false
+    statestore: false
+    eventstore: false
+    subscription: false
+    configurationstore: false
+    lock: false
+  keda:
+    enabled: true
+    minReplicaCount: 0
+    temporal:
+      targetQueueSize: 5

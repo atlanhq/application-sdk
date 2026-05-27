@@ -6,10 +6,10 @@ Targets uncovered branches:
 - Writer._convert_to_dataframe pandas / dict / list / daft / unsupported branches,
   including the daft ImportError fallbacks.
 - Writer.write closed / unsupported ``dataframe_type`` errors.
-- Writer._write_batched_dataframe rewrap on exception.
+- Writer._write_batched_dataframe raises FormatWriteError on exception.
 - Writer._upload_file delegation and ``retain_local_copy`` propagation.
 - Writer._flush_buffer failure path (records error metric, re-raises).
-- Writer.close idempotent + rewrap on finalise failure.
+- Writer.close idempotent + raises FormatCloseError on finalise failure.
 
 All disk I/O outside ``tmp_path`` is mocked; no real obstore traffic; no real
 threads or loops beyond pytest-asyncio.
@@ -17,7 +17,8 @@ threads or loops beyond pytest-asyncio.
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -65,7 +66,9 @@ class _StubWriter(Writer):
         self.dataframe_type = dataframe_type
         self._is_closed = False
         self._statistics = None
+        self._result = None
         self.chunk_start = None
+        self.typename = None
         self.metrics = MagicMock()
 
     async def _write_daft_dataframe(self, dataframe: Any, **kwargs: Any) -> None:
@@ -191,15 +194,22 @@ class TestConvertToDataframe:
         assert list(result["a"]) == [1, 2]
 
     def test_unsupported_type_raises_typeerror(self) -> None:
+        from application_sdk.storage.formats.format_errors import (
+            UnsupportedDataTypeError,
+        )
+
         writer = _StubWriter(dataframe_type=DataframeType.pandas)
-        with pytest.raises(TypeError, match="Unsupported data type"):
+        with pytest.raises(UnsupportedDataTypeError) as exc_info:
             writer._convert_to_dataframe(42)
+        assert exc_info.value.code == "INVALID_INPUT_FORMAT_DATA_TYPE"
 
     def test_pandas_input_with_daft_type_without_daft_raises(self) -> None:
         """Exercises inline ``import daft`` ImportError fallback."""
         import builtins
 
         import pandas as pd
+
+        from application_sdk.storage.formats.format_errors import DaftNotInstalledError
 
         writer = _StubWriter(dataframe_type=DataframeType.daft)
         df = pd.DataFrame({"a": [1]})
@@ -212,12 +222,15 @@ class TestConvertToDataframe:
             return original_import(name, *args, **kwargs)
 
         with patch.object(builtins, "__import__", side_effect=_raise_for_daft):
-            with pytest.raises(TypeError, match="daft is not installed"):
+            with pytest.raises(DaftNotInstalledError) as exc_info:
                 writer._convert_to_dataframe(df)
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAFT"
 
     def test_dict_input_with_daft_type_without_daft_raises(self) -> None:
         """Inline ``import daft`` ImportError on dict→daft conversion path."""
         import builtins
+
+        from application_sdk.storage.formats.format_errors import DaftNotInstalledError
 
         writer = _StubWriter(dataframe_type=DataframeType.daft)
         original_import = builtins.__import__
@@ -228,8 +241,9 @@ class TestConvertToDataframe:
             return original_import(name, *args, **kwargs)
 
         with patch.object(builtins, "__import__", side_effect=_raise_for_daft):
-            with pytest.raises(TypeError, match="Dict and list inputs require daft"):
+            with pytest.raises(DaftNotInstalledError) as exc_info:
                 writer._convert_to_dataframe({"a": 1})
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAFT"
 
 
 # ---------------------------------------------------------------------------
@@ -240,18 +254,26 @@ class TestConvertToDataframe:
 class TestWriterWrite:
     @pytest.mark.asyncio
     async def test_write_to_closed_writer_raises(self) -> None:
+        from application_sdk.storage.formats.format_errors import WriterClosedError
+
         writer = _StubWriter()
         writer._is_closed = True
-        with pytest.raises(ValueError, match="closed writer"):
+        with pytest.raises(WriterClosedError) as exc_info:
             await writer.write({"a": 1})
+        assert exc_info.value.code == "PRECONDITION_FORMAT_WRITER_CLOSED"
 
     @pytest.mark.asyncio
     async def test_write_unsupported_dtype_raises(self) -> None:
+        from application_sdk.storage.formats.format_errors import (
+            UnsupportedDataframeTypeError,
+        )
+
         writer = _StubWriter()
         # Replace with an arbitrary value the dispatcher does not understand.
         writer.dataframe_type = "unknown"
-        with pytest.raises(ValueError, match="Unsupported dataframe_type"):
+        with pytest.raises(UnsupportedDataframeTypeError) as exc_info:
             await writer.write({"a": 1})
+        assert exc_info.value.code == "UNIMPLEMENTED_FORMAT_DATAFRAME_TYPE"
 
     @pytest.mark.asyncio
     async def test_write_pandas_calls_internal_method(self) -> None:
@@ -286,30 +308,40 @@ class TestWriterWrite:
 class TestWriteBatches:
     @pytest.mark.asyncio
     async def test_write_batches_to_closed_writer_raises(self) -> None:
+        from application_sdk.storage.formats.format_errors import WriterClosedError
+
         writer = _StubWriter()
         writer._is_closed = True
 
         async def _gen() -> AsyncGenerator[Any, None]:  # pragma: no cover
             yield None
 
-        with pytest.raises(ValueError, match="closed writer"):
+        with pytest.raises(WriterClosedError) as exc_info:
             await writer.write_batches(_gen())
+        assert exc_info.value.code == "PRECONDITION_FORMAT_WRITER_CLOSED"
 
     @pytest.mark.asyncio
     async def test_write_batches_unsupported_dtype_raises(self) -> None:
+        from application_sdk.storage.formats.format_errors import (
+            UnsupportedDataframeTypeError,
+        )
+
         writer = _StubWriter()
         writer.dataframe_type = "weird"
 
         def _gen():
             yield None
 
-        with pytest.raises(ValueError, match="Unsupported dataframe_type"):
+        with pytest.raises(UnsupportedDataframeTypeError) as exc_info:
             await writer.write_batches(_gen())
+        assert exc_info.value.code == "UNIMPLEMENTED_FORMAT_DATAFRAME_TYPE"
 
     @pytest.mark.asyncio
-    async def test_batched_dataframe_rewrap_on_failure(self) -> None:
+    async def test_batched_dataframe_raises_format_write_error(self) -> None:
+        from application_sdk.storage.formats.format_errors import FormatWriteError
+
         writer = _StubWriter()
-        # _write_dataframe raises during iteration → rewrapped into RewrappedException.
+        # _write_dataframe raises during iteration → wrapped into FormatWriteError.
         with patch.object(
             writer,
             "_write_dataframe",
@@ -322,9 +354,9 @@ class TestWriteBatches:
 
                 yield pd.DataFrame({"a": [1]})
 
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(FormatWriteError) as excinfo:
                 await writer.write_batches(_gen())
-        assert "Error writing batched dataframe" in str(excinfo.value)
+        assert excinfo.value.code == "INTERNAL_FORMAT_WRITE"
 
 
 # ---------------------------------------------------------------------------
@@ -377,14 +409,16 @@ class TestFlushBuffer:
         import pandas as pd
 
         writer = _StubWriter()
-        with patch.object(
-            writer,
-            "_write_chunk",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("disk full"),
+        with (
+            patch.object(
+                writer,
+                "_write_chunk",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("disk full"),
+            ),
+            pytest.raises(RuntimeError, match="disk full"),
         ):
-            with pytest.raises(RuntimeError, match="disk full"):
-                await writer._flush_buffer(pd.DataFrame({"a": [1]}), 0)
+            await writer._flush_buffer(pd.DataFrame({"a": [1]}), 0)
 
         # Last metric call should record write_errors.
         names = [
@@ -418,45 +452,58 @@ class TestFlushBuffer:
 
 
 # ---------------------------------------------------------------------------
-# Writer.close — idempotent + rewrap
+# Writer.close — idempotent + FormatCloseError
 # ---------------------------------------------------------------------------
 
 
 class TestWriterClose:
     @pytest.mark.asyncio
-    async def test_close_idempotent_returns_cached_statistics(self) -> None:
-        from application_sdk.common.models import TaskStatistics
+    async def test_close_idempotent_returns_cached_result(self) -> None:
+        from application_sdk.storage.formats import WriterResult
 
         writer = _StubWriter()
         writer._is_closed = True
-        cached = TaskStatistics(total_record_count=5, chunk_count=2, partitions=[0, 1])
-        writer._statistics = cached
+        cached = WriterResult(
+            total_record_count=5,
+            chunk_count=2,
+            partitions=[0, 1],
+            files=None,
+        )
+        writer._result = cached
         result = await writer.close()
         assert result is cached
 
     @pytest.mark.asyncio
-    async def test_close_idempotent_returns_live_statistics_when_no_cache(self) -> None:
+    async def test_close_idempotent_rederives_when_no_cached_result(self) -> None:
         writer = _StubWriter()
         writer._is_closed = True
         writer._statistics = None
+        writer._result = None
         writer.total_record_count = 7
         writer.partitions = [0, 1, 2]
         result = await writer.close()
+        # WriterResult subclasses TaskStatistics, so attribute access is direct.
         assert result.total_record_count == 7
         assert result.chunk_count == 3
+        # Base Writer doesn't opt into deferred uploads → no FileReference.
+        assert result.files is None
 
     @pytest.mark.asyncio
-    async def test_close_rewraps_finalize_failure(self) -> None:
+    async def test_close_raises_format_close_error_on_finalize_failure(self) -> None:
+        from application_sdk.storage.formats.format_errors import FormatCloseError
+
         writer = _StubWriter()
-        with patch.object(
-            writer,
-            "_finalize",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("flush fail"),
+        with (
+            patch.object(
+                writer,
+                "_finalize",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("flush fail"),
+            ),
+            pytest.raises(FormatCloseError) as excinfo,
         ):
-            with pytest.raises(Exception) as excinfo:
-                await writer.close()
-        assert "Error closing writer" in str(excinfo.value)
+            await writer.close()
+        assert excinfo.value.code == "INTERNAL_FORMAT_CLOSE"
 
     @pytest.mark.asyncio
     async def test_close_writes_statistics_and_marks_closed(self, tmp_path) -> None:
@@ -467,11 +514,14 @@ class TestWriterClose:
         with patch(
             "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
         ) as mock_upload:
-            stats = await writer.close()
+            result = await writer.close()
 
         assert writer._is_closed is True
-        assert stats.total_record_count == 4
-        # Statistics file uploaded.
+        # WriterResult subclasses TaskStatistics — inherited attributes.
+        assert result.total_record_count == 4
+        # Base Writer keeps the legacy inline-upload contract; no FileReference.
+        assert result.files is None
+        # Statistics file uploaded by base Writer (not overridden in _StubWriter).
         mock_upload.assert_awaited()
 
 

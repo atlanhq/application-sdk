@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.8.0
-source-sha:    de1e7a2d7251d3bd2b3b9cd68dfe88587f3d237e
-source-date:   2026-05-11T12:16:02+01:00
+sdk-version:   3.13.2
+source-sha:    802c1284630b7045881ed7eb1b1dd884168214fd
+source-date:   2026-05-25T22:48:09+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 16 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 25 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
@@ -105,6 +105,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Base class for all output contracts (Apps and tasks).
 - **Defined in:** `application_sdk/contracts/base.py`
 
+#### `OutputStatus`
+
+- **Import:** `from application_sdk.app import OutputStatus`
+- **Signature:** `class OutputStatus`
+- **Summary:** Standard run-result status used on :class:`Output`.
+- **Defined in:** `application_sdk/contracts/base.py`
+
 #### `RetryableError`
 
 - **Import:** `from application_sdk.app import RetryableError`
@@ -155,6 +162,64 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import mcp_tool`
 - **Summary:** _(no docstring)_
+
+### Constants and Enums
+
+#### `InteractionUnfinishedPolicy`
+
+- **Import:** `from application_sdk.app import InteractionUnfinishedPolicy`
+- **Signature:** `InteractionUnfinishedPolicy`
+- **Summary:** Policy applied to in-flight runtime interactions when an app run exits.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `now`
+
+- **Import:** `from application_sdk.app import now`
+- **Signature:** `now`
+- **Summary:** Return the current time from the app run's perspective (deterministic).
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `query`
+
+- **Import:** `from application_sdk.app import query`
+- **Signature:** `query`
+- **Summary:** Declare a ``@query`` runtime interaction that reads live state without mutation.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `signal`
+
+- **Import:** `from application_sdk.app import signal`
+- **Signature:** `signal`
+- **Summary:** Declare a ``@signal`` runtime interaction on an App subclass.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `sleep`
+
+- **Import:** `from application_sdk.app import sleep`
+- **Signature:** `sleep`
+- **Summary:** Sleep for a given duration inside an app run (deterministic).
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `update`
+
+- **Import:** `from application_sdk.app import update`
+- **Signature:** `update`
+- **Summary:** Declare a ``@update`` runtime interaction that mutates state and returns a typed response.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `uuid4`
+
+- **Import:** `from application_sdk.app import uuid4`
+- **Signature:** `uuid4`
+- **Summary:** Generate a determinism-safe v4 UUID inside an app run.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `wait_condition`
+
+- **Import:** `from application_sdk.app import wait_condition`
+- **Signature:** `wait_condition`
+- **Summary:** Suspend ``run()`` or a runtime interaction until a predicate becomes ``True``.
+- **Defined in:** `application_sdk/app/__init__.py`
 
 ## `application_sdk.clients`
 
@@ -287,7 +352,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `normalize_filters`
 
 - **Import:** `from application_sdk.common import normalize_filters`
-- **Signature:** `normalize_filters(filter_dict: Dict[str, List[str] | str], is_include: bool)`
+- **Signature:** `normalize_filters(filter_dict: dict[str, list[str] | str], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -301,7 +366,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `prepare_query`
 
 - **Import:** `from application_sdk.common import prepare_query`
-- **Signature:** `prepare_query(query: Optional[str], ...)`
+- **Signature:** `prepare_query(query: str | None, ...)`
 - **Summary:** Prepare a SQL query by applying include/exclude filters.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -739,8 +804,8 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `create_async_atlan_client`
 
 - **Import:** `from application_sdk.credentials import create_async_atlan_client`
-- **Signature:** `create_async_atlan_client(cred: 'Credential')`
-- **Summary:** Create an AsyncAtlanClient from a resolved Atlan credential.
+- **Signature:** `create_async_atlan_client(cred: Credential, *, extra_headers: dict[str, str] | None = None)`
+- **Summary:** Create a pyatlan_v9 AsyncAtlanClient from a resolved Atlan credential.
 - **Defined in:** `application_sdk/credentials/atlan_client.py`
 
 #### `expand_dotted_keys`
@@ -952,13 +1017,6 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Operation not supported or capability not yet built.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
-#### `WorkerEvictedError`
-
-- **Import:** `from application_sdk.errors import WorkerEvictedError`
-- **Signature:** `class WorkerEvictedError(*, ...)`
-- **Summary:** Activity terminated because the worker pod is shutting down.
-- **Defined in:** `application_sdk/errors/leaves.py`
-
 ### Constants and Enums
 
 #### `APP_ALREADY_REGISTERED`
@@ -1140,6 +1198,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import STORAGE_CONFIG`
 - **Signature:** `STORAGE_CONFIG`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_EMPTY_UPLOAD`
+
+- **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
+- **Signature:** `STORAGE_EMPTY_UPLOAD`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
 
@@ -2211,6 +2276,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import Output`
 - **Summary:** Base class for all output contracts (Apps and tasks).
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
   - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
   - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
 - **Defined in:** `application_sdk/contracts/base.py`
@@ -2250,6 +2316,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `storage_subdir: str | None`
   - `tier: StorageTier` `= StorageTier.RETAINED`
   - `skip_if_exists: bool` `= False`
+  - `raise_on_empty: bool` `= False`
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 #### `UploadOutput`
@@ -2495,7 +2562,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `output_path: str` `= ''` — Local or object store path for output files.
   - `exclude_filter: FilterMap | str` `= Field(default='')` — Filter for excluding schemas/tables.
   - `include_filter: FilterMap | str` `= Field(default='')` — Filter for including schemas/tables.
-  - `temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern identifying temporary tables.
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern identifying temporary tables.
   - `source_tag_prefix: str` `= ''` — Tag prefix for source-level metadata.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
@@ -2531,8 +2598,18 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `output_path: str` `= ''`
   - `exclude_filter: FilterMap | str` `= Field(default='')`
   - `include_filter: FilterMap | str` `= Field(default='')`
-  - `temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)]` `= ''`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
   - `source_tag_prefix: str` `= ''`
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
+#### `ExtractionTaskOutput`
+
+- **Import:** `from application_sdk.templates.contracts import ExtractionTaskOutput`
+- **Summary:** Output from a per-entity ``extract_*`` task.
+- **Fields:**
+  - `typename: str` `= ''`
+  - `total_record_count: int` `= 0`
+  - `raw_file: FileReference | None` — ``FileReference`` to the extract's raw output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchColumnsIncrementalInput`
@@ -2579,7 +2656,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `connection_qualified_name: str` `= ''` — Connection qualified name used to locate the persistent marker file.
   - `application_name: str` `= ''` — Application name for S3 path resolution.
-  - `existing_marker: Optional[str]` — Pre-existing marker value (e.g., from a manual workflow override).
+  - `existing_marker: str | None` — Pre-existing marker value (e.g., from a manual workflow override).
   - `prepone_enabled: bool` `= True` — Whether to move the marker back by ``prepone_hours``.
   - `prepone_hours: float` `= 3.0` — Hours to subtract from the marker when preponing is enabled.
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
@@ -2722,6 +2799,17 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `batches_local_dir: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
+#### `PrimeAuthOutput`
+
+- **Import:** `from application_sdk.templates.contracts import PrimeAuthOutput`
+- **Summary:** Output from the ``prime_sql_auth`` task (BLDX-1295).
+- **Fields:**
+  - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
+  - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means the probe
+  - `error_type: str | None` — Exception class name (e.g. ``OperationalError``) when ``success``
+  - `error_message: str | None` — Truncated exception message when ``success`` is ``False``.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
 #### `QueryBatchInput`
 
 - **Import:** `from application_sdk.templates.contracts import QueryBatchInput`
@@ -2812,21 +2900,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `TransformInput`
 
 - **Import:** `from application_sdk.templates.contracts import TransformInput`
-- **Summary:** Input for the transform_data task.
+- **Summary:** Input for transform tasks.
 - **Fields:**
-  - `typename: str` `= ''`
-  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)`
-  - `chunk_start: int` `= 0`
+  - `typename: str` `= ''` — **Deprecated** — kept for backward compatibility with existing
+  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated and unused** — retained on the schema as a no-op
+  - `chunk_start: int` `= 0` — **Deprecated** — chunk-offset hint used by the legacy
+  - `raw_file: FileReference | None` — Durable ``FileReference`` to the matching extract's raw output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `TransformOutput`
 
 - **Import:** `from application_sdk.templates.contracts import TransformOutput`
-- **Summary:** Output from the transform_data task.
+- **Summary:** Output from the v3 ``transform_*`` tasks.
 - **Fields:**
   - `typename: str` `= ''`
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
+  - `transformed_file: FileReference | None` — ``FileReference`` to the transformed asset output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `UpdateMarkerInput`

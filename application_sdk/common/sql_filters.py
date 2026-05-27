@@ -9,12 +9,154 @@ import glob
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any
 
-from application_sdk.common.error_codes import CommonError
+from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
+from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def safe_substitute_placeholders(template: str, mapping: dict[str, str]) -> str:
+    """Single-pass placeholder substitution — replacement values are never re-scanned.
+
+    Replaces every key in *mapping* that appears in *template* using a single
+    ``re.sub`` pass.  Contrast with chained ``str.replace()`` calls, where each
+    call operates on the *mutated* string: a replacement value that happens to
+    contain the literal text of a later placeholder would be re-substituted,
+    silently corrupting the output.  ``re.sub`` with alternation scans the
+    original string positions exactly once and never re-interprets replacement
+    values (including ``\\1``/``\\g<0>`` backref sequences).
+
+    Args:
+        template: The SQL (or any string) to substitute into.
+        mapping: ``{placeholder: replacement}`` pairs.  Keys are treated as
+                 literals (``re.escape``d) so ``{`` / ``}`` in placeholder
+                 names are not special.
+
+    Returns:
+        The template with every matching key replaced by its value, in a
+        single left-to-right scan.
+    """
+    if not mapping:
+        return template
+    pattern = re.compile("|".join(re.escape(k) for k in mapping))
+    return pattern.sub(lambda m: mapping[m.group()], template)
+
+
+# ---------------------------------------------------------------------------
+# SQL injection deny-list for filter values (BLDX-518).
+#
+# Filter values (include_filter, exclude_filter, temp_table_regex) are
+# substituted into SQL templates via ``str.replace`` and end up inside
+# quoted SQL string literals (the template author is contractually
+# required to wrap each substitution in single quotes — see the warning
+# in ``templates/sql_metadata_extractor.SqlMetadataExtractor._prepare_sql``).
+#
+# To make that contract attacker-resistant, we forbid the SQL-meaningful
+# sequences that have no legitimate use inside a regex pattern destined
+# for a quoted literal:
+#
+#   * ``'`` — string-literal delimiter (would close the surrounding quote)
+#   * ``"`` — identifier delimiter in dialects that allow it
+#   * ``;`` — statement separator (stacked-query injection)
+#   * ``--`` — SQL line comment (eats the rest of the line)
+#   * ``/*`` / ``*/`` — block comment
+#   * ``\x00`` — null byte; some drivers truncate on it
+#
+# Regex meta-characters that legitimately appear in filter values
+# (``^``, ``$``, ``.``, ``*``, ``+``, ``?``, ``|``, ``()``, ``[]``, ``\``,
+# ``{}``, single ``-``) remain allowed. This is a deny-list, not an
+# allow-list — a strict allow-list would break virtually every existing
+# filter pattern.
+# ---------------------------------------------------------------------------
+
+_FORBIDDEN_FILTER_SEQUENCES: tuple[str, ...] = (
+    "'",
+    '"',
+    ";",
+    "--",
+    "/*",
+    "*/",
+    "\x00",
+)
+
+# Used by Pydantic ``Field(pattern=...)`` on filter-shaped fields. Forbids
+# the single-character members of ``_FORBIDDEN_FILTER_SEQUENCES``;
+# multi-character sequences (``--``, ``/*``, ``*/``) are caught by the
+# dedicated ``validate_filter_no_sql_injection`` validator below.
+SAFE_FILTER_PATTERN: str = r"^[^'\";\x00]*$"
+_SAFE_FILTER_PATTERN = SAFE_FILTER_PATTERN  # backward-compat alias
+
+
+def validate_filter_no_sql_injection(v: Any) -> Any:
+    """Reject filter values containing SQL-meaningful character sequences.
+
+    See the module docstring for the rationale behind each forbidden
+    sequence. Applies to:
+
+    * Raw regex strings — checked directly.
+    * JSON-encoded strings (legacy AE payload shape) — parsed first;
+      the parsed dict is then checked. The JSON's own structural
+      double-quotes are stripped by the parse, so we only ever apply
+      the deny-list to the actual filter contents.
+    * Structured dict filters (``FilterMap``) — checks every key and
+      every string in every value list.
+
+    Returns ``v`` unchanged when the value is safe; raises ``ValueError``
+    on the first forbidden sequence encountered so the caller (Pydantic
+    or a hand-rolled helper) surfaces a clear error before any SQL
+    template substitution.
+
+    Args:
+        v: A filter value — either a raw regex string, a JSON-encoded
+            filter map string, or a normalized ``FilterMap`` dict.
+
+    Returns:
+        The same value if it passes all deny-list checks.
+
+    Raises:
+        ValueError: When any forbidden sequence is found.
+    """
+
+    def _check_str(label: str, value: str) -> None:
+        for seq in _FORBIDDEN_FILTER_SEQUENCES:
+            if seq in value:
+                raise ValueError(
+                    f"SQL-unsafe sequence {seq!r} not allowed in filter {label}: {value!r}"
+                )
+
+    if isinstance(v, str):
+        # Legacy AE callers pass the filter as a JSON-encoded string. The
+        # JSON syntax itself carries double-quotes that would trip the
+        # deny-list, so parse first and validate the resulting dict;
+        # fall back to treating the string as a raw regex otherwise.
+        # We return the ORIGINAL string unchanged on success — the
+        # downstream consumer expects whichever shape it was given,
+        # not a coerced one.
+        stripped = v.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                # Validate the parsed shape; ignore the returned value
+                # and keep ``v`` (the original JSON string) intact.
+                validate_filter_no_sql_injection(parsed)
+                return v
+        _check_str("value", v)
+    elif isinstance(v, dict):
+        for key, values in v.items():
+            _check_str("key", key)
+            if isinstance(values, list):
+                for item in values:
+                    if isinstance(item, str):
+                        _check_str("value", item)
+            elif isinstance(values, str):
+                _check_str("value", values)
+    return v
 
 
 def extract_database_names_from_regex_common(
@@ -39,7 +181,7 @@ def extract_database_names_from_regex_common(
         if normalized_regex == ".*":
             return "'.*'"
 
-        database_names: Set[str] = set()
+        database_names: set[str] = set()
         patterns = normalized_regex.split("|")
 
         for pattern in patterns:
@@ -116,11 +258,11 @@ def transform_posix_regex(regex_pattern: str) -> str:
 
 
 def prepare_query(
-    query: Optional[str],
-    workflow_args: Dict[str, Any],
-    temp_table_regex_sql: Optional[str] = "",
-    use_posix_regex: Optional[bool] = False,
-) -> Optional[str]:
+    query: str | None,
+    workflow_args: dict[str, Any],
+    temp_table_regex_sql: str | None = "",
+    use_posix_regex: bool | None = False,
+) -> str | None:
     """Prepare a SQL query by applying include/exclude filters.
 
     Modifies the provided SQL query using filters and settings defined in
@@ -145,9 +287,17 @@ def prepare_query(
 
         include_filter = metadata.get("include-filter") or "{}"
         exclude_filter = metadata.get("exclude-filter") or "{}"
-        if metadata.get("temp-table-regex") and temp_table_regex_sql is not None:
+        # Defense in depth (BLDX-518): callers of ``prepare_query`` pass a
+        # raw ``workflow_args`` dict, bypassing the Pydantic validators
+        # that gate the typed extraction inputs. Run the same deny-list
+        # here so user-controlled metadata can't smuggle SQL escape
+        # sequences into the substituted templates.
+        temp_table_regex = metadata.get("temp-table-regex")
+        if isinstance(temp_table_regex, str):
+            validate_filter_no_sql_injection(temp_table_regex)
+        if temp_table_regex and temp_table_regex_sql is not None:
             temp_table_regex_sql = temp_table_regex_sql.format(
-                exclude_table_regex=metadata.get("temp-table-regex")
+                exclude_table_regex=temp_table_regex
             )
         else:
             temp_table_regex_sql = ""
@@ -198,11 +348,11 @@ def prepare_query(
                 exclude_empty_tables=exclude_empty_tables,
                 exclude_views=exclude_views,
             )
-    except CommonError as e:
+    except AppError as e:
         error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
         logger.error(
             "Error preparing query: error_code=%s error_message=%s",
-            CommonError.QUERY_PREPARATION_ERROR.code,
+            e.code,
             error_message,
             exc_info=True,
         )
@@ -211,7 +361,7 @@ def prepare_query(
 
 async def get_database_names(
     sql_client, workflow_args, fetch_database_sql
-) -> Optional[List[str]]:
+) -> list[str] | None:
     """Get database names from include-filter or by running a SQL query.
 
     Args:
@@ -222,9 +372,14 @@ async def get_database_names(
     Returns:
         List of database names.
     """
-    database_names = parse_filter_input(
-        workflow_args.get("metadata", {}).get("include-filter", {})
-    )
+    raw_include = workflow_args.get("metadata", {}).get("include-filter", {})
+    # BLDX-518: validate before any downstream caller can interpolate these
+    # names into SQL. ``prepare_query`` does its own validation on the
+    # fall-through path; this catches the case where the include-filter
+    # carries database names that are returned directly to the caller.
+    if isinstance(raw_include, (str, dict)):
+        validate_filter_no_sql_injection(raw_include)
+    database_names = parse_filter_input(raw_include)
 
     database_names = [
         re.sub(r"^[^\w]+|[^\w]+$", "", database_name)
@@ -246,8 +401,8 @@ async def get_database_names(
 
 
 def parse_filter_input(
-    filter_input: Union[str, Dict[str, Any], None],
-) -> Dict[str, Any]:
+    filter_input: str | dict[str, Any] | None,
+) -> dict[str, Any]:
     """Robustly parse filter input from various formats.
 
     Args:
@@ -266,12 +421,12 @@ def parse_filter_input(
         try:
             return json.loads(filter_input)
         except json.JSONDecodeError as e:
-            raise CommonError(f"Invalid filter JSON: {str(e)}") from e
+            raise InvalidSqlFilterError(cause=e) from e
 
 
 def prepare_filters(
     include_filter_str: str, exclude_filter_str: str
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Prepare include/exclude filters for SQL queries.
 
     Args:
@@ -284,8 +439,22 @@ def prepare_filters(
     Raises:
         CommonError: If JSON parsing fails for either filter.
     """
+    # BLDX-518: gate raw input before ``parse_filter_input``. The parse
+    # step raises on non-JSON strings, which would mask the deny-list
+    # check for raw-regex callers (``"prefix'injection"`` would surface
+    # as a JSONDecodeError instead of the SQL-unsafe ValueError).
+    if isinstance(include_filter_str, str):
+        validate_filter_no_sql_injection(include_filter_str)
+    if isinstance(exclude_filter_str, str):
+        validate_filter_no_sql_injection(exclude_filter_str)
+
     include_filter = parse_filter_input(include_filter_str)
     exclude_filter = parse_filter_input(exclude_filter_str)
+
+    # Re-validate the parsed shapes — defense in depth for callers that
+    # pass a dict directly without going through the string path.
+    validate_filter_no_sql_injection(include_filter)
+    validate_filter_no_sql_injection(exclude_filter)
 
     normalized_include_filter_list = normalize_filters(include_filter, True)
     normalized_exclude_filter_list = normalize_filters(exclude_filter, False)
@@ -305,8 +474,8 @@ def prepare_filters(
 
 
 def normalize_filters(
-    filter_dict: Dict[str, List[str] | str], is_include: bool
-) -> List[str]:
+    filter_dict: dict[str, list[str] | str], is_include: bool
+) -> list[str]:
     """Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 
     Each emitted pattern is anchored with ``^`` and ``$`` so that callers
@@ -330,7 +499,7 @@ def normalize_filters(
     Returns:
         List of anchored regex segments suitable for joining with ``|``.
     """
-    normalized_filter_list: List[str] = []
+    normalized_filter_list: list[str] = []
     for filtered_db, filtered_schemas in filter_dict.items():
         db = filtered_db.strip("^$")
 
@@ -348,7 +517,7 @@ def normalize_filters(
 
 def read_sql_files(
     queries_prefix: str = f"{os.path.dirname(os.path.abspath(__file__))}/queries",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Read all SQL files from a directory and return as a name→content mapping.
 
     Args:
@@ -357,12 +526,12 @@ def read_sql_files(
     Returns:
         Dictionary mapping SQL file names (uppercase, without extension) to contents.
     """
-    sql_files: List[str] = glob.glob(
+    sql_files: list[str] = glob.glob(
         os.path.join(queries_prefix, "**/*.sql"),
         recursive=True,
     )
 
-    result: Dict[str, str] = {}
+    result: dict[str, str] = {}
     for file in sql_files:
         with open(file, encoding="utf-8") as f:
             result[os.path.basename(file).upper().replace(".SQL", "")] = (

@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.8.0"
+version = "3.13.3"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -64,7 +64,7 @@ sql = [
 ]
 # Daft transformer engine
 daft = [
-    "daft>=0.7.1,<0.8.0",
+    "daft==0.7.3",
 ]
 lakehouse = [
     "pyiceberg[pyiceberg-core]>=0.11.0,<0.13.0",
@@ -84,7 +84,7 @@ incremental = [
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
     "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
-    "daft>=0.7.1,<0.8.0",
+    "daft==0.7.3",
     "rocksdict>=0.3.0",
 ]
 # AWS IAM authentication for RDS/Redshift
@@ -138,6 +138,7 @@ test = [
     "pytest-timeout>=2.3.0,<3.0.0",
     "hypothesis>=6.114.0,<7.0.0",
     "trustme>=1.2.1,<2.0.0",
+    "pyjwt[crypto]>=2.12.0",
 ]
 examples = [
     "snowflake-sqlalchemy>=1.7.0,<2.0.0",
@@ -293,6 +294,8 @@ extend-select = [
 "examples/**" = ["T201", "PLC0415"]
 "contract-toolkit/scripts/**" = ["T201", "PLC0415"]
 "contract-toolkit/examples/**/generated/_input.py" = ["F401"]
+# Mid-file import required to break circular dependency between models.py and assertions.py
+"application_sdk/testing/integration/models.py" = ["E402"]
 
 [tool.uv]
 default-groups = ["dev", "test"]

@@ -7,7 +7,9 @@ Manages OAuth token lifecycle for long-running Temporal worker connections:
 
 Token exchange is delegated to ``credentials.oauth.OAuthTokenService``; this
 module owns only the Temporal-specific lifecycle (background loop, client
-api_key update, event emission).
+api_key update, event emission).  Clock-offset calibration and drift
+correction live in ``OAuthTokenService`` and are consumed here via the
+``clock_offset_seconds`` property.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -63,6 +65,11 @@ class TemporalAuthManager:
     long-running workers connected.  Token exchange is handled by an
     internal ``OAuthTokenService``; this class owns the Temporal-specific
     concerns (background loop timing, ``client.api_key`` update).
+
+    Clock-offset calibration is delegated to ``OAuthTokenService``.
+    ``_calculate_sleep_seconds`` reads ``clock_offset_seconds`` from the
+    service to correct for container clock drift without reinventing the
+    calibration logic here.
     """
 
     config: TemporalAuthConfig
@@ -94,9 +101,11 @@ class TemporalAuthManager:
         try:
             access_token = await self._get_token_service().get_token(force_refresh=True)
         except Exception as exc:
-            raise RuntimeError(
-                f"Failed to acquire initial Temporal auth token: {exc}"
-            ) from exc
+            from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+                TemporalAuthTokenAcquireError,
+            )
+
+            raise TemporalAuthTokenAcquireError(cause=exc) from exc
 
         expires_at = self._get_token_service().current_expires_at
         logger.info(
@@ -173,8 +182,12 @@ class TemporalAuthManager:
         if self.config.base_url:
             base = self.config.base_url.rstrip("/")
             return f"{base}/auth/realms/default/protocol/openid-connect/token"
-        raise ValueError(
-            "Either token_url or base_url must be set in TemporalAuthConfig"
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            TemporalAuthConfigError,
+        )
+
+        raise TemporalAuthConfigError(
+            message="Either token_url or base_url must be set", field="token_url"
         )
 
     async def _refresh_loop(self, client: Client) -> None:
@@ -196,7 +209,7 @@ class TemporalAuthManager:
                 )
                 break
             except TimeoutError:
-                pass
+                pass  # wait_for timeout means sleep duration elapsed; continue loop
 
             try:
                 await self._do_refresh(client)
@@ -213,7 +226,7 @@ class TemporalAuthManager:
                     )
                     break
                 except TimeoutError:
-                    pass
+                    pass  # wait_for timeout means retry sleep elapsed; continue loop
 
         logger.info("Token refresh loop exiting")
 
@@ -266,16 +279,27 @@ class TemporalAuthManager:
             logger.warning("Failed to emit token_refresh event", exc_info=True)
 
     def _calculate_sleep_seconds(self) -> float:
-        """Calculate how long to sleep before next refresh."""
-        expires_at = self._get_token_service().current_expires_at
+        """Calculate how long to sleep before next refresh.
+
+        ``OAuthTokenService.current_expires_at`` stores the server-issued JWT
+        exp claim (immune to container clock drift).
+        ``OAuthTokenService.clock_offset_seconds`` is the iat-derived
+        server–local offset calibrated on each exchange, so
+        ``time.time() + offset ≈ server_now`` even after a host sleep/wake cycle.
+
+        Negative remaining is clamped to ``_MIN_REFRESH_INTERVAL_SECONDS`` so
+        the loop never spins against the token endpoint.
+        """
+        svc = self._get_token_service()
+        expires_at = svc.current_expires_at
         if expires_at is None:
             return float(_MAX_REFRESH_INTERVAL_SECONDS)
 
-        now = datetime.now(UTC)
-        remaining = (expires_at - now).total_seconds()
+        server_now = time.time() + svc.clock_offset_seconds
+        remaining = expires_at.timestamp() - server_now
 
         if remaining <= 0:
-            return 0
+            return float(_MIN_REFRESH_INTERVAL_SECONDS)
 
         sleep = remaining / 2
         return max(

@@ -9,6 +9,7 @@ from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
 
 from application_sdk.constants import (
+    ENABLE_OBSERVABILITY_STORE_SINK,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
     METRICS_FILE_NAME,
@@ -51,11 +52,13 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     """
 
     _flush_task_started: ClassVar[bool] = False
+    _otel_setup_failed_logged: ClassVar[bool] = False
 
     @classmethod
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation."""
         cls._flush_task_started = False
+        cls._otel_setup_failed_logged = False
 
     def __init__(self):
         """Initialize the metrics adapter with configuration and setup.
@@ -77,6 +80,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         )
 
         # Prometheus is the canonical metrics surface and is always on.
+        self._otel_metrics_enabled = False
         self._setup_otel_metrics()
 
         # Initialize Segment client (enabled automatically if write key is present)
@@ -127,15 +131,30 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             # ``* on(instance) group_left(...)`` join. See the cardinality
             # rationale in observability/utils.py:METRIC_ENRICHMENT_KEYS.
             self._prometheus_reader = EnrichedPrometheusMetricReader(resource=resource)
+            readers = [self._prometheus_reader]
+
+            if ENABLE_OBSERVABILITY_STORE_SINK:
+                from application_sdk.observability._objectstore_metric_reader import (  # noqa: PLC0415 — cold path
+                    create_objectstore_metric_reader,
+                )
+
+                self._objectstore_reader = create_objectstore_metric_reader()
+                readers.append(self._objectstore_reader)
+
             self.meter_provider = MeterProvider(
                 resource=resource,
-                metric_readers=[self._prometheus_reader],
+                metric_readers=readers,
             )
             metrics.set_meter_provider(self.meter_provider)
             self.meter = self.meter_provider.get_meter(SERVICE_NAME)
+            self._otel_metrics_enabled = True
+            AtlanMetricsAdapter._otel_setup_failed_logged = False
             logging.info("Prometheus metrics reader enabled")
         except Exception:
-            logging.error("Failed to setup OTel meter provider", exc_info=True)
+            self._otel_metrics_enabled = False
+            if not AtlanMetricsAdapter._otel_setup_failed_logged:
+                logging.error("Failed to setup OTel meter provider", exc_info=True)
+                AtlanMetricsAdapter._otel_setup_failed_logged = True
 
     async def _flush_buffer(self, force=False):
         await super()._flush_buffer(force=force)
@@ -213,6 +232,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If sending fails, logs error and continues
         """
+        if not self._otel_metrics_enabled:
+            return
+
         try:
             otel_attrs: dict[str, str | int | float | bool] = {}
             dropped: list[str] = []

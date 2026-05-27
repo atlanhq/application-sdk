@@ -9,14 +9,15 @@ import inspect
 import os
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Union, cast
 
 import orjson
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
+from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.storage.formats.utils import (
@@ -25,6 +26,30 @@ from application_sdk.storage.formats.utils import (
     path_gen,
 )
 from application_sdk.storage.ops import upload_file as _upload_file
+
+
+@dataclass
+class WriterResult(TaskStatistics):
+    """Outcome of a Writer.close() call.
+
+    Subclasses ``TaskStatistics`` so existing callers that read
+    ``result.total_record_count``, ``result.chunk_count``, ``result.partitions``,
+    ``result.typename`` keep working unchanged via inheritance.
+
+    Adds one new field — ``files`` — for callers who opted into the deferred-
+    upload contract via ``defer_uploads=True`` on the writer constructor.
+    When deferred uploads are off (the default), ``files`` is ``None`` because
+    files have already been uploaded inline and surfacing a ``FileReference``
+    would risk a double-upload through the activity interceptor.
+
+    Apps that want SHA-256 dedup, integrity verification, and parallel
+    transfers via the ``FileReference`` boundary set ``defer_uploads=True``
+    and read ``result.files`` here. Apps that don't care can ignore this
+    field entirely — their existing code paths are unaffected.
+    """
+
+    files: FileReference | None = None
+
 
 logger = get_logger(__name__)
 
@@ -166,7 +191,11 @@ class Reader(ABC):
             NotImplementedError: If the method is not implemented.
             ValueError: If the reader has been closed.
         """
-        raise NotImplementedError
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+            AbstractFormatReaderError,
+        )
+
+        raise AbstractFormatReaderError()
 
     @abstractmethod
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
@@ -179,7 +208,11 @@ class Reader(ABC):
             NotImplementedError: If the method is not implemented.
             ValueError: If the reader has been closed.
         """
-        raise NotImplementedError
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+            AbstractFormatReaderError,
+        )
+
+        raise AbstractFormatReaderError()
 
 
 class WriteMode(Enum):
@@ -211,16 +244,18 @@ class Writer(ABC):
     Example:
         Using close() explicitly::
 
-            writer = JsonFileWriter(path="/data/output")
+            writer = ParquetFileWriter(path="/data/output", typename="users")
             await writer.write(dataframe)
-            await writer.write({"key": "value"})  # Dict support
-            stats = await writer.close()
+            result = await writer.close()
+            # result.statistics → TaskStatistics
+            # result.files      → ephemeral FileReference for the output dir
 
         Using context manager (recommended)::
 
-            async with JsonFileWriter(path="/data/output") as writer:
-                await writer.write(dataframe)
-            # close() called automatically
+            async with ParquetFileWriter(path=base, typename="users") as w:
+                await w.write(dataframe)
+            # close() called automatically; final result retrievable via
+            # w.last_result if needed.
     """
 
     path: str
@@ -237,6 +272,7 @@ class Writer(ABC):
     dataframe_type: DataframeType
     _is_closed: bool = False
     _statistics: TaskStatistics | None = None
+    _result: "WriterResult | None" = None
 
     async def __aenter__(self) -> "Writer":
         """Enter the async context manager.
@@ -283,10 +319,11 @@ class Writer(ABC):
 
                     return daft.from_pandas(data)
                 except ImportError:
-                    raise TypeError(
-                        "daft is not installed. Please install daft to use DataframeType.daft, "
-                        "or use DataframeType.pandas instead."
+                    from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                        DaftNotInstalledError,
                     )
+
+                    raise DaftNotInstalledError()
             return data
 
         # Check for daft DataFrame
@@ -296,6 +333,8 @@ class Writer(ABC):
             if isinstance(data, daft.DataFrame):
                 return data
         except ImportError:
+            # Optional dep: daft is not installed — input cannot be a daft
+            # DataFrame, so fall through to the dict/list branches.
             pass
 
         # Convert dict or list of dicts to DataFrame
@@ -321,17 +360,19 @@ class Writer(ABC):
                                 columnar_data[key].append(value)
                     return daft.from_pydict(columnar_data)
                 except ImportError:
-                    raise TypeError(
-                        "Dict and list inputs require daft to be installed when using DataframeType.daft. "
-                        "Please install daft or use DataframeType.pandas instead."
+                    from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                        DaftNotInstalledError,
                     )
+
+                    raise DaftNotInstalledError()
             # For pandas dataframe_type, convert to pandas DataFrame
             return pd.DataFrame([data] if isinstance(data, dict) else data)
 
-        raise TypeError(
-            f"Unsupported data type: {type(data).__name__}. "
-            "Expected DataFrame, dict, or list of dicts."
+        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+            UnsupportedDataTypeError,
         )
+
+        raise UnsupportedDataTypeError(observed_type=type(data).__name__)
 
     async def write(
         self,
@@ -354,7 +395,11 @@ class Writer(ABC):
             TypeError: If data type is not supported.
         """
         if self._is_closed:
-            raise ValueError("Cannot write to a closed writer")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                WriterClosedError,
+            )
+
+            raise WriterClosedError()
 
         # Convert to DataFrame if needed
         dataframe = self._convert_to_dataframe(data)
@@ -364,7 +409,11 @@ class Writer(ABC):
         elif self.dataframe_type == DataframeType.daft:
             await self._write_daft_dataframe(dataframe, **kwargs)
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     async def write_batches(
         self,
@@ -382,14 +431,22 @@ class Writer(ABC):
             ValueError: If the writer has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            raise ValueError("Cannot write to a closed writer")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                WriterClosedError,
+            )
+
+            raise WriterClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             await self._write_batched_dataframe(dataframe)
         elif self.dataframe_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                UnsupportedDataframeTypeError,
+            )
+
+            raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     async def _write_batched_dataframe(
         self,
@@ -421,7 +478,11 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
         except Exception as e:
-            raise rewrap(e, "Error writing batched dataframe") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatWriteError,
+            )
+
+            raise FormatWriteError(cause=e) from e
 
     async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
         """Write a pandas DataFrame to Parquet files and upload to object store.
@@ -535,7 +596,11 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_daft_dataframe(dataframe)
         except Exception as e:
-            raise rewrap(e, "Error writing batched daft dataframe") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatWriteError,
+            )
+
+            raise FormatWriteError(cause=e) from e
 
     @abstractmethod
     async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):
@@ -545,6 +610,20 @@ class Writer(ABC):
             dataframe (daft.DataFrame): The DataFrame to write.
             **kwargs: Additional parameters passed through from write().
         """
+
+    @property
+    def last_result(self) -> "WriterResult | None":
+        """Return the result of the most recent close(), or None if not closed yet.
+
+        Useful when calling close() implicitly via ``async with``: the
+        context manager discards close()'s return value, so read it here
+        afterwards::
+
+            async with ParquetFileWriter(path=base, typename="t") as w:
+                await w.write(df)
+            result = w.last_result  # WriterResult
+        """
+        return self._result
 
     @property
     def statistics(self) -> TaskStatistics:
@@ -570,19 +649,23 @@ class Writer(ABC):
         upload remaining files, etc. This is called by close() before writing statistics.
         """
 
-    async def close(self) -> TaskStatistics:
-        """Close the writer, flush buffers, upload files, and return statistics.
+    async def close(self) -> WriterResult:
+        """Close the writer, flush buffers, and return statistics + file reference.
 
-        This method finalizes all pending writes, uploads any remaining files to
-        the object store, writes statistics, and marks the writer as closed.
-        Calling close() multiple times is safe (subsequent calls are no-ops).
+        Finalizes all pending writes, writes the statistics sidecar, and marks
+        the writer as closed. Calling close() multiple times is safe — subsequent
+        calls return the cached :class:`WriterResult`.
 
-        The typename for statistics is automatically taken from `self.typename`
-        if it was set during initialization.
+        The returned :class:`WriterResult` carries an ephemeral
+        :class:`FileReference` pointing at the writer-owned output directory
+        (``self.path``). When that ``FileReference`` is placed on an activity's
+        typed Output, the Temporal interceptor's ``persist_file_refs`` uploads
+        it transparently with SHA-256 sidecars — callers do not need to call
+        ``persist_file_reference`` themselves.
 
         Returns:
-            TaskStatistics: Final statistics including total_record_count,
-                chunk_count, and partitions.
+            WriterResult: ``statistics`` (record/chunk counts) and ``files``
+                (ephemeral ``FileReference`` to the output directory).
 
         Raises:
             ValueError: If statistics data is invalid.
@@ -590,16 +673,26 @@ class Writer(ABC):
 
         Example:
             ```python
-            writer = JsonFileWriter(path="/data/output", typename="table")
-            await writer.write(dataframe)
-            stats = await writer.close()
-            print(f"Wrote {stats.total_record_count} records")
+            async with ParquetFileWriter(path=base, typename="table") as w:
+                await w.write(df)
+            result = await w.close()
+            return MyOutput(statistics=result.statistics, data=result.files)
             ```
         """
         if self._is_closed:
-            if self._statistics:
-                return self._statistics
-            return self.statistics
+            if self._result is not None:
+                return self._result
+            # Idempotent fallback: re-derive when called more than once on an
+            # already-closed instance with no cached result (defensive — should
+            # not happen in normal flow).
+            base = self._statistics or self.statistics
+            return WriterResult(
+                total_record_count=base.total_record_count,
+                chunk_count=base.chunk_count,
+                partitions=base.partitions,
+                typename=base.typename,
+                files=self._build_file_reference(),
+            )
 
         try:
             # Allow subclasses to perform final flush/upload operations
@@ -611,17 +704,45 @@ class Writer(ABC):
             # Write statistics to file and object store
             statistics_dict = await self._write_statistics(typename)
             if not statistics_dict:
-                raise ValueError("No statistics data available")
+                from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                    MissingStatisticsError,
+                )
+
+                raise MissingStatisticsError()
 
             self._statistics = TaskStatistics(**statistics_dict)
             if typename:
                 self._statistics.typename = typename
 
             self._is_closed = True
-            return self._statistics
+            self._result = WriterResult(
+                total_record_count=self._statistics.total_record_count,
+                chunk_count=self._statistics.chunk_count,
+                partitions=self._statistics.partitions,
+                typename=self._statistics.typename,
+                files=self._build_file_reference(),
+            )
+            return self._result
 
         except Exception as e:
-            raise rewrap(e, "Error closing writer") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatCloseError,
+            )
+
+            raise FormatCloseError(cause=e) from e
+
+    def _build_file_reference(self) -> "FileReference | None":
+        """Return an ephemeral FileReference for the writer's output directory.
+
+        Only populated when the subclass opts into deferred uploads (e.g.
+        ``ParquetFileWriter(defer_uploads=True)``). For the default
+        inline-upload path, returns ``None`` so the activity interceptor
+        does not double-upload files that are already in the object store.
+
+        Subclasses that defer uploads override this to return
+        ``FileReference.from_local(self.path)``.
+        """
+        return None
 
     async def _upload_file(self, file_name: str):
         """Upload a file to the object store."""
@@ -719,9 +840,16 @@ class Writer(ABC):
             with open(output_file_name, "wb") as f:
                 f.write(orjson.dumps(statistics))
 
-            # Push the file to the object store (key = local path for consistency)
-            await _upload_file(output_file_name, output_file_name)
+            # Push the file to the object store (key = local path for consistency).
+            # ParquetFileWriter with defer_uploads=True overrides _upload_file
+            # to a no-op so the statistics sidecar travels via close()'s
+            # returned FileReference instead of inline.
+            await self._upload_file(output_file_name)
 
             return statistics
         except Exception as e:
-            raise rewrap(e, "Error writing statistics") from e
+            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
+                FormatStatisticsWriteError,
+            )
+
+            raise FormatStatisticsWriteError(cause=e) from e

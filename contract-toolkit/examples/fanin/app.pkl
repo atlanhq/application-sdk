@@ -15,15 +15,13 @@
 /// `dependsOnCondition` API instead of overloading `dependsOn`.
 ///
 /// See also: `trino/app.pkl` for the single-parent `dependsOn` pattern.
-amends "../../src/NativeApp.pkl"
+amends "../../src/App.pkl"
 
-import "../../src/Config.pkl"
 import "../../src/Connectors.pkl"
 
 name = "fanin"
 displayName = "Fan-in Example"
 connector = Connectors.TRINO
-workflowType = "FaninWorkflow"
 icon = "https://assets.atlan.com/assets/trino.svg"
 credentialConnectorType = "jdbc"
 
@@ -41,14 +39,12 @@ credentialAuthOptions {
   }
 }
 
-uiConfig {
+uiConfig = new UIConfig {
   tasks {
     ["Credential"] {
       inputs {
-        ["credential-guid"] = new Config.CredentialInput {
-          title = ""
+        ["credential-guid"] = new CredentialInput {
           credType = "atlan-connectors-fanin"
-          placeholderText = "Credential Guid"
         }
       }
     }

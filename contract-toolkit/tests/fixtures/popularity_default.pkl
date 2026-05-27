@@ -1,22 +1,54 @@
-/// Minimal example demonstrating the built-in `PopularityNode`.
+/// Minimal example demonstrating the built-in `PopularityStep`.
 ///
 /// The source workflow is expected to mine query history, publish assets, and
 /// expose the exact object-store prefixes consumed below. Popularity depends on
 /// the QI node for parsed SQL and on the publish node for the SQLite connection
 /// cache, but the paths are explicit because both child workflows currently
 /// return no output paths.
-amends "../../src/NativeApp.pkl"
+amends "../../src/App.pkl"
 
-import "../../src/Config.pkl"
 import "../../src/Connectors.pkl"
 
 name = "popularity-node"
 displayName = "Popularity Node Example"
 connector = Connectors.SNOWFLAKE
-workflowType = "SnowflakePopularityExampleWorkflow"
 icon = "https://assets.atlan.com/assets/snowflake.svg"
 credentialConnectorType = "jdbc"
-hasPublishInputFields = false
+
+pipeline {
+  // Custom publish node with extra connection-cache args goes into extraNodes.
+  // Set publish = null so the auto-generated publish is suppressed and publish
+  // scaffold fields (output_dir, etc.) are excluded from _input.py.
+  publish = null
+  parseQueries = new ParseQueriesStep {
+    vendorName = "snowflake"
+    sqlKey = "QUERY_TEXT"
+    catalogKey = "DATABASE_NAME"
+    schemaKey = "SCHEMA_NAME"
+    timestampKey = "START_TIME"
+    mineOutputType = "parquet"
+    parsingMode = "fallback"
+    inputPrefix = "$.extract.outputs.query_history_prefix"
+    outputPrefix = "$.extract.outputs.qi_output_prefix"
+  }
+  popularity = new PopularityStep {
+    tenantId = "$.extract.outputs.tenant_id"
+    parsedDataPrefix = "$.extract.outputs.qi_output_prefix"
+    minedDataPrefix = "$.extract.outputs.query_history_prefix"
+    connectionCachePath = "$.extract.outputs.connection_cache_path"
+    outputPrefix = "$.extract.outputs.popularity_output_prefix"
+    accessHistoryDataPrefix = "$.extract.outputs.access_history_prefix"
+    mineColumnMapping = new PopularityMineColumnMapping {
+      queryHash = "md5(QUERY_TEXT)"
+      queryText = "QUERY_TEXT"
+      queryTag = "QUERY_TAG"
+      queryTagsSql = "QUERY_TAGS_SQL"
+      sourceQueryTypeQi = "SOURCE_QUERY_TYPE"
+      hasNativeInputs = "HAS_NATIVE_INPUTS"
+      nativeInputsPayload = "NATIVE_INPUTS_PAYLOAD"
+    }
+  }
+}
 
 credentialCommonFields {
   new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
@@ -32,21 +64,18 @@ credentialAuthOptions {
   }
 }
 
-uiConfig {
+uiConfig = new UIConfig {
   tasks {
     ["Credential"] {
       inputs {
-        ["credential-guid"] = new Config.CredentialInput {
-          title = ""
+        ["credential-guid"] = new CredentialInput {
           credType = "atlan-connectors-popularity-node"
-          placeholderText = "Credential Guid"
         }
       }
     }
     ["Connection"] {
       inputs {
-        ["connection"] = new Config.ConnectionCreator {
-          title = ""
+        ["connection"] = new ConnectionCreator {
           placeholderText = "Connection Name"
         }
       }
@@ -54,40 +83,13 @@ uiConfig {
   }
 }
 
+// Custom publish node with connection-cache args not supported by PublishStep.
 extraNodes {
-  ["qi"] = new QueryIntelligenceNode {
-    vendorName = "snowflake"
-    sqlKey = "QUERY_TEXT"
-    catalogKey = "DATABASE_NAME"
-    schemaKey = "SCHEMA_NAME"
-    timestampKey = "START_TIME"
-    mineOutputType = "parquet"
-    parsingMode = "fallback"
-    inputPrefix = "$.extract.outputs.query_history_prefix"
-    outputPrefix = "$.extract.outputs.qi_output_prefix"
-  }
   ["publish"] = new PublishNode {
     args {
       ["connection_cache_enabled"] = true
       ["connection_cache_via_app_enabled"] = true
       ["current_state_via_app_enabled"] = true
-    }
-  }
-  ["popularity"] = new PopularityNode {
-    tenantId = "$.extract.outputs.tenant_id"
-    parsedDataPrefix = "$.extract.outputs.qi_output_prefix"
-    minedDataPrefix = "$.extract.outputs.query_history_prefix"
-    connectionCachePath = "$.extract.outputs.connection_cache_path"
-    outputPrefix = "$.extract.outputs.popularity_output_prefix"
-    accessHistoryDataPrefix = "$.extract.outputs.access_history_prefix"
-    mineColumnMapping = new PopularityMineColumnMapping {
-      queryHash = "md5(QUERY_TEXT)"
-      queryText = "QUERY_TEXT"
-      queryTag = "QUERY_TAG"
-      queryTagsSql = "QUERY_TAGS_SQL"
-      sourceQueryTypeQi = "SOURCE_QUERY_TYPE"
-      hasNativeInputs = "HAS_NATIVE_INPUTS"
-      nativeInputsPayload = "NATIVE_INPUTS_PAYLOAD"
     }
   }
 }

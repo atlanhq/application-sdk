@@ -33,11 +33,11 @@
 """
 
 import os
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from temporalio import activity
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     APPLICATION_NAME,
     TEMPORARY_PATH,
@@ -71,18 +71,22 @@ def get_workflow_id() -> str:
         The workflow ID of the current activity.
 
     Raises:
-        Exception: If called outside an activity context, or if the
+        WorkflowIdError: If called outside an activity context, or if the
             workflow ID cannot be retrieved.
     """
+    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+        WorkflowIdError,
+    )
+
     try:
         wf_id = activity.info().workflow_id
-        if wf_id is None:
-            raise ValueError(
-                "workflow_id unavailable outside a workflow-backed activity"
-            )
-        return wf_id
-    except Exception as e:
-        raise rewrap(e, "Failed to get workflow id") from e
+    except Exception as exc:
+        raise WorkflowIdError(cause=exc) from exc
+    if wf_id is None:
+        raise WorkflowIdError(
+            message="workflow_id unavailable outside a workflow-backed activity"
+        )
+    return wf_id
 
 
 def get_workflow_run_id() -> str:
@@ -100,15 +104,19 @@ def get_workflow_run_id() -> str:
     run ID (e.g. cleanup of artifacts written under the current
     attempt's prefix).
     """
+    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+        WorkflowRunIdError,
+    )
+
     try:
         wf_run_id = activity.info().workflow_run_id
-        if wf_run_id is None:
-            raise ValueError(
-                "workflow_run_id unavailable outside a workflow-backed activity"
-            )
-        return wf_run_id
-    except Exception as e:
-        raise rewrap(e, "Failed to get workflow run id") from e
+    except Exception as exc:
+        raise WorkflowRunIdError(cause=exc) from exc
+    if wf_run_id is None:
+        raise WorkflowRunIdError(
+            message="workflow_run_id unavailable outside a workflow-backed activity"
+        )
+    return wf_run_id
 
 
 def build_output_path() -> str:
@@ -172,6 +180,22 @@ def get_object_store_prefix(path: str) -> str:
     abs_path = os.path.abspath(path)
     abs_temp_path = os.path.abspath(TEMPORARY_PATH)
 
+    def _to_relative_object_store_key(p: str) -> str:
+        """Strip drive letter / leading anchor + normalize separators.
+
+        Object-store keys are forward-slash, **relative** strings (no
+        drive letter, no leading slash). On Windows, an absolute local
+        path like ``C:\\Users\\...\\file`` would otherwise become a
+        bogus key the obstore LocalFileSystem backend can't append to
+        its store root (it'd try to walk
+        ``<store_root>\\C:\\Users\\...`` which Windows rejects as
+        invalid syntax). ``os.path.splitdrive`` peels the drive on
+        Windows (no-op on POSIX), then we strip the leading
+        separator and convert remaining backslashes.
+        """
+        _drive, rest = os.path.splitdrive(p)
+        return rest.replace(os.path.sep, "/").strip("/")
+
     # Check if path is under TEMPORARY_PATH
     try:
         # Use os.path.commonpath to properly check if path is under temp directory
@@ -183,9 +207,12 @@ def get_object_store_prefix(path: str) -> str:
             # Normalize path separators to forward slashes for object store
             return relative_path.replace(os.path.sep, "/")
         else:
-            # Path is already a relative object store path, return as-is
-            return path.strip("/")
+            # Path is outside TEMPORARY_PATH (user-provided base, unit
+            # tests using ``tmp_path``, etc.). Strip drive letter and
+            # leading separator so the result is still a relative
+            # object-store key, not an absolute filesystem path.
+            return _to_relative_object_store_key(path)
     except ValueError:
         # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
-        # In this case, treat as user-provided path, return as-is
-        return path.strip("/")
+        # In this case, treat as user-provided path, normalize the same way.
+        return _to_relative_object_store_key(path)
