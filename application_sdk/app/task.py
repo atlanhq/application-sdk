@@ -16,6 +16,7 @@ Tasks support heartbeating for long-running operations:
 """
 
 import inspect
+import os
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -33,6 +34,15 @@ F = TypeVar("F", bound=Callable[..., Any])
 # Sentinel for "use default" - allows None to mean "disable"
 _USE_DEFAULT = object()
 
+# Env-var-driven defaults for @task timeouts. Read once at import time so the
+# value is stable for the process lifetime (same pattern as constants.py).
+# Apps that need a different per-task value pass it explicitly to @task().
+_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = int(
+    os.getenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", "60")
+)
+_DEFAULT_TIMEOUT_SECONDS: int = int(
+    os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", "600")
+)
 
 # Type alias for methods with single Input param returning Output
 TaskMethod = Callable[..., Any]
@@ -95,8 +105,9 @@ class TaskMetadata:
     description: str = ""
     """Human-readable description."""
 
-    timeout_seconds: int = 600
-    """Default timeout for this task (10 minutes)."""
+    timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS
+    """Default timeout for this task. Defaults to ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS
+    env var, or 600s (10 minutes) if unset."""
 
     retry_policy: "RetryPolicy | None" = field(default=None, compare=False)
     """Full retry policy for this task. When provided, takes precedence over
@@ -110,11 +121,11 @@ class TaskMetadata:
     to prevent very long waits between retries. Default: 30 seconds.
     Ignored when retry_policy is set."""
 
-    heartbeat_timeout_seconds: int | None = 60
+    heartbeat_timeout_seconds: int | None = _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS
     """Heartbeat timeout in seconds. If no heartbeat is received within this
     window, Temporal will consider the activity dead and restart it.
     Set to None to disable heartbeating entirely (legacy behavior).
-    Default: 60 seconds."""
+    Defaults to ATLAN_HEARTBEAT_TIMEOUT_SECONDS env var, or 60 seconds if unset."""
 
     auto_heartbeat_seconds: int | None = 10
     """Auto-heartbeat interval in seconds. The framework will automatically
@@ -229,7 +240,7 @@ def task(
     *,
     name: str | None = None,
     description: str = "",
-    timeout_seconds: int = 600,
+    timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
     retry_policy: "RetryPolicy | None" = None,
     retry_max_attempts: int = 3,
     retry_max_interval_seconds: int = 30,
@@ -243,7 +254,7 @@ def task(
     *,
     name: str | None = None,
     description: str = "",
-    timeout_seconds: int = 600,
+    timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
     retry_policy: "RetryPolicy | None" = None,
     retry_max_attempts: int = 3,
     retry_max_interval_seconds: int = 30,
@@ -331,7 +342,7 @@ def task(
     """
     # Resolve sentinel values to defaults
     resolved_heartbeat_timeout: int | None = (
-        60
+        _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS
         if heartbeat_timeout_seconds is _USE_DEFAULT
         else cast("int | None", heartbeat_timeout_seconds)
     )

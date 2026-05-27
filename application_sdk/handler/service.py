@@ -37,7 +37,7 @@ import re
 import shutil
 import tempfile
 import warnings
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
@@ -361,6 +361,9 @@ class WorkflowClientConfig:
     enable_temporal_core_metrics: bool = True
     prometheus_bind_address: str = ""
 
+    # Workflow execution timeout
+    workflow_max_timeout_hours: int | None = None
+
     def is_configured(self) -> bool:
         return bool(self.host and self.app_class and self.app_name)
 
@@ -499,6 +502,7 @@ def create_app_handler_service(
     frontend_assets_path: str = "app/generated/frontend/static",
     enable_temporal_core_metrics: bool = True,
     prometheus_bind_address: str = "",
+    workflow_max_timeout_hours: int | None = None,
     # Deprecated: state_store is no longer used. Credential resolution now
     # goes through DaprCredentialVault exclusively. Passing this parameter
     # emits a DeprecationWarning. Will be removed in v3.2.0.
@@ -563,6 +567,7 @@ def create_app_handler_service(
         auth_scopes=auth_scopes,
         enable_temporal_core_metrics=enable_temporal_core_metrics,
         prometheus_bind_address=prometheus_bind_address,
+        workflow_max_timeout_hours=workflow_max_timeout_hours,
     )
 
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
@@ -1035,6 +1040,11 @@ def create_app_handler_service(
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
                 memo=corr_ctx.to_temporal_memo(),
+                execution_timeout=(
+                    timedelta(hours=_workflow_config.workflow_max_timeout_hours)
+                    if _workflow_config.workflow_max_timeout_hours
+                    else None
+                ),
             )
 
             logger.info(

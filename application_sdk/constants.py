@@ -269,9 +269,14 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 )
 
 # REMOVED: HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT, GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
-# These were never used. See ExecutionSettings for the actual runtime values:
+# The env-var fallbacks for heartbeat and start-to-close timeouts are now read in
+# application_sdk/app/task.py (_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
+# _DEFAULT_TIMEOUT_SECONDS) and used as the defaults for TaskMetadata fields and
+# the @task decorator. Per-task overrides still take precedence.
+#   ATLAN_HEARTBEAT_TIMEOUT_SECONDS → default heartbeat_timeout_seconds for @task
+#   ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS → default timeout_seconds for @task
+# ExecutionSettings owns the graceful shutdown timeout:
 #   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
-#   - @task(timeout_seconds=..., heartbeat_timeout_seconds=...) for per-task timeouts
 
 #: Delay before initiating worker shutdown after receiving a termination signal.
 #: This gives the event loop time to flush in-flight activity completions

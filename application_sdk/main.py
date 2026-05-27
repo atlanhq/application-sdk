@@ -181,6 +181,12 @@ class AppConfig:
     """Maximum concurrent object-store uploads/downloads.
     Reads same env var as constants.MAX_CONCURRENT_STORAGE_TRANSFERS."""
 
+    workflow_max_timeout_hours: int | None = None
+    """Maximum workflow execution timeout in hours. When set, passed as
+    execution_timeout to Temporal on every /workflows/v1/start call.
+    Reads env var ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS. None means no SDK-level
+    ceiling (Temporal namespace default applies)."""
+
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
         if not self.task_queue and self.app_module:
@@ -313,6 +319,8 @@ class AppConfig:
             max_concurrent_storage_transfers=_env_int(
                 "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
             ),
+            workflow_max_timeout_hours=_env_int("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", 0)
+            or None,
         )
 
 
@@ -1125,6 +1133,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_scopes=config.auth_scopes,
         enable_temporal_core_metrics=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
+        workflow_max_timeout_hours=config.workflow_max_timeout_hours,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
