@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "service-now-frontend-app",
+    "severity": "HIGH",
+    "reason": "No upstream fix available (Snyk reported no fix_in); package metadata missing from scanner output (daily-cert scan on ghcr.io/atlanhq/service-now-frontend-app:main-3f43bc6) \u2014 allowlisted pending SEC review and scanner remediation. Reviewer must verify or correct package name once scanner data quality issue is resolved.",
+    "expires": "2026-06-26",
+    "added_by": "claude-securityclaw[bot]",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "service-now-frontend-app",
+    "severity": "HIGH",
+    "reason": "No upstream fix available (Snyk reported no fix_in); package metadata missing from scanner output (daily-cert scan on ghcr.io/atlanhq/service-now-frontend-app:main-3f43bc6) \u2014 allowlisted pending SEC review and scanner remediation. Reviewer must verify or correct package name once scanner data quality issue is resolved.",
+    "expires": "2026-06-26",
+    "added_by": "claude-securityclaw[bot]",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "service-now-frontend-app",
+    "severity": "HIGH",
+    "reason": "No upstream fix available (Snyk reported no fix_in); package metadata missing from scanner output (daily-cert scan on ghcr.io/atlanhq/service-now-frontend-app:main-3f43bc6) \u2014 allowlisted pending SEC review and scanner remediation. Reviewer must verify or correct package name once scanner data quality issue is resolved.",
+    "expires": "2026-06-26",
+    "added_by": "claude-securityclaw[bot]",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
