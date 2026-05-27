@@ -288,14 +288,18 @@ def create_store_from_binding(
         account = meta.get("accountName", "")
         container = meta.get("containerName", "")
         az_config: dict[str, str] = {}
+        az_client_options: dict[str, object] = dict(sdk_client_options)
         az_credential_provider = None
 
         if account:
             az_config["azure_storage_account_name"] = account
         if _nonempty(meta, "endpoint"):
             az_config["azure_storage_endpoint"] = meta["endpoint"]
+            if meta["endpoint"].startswith("http://"):
+                az_client_options["allow_http"] = True
         if _coerce_bool(meta.get("useEmulator", "")):
             az_config["azure_storage_use_emulator"] = "true"
+            az_client_options["allow_http"] = True
 
         if _nonempty(meta, "azureEnvironment"):
             env_name = meta["azureEnvironment"]
@@ -355,12 +359,12 @@ def create_store_from_binding(
             az_config["azure_storage_msi_resource_id"] = meta["msiResourceId"]
 
         log_obstore_config(
-            "azure", client_options=sdk_client_options, retry_config=sdk_retry_config
+            "azure", client_options=az_client_options, retry_config=sdk_retry_config
         )
         return AzureStore(
             container_name=container,
             config=az_config if az_config else None,
-            client_options=sdk_client_options,
+            client_options=az_client_options,
             retry_config=sdk_retry_config,
             credential_provider=az_credential_provider,
         )
