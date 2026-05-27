@@ -6,7 +6,7 @@ import os
 logger = logging.getLogger(__name__)
 
 
-def env_int(key: str, default: int) -> int:
+def env_int(key: str, default: int = 0) -> int:
     """Read an int env var, returning ``default`` when unset, empty, or unparsable.
 
     A malformed value like ``ATLAN_HANDLER_PORT="not-a-number"`` falls through
