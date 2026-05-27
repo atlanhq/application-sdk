@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "unknown (package not reported by scanner)",
+    "severity": "HIGH",
+    "reason": "Detected on atlan-metadata-propagator-app image (SEC-3582). No fix available upstream; no package metadata reported by daily-cert scan.",
+    "expires": "2026-06-26",
+    "added_by": "atlan-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "unknown (package not reported by scanner)",
+    "severity": "HIGH",
+    "reason": "Detected on atlan-metadata-propagator-app image (SEC-3582). No fix available upstream; no package metadata reported by daily-cert scan.",
+    "expires": "2026-06-26",
+    "added_by": "atlan-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "unknown (package not reported by scanner)",
+    "severity": "HIGH",
+    "reason": "Detected on atlan-metadata-propagator-app image (SEC-3582). No fix available upstream; no package metadata reported by daily-cert scan.",
+    "expires": "2026-06-26",
+    "added_by": "atlan-claw",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
