@@ -14,7 +14,10 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 
-from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
+from application_sdk.constants import (
+    ENABLE_ATLAN_UPLOAD,
+    TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+)
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.utils import get_metric_enrichment_labels
@@ -505,14 +508,16 @@ async def create_temporal_client(
             "Connecting to Temporal (plaintext): host=%s namespace=%s", host, namespace
         )
 
-    # Pre-resolve the target hostname and prefer IPv4 when the OS
-    # resolver returns both A and AAAA. The Rust Temporal bridge picks
-    # one address from the resolver and fails the whole connect if that
-    # address is unreachable — on hosts with half-broken IPv6 (link-
-    # local only, or v6 enabled without a global route) this manifests
-    # as ``Status { code: Unavailable, ... AddrNotAvailable ... }`` on
-    # an AAAA record. See ``_prefer_v4_target`` for the full rationale.
-    resolved_host, sni_host = await _prefer_v4_target(host)
+    # IPv4 pre-resolution (#1857) is an SDR-only workaround: it pins the
+    # target to a literal v4 IP so the Rust bridge can't pick an unreachable
+    # AAAA on half-broken-IPv6 customer hosts. SDR-gated because for internal
+    # cluster URLs (headless Temporal frontend) a pinned pod IP goes stale on
+    # restart and can't re-resolve, hanging every call ~130s. Non-SDR connects
+    # by hostname and lets gRPC re-resolve. See ``_prefer_v4_target``.
+    if ENABLE_ATLAN_UPLOAD:
+        resolved_host, sni_host = await _prefer_v4_target(host)
+    else:
+        resolved_host, sni_host = host, None
     if sni_host is not None:
         # We substituted an IP for the hostname — preserve TLS SNI so
         # the handshake still validates against the original DNS name's

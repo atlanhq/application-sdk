@@ -644,6 +644,12 @@ class TestApplySniDomain:
 
 
 class TestCreateTemporalClientPrefersV4:
+    @pytest.fixture(autouse=True)
+    def _sdr_mode(self):
+        # v4 pre-resolution is SDR-gated; these tests assert the SDR path.
+        with mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", True):
+            yield
+
     @pytest.mark.asyncio
     async def test_substitutes_v4_ip_and_preserves_sni_for_tls(self) -> None:
         """End-to-end: when the resolver returns both v4 and v6 and TLS
@@ -732,4 +738,31 @@ class TestCreateTemporalClientPrefersV4:
             )
         kwargs = connect.await_args.kwargs
         assert kwargs["target_host"] == "203.0.113.10:443"
+        assert kwargs["tls"] is False
+
+
+class TestCreateTemporalClientNonSdrSkipsV4:
+    @pytest.mark.asyncio
+    async def test_non_sdr_connects_by_hostname(self) -> None:
+        # Non-SDR (in-cluster): skip v4 pre-resolution so gRPC can re-resolve
+        # the headless service on pod restart. target_host stays the hostname.
+        host = "temporal-cluster-internal-frontend-headless.temporal.svc.cluster.local:7236"
+        with (
+            mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", False),
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module,
+                "_prefer_v4_target",
+                new=mock.AsyncMock(),
+            ) as prefer_v4,
+            mock.patch.object(
+                backend_module.Client,
+                "connect",
+                new=mock.AsyncMock(return_value=mock.MagicMock()),
+            ) as connect,
+        ):
+            await create_temporal_client(host=host, connect_max_attempts=1)
+        prefer_v4.assert_not_called()
+        kwargs = connect.await_args.kwargs
+        assert kwargs["target_host"] == host
         assert kwargs["tls"] is False
