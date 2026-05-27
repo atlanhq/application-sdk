@@ -622,5 +622,38 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-42012": {
+    "package": "unknown",
+    "severity": "HIGH",
+    "reason": "No upstream fix available (Snyk reported no fix_in); package name not populated by scanner — fill in before merge. Allowlisted pending SEC review.",
+    "expires": "2026-06-26",
+    "added_by": "claude-securityclaw[bot]",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-42013": {
+    "package": "unknown",
+    "severity": "HIGH",
+    "reason": "No upstream fix available (Snyk reported no fix_in); package name not populated by scanner — fill in before merge. Allowlisted pending SEC review.",
+    "expires": "2026-06-26",
+    "added_by": "claude-securityclaw[bot]",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-5260": {
+    "package": "unknown",
+    "severity": "HIGH",
+    "reason": "No upstream fix available (Snyk reported no fix_in); package name not populated by scanner — fill in before merge. Allowlisted pending SEC review.",
+    "expires": "2026-06-26",
+    "added_by": "claude-securityclaw[bot]",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
