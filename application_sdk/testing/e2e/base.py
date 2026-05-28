@@ -156,7 +156,7 @@ class BaseE2ETest:
     # consistent but assets that will appear do so within seconds of the
     # publish step completing. No point holding CI for 25 minutes.
     atlas_asset_poll_interval_seconds: ClassVar[int] = 5
-    atlas_asset_poll_timeout_seconds: ClassVar[int] = 60
+    atlas_asset_poll_timeout_seconds: ClassVar[int] = 15
 
     expected_min_asset_counts: ClassVar[dict[str, int]] = {}
     expect_lineage: ClassVar[bool] = True
