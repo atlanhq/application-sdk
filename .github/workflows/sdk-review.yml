@@ -179,7 +179,100 @@ jobs:
             core.setOutput('base_ref', pr.base.ref);
             core.setOutput('html_url', pr.html_url);
 
+      # PR title is the squash-merge commit subject on main. The SDK
+      # (`release.py`) and contract-toolkit (`contract_toolkit_release.py`)
+      # bumpers compute semver from conventional commits since the last
+      # release tag — title type drives the bump. A mismatched title
+      # over-bumps or under-bumps the version with no functional reason.
+      #
+      # Check it first, before spending mothership budget on a review
+      # that would just downgrade to NEEDS_FIXES on title alone. If
+      # invalid, the next step posts the verdict directly (marker +
+      # label + status) and the workflow exits with `dispatch=false`,
+      # so all downstream steps short-circuit.
+      - name: Validate PR title against file-scope rules
+        id: title
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          REPO: ${{ github.repository }}
+        continue-on-error: true
+        run: |
+          set +e
+          OUTPUT=$(bash .github/scripts/validate_pr_title.sh)
+          RC=$?
+          echo "$OUTPUT" >> "$GITHUB_OUTPUT"
+          exit $RC
+
+      - name: Post NEEDS_FIXES verdict + label + status (title invalid → skip mothership)
+        if: steps.title.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          TITLE_REASON: ${{ steps.title.outputs.reason }}
+          TITLE_MESSAGE: ${{ steps.title.outputs.message }}
+          BAD_TITLE: ${{ steps.title.outputs.title }}
+        run: |
+          set -euo pipefail
+
+          # Apply the canonical labels: needs-fixes implies removing
+          # approved if it was there from a prior run on the same HEAD.
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-human" 2>/dev/null || true
+          for stale in "sdk-review-approved" "test-sdk-review-approved"; do
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$stale" 2>/dev/null || true
+          done
+
+          # Flip the sdk-review status to failure so the PR's check
+          # surface mirrors the verdict.
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -X POST \
+            -f state=failure \
+            -f context=sdk-review \
+            -f description="NEEDS FIXES — PR title doesn't match file scope"
+
+          # Post a verdict comment with the canonical marker so
+          # downstream tooling (PRIOR_REVIEW.md loader in §6b, the
+          # dismiss-on-human flow, etc.) treats this exactly like a
+          # full mothership verdict.
+          gh pr comment "${PR_NUMBER}" --repo "${REPO}" --body "$(cat <<EOF
+          <!-- SDK_REVIEW -->
+          <!-- VERDICT: NEEDS_FIXES -->
+          ## SDK Review: PR #${PR_NUMBER}
+
+          ### Verdict: NEEDS FIXES
+
+          > PR title \`${BAD_TITLE}\` would misroute the semver release pipelines. This is a hard pre-flight gate — the full review didn't run, because fixing the title is a prerequisite for the verdict to be meaningful.
+
+          ### Findings
+
+          **PR title**
+          - **Critical** [TITLE] — \`${TITLE_REASON}\`
+
+          ${TITLE_MESSAGE}
+
+          ### What to do
+
+          1. Edit the PR title.
+          2. Re-comment \`@sdk-review\` — the full mothership review will then run.
+
+          <details><summary>Why this matters</summary>
+
+          Squash-merge means the PR title becomes the commit subject on main. \`release.py\` (SDK) and \`contract_toolkit_release.py\` (toolkit) compute the next semver from conventional commits since the last release tag — a mismatched title either over-bumps or under-bumps the version.
+
+          - Touches \`application_sdk/\` → \`feat: ...\` or \`fix: ...\` (any scope)
+          - Touches \`contract-toolkit/\` only → \`feat(contract-toolkit): ...\` or \`fix(contract-toolkit): ...\`
+          - Touches neither → anything other than feat/fix (chore, docs, ci, refactor, etc.)
+          </details>
+          EOF
+          )"
+
+          echo "::error::PR title is invalid. Posted NEEDS_FIXES verdict — mothership dispatch skipped."
+          exit 1
+
       - name: Post 'review starting' notice to PR
+        id: starter
         env:
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           COMMENTER: ${{ steps.parse.outputs.commenter }}
@@ -193,13 +286,53 @@ jobs:
             // but GitHub's UI showed the original createdAt timestamp on
             // every re-trigger, making the latest run look stale.
             //
-            // The final review summary lands as a separate comment from
-            // mothership-ai[bot] when the sandbox completes.
+            // To balance re-trigger spam against visibility, previous
+            // starter comments on this PR are FOLDED into <details>
+            // blocks at trigger time. Only the new starter stays
+            // expanded. History is preserved, but the PR scroll only
+            // shows the latest run's link prominently.
+            //
+            // The starter's comment ID is exposed as `comment_id` so
+            // downstream steps (cost stamp, heartbeat on idle, final
+            // verdict edit) can update this same comment instead of
+            // posting yet more.
             const marker = '<!-- SDK_REVIEW_STARTED -->';
+            const foldedMarker = '<!-- SDK_REVIEW_STARTED_FOLDED -->';
             const commenter = process.env.COMMENTER || 'unknown';
             const runUrl = process.env.GHA_RUN_URL;
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
             const startedAt = new Date().toISOString();
+
+            // Fold any previous (unfolded) starter comments on this PR.
+            const existing = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            for (const c of existing.data) {
+              if (!c.body || !c.body.startsWith(marker)) continue;
+              if (c.body.includes(foldedMarker)) continue;  // already folded
+              const rest = c.body.split('\n').slice(1).join('\n');
+              const folded = [
+                marker,
+                foldedMarker,
+                '<details><summary>Earlier @sdk-review trigger (click to expand)</summary>',
+                '',
+                rest,
+                '</details>',
+              ].join('\n');
+              try {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: c.id,
+                  body: folded,
+                });
+              } catch (e) {
+                console.log(`Could not fold previous starter ${c.id}: ${e.message}`);
+              }
+            }
 
             const body = [
               marker,
@@ -208,13 +341,15 @@ jobs:
               `[Watch the workflow run live](${runUrl}) — the review summary will appear as a separate comment when complete (typical: 5–30 min, hard cap 2h).`,
             ].join('\n');
 
-            await github.rest.issues.createComment({
+            const result = await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
               body,
             });
-            console.log(`Posted new 'starting' comment`);
+            core.setOutput('comment_id', String(result.data.id));
+            core.setOutput('started_at', startedAt);
+            console.log(`Posted new 'starting' comment id=${result.data.id}`);
 
       - name: Set sdk-review status to pending
         env:
@@ -321,6 +456,7 @@ jobs:
           exit 1
 
       - name: Dispatch to mothership Rover Direct API
+        id: dispatch
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
@@ -329,6 +465,8 @@ jobs:
           COMMENTER: ${{ steps.parse.outputs.commenter }}
           COMMENTER_INTENT: ${{ steps.parse.outputs.commenter_intent }}
           COMMENT_ID: ${{ steps.parse.outputs.comment_id }}
+          STARTER_COMMENT_ID: ${{ steps.starter.outputs.comment_id }}
+          STARTER_STARTED_AT: ${{ steps.starter.outputs.started_at }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           HEAD_SHA_SHORT: ${{ steps.pr.outputs.head_sha_short }}
           HEAD_REF: ${{ steps.pr.outputs.head_ref }}
@@ -466,10 +604,32 @@ jobs:
           SESSION_FROM_STREAM=""
           SANDBOX_FROM_STREAM=""
 
+          # Heartbeat: track time since last `action` event. Mothership
+          # emits a `:` SSE comment every ~15s of silence which causes
+          # `read` to return — so we get a chance to check the idle
+          # threshold without spawning a watchdog. If we go > 5 min
+          # without an action, emit a single `::warning::` annotation
+          # so a stalled sandbox is visible on the workflow run page.
+          LOOP_START_TS=$(date +%s)
+          LAST_ACTION_TS=$LOOP_START_TS
+          LAST_ACTION_NAME="(none yet)"
+          IDLE_WARN_AT=300
+          IDLE_WARNED=0
+
           # curl -N: no buffering (required for SSE).
           # --max-time matches mothership's max_timeout_seconds upper bound.
           # 2>&1: surface curl's own diagnostics into the same stream.
           while IFS= read -r line; do
+            # Idle-watchdog: every line is an opportunity to check
+            # wall-clock against LAST_ACTION_TS. SSE `:` heartbeats
+            # arrive every ~15s so the loop ticks even when the
+            # sandbox is otherwise silent.
+            NOW_TS=$(date +%s)
+            IDLE_S=$((NOW_TS - LAST_ACTION_TS))
+            if [ "$IDLE_WARNED" = "0" ] && [ "$IDLE_S" -ge "$IDLE_WARN_AT" ]; then
+              echo "::warning::Sandbox idle for ${IDLE_S}s on PR #${PR_NUMBER} (last action: ${LAST_ACTION_NAME}). If it stays stalled, check sandbox logs at ${GHA_RUN_URL}."
+              IDLE_WARNED=1
+            fi
             case "$line" in
               "")
                 # Blank line — end of one SSE event block. Reset event type.
@@ -492,10 +652,16 @@ jobs:
                     SESSION_FROM_STREAM=$(printf '%s' "$DATA" | jq -r '.session_id // empty' 2>/dev/null)
                     SANDBOX_FROM_STREAM=$(printf '%s' "$DATA" | jq -r '.sandbox_id // empty' 2>/dev/null)
                     echo "[started]   session=${SESSION_FROM_STREAM} sandbox=${SANDBOX_FROM_STREAM}"
+                    LAST_ACTION_TS=$NOW_TS
+                    LAST_ACTION_NAME="started"
+                    IDLE_WARNED=0
                     ;;
                   action)
                     ACTION_NAME=$(printf '%s' "$DATA" | jq -r '.action_name // empty' 2>/dev/null)
                     [ -n "$ACTION_NAME" ] && echo "[action]    ${ACTION_NAME}"
+                    LAST_ACTION_TS=$NOW_TS
+                    [ -n "$ACTION_NAME" ] && LAST_ACTION_NAME="$ACTION_NAME"
+                    IDLE_WARNED=0
                     ;;
                   thought)
                     # Reasoning steps come every ~1s — too noisy for the log.
@@ -600,6 +766,75 @@ jobs:
 
           echo "SDK Review (mothership) completed successfully (cost=${FINAL_COST})."
 
+          # Export the run summary fields so the next step (github-script)
+          # can stamp them onto the starter comment. github-script (via
+          # Octokit) is more reliable than `gh api -X PATCH -f body=...`
+          # for editing a comment whose body contains newlines and
+          # markdown — `-f` builds a JSON body but encoding edge-cases
+          # with multi-line strings have bitten us before.
+          {
+            echo "final_status=${FINAL_STATUS:-${FINAL_ERR_CODE:-unknown}}"
+            echo "final_cost=${FINAL_COST:-unknown}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Stamp the run cost + duration + verdict status onto the starter
+      # comment we posted at the start of this job. The PR scroll then
+      # shows a single comment that opens with "🔍 triggered" and ends
+      # with "✅ completed — cost $X, duration Ym". No extra comment is
+      # posted (E: re-trigger spam), and the cost is visible without
+      # clicking through to the workflow logs.
+      #
+      # Uses github-script (Octokit) instead of `gh api -X PATCH -f body=`
+      # because the latter has shaky multi-line handling.
+      - name: Stamp cost + status onto starter comment
+        if: always() && steps.starter.outputs.comment_id != ''
+        uses: actions/github-script@v7
+        env:
+          STARTER_COMMENT_ID: ${{ steps.starter.outputs.comment_id }}
+          STARTER_STARTED_AT: ${{ steps.starter.outputs.started_at }}
+          FINAL_STATUS: ${{ steps.dispatch.outputs.final_status }}
+          FINAL_COST: ${{ steps.dispatch.outputs.final_cost }}
+          DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
+        with:
+          script: |
+            const commentId = parseInt(process.env.STARTER_COMMENT_ID, 10);
+            if (!commentId) return;
+
+            const startedAt = process.env.STARTER_STARTED_AT;
+            const finalStatus = process.env.FINAL_STATUS || process.env.DISPATCH_OUTCOME || 'unknown';
+            const finalCost = process.env.FINAL_COST || 'unknown';
+
+            let durationTxt = 'unknown';
+            if (startedAt) {
+              const ms = Date.now() - Date.parse(startedAt);
+              if (!isNaN(ms) && ms > 0) {
+                const s = Math.floor(ms / 1000);
+                durationTxt = `${Math.floor(s / 60)}m ${s % 60}s`;
+              }
+            }
+
+            const verb = finalStatus === 'completed' ? '✅ **Completed**' :
+                         (process.env.DISPATCH_OUTCOME === 'success' ? '✅ **Completed**' : '🟥 **Run ended without a clean completion**');
+            const footer = `\n\n---\n${verb} — status \`${finalStatus}\`, cost \`$${finalCost}\`, duration ${durationTxt}.`;
+
+            const { data: existing } = await github.rest.issues.getComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: commentId,
+            });
+            if (existing.body && existing.body.includes('— status `')) {
+              console.log(`Starter comment ${commentId} already stamped — skipping.`);
+              return;
+            }
+
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: commentId,
+              body: `${existing.body || ''}${footer}`,
+            });
+            console.log(`Stamped starter comment ${commentId}: status=${finalStatus} cost=${finalCost} duration=${durationTxt}`);
+
       # The mothership sandbox cannot approve PRs in a way that satisfies
       # the `require_code_owner_review` rule on `main`:
       # `mothership-ai[bot]` is a GitHub App, and Apps cannot be listed in
@@ -666,12 +901,16 @@ jobs:
             exit 0
           fi
 
-          # Extract the verdict and normalize spaces → underscores.
-          # Case-insensitive grep with flexible whitespace, then
-          # upper-case + collapse to underscores
-          # so "READY TO MERGE" → "READY_TO_MERGE".
-          RAW=$(printf '%s' "$SUMMARY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
-          VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
+          # Extract the verdict. Prefer the structured marker
+          # `<!-- VERDICT: READY_TO_MERGE -->` (deterministic, formatting-
+          # invariant). Fall back to the `### Verdict:` grep for legacy
+          # comments from orchestration versions that pre-date the
+          # structured marker.
+          VERDICT=$(printf '%s' "$SUMMARY" | grep -oP '<!--\s*VERDICT:\s*\K[A-Z_]+' | head -1)
+          if [ -z "$VERDICT" ]; then
+            RAW=$(printf '%s' "$SUMMARY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
+            VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
+          fi
           echo "Detected verdict: '${VERDICT}'"
 
           # Apply the canonical sdk-review-* labels from the GHA layer.

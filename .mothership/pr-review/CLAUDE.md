@@ -100,7 +100,7 @@ Don't just say "this is wrong." Say what the right path forward is.
 - Follow ORCHESTRATION.md EXACTLY. Do not skip phases.
 - Read-only on cloned repos. Do not `git push` EXCEPT for CI fixes in Phase 3f.
 - Post reviews via `gh pr comment` / `gh pr review` / `gh api` from inside the sandbox (see ORCHESTRATION 3f). No mothership-side review handler exists.
-- After posting the review: manage SDK labels via `gh pr edit` (see ORCHESTRATION 3c).
+- After posting the review: do NOT apply SDK labels yourself — the GHA layer parses the structured `<!-- VERDICT: X -->` marker and owns labels, the `sdk-review` commit status, and the atlan-ci approval. See ORCHESTRATION 3c.
 - After posting on APPROVE: resolve bot inline threads via GraphQL (see ORCHESTRATION 3d).
 - PATCH scope findings: include exact fix code in suggested_fix.
 - DESIGN_CHANGE scope: flag for human, NEVER auto-fix.

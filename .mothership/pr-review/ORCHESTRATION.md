@@ -174,8 +174,10 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    git merge --abort
    ```
    Submit minimal review: "PR has merge conflicts. Please rebase or
-   comment `@sdk-review` after resolving conflicts." Label `sdk-review-needs-rebase`.
-   EXIT.
+   comment `@sdk-review` after resolving conflicts." Set the verdict in
+   §3e to `NEEDS_REBASE` (the structured marker is `<!-- VERDICT:
+   NEEDS_REBASE -->`); the GHA layer applies the `sdk-review-needs-rebase`
+   label from there. EXIT.
 
 9. **Pre-commit cleanup** (eliminate style noise before review):
    ```bash
@@ -593,51 +595,48 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
   **Fix:** <exact code suggestion if PATCH scope>
   ```
 
-### 3c. Verdict-Stamp: Labels Only (formal approval posted by the GHA runner)
+### 3c. Verdict-Stamp: Owned by the GHA runner (sandbox does nothing)
 
-There is no mothership-side handler, and the sandbox itself **does not
-post `gh pr review`**. The formal approval is posted **outside** the
-sandbox by the GHA workflow (`sdk-review.yml` → "Approve PR as
-atlan-ci" step), so the approval is recorded as `atlan-ci` and counts
-toward the `require_code_owner_review` rule on `main`.
-`mothership-ai[bot]` is a GitHub App and cannot be in CODEOWNERS.
+There is no mothership-side handler, and the sandbox **does not post
+`gh pr review`** and **does not apply labels**. Both happen outside
+the sandbox:
 
-The atlan-ci approval is **auto-dismissed the moment any human
-comments or reviews on the PR**, via the companion workflow
-`sdk-review-dismiss-on-human.yml`. So the policy is: bot
-green-lights, any human touching the PR returns the gate to "needs
-human approval." That gives the bot leverage to actually unblock
-merges (real code-owner approval, not advisory) without giving it
-the ability to solo-approve in the presence of human engagement.
+- **Approval**: `sdk-review-approve-on-verdict.yml` fires on
+  `issue_comment: created` from `mothership-ai[bot]` with the
+  `<!-- SDK_REVIEW -->` marker (within ~5s of the verdict comment
+  landing). It parses the verdict from the structured
+  `<!-- VERDICT: X -->` marker in §3e, applies the
+  `sdk-review-approved` / `sdk-review-needs-human` /
+  `sdk-review-needs-rebase` labels, sets the `sdk-review` commit
+  status, and posts the formal `atlan-ci` approval if the verdict is
+  `READY_TO_MERGE`. `sdk-review.yml`'s "Approve PR as atlan-ci" step
+  runs the same logic after the SSE stream ends as a fallback —
+  idempotency guards (label present + no existing approval) prevent
+  double-approval. atlan-ci is in CODEOWNERS, so its approval
+  satisfies `require_code_owner_review` on `main`;
+  `mothership-ai[bot]` is a GitHub App and can't be.
+- **Dismiss on human activity**: `sdk-review-dismiss-on-human.yml`
+  fires on `issue_comment` / `pull_request_review` from humans and
+  dismisses the atlan-ci approval + strips the label. So the bot can
+  unblock merges by itself until a human pushes back.
+- **Reset on push**: `sdk-review-reset-on-push.yml` fires on
+  `pull_request: synchronize` and strips the label + flips the
+  `sdk-review` status to pending on the new HEAD. Branch protection
+  separately auto-dismisses the approval (`dismiss_stale_reviews_on_push`).
+- **CI-failure downgrade**: `sdk-review-downgrade-on-ci-failure.yml`
+  fires on `check_suite: completed`; if a non-sdk-review check
+  failed on a HEAD that carries `sdk-review-approved`, it strips
+  the label, dismisses the approval, and flips status to failure.
 
-The sandbox is responsible only for **labels** here.
+**Implication for the sandbox**: don't `gh pr edit --add-label` or
+`gh pr review --approve` from inside the orchestration. The verdict
+flows out via the structured marker in the summary comment in §3e;
+the GHA layer reads that and does the rest.
 
-```bash
-# $GITHUB_TOKEN is set in Phase 0 step 3 (injected by dispatcher)
-PR=<pr_number>
-REPO="atlanhq/application-sdk"
-
-case "$VERDICT" in
-  "READY_TO_MERGE")
-    gh pr edit $PR --repo $REPO --add-label "sdk-review-approved"
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-needs-human" 2>/dev/null || true
-    ;;
-  "NEEDS_HUMAN")
-    gh pr edit $PR --repo $REPO --add-label "sdk-review-needs-human"
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-approved" 2>/dev/null || true
-    ;;
-  "NEEDS_FIXES"|"BLOCKED")
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-approved" 2>/dev/null || true
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-needs-human" 2>/dev/null || true
-    ;;
-esac
-```
-
-The verdict must also be written into the summary comment in §3e as
-a line `### Verdict: READY TO MERGE` (etc.) — the GHA runner greps
-that line out of the just-posted `<!-- SDK_REVIEW -->` comment
-to decide whether to call `gh pr review --approve`. Do not change
-the verdict line's prefix without updating the workflow's parser.
+The structured verdict marker is the contract. Keep
+`<!-- VERDICT: X -->` in sync with `### Verdict: ...` in the summary
+template. The token must be one of:
+`READY_TO_MERGE`, `NEEDS_FIXES`, `BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
 
 ### 3d. Resolve Inline Threads (on APPROVE)
 
@@ -677,12 +676,17 @@ Do NOT resolve threads from human reviewers.
 
 ### 3e. Summary
 
-Use this template. The leading `<!-- SDK_REVIEW -->` HTML
-comment is the marker the orchestration uses to find prior reviews
-on subsequent runs; do NOT remove it:
+Use this template. The leading `<!-- SDK_REVIEW -->` HTML comment is
+the marker the orchestration uses to find prior reviews on subsequent
+runs; do NOT remove it. The second marker `<!-- VERDICT: X -->` is the
+machine-readable verdict the GHA approval workflows parse — keep it
+in sync with the human-readable `### Verdict:` line below. The token
+after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
+`BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
 
 ```
 <!-- SDK_REVIEW -->
+<!-- VERDICT: READY_TO_MERGE | NEEDS_FIXES | BLOCKED | NEEDS_HUMAN | NEEDS_REBASE -->
 ## SDK <Review | Re-review> (mothership): PR #<number> — <title>
 
 ### Verdict: <READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW>

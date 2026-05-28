@@ -36,7 +36,11 @@ name: SDK Review — approve on verdict comment
 
 on:
   issue_comment:
-    types: [created, edited]
+    # `edited` deliberately omitted: mothership doesn't edit the verdict
+    # comment in normal flow, and re-firing the labels + approval logic
+    # on every comment edit was wasted work (idempotency guards skip,
+    # but the runner minutes are spent regardless).
+    types: [created]
 
 permissions:
   contents: read
@@ -69,11 +73,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Extract the verdict from the comment body.
-          # Same grep as sdk-review.yml's approve step — see there for
-          # why we anchor on `### Verdict:`.
-          RAW=$(printf '%s' "$COMMENT_BODY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
-          VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
+          # Extract the verdict. Prefer the structured marker
+          # `<!-- VERDICT: READY_TO_MERGE -->` (deterministic, formatting-
+          # invariant). Fall back to the `### Verdict:` grep for legacy
+          # comments that pre-date the structured marker.
+          VERDICT=$(printf '%s' "$COMMENT_BODY" | grep -oP '<!--\s*VERDICT:\s*\K[A-Z_]+' | head -1)
+          if [ -z "$VERDICT" ]; then
+            RAW=$(printf '%s' "$COMMENT_BODY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
+            VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
+          fi
           if [ -z "$VERDICT" ]; then
             echo "::warning::Could not extract verdict from mothership-ai comment on PR #${PR_NUMBER}. Skipping."
             exit 0
