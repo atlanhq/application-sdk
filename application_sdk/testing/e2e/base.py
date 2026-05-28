@@ -476,8 +476,14 @@ class BaseE2ETest:
                 timeout_seconds=self.atlas_poll_timeout_seconds,
             )
             if connection_in_atlas:
+                probe_types = (
+                    tuple(self.expected_min_asset_counts.keys())
+                    if self.expected_min_asset_counts
+                    else ("Database", "Schema", "Table", "View", "Column")
+                )
                 asset_counts = self.client.count_assets_under_connection(
-                    self.connection_qualified_name
+                    self.connection_qualified_name,
+                    type_names=probe_types,
                 )
                 lineage_counts = self.client.count_lineage_under_connection(
                     self.connection_qualified_name
