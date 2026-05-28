@@ -9,8 +9,11 @@ import pytest
 
 rocksdict = pytest.importorskip("rocksdict")
 
-from application_sdk.common import spillable_dict as dbd_module
-from application_sdk.common.spillable_dict import SpillableDict
+# Imports below come after pytest.importorskip() — E402 is expected.
+# CI's pinned ruff (v0.6.4) flags it; per-line noqa silences the rule on
+# both these intentional post-importorskip imports.
+from application_sdk.common import spillable_dict as dbd_module  # noqa: E402
+from application_sdk.common.spillable_dict import SpillableDict  # noqa: E402
 
 
 class TestSpillableDict:
