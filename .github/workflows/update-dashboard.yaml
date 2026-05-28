@@ -252,20 +252,40 @@ jobs:
                   unique.append(v)
 
           # Write per-repo data file (not shared data.json)
-          # Extract SDK version from Dockerfile
+          # Extract SDK version from the repo's Dockerfile. Compared to the
+          # previous "open ./Dockerfile, take first FROM, stop", this:
+          #   1. Searches common Dockerfile locations (./Dockerfile, deploy/,
+          #      docker/) — many repos put their Dockerfile in a subdir.
+          #   2. Reads ALL FROM lines, then prefers one whose image matches a
+          #      known SDK base registry — so multi-stage builds whose first
+          #      FROM is a builder layer (node:20-alpine etc.) no longer leak
+          #      that builder tag into the SDK version column.
+          #   3. Falls back to the LAST FROM (final runtime stage) when no
+          #      SDK-base FROM is found. Same "no :tag → unknown" behaviour.
           import re as _re
           sdk_version = "unknown"
-          try:
-              with open("Dockerfile") as f:
-                  for line in f:
-                      if line.strip().startswith("FROM "):
-                          image = line.strip().split()[1]
-                          # Extract tag after ':'
-                          if ":" in image:
-                              sdk_version = image.split(":")[-1]
-                          break
-          except FileNotFoundError:
-              pass
+          SDK_BASE_PATTERNS = (
+              "registry.atlan.com/public/app-runtime-base",
+              "registry.atlan.com/public/application-sdk",
+              "ghcr.io/atlanhq/application-sdk-main",
+          )
+          dockerfile_candidates = ["Dockerfile", "deploy/Dockerfile", "docker/Dockerfile"]
+          froms = []
+          for path in dockerfile_candidates:
+              try:
+                  with open(path) as f:
+                      for line in f:
+                          s = line.strip()
+                          if s.startswith("FROM "):
+                              froms.append(s.split()[1])
+                  break  # use the first existing Dockerfile
+              except FileNotFoundError:
+                  continue
+          chosen = next((i for i in froms if any(p in i for p in SDK_BASE_PATTERNS)), None)
+          if not chosen and froms:
+              chosen = froms[-1]
+          if chosen and ":" in chosen:
+              sdk_version = chosen.split(":")[-1]
 
           repo_slug = repo_name.replace("/", "_")
           app_count = sum(1 for v in unique if v["source_type"] == "app")
