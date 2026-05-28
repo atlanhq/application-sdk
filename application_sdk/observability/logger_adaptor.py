@@ -32,6 +32,7 @@ from application_sdk.constants import (
     SERVICE_NAME,
 )
 from application_sdk.observability.context import correlation_context, request_context
+from application_sdk.observability.correlation import get_correlation_context
 from application_sdk.observability.logger_adaptor_errors import (
     UnsupportedLogRecordError,
 )
@@ -320,10 +321,6 @@ def _apply_atlan_context(kwargs: dict[str, Any], *, prefer_caller: bool) -> None
     # read from v3 CorrelationContext ContextVar (set by the v3
     # CorrelationContextInterceptor).
     if "correlation_id" not in kwargs:
-        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
-            get_correlation_context,
-        )
-
         v3_ctx = get_correlation_context()
         if v3_ctx and v3_ctx.correlation_id:
             kwargs["correlation_id"] = v3_ctx.correlation_id
