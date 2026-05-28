@@ -205,7 +205,7 @@ class LineagePublishStep {               // wraps LineagePublishNode
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for hidden credential `name` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
 
-The auth-type radio's `ui.hidden` is auto-derived: it is hidden when only one auth option would be presented (`credentialAuthOptions.length == 1` for plain auth, or `directKeys.length == 1` for JDBC). No manual flag is required.
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
 
 ### Workflow Config
 
@@ -378,7 +378,7 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `credentialConnectorDefault` | String? | null | Optional default for the hidden credential `connector` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. When set, every `credentialAuthOptions` entry must be a `JDBCUrlAuthOption`. See [AdvancedJDBCUrlGroup](#advancedjdbcurlgroup--hostrlarrowurl-jdbc-credential-form). |
 
-The auth-type radio's `ui.hidden` is auto-derived: it is hidden when only one auth option would be presented (`credentialAuthOptions.length == 1` for plain auth, or `directKeys.length == 1` for JDBC). No manual flag is required.
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
 
 ### Workflow Config
 
