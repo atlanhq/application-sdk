@@ -1,8 +1,8 @@
-name: Daily Security Scan — app-runtime-base + SDK Python Deps
+name: Hourly Security Scan — app-runtime-base + SDK Python Deps
 
 on:
   schedule:
-    - cron: '30 3 * * *' # Daily at 03:30 UTC (09:00 IST)
+    - cron: '0 * * * *' # Hourly at minute 0
   workflow_dispatch:
 
 permissions:
@@ -344,7 +344,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Daily Security Scan — \`$TARGET_IMAGE\` + SDK Python Deps"
+            echo "## Hourly Security Scan — \`$TARGET_IMAGE\` + SDK Python Deps"
             echo ""
             echo "### Vulnerability Summary"
             echo ""
