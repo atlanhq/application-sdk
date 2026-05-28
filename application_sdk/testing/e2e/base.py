@@ -476,30 +476,28 @@ class BaseE2ETest:
                 timeout_seconds=self.atlas_poll_timeout_seconds,
             )
             if connection_in_atlas:
-                probe_types = (
-                    tuple(self.expected_min_asset_counts.keys())
-                    if self.expected_min_asset_counts
-                    else ("Database", "Schema", "Table", "View", "Column")
-                )
-                asset_counts = self.client.count_assets_under_connection(
-                    self.connection_qualified_name,
-                    type_names=probe_types,
-                )
-                lineage_counts = self.client.count_lineage_under_connection(
-                    self.connection_qualified_name
-                )
-                lineage_present = any(c > 0 for c in lineage_counts.values())
-                logger.info(
-                    "Atlas inventory under %s: %s",
-                    self.connection_qualified_name,
-                    asset_counts,
-                )
-                logger.info(
-                    "Lineage inventory under %s: %s lineage_present=%s",
-                    self.connection_qualified_name,
-                    lineage_counts,
-                    lineage_present,
-                )
+                if self.expected_min_asset_counts:
+                    asset_counts = self.client.count_assets_under_connection(
+                        self.connection_qualified_name,
+                        type_names=tuple(self.expected_min_asset_counts.keys()),
+                    )
+                    logger.info(
+                        "Atlas inventory under %s: %s",
+                        self.connection_qualified_name,
+                        asset_counts,
+                    )
+                if self.expect_lineage:
+                    lineage_counts = self.client.count_lineage_under_connection(
+                        self.connection_qualified_name,
+                        type_names=tuple(self.expected_min_asset_counts.keys()),
+                    )
+                    lineage_present = any(c > 0 for c in lineage_counts.values())
+                    logger.info(
+                        "Lineage inventory under %s: %s lineage_present=%s",
+                        self.connection_qualified_name,
+                        lineage_counts,
+                        lineage_present,
+                    )
         else:
             failed_names = ", ".join(n.name for n in ae_result.failed_nodes) or "(none)"
             logger.warning(
