@@ -679,13 +679,11 @@ Do NOT resolve threads from human reviewers.
 
 Use this template. The leading `<!-- SDK_REVIEW -->` HTML
 comment is the marker the orchestration uses to find prior reviews
-on subsequent runs; do NOT remove it or use the production
-`<!-- SDK_REVIEW_V2 -->` marker (that belongs to the production
-@sdk-review flow):
+on subsequent runs; do NOT remove it:
 
 ```
 <!-- SDK_REVIEW -->
-## Test SDK <Review | Re-review> (mothership): PR #<number> — <title>
+## SDK <Review | Re-review> (mothership): PR #<number> — <title>
 
 ### Verdict: <READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW>
 
@@ -723,9 +721,9 @@ on subsequent runs; do NOT remove it or use the production
 
 **Title selection — "Review" vs "Re-review":**
 - If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first
-  `<!-- SDK_REVIEW -->` comment on the PR) → use **"Test SDK
-  Review (mothership)"**.
-- If a prior summary exists → use **"Test SDK Re-review (mothership)"**.
+  `<!-- SDK_REVIEW -->` comment on the PR) → use **"SDK Review
+  (mothership)"**.
+- If a prior summary exists → use **"SDK Re-review (mothership)"**.
   This tells the human reading the PR-comment timeline that this
   pass loaded the previous review as context and reasoned about
   deltas (per Phase 0 §6b + §2d), not that it ignored history and
