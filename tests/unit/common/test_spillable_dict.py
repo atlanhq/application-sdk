@@ -1,4 +1,4 @@
-"""Tests for application_sdk.common.disk_backed_dict.DiskBackedDict."""
+"""Tests for application_sdk.common.spillable_dict.SpillableDict."""
 
 from __future__ import annotations
 
@@ -9,31 +9,31 @@ import pytest
 
 rocksdict = pytest.importorskip("rocksdict")
 
-from application_sdk.common import disk_backed_dict as dbd_module  # noqa: E402
-from application_sdk.common.disk_backed_dict import DiskBackedDict  # noqa: E402
+from application_sdk.common import spillable_dict as dbd_module  # noqa: E402
+from application_sdk.common.spillable_dict import SpillableDict  # noqa: E402
 
 
-class TestDiskBackedDict:
+class TestSpillableDict:
     def test_setitem_and_getitem(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             d["k"] = "v"
             assert d["k"] == "v"
 
     def test_get_with_default(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             assert d.get("missing") is None
             assert d.get("missing", "fallback") == "fallback"
             d["present"] = 42
             assert d.get("present") == 42
 
     def test_contains(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             assert "k" not in d
             d["k"] = "v"
             assert "k" in d
 
     def test_delitem(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             d["k"] = "v"
             assert "k" in d
             del d["k"]
@@ -43,12 +43,12 @@ class TestDiskBackedDict:
         """Match standard dict semantics — and sqlitedict's, which the
         migration story implicitly assumes (sqlitedict raises KeyError on
         del of a missing key)."""
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             with pytest.raises(KeyError):
                 del d["nope"]
 
     def test_iteration_over_keys(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             d["a"] = 1
             d["b"] = 2
             d["c"] = 3
@@ -58,28 +58,28 @@ class TestDiskBackedDict:
             assert sorted(collected) == ["a", "b", "c"]
 
     def test_items_iteration(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             d["a"] = 1
             d["b"] = 2
             assert sorted(d.items()) == [("a", 1), ("b", 2)]
 
     def test_items_empty(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             assert list(d.items()) == []
 
     def test_append_to_key_new(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             d.append_to_key("list", "first")
             assert d["list"] == ["first"]
 
     def test_append_to_key_existing(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             d["list"] = ["existing"]
             d.append_to_key("list", "added")
             assert d["list"] == ["existing", "added"]
 
     def test_len_after_inserts(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             d["a"] = 1
             d["b"] = 2
             d["c"] = 3
@@ -88,12 +88,12 @@ class TestDiskBackedDict:
             assert len(d) >= 1
 
     def test_nested_values_roundtrip(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             d["nested"] = {"a": [1, 2, {"b": "deep"}]}
             assert d["nested"] == {"a": [1, 2, {"b": "deep"}]}
 
     def test_context_manager_cleanup_removes_temp_dir(self) -> None:
-        with DiskBackedDict() as d:
+        with SpillableDict() as d:
             temp_dir = d._temp_dir
             d["k"] = "v"
             assert os.path.isdir(temp_dir)
@@ -101,7 +101,7 @@ class TestDiskBackedDict:
         assert not os.path.isdir(temp_dir)
 
     def test_explicit_close_removes_temp_dir(self) -> None:
-        d = DiskBackedDict()
+        d = SpillableDict()
         temp_dir = d._temp_dir
         d["k"] = "v"
         d.close()
@@ -109,7 +109,7 @@ class TestDiskBackedDict:
 
     def test_close_is_idempotent(self) -> None:
         """close() must be safe to call multiple times (atexit, ctx-mgr, etc.)."""
-        d = DiskBackedDict()
+        d = SpillableDict()
         d["k"] = "v"
         d.close()
         # Second close — should not raise even though the db is already closed
@@ -121,4 +121,61 @@ class TestDiskBackedDict:
         rocksdict isn't installed."""
         with patch.object(dbd_module, "Rdict", None):
             with pytest.raises(ImportError, match="rocksdict is required"):
-                DiskBackedDict()
+                SpillableDict()
+
+    def test_is_mutablemapping(self) -> None:
+        """Inheriting from MutableMapping gives pop/update/setdefault/keys/
+        values/clear for free — verify the registration."""
+        from collections.abc import MutableMapping
+        d = SpillableDict()
+        try:
+            assert isinstance(d, MutableMapping)
+        finally:
+            d.close()
+
+    def test_mutablemapping_pop(self) -> None:
+        with SpillableDict() as d:
+            d["k"] = "v"
+            assert d.pop("k") == "v"
+            assert "k" not in d
+            # missing key → KeyError unless default given
+            with pytest.raises(KeyError):
+                d.pop("missing")
+            assert d.pop("missing", "default") == "default"
+
+    def test_mutablemapping_setdefault(self) -> None:
+        with SpillableDict() as d:
+            assert d.setdefault("k", "new") == "new"
+            assert d["k"] == "new"
+            assert d.setdefault("k", "ignored") == "new"  # existing wins
+
+    def test_mutablemapping_update(self) -> None:
+        with SpillableDict() as d:
+            d.update({"a": 1, "b": 2})
+            assert d["a"] == 1
+            assert d["b"] == 2
+
+    def test_mutablemapping_keys_values(self) -> None:
+        with SpillableDict() as d:
+            d["a"] = 1
+            d["b"] = 2
+            assert sorted(d.keys()) == ["a", "b"]
+            assert sorted(d.values()) == [1, 2]
+
+    def test_mutablemapping_clear(self) -> None:
+        with SpillableDict() as d:
+            d["a"] = 1
+            d["b"] = 2
+            d.clear()
+            assert "a" not in d
+            assert "b" not in d
+
+    def test_contains_accepts_non_str(self) -> None:
+        """__contains__ signature is `key: object` (protocol). Passing a
+        non-str shouldn't raise — should just return False since we only
+        ever store str keys."""
+        with SpillableDict() as d:
+            d["k"] = "v"
+            # These should not raise — just return False
+            assert (123 in d) is False
+            assert (None in d) is False  # type: ignore[operator]
