@@ -20,7 +20,10 @@ from application_sdk.constants import (
     SERVICE_VERSION,
     TEMPORARY_PATH,
 )
-from application_sdk.observability.context import correlation_context
+from application_sdk.observability.context import (
+    correlation_context,
+    get_execution_context,
+)
 
 #: Resource attribute keys we inline as labels onto every metric series.
 #: Kept deliberately minimal — every additional inline key multiplies the
@@ -105,10 +108,6 @@ def get_workflow_context() -> dict[str, str]:
     Returns:
         dict[str, str]: The workflow context fields.
     """
-    from application_sdk.observability.context import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
-        get_execution_context,
-    )
-
     ctx = get_execution_context()
     context: dict[str, str] = {
         "in_workflow": str(ctx.execution_type == "workflow").lower(),
