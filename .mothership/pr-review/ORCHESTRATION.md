@@ -602,8 +602,13 @@ explicit confirmation rather than absence of a complaint.
 |---|---|---|
 | BLOCKED | G1/G2/G3/G5 violation | REJECT |
 | NEEDS_HUMAN | DESIGN_CHANGE scope | REQUEST_CHANGES |
-| NEEDS_FIXES | Critical, G4/G6, 3+ Important, CI failing, **OR §2f-bis title mismatch** | REQUEST_CHANGES |
-| READY_TO_MERGE | No Critical, < 3 Important, CI passing, **AND §2f-bis title aligned** | APPROVE |
+| NEEDS_FIXES | Critical, G4/G6, **any Important**, CI failing, **OR §2f-bis title mismatch** | REQUEST_CHANGES |
+| READY_TO_MERGE | **0 Critical AND 0 Important**, CI passing, **AND §2f-bis title aligned** | APPROVE |
+
+`READY_TO_MERGE` is strict: a single Important finding forces
+`NEEDS_FIXES`. Nits do not block. If you believe an Important should
+be downgraded, downgrade it explicitly in §2d with a one-line reason
+— do not silently approve over the top of it.
 
 ### 2h. Challenge Mode (if Intent Inference picked Mode D)
 
@@ -766,9 +771,25 @@ after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 
 ### Findings
 
+> **Format is MANDATORY: file-by-file grouped bullets.** Do NOT
+> substitute a Markdown table (`| Severity | Domain | Where | Summary |`).
+> Group findings under a bold file-path header, then one bullet per
+> finding starting with the severity. Each bullet MUST include the
+> domain tag in square brackets, the line reference (`L<n>` or
+> `L<n>-<m>`), a description, and an italicised `*Path: …*` clause
+> describing the fix. Findings spanning multiple files appear under
+> each affected file's header. Sort files alphabetically; within a
+> file, sort by severity (Critical → Important → Nit) then by line
+> number. PR-metadata-level findings (e.g. title mismatches) go under
+> a `**PR metadata**` pseudo-header.
+
 **`<path/to/file.py>`**
 - **Critical** [SEC] L42 — description. *Path: immediate fix — <what to do>*
 - **Important** [ARCH] L88 — description. *Path: follow-up ticket — <why>*
+- **Nit** [QUAL] L120 — description. *Path: optional cleanup — <why>*
+
+**`<path/to/other_file.py>`**
+- **Nit** [STRUCT] L15 — description. *Path: <…>*
 
 ### Holistic Recommendations (if any)
 - Root cause assessment: is this PR treating symptoms or causes?
