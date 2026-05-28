@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+from unittest.mock import patch
 
 import pytest
 
 rocksdict = pytest.importorskip("rocksdict")
 
+from application_sdk.common import disk_backed_dict as dbd_module  # noqa: E402
 from application_sdk.common.disk_backed_dict import DiskBackedDict  # noqa: E402
 
 
@@ -30,11 +32,32 @@ class TestDiskBackedDict:
             d["k"] = "v"
             assert "k" in d
 
+    def test_delitem(self) -> None:
+        with DiskBackedDict() as d:
+            d["k"] = "v"
+            assert "k" in d
+            del d["k"]
+            assert "k" not in d
+
+    def test_iteration_over_keys(self) -> None:
+        with DiskBackedDict() as d:
+            d["a"] = 1
+            d["b"] = 2
+            d["c"] = 3
+            assert sorted(iter(d)) == ["a", "b", "c"]
+            # for-loop usage
+            collected = [k for k in d]
+            assert sorted(collected) == ["a", "b", "c"]
+
     def test_items_iteration(self) -> None:
         with DiskBackedDict() as d:
             d["a"] = 1
             d["b"] = 2
             assert sorted(d.items()) == [("a", 1), ("b", 2)]
+
+    def test_items_empty(self) -> None:
+        with DiskBackedDict() as d:
+            assert list(d.items()) == []
 
     def test_append_to_key_new(self) -> None:
         with DiskBackedDict() as d:
@@ -56,7 +79,7 @@ class TestDiskBackedDict:
             # it tracks inserts. Check it's >0 rather than exact.
             assert len(d) >= 1
 
-    def test_complex_values_pickled(self) -> None:
+    def test_nested_values_roundtrip(self) -> None:
         with DiskBackedDict() as d:
             d["nested"] = {"a": [1, 2, {"b": "deep"}]}
             assert d["nested"] == {"a": [1, 2, {"b": "deep"}]}
@@ -75,3 +98,19 @@ class TestDiskBackedDict:
         d["k"] = "v"
         d.close()
         assert not os.path.isdir(temp_dir)
+
+    def test_close_is_idempotent(self) -> None:
+        """close() must be safe to call multiple times (atexit, ctx-mgr, etc.)."""
+        d = DiskBackedDict()
+        d["k"] = "v"
+        d.close()
+        # Second close — should not raise even though the db is already closed
+        # and the temp dir is already gone.
+        d.close()
+
+    def test_import_error_when_rocksdict_unavailable(self) -> None:
+        """Constructor must raise ImportError with an actionable message when
+        rocksdict isn't installed."""
+        with patch.object(dbd_module, "Rdict", None):
+            with pytest.raises(ImportError, match="rocksdict is required"):
+                DiskBackedDict()
