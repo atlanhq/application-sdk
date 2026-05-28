@@ -39,6 +39,14 @@ class TestDiskBackedDict:
             del d["k"]
             assert "k" not in d
 
+    def test_delitem_missing_raises_keyerror(self) -> None:
+        """Match standard dict semantics — and sqlitedict's, which the
+        migration story implicitly assumes (sqlitedict raises KeyError on
+        del of a missing key)."""
+        with DiskBackedDict() as d:
+            with pytest.raises(KeyError):
+                del d["nope"]
+
     def test_iteration_over_keys(self) -> None:
         with DiskBackedDict() as d:
             d["a"] = 1

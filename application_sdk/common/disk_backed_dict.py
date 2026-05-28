@@ -79,7 +79,9 @@ class DiskBackedDict:
     """
 
     def __init__(self) -> None:
-        if Rdict is None or Options is None or BlockBasedOptions is None:
+        if Rdict is None:
+            # rocksdict ships Rdict/Options/BlockBasedOptions as a unit;
+            # checking one is sufficient.
             raise ImportError(
                 "rocksdict is required for DiskBackedDict — install with "
                 "`pip install atlan-application-sdk[incremental]` or add "
@@ -110,6 +112,13 @@ class DiskBackedDict:
         return self._db[key]
 
     def __delitem__(self, key: str) -> None:
+        # rocksdict's __delitem__ maps to RocksDB Delete, which is a no-op
+        # on missing keys (writes a tombstone unconditionally). We want
+        # standard dict semantics — match what sqlitedict callers expect.
+        # Bloom filter short-circuits the negative case; the explicit
+        # `in self._db` check handles bloom-filter false positives.
+        if not self._db.key_may_exist(key) or key not in self._db:
+            raise KeyError(key)
         del self._db[key]
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -124,8 +133,10 @@ class DiskBackedDict:
             yield key, value
 
     def __iter__(self) -> Iterator[str]:
-        for key, _ in self._db.items():
-            yield key
+        # Rdict.keys() walks SST keys without ever reading + unpickling
+        # values — both faster and narrower than .items() since `for k in d:`
+        # has no reason to touch the pickle surface.
+        yield from self._db.keys()
 
     def __contains__(self, key: str) -> bool:
         return key in self._db
