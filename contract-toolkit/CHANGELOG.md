@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.10.2] - 2026-05-27
+
+### Bug fixes
+
+- add current_state_enabled + current_state_via_app_enabled to PublishNode and PublishStep (#1866) ([318af06](https://github.com/atlanhq/application-sdk/commit/318af06))
+
 ## [0.10.1] - 2026-05-22
 
 ### Bug fixes

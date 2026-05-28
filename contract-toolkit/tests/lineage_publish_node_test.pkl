@@ -87,6 +87,25 @@ facts {
     assetPublishNode.args["connection_cache_via_app_enabled"] == false
   }
 
+  // current_state_enabled and current_state_via_app_enabled follow the same
+  // safe-base pattern: PublishNode defaults to false, PublishStep injects true.
+  ["PublishNode base default for current_state_enabled is false"] {
+    assetPublishNode.args["current_state_enabled"] == false
+    assetPublishNode.args["current_state_via_app_enabled"] == false
+  }
+
+  // Default pipeline (no pipeline block): PublishStep defaults inject true.
+  ["App with no pipeline declaration gets current_state_enabled true on publish node"] {
+    defaultPublishArgs["current_state_enabled"] == true
+    defaultPublishArgs["current_state_via_app_enabled"] == true
+  }
+
+  // Asset publish node in the lineage-publish pipeline fixture also gets true.
+  ["Asset publish node in lineage pipeline gets current_state_enabled true"] {
+    publishArgs["current_state_enabled"] == true
+    publishArgs["current_state_via_app_enabled"] == true
+  }
+
   ["LineagePublishNode defaults connection_cache_enabled to false"] {
     lineagePublishNode.args["connection_cache_enabled"] == false
     lineagePublishNode.args["connection_cache_via_app_enabled"] == false

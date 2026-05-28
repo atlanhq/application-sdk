@@ -22,6 +22,7 @@ from application_sdk.main import (
     _log_dapr_components,
     _loop_exception_handler,
     _parse_all_component_yamls,
+    _parse_workflow_max_timeout_hours,
     main,
     parse_args,
     run_combined_mode,
@@ -370,6 +371,39 @@ class TestAppConfigFromArgsAndEnv:
         args = self._make_args()
         config = AppConfig.from_args_and_env(args)
         assert config.task_queue == "custom-queue"
+
+
+class TestParseWorkflowMaxTimeoutHours:
+    """Tests for _parse_workflow_max_timeout_hours()."""
+
+    def test_positive_value_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A positive env var value is returned as-is."""
+        monkeypatch.setenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "4")
+        assert _parse_workflow_max_timeout_hours() == 4
+
+    def test_zero_returns_none_silently(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Zero is treated as unset — returns None without a warning."""
+        monkeypatch.setenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "0")
+        with patch("application_sdk.main.logger") as mock_log:
+            result = _parse_workflow_max_timeout_hours()
+        assert result is None
+        mock_log.warning.assert_not_called()
+
+    def test_negative_returns_none_and_warns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A negative value returns None and emits a warning."""
+        monkeypatch.setenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "-5")
+        with patch("application_sdk.main.logger") as mock_log:
+            result = _parse_workflow_max_timeout_hours()
+        assert result is None
+        mock_log.warning.assert_called_once()
+        assert "ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS" in mock_log.warning.call_args[0][0]
+
+    def test_unset_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unset env var returns None."""
+        monkeypatch.delenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", raising=False)
+        assert _parse_workflow_max_timeout_hours() is None
 
 
 class TestRunMain:
