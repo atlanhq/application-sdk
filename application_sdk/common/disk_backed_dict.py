@@ -21,6 +21,10 @@ import tempfile
 from collections.abc import Iterator
 from typing import Any
 
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
 try:
     from rocksdict import Options, Rdict
 except ImportError:
@@ -120,7 +124,7 @@ class DiskBackedDict:
         try:
             self._db.close()
         except Exception:
-            pass
+            logger.warning("Failed to close RocksDB cleanly", exc_info=True)
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
     def __enter__(self) -> "DiskBackedDict":

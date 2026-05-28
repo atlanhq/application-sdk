@@ -8,7 +8,7 @@ import pytest
 
 rocksdict = pytest.importorskip("rocksdict")
 
-from application_sdk.common.disk_backed_dict import DiskBackedDict
+from application_sdk.common.disk_backed_dict import DiskBackedDict  # noqa: E402
 
 
 class TestDiskBackedDict:
