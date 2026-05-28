@@ -814,9 +814,15 @@ jobs:
           # invariant). Fall back to the `### Verdict:` grep for legacy
           # comments from orchestration versions that pre-date the
           # structured marker.
-          VERDICT=$(printf '%s' "$SUMMARY" | grep -oP '<!--\s*VERDICT:\s*\K[A-Z_]+' | head -1)
+          #
+          # `|| true` is load-bearing here: under `set -euo pipefail`,
+          # grep returning 1 on a no-match (the structured marker isn't
+          # present yet in the verdict comment we're parsing) would kill
+          # the script BEFORE the prose-grep fallback below got a chance
+          # to run. Tolerate the no-match so we fall through cleanly.
+          VERDICT=$(printf '%s' "$SUMMARY" | grep -oP '<!--\s*VERDICT:\s*\K[A-Z_]+' | head -1 || true)
           if [ -z "$VERDICT" ]; then
-            RAW=$(printf '%s' "$SUMMARY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
+            RAW=$(printf '%s' "$SUMMARY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
             VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
           fi
           echo "Detected verdict: '${VERDICT}'"
