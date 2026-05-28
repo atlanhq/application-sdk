@@ -1,0 +1,145 @@
+# Downgrade the @sdk-review verdict from READY_TO_MERGE → NEEDS_FIXES
+# when CI checks fail on a PR that currently carries the bot's approval.
+#
+# Why this exists:
+#   `sdk-review.yml` evaluates CI at review time. If CI was green when
+#   the bot ran, it stamps `sdk-review-approved` and posts an atlan-ci
+#   approval. If CI subsequently fails (a check that runs after the
+#   bot's verdict, a flake that resolved-then-broke, a follow-up commit
+#   whose review ran but whose CI failed) the bot's verdict is stale
+#   but the labels + atlan-ci approval persist. Branch protection's
+#   required_status_checks still blocks merge, but the PR's "@sdk-review
+#   approved" signal becomes misleading.
+#
+# What it does:
+#   Listens for completed check_suites. When a suite finishes with a
+#   non-success conclusion AND a PR at that HEAD currently carries
+#   `sdk-review-approved`, this workflow:
+#     1. Strips the `sdk-review-approved` (and legacy
+#        `test-sdk-review-approved`) labels.
+#     2. Dismisses the active atlan-ci approval matching the bot's
+#        signature.
+#     3. Flips the `sdk-review` commit status on the HEAD to `failure`
+#        with description "Downgraded to NEEDS FIXES — CI failing".
+#     4. Posts a single PR comment explaining the downgrade.
+#
+# Recursion guard:
+#   This workflow's own check_suite completing also fires this event.
+#   To avoid the workflow downgrading PRs based on itself failing, we
+#   query the HEAD's check_runs and only proceed if at least one
+#   non-sdk-review check failed.
+
+name: SDK Review — downgrade verdict on CI failure
+
+on:
+  check_suite:
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+  checks: read
+
+jobs:
+  sdk-review-downgrade:
+    if: >-
+      github.event.check_suite.conclusion == 'failure'
+      || github.event.check_suite.conclusion == 'timed_out'
+      || github.event.check_suite.conclusion == 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Downgrade approval if PR carries sdk-review-approved
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+          SUITE_SHA: ${{ github.event.check_suite.head_sha }}
+          SUITE_CONCLUSION: ${{ github.event.check_suite.conclusion }}
+        run: |
+          set -euo pipefail
+
+          # Recursion guard: only downgrade if a non-sdk-review check
+          # actually failed on this HEAD. Without this, a failure in
+          # sdk-review.yml itself (e.g. VPN timeout) would cause us to
+          # downgrade PRs whose underlying CI is fine.
+          NON_OWN_FAILURES=$(gh api \
+            "repos/${REPO}/commits/${SUITE_SHA}/check-runs?per_page=100" \
+            --paginate \
+            --jq '[.check_runs // [] | .[]
+                   | select(.conclusion == "failure"
+                            or .conclusion == "cancelled"
+                            or .conclusion == "timed_out")
+                   | select(.name | test("^sdk-review") | not)
+                  ] | length')
+          if [ "$NON_OWN_FAILURES" = "0" ]; then
+            echo "No non-sdk-review checks failed on ${SUITE_SHA} — nothing to downgrade."
+            exit 0
+          fi
+
+          # Find open PRs whose HEAD matches this suite's SHA. A single
+          # commit can be the HEAD of multiple PRs in rare cases; handle
+          # them all.
+          PR_NUMBERS=$(gh api "repos/${REPO}/commits/${SUITE_SHA}/pulls" \
+            --jq '.[] | select(.state == "open" and .head.sha == "'"$SUITE_SHA"'") | .number' \
+            2>/dev/null || echo "")
+
+          if [ -z "$PR_NUMBERS" ]; then
+            echo "No open PR has ${SUITE_SHA} as HEAD — nothing to do."
+            exit 0
+          fi
+
+          for PR_NUM in $PR_NUMBERS; do
+            # Race guard: HEAD may have moved between suite-queued and now.
+            CURRENT_HEAD=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha')
+            if [ "$CURRENT_HEAD" != "$SUITE_SHA" ]; then
+              echo "PR #${PR_NUM} HEAD moved (${SUITE_SHA} -> ${CURRENT_HEAD}). Skipping — reset-on-push will handle the new HEAD."
+              continue
+            fi
+
+            # Only act if the PR currently carries an approved label.
+            # Idempotency: once we downgrade, the label is gone, so a
+            # subsequent check_suite failure on the same HEAD is a no-op.
+            HAS_LABEL=$(gh api "repos/${REPO}/issues/${PR_NUM}/labels" \
+              --jq '[.[] | select(.name == "sdk-review-approved" or .name == "test-sdk-review-approved")] | length')
+            if [ "$HAS_LABEL" = "0" ]; then
+              echo "PR #${PR_NUM} has no sdk-review-approved label — nothing to downgrade."
+              continue
+            fi
+
+            echo "Downgrading PR #${PR_NUM}: CI suite ${SUITE_SHA} concluded '${SUITE_CONCLUSION}'."
+
+            # 1. Strip approved labels.
+            for stale in "sdk-review-approved" "test-sdk-review-approved"; do
+              gh pr edit "${PR_NUM}" --repo "${REPO}" --remove-label "${stale}" 2>/dev/null || true
+            done
+
+            # 2. Dismiss the active atlan-ci approval bearing our signature.
+            REVIEW_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" --paginate \
+              --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | .[].id')
+            for rid in $REVIEW_IDS; do
+              gh api "repos/${REPO}/pulls/${PR_NUM}/reviews/${rid}/dismissals" \
+                -X PUT \
+                -f message="CI checks failed on this commit. The @sdk-review bot's prior approval has been dismissed. Fix CI, then re-comment \`@sdk-review\` to re-evaluate." \
+                && echo "Dismissed atlan-ci review ${rid} on PR #${PR_NUM}."
+            done
+
+            # 3. Flip sdk-review status check on this HEAD to failure.
+            gh api "repos/${REPO}/statuses/${SUITE_SHA}" \
+              -X POST \
+              -f state=failure \
+              -f context=sdk-review \
+              -f description="Downgraded to NEEDS FIXES — CI failing on this commit"
+
+            # 4. Post a comment so the PR author has a clear signal.
+            SHORT_SHA="${SUITE_SHA:0:8}"
+            gh pr comment "${PR_NUM}" --repo "${REPO}" --body "$(cat <<EOF
+          🟥 **SDK Review verdict downgraded → NEEDS FIXES.**
+
+          CI checks on commit \`${SHORT_SHA}\` failed (\`check_suite\` conclusion: \`${SUITE_CONCLUSION}\`). The \`sdk-review-approved\` label has been removed and the bot's atlan-ci approval has been dismissed.
+
+          Fix the failing CI checks and re-comment \`@sdk-review\` once they're green.
+          EOF
+          )"
+            echo "Downgrade complete for PR #${PR_NUM}."
+          done

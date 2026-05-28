@@ -44,7 +44,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  dismiss:
+  sdk-review-dismiss:
     # Skip if the actor is one of our service accounts / bots — we only
     # want to react to *human* engagement. `endsWith(..., '[bot]')`
     # catches every GitHub App (mothership-ai[bot], claude[bot],
@@ -116,11 +116,14 @@ jobs:
             echo "Dismissed atlan-ci review ${review_id} on PR #${PR_NUMBER}."
           done
 
-          # The `sdk-review-approved` label is owned by the mothership
-          # sandbox (see .mothership/pr-review/ORCHESTRATION.md) and travels
-          # with the approval. If we dismissed the approval, the label is
-          # stale until the next sandbox run — strip it here so the PR's
-          # label state matches its review state. `|| true` because the
-          # label may not be present (e.g. prior verdict was NEEDS_HUMAN).
-          gh pr edit "${PR_NUMBER}" --repo "${REPO}" --remove-label "sdk-review-approved" 2>/dev/null || true
-          echo "Removed sdk-review-approved label (if present) from PR #${PR_NUMBER}."
+          # The `sdk-review-approved` label is applied by the GHA
+          # workflow alongside the approval (see sdk-review.yml). If we
+          # dismissed the approval, the label is stale — strip it here so
+          # the PR's label state matches its review state. Also strip the
+          # legacy `test-sdk-review-approved` label so PRs that pre-date
+          # the promotion don't end up wearing both prefixes. `|| true`
+          # because labels may not be present.
+          for label in "sdk-review-approved" "test-sdk-review-approved"; do
+            gh pr edit "${PR_NUMBER}" --repo "${REPO}" --remove-label "${label}" 2>/dev/null || true
+          done
+          echo "Removed sdk-review-approved labels (if present) from PR #${PR_NUMBER}."
