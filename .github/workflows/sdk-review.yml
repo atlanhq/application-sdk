@@ -1,8 +1,6 @@
-# Test SDK Review — experimental mothership Rover-based reviewer.
+# SDK Review — mothership Rover-based reviewer.
 #
-# Runs in PARALLEL with the production @sdk-review (claude.yml) so the
-# team can compare outputs. Triggered only by the explicit
-# @test-sdk-review mention; never by @sdk-review.
+# Triggered by the @sdk-review mention on a PR.
 #
 # All SDK-specific review behavior (orchestration, agents, rules, severity
 # rubric, guardrails, modes) lives in application-sdk/.mothership/pr-review/
@@ -13,11 +11,11 @@
 # This repo provides: every detail of how to review SDK PRs.
 #
 # Trigger surface:
-#   @test-sdk-review                       → Standard review. Orchestration
+#   @sdk-review                       → Standard review. Orchestration
 #                                            picks the right mode based on
 #                                            PR state and previous review
 #                                            history.
-#   @test-sdk-review <free-form text>      → Same, but the trailing text is
+#   @sdk-review <free-form text>      → Same, but the trailing text is
 #                                            forwarded to the orchestration
 #                                            as COMMENTER_INTENT. The agent
 #                                            decides what to do (auto-fix,
@@ -26,11 +24,11 @@
 #                                            etc.) by reading the text.
 #                                            No command enumeration here.
 #
-# Side-effects are namespaced separately from the production reviewer:
-#   commit-status context  = test-sdk-review (not sdk-review)
-#   labels                 = test-sdk-review-approved, test-sdk-review-needs-human
-#   comment marker         = <!-- TEST_SDK_REVIEW --> (orchestration uses
-#                            <!-- SDK_REVIEW_V2 --> on the production path)
+# Side-effects:
+#   commit-status context  = sdk-review
+#   labels                 = sdk-review-approved, sdk-review-needs-human,
+#                            sdk-review-needs-rebase
+#   comment marker         = <!-- SDK_REVIEW -->
 #
 # Required configuration:
 #   secrets.HARNESS_TOKEN              Bearer token for /api/sandbox/execute.
@@ -42,7 +40,7 @@
 #   vars.GLOBALPROTECT_PORTAL_URL      VPN portal URL.
 #   vars.MOTHERSHIP_URL                e.g. https://mothership.atlan.dev
 
-name: Test SDK Review (mothership)
+name: SDK Review (mothership)
 
 on:
   issue_comment:
@@ -77,7 +75,7 @@ jobs:
       github.event_name == 'workflow_dispatch'
       || (
         github.event.issue.pull_request
-        && contains(github.event.comment.body, '@test-sdk-review')
+        && contains(github.event.comment.body, '@sdk-review')
         && (
           github.event.comment.author_association == 'OWNER'
           || github.event.comment.author_association == 'MEMBER'
@@ -90,7 +88,7 @@ jobs:
     # but `curl --max-time 7200` blocks this job for that duration.
     timeout-minutes: 130
     concurrency:
-      group: test-sdk-review-${{ github.event.issue.number || inputs.pr_number }}
+      group: sdk-review-${{ github.event.issue.number || inputs.pr_number }}
       cancel-in-progress: true
     steps:
       - name: Checkout repo (for local globalprotect-connect action)
@@ -115,7 +113,7 @@ jobs:
             } else {
               const raw = context.payload.comment.body || '';
               intent = raw
-                .replace(/@test-sdk-review/gi, '')
+                .replace(/@sdk-review/gi, '')
                 .replace(/^\s+|\s+$/g, '');
               commenter = context.payload.comment.user.login;
               commentId = String(context.payload.comment.id);
@@ -142,12 +140,10 @@ jobs:
               });
             }
 
-            // Labels are prefixed `test-` so they don't collide with the
-            // production reviewer's labels (sdk-review-approved, etc.)
             const labels = [
-              { name: 'test-sdk-review-approved', color: '0e8a16', description: 'Experimental SDK review (mothership) approved' },
-              { name: 'test-sdk-review-needs-human', color: 'd93f0b', description: 'Experimental SDK review (mothership) needs human decision' },
-              { name: 'test-sdk-review-needs-rebase', color: 'e4e669', description: 'Experimental SDK review (mothership) blocked on rebase conflicts' },
+              { name: 'sdk-review-approved', color: '0e8a16', description: 'SDK review (mothership) approved' },
+              { name: 'sdk-review-needs-human', color: 'd93f0b', description: 'SDK review (mothership) needs human decision' },
+              { name: 'sdk-review-needs-rebase', color: 'e4e669', description: 'SDK review (mothership) blocked on rebase conflicts' },
             ];
             for (const l of labels) {
               try {
@@ -193,8 +189,8 @@ jobs:
             //
             // The HTML comment marker lets repeat invocations update the
             // existing notice in place instead of accumulating one comment
-            // per @test-sdk-review trigger.
-            const marker = '<!-- TEST_SDK_REVIEW_STARTED -->';
+            // per @sdk-review trigger.
+            const marker = '<!-- SDK_REVIEW_STARTED -->';
             const commenter = process.env.COMMENTER || 'unknown';
             const runUrl = process.env.GHA_RUN_URL;
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
@@ -202,7 +198,7 @@ jobs:
 
             const body = [
               marker,
-              `🔍 **Test SDK Review (mothership)** triggered by @${commenter} at ${startedAt}.`,
+              `🔍 **SDK Review (mothership)** triggered by @${commenter} at ${startedAt}.`,
               ``,
               `[Watch the workflow run live](${runUrl}) — the review summary will appear as a separate comment when complete (typical: 5–30 min, hard cap 2h).`,
             ].join('\n');
@@ -233,7 +229,7 @@ jobs:
               console.log(`Posted new 'starting' comment`);
             }
 
-      - name: Set test-sdk-review status to pending
+      - name: Set sdk-review status to pending
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         uses: actions/github-script@v7
@@ -244,8 +240,8 @@ jobs:
               repo: context.repo.repo,
               sha: process.env.HEAD_SHA,
               state: 'pending',
-              context: 'test-sdk-review',
-              description: 'Test SDK Review (mothership) in progress (up to ~2h)',
+              context: 'sdk-review',
+              description: 'SDK Review (mothership) in progress (up to ~2h)',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
 
@@ -287,7 +283,7 @@ jobs:
 
       # If all three VPN attempts failed, post a comment on the PR so the
       # author knows the workflow died for an infra reason (not a real review
-      # failure) and can retry with another @test-sdk-review mention. Without
+      # failure) and can retry with another @sdk-review mention. Without
       # this, the only signal is a red commit status — and most authors don't
       # check the GHA logs to discover it was a VPN issue.
       - name: Notify PR if VPN failed after 3 attempts
@@ -302,13 +298,13 @@ jobs:
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
             const runUrl = process.env.GHA_RUN_URL;
             const body = [
-              `⚠️ **Test SDK Review failed: could not connect to VPN.**`,
+              `⚠️ **SDK Review failed: could not connect to VPN.**`,
               ``,
               `All 3 VPN connection attempts to \`${process.env.PORTAL_URL || 'the VPN portal'}\` failed. This is usually a transient infrastructure issue.`,
               ``,
               `[View workflow logs](${runUrl})`,
               ``,
-              `Please retry by commenting \`@test-sdk-review\` again. If it keeps failing, flag it in \`#bu-platform-engineering\`.`,
+              `Please retry by commenting \`@sdk-review\` again. If it keeps failing, flag it in \`#bu-platform-engineering\`.`,
             ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -406,7 +402,7 @@ jobs:
           # Deterministic session_id ties this dispatch to the PR head.
           # A new commit produces a new HEAD_SHA → fresh sandbox.
           # A re-trigger on the same HEAD resumes the same sandbox session.
-          SESSION_ID="test-sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}"
+          SESSION_ID="sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}"
 
           # Build the dispatch payload.
           PAYLOAD=$(jq -n \
@@ -562,7 +558,7 @@ jobs:
 
           # Stream ended. Decide outcome.
           #
-          # If a <!-- TEST_SDK_REVIEW --> summary comment was posted by this
+          # If a <!-- SDK_REVIEW --> summary comment was posted by this
           # run (i.e. created after the workflow started), the review verdict
           # was already delivered before the stream went sideways — typically
           # a mothership-side finalize/cleanup crash that happens AFTER
@@ -577,7 +573,7 @@ jobs:
           if [ -n "${PR_NUMBER}" ] && [ -n "${RUN_STARTED_AT}" ]; then
             SUMMARY_COUNT=$(gh api "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/comments" \
               --paginate \
-              --jq "[.[] | select(.body | contains(\"<!-- TEST_SDK_REVIEW -->\")) | select(.created_at >= \"${RUN_STARTED_AT}\")] | length" \
+              --jq "[.[] | select(.body | contains(\"<!-- SDK_REVIEW -->\")) | select(.created_at >= \"${RUN_STARTED_AT}\")] | length" \
               2>/dev/null || echo "0")
             if [ "${SUMMARY_COUNT}" -gt 0 ]; then
               VERDICT_POSTED=1
@@ -587,7 +583,7 @@ jobs:
           if [ "$ERRORED" = "1" ]; then
             MSG="Sandbox error: code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
             if [ "$VERDICT_POSTED" = "1" ]; then
-              echo "::warning::${MSG} — but a TEST_SDK_REVIEW summary comment was already posted on PR #${PR_NUMBER}. Treating as soft-success since the review was delivered."
+              echo "::warning::${MSG} — but a SDK_REVIEW summary comment was already posted on PR #${PR_NUMBER}. Treating as soft-success since the review was delivered."
             else
               echo "::error::${MSG}"
               exit 1
@@ -606,25 +602,24 @@ jobs:
             exit 1
           fi
 
-          echo "Test SDK Review (mothership) completed successfully (cost=${FINAL_COST})."
+          echo "SDK Review (mothership) completed successfully (cost=${FINAL_COST})."
 
       # The mothership sandbox cannot approve PRs in a way that satisfies
       # the `require_code_owner_review` rule on `main`:
       # `mothership-ai[bot]` is a GitHub App, and Apps cannot be listed in
-      # CODEOWNERS. So we mirror what claude.yml does for production
-      # `@sdk-review`: post the formal approval from the GHA runner so it
-      # is recorded as `atlan-ci` (a regular User account that IS in
+      # CODEOWNERS. So we post the formal approval from the GHA runner so
+      # it is recorded as `atlan-ci` (a regular User account that IS in
       # CODEOWNERS). Branch-protection then accepts the approval.
       #
       # Solo-approval guard: the companion workflow
-      # `test-sdk-review-dismiss-on-human.yml` listens for any human
+      # `sdk-review-dismiss-on-human.yml` listens for any human
       # comment or review on the PR and dismisses the atlan-ci approval
       # posted below. Net effect: bot can green-light a PR by itself only
       # until a human engages — the moment any human touches the PR
       # (comments OR reviews), the bot's approval drops and merge gates
       # require a fresh human approval. Identifying "the bot's approval"
       # uses a body-text signature so we never touch other atlan-ci
-      # reviews (e.g. claude.yml's production approvals).
+      # reviews.
       - name: Approve PR as atlan-ci (counts as code-owner)
         if: success() && steps.parse.outputs.pr_number != ''
         env:
@@ -636,7 +631,7 @@ jobs:
 
           # Re-read the just-posted summary comment to extract the verdict.
           # The mothership orchestration (.mothership/pr-review/ORCHESTRATION.md
-          # §3e) posts a comment with the `<!-- TEST_SDK_REVIEW -->` HTML
+          # §3e) posts a comment with the `<!-- SDK_REVIEW -->` HTML
           # marker and a `### Verdict: <state>` line. If a prior summary
           # exists from a re-trigger on the same PR head, the most recent
           # comment wins.
@@ -645,19 +640,19 @@ jobs:
           # we get the full body of the last matching comment as a single
           # string. A naive `.[] | select(...) | .body | tail -1` truncates
           # the multiline body to its last line, which silently breaks the
-          # verdict grep below. Same idiom as claude.yml:822-823.
+          # verdict grep below.
           SUMMARY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
             --paginate \
-            --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
+            --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
 
           if [ -z "$SUMMARY" ]; then
-            echo "::warning::No <!-- TEST_SDK_REVIEW --> summary comment found on PR #${PR_NUMBER} — skipping approval (the sandbox may have errored before posting)"
+            echo "::warning::No <!-- SDK_REVIEW --> summary comment found on PR #${PR_NUMBER} — skipping approval (the sandbox may have errored before posting)"
             exit 0
           fi
 
           # Extract the verdict and normalize spaces → underscores.
-          # Same pattern as claude.yml:832-834: case-insensitive grep with
-          # flexible whitespace, then upper-case + collapse to underscores
+          # Case-insensitive grep with flexible whitespace, then
+          # upper-case + collapse to underscores
           # so "READY TO MERGE" → "READY_TO_MERGE".
           RAW=$(printf '%s' "$SUMMARY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
           VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
@@ -668,7 +663,7 @@ jobs:
               # NOTE: the leading line of the body is a STABLE SIGNATURE used
               # by the dismiss-on-human workflow to identify approvals posted
               # by this flow. Do NOT change the leading text without updating
-              # `test-sdk-review-dismiss-on-human.yml` accordingly.
+              # `sdk-review-dismiss-on-human.yml` accordingly.
               APPROVE_BODY=$(printf '%s\n' \
                 "**SDK reviewer's verdict:** READY TO MERGE." \
                 "" \
@@ -682,7 +677,7 @@ jobs:
               ;;
           esac
 
-      - name: Set test-sdk-review status to failure (only on workflow failure)
+      - name: Set sdk-review status to failure (only on workflow failure)
         if: failure() && steps.pr.outputs.head_sha != ''
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -701,7 +696,7 @@ jobs:
               repo: context.repo.repo,
               sha: process.env.HEAD_SHA,
               state: 'failure',
-              context: 'test-sdk-review',
-              description: 'Test SDK Review (mothership) workflow failed — see logs',
+              context: 'sdk-review',
+              description: 'SDK Review (mothership) workflow failed — see logs',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
