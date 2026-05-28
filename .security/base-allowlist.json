@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-05-28",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -164,8 +164,8 @@
   "CVE-2026-39883": {
     "package": "go.opentelemetry.io/otel/sdk",
     "severity": "HIGH",
-    "reason": "Base image - OpenTelemetry Go dependency",
-    "expires": "2026-05-27",
+    "reason": "Base image - OpenTelemetry Go dependency. No upstream fix available as of 2026-05-28; rolling 30-day renewal.",
+    "expires": "2026-06-27",
     "added_by": "mananjain99",
     "fix_available_date": null,
     "compensating_controls": null,
@@ -296,8 +296,8 @@
   "CVE-2026-27140": {
     "package": "dapr-daprd-1.17",
     "severity": "HIGH",
-    "reason": "Base image - Dapr runtime, fix available in 1.17.5-r0",
-    "expires": "2026-05-27",
+    "reason": "Base image - Dapr runtime, fix available in 1.17.5-r0. Dockerfile bumped to 1.17.5-r0 in this PR; bridge allowlist until new SDK base image is built and deployed.",
+    "expires": "2026-06-27",
     "added_by": "mananjain99",
     "fix_available_date": null,
     "compensating_controls": null,
@@ -307,8 +307,8 @@
   "CVE-2026-32281": {
     "package": "dapr-daprd-1.17",
     "severity": "HIGH",
-    "reason": "Base image - Dapr runtime, fix available in 1.17.5-r0",
-    "expires": "2026-05-27",
+    "reason": "Base image - Dapr runtime, fix available in 1.17.5-r0. Dockerfile bumped to 1.17.5-r0 in this PR; bridge allowlist until new SDK base image is built and deployed.",
+    "expires": "2026-06-27",
     "added_by": "mananjain99",
     "fix_available_date": null,
     "compensating_controls": null,
@@ -318,8 +318,8 @@
   "CVE-2026-32283": {
     "package": "dapr-daprd-1.17",
     "severity": "HIGH",
-    "reason": "Base image - Dapr runtime, fix available in 1.17.5-r0",
-    "expires": "2026-05-27",
+    "reason": "Base image - Dapr runtime, fix available in 1.17.5-r0. Dockerfile bumped to 1.17.5-r0 in this PR; bridge allowlist until new SDK base image is built and deployed.",
+    "expires": "2026-06-27",
     "added_by": "mananjain99",
     "fix_available_date": null,
     "compensating_controls": null,
