@@ -1,6 +1,14 @@
 """Unit tests for IntegrationTestClient credential conversion."""
 
-from application_sdk.testing.integration.client import _to_v3_credentials
+from unittest.mock import patch
+
+import pytest
+
+from application_sdk.testing.integration.client import (
+    IntegrationTestClient,
+    _from_v3_credentials,
+    _to_v3_credentials,
+)
 
 
 class TestToV3Credentials:
@@ -49,3 +57,217 @@ class TestToV3Credentials:
         _to_v3_credentials(original)
         # Original should still have "extra" key (we shallow-copy)
         assert "extra" in original
+
+
+class TestFromV3Credentials:
+    """Tests for the _from_v3_credentials helper."""
+
+    def test_dict_pass_through(self):
+        assert _from_v3_credentials({"host": "localhost"}) == {"host": "localhost"}
+
+    def test_v3_list_to_flat_dict(self):
+        creds = [
+            {"key": "host", "value": "localhost"},
+            {"key": "port", "value": "5432"},
+        ]
+        assert _from_v3_credentials(creds) == {"host": "localhost", "port": "5432"}
+
+    def test_extra_keys_renested(self):
+        creds = [
+            {"key": "host", "value": "localhost"},
+            {"key": "extra.ssl", "value": "true"},
+            {"key": "extra.timeout", "value": "30"},
+        ]
+        result = _from_v3_credentials(creds)
+        assert result["host"] == "localhost"
+        assert result["extra"] == {"ssl": "true", "timeout": "30"}
+
+
+class TestProvisionAndStartWorkflow:
+    """Tests for the auto-provisioning behavior in _call_workflow.
+
+    The vault refactor (commit 0a55371d) made /start strip inline credentials
+    and require a credential_guid. These tests pin the framework's new contract:
+    it must POST credentials to /dev/local-vault and forward only the guid.
+    """
+
+    def _client(self) -> IntegrationTestClient:
+        return IntegrationTestClient(host="http://app", version="v1")
+
+    def test_workflow_provisions_then_starts(self):
+        client = self._client()
+        responses = iter(
+            [
+                {"data": {"credential_guid": "guid-123"}},
+                {"success": True, "data": {"workflow_id": "wf-1", "run_id": "run-1"}},
+            ]
+        )
+        with patch.object(
+            client, "_post", side_effect=lambda *_a, **_kw: next(responses)
+        ) as post:
+            response = client.call_api(
+                "workflow",
+                {
+                    "credentials": {"host": "db", "username": "u"},
+                    "metadata": {"foo": "bar"},
+                },
+            )
+
+        assert response["success"] is True
+        assert post.call_args_list[0].args[0] == "/dev/local-vault"
+        # local-vault must receive flat dict, not v3 pairs
+        vault_body = post.call_args_list[0].kwargs["data"]
+        assert vault_body == {"host": "db", "username": "u"}
+
+        start_body = post.call_args_list[1].kwargs["data"]
+        assert start_body["credential_guid"] == "guid-123"
+        assert "credentials" not in start_body
+        assert start_body["metadata"] == {"foo": "bar"}
+
+    def test_workflow_skips_provisioning_when_guid_provided(self):
+        client = self._client()
+        with patch.object(
+            client,
+            "_post",
+            return_value={"success": True, "data": {"workflow_id": "w"}},
+        ) as post:
+            client.call_api(
+                "workflow",
+                {"credential_guid": "preset-guid", "metadata": {}},
+            )
+
+        assert post.call_count == 1
+        endpoint = post.call_args.args[0]
+        assert endpoint != "/dev/local-vault"
+
+    def test_provision_raises_when_guid_missing(self):
+        """Vault reachable (has _http_status), returned no guid -> generic raise."""
+        client = self._client()
+        with (
+            patch.object(
+                client,
+                "_post",
+                return_value={"_http_status": 200, "success": False, "error": "boom"},
+            ),
+            pytest.raises(RuntimeError, match="credential_guid"),
+        ):
+            client._provision_credentials({"host": "db"})
+
+    def test_provision_raises_clear_error_on_connection_failure(self):
+        """Transport failure (no _http_status) -> surface the real cause."""
+        client = self._client()
+        err_response = {
+            "success": False,
+            "error": {
+                "code": "CONNECTION_FAILED",
+                "message": "Cannot connect to server at http://app.",
+                "details": "ConnectionRefusedError",
+            },
+        }
+        with (
+            patch.object(client, "_post", return_value=err_response),
+            pytest.raises(RuntimeError, match="Could not reach"),
+        ):
+            client._provision_credentials({"host": "db"})
+
+    def test_provision_raises_clear_error_on_timeout(self):
+        """Timeout (no _http_status) -> surface the real cause."""
+        client = self._client()
+        err_response = {
+            "success": False,
+            "error": {
+                "code": "REQUEST_TIMEOUT",
+                "message": "Request timed out after 30s",
+                "details": "ReadTimeoutError",
+            },
+        }
+        with (
+            patch.object(client, "_post", return_value=err_response),
+            pytest.raises(RuntimeError, match="Could not reach"),
+        ):
+            client._provision_credentials({"host": "db"})
+
+    def test_provision_raises_on_5xx(self):
+        """5xx from local-vault -> raises with status, not silently treated as 403."""
+        client = self._client()
+        with (
+            patch.object(
+                client,
+                "_post",
+                return_value={"_http_status": 500, "error": "internal"},
+            ),
+            pytest.raises(RuntimeError, match="status=500"),
+        ):
+            client._provision_credentials({"host": "db"})
+
+    def test_provision_does_not_leak_response_body_into_error(self):
+        """Error message should not interpolate the full response dict (avoids
+        echoing potentially sensitive 4xx detail payloads)."""
+        client = self._client()
+        with (
+            patch.object(
+                client,
+                "_post",
+                return_value={
+                    "_http_status": 422,
+                    "detail": [{"loc": ["body"], "msg": "secret-looking-value"}],
+                },
+            ),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
+            client._provision_credentials({"host": "db"})
+        assert "secret-looking-value" not in str(exc_info.value)
+
+    def test_workflow_falls_back_to_inline_when_local_vault_gated_off(self):
+        """SDR testcontainer / non-LOCAL deployments gate /dev/local-vault behind 403.
+
+        The framework must not break those tests: provisioning returns None and
+        the workflow start receives credentials inline (as v3 pairs).
+        """
+        client = self._client()
+        responses = iter(
+            [
+                {"detail": "Dev-only endpoint", "_http_status": 403},
+                {"success": True, "data": {"workflow_id": "w"}},
+            ]
+        )
+        with patch.object(
+            client, "_post", side_effect=lambda *_a, **_kw: next(responses)
+        ) as post:
+            client.call_api(
+                "workflow",
+                {"credentials": {"host": "db", "username": "u"}, "metadata": {}},
+            )
+
+        assert post.call_count == 2
+        start_body = post.call_args_list[1].kwargs["data"]
+        assert "credential_guid" not in start_body
+        assert start_body["credentials"] == [
+            {"key": "host", "value": "db"},
+            {"key": "username", "value": "u"},
+        ]
+
+    def test_workflow_accepts_v3_credentials_list(self):
+        """Scenarios that hand-craft v3 pair lists still get flattened for vault."""
+        client = self._client()
+        responses = iter(
+            [
+                {"data": {"credential_guid": "guid-xyz"}},
+                {"success": True, "data": {"workflow_id": "w"}},
+            ]
+        )
+        with patch.object(
+            client, "_post", side_effect=lambda *_a, **_kw: next(responses)
+        ) as post:
+            client.call_api(
+                "workflow",
+                {
+                    "credentials": [
+                        {"key": "host", "value": "db"},
+                        {"key": "extra.ssl", "value": "true"},
+                    ]
+                },
+            )
+
+        vault_body = post.call_args_list[0].kwargs["data"]
+        assert vault_body == {"host": "db", "extra": {"ssl": "true"}}
