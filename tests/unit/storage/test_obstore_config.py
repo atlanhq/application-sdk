@@ -208,7 +208,7 @@ class TestCloudPlumbsClientOptions:
         monkeypatch.setenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES", "7")
         monkeypatch.delenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", raising=False)
 
-        with patch("application_sdk.storage.cloud.S3Store") as mock_s3:
+        with patch("obstore.store.S3Store") as mock_s3:
             mock_s3.return_value = MagicMock()
             from application_sdk.storage.cloud import CloudStore
 

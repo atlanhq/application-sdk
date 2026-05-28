@@ -157,7 +157,7 @@ jobs:
             }')
 
           # SSE streaming dispatch (sync mode 504s behind mothership's nginx;
-          # see test-sdk-review.yml for the full rationale).
+          # see sdk-review.yml for the full rationale).
           EVENT=""
           COMPLETED=0
           ERRORED=0

@@ -14,7 +14,10 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 
-from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
+from application_sdk.constants import (
+    ENABLE_ATLAN_UPLOAD,
+    TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+)
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.utils import get_metric_enrichment_labels
@@ -291,6 +294,11 @@ def _build_tls_config(
 async def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
     """Pre-resolve ``target_host`` and prefer an IPv4 address when AAAA is present.
 
+    Caller-gated: ``create_temporal_client`` only invokes this when
+    ``ENABLE_ATLAN_UPLOAD`` is set (SDR mode). Internal Atlan services that
+    connect via in-cluster Service DNS keep the hostname intact so the
+    Rust bridge re-resolves on reconnect and survives Service IP changes.
+
     Returns ``(resolved_target, sni_hostname)``:
 
     * ``resolved_target`` — the literal ``<ip>:<port>`` to hand to the Rust
@@ -505,25 +513,37 @@ async def create_temporal_client(
             "Connecting to Temporal (plaintext): host=%s namespace=%s", host, namespace
         )
 
-    # Pre-resolve the target hostname and prefer IPv4 when the OS
-    # resolver returns both A and AAAA. The Rust Temporal bridge picks
-    # one address from the resolver and fails the whole connect if that
-    # address is unreachable — on hosts with half-broken IPv6 (link-
-    # local only, or v6 enabled without a global route) this manifests
-    # as ``Status { code: Unavailable, ... AddrNotAvailable ... }`` on
-    # an AAAA record. See ``_prefer_v4_target`` for the full rationale.
-    resolved_host, sni_host = await _prefer_v4_target(host)
-    if sni_host is not None:
-        # We substituted an IP for the hostname — preserve TLS SNI so
-        # the handshake still validates against the original DNS name's
-        # cert, not the literal IP.
-        tls_config = _apply_sni_domain(tls_config, sni_host)
-        logger.info(
-            "Pre-resolved Temporal target %s -> %s (SNI preserved as %s)",
-            host,
-            resolved_host,
-            sni_host,
-        )
+    # SDR-only: pre-resolve the target hostname and prefer IPv4 when the OS
+    # resolver returns both A and AAAA. Solves the half-broken-IPv6 case on
+    # customer SDR hosts (link-local-only v6, or v6 enabled without a global
+    # route) where the Rust Temporal bridge picks the AAAA address and fails
+    # the whole connect with ``EADDRNOTAVAIL``. See ``_prefer_v4_target`` for
+    # the full rationale.
+    #
+    # Gated on ``ENABLE_ATLAN_UPLOAD`` (the SDR-mode flag) because internal
+    # Atlan services connect to Temporal via in-cluster Service DNS
+    # (``temporal-frontend.temporal.svc.cluster.local``) where the ClusterIP
+    # can change if the Service object is recreated (Helm reapply, namespace
+    # rebuild, etc.). On reconnect the Rust bridge keeps using the literal
+    # IP it was given at connect time, so a pinned-IP target goes stale and
+    # connect fails. Hostname-based connects re-resolve each reconnect and
+    # stay healthy through Service IP churn. Only SDR — where DNS goes
+    # through Cloudflare anycast and there's no in-cluster Service to track
+    # — benefits from the literal-IP substitution.
+    resolved_host, sni_host = host, None
+    if ENABLE_ATLAN_UPLOAD:
+        resolved_host, sni_host = await _prefer_v4_target(host)
+        if sni_host is not None:
+            # We substituted an IP for the hostname — preserve TLS SNI so
+            # the handshake still validates against the original DNS name's
+            # cert, not the literal IP.
+            tls_config = _apply_sni_domain(tls_config, sni_host)
+            logger.info(
+                "Pre-resolved Temporal target %s -> %s (SNI preserved as %s)",
+                host,
+                resolved_host,
+                sni_host,
+            )
 
     kwargs: dict[str, Any] = {
         "target_host": resolved_host,

@@ -72,7 +72,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
      echo "PR moved from $HEAD_SHA to $CURRENT_SHA since dispatch — aborting cleanly."
      # Submit a minimal review so the status check doesn't stay pending,
-     # then exit. A fresh @test-sdk-review on the new HEAD gets a new session.
+     # then exit. A fresh @sdk-review on the new HEAD gets a new session.
      exit 0
    fi
    ```
@@ -89,7 +89,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    - `.mothership/review.yaml`
 
 6b. **Load prior review into context (re-review continuity)** — if a
-    previous `<!-- TEST_SDK_REVIEW -->` summary comment exists on this
+    previous `<!-- SDK_REVIEW -->` summary comment exists on this
     PR, read its full body and write it to `/tmp/PRIOR_REVIEW.md`. The
     body becomes **input** to Phase 2 reasoning (not just a labeling
     reference for §2d at the end): it tells the agents what was flagged
@@ -99,23 +99,22 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     ```bash
     PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
       --paginate \
-      --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
+      --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
 
     if [ -n "$PRIOR_REVIEW" ]; then
       printf '%s\n' "$PRIOR_REVIEW" > /tmp/PRIOR_REVIEW.md
-      echo "[bootstrap] prior test-sdk-review summary found — loaded into /tmp/PRIOR_REVIEW.md"
+      echo "[bootstrap] prior sdk-review summary found — loaded into /tmp/PRIOR_REVIEW.md"
     else
       : > /tmp/PRIOR_REVIEW.md
-      echo "[bootstrap] no prior test-sdk-review summary — fresh review"
+      echo "[bootstrap] no prior sdk-review summary — fresh review"
     fi
     ```
 
     **CRITICAL — jq idiom:** wrap the selection in `[ ... ] | last`
     and take `.body` from the array element. A naive
     `--jq '.[] | select(...) | .body' | head -1` collapses the raw
-    multiline body to its first line (the `<!-- TEST_SDK_REVIEW -->`
+    multiline body to its first line (the `<!-- SDK_REVIEW -->`
     HTML marker) and silently drops the entire review content.
-    Same shape-of-bug as claude.yml:822-823 is set up to avoid.
 
     Every subsequent phase that reasons about the PR (Phase 2 agents,
     cross-model debias, verdict determination) should treat
@@ -126,7 +125,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     counts as a "new" finding vs a known-and-discussed one.
 
 7. **§Intent Inference** — interpret `COMMENTER_INTENT` (free-form text
-   the human typed after `@test-sdk-review`) and set the mode for this run.
+   the human typed after `@sdk-review`) and set the mode for this run.
    The workflow does NOT parse commands — that is your job.
 
    Apply these rules in order; first match wins. If `COMMENTER_INTENT`
@@ -175,7 +174,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    git merge --abort
    ```
    Submit minimal review: "PR has merge conflicts. Please rebase or
-   comment `@test-sdk-review` after resolving conflicts." Label `test-sdk-review-needs-rebase`.
+   comment `@sdk-review` after resolving conflicts." Label `sdk-review-needs-rebase`.
    EXIT.
 
 9. **Pre-commit cleanup** (eliminate style noise before review):
@@ -374,7 +373,7 @@ done
 ```
 > **Large PR (N files, M lines).** Full review applied to X high-risk files.
 > Hunk review applied to Y medium-risk files. Z low-risk files skipped.
-> Re-run `@test-sdk-review` on specific files if needed.
+> Re-run `@sdk-review` on specific files if needed.
 ```
 
 #### Single-file overflow (any tier)
@@ -511,7 +510,7 @@ silently breaks downstream consumers):
 ```bash
 PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
   --paginate \
-  --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
+  --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
 ```
 
 Labeling rules:
@@ -598,25 +597,20 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
 
 There is no mothership-side handler, and the sandbox itself **does not
 post `gh pr review`**. The formal approval is posted **outside** the
-sandbox by the GHA workflow (`test-sdk-review.yml` → "Approve PR as
+sandbox by the GHA workflow (`sdk-review.yml` → "Approve PR as
 atlan-ci" step), so the approval is recorded as `atlan-ci` and counts
 toward the `require_code_owner_review` rule on `main`.
-`mothership-ai[bot]` is a GitHub App and cannot be in CODEOWNERS —
-same pattern claude.yml uses for the production reviewer.
+`mothership-ai[bot]` is a GitHub App and cannot be in CODEOWNERS.
 
 The atlan-ci approval is **auto-dismissed the moment any human
 comments or reviews on the PR**, via the companion workflow
-`test-sdk-review-dismiss-on-human.yml`. So the policy is: bot
+`sdk-review-dismiss-on-human.yml`. So the policy is: bot
 green-lights, any human touching the PR returns the gate to "needs
 human approval." That gives the bot leverage to actually unblock
 merges (real code-owner approval, not advisory) without giving it
 the ability to solo-approve in the presence of human engagement.
 
-The sandbox is responsible only for **labels** here. Labels are
-**prefixed `test-`** to keep the experimental reviewer's signals
-separate from the production `@sdk-review` flow (which uses the
-un-prefixed `sdk-review-approved` / `needs-human-review` labels). Do
-NOT touch the production labels from this orchestration.
+The sandbox is responsible only for **labels** here.
 
 ```bash
 # $GITHUB_TOKEN is set in Phase 0 step 3 (injected by dispatcher)
@@ -625,23 +619,23 @@ REPO="atlanhq/application-sdk"
 
 case "$VERDICT" in
   "READY_TO_MERGE")
-    gh pr edit $PR --repo $REPO --add-label "test-sdk-review-approved"
-    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
+    gh pr edit $PR --repo $REPO --add-label "sdk-review-approved"
+    gh pr edit $PR --repo $REPO --remove-label "sdk-review-needs-human" 2>/dev/null || true
     ;;
   "NEEDS_HUMAN")
-    gh pr edit $PR --repo $REPO --add-label "test-sdk-review-needs-human"
-    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
+    gh pr edit $PR --repo $REPO --add-label "sdk-review-needs-human"
+    gh pr edit $PR --repo $REPO --remove-label "sdk-review-approved" 2>/dev/null || true
     ;;
   "NEEDS_FIXES"|"BLOCKED")
-    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
-    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
+    gh pr edit $PR --repo $REPO --remove-label "sdk-review-approved" 2>/dev/null || true
+    gh pr edit $PR --repo $REPO --remove-label "sdk-review-needs-human" 2>/dev/null || true
     ;;
 esac
 ```
 
 The verdict must also be written into the summary comment in §3e as
 a line `### Verdict: READY TO MERGE` (etc.) — the GHA runner greps
-that line out of the just-posted `<!-- TEST_SDK_REVIEW -->` comment
+that line out of the just-posted `<!-- SDK_REVIEW -->` comment
 to decide whether to call `gh pr review --approve`. Do not change
 the verdict line's prefix without updating the workflow's parser.
 
@@ -683,15 +677,13 @@ Do NOT resolve threads from human reviewers.
 
 ### 3e. Summary
 
-Use this template. The leading `<!-- TEST_SDK_REVIEW -->` HTML
+Use this template. The leading `<!-- SDK_REVIEW -->` HTML
 comment is the marker the orchestration uses to find prior reviews
-on subsequent runs; do NOT remove it or use the production
-`<!-- SDK_REVIEW_V2 -->` marker (that belongs to the production
-@sdk-review flow):
+on subsequent runs; do NOT remove it:
 
 ```
-<!-- TEST_SDK_REVIEW -->
-## Test SDK <Review | Re-review> (mothership): PR #<number> — <title>
+<!-- SDK_REVIEW -->
+## SDK <Review | Re-review> (mothership): PR #<number> — <title>
 
 ### Verdict: <READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW>
 
@@ -729,9 +721,9 @@ on subsequent runs; do NOT remove it or use the production
 
 **Title selection — "Review" vs "Re-review":**
 - If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first
-  `<!-- TEST_SDK_REVIEW -->` comment on the PR) → use **"Test SDK
-  Review (mothership)"**.
-- If a prior summary exists → use **"Test SDK Re-review (mothership)"**.
+  `<!-- SDK_REVIEW -->` comment on the PR) → use **"SDK Review
+  (mothership)"**.
+- If a prior summary exists → use **"SDK Re-review (mothership)"**.
   This tells the human reading the PR-comment timeline that this
   pass loaded the previous review as context and reasoned about
   deltas (per Phase 0 §6b + §2d), not that it ignored history and
@@ -762,7 +754,7 @@ comment and each finding as an inline review comment.
 
 ```bash
 # Summary comment (the body built in 3a, including the
-# <!-- TEST_SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
+# <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
 gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 
 # Inline finding comments — post one per finding via
@@ -771,13 +763,9 @@ gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 # (--approve | --comment) is already submitted in §3c — do NOT submit
 # a second `gh pr review` here.
 
-# Commit status — set the test-sdk-review check explicitly.
-# This MUST be `test-sdk-review`, NOT `sdk-review` — the production
-# @sdk-review (claude.yml) reviewer owns the `sdk-review` context;
-# writing there would hijack its signal. The experimental reviewer
-# uses `test-sdk-review` so the two never collide on the merge box.
+# Commit status — set the sdk-review check explicitly.
 gh api "repos/$REPO/statuses/$HEAD_SHA" \
-  -f context="test-sdk-review" \
+  -f context="sdk-review" \
   -f state="$STATE" \
   -f description="$DESCRIPTION"
 # where STATE ∈ success|failure|pending and DESCRIPTION ≤ 140 chars
@@ -881,7 +869,7 @@ Submit minimal:
 ```json
 {
   "approval_recommendation": "REQUEST_CHANGES",
-  "summary": "Test SDK Review (mothership) could not complete: <reason>. Re-trigger with @test-sdk-review.",
+  "summary": "SDK Review (mothership) could not complete: <reason>. Re-trigger with @sdk-review.",
   "findings": []
 }
 ```

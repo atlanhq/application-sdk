@@ -1,50 +1,43 @@
 # Code Review
 
-PRs to `main` are reviewed by AI agents. Two reviewers currently run in
-**parallel** so the team can compare outputs side-by-side:
+PRs to `main` are reviewed by an AI agent triggered with `@sdk-review`.
+The reviewer runs on Atlan's mothership Rover Direct backend; all
+SDK-specific behavior lives in `.mothership/pr-review/`.
 
 | Trigger | Reviewer | Backend | Workflow file |
 |---|---|---|---|
-| `@sdk-review` | Production reviewer (stable) | Anthropic's `claude-code-action` | `.github/workflows/claude.yml` |
-| `@test-sdk-review` | Experimental reviewer | Mothership Rover Direct API, with orchestration in `.mothership/pr-review/` | `.github/workflows/test-sdk-review.yml` |
+| `@sdk-review` | SDK reviewer (mothership) | Mothership Rover Direct API, with orchestration in `.mothership/pr-review/` | `.github/workflows/sdk-review.yml` |
 
-Both can be triggered on the same PR. They produce separately-marked
-comments, set distinct commit-status checks (`sdk-review` vs
-`test-sdk-review`), and write to separately-prefixed labels — so they
-don't collide.
+The reviewer sets the `sdk-review` commit status, posts a summary
+comment marked `<!-- SDK_REVIEW -->`, and manages the
+`sdk-review-approved` / `sdk-review-needs-human` /
+`sdk-review-needs-rebase` labels.
 
-## Trigger surface (the experimental `@test-sdk-review` flow)
+## Trigger surface
 
 Comment on any PR:
 
 | What you type | What happens |
 |---|---|
-| `@test-sdk-review` | Standard review via the mothership Rover backend. The orchestration picks the right mode based on PR state and prior review history. |
-| `@test-sdk-review <free-form text>` | Same, but the trailing text is forwarded as `COMMENTER_INTENT`. The agent interprets it and decides what to do — auto-fix, dispute a finding, stop, override, focus on a specific area, etc. |
+| `@sdk-review` | Standard review via the mothership Rover backend. The orchestration picks the right mode based on PR state and prior review history. |
+| `@sdk-review <free-form text>` | Same, but the trailing text is forwarded as `COMMENTER_INTENT`. The agent interprets it and decides what to do — auto-fix, dispute a finding, stop, override, focus on a specific area, etc. |
 
 Examples:
 
-- `@test-sdk-review please also fix the lint warnings` — review and
+- `@sdk-review please also fix the lint warnings` — review and
   auto-fix any PATCH-scope findings.
-- `@test-sdk-review focus on the new metric reader code` — standard
+- `@sdk-review focus on the new metric reader code` — standard
   review, but the agent weights that area extra.
-- `@test-sdk-review stop` — cancel an in-flight review.
-- `@test-sdk-review override: rule does not apply to internal helper` —
+- `@sdk-review stop` — cancel an in-flight review.
+- `@sdk-review override: rule does not apply to internal helper` —
   admin force-pass (the orchestration verifies the commenter is a repo
   admin before honouring this).
-- `@test-sdk-review challenge: ARCH-001 — this is intentional because …`
+- `@sdk-review challenge: ARCH-001 — this is intentional because …`
   — re-evaluate a specific finding with the author's reasoning.
 
 There is no command enumeration in the workflow YAML. All intent
 inference happens in `.mothership/pr-review/ORCHESTRATION.md`
 (§Intent Inference) so it can be tuned without editing CI.
-
-## Trigger surface (the production `@sdk-review` flow)
-
-Refer to the existing `claude.yml` workflow and the
-`.claude/skills/sdk-review/` rules for the production reviewer. The
-command surface there is unchanged from before this experimental
-parallel reviewer was introduced.
 
 Only repo OWNER, MEMBER, or COLLABORATOR can trigger. External fork
 contributors cannot.
@@ -82,10 +75,10 @@ The review uses two model families to eliminate bias:
 - Findings where the models disagree are dropped (model bias)
 - Guardrail violations are always kept regardless of model agreement
 
-## Auto-Fix Loop (experimental reviewer only)
+## Auto-Fix Loop
 
-When the human's intent text asks the experimental agent to fix (e.g.
-`@test-sdk-review apply fixes`):
+When the human's intent text asks the agent to fix (e.g.
+`@sdk-review apply fixes`):
 
 1. Review the PR
 2. Apply PATCH-scope findings (exact code changes from the review)
@@ -97,9 +90,9 @@ The whole loop runs inside the same Cloudflare sandbox via Rover
 Direct's `session_id` resume — no re-dispatch from CI. MIGRATE,
 REFACTOR, and DESIGN_CHANGE scope findings are left for humans.
 
-## Disputing a Finding (experimental reviewer)
+## Disputing a Finding
 
-Comment `@test-sdk-review challenge: <your explanation>` (or any
+Comment `@sdk-review challenge: <your explanation>` (or any
 equivalent phrasing — the orchestration parses intent, not exact
 commands). The next review run re-evaluates the cited findings
 against your context:
@@ -108,34 +101,18 @@ against your context:
 - If partially valid: severity is downgraded
 - If not valid: finding stays with explanation
 
-## Override (Admin Only, experimental reviewer)
+## Override (Admin Only)
 
-`@test-sdk-review override: <reason>` — sets the `test-sdk-review`
+`@sdk-review override: <reason>` — sets the `sdk-review`
 status check to success. Only repo admins can do this; the
 orchestration verifies via
 `gh api repos/<repo>/collaborators/<commenter>/permission` before
 honouring the override. Logged for audit trail.
 
-## Merge Queue
-
-After a PR is approved, the merge queue workflow automatically:
-
-- Updates the branch when it falls behind main
-- Lets GitHub's native auto-merge handle the final squash
-- Labels `needs-rebase` if conflicts arise
-- Auto-triggers `@test-sdk-review` (the experimental mothership reviewer)
-  if post-update CI fails on an approved PR — whichever reviewer
-  originally approved (production label `sdk-review-approved` or
-  experimental label `test-sdk-review-approved` both qualify the PR)
-
-Enable auto-merge on the PR or add the `auto-merge` label to opt in.
-
 ## Required configuration
 
-The `test-sdk-review` and `sdk-evolution-cron` workflows (mothership
-flows) need these repo-level secrets and variables. The production
-`@sdk-review` flow (claude.yml) uses its own existing configuration
-unchanged.
+The `sdk-review` and `sdk-evolution-cron` workflows (both mothership
+flows) need these repo-level secrets and variables.
 
 | Kind | Name | Purpose |
 |---|---|---|

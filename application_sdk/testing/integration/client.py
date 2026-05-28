@@ -70,6 +70,33 @@ def _to_v3_credentials(
     return pairs
 
 
+def _from_v3_credentials(
+    creds: dict[str, Any] | list[dict[str, str]],
+) -> dict[str, Any]:
+    """Inverse of ``_to_v3_credentials`` — turn a v3 pair list into a flat dict.
+
+    ``extra.<subkey>`` pairs are re-nested under a single ``extra`` dict. Dict
+    inputs pass through unchanged so callers can stay format-agnostic.
+    """
+    if isinstance(creds, dict):
+        return creds
+
+    flat: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    for pair in creds:
+        key = pair.get("key")
+        value = pair.get("value")
+        if not key:
+            continue
+        if key.startswith("extra."):
+            extra[key[len("extra.") :]] = value
+        else:
+            flat[key] = value
+    if extra:
+        flat["extra"] = extra
+    return flat
+
+
 class IntegrationTestClient:
     """Client for integration testing of the Core 3 APIs.
 
@@ -231,7 +258,14 @@ class IntegrationTestClient:
     ) -> dict[str, Any]:
         """Call the workflow start API.
 
-        Converts flat credential dicts to v3 key-value format before sending.
+        Production /start strips inline credentials and resolves them via a
+        ``credential_guid`` provisioned out-of-band (by AE/Heracles). To match
+        that locally, we POST credentials to ``/dev/local-vault`` and forward
+        only the returned guid. When local-vault is not exposed — e.g. SDR
+        testcontainer runs where the workflow resolves credentials via
+        ``agent_json`` — we fall back to sending inline credentials so those
+        scenarios stay unaffected. Scenarios that already supply
+        ``credential_guid`` skip provisioning entirely.
 
         Args:
             args: The workflow arguments (credentials, metadata, connection).
@@ -241,11 +275,79 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response.
         """
         endpoint = endpoint_override or self.workflow_endpoint
-        # Convert credentials inside args to v3 format if present
         data = dict(args)
-        if "credentials" in data and isinstance(data["credentials"], dict):
+
+        if "credential_guid" not in data and data.get("credentials"):
+            credential_guid = self._provision_credentials(data["credentials"])
+            if credential_guid is not None:
+                data["credential_guid"] = credential_guid
+                del data["credentials"]
+            elif isinstance(data["credentials"], dict):
+                data["credentials"] = _to_v3_credentials(data["credentials"])
+        elif "credentials" in data and isinstance(data["credentials"], dict):
             data["credentials"] = _to_v3_credentials(data["credentials"])
+
         return self._post(endpoint, data=data)
+
+    def _provision_credentials(
+        self,
+        credentials: dict[str, Any] | list[dict[str, str]],
+    ) -> str | None:
+        """Provision credentials via the dev local-vault and return the guid.
+
+        Mirrors the production AE/Heracles flow: sensitive fields land in the
+        local secret store, non-sensitive ones in object storage, and the
+        caller gets back a guid to pass to ``/start``.
+
+        When ``/dev/local-vault`` is gated off (HTTP 403 ``Dev-only endpoint``,
+        e.g. on SDR testcontainer or any non-LOCAL deployment), returns
+        ``None`` so the caller can fall back to inline credentials. Any other
+        failure raises.
+
+        Args:
+            credentials: Flat ``{key: value}`` dict or v3 ``[{key, value}]``
+                list. v3 lists are flattened back to a dict for the vault.
+
+        Returns:
+            The ``credential_guid`` issued by the vault, or ``None`` if the
+            endpoint is gated off in this deployment.
+
+        Raises:
+            RuntimeError: If local-vault cannot be reached, or is reachable but
+                returns no guid.
+        """
+        flat = _from_v3_credentials(credentials)
+        response = self._post("/dev/local-vault", data=flat)
+
+        if response.get("_http_status") == 403:
+            logger.info(
+                "local-vault gated off (%s); falling back to inline credentials. "
+                "If your workflow expects a credential_guid, set one explicitly "
+                "on the scenario.",
+                response.get("detail") or response.get("error"),
+            )
+            return None
+
+        # Transport-failure shape from _post (ConnectionError / Timeout /
+        # RequestException): no _http_status, success=False, error is a dict.
+        # Surface the actual cause instead of the generic missing-guid raise.
+        if "_http_status" not in response and isinstance(response.get("error"), dict):
+            err = response["error"]
+            raise RuntimeError(
+                f"Could not reach /dev/local-vault at {self.host}: "
+                f"{err.get('message')}. Is the application server running?"
+            )
+
+        guid = (response.get("data") or {}).get("credential_guid") or response.get(
+            "credential_guid"
+        )
+        if not guid:
+            raise RuntimeError(
+                "Local-vault did not return a credential_guid "
+                f"(status={response.get('_http_status')})."
+            )
+        logger.debug("Provisioned credentials via local-vault: guid=%s", guid)
+        return guid
 
     def _call_config(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the config GET or POST API.
