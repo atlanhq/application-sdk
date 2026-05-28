@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.13.4 (May 28, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.3...v3.13.4
+
+### Bug Fixes
+
+- restore atlan.yaml timeout env vars as SDK fallbacks (#1888) (by @cmgrote in [127841b](https://github.com/atlanhq/application-sdk/commit/127841b))
+- gate IPv4-resolver substitution on SDR mode only (DISTR-507 follow-up) (#1899) (by @Lalit3716-atlan in [de5214c](https://github.com/atlanhq/application-sdk/commit/de5214c))
+- allow GCS binding to use ADC / Workload Identity (#1897) (by @avinash-ganta in [6127f1d](https://github.com/atlanhq/application-sdk/commit/6127f1d))
+- translate all Dapr binding auth modes into obstore config + real-cloud integration tests (#1912) (by @cmgrote in [25cbd5f](https://github.com/atlanhq/application-sdk/commit/25cbd5f))
+
+
 ## v3.13.3 (May 27, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.2...v3.13.3
