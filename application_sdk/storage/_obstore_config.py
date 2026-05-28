@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # obstore TypedDicts — not importable at runtime.
-    from obstore.store import ClientConfig, RetryConfig
+    from obstore.store import ClientConfig, ObjectStore, RetryConfig
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -141,6 +141,79 @@ def obstore_retry_config() -> RetryConfig | None:
             )
 
     return cfg or None
+
+
+def make_s3_store(
+    bucket: str,
+    config: dict[str, str] | None = None,
+    *,
+    label: str = "s3",
+    client_options: ClientConfig | None = None,
+    credential_provider: object = None,
+) -> ObjectStore:
+    """Create an S3Store with SDK-default client/retry config.
+
+    Both ``binding.py`` and ``cloud.py`` delegate store construction here so
+    timeouts, retry budgets, and log output stay consistent across all S3 paths.
+    Pass *client_options* to override the SDK defaults (e.g., for insecureSSL).
+    """
+    from obstore.store import S3Store  # noqa: PLC0415
+
+    opts = client_options if client_options is not None else obstore_client_options()
+    retry = obstore_retry_config()
+    log_obstore_config(label, client_options=opts, retry_config=retry)
+    kw: dict[str, object] = dict(
+        bucket=bucket, config=config, client_options=opts, retry_config=retry
+    )
+    if credential_provider is not None:
+        kw["credential_provider"] = credential_provider
+    return S3Store(**kw)  # type: ignore[arg-type]
+
+
+def make_azure_store(
+    container: str,
+    config: dict[str, str] | None = None,
+    *,
+    label: str = "azure",
+    client_options: ClientConfig | None = None,
+    credential_provider: object = None,
+) -> ObjectStore:
+    """Create an AzureStore with SDK-default client/retry config.
+
+    See :func:`make_s3_store` for rationale.
+    """
+    from obstore.store import AzureStore  # noqa: PLC0415
+
+    opts = client_options if client_options is not None else obstore_client_options()
+    retry = obstore_retry_config()
+    log_obstore_config(label, client_options=opts, retry_config=retry)
+    kw: dict[str, object] = dict(
+        container_name=container, config=config, client_options=opts, retry_config=retry
+    )
+    if credential_provider is not None:
+        kw["credential_provider"] = credential_provider
+    return AzureStore(**kw)  # type: ignore[arg-type]
+
+
+def make_gcs_store(
+    bucket: str,
+    config: dict[str, str] | None = None,
+    *,
+    label: str = "gcs",
+    client_options: ClientConfig | None = None,
+) -> ObjectStore:
+    """Create a GCSStore with SDK-default client/retry config.
+
+    See :func:`make_s3_store` for rationale.
+    """
+    from obstore.store import GCSStore  # noqa: PLC0415
+
+    opts = client_options if client_options is not None else obstore_client_options()
+    retry = obstore_retry_config()
+    log_obstore_config(label, client_options=opts, retry_config=retry)
+    return GCSStore(
+        bucket=bucket, config=config, client_options=opts, retry_config=retry
+    )  # type: ignore[arg-type]
 
 
 def log_obstore_config(
