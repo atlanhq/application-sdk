@@ -111,7 +111,7 @@ jobs:
         with:
           name: docker-image
           path: /tmp/image.tar
-          retention-days: 1
+          retention-days: 7
 
   # ── Trivy scan (parallel with Snyk) ─────────────────────────────────────────
   trivy-scan:
@@ -171,7 +171,7 @@ jobs:
         with:
           name: trivy-results
           path: /tmp/trivy_results.json
-          retention-days: 1
+          retention-days: 7
 
   # ── Snyk scan (parallel with Trivy) ─────────────────────────────────────────
   snyk-scan:
@@ -230,7 +230,7 @@ jobs:
         with:
           name: snyk-results
           path: /tmp/snyk_results.json
-          retention-days: 1
+          retention-days: 7
 
   # ── Security Gate — merge results, check allowlist ──────────────────────────
   security-gate:
