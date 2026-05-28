@@ -27,8 +27,14 @@
 # Side-effects:
 #   commit-status context  = sdk-review
 #   labels                 = sdk-review-approved, sdk-review-needs-human,
-#                            sdk-review-needs-rebase
-#   comment marker         = <!-- SDK_REVIEW -->
+#                            sdk-review-needs-rebase (applied here based on
+#                            the extracted verdict; the legacy
+#                            `test-sdk-review-*` labels are stripped on the
+#                            way in)
+#   comment marker         = <!-- SDK_REVIEW --> (the legacy
+#                            <!-- TEST_SDK_REVIEW --> marker is also
+#                            accepted for in-flight PRs that pre-date the
+#                            promotion)
 #
 # Required configuration:
 #   secrets.HARNESS_TOKEN              Bearer token for /api/sandbox/execute.
@@ -181,15 +187,14 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Post / update a single "starting" notice per PR so the user
-            // gets an immediate clickable link to the workflow run and can
-            // watch the SSE event stream live. The final review summary
-            // lands as a separate comment from mothership-ai[bot] when the
-            // sandbox completes.
+            // Post a fresh "starting" notice per @sdk-review trigger so the
+            // PR shows a "just now" comment the user can scroll to. We used
+            // to update a single comment in place — that kept the PR tidy
+            // but GitHub's UI showed the original createdAt timestamp on
+            // every re-trigger, making the latest run look stale.
             //
-            // The HTML comment marker lets repeat invocations update the
-            // existing notice in place instead of accumulating one comment
-            // per @sdk-review trigger.
+            // The final review summary lands as a separate comment from
+            // mothership-ai[bot] when the sandbox completes.
             const marker = '<!-- SDK_REVIEW_STARTED -->';
             const commenter = process.env.COMMENTER || 'unknown';
             const runUrl = process.env.GHA_RUN_URL;
@@ -203,31 +208,13 @@ jobs:
               `[Watch the workflow run live](${runUrl}) — the review summary will appear as a separate comment when complete (typical: 5–30 min, hard cap 2h).`,
             ].join('\n');
 
-            const existing = await github.rest.issues.listComments({
+            await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
-              per_page: 100,
+              body,
             });
-            const prior = existing.data.find(c => c.body && c.body.startsWith(marker));
-
-            if (prior) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: prior.id,
-                body,
-              });
-              console.log(`Updated existing 'starting' comment ${prior.id}`);
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body,
-              });
-              console.log(`Posted new 'starting' comment`);
-            }
+            console.log(`Posted new 'starting' comment`);
 
       - name: Set sdk-review status to pending
         env:
@@ -635,8 +622,22 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           REPO: ${{ github.repository }}
+          DISPATCH_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set -euo pipefail
+
+          # Staleness guard: a review can take 10–30 min. If a new commit
+          # landed mid-review, branch protection has already dismissed the
+          # atlan-ci approval (dismiss_stale_reviews_on_push) and
+          # sdk-review-reset-on-push.yml has cleared the labels — but if
+          # we proceed here we'd happily re-stamp labels and re-post an
+          # approval based on a verdict that described the old HEAD.
+          # Bail before we touch anything visible.
+          CURRENT_HEAD=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
+          if [ "$CURRENT_HEAD" != "$DISPATCH_HEAD_SHA" ]; then
+            echo "::warning::PR #${PR_NUMBER} HEAD moved from ${DISPATCH_HEAD_SHA} to ${CURRENT_HEAD} during the review. Skipping approval + labeling — a fresh @sdk-review on the new HEAD will produce a verdict that matches the actual diff."
+            exit 0
+          fi
 
           # Re-read the just-posted summary comment to extract the verdict.
           # The mothership orchestration (.mothership/pr-review/ORCHESTRATION.md
@@ -645,6 +646,12 @@ jobs:
           # exists from a re-trigger on the same PR head, the most recent
           # comment wins.
           #
+          # Marker tolerance: open PRs that were branched off main BEFORE
+          # the `test-sdk-review` → `sdk-review` promotion still carry the
+          # old orchestration on their head, which emits the legacy
+          # `<!-- TEST_SDK_REVIEW -->` marker. Accept either marker so the
+          # formal-approval path keeps working until those PRs rebase.
+          #
           # The jq pattern wraps `.[] | select(...)` in `[ ... ] | last` so
           # we get the full body of the last matching comment as a single
           # string. A naive `.[] | select(...) | .body | tail -1` truncates
@@ -652,10 +659,10 @@ jobs:
           # verdict grep below.
           SUMMARY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
             --paginate \
-            --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
+            --jq '[.[] | select((.body | contains("<!-- SDK_REVIEW -->")) or (.body | contains("<!-- TEST_SDK_REVIEW -->")))] | last | .body // ""')
 
           if [ -z "$SUMMARY" ]; then
-            echo "::warning::No <!-- SDK_REVIEW --> summary comment found on PR #${PR_NUMBER} — skipping approval (the sandbox may have errored before posting)"
+            echo "::warning::No SDK_REVIEW summary comment found on PR #${PR_NUMBER} — skipping approval (the sandbox may have errored before posting)"
             exit 0
           fi
 
@@ -667,8 +674,21 @@ jobs:
           VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
           echo "Detected verdict: '${VERDICT}'"
 
+          # Apply the canonical sdk-review-* labels from the GHA layer.
+          # The orchestration on a PR's head may still emit legacy
+          # `test-sdk-review-*` labels — strip those here and reapply the
+          # promoted names so labels are a single-source-of-truth read
+          # from the verdict, not from whichever orchestration the PR
+          # head happened to have.
+          for stale in "test-sdk-review-approved" "test-sdk-review-needs-human" "test-sdk-review-needs-rebase"; do
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$stale" 2>/dev/null || true
+          done
+
           case "$VERDICT" in
             "READY_TO_MERGE")
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-approved" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-human" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-rebase" 2>/dev/null || true
               # NOTE: the leading line of the body is a STABLE SIGNATURE used
               # by the dismiss-on-human workflow to identify approvals posted
               # by this flow. Do NOT change the leading text without updating
@@ -681,7 +701,20 @@ jobs:
               gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
               echo "Approved PR #${PR_NUMBER} as atlan-ci."
               ;;
+            "NEEDS_HUMAN")
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-human" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
+              echo "Verdict NEEDS_HUMAN — labeled, no approval posted."
+              ;;
+            "NEEDS_REBASE")
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-rebase" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
+              echo "Verdict NEEDS_REBASE — labeled, no approval posted."
+              ;;
             *)
+              # NEEDS_FIXES, BLOCKED, or unknown — clear approval/human labels.
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-human" 2>/dev/null || true
               echo "Verdict '${VERDICT}' is not READY TO MERGE — not posting an approval."
               ;;
           esac

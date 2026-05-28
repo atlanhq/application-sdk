@@ -1,0 +1,80 @@
+# Reset the @sdk-review state when a PR receives a new commit.
+#
+# Why this exists:
+#   `sdk-review.yml` posts a commit-status (`context: sdk-review`) and
+#   sticks `sdk-review-approved` / `sdk-review-needs-human` /
+#   `sdk-review-needs-rebase` labels keyed to the verdict of a specific
+#   HEAD_SHA. Commit statuses are per-SHA — once a new commit lands, the
+#   PR has no `sdk-review` context at all and the labels become stale
+#   (they describe the previous head, not the current one).
+#
+#   Branch protection already auto-dismisses the atlan-ci approval on
+#   push (`dismiss_stale_reviews_on_push: true`), so the formal review
+#   gate is correct without our help. This workflow handles the bits
+#   GitHub does NOT touch on push: the verdict labels and the
+#   `sdk-review` commit status on the new HEAD.
+#
+# What it does:
+#   On `pull_request: synchronize` (push to a PR branch):
+#     1. Remove `sdk-review-approved`, `sdk-review-needs-human`, and
+#        `sdk-review-needs-rebase` labels if present. Their semantics
+#        ("the bot reviewed THIS head") no longer hold.
+#     2. Set `sdk-review` commit status on the new HEAD to `pending`
+#        with description "Awaiting @sdk-review trigger on new commit"
+#        so the PR check surface reflects "needs a fresh review".
+
+name: SDK Review — reset state on new commit
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Strip stale sdk-review labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          for label in \
+            "sdk-review-approved" \
+            "sdk-review-needs-human" \
+            "sdk-review-needs-rebase" \
+            "test-sdk-review-approved" \
+            "test-sdk-review-needs-human" \
+            "test-sdk-review-needs-rebase"; do
+            gh pr edit "${PR_NUMBER}" --repo "${REPO}" --remove-label "${label}" 2>/dev/null || true
+          done
+          echo "Stripped stale sdk-review-* labels from PR #${PR_NUMBER} (if present)."
+
+      - name: Reset sdk-review commit status on new HEAD
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // The `sdk-review` context lives on a specific SHA. When a new
+            // commit lands, the new SHA has no status under that context.
+            // Branch protection treats "missing" as "not yet run" — which
+            // is technically correct, but doesn't surface a visible
+            // "needs review" signal to the author. Setting `pending` with
+            // a clear description gives the PR's check surface a row that
+            // reads "Awaiting @sdk-review trigger on new commit" instead
+            // of silently dropping the previous verdict.
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.pull_request.head.sha,
+              state: 'pending',
+              context: 'sdk-review',
+              description: 'Awaiting @sdk-review trigger on new commit',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/pull/${context.payload.pull_request.number}`,
+            });
