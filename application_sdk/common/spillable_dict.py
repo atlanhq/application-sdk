@@ -28,18 +28,25 @@ import shutil
 import tempfile
 import weakref
 from collections.abc import Iterator, MutableMapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
-try:
+# Optional dependency. For static type checking we always reference the real
+# rocksdict symbols so pyright sees the proper types throughout the file. At
+# runtime we fall back to None and raise a clear ImportError in __init__ if
+# the [storage] extra isn't installed.
+if TYPE_CHECKING:
     from rocksdict import BlockBasedOptions, Options, Rdict
-except ImportError:
-    Rdict = None  # type: ignore[misc, assignment]
-    Options = None  # type: ignore[misc, assignment]
-    BlockBasedOptions = None  # type: ignore[misc, assignment]
+else:
+    try:
+        from rocksdict import BlockBasedOptions, Options, Rdict
+    except ImportError:
+        Rdict = None
+        Options = None
+        BlockBasedOptions = None
 
 
 class SpillableDict(MutableMapping):  # type: ignore[type-arg]
@@ -162,7 +169,9 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         # Rdict.keys() walks SST keys without ever reading + unpickling
         # values — both faster and narrower than .items() since `for k in d:`
         # has no reason to touch the pickle surface.
-        yield from self._db.keys()
+        # rocksdict's keys() returns Iterator[str|int|float|bytes|bool] (the
+        # supported key types); we contract for str-only keys, so cast.
+        return cast(Iterator[str], iter(self._db.keys()))
 
     def __contains__(self, key: object) -> bool:
         # Protocol signature uses `object`. We only write str keys, and
