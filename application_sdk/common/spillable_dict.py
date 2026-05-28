@@ -28,7 +28,7 @@ import shutil
 import tempfile
 import weakref
 from collections.abc import Iterator, MutableMapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -95,7 +95,8 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
                 ...
 
     Notes:
-        - ``__len__`` returns RocksDB's estimate, not a true count.
+        - ``__len__`` is exact (O(n)) — honors MutableMapping's exact-len
+          contract. Use ``approximate_size()`` for a constant-time hint.
         - Iteration is in RocksDB's internal key order, not insertion order.
     """
 
@@ -110,22 +111,33 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
             )
 
         self._temp_dir = tempfile.mkdtemp(prefix="atlan_spillable_dict_")
-        options = Options()
-        # Smaller MemTable than RocksDB's 64MB default — connectors often
-        # spin up many of these in parallel under tight memory limits.
-        options.set_write_buffer_size(16 * 1024 * 1024)  # 16MB
-        # Bloom filter for fast negative lookups in get() / __contains__.
-        # 10 bits/key gives ~1% false-positive rate; we don't subscribe to
-        # a hot read path that needs more.
-        bbo = BlockBasedOptions()
-        bbo.set_bloom_filter(bits_per_key=10, block_based=False)
-        options.set_block_based_table_factory(bbo)
-        self._db = Rdict(self._temp_dir, options=options)
+        # Wrap the rest of init: if Options()/BlockBasedOptions()/Rdict()
+        # raises (or KeyboardInterrupt fires mid-construction), the
+        # tempfile.mkdtemp above has already created the directory but
+        # cleanup paths (atexit / close / __exit__) aren't reachable yet.
+        # Catch BaseException so SIGINT-during-init still cleans up.
+        try:
+            options = Options()
+            # Smaller MemTable than RocksDB's 64MB default — connectors often
+            # spin up many of these in parallel under tight memory limits.
+            options.set_write_buffer_size(16 * 1024 * 1024)  # 16MB
+            # Bloom filter for fast negative lookups in get() / __contains__.
+            # 10 bits/key gives ~1% false-positive rate; we don't subscribe
+            # to a hot read path that needs more.
+            bbo = BlockBasedOptions()
+            bbo.set_bloom_filter(bits_per_key=10, block_based=False)
+            options.set_block_based_table_factory(bbo)
+            self._db = Rdict(self._temp_dir, options=options)
+        except BaseException:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+            raise
+
         self._closed = False
 
         # Safety net: register an atexit cleanup keyed by weakref so the
-        # instance can still be GC'd; if close() / __exit__ fires first,
-        # the second call is a no-op (self._closed guard).
+        # instance can still be GC'd. Keep the handle so _cleanup() can
+        # unregister it — otherwise atexit's registry grows by one slot
+        # per SpillableDict() until process exit even after close().
         self_ref = weakref.ref(self)
 
         def _atexit_cleanup() -> None:
@@ -133,7 +145,8 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
             if inst is not None:
                 inst._cleanup()
 
-        atexit.register(_atexit_cleanup)
+        self._atexit_handle = _atexit_cleanup
+        atexit.register(self._atexit_handle)
 
     def __setitem__(self, key: str, value: Any) -> None:
         # Reminder for callers: value is pickled. See class docstring's
@@ -161,9 +174,11 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
             return default
         return self._db.get(key, default)
 
-    def items(self) -> Iterator[tuple[Any, Any]]:  # type: ignore[override]
-        for key, value in self._db.items():
-            yield key, value
+    # items() is NOT overridden — MutableMapping's default ItemsView
+    # (backed by __iter__ + __getitem__) preserves the ABC contract
+    # (supports len(d.items()), repeated iteration, containment checks).
+    # An override that returns a generator would silently violate that
+    # contract for marginal perf gain.
 
     def __iter__(self) -> Iterator[str]:
         # Rdict.keys() walks SST keys without ever reading + unpickling
@@ -182,12 +197,29 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         return key in self._db
 
     def __len__(self) -> int:
-        """Estimated key count.
+        """Exact key count.
 
-        RocksDB exposes an estimate (sum of inserts/updates seen by the LSM),
-        not an exact count. Use this for rough sizing, not invariants.
+        Iterates RocksDB's keyspace once (O(n)) to honor MutableMapping's
+        exact-len contract — `bool(d)` / `len(d) == 0` must answer correctly,
+        and RocksDB's internal estimate can be wrong on either side.
+
+        Use ``approximate_size()`` if you need a constant-time hint on a
+        large store.
         """
-        # property_value can in principle return an empty string; coerce safely.
+        # rocksdict's Rdict.__iter__ has different semantics than .keys()
+        # and triggers KeyError mid-iteration. Use .keys() explicitly so
+        # this delegates to RdictKeysIter — not the default __iter__.
+        return sum(1 for _ in self._db.keys())  # noqa: SIM118
+
+    def approximate_size(self) -> int:
+        """RocksDB's estimated key count — O(1), may be inaccurate.
+
+        Fast alternative to ``len()`` when an exact count isn't needed
+        (progress logging, sizing heuristics, etc.). Returns RocksDB's
+        ``rocksdb.estimate-num-keys`` property, which counts insertions
+        without subtracting deletes — so it can over-count, and on a
+        freshly-flushed table it can briefly under-count.
+        """
         return int(self._db.property_value("rocksdb.estimate-num-keys") or "0")
 
     def append_to_key(self, key: str, value: Any) -> None:
@@ -196,6 +228,13 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         Read-modify-write list append. **Not atomic, not thread-safe.**
         Two threads or coroutines racing on the same key will lose updates;
         serialize access externally if that's possible in your call site.
+
+        **Performance — O(N²) for repeated appends to the same key.** Each
+        call unpickles the whole list, appends, and repickles. Building a
+        K-element list this way costs O(K²) bytes shuffled through pickle.
+        For known-large lists, prefer a flattened layout where each list
+        element gets its own key (e.g. ``"prefix/0"``, ``"prefix/1"``, ...
+        plus a separate ``"prefix/count"``) so each append is O(1).
 
         **Note on untrusted data:** the value gets pickled on write and
         unpickled on subsequent reads (including the read inside this method).
@@ -221,14 +260,19 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         if self._closed:
             return
         self._closed = True
+        # Unregister the atexit hook to keep the registry bounded across
+        # many short-lived instances. atexit.unregister silently no-ops
+        # if the handle was already removed (e.g. atexit already fired
+        # during interpreter shutdown).
+        atexit.unregister(self._atexit_handle)
         try:
             self._db.close()
         except Exception:
             logger.warning("Failed to close RocksDB cleanly", exc_info=True)
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
-    def __enter__(self) -> "SpillableDict":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc_info: Any) -> None:
+    def __exit__(self, *exc_info: object) -> None:
         self._cleanup()

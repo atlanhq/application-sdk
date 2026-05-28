@@ -9,8 +9,8 @@ import pytest
 
 rocksdict = pytest.importorskip("rocksdict")
 
-from application_sdk.common import spillable_dict as dbd_module  # noqa: E402
-from application_sdk.common.spillable_dict import SpillableDict  # noqa: E402
+from application_sdk.common import spillable_dict as dbd_module
+from application_sdk.common.spillable_dict import SpillableDict
 
 
 class TestSpillableDict:
@@ -43,9 +43,25 @@ class TestSpillableDict:
         """Match standard dict semantics — and sqlitedict's, which the
         migration story implicitly assumes (sqlitedict raises KeyError on
         del of a missing key)."""
+        with SpillableDict() as d, pytest.raises(KeyError):
+            del d["nope"]
+
+    def test_delitem_under_load_exercises_bloom_recovery(self) -> None:
+        """Insert N keys + probe nearby never-inserted keys to force the
+        bloom-filter false-positive branch in __delitem__ (the explicit
+        `or key not in self._db` recovery clause). At default bloom config
+        (~1% FP rate) probing 5K nearby keys should hit several FPs — even
+        if zero hits, the test still validates that all 5K KeyErrors are
+        raised correctly (i.e., the recovery clause stays correct in
+        either branch)."""
         with SpillableDict() as d:
-            with pytest.raises(KeyError):
-                del d["nope"]
+            for i in range(1000):
+                d[f"key_{i}"] = i
+            # Probe a parallel keyspace that was never inserted. Each
+            # del must raise KeyError regardless of which branch fires.
+            for i in range(5000):
+                with pytest.raises(KeyError):
+                    del d[f"missing_{i}"]
 
     def test_iteration_over_keys(self) -> None:
         with SpillableDict() as d:
@@ -78,14 +94,31 @@ class TestSpillableDict:
             d.append_to_key("list", "added")
             assert d["list"] == ["existing", "added"]
 
-    def test_len_after_inserts(self) -> None:
+    def test_len_is_exact(self) -> None:
+        """__len__ honors MutableMapping's exact-len contract."""
         with SpillableDict() as d:
+            assert len(d) == 0
             d["a"] = 1
             d["b"] = 2
             d["c"] = 3
-            # RocksDB's len() is an estimate, but for a small fresh store
-            # it tracks inserts. Check it's >0 rather than exact.
-            assert len(d) >= 1
+            assert len(d) == 3
+            del d["b"]
+            assert len(d) == 2
+
+    def test_bool_empty(self) -> None:
+        """bool(d) on empty dict must be False — relies on __len__ exactness."""
+        with SpillableDict() as d:
+            assert not bool(d)
+            d["k"] = "v"
+            assert bool(d)
+
+    def test_approximate_size_is_estimate(self) -> None:
+        """approximate_size() returns an integer; doesn't need to match exactly."""
+        with SpillableDict() as d:
+            d["a"] = 1
+            d["b"] = 2
+            assert isinstance(d.approximate_size(), int)
+            assert d.approximate_size() >= 0
 
     def test_nested_values_roundtrip(self) -> None:
         with SpillableDict() as d:
@@ -119,9 +152,11 @@ class TestSpillableDict:
     def test_import_error_when_rocksdict_unavailable(self) -> None:
         """Constructor must raise ImportError with an actionable message when
         rocksdict isn't installed."""
-        with patch.object(dbd_module, "Rdict", None):
-            with pytest.raises(ImportError, match="rocksdict is required"):
-                SpillableDict()
+        with (
+            patch.object(dbd_module, "Rdict", None),
+            pytest.raises(ImportError, match="rocksdict is required"),
+        ):
+            SpillableDict()
 
     def test_is_mutablemapping(self) -> None:
         """Inheriting from MutableMapping gives pop/update/setdefault/keys/
