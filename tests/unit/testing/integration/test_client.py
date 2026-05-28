@@ -141,16 +141,82 @@ class TestProvisionAndStartWorkflow:
         assert endpoint != "/dev/local-vault"
 
     def test_provision_raises_when_guid_missing(self):
+        """Vault reachable (has _http_status), returned no guid -> generic raise."""
         client = self._client()
         with (
             patch.object(
                 client,
                 "_post",
-                return_value={"success": False, "error": "boom"},
+                return_value={"_http_status": 200, "success": False, "error": "boom"},
             ),
             pytest.raises(RuntimeError, match="credential_guid"),
         ):
             client._provision_credentials({"host": "db"})
+
+    def test_provision_raises_clear_error_on_connection_failure(self):
+        """Transport failure (no _http_status) -> surface the real cause."""
+        client = self._client()
+        err_response = {
+            "success": False,
+            "error": {
+                "code": "CONNECTION_FAILED",
+                "message": "Cannot connect to server at http://app.",
+                "details": "ConnectionRefusedError",
+            },
+        }
+        with (
+            patch.object(client, "_post", return_value=err_response),
+            pytest.raises(RuntimeError, match="Could not reach"),
+        ):
+            client._provision_credentials({"host": "db"})
+
+    def test_provision_raises_clear_error_on_timeout(self):
+        """Timeout (no _http_status) -> surface the real cause."""
+        client = self._client()
+        err_response = {
+            "success": False,
+            "error": {
+                "code": "REQUEST_TIMEOUT",
+                "message": "Request timed out after 30s",
+                "details": "ReadTimeoutError",
+            },
+        }
+        with (
+            patch.object(client, "_post", return_value=err_response),
+            pytest.raises(RuntimeError, match="Could not reach"),
+        ):
+            client._provision_credentials({"host": "db"})
+
+    def test_provision_raises_on_5xx(self):
+        """5xx from local-vault -> raises with status, not silently treated as 403."""
+        client = self._client()
+        with (
+            patch.object(
+                client,
+                "_post",
+                return_value={"_http_status": 500, "error": "internal"},
+            ),
+            pytest.raises(RuntimeError, match="status=500"),
+        ):
+            client._provision_credentials({"host": "db"})
+
+    def test_provision_does_not_leak_response_body_into_error(self):
+        """Error message should not interpolate the full response dict (avoids
+        echoing potentially sensitive 4xx detail payloads)."""
+        client = self._client()
+        with (
+            patch.object(
+                client,
+                "_post",
+                return_value={
+                    "_http_status": 422,
+                    "detail": [{"loc": ["body"], "msg": "secret-looking-value"}],
+                },
+            ),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
+            client._provision_credentials({"host": "db"})
+        assert "secret-looking-value" not in str(exc_info.value)
 
     def test_workflow_falls_back_to_inline_when_local_vault_gated_off(self):
         """SDR testcontainer / non-LOCAL deployments gate /dev/local-vault behind 403.

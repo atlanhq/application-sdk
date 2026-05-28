@@ -313,7 +313,8 @@ class IntegrationTestClient:
             endpoint is gated off in this deployment.
 
         Raises:
-            RuntimeError: If local-vault is reachable but returns no guid.
+            RuntimeError: If local-vault cannot be reached, or is reachable but
+                returns no guid.
         """
         flat = _from_v3_credentials(credentials)
         response = self._post("/dev/local-vault", data=flat)
@@ -327,12 +328,23 @@ class IntegrationTestClient:
             )
             return None
 
+        # Transport-failure shape from _post (ConnectionError / Timeout /
+        # RequestException): no _http_status, success=False, error is a dict.
+        # Surface the actual cause instead of the generic missing-guid raise.
+        if "_http_status" not in response and isinstance(response.get("error"), dict):
+            err = response["error"]
+            raise RuntimeError(
+                f"Could not reach /dev/local-vault at {self.host}: "
+                f"{err.get('message')}. Is the application server running?"
+            )
+
         guid = (response.get("data") or {}).get("credential_guid") or response.get(
             "credential_guid"
         )
         if not guid:
             raise RuntimeError(
-                f"Local-vault did not return a credential_guid. Response: {response}"
+                "Local-vault did not return a credential_guid "
+                f"(status={response.get('_http_status')})."
             )
         logger.debug("Provisioned credentials via local-vault: guid=%s", guid)
         return guid
