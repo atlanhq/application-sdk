@@ -595,12 +595,20 @@ jobs:
                     COMPLETED=1
                     FINAL_STATUS=$(printf '%s' "$DATA" | jq -r '.status // "unknown"' 2>/dev/null)
                     FINAL_COST=$(printf '%s' "$DATA" | jq -r '.cost_usd // empty' 2>/dev/null)
-                    # If complete carries error details (status=error), capture them.
+                    # If complete carries error details (status=error), capture them
+                    # so the dispatch step can fail loudly with the underlying cause
+                    # and the starter comment can surface it to the PR author.
+                    # Per atlanhq/mothership/docs/reference/rover-direct-api.md, a
+                    # `complete` event with `status=error` carries `.error.code` and
+                    # `.error.message`. We log both inline here so the GHA logs are
+                    # self-explanatory without having to read the raw SSE payload.
                     if [ "$FINAL_STATUS" = "error" ]; then
                       FINAL_ERR_CODE=$(printf '%s' "$DATA" | jq -r '.error.code // "none"' 2>/dev/null)
                       FINAL_ERR_MSG=$(printf '%s' "$DATA" | jq -r '.error.message // ""' 2>/dev/null)
+                      echo "[complete]  status=error code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG} cost_usd=${FINAL_COST}"
+                    else
+                      echo "[complete]  status=${FINAL_STATUS} cost_usd=${FINAL_COST}"
                     fi
-                    echo "[complete]  status=${FINAL_STATUS} cost_usd=${FINAL_COST}"
                     ;;
                   "")
                     # data: without preceding event: → could be an HTML error
@@ -650,6 +658,27 @@ jobs:
             fi
           fi
 
+          # Export the run summary fields BEFORE the failure checks below
+          # call `fail_or_warn`, which can `exit 1`. If we exported after,
+          # the very failure paths we want to surface (sandbox startup
+          # crash → status=error in the `complete` event, no verdict posted)
+          # would never get a chance to write `final_err_code` /
+          # `final_err_msg` to $GITHUB_OUTPUT, and the starter-comment
+          # stamper would have nothing to render.
+          #
+          # final_err_code / final_err_msg are populated from either:
+          #   - a top-level `error` SSE event (.code / .message), or
+          #   - a `complete` event with status=error (.error.code / .error.message).
+          # Multi-line messages are flattened (jq emits literal \n in JSON
+          # strings) so the GITHUB_OUTPUT key=value contract isn't broken.
+          FLAT_ERR_MSG=$(printf '%s' "${FINAL_ERR_MSG:-}" | tr '\n' ' ')
+          {
+            echo "final_status=${FINAL_STATUS:-${FINAL_ERR_CODE:-unknown}}"
+            echo "final_cost=${FINAL_COST:-unknown}"
+            echo "final_err_code=${FINAL_ERR_CODE:-}"
+            echo "final_err_msg=${FLAT_ERR_MSG}"
+          } >> "$GITHUB_OUTPUT"
+
           # Soft-success rule: if the orchestration already posted a
           # <!-- SDK_REVIEW --> verdict comment on this run, the review was
           # delivered to the PR — any subsequent stream breakage (idle
@@ -677,21 +706,18 @@ jobs:
             fail_or_warn "Stream ended without a 'complete' event"
           fi
           if [ "$FINAL_STATUS" != "completed" ] && [ "$ERRORED" != "1" ]; then
-            fail_or_warn "Sandbox final status=${FINAL_STATUS} (expected 'completed')"
+            # When the `complete` event itself carries status=error, surface
+            # the nested error.code / error.message in the annotation so the
+            # PR author doesn't need to dig into the GHA log to know what
+            # went wrong on the mothership side.
+            DETAIL=""
+            if [ -n "${FINAL_ERR_CODE}" ] || [ -n "${FINAL_ERR_MSG}" ]; then
+              DETAIL=" — code=${FINAL_ERR_CODE:-none} message=${FINAL_ERR_MSG}"
+            fi
+            fail_or_warn "Sandbox final status=${FINAL_STATUS} (expected 'completed')${DETAIL}"
           fi
 
           echo "SDK Review (mothership) completed successfully (cost=${FINAL_COST})."
-
-          # Export the run summary fields so the next step (github-script)
-          # can stamp them onto the starter comment. github-script (via
-          # Octokit) is more reliable than `gh api -X PATCH -f body=...`
-          # for editing a comment whose body contains newlines and
-          # markdown — `-f` builds a JSON body but encoding edge-cases
-          # with multi-line strings have bitten us before.
-          {
-            echo "final_status=${FINAL_STATUS:-${FINAL_ERR_CODE:-unknown}}"
-            echo "final_cost=${FINAL_COST:-unknown}"
-          } >> "$GITHUB_OUTPUT"
 
       # Stamp the run cost + duration + verdict status onto the starter
       # comment we posted at the start of this job. The PR scroll then
@@ -710,6 +736,8 @@ jobs:
           STARTER_STARTED_AT: ${{ steps.starter.outputs.started_at }}
           FINAL_STATUS: ${{ steps.dispatch.outputs.final_status }}
           FINAL_COST: ${{ steps.dispatch.outputs.final_cost }}
+          FINAL_ERR_CODE: ${{ steps.dispatch.outputs.final_err_code }}
+          FINAL_ERR_MSG: ${{ steps.dispatch.outputs.final_err_msg }}
           DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
         with:
           script: |
@@ -719,6 +747,8 @@ jobs:
             const startedAt = process.env.STARTER_STARTED_AT;
             const finalStatus = process.env.FINAL_STATUS || process.env.DISPATCH_OUTCOME || 'unknown';
             const finalCost = process.env.FINAL_COST || 'unknown';
+            const errCode = (process.env.FINAL_ERR_CODE || '').trim();
+            const errMsg = (process.env.FINAL_ERR_MSG || '').trim();
 
             let durationTxt = 'unknown';
             if (startedAt) {
@@ -731,7 +761,25 @@ jobs:
 
             const verb = finalStatus === 'completed' ? '✅ **Completed**' :
                          (process.env.DISPATCH_OUTCOME === 'success' ? '✅ **Completed**' : '🟥 **Run ended without a clean completion**');
-            const footer = `\n\n---\n${verb} — status \`${finalStatus}\`, cost \`$${finalCost}\`, duration ${durationTxt}.`;
+            let footer = `\n\n---\n${verb} — status \`${finalStatus}\`, cost \`$${finalCost}\`, duration ${durationTxt}.`;
+
+            // Surface the mothership-side error on the PR comment whenever
+            // we have either a code or a message. This is the field most
+            // PR authors care about when a run dies at startup — without it
+            // they only see "status failure" and have to dig into the GHA log.
+            // Truncate the message to keep the comment scannable; the GHA
+            // log retains the full text.
+            if (errCode || errMsg) {
+              // Replace backticks in both code and message so the inline-code
+              // formatting in the rendered comment can't be broken by a
+              // backtick inside a mothership error string.
+              const safeCode = (errCode || 'unknown').replace(/`/g, "'");
+              const truncated = errMsg && errMsg.length > 400 ? errMsg.slice(0, 397) + '…' : errMsg;
+              const safeMsg = (truncated || '').replace(/`/g, "'");
+              footer += safeMsg
+                ? `\n**Error:** \`${safeCode}\` — ${safeMsg}`
+                : `\n**Error:** \`${safeCode}\``;
+            }
 
             const { data: existing } = await github.rest.issues.getComment({
               owner: context.repo.owner,
@@ -749,7 +797,7 @@ jobs:
               comment_id: commentId,
               body: `${existing.body || ''}${footer}`,
             });
-            console.log(`Stamped starter comment ${commentId}: status=${finalStatus} cost=${finalCost} duration=${durationTxt}`);
+            console.log(`Stamped starter comment ${commentId}: status=${finalStatus} cost=${finalCost} duration=${durationTxt} err=${errCode || '(none)'}`);
 
       # The mothership sandbox cannot approve PRs in a way that satisfies
       # the `require_code_owner_review` rule on `main`:
