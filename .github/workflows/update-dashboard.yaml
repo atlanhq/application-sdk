@@ -65,15 +65,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SCAN_WORKFLOW: ${{ inputs.scan_workflow }}
+          # When invoked via workflow_run (the normal path), this is the run
+          # that just completed and uploaded the artifacts we want. Reading
+          # it directly avoids the prior "gh run list latest" race where
+          # an older run could be picked if API listing lagged behind.
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           mkdir -p /tmp/scan-artifacts
 
-          RUN_ID=$(gh run list \
-            --workflow="${SCAN_WORKFLOW}" \
-            --status=completed \
-            --limit=5 \
-            --json databaseId,conclusion \
-            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+          # Prefer the triggering workflow_run's ID. Fall back to "latest
+          # completed run of SCAN_WORKFLOW" only for manual workflow_dispatch
+          # invocations (where TRIGGER_RUN_ID is empty).
+          if [ -n "$TRIGGER_RUN_ID" ]; then
+            RUN_ID="$TRIGGER_RUN_ID"
+            echo "Using triggering run: $RUN_ID"
+          else
+            RUN_ID=$(gh run list \
+              --workflow="${SCAN_WORKFLOW}" \
+              --status=completed \
+              --limit=5 \
+              --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+            echo "Manual dispatch fallback — latest completed run: $RUN_ID"
+          fi
 
           if [ -z "$RUN_ID" ]; then
             echo "::warning::No completed runs found for workflow ${SCAN_WORKFLOW}"
