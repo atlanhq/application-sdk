@@ -482,6 +482,34 @@
                   "label": "Database",
                   "grid": 4
                 }
+              },
+              "token_audience": {
+                "type": "conditional",
+                "default": "",
+                "conditions": [
+                  {
+                    "filter": {
+                      "$or": [
+                        {
+                          "agent-json.auth-type": "token"
+                        },
+                        {
+                          "credential-guid.auth-type": "token"
+                        }
+                      ]
+                    },
+                    "required": true,
+                    "type": "string",
+                    "ui": {
+                      "widget": "input",
+                      "label": "Token audience",
+                      "hidden": false,
+                      "help": "",
+                      "placeholder": "api://default",
+                      "grid": 4
+                    }
+                  }
+                ]
               }
             }
           }

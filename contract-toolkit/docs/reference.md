@@ -201,9 +201,11 @@ class LineagePublishStep {               // wraps LineagePublishNode
 | `credentialAuthPlaceholder` | String? | null | Placeholder for auth-type radio. |
 | `credentialAuthHelp` | String? | null | Tooltip below auth-type radio. |
 | `credentialAuthWidth` | Int? | null | Grid width for auth-type radio. |
-| `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type values hidden during credential creation. |
+| `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for hidden credential `name` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
+
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
 
 ### Workflow Config
 
@@ -375,6 +377,8 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for the hidden credential `name` field. |
 | `credentialConnectorDefault` | String? | null | Optional default for the hidden credential `connector` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. When set, every `credentialAuthOptions` entry must be a `JDBCUrlAuthOption`. See [AdvancedJDBCUrlGroup](#advancedjdbcurlgroup--hostrlarrowurl-jdbc-credential-form). |
+
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
 
 ### Workflow Config
 
@@ -693,7 +697,7 @@ configmaps. New apps should normally leave them at their defaults.
 | `fieldType = "number"` | `inputNumber` |
 | `fieldType = "select"` (≤4 options) | `radio` |
 | `fieldType = "select"` (>4 options) | `select` |
-| `fieldType = "checkbox"` | `boolean` |
+| `fieldType = "checkbox"` | `checkbox` |
 | `fieldType = "textarea"` | `TextInput` |
 | `fieldType = "inputRepeater"` | `inputRepeater` |
 | Default | `input` |
@@ -737,8 +741,10 @@ new ConditionalFieldSpec {
 }
 ```
 
-For connector-specific condition trees, add a focused example or Pkl test that
-pins the generated credential JSON shape.
+For an executable example, see `examples/full/app.pkl`, where
+`token_audience` is a field-level `ConditionalFieldSpec` that appears only for
+token auth. For connector-specific condition trees, add a focused example or Pkl
+test that pins the generated credential JSON shape.
 
 ## AuthOption — Auth Type Definition
 

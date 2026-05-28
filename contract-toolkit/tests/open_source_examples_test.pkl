@@ -58,6 +58,14 @@ facts {
     fullCredentialJson.contains("\"token\"")
   }
 
+  ["Full example demonstrates a field-level ConditionalFieldSpec"] {
+    fullCredentialJson.contains("\"token_audience\"")
+    fullCredentialJson.contains("\"type\": \"conditional\"")
+    fullCredentialJson.contains("\"agent-json.auth-type\": \"token\"")
+    fullCredentialJson.contains("\"credential-guid.auth-type\": \"token\"")
+    fullCredentialJson.contains("\"label\": \"Token audience\"")
+  }
+
   ["Full example pipeline: extract with custom displayName, parseQueries, publish"] {
     fullManifestJson.contains("\"activity_display_name\": \"Discover\"")
     // qi node is present (pipeline.parseQueries wired)

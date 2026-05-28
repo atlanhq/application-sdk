@@ -1333,7 +1333,7 @@ local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
       ["widget"] = if (f.sensitive || f.fieldType == "password") "password"
         else if (f.fieldType == "textarea") "TextInput"
         else if (f.fieldType == "number") "inputNumber"
-        else if (f.fieldType == "checkbox") "boolean"
+        else if (f.fieldType == "checkbox") "checkbox"
         else if (f.fieldType == "select" && f.options != null && f.options!!.length <= 4) "radio"
         else if (f.fieldType == "select") "select"
         else if (f.fieldType == "inputRepeater") "inputRepeater"
@@ -1622,7 +1622,7 @@ local function renderJdbcAuthTypeField(options: Mapping<String, AuthOption>): Ma
     ["enumNames"] = new Listing { for (k in directKeys) { options[k].label } }
     ["ui"] = new Mapping {
       ["widget"] = "radio"
-      ["hidden"] = false
+      ["hidden"] = credentialAuthHidden
       ["label"] = credentialAuthTitle
       when (credentialAuthHelp != null) { ["help"] = credentialAuthHelp }
       when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
@@ -1806,6 +1806,13 @@ local connectorInvariant =
     throw("connector must be set when hasCredentialConfig = true.")
   else true
 
+/// Auto-derived: hide the auth-type radio when the connector has a single auth
+/// option, since presenting a one-item radio adds no value. Auto-calculation
+/// keeps this in sync as connectors add or remove auth options — no manual
+/// flag to forget.
+local credentialAuthHidden: Boolean =
+  credentialAuthOptions != null && credentialAuthOptions!!.length == 1
+
 local function generateCredentialConfig(): Mapping<String, Any> =
   let (_ = jdbcInvariant)
   new Mapping {
@@ -1856,7 +1863,7 @@ local function generateCredentialConfig(): Mapping<String, Any> =
           }
           ["ui"] = new Mapping {
             ["widget"] = "radio"
-            ["hidden"] = false
+            ["hidden"] = credentialAuthHidden
             ["label"] = credentialAuthTitle
             when (credentialAuthRules != null) { ["rules"] = credentialAuthRules }
             when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
