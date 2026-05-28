@@ -213,22 +213,29 @@ class BaseE2ETest:
         self.connection_display_name = f"{_conn_type}-{_epoch}"
 
         # Atlas requires at least one non-empty admin list on a Connection
-        # (ATLAS-400-00-114). Auto-detect the caller's identity from the API
-        # key when the subclass left all three admin attrs unset, so the
-        # harness never needs per-connector boilerplate for the admin list.
-        self._auto_admin_users: tuple[str, ...] = ()
+        # (ATLAS-400-00-114). When the subclass leaves all three admin attrs
+        # unset, resolve the built-in $admin role GUID so any tenant admin
+        # can manage the test connection — not just the token under which
+        # the workflow runs.
+        self._auto_admin_roles: tuple[str, ...] = ()
         if not any([self.connection_admin_users, self.connection_admin_groups, self.connection_admin_roles]):
             try:
                 from pyatlan.client import AtlanClient  # type: ignore[import]
                 _pc = AtlanClient(base_url=tenant_url, api_key=api_token)
-                _u = _pc.user.get_current()
-                if _u and _u.username:
-                    self._auto_admin_users = (_u.username,)
-                    logger.info("Auto-detected admin user for connection: %s", _u.username)
+                _roles = _pc.role.get_all()
+                _admin_role = next(
+                    (r for r in (_roles.records or []) if r.name == "$admin"),
+                    None,
+                )
+                if _admin_role:
+                    self._auto_admin_roles = (_admin_role.id,)
+                    logger.info("Resolved $admin role GUID for connection: %s", _admin_role.id)
+                else:
+                    logger.warning("$admin role not found on tenant; connection may fail ATLAS-400-00-114")
             except Exception as _exc:
                 logger.warning(
-                    "Could not auto-detect admin user from API key (%s). "
-                    "Set connection_admin_users on the test class to avoid "
+                    "Could not resolve $admin role GUID (%s). "
+                    "Set connection_admin_roles on the test class to avoid "
                     "ATLAS-400-00-114 errors.",
                     _exc,
                 )
@@ -249,16 +256,16 @@ class BaseE2ETest:
         # body will be created — public-source connectors (credential_body=None)
         # must NOT send the literal unsubstituted string to Atlas.
         cred_guid = "{{credentialGuid}}" if self._credential_body() is not None else ""
-        # Use auto-detected admin user when no explicit admin is set.
-        admin_users = self.connection_admin_users or getattr(self, "_auto_admin_users", ())
+        # Fall back to auto-resolved $admin role GUID when no explicit admin is set.
+        admin_roles = self.connection_admin_roles or getattr(self, "_auto_admin_roles", ())
         return ConnectionSpec(
             name=self.connection_display_name,
             qualified_name=self.connection_qualified_name,
             connector_name=self.connection_type or self.connector_short_name,
             source_logo=f"https://assets.atlan.com/assets/{self.connector_short_name}.png",
-            admin_users=admin_users,
+            admin_users=self.connection_admin_users,
             admin_groups=self.connection_admin_groups,
-            admin_roles=self.connection_admin_roles,
+            admin_roles=admin_roles,
             category=self.connection_category,
             default_credential_guid=cred_guid,
         )
