@@ -223,6 +223,7 @@ class BaseE2ETest:
         # can manage the test connection — not just the token under which
         # the workflow runs.
         self._auto_admin_roles: tuple[str, ...] = ()
+        self._auto_admin_users: tuple[str, ...] = ()
         if not any([self.connection_admin_users, self.connection_admin_groups, self.connection_admin_roles]):
             try:
                 from pyatlan.client.atlan import AtlanClient  # type: ignore[import]
@@ -233,9 +234,16 @@ class BaseE2ETest:
                     logger.info("Resolved $admin role GUID for connection: %s", _guid)
                 else:
                     logger.warning("$admin role not found on tenant; connection may fail ATLAS-400-00-114")
+                # Also add the current API token's user to adminUsers so the
+                # teardown can purge the connection (the $admin role alone is
+                # insufficient when the service account doesn't hold that role).
+                _me = _pc.user.get_current()
+                if _me and _me.username:
+                    self._auto_admin_users = (_me.username,)
+                    logger.info("Resolved current user for connection adminUsers: %s", _me.username)
             except Exception as _exc:
                 logger.warning(
-                    "Could not resolve $admin role GUID (%s). "
+                    "Could not resolve $admin role GUID or current user (%s). "
                     "Set connection_admin_roles on the test class to avoid "
                     "ATLAS-400-00-114 errors.",
                     _exc,
@@ -323,14 +331,17 @@ class BaseE2ETest:
         # body will be created — public-source connectors (credential_body=None)
         # must NOT send the literal unsubstituted string to Atlas.
         cred_guid = "{{credentialGuid}}" if self._credential_body() is not None else ""
-        # Fall back to auto-resolved $admin role GUID when no explicit admin is set.
+        # Fall back to auto-resolved values when no explicit admins are set.
+        # _auto_admin_roles: the $admin role GUID (any tenant admin can manage)
+        # _auto_admin_users: the current API token's username (so teardown can purge)
         admin_roles = self.connection_admin_roles or getattr(self, "_auto_admin_roles", ())
+        admin_users = self.connection_admin_users or getattr(self, "_auto_admin_users", ())
         return ConnectionSpec(
             name=self.connection_display_name,
             qualified_name=self.connection_qualified_name,
             connector_name=self.connection_type or self.connector_short_name,
             source_logo=f"https://assets.atlan.com/assets/{self.connector_short_name}.png",
-            admin_users=self.connection_admin_users,
+            admin_users=admin_users,
             admin_groups=self.connection_admin_groups,
             admin_roles=admin_roles,
             category=self.connection_category,
