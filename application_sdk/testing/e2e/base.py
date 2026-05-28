@@ -220,7 +220,7 @@ class BaseE2ETest:
         self._auto_admin_roles: tuple[str, ...] = ()
         if not any([self.connection_admin_users, self.connection_admin_groups, self.connection_admin_roles]):
             try:
-                from pyatlan.client import AtlanClient  # type: ignore[import]
+                from pyatlan.client.atlan import AtlanClient  # type: ignore[import]
                 _pc = AtlanClient(base_url=tenant_url, api_key=api_token)
                 _guid = _pc.role_cache.get_id_for_name("$admin")
                 if _guid:
