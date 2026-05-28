@@ -222,14 +222,10 @@ class BaseE2ETest:
             try:
                 from pyatlan.client import AtlanClient  # type: ignore[import]
                 _pc = AtlanClient(base_url=tenant_url, api_key=api_token)
-                _roles = _pc.role.get_all()
-                _admin_role = next(
-                    (r for r in (_roles.records or []) if r.name == "$admin"),
-                    None,
-                )
-                if _admin_role:
-                    self._auto_admin_roles = (_admin_role.id,)
-                    logger.info("Resolved $admin role GUID for connection: %s", _admin_role.id)
+                _guid = _pc.role_cache.get_id_for_name("$admin")
+                if _guid:
+                    self._auto_admin_roles = (_guid,)
+                    logger.info("Resolved $admin role GUID for connection: %s", _guid)
                 else:
                     logger.warning("$admin role not found on tenant; connection may fail ATLAS-400-00-114")
             except Exception as _exc:
