@@ -76,7 +76,7 @@ permissions:
   checks: write
 
 jobs:
-  dispatch:
+  sdk-review-dispatch:
     if: >-
       github.event_name == 'workflow_dispatch'
       || (
@@ -689,17 +689,39 @@ jobs:
               gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-approved" 2>/dev/null || true
               gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-human" 2>/dev/null || true
               gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-rebase" 2>/dev/null || true
-              # NOTE: the leading line of the body is a STABLE SIGNATURE used
-              # by the dismiss-on-human workflow to identify approvals posted
-              # by this flow. Do NOT change the leading text without updating
-              # `sdk-review-dismiss-on-human.yml` accordingly.
-              APPROVE_BODY=$(printf '%s\n' \
-                "**SDK reviewer's verdict:** READY TO MERGE." \
-                "" \
-                "Full review summary is in the comment posted on this PR." \
-                "")
-              gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
-              echo "Approved PR #${PR_NUMBER} as atlan-ci."
+              # Idempotency guards: sdk-review-approve-on-verdict.yml posts
+              # the approval within ~5s of the verdict comment. This slow
+              # path runs 30–60s later when the sandbox finishes cleanup.
+              # By that time the fast path's approval may already be in
+              # place, OR the downgrade-on-ci-failure / dismiss-on-human
+              # workflow may have stripped the label and dismissed it. We
+              # must not re-approve in either case.
+              #
+              # The label is the canonical "this verdict still stands"
+              # signal: fast path stamps it, downgrade/dismiss strip it,
+              # reset-on-push strips it. If it's gone we treat the
+              # READY_TO_MERGE comment as stale.
+              LABEL_PRESENT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" \
+                --jq '[.[] | select(.name == "sdk-review-approved")] | length')
+              EXISTING_APPROVAL=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate \
+                --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | length')
+              if [ "$LABEL_PRESENT" = "0" ]; then
+                echo "sdk-review-approved label not present on PR #${PR_NUMBER} (downgrade or reset-on-push likely ran) — skipping approval."
+              elif [ "$EXISTING_APPROVAL" != "0" ]; then
+                echo "atlan-ci already approved PR #${PR_NUMBER} (likely from the fast path) — skipping."
+              else
+                # NOTE: the leading line of the body is a STABLE SIGNATURE used
+                # by the dismiss-on-human workflow to identify approvals posted
+                # by this flow. Keep this in sync with
+                # sdk-review-approve-on-verdict.yml.
+                APPROVE_BODY=$(printf '%s\n' \
+                  "**SDK reviewer's verdict:** READY TO MERGE." \
+                  "" \
+                  "Full review summary is in the comment posted on this PR." \
+                  "")
+                gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
+                echo "Approved PR #${PR_NUMBER} as atlan-ci (slow path fallback)."
+              fi
               ;;
             "NEEDS_HUMAN")
               gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-human" 2>/dev/null || true

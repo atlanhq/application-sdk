@@ -1,0 +1,157 @@
+# Post the atlan-ci approval the moment mothership-ai[bot] posts the
+# verdict comment, so the formal approval doesn't have to wait for the
+# sandbox to finish its post-verdict cleanup.
+#
+# Why this exists:
+#   `sdk-review.yml`'s "Approve PR as atlan-ci" step runs AFTER the
+#   `Dispatch to mothership Rover Direct API` step ends — i.e., after
+#   the sandbox's SSE stream sends `event: complete`. The sandbox does
+#   30–60s of bookkeeping (labels, GHA annotations, retro logging,
+#   sandbox teardown) between posting the verdict comment and emitting
+#   `complete`. From the PR author's perspective the review summary
+#   shows up, then there's a 1–2 minute gap before the formal
+#   atlan-ci approval appears.
+#
+#   `issue_comment: created` fires within seconds of the verdict comment
+#   landing. This workflow listens on that event, validates the
+#   commenter (mothership-ai[bot]) and the marker (`<!-- SDK_REVIEW -->`
+#   or the legacy `<!-- TEST_SDK_REVIEW -->`), extracts the verdict, and
+#   posts the approval directly. End-to-end: comment → approval in ~5s.
+#
+# Idempotency:
+#   The approve step in `sdk-review.yml` still runs as a fallback after
+#   the SSE stream ends. Both paths check "does atlan-ci already have an
+#   APPROVED review with the bot signature?" before posting, so we
+#   don't end up with two approvals on the same PR head.
+#
+# Side-effects:
+#   labels        applied from the extracted verdict (single source of
+#                 truth, decoupled from PR-head orchestration)
+#   reviews       atlan-ci posts APPROVE only when verdict ==
+#                 READY_TO_MERGE
+#   commit-status sdk-review context flipped to success/failure based
+#                 on the verdict
+
+name: SDK Review — approve on verdict comment
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  sdk-review-approve:
+    # Fire only when the verdict comment was posted by the mothership
+    # bot on a PR (issue_comment also fires on Issues; the PR-side has
+    # `issue.pull_request` populated). The marker filter accepts both
+    # `<!-- SDK_REVIEW -->` and the legacy `<!-- TEST_SDK_REVIEW -->`
+    # for in-flight PRs.
+    if: >-
+      github.event.issue.pull_request != null
+      && github.event.comment.user.login == 'mothership-ai[bot]'
+      && (
+        contains(github.event.comment.body, '<!-- SDK_REVIEW -->')
+        || contains(github.event.comment.body, '<!-- TEST_SDK_REVIEW -->')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Extract verdict, apply labels, post approval
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+
+          # Extract the verdict from the comment body.
+          # Same grep as sdk-review.yml's approve step — see there for
+          # why we anchor on `### Verdict:`.
+          RAW=$(printf '%s' "$COMMENT_BODY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
+          VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
+          if [ -z "$VERDICT" ]; then
+            echo "::warning::Could not extract verdict from mothership-ai comment on PR #${PR_NUMBER}. Skipping."
+            exit 0
+          fi
+          echo "Detected verdict: '${VERDICT}'"
+
+          # Resolve the PR HEAD so we can apply the commit status.
+          HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
+
+          # Strip the legacy `test-sdk-review-*` labels so PRs that
+          # pre-date the promotion don't end up wearing both prefixes.
+          for stale in "test-sdk-review-approved" "test-sdk-review-needs-human" "test-sdk-review-needs-rebase"; do
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$stale" 2>/dev/null || true
+          done
+
+          # Apply the canonical sdk-review-* labels based on verdict.
+          case "$VERDICT" in
+            "READY_TO_MERGE")
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-approved" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-human" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-rebase" 2>/dev/null || true
+              ;;
+            "NEEDS_HUMAN")
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-human" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
+              ;;
+            "NEEDS_REBASE")
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-rebase" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
+              ;;
+            *)
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-human" 2>/dev/null || true
+              ;;
+          esac
+
+          # Update the sdk-review commit status on the PR HEAD to
+          # reflect the verdict. The dispatch workflow sets this to
+          # pending; we resolve it here based on the actual outcome.
+          case "$VERDICT" in
+            "READY_TO_MERGE")
+              STATUS_STATE="success"; STATUS_DESC="Approved";;
+            "NEEDS_FIXES"|"BLOCKED")
+              STATUS_STATE="failure"; STATUS_DESC="Verdict: ${VERDICT}";;
+            *)
+              # NEEDS_HUMAN / NEEDS_REBASE / unknown — leave as failure
+              # so the merge gate stays visibly blocked.
+              STATUS_STATE="failure"; STATUS_DESC="Verdict: ${VERDICT}";;
+          esac
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -X POST \
+            -f state="${STATUS_STATE}" \
+            -f context=sdk-review \
+            -f description="${STATUS_DESC}"
+
+          # Only READY_TO_MERGE gets a formal atlan-ci approval.
+          if [ "$VERDICT" != "READY_TO_MERGE" ]; then
+            echo "Verdict '${VERDICT}' is not READY TO MERGE — labels applied, no approval posted."
+            exit 0
+          fi
+
+          # Idempotency guard: don't post a second atlan-ci approval if
+          # one already exists with our signature. Otherwise the slow-path
+          # approve step in sdk-review.yml would double-approve.
+          EXISTING=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate \
+            --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | length')
+          if [ "$EXISTING" != "0" ]; then
+            echo "atlan-ci has already approved PR #${PR_NUMBER} with the bot signature — skipping."
+            exit 0
+          fi
+
+          # NOTE: the leading line of the body is a STABLE SIGNATURE used
+          # by sdk-review-dismiss-on-human.yml to identify approvals
+          # posted by the bot. Keep this in sync with sdk-review.yml.
+          APPROVE_BODY=$(printf '%s\n' \
+            "**SDK reviewer's verdict:** READY TO MERGE." \
+            "" \
+            "Full review summary is in the comment posted on this PR." \
+            "")
+          gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
+          echo "Approved PR #${PR_NUMBER} as atlan-ci (fast path)."

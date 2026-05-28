@@ -44,7 +44,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  dismiss:
+  sdk-review-dismiss:
     # Skip if the actor is one of our service accounts / bots — we only
     # want to react to *human* engagement. `endsWith(..., '[bot]')`
     # catches every GitHub App (mothership-ai[bot], claude[bot],
