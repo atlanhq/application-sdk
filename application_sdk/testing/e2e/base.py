@@ -241,6 +241,72 @@ class BaseE2ETest:
                     _exc,
                 )
 
+    def teardown_method(self, method: Any) -> None:
+        """Purge all assets created by this test run, regardless of outcome.
+
+        Runs after every test method — including on failure and error — so
+        ephemeral connections and their descendants don't accumulate on the
+        tenant and degrade search performance over time.
+
+        Failures here are logged as warnings, not re-raised, so they never
+        mask the real test result.
+        """
+        conn_qn = getattr(self, "connection_qualified_name", None)
+        if not conn_qn:
+            return
+
+        try:
+            from pyatlan.client.atlan import AtlanClient  # type: ignore[import]
+            from pyatlan.model.assets import Asset  # type: ignore[import]
+            from pyatlan.model.fluent_search import FluentSearch  # type: ignore[import]
+
+            tenant_url = os.environ.get("ATLAN_BASE_URL", "")
+            api_token = os.environ.get("ATLAN_API_KEY", "")
+            if not tenant_url or not api_token:
+                return
+
+            client = AtlanClient(base_url=tenant_url, api_key=api_token)
+
+            # Collect GUIDs for all descendant assets.
+            child_guids: list[str] = []
+            child_request = (
+                FluentSearch()
+                .where(Asset.QUALIFIED_NAME.startswith(conn_qn + "/"))
+                .include_on_results(Asset.GUID)
+            ).to_request()
+            child_request.dsl.size = 200
+            for asset in client.asset.search(child_request):
+                if asset.guid:
+                    child_guids.append(asset.guid)
+
+            if child_guids:
+                client.asset.purge_by_guid(child_guids)
+                logger.info(
+                    "e2e cleanup: purged %d child assets under %s",
+                    len(child_guids),
+                    conn_qn,
+                )
+
+            # Purge the connection itself.
+            conn_request = (
+                FluentSearch()
+                .where(Asset.QUALIFIED_NAME.eq(conn_qn))
+                .where(Asset.TYPE_NAME.eq("Connection"))
+                .include_on_results(Asset.GUID)
+            ).to_request()
+            conn_request.dsl.size = 1
+            for asset in client.asset.search(conn_request):
+                if asset.guid:
+                    client.asset.purge_by_guid(asset.guid)
+                    logger.info("e2e cleanup: purged connection %s", conn_qn)
+
+        except Exception:
+            logger.warning(
+                "e2e cleanup failed for connection %s — manual purge may be needed",
+                conn_qn,
+                exc_info=True,
+            )
+
     # ------------------------------------------------------------------
     # Subclass hooks — override these
     # ------------------------------------------------------------------
