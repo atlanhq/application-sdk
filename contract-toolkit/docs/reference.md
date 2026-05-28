@@ -202,9 +202,10 @@ class LineagePublishStep {               // wraps LineagePublishNode
 | `credentialAuthHelp` | String? | null | Tooltip below auth-type radio. |
 | `credentialAuthWidth` | Int? | null | Grid width for auth-type radio. |
 | `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
-| `credentialAuthHidden` | Boolean | `false` | Hide the auth-type selector while preserving the generated default auth mode. Use when a connector has one valid auth mode. |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for hidden credential `name` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
+
+The auth-type radio's `ui.hidden` is auto-derived: it is hidden when only one auth option would be presented (`credentialAuthOptions.length == 1` for plain auth, or `directKeys.length == 1` for JDBC). No manual flag is required.
 
 ### Workflow Config
 
@@ -373,10 +374,11 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `credentialAuthHelp` | String? | null | Help text under the auth-type radio (tooltip). |
 | `credentialAuthWidth` | Int? | null | Grid width for auth-type radio when set. |
 | `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
-| `credentialAuthHidden` | Boolean | `false` | Hide the auth-type selector while preserving the generated default auth mode. Use when a connector has one valid auth mode. |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for the hidden credential `name` field. |
 | `credentialConnectorDefault` | String? | null | Optional default for the hidden credential `connector` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. When set, every `credentialAuthOptions` entry must be a `JDBCUrlAuthOption`. See [AdvancedJDBCUrlGroup](#advancedjdbcurlgroup--hostrlarrowurl-jdbc-credential-form). |
+
+The auth-type radio's `ui.hidden` is auto-derived: it is hidden when only one auth option would be presented (`credentialAuthOptions.length == 1` for plain auth, or `directKeys.length == 1` for JDBC). No manual flag is required.
 
 ### Workflow Config
 

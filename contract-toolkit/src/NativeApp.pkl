@@ -682,12 +682,6 @@ credentialAuthWidth: Int?
 /// The frontend keeps previously-selected values visible during edit.
 credentialAuthHiddenEnumListForCreating: Listing<String>?
 
-/// Whether the auth-type radio is hidden in the credential form.
-///
-/// Use this when a connector supports exactly one auth mode and the generated
-/// default should be submitted without requiring user input.
-credentialAuthHidden: Boolean = false
-
 /// Placeholder for the hidden credential `name` field.
 credentialNamePlaceholder: String = "Host Name"
 
@@ -2240,6 +2234,13 @@ local jdbcInvariant: Any =
             + "Every option must be a JDBCUrlAuthOption when credentialUrlGroup is non-null.")
       else null
   else null
+
+/// Auto-derived: hide the auth-type radio when the connector has a single auth
+/// option, since presenting a one-item radio adds no value. Auto-calculation
+/// keeps this in sync as connectors add or remove auth options — no manual
+/// flag to forget.
+local credentialAuthHidden: Boolean =
+  credentialAuthOptions != null && credentialAuthOptions!!.length == 1
 
 /// Generate the full credential configmap JSON.
 local function generateCredentialConfig(): Mapping<String, Any> =

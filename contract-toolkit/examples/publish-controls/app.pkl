@@ -44,8 +44,6 @@ credentialCommonFields {
   }
 }
 
-credentialAuthHidden = true
-
 credentialAuthOptions {
   ["basic"] = new AuthOption {
     label = "Basic"

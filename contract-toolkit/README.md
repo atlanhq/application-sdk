@@ -125,8 +125,9 @@ Credentials are shared — a user creates credentials once and reuses them acros
 Credential `FieldSpec` values render to frontend widget schemas. For boolean
 credential checkboxes, use `fieldType = "checkbox"`; the generated JSON keeps
 `type = "boolean"` and emits `ui.widget = "checkbox"`. When a connector has
-only one valid auth mode, set `credentialAuthHidden = true` to hide the
-auth-type selector while preserving the generated default value.
+only one auth option (or, for JDBC, one direct-mode auth option), the
+auth-type radio is auto-hidden — the generated default is still emitted, so
+no form input is required.
 
 ### Manifest (`app/generated/manifest.json`)
 
