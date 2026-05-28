@@ -10,14 +10,11 @@ from __future__ import annotations
 from typing import Any
 
 import orjson
-import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
-    AgentSpec,
     ConnectionSpec,
-    DatabaseSpec,
     RunMode,
     build_ae_payload,
 )
@@ -25,7 +22,6 @@ from application_sdk.testing.e2e.substitutions import (
     MustacheSubstitutions,
     SQLMustacheSubstitutions,
 )
-
 
 _OPENAPI_CONNECTION = ConnectionSpec(
     name="e2e-ci-openapi-1234",
