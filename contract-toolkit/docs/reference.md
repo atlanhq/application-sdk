@@ -201,7 +201,7 @@ class LineagePublishStep {               // wraps LineagePublishNode
 | `credentialAuthPlaceholder` | String? | null | Placeholder for auth-type radio. |
 | `credentialAuthHelp` | String? | null | Tooltip below auth-type radio. |
 | `credentialAuthWidth` | Int? | null | Grid width for auth-type radio. |
-| `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type values hidden during credential creation. |
+| `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
 | `credentialAuthHidden` | Boolean | `false` | Hide the auth-type selector while preserving the generated default auth mode. Use when a connector has one valid auth mode. |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for hidden credential `name` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
