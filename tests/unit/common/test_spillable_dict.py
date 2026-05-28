@@ -127,6 +127,7 @@ class TestSpillableDict:
         """Inheriting from MutableMapping gives pop/update/setdefault/keys/
         values/clear for free — verify the registration."""
         from collections.abc import MutableMapping
+
         d = SpillableDict()
         try:
             assert isinstance(d, MutableMapping)
