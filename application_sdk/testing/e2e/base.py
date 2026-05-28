@@ -109,7 +109,13 @@ class BaseE2ETest:
     Class attrs with defaults:
 
     Attributes:
-        connection_name_prefix: Prefix in the test Connection name.
+        connection_type: Atlan catalog type segment used in the Connection
+            qualifiedName (``default/<connection_type>/<epoch>``).  When
+            empty (the default) the harness falls back to
+            ``connector_short_name``.  Override when the two differ — e.g.
+            the OpenAPI connector uses ``connector_short_name = "openapi"``
+            but its Atlan connection type is ``"api"``
+            (``AtlanConnectorType.API.value``).
         connection_admin_users / _groups / _roles: ACL on the Connection.
         ae_poll_interval_seconds / ae_poll_timeout_seconds: AE polling.
         atlas_poll_interval_seconds / atlas_poll_timeout_seconds: Atlas polling.
@@ -130,6 +136,7 @@ class BaseE2ETest:
     app_service_url: ClassVar[str] = ""
 
     # --- optional class attrs ------------------------------------------
+    connection_type: ClassVar[str] = ""
     connection_name_prefix: ClassVar[str] = "e2e-full-ci"
     connection_admin_users: ClassVar[tuple[str, ...]] = ()
     connection_admin_groups: ClassVar[tuple[str, ...]] = ()
@@ -194,13 +201,15 @@ class BaseE2ETest:
             oauth_client_id=oauth_client_id or None,
             oauth_client_secret=oauth_client_secret or None,
         )
-        self.connection_qualified_name = (
-            f"default/{self.connector_short_name}/"
-            f"{self.connection_name_prefix}-{self.run_id}"
-        )
-        self.connection_display_name = (
-            f"{self.connection_name_prefix}-{self.connector_short_name}-{self.run_id}"
-        )
+        # connection_type overrides connector_short_name when the Atlan
+        # catalog type segment differs from the connector's app name (e.g.
+        # OpenAPI: connector_short_name="openapi", connection_type="api").
+        # The name is pure epoch seconds so Atlas never rejects it for
+        # containing hyphens or alpha characters.
+        _conn_type = self.connection_type or self.connector_short_name
+        _epoch = int(time.time())
+        self.connection_qualified_name = f"default/{_conn_type}/{_epoch}"
+        self.connection_display_name = f"{_conn_type}-{_epoch}"
 
     # ------------------------------------------------------------------
     # Subclass hooks — override these
@@ -217,7 +226,7 @@ class BaseE2ETest:
         return ConnectionSpec(
             name=self.connection_display_name,
             qualified_name=self.connection_qualified_name,
-            connector_name=self.connector_short_name,
+            connector_name=self.connection_type or self.connector_short_name,
             source_logo=f"https://assets.atlan.com/assets/{self.connector_short_name}.png",
             admin_users=self.connection_admin_users,
             admin_groups=self.connection_admin_groups,
