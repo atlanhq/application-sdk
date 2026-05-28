@@ -152,6 +152,11 @@ class BaseE2ETest:
     ae_poll_timeout_seconds: ClassVar[int] = 600
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
+    # Asset counts use a much shorter poll window: Elasticsearch is eventually
+    # consistent but assets that will appear do so within seconds of the
+    # publish step completing. No point holding CI for 25 minutes.
+    atlas_asset_poll_interval_seconds: ClassVar[int] = 5
+    atlas_asset_poll_timeout_seconds: ClassVar[int] = 60
 
     expected_min_asset_counts: ClassVar[dict[str, int]] = {}
     expect_lineage: ClassVar[bool] = True
@@ -477,11 +482,12 @@ class BaseE2ETest:
             )
             if connection_in_atlas:
                 if self.expected_min_asset_counts:
-                    # Poll for asset counts — Elasticsearch indexing is async so
-                    # assets may not be searchable the moment AE reports success.
-                    # Reuse the atlas poll interval/timeout for consistency.
+                    # Poll for asset counts — Elasticsearch is eventually
+                    # consistent but assets appear within seconds if publish
+                    # succeeded. Use a short dedicated timeout rather than the
+                    # full atlas_poll_timeout_seconds used for the connection.
                     probe_types = tuple(self.expected_min_asset_counts.keys())
-                    deadline = time.monotonic() + self.atlas_poll_timeout_seconds
+                    deadline = time.monotonic() + self.atlas_asset_poll_timeout_seconds
                     while True:
                         asset_counts = self.client.count_assets_under_connection(
                             self.connection_qualified_name,
@@ -498,7 +504,7 @@ class BaseE2ETest:
                         )
                         if thresholds_met or time.monotonic() >= deadline:
                             break
-                        time.sleep(self.atlas_poll_interval_seconds)
+                        time.sleep(self.atlas_asset_poll_interval_seconds)
                 if self.expect_lineage:
                     lineage_counts = self.client.count_lineage_under_connection(
                         self.connection_qualified_name,
