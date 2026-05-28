@@ -246,13 +246,20 @@ jobs:
             });
 
       # max-attempts: '1' overrides the action's internal default of 3 so
-      # each outer step is one real attempt, not three. Combined with the
-      # action's 5-min timeout_minutes, three outer steps cap total VPN
-      # time at ~15 min in the worst case.
+      # each outer step is one real attempt, not three. Three outer steps
+      # cap total VPN time at ~15 min in the worst case.
+      #
+      # timeout-minutes: 5 is a runner-enforced hard cap on each step. The
+      # inner nick-fields/retry timeout_minutes is best-effort — it SIGTERMs
+      # the bash subshell, but sudo/openconnect children survive parent
+      # signals, so a wedged attempt can hang indefinitely. The outer
+      # timeout-minutes is enforced by the runner itself and is the only
+      # guarantee the step terminates and the next attempt fires.
       - name: Connect to VPN (attempt 1/3)
         id: vpn1
         uses: ./.github/actions/globalprotect-connect
         continue-on-error: true
+        timeout-minutes: 5
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
@@ -264,6 +271,7 @@ jobs:
         if: steps.vpn1.outcome == 'failure'
         uses: ./.github/actions/globalprotect-connect
         continue-on-error: true
+        timeout-minutes: 5
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
@@ -275,6 +283,7 @@ jobs:
         if: steps.vpn2.outcome == 'failure'
         uses: ./.github/actions/globalprotect-connect
         continue-on-error: true
+        timeout-minutes: 5
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
