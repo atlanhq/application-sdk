@@ -650,26 +650,34 @@ jobs:
             fi
           fi
 
-          if [ "$ERRORED" = "1" ]; then
-            MSG="Sandbox error: code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
+          # Soft-success rule: if the orchestration already posted a
+          # <!-- SDK_REVIEW --> verdict comment on this run, the review was
+          # delivered to the PR — any subsequent stream breakage (idle
+          # connection drop, missing `complete` event, non-`completed` final
+          # status, mid-stream `error` event) is a mothership-side
+          # finalize/cleanup glitch, not a real review failure. Surface as a
+          # warning so the CI check still passes.
+          fail_or_warn() {
+            local msg="$1"
             if [ "$VERDICT_POSTED" = "1" ]; then
-              echo "::warning::${MSG} — but a SDK_REVIEW summary comment was already posted on PR #${PR_NUMBER}. Treating as soft-success since the review was delivered."
+              echo "::warning::${msg} — but a SDK_REVIEW summary comment was already posted on PR #${PR_NUMBER}. Treating as soft-success since the review was delivered."
             else
-              echo "::error::${MSG}"
+              echo "::error::${msg}"
               exit 1
             fi
+          }
+
+          if [ "$ERRORED" = "1" ]; then
+            fail_or_warn "Sandbox error: code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
           fi
           if [ "$STREAM_GOT_EVENT" = "0" ]; then
-            echo "::error::Stream ended without a single SSE event — likely VPN/network/proxy issue"
-            exit 1
+            fail_or_warn "Stream ended without a single SSE event — likely VPN/network/proxy issue"
           fi
           if [ "$COMPLETED" != "1" ] && [ "$ERRORED" != "1" ]; then
-            echo "::error::Stream ended without a 'complete' event"
-            exit 1
+            fail_or_warn "Stream ended without a 'complete' event"
           fi
           if [ "$FINAL_STATUS" != "completed" ] && [ "$ERRORED" != "1" ]; then
-            echo "::error::Sandbox final status=${FINAL_STATUS} (expected 'completed')"
-            exit 1
+            fail_or_warn "Sandbox final status=${FINAL_STATUS} (expected 'completed')"
           fi
 
           echo "SDK Review (mothership) completed successfully (cost=${FINAL_COST})."
