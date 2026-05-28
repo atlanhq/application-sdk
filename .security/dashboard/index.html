@@ -149,6 +149,17 @@
         .tab{flex:1;text-align:center;padding:10px 22px;font-size:13px;font-weight:600;color:#8c8fa3;cursor:pointer;border-radius:8px;transition:all 0.2s;}
         .tab:hover{color:#1a1a2e;background:#f5f7fa;}
         .tab.active{color:#fff;background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 2px 8px rgba(99,102,241,0.3);}
+        .type-toggle button.active{background:#fff !important;color:#6366f1 !important;box-shadow:0 1px 3px rgba(99,102,241,0.15);}
+        .type-toggle button:hover:not(.active){color:#1a1a2e;}
+        .sub-tabs{display:flex;gap:4px;margin:0 0 16px 0;padding:4px;background:#f4f5fa;border-radius:12px;}
+        .sub-tab{flex:1;text-align:center;border:0;background:transparent;padding:10px 22px;font-size:13px;font-weight:600;color:#8c8fa3;cursor:pointer;border-radius:8px;transition:all 0.2s;}
+        .sub-tab:hover:not(.active){color:#1a1a2e;background:#fff;}
+        .sub-tab.active{color:#fff;background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 2px 8px rgba(99,102,241,0.3);}
+        .sub-content:empty{display:none;}
+        /* Legacy panels (tab-trends, tab-sdkvulns, tab-vulns) get relocated
+           into .sub-content. Their visibility is then driven by inline
+           style (set by showCategorySubTab) — they are not bound to the
+           .active class once relocated. */
         .tab-panel{display:none;}
         .tab-panel.active{display:block;animation:fadeIn 0.4s ease;}
         @keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
@@ -165,15 +176,14 @@
     <div class="stats-row" id="stats"></div>
     <div class="tabs">
         <div class="tab active" data-tab="overview">Overview</div>
-        <div class="tab" data-tab="sdkvulns">SDK Vulnerabilities</div>
-        <div class="tab" data-tab="vulns">App Vulnerabilities</div>
-        <div class="tab" data-tab="trends">Trends</div>
+        <div class="tab" data-tab="connectors">Connector Apps</div>
+        <div class="tab" data-tab="system">System Apps</div>
         <div class="tab" data-tab="repos">Repos</div>
     </div>
     <div class="tab-panel active" id="tab-overview">
         <div class="grid-2">
-            <div class="card"><div class="card-title">By Source</div><div id="srcDonut"></div></div>
-            <div class="card"><div class="card-title">By Scanner</div><div id="scanDonut"></div></div>
+            <div class="card" style="border-top:3px solid #ea580c"><div class="card-title">Connector Apps</div><div id="connectorBreakdown"></div></div>
+            <div class="card" style="border-top:3px solid #4f46e5"><div class="card-title">System Apps</div><div id="systemBreakdown"></div></div>
         </div>
         <div class="grid-2">
             <div class="card"><div class="card-title">Top Packages</div><div id="pkgBars"></div></div>
@@ -182,7 +192,7 @@
     </div>
     <div class="tab-panel" id="tab-trends">
         <!-- Section 1: Snapshot cards -->
-        <div class="stats-row" id="trendSnapshot" style="grid-template-columns:repeat(5,1fr)"></div>
+        <div class="stats-row" id="trendSnapshot" style="grid-template-columns:repeat(4,1fr)"></div>
         <!-- Section 2: Line chart -->
         <div class="card" style="margin-bottom:16px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -226,6 +236,32 @@
                     <th style="width:40px">#</th><th data-ts="repo">Repo</th><th data-ts="sdk">SDK Version</th><th data-ts="scanned">Last Scan</th><th data-ts="app">App CVEs</th><th data-ts="base">Base CVEs</th><th data-ts="now">Total CVEs</th><th data-ts="old" id="thCompare">7d ago</th><th data-ts="delta">Change</th><th>Status</th>
                 </tr></thead><tbody id="trendTableBody"></tbody></table>
             </div>
+        </div>
+    </div>
+    <!-- Per-category self-contained panels. Rendered by renderCategoryView()
+         which writes a snapshot summary + per-repo table into the container. -->
+    <div class="tab-panel" id="tab-connectors">
+        <div class="category-wrap" style="background:#fff;border-radius:14px;padding:18px;box-shadow:0 1px 3px rgba(15,23,42,0.05);min-height:60vh;">
+            <div class="sub-tabs" data-category="connector">
+                <button data-sub="snapshot" class="sub-tab active" onclick="showCategorySubTab('connector','snapshot')">Snapshot</button>
+                <button data-sub="trends" class="sub-tab" onclick="showCategorySubTab('connector','trends')">Trends</button>
+                <button data-sub="sdkvulns" class="sub-tab" onclick="showCategorySubTab('connector','sdkvulns')">SDK Vulnerabilities</button>
+                <button data-sub="vulns" class="sub-tab" onclick="showCategorySubTab('connector','vulns')">App Vulnerabilities</button>
+            </div>
+            <div id="connectorsView"></div>
+            <div id="connectorsSubContent" class="sub-content"></div>
+        </div>
+    </div>
+    <div class="tab-panel" id="tab-system">
+        <div class="category-wrap" style="background:#fff;border-radius:14px;padding:18px;box-shadow:0 1px 3px rgba(15,23,42,0.05);min-height:60vh;">
+            <div class="sub-tabs" data-category="system">
+                <button data-sub="snapshot" class="sub-tab active" onclick="showCategorySubTab('system','snapshot')">Snapshot</button>
+                <button data-sub="trends" class="sub-tab" onclick="showCategorySubTab('system','trends')">Trends</button>
+                <button data-sub="sdkvulns" class="sub-tab" onclick="showCategorySubTab('system','sdkvulns')">SDK Vulnerabilities</button>
+                <button data-sub="vulns" class="sub-tab" onclick="showCategorySubTab('system','vulns')">App Vulnerabilities</button>
+            </div>
+            <div id="systemView"></div>
+            <div id="systemSubContent" class="sub-content"></div>
         </div>
     </div>
     <div class="tab-panel" id="tab-repos">
@@ -279,16 +315,54 @@ const SYSTEM_REPOS=new Set([
     "atlan-app-template",
     "atlan-asset-term-link-app",
     "atlan-auth-app",
+    "atlan-aws-glue-enrichment-app",
+    "atlan-confluence-integration-manager-app",
+    "atlan-context-studio-app",
     "atlan-conversational-ai-app",
     "atlan-duplicate-detector-app",
+    "atlan-generic-miner-app",
+    "atlan-governance-app",
+    "atlan-lake-formation-tag-sync-app",
     "atlan-lineage-app",
+    "atlan-lineage-builder-app",
     "atlan-metadata-propagator-app",
     "atlan-openlineage-app",
+    "atlan-popularity-app",
+    "atlan-powerquery-parser-app",
+    "atlan-publish-app",
+    "atlan-tenant-config-manager-app",
+    "atlan-testkit-app",
     "atlan-user-export-app",
     "atlan-user-offboarding-app",
     "lineage-builder-app",
+    "native-migration-app",
 ]);
 const isSystemRepo=r=>SYSTEM_REPOS.has(r.split('/').pop());
+
+// Current top-level filter: 'all' | 'system' | 'connector'. Drives every
+// view by funnelling all `visibleRepoKeys()` callers through visibleRepoKeys().
+let _typeFilter='all';
+function visibleRepoKeys(){
+    const all=Object.keys(D.repos||{});
+    if(_typeFilter==='system')return all.filter(isSystemRepo);
+    if(_typeFilter==='connector')return all.filter(r=>!isSystemRepo(r));
+    return all;
+}
+function setTypeFilter(t){
+    if(_typeFilter===t)return;
+    _typeFilter=t;
+    document.querySelectorAll('.type-toggle button').forEach(b=>{
+        b.classList.toggle('active',b.dataset.type===t);
+    });
+    // Re-render whatever's currently visible
+    buildVM();
+    renderStats();
+    const activeTab=document.querySelector('.tab.active')?.dataset.tab;
+    if(activeTab==='trends')renderTrends();
+    else if(activeTab==='sdkvulns')renderSdkVulns();
+    else if(activeTab==='repos')renderRepos();
+    else if(activeTab==='vulns')renderTable();
+}
 
 function animateCount(el,target){let cur=0;const step=Math.max(1,Math.ceil(target/30));const timer=setInterval(()=>{cur+=step;if(cur>=target){cur=target;clearInterval(timer);}el.textContent=cur;},30);}
 
@@ -304,26 +378,57 @@ async function load(){
     }catch(e){document.getElementById('empty').style.display='block';document.getElementById('empty').textContent='No data yet.';}
 }
 
-function buildVM(){VM={};Object.keys(D.repos).forEach(repo=>{(D.repos[repo].vulnerabilities||[]).forEach(v=>{if(!VM[v.id]){VM[v.id]={...v,repos:[repo],statuses:{}};}else{if(!VM[v.id].repos.includes(repo))VM[v.id].repos.push(repo);if(v.source_type==='base_image')VM[v.id].source_type='base_image';}VM[v.id].statuses[repo]=v.status||'new';});});}
+function buildVM(){VM={};visibleRepoKeys().forEach(repo=>{(D.repos[repo].vulnerabilities||[]).forEach(v=>{if(!VM[v.id]){VM[v.id]={...v,repos:[repo],statuses:{}};}else{if(!VM[v.id].repos.includes(repo))VM[v.id].repos.push(repo);if(v.source_type==='base_image')VM[v.id].source_type='base_image';}VM[v.id].statuses[repo]=v.status||'new';});});}
 
 function renderAll(){renderStats();renderOverview();renderRepos();renderTable();renderSdkVulns();
     document.getElementById('lastUpdated').textContent='Updated '+(D.generated_at?new Date(D.generated_at).toLocaleString():'N/A');}
 
 function renderStats(repoFilter){
-    const repos=repoFilter||Object.keys(D.repos);
-    const repoSet=new Set(repos);
-    const vs=Object.values(VM).map(v=>({...v,repos:v.repos.filter(r=>repoSet.has(r)),statuses:Object.fromEntries(Object.entries(v.statuses).filter(([r])=>repoSet.has(r)))})).filter(v=>v.repos.length>0);
-    const c=vs.filter(v=>v.severity==='CRITICAL').length,h=vs.filter(v=>v.severity==='HIGH').length;
-    const nw=vs.filter(v=>Object.values(v.statuses).includes('new')).length,al=vs.length-nw;
-    // SDK version breakdown
-    let v2=0,v3=0;
-    repos.forEach(r=>{const sdk=(D.repos[r].sdk_version||'');if(sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3'))v3++;else if(sdk!=='unknown')v2++;});
-    document.getElementById('stats').innerHTML=`
-        <div class="stat s-total" onclick="qf('all')"><div class="stat-glow"></div><div class="stat-icon">&#128202;</div><div class="stat-value" data-count="${vs.length}">0</div><div class="stat-label">Unique CVEs</div><div class="stat-bar" style="width:100%;background:linear-gradient(90deg,#6366f1,#a855f7)"></div></div>
-        <div class="stat s-crit" onclick="qf('CRITICAL')"><div class="stat-glow"></div><div class="stat-icon">&#9888;&#65039;</div><div class="stat-value" data-count="${c}">0</div><div class="stat-label">Critical</div><div class="stat-bar" style="width:${pct(c,vs.length)}%;background:#ef4444"></div></div>
-        <div class="stat s-new" onclick="qf('new')"><div class="stat-glow"></div><div class="stat-icon">&#10060;</div><div class="stat-value" data-count="${nw}">0</div><div class="stat-label">Blocking</div><div class="stat-bar" style="width:${pct(nw,vs.length)}%;background:#ef4444"></div></div>
-        <div class="stat s-ok" onclick="qf('allowlisted')"><div class="stat-glow"></div><div class="stat-icon">&#10004;&#65039;</div><div class="stat-value" data-count="${al}">0</div><div class="stat-label">Allowlisted</div><div class="stat-bar" style="width:${pct(al,vs.length)}%;background:#22c55e"></div></div>`;
-    document.querySelectorAll('.stat-value[data-count]').forEach(el=>animateCount(el,parseInt(el.dataset.count)));
+    // Two category-summary cards at the top. Connector vs System, each showing
+    // unique CVEs / Critical / High counts. Always computed over ALL repos in
+    // that category (independent of the active tab) so users get a constant
+    // top-of-page reference.
+    const allRepos=Object.keys(D.repos||{});
+    const connRepos=allRepos.filter(r=>!isSystemRepo(r));
+    const sysRepos=allRepos.filter(isSystemRepo);
+    // Walk D.repos directly rather than going through VM. VM gets rebuilt
+    // with `_typeFilter` applied every time the user navigates into a category
+    // sub-tab — so it doesn't include the other category's CVEs anymore. These
+    // top cards always need to show BOTH categories regardless of filter state,
+    // so we compute their unique-CVE counts from the raw repo data instead.
+    const buildSummary=(repos)=>{
+        const idsAll=new Set(),idsCrit=new Set(),idsHigh=new Set();
+        repos.forEach(r=>{
+            (D.repos[r].vulnerabilities||[]).forEach(v=>{
+                if(!v.id)return;
+                idsAll.add(v.id);
+                if(v.severity==='CRITICAL')idsCrit.add(v.id);
+                else if(v.severity==='HIGH')idsHigh.add(v.id);
+            });
+        });
+        return {uniq:idsAll.size,crit:idsCrit.size,high:idsHigh.size,repos:repos.length};
+    };
+    const conn=buildSummary(connRepos);
+    const sys=buildSummary(sysRepos);
+    const card=(label,d,accent,tabName)=>`
+        <div class="stat" style="cursor:pointer;border-top:3px solid ${accent}" onclick="document.querySelector('[data-tab=\\'${tabName}\\']').click()">
+            <div class="stat-glow"></div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+                <div>
+                    <div class="stat-label" style="margin:0">${label}</div>
+                    <div style="font-size:11px;color:#8c8fa3;margin-top:2px">${d.repos} repo${d.repos===1?'':'s'}</div>
+                </div>
+                <div style="font-size:11px;color:${accent};font-weight:600;text-transform:uppercase">View →</div>
+            </div>
+            <div style="display:flex;gap:24px;margin-top:8px">
+                <div><div style="font-size:32px;font-weight:700;color:#ef4444;line-height:1">${d.crit}</div><div style="font-size:10px;color:#8c8fa3;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px">Critical</div></div>
+                <div><div style="font-size:32px;font-weight:700;color:#f97316;line-height:1">${d.high}</div><div style="font-size:10px;color:#8c8fa3;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px">High</div></div>
+                <div style="margin-left:auto;text-align:right"><div style="font-size:32px;font-weight:700;color:#1a1a2e;line-height:1">${d.uniq}</div><div style="font-size:10px;color:#8c8fa3;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px">Unique CVEs</div></div>
+            </div>
+        </div>`;
+    const statsEl=document.getElementById('stats');
+    statsEl.style.gridTemplateColumns='1fr 1fr';
+    statsEl.innerHTML=card('Connector Apps',conn,'#ea580c','connectors')+card('System Apps',sys,'#4f46e5','system');
 }
 
 function qf(t){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));
@@ -340,13 +445,61 @@ function donut(id,items){
 }
 
 function renderOverview(){
+    // Build per-category breakdown cards — each shows By Source + By Scanner
+    // donuts side-by-side. Uses raw D.repos data (not VM) so the cards are
+    // independent of any active type filter.
+    const allRepos=Object.keys(D.repos||{});
+    // Each CVE ID is assigned EXACTLY ONE source and EXACTLY ONE scanner so
+    // the donut slices sum to the unique-CVE total. Precedence:
+    //   source  — base_image wins over app (matches buildVM's merge rule)
+    //   scanner — first-seen wins (consistent across renders)
+    const buildCategoryBreakdown=(repos)=>{
+        const srcOf={},scanOf={};
+        repos.forEach(r=>{
+            (D.repos[r].vulnerabilities||[]).forEach(v=>{
+                if(!v.id)return;
+                if(v.source_type==='base_image')srcOf[v.id]='base';
+                else if(v.source_type==='app'&&srcOf[v.id]!=='base')srcOf[v.id]='app';
+                if(!scanOf[v.id])scanOf[v.id]=v.scanner||'other';
+            });
+        });
+        const counts={base:0,app:0,trivy:0,snyk:0,total:0};
+        Object.values(srcOf).forEach(s=>{counts.total++;if(s==='base')counts.base++;else if(s==='app')counts.app++;});
+        Object.values(scanOf).forEach(s=>{if(s==='trivy')counts.trivy++;else if(s==='snyk')counts.snyk++;});
+        return counts;
+    };
+    const renderInto=(containerId,prefix,data)=>{
+        const el=document.getElementById(containerId);
+        if(!el)return;
+        el.innerHTML=`
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+                <div>
+                    <div style="font-size:10px;font-weight:600;color:#8c8fa3;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">By Source</div>
+                    <div id="${prefix}SrcDonut"></div>
+                </div>
+                <div>
+                    <div style="font-size:10px;font-weight:600;color:#8c8fa3;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">By Scanner</div>
+                    <div id="${prefix}ScanDonut"></div>
+                </div>
+            </div>`;
+        donut(prefix+'SrcDonut',[
+            {label:'Base image',count:data.base,color:'#6366f1'},
+            {label:'App dependency',count:data.app,color:'#f97316'},
+        ]);
+        donut(prefix+'ScanDonut',[
+            {label:'Trivy',count:data.trivy,color:'#2563eb'},
+            {label:'Snyk',count:data.snyk,color:'#7c3aed'},
+        ]);
+    };
+    renderInto('connectorBreakdown','conn',buildCategoryBreakdown(allRepos.filter(r=>!isSystemRepo(r))));
+    renderInto('systemBreakdown','sys',buildCategoryBreakdown(allRepos.filter(isSystemRepo)));
+
+    // Top packages + repos use the visible (filter-respecting) VM and repo list
     const vs=Object.values(VM);
-    donut('srcDonut',[{label:'Base image',count:vs.filter(v=>v.source_type==='base_image').length,color:'#6366f1'},{label:'App dependency',count:vs.filter(v=>v.source_type==='app').length,color:'#f97316'}]);
-    donut('scanDonut',[{label:'Trivy',count:vs.filter(v=>v.scanner==='trivy').length,color:'#2563eb'},{label:'Snyk',count:vs.filter(v=>v.scanner==='snyk').length,color:'#7c3aed'}]);
     const pkgMap={};vs.forEach(v=>{pkgMap[v.package]=(pkgMap[v.package]||0)+1;});
     const pkgs=Object.entries(pkgMap).sort((a,b)=>b[1]-a[1]).slice(0,6);const mx=Math.max(...pkgs.map(p=>p[1]),1);
     document.getElementById('pkgBars').innerHTML=pkgs.map(([p,c])=>`<div class="hbar"><div class="hbar-header"><span class="hbar-label" title="${esc(p)}">${esc(p)}</span><span class="hbar-val">${c}</span></div><div class="hbar-track"><div class="hbar-fill" style="width:${pct(c,mx)}%"></div></div></div>`).join('');
-    const repos=Object.keys(D.repos).map(r=>({name:r.split('/').pop(),total:D.repos[r].total,c:D.repos[r].critical,h:D.repos[r].high})).sort((a,b)=>b.total-a.total);const rmx=Math.max(...repos.map(r=>r.total),1);
+    const repos=visibleRepoKeys().map(r=>({name:r.split('/').pop(),total:D.repos[r].total,c:D.repos[r].critical,h:D.repos[r].high})).sort((a,b)=>b.total-a.total);const rmx=Math.max(...repos.map(r=>r.total),1);
     document.getElementById('repoBars').innerHTML=repos.map(r=>`<div class="hbar"><div class="hbar-header"><span class="hbar-label">${esc(r.name)}</span><span class="hbar-val">${r.total}</span></div><div class="hbar-track"><div class="hbar-fill" style="width:${pct(r.total,rmx)}%;background:linear-gradient(90deg,#ef4444 ${pct(r.c,r.total)}%,#f97316 ${pct(r.c,r.total)}%)"></div></div></div>`).join('');
 }
 
@@ -354,7 +507,7 @@ function renderSdkVulns(){
     // Group base-image CVEs by SDK version. A repo's base CVEs come from its SDK base image,
     // so grouping by SDK shows what's baked into each base image.
     const sdkSel=document.getElementById('fSdkVer');
-    const allSdks=[...new Set(Object.keys(D.repos).map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))]
+    const allSdks=[...new Set(visibleRepoKeys().map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))]
         .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
     // Default to latest SDK version on first render; preserve user choice afterwards.
     let curSdk=sdkSel.value;
@@ -362,7 +515,7 @@ function renderSdkVulns(){
         curSdk=allSdks.length?allSdks[allSdks.length-1]:'all';
         sdkSel.dataset.initialized='true';
     }
-    sdkSel.innerHTML='<option value="all">All</option>';allSdks.forEach(s=>{const cnt=Object.keys(D.repos).filter(r=>(D.repos[r].sdk_version||'')==s).length;const o=document.createElement('option');o.value=s;o.textContent=s+' ('+cnt+')';if(s===curSdk)o.selected=true;sdkSel.appendChild(o);});
+    sdkSel.innerHTML='<option value="all">All</option>';allSdks.forEach(s=>{const cnt=visibleRepoKeys().filter(r=>(D.repos[r].sdk_version||'')==s).length;const o=document.createElement('option');o.value=s;o.textContent=s+' ('+cnt+')';if(s===curSdk)o.selected=true;sdkSel.appendChild(o);});
     const sdkFilter=sdkSel.value;
     const sevFilter=document.getElementById('fSdkSev').value;
     const stFilter=document.getElementById('fSdkStatus').value;
@@ -373,7 +526,7 @@ function renderSdkVulns(){
     // surface CVEs that newer scans on the same SDK have already cleared. Using the freshest
     // scan as representative gives an honest "current state of this SDK base" view.
     const reposBySdk={};
-    Object.keys(D.repos).forEach(r=>{
+    visibleRepoKeys().forEach(r=>{
         const sdk=D.repos[r].sdk_version||'unknown';
         (reposBySdk[sdk]=reposBySdk[sdk]||[]).push(r);
     });
@@ -426,7 +579,7 @@ function renderSdkVulns(){
 function renderRepos(){
     // Populate SDK filter for repos tab
     const repoSdkSel=document.getElementById('fRepoSdk'),curRepoSdk=repoSdkSel.value;
-    const allRepos=Object.keys(D.repos);
+    const allRepos=visibleRepoKeys();
     const sdkVers=[...new Set(allRepos.map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))].sort();
     repoSdkSel.innerHTML='<option value="all">All ('+allRepos.length+')</option>';sdkVers.forEach(s=>{const cnt=allRepos.filter(r=>(D.repos[r].sdk_version||'')==s).length;const o=document.createElement('option');o.value=s;o.textContent=s+' ('+cnt+')';if(s===curRepoSdk)o.selected=true;repoSdkSel.appendChild(o);});
     // Filter repos
@@ -464,7 +617,7 @@ function getFiltered(){
 }
 
 function renderTable(){
-    const repos=Object.keys(D.repos),sel=document.getElementById('fRepo'),cur=sel.value;
+    const repos=visibleRepoKeys(),sel=document.getElementById('fRepo'),cur=sel.value;
     sel.innerHTML=`<option value="all">All repos (${repos.length})</option>`;repos.forEach(r=>{const o=document.createElement('option');o.value=r;o.textContent=r.split('/').pop();if(r===cur)o.selected=true;sel.appendChild(o);});
     const vs=getFiltered(),sr=document.getElementById('fRepo').value;
     document.getElementById('tblCount').textContent=vs.length+' vulnerabilities';const tb=document.getElementById('tbl');tb.innerHTML='';
@@ -555,7 +708,65 @@ document.querySelectorAll('#trendTable th[data-ts]').forEach(th=>th.addEventList
     window._trendSort=cur.col===c?{col:c,dir:cur.dir==='asc'?'desc':'asc'}:{col:c,dir:'asc'};
     renderTrends();
 }));
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');if(t.dataset.tab==='trends'){renderTrends();}else if(t.dataset.tab==='sdkvulns'){renderSdkVulns();renderStats();}else{renderStats();}}));
+// Top-level tab nav. Only 4 tabs at this level: Overview, Connector Apps,
+// System Apps, Repos. Connector/System Apps each contain their own sub-tabs
+// (Snapshot / Trends / SDK Vulns / App Vulns) handled via showCategorySubTab().
+document.querySelectorAll('.tabs > .tab').forEach(t=>t.addEventListener('click',()=>{
+    document.querySelectorAll('.tabs > .tab').forEach(x=>x.classList.remove('active'));
+    // Only deactivate TOP-LEVEL panels (the ones direct children of .container)
+    document.querySelectorAll('.container > .tab-panel').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('tab-'+t.dataset.tab).classList.add('active');
+    const tab=t.dataset.tab;
+    if(tab==='connectors'){showCategorySubTab('connector','snapshot');}
+    else if(tab==='system'){showCategorySubTab('system','snapshot');}
+    else{
+        _typeFilter='all';
+        buildVM();
+        if(tab==='overview'){renderStats();renderOverview();}
+        else if(tab==='repos')renderRepos();
+    }
+}));
+
+// Sub-tab navigation inside category panels. Each sub-tab corresponds to one
+// of the legacy top-level panels (tab-trends, tab-sdkvulns, tab-vulns), which
+// are kept in the DOM and physically RELOCATED into the active category's
+// sub-content container on click. Filter state is set before re-rendering so
+// the existing render functions (which use visibleRepoKeys() internally)
+// scope their output to the chosen category automatically.
+window.showCategorySubTab=function(category,subTab){
+    _typeFilter=category;
+    buildVM();  // Rebuild vuln map under the new filter so VM-backed views (SDK Vulns / App Vulns) are scoped correctly.
+    const subContent=document.getElementById(category==='system'?'systemSubContent':'connectorsSubContent');
+    const snapshotView=document.getElementById(category==='system'?'systemView':'connectorsView');
+
+    // Sub-tab active states (this category active, other category resets to snapshot)
+    document.querySelectorAll(`.sub-tabs[data-category="${category}"] .sub-tab`).forEach(b=>b.classList.toggle('active',b.dataset.sub===subTab));
+    const otherCat=category==='system'?'connector':'system';
+    document.querySelectorAll(`.sub-tabs[data-category="${otherCat}"] .sub-tab`).forEach(b=>b.classList.toggle('active',b.dataset.sub==='snapshot'));
+
+    // Hide every relocatable legacy panel — wherever they currently live in the DOM.
+    // They'll be re-shown selectively below when their sub-tab is active.
+    ['trends','sdkvulns','vulns'].forEach(p=>{const el=document.getElementById('tab-'+p);if(el)el.style.display='none';});
+
+    if(subTab==='snapshot'){
+        snapshotView.style.display='block';
+        renderCategoryView(category);
+        return;
+    }
+    snapshotView.style.display='none';
+
+    // Relocate the legacy panel under this category's sub-content if it's
+    // elsewhere (e.g., it was last viewed under the other category).
+    const panel=document.getElementById('tab-'+subTab);
+    if(!panel)return;
+    if(panel.parentElement!==subContent){subContent.appendChild(panel);}
+    panel.style.display='block';
+
+    if(subTab==='trends')renderTrends();
+    else if(subTab==='sdkvulns')renderSdkVulns();
+    else if(subTab==='vulns')renderTable();
+};
 document.querySelectorAll('.filters-bar select,.filters-bar input').forEach(el=>{el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);});
 // Trend data
 let historyData={};
@@ -575,7 +786,7 @@ async function loadHistory(){
     }catch(e){}
     // If no history, generate from current data as day-0
     if(!Object.keys(historyData).length){
-        Object.keys(D.repos).forEach(r=>{
+        visibleRepoKeys().forEach(r=>{
             const d=D.repos[r];
             historyData[r]=[{date:new Date().toISOString().slice(0,10),repo:r,sdk_version:d.sdk_version||'unknown',total:d.total,critical:d.critical,high:d.high,base_image:d.base_image_count||0,app:d.app_count||0,allowlisted:d.allowlisted,new:d.new||0}];
         });
@@ -622,7 +833,7 @@ function renderTrends(){
     const days=parseInt(document.getElementById('fTrendDays').value);
     const metric=document.getElementById('fTrendMetric').value;
     const colors={total:'#6366f1',new:'#ef4444',app:'#f97316',base_image:'#8b949e'};
-    const allRepos=Object.keys(D.repos);
+    const allRepos=visibleRepoKeys();
     // Populate SDK filter (multi-select) from ALL repos (before filtering)
     const trendSdkSel=document.getElementById('fTrendSdk');
     const prevSelected=new Set([...trendSdkSel.selectedOptions].map(o=>o.value));
@@ -741,21 +952,14 @@ function renderTrends(){
     });
     const systemRepoCount=repos.filter(isSystemRepo).length;
     const connectorRepoCount=repos.length-systemRepoCount;
-    const sharedUnique=new Set([...systemUnique].filter(id=>connectorUnique.has(id)));
-    // Partition the org's unique CVE union into three disjoint buckets so the
-    // three numbers sum exactly to the headline Unique CVEs count.
-    const systemOnly=systemUnique.size-sharedUnique.size;
-    const connectorOnly=connectorUnique.size-sharedUnique.size;
-    const tipSystemCves=`Unique CVEs that ONLY appear in system / platform repos (${systemRepoCount}). These need system-team action; not shared with any connector.`;
-    const tipConnectorCves=`Unique CVEs that ONLY appear in connector repos (${connectorRepoCount}). These are connector-specific.`;
-    const tipSharedCves=`CVEs present in BOTH system and connector repos — typically base-image CVEs. Fixing one of these cleans both categories at once; highest-leverage target. System-only + Connector-only + Shared = total unique CVEs.`;
+    const tipSystemCves=`Unique CVEs across ${systemRepoCount} system / platform repo${systemRepoCount===1?'':'s'}. CVEs shared with connectors are counted on both sides.`;
+    const tipConnectorCves=`Unique CVEs across ${connectorRepoCount} connector repo${connectorRepoCount===1?'':'s'}. CVEs shared with system apps are counted on both sides.`;
 
     document.getElementById('trendSnapshot').innerHTML=`
         <div class="stat" style="cursor:help" title="${esc(tipReposScanned)}"><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128230;</div><div class="stat-value">${repos.length}</div><div class="stat-label">Repos Scanned</div></div>
         <div class="stat" style="cursor:help" title="${esc(tipTodayUnique)}"><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128202;</div><div class="stat-value">${totalToday}</div><div class="stat-label">Unique CVEs Today</div></div>
-        <div class="stat" style="cursor:help" title="${esc(tipSystemCves)}"><div class="stat-icon" style="background:#eef2ff;color:#4f46e5">&#9881;&#65039;</div><div class="stat-value">${systemOnly}</div><div class="stat-label">System-only <span style="color:#b0b3c6;font-weight:500">(${systemRepoCount})</span></div></div>
-        <div class="stat" style="cursor:help" title="${esc(tipConnectorCves)}"><div class="stat-icon" style="background:#fff7ed;color:#ea580c">&#128268;</div><div class="stat-value">${connectorOnly}</div><div class="stat-label">Connector-only <span style="color:#b0b3c6;font-weight:500">(${connectorRepoCount})</span></div></div>
-        <div class="stat" style="cursor:help" title="${esc(tipSharedCves)}"><div class="stat-icon" style="background:#f0fdf4;color:#16a34a">&#128279;</div><div class="stat-value">${sharedUnique.size}</div><div class="stat-label">Shared <span style="color:#b0b3c6;font-weight:500">(both)</span></div></div>`;
+        <div class="stat" style="cursor:help" title="${esc(tipSystemCves)}"><div class="stat-icon" style="background:#eef2ff;color:#4f46e5">&#9881;&#65039;</div><div class="stat-value">${systemUnique.size}</div><div class="stat-label">System Apps <span style="color:#b0b3c6;font-weight:500">(${systemRepoCount})</span></div></div>
+        <div class="stat" style="cursor:help" title="${esc(tipConnectorCves)}"><div class="stat-icon" style="background:#fff7ed;color:#ea580c">&#128268;</div><div class="stat-value">${connectorUnique.size}</div><div class="stat-label">Connector Apps <span style="color:#b0b3c6;font-weight:500">(${connectorRepoCount})</span></div></div>`;
 
     // Section 2: Stacked area chart
     // For each date, compute "state of the org as of that date": every in-scope repo
@@ -1001,7 +1205,7 @@ function renderTrends(){
 function renderRegressions(){
     const el=document.getElementById('trendRegressions');
     const today=new Date().toISOString().slice(0,10);
-    const repos=Object.keys(D.repos);
+    const repos=visibleRepoKeys();
     if(!repos.length){el.innerHTML='';return;}
 
     // Pick the prior date as (today − window). The chart's window selector is
@@ -1096,7 +1300,7 @@ function renderRegressions(){
 }
 
 function exportTrendCSV(){
-    const allRepos=Object.keys(D.repos);
+    const allRepos=visibleRepoKeys();
     const sdkFilter=document.getElementById('fTrendSdk').value;
     const repos=sdkFilter==='all'?allRepos:allRepos.filter(r=>(D.repos[r].sdk_version||'')==sdkFilter);
     const days=parseInt(document.getElementById('fTrendDays').value);
@@ -1116,6 +1320,134 @@ function exportTrendCSV(){
     const a=document.createElement('a');a.href=url;a.download='vulnerability-trends.csv';a.click();URL.revokeObjectURL(url);
 }
 
+
+// SDK-version filter state per category. Survives re-renders so the dropdown
+// keeps its selection even when the rest of the view is rebuilt.
+const _categorySdkFilter={connector:'all',system:'all'};
+
+function setCategorySdkFilter(category,value){
+    _categorySdkFilter[category]=value;
+    renderCategoryView(category);
+}
+
+// Render a self-contained dashboard for one category (connector | system)
+// into its tab panel. Produces a snapshot row + per-repo table — uses the
+// same data source as the main views but scoped to repos in the chosen set.
+function renderCategoryView(category){
+    const containerId=category==='system'?'systemView':'connectorsView';
+    const el=document.getElementById(containerId);
+    const allRepos=Object.keys(D.repos||{});
+    const inCategory=category==='system'?allRepos.filter(isSystemRepo):allRepos.filter(r=>!isSystemRepo(r));
+    if(!inCategory.length){el.innerHTML='<div class="empty" style="padding:32px">No repos in this category yet.</div>';return;}
+
+    // SDK version dropdown — bucketed by family rather than per-tag, so the
+    // dropdown stays short. Buckets and their match rules:
+    //   v2          → starts with 2. (e.g., 2.6.0, 2.8.7-4)
+    //   v3          → starts with 3. OR has v3 / refactor-v3 / main-3 markers
+    //   latest      → exact "latest"
+    //   main-latest → exact "main-latest"
+    //   alpine      → contains "-alpine" (Node base images leaked from multi-stage)
+    //   unknown     → exact "unknown" or missing
+    //   other       → anything left over (rare)
+    const sdkBucket=(sdk)=>{
+        const s=String(sdk||'').trim();
+        if(!s||s==='unknown')return 'unknown';
+        // Match bare major versions ("3") or dotted ("3.0.0", "3.13.1-4")
+        if(/^2(\.|$|-)/.test(s))return 'v2';
+        if(/^3(\.|$|-)/.test(s)||/v3/i.test(s)||/main-3/.test(s))return 'v3';
+        if(s==='latest')return 'latest';
+        if(s==='main-latest')return 'main-latest';
+        if(/alpine/.test(s))return 'alpine';
+        return 'other';
+    };
+    const currentSdk=_categorySdkFilter[category]||'all';
+    const repos=currentSdk==='all'?inCategory:inCategory.filter(r=>sdkBucket(D.repos[r].sdk_version)===currentSdk);
+    const bucketCount=(b)=>inCategory.filter(r=>sdkBucket(D.repos[r].sdk_version)===b).length;
+
+    // Snapshot stats
+    const repoSet=new Set(repos);
+    const vs=Object.values(VM).map(v=>({...v,repos:v.repos.filter(r=>repoSet.has(r)),statuses:Object.fromEntries(Object.entries(v.statuses).filter(([r])=>repoSet.has(r)))})).filter(v=>v.repos.length>0);
+    const c=vs.filter(v=>v.severity==='CRITICAL').length;
+    const h=vs.filter(v=>v.severity==='HIGH').length;
+    const appCves=vs.filter(v=>v.source_type==='app').length;
+    const baseCves=vs.filter(v=>v.source_type==='base_image').length;
+    const vulnFree=repos.filter(r=>(D.repos[r].total||0)===0).length;
+
+    // Per-repo rows
+    const today=new Date().toISOString().slice(0,10);
+    const fmtScanned=(iso)=>{
+        if(!iso)return{label:'—',color:'#8c8fa3',title:''};
+        const t=Date.parse(iso);if(isNaN(t))return{label:'—',color:'#8c8fa3',title:iso};
+        const days=Math.floor((Date.now()-t)/86400000);
+        const label=days<=0?'today':days===1?'1d ago':`${days}d ago`;
+        const color=days>=14?'#ef4444':days>=7?'#ea580c':'#8c8fa3';
+        return{label,color,title:new Date(t).toISOString().slice(0,10)};
+    };
+    const rows=repos.map(r=>{
+        const d=D.repos[r];
+        return {repo:r,sdk:d.sdk_version||'?',total:d.total||0,crit:d.critical||0,high:d.high||0,app:d.app_count||0,base:d.base_image_count||0,scanned:d.scanned_at||''};
+    }).sort((a,b)=>b.total-a.total);
+
+    const catLabel=category==='system'?'System Apps':'Connector Apps';
+    const accent=category==='system'?'#4f46e5':'#ea580c';
+    const accentBg=category==='system'?'#eef2ff':'#fff7ed';
+
+    // Build options dynamically — only show buckets that actually have repos in
+    // this category to avoid empty "(0)" entries cluttering the dropdown.
+    const allBuckets=[
+        ['v2','SDK v2'],['v3','SDK v3'],
+        ['latest','latest'],['main-latest','main-latest'],
+        ['alpine','*-alpine'],['unknown','unknown'],['other','other'],
+    ];
+    const sdkOptions=[`<option value="all"${currentSdk==='all'?' selected':''}>All SDK versions (${inCategory.length})</option>`]
+        .concat(allBuckets.filter(([b])=>bucketCount(b)>0).map(([b,label])=>`<option value="${b}"${b===currentSdk?' selected':''}>${esc(label)} (${bucketCount(b)})</option>`))
+        .join('');
+    const scopeLabel=currentSdk==='all'?'':`on ${currentSdk}`;
+    const scopeNote=currentSdk==='all'?`${repos.length} repo${repos.length===1?'':'s'} in scope`:`${repos.length} of ${inCategory.length} repo${inCategory.length===1?'':'s'} ${scopeLabel}`;
+
+    el.innerHTML=`
+        <div class="card" style="margin-bottom:16px;border-top:3px solid ${accent}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+                <div>
+                    <div class="card-title" style="margin:0">${catLabel} — Snapshot</div>
+                    <div style="font-size:11px;color:#8c8fa3;margin-top:2px">${scopeNote}</div>
+                </div>
+                <div class="filter-group"><label>SDK</label><select onchange="setCategorySdkFilter('${category}',this.value)" style="margin-left:6px;min-width:160px">${sdkOptions}</select></div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:14px">
+                <div class="stat" style="cursor:default"><div class="stat-icon" style="background:${accentBg};color:${accent}">&#128202;</div><div class="stat-value">${vs.length}</div><div class="stat-label">Unique CVEs</div></div>
+                <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#fef2f2;color:#ef4444">&#9888;&#65039;</div><div class="stat-value" style="color:#ef4444">${c}</div><div class="stat-label">Critical</div></div>
+                <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#fff7ed;color:#f97316">&#10071;</div><div class="stat-value" style="color:#f97316">${h}</div><div class="stat-label">High</div></div>
+                <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#fff7ed;color:#ea580c">&#128268;</div><div class="stat-value" style="color:#ea580c">${appCves}</div><div class="stat-label">App-level CVEs</div></div>
+                <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#eef2ff;color:#4f46e5">&#128230;</div><div class="stat-value" style="color:#4f46e5">${baseCves}</div><div class="stat-label">Base-level CVEs</div></div>
+                <div class="stat" style="cursor:default"><div class="stat-icon" style="background:#f0fdf4;color:#22c55e">&#10004;&#65039;</div><div class="stat-value" style="color:#22c55e">${vulnFree}</div><div class="stat-label">Vuln-free repos</div></div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title">Per Repo — ${catLabel} <span style="color:#b0b3c6;font-weight:500">(${rows.length})</span></div>
+            <div style="overflow-x:auto">
+                <table style="width:100%"><thead><tr>
+                    <th style="width:40px">#</th><th>Repo</th><th>SDK</th><th>Last Scan</th><th>App CVEs</th><th>Base CVEs</th><th>Critical</th><th>High</th><th>Total</th>
+                </tr></thead><tbody>
+                ${rows.map((r,i)=>{
+                    const isV3=r.sdk.startsWith('3')||r.sdk.includes('v3')||r.sdk.includes('refactor-v3');
+                    const scan=fmtScanned(r.scanned);
+                    return `<tr>
+                        <td style="color:#b0b3c6;font-weight:600">${i+1}</td>
+                        <td><span class="repo-tag">${esc(r.repo.split('/').pop())}</span></td>
+                        <td><span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'}">${esc(r.sdk)}</span></td>
+                        <td title="${esc(scan.title)}" style="color:${scan.color};font-size:11px">${scan.label}</td>
+                        <td>${r.app}</td>
+                        <td>${r.base}</td>
+                        <td style="color:#ef4444;font-weight:600">${r.crit||''}</td>
+                        <td style="color:#f97316;font-weight:600">${r.high||''}</td>
+                        <td><strong>${r.total}</strong></td>
+                    </tr>`;
+                }).join('')}
+                </tbody></table>
+            </div>
+        </div>`;
+}
 
 async function init(){await load();await loadHistory();renderTrends();}
 init();
