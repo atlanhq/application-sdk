@@ -137,6 +137,7 @@ class BaseE2ETest:
 
     # --- optional class attrs ------------------------------------------
     connection_type: ClassVar[str] = ""
+    connection_category: ClassVar[str] = "warehouse"
     connection_name_prefix: ClassVar[str] = "e2e-full-ci"
     connection_admin_users: ClassVar[tuple[str, ...]] = ()
     connection_admin_groups: ClassVar[tuple[str, ...]] = ()
@@ -223,6 +224,10 @@ class BaseE2ETest:
 
     def connection_spec(self) -> ConnectionSpec:
         """Where the resulting Atlas Connection will live."""
+        # Include the {{credentialGuid}} placeholder only when a credential
+        # body will be created — public-source connectors (credential_body=None)
+        # must NOT send the literal unsubstituted string to Atlas.
+        cred_guid = "{{credentialGuid}}" if self._credential_body() is not None else ""
         return ConnectionSpec(
             name=self.connection_display_name,
             qualified_name=self.connection_qualified_name,
@@ -231,6 +236,8 @@ class BaseE2ETest:
             admin_users=self.connection_admin_users,
             admin_groups=self.connection_admin_groups,
             admin_roles=self.connection_admin_roles,
+            category=self.connection_category,
+            default_credential_guid=cred_guid,
         )
 
     def _mustache_substitutions(self) -> MustacheSubstitutions:

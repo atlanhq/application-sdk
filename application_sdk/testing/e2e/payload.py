@@ -65,16 +65,22 @@ class ConnectionSpec:
     allow_query_preview: bool = True
     is_discoverable: bool = True
     is_editable: bool = False
+    default_credential_guid: str = ""
 
     def attributes(self) -> dict[str, Any]:
-        """Pyatlan-style ``Connection.attributes`` block."""
-        return {
+        """Pyatlan-style ``Connection.attributes`` block.
+
+        ``defaultCredentialGuid`` is only included when
+        ``default_credential_guid`` is non-empty — callers that have no
+        credential (public sources) omit it so Atlas never receives the
+        unsubstituted ``{{credentialGuid}}`` literal.
+        """
+        attrs: dict[str, Any] = {
             "name": self.name,
             "qualifiedName": self.qualified_name,
             "allowQuery": self.allow_query,
             "allowQueryPreview": self.allow_query_preview,
             "rowLimit": self.row_limit,
-            "defaultCredentialGuid": "{{credentialGuid}}",
             "connectorName": self.connector_name,
             "sourceLogo": self.source_logo,
             "isDiscoverable": self.is_discoverable,
@@ -84,6 +90,9 @@ class ConnectionSpec:
             "adminGroups": list(self.admin_groups),
             "adminRoles": list(self.admin_roles),
         }
+        if self.default_credential_guid:
+            attrs["defaultCredentialGuid"] = self.default_credential_guid
+        return attrs
 
 
 @dataclass(frozen=True)
