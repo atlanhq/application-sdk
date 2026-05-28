@@ -477,15 +477,28 @@ class BaseE2ETest:
             )
             if connection_in_atlas:
                 if self.expected_min_asset_counts:
-                    asset_counts = self.client.count_assets_under_connection(
-                        self.connection_qualified_name,
-                        type_names=tuple(self.expected_min_asset_counts.keys()),
-                    )
-                    logger.info(
-                        "Atlas inventory under %s: %s",
-                        self.connection_qualified_name,
-                        asset_counts,
-                    )
+                    # Poll for asset counts — Elasticsearch indexing is async so
+                    # assets may not be searchable the moment AE reports success.
+                    # Reuse the atlas poll interval/timeout for consistency.
+                    probe_types = tuple(self.expected_min_asset_counts.keys())
+                    deadline = time.monotonic() + self.atlas_poll_timeout_seconds
+                    while True:
+                        asset_counts = self.client.count_assets_under_connection(
+                            self.connection_qualified_name,
+                            type_names=probe_types,
+                        )
+                        thresholds_met = all(
+                            asset_counts.get(tn, 0) >= floor
+                            for tn, floor in self.expected_min_asset_counts.items()
+                        )
+                        logger.info(
+                            "Atlas inventory under %s: %s",
+                            self.connection_qualified_name,
+                            asset_counts,
+                        )
+                        if thresholds_met or time.monotonic() >= deadline:
+                            break
+                        time.sleep(self.atlas_poll_interval_seconds)
                 if self.expect_lineage:
                     lineage_counts = self.client.count_lineage_under_connection(
                         self.connection_qualified_name,
