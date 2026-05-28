@@ -855,6 +855,44 @@ class TestAzureCertificateProvider:
         config = mock_az_cls.call_args.kwargs.get("config") or {}
         assert config.get("azure_storage_account_key") == "key123"
 
+    @patch("application_sdk.storage._credential_providers.AzureCredentialProvider")
+    @patch("application_sdk.storage._credential_providers.CertificateCredential")
+    @patch("obstore.store.AzureStore")
+    def test_cert_only_does_not_trigger_multiple_modes_warning(
+        self,
+        mock_az_cls: MagicMock,
+        mock_cert_cred: MagicMock,
+        mock_az_prov: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Cert auth (tenant+client+cert, no secret) must not fire the multi-mode warning.
+
+        Previously the WI classifier matched cert auth because it checks
+        tenant_id + client_id + not client_secret, which is also true for cert.
+        """
+        mock_az_cls.return_value = MagicMock()
+        mock_cert_cred.return_value = MagicMock()
+        mock_az_prov.return_value = MagicMock()
+
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.azure.blobstorage",
+            {
+                "accountName": "acct",
+                "containerName": "ctr",
+                "azureTenantId": "tid",
+                "azureClientId": "cid",
+                "azureCertificateFile": "/certs/app.pfx",
+            },
+        )
+        with patch("application_sdk.storage.binding._get_logger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        mock_logger.warning.assert_not_called()
+
 
 class TestAzureMsiExtras:
     @patch("obstore.store.AzureStore")

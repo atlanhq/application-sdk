@@ -246,14 +246,17 @@ def _build_azure_config(
 
     # Warn when an operator accidentally configures more than one mutually
     # exclusive auth mode — only the highest-priority one takes effect.
+    # Cert auth requires tenant_id + client_id with no client_secret, so the WI
+    # and MI classifiers must exclude the cert case to avoid a spurious warning.
+    _has_cert = bool(cert_data or cert_file)
     _active_az_modes = sum(
         [
             bool(account_key),
             bool(sas_token),
-            bool(cert_data or cert_file),
+            _has_cert,
             bool(tenant_id and client_id and client_secret),
-            bool(tenant_id and client_id and not client_secret),
-            bool(client_id and not tenant_id and not client_secret),
+            bool(tenant_id and client_id and not client_secret and not _has_cert),
+            bool(client_id and not tenant_id and not client_secret and not _has_cert),
         ]
     )
     if _active_az_modes > 1:
