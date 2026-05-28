@@ -1,0 +1,138 @@
+name: Register AE workflow (reusable)
+
+# Reusable workflow that registers (create + publish) a connector app's AE
+# workflow straight from its app/generated/manifest.json. Every connector
+# adds a small ``workflow_dispatch`` wrapper that ``uses:`` this — no job
+# boilerplate per connector.
+#
+# Composes the ``ae-workflow`` composite action; structural config (DAG
+# topology, parsing_mode, timeouts, workflow_type, $. output wiring) flows
+# from the caller's manifest, so a manifest change can't leave any connector
+# behind.
+#
+# Required secret:
+#   atlan-api-key — Bearer token for the target tenant's AE
+#
+# Output:
+#   slug — the AE workflow slug that was created/updated and published
+
+on:
+  workflow_call:
+    inputs:
+      tenant:
+        description: "Tenant hostname (no scheme), e.g. apps-typedef.atlan.com"
+        required: true
+        type: string
+      name:
+        description: "Workflow display name (reused-or-created by name)"
+        required: true
+        type: string
+      credential-guid:
+        description: "Credential GUID (must be fully provisioned in Vault + object store)"
+        required: true
+        type: string
+      connection-qn:
+        description: "Connection qualified name (pre-existing Atlas connection)"
+        required: true
+        type: string
+      connection-name:
+        description: "Connection display name"
+        required: true
+        type: string
+      deployment:
+        description: "Deployment tier; fills {deployment_name} in manifest task_queues"
+        required: false
+        type: string
+        default: production
+      ref:
+        description: "Caller repo ref to check out (default: the triggering ref)"
+        required: false
+        type: string
+        default: ""
+      extraction-method:
+        required: false
+        type: string
+        default: direct
+      values-file:
+        description: "Path (in caller repo) to a JSON file extending the {{token}} map"
+        required: false
+        type: string
+        default: ""
+      manifest:
+        required: false
+        type: string
+        default: app/generated/manifest.json
+      atlan-yaml:
+        required: false
+        type: string
+        default: atlan.yaml
+      connection-creation-enabled:
+        required: false
+        type: string
+        default: "false"
+      executor-enabled:
+        required: false
+        type: string
+        default: "true"
+      connection-cache-enabled:
+        required: false
+        type: string
+        default: "true"
+      connection-cache-via-app-enabled:
+        required: false
+        type: string
+        default: "true"
+    secrets:
+      atlan-api-key:
+        description: "Bearer token for the target tenant's AE"
+        required: true
+    outputs:
+      slug:
+        description: "Registered/updated AE workflow slug"
+        value: ${{ jobs.register.outputs.slug }}
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      slug: ${{ steps.ae.outputs.slug }}
+    steps:
+      # Caller repo (the connector) — its manifest + atlan.yaml are what
+      # the composite action reads from $GITHUB_WORKSPACE.
+      - name: Checkout caller
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.0.0
+        with:
+          ref: ${{ inputs.ref }}
+
+      # Pinned to the composite action's commit SHA (#1891 squash) per the
+      # actions-pinning rule. Bump to a release tag once application-sdk
+      # cuts one that includes the action.
+      - name: Register AE workflow
+        id: ae
+        uses: atlanhq/application-sdk/.github/actions/ae-workflow@38d38ec37741abe811c760c2345500297361b35a
+        with:
+          ae-url:                          "https://${{ inputs.tenant }}/automation"
+          token:                           ${{ secrets.atlan-api-key }}
+          name:                            ${{ inputs.name }}
+          deployment:                      ${{ inputs.deployment }}
+          cred-guid:                       ${{ inputs.credential-guid }}
+          connection-qn:                   ${{ inputs.connection-qn }}
+          connection-name:                 ${{ inputs.connection-name }}
+          extraction-method:               ${{ inputs.extraction-method }}
+          values:                          ${{ inputs.values-file }}
+          manifest:                        ${{ inputs.manifest }}
+          atlan-yaml:                      ${{ inputs.atlan-yaml }}
+          connection-creation-enabled:     ${{ inputs.connection-creation-enabled }}
+          executor-enabled:                ${{ inputs.executor-enabled }}
+          connection-cache-enabled:        ${{ inputs.connection-cache-enabled }}
+          connection-cache-via-app-enabled: ${{ inputs.connection-cache-via-app-enabled }}
+
+      - name: Summary
+        run: |
+          echo "### Registered AE workflow" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tenant:** \`${{ inputs.tenant }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Workflow name:** ${{ inputs.name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Slug:** \`${{ steps.ae.outputs.slug }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Connection:** \`${{ inputs.connection-qn }}\` (${{ inputs.connection-name }})" >> "$GITHUB_STEP_SUMMARY"
