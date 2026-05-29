@@ -137,15 +137,6 @@ on:
           API-key service account carries realm-admin which the OAuth
           client does not — verified on devex.
         required: true
-      SDR_OAUTH_CLIENT_ID:
-        description: |
-          OAuth client id used by the Dapr S3 binding (via the tenant's
-          /api/blobstorage proxy) and by pyatlan for asset queries.
-          Optional — falls back to API-key bearer when absent.
-        required: false
-      SDR_OAUTH_CLIENT_SECRET:
-        description: Matching OAuth client secret.
-        required: false
 
 jobs:
   e2e-full:
@@ -163,11 +154,9 @@ jobs:
       CI_TENANT_DOMAIN: ${{ secrets.SDR_TEST_TENANT }}
       CI_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
       CI_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
-      ATLAN_AUTH_CLIENT_ID: ${{ secrets.SDR_OAUTH_CLIENT_ID }}
-      ATLAN_AUTH_CLIENT_SECRET: ${{ secrets.SDR_OAUTH_CLIENT_SECRET }}
+      ATLAN_AUTH_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      ATLAN_AUTH_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
       ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
-      SDR_OAUTH_CLIENT_ID: ${{ secrets.SDR_OAUTH_CLIENT_ID }}
-      SDR_OAUTH_CLIENT_SECRET: ${{ secrets.SDR_OAUTH_CLIENT_SECRET }}
       ATLAN_BASE_URL: ${{ secrets.ATLAN_BASE_URL }}
     steps:
       # codex-/return-dispatch on the apps-sdk side scans step *names*
