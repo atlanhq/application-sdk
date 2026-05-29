@@ -672,7 +672,7 @@ runs:
       shell: bash
       run: |
         mkdir -p results
-        docker compose ${{ steps.compose_files.outputs.files }} logs >> results/sdr-container.log 2>&1 || true
+        docker compose ${{ steps.compose_files.outputs.files }} logs 2>&1 | tee results/sdr-container.log || true
 
     - name: Tear down SDR container
       if: always()
