@@ -203,6 +203,8 @@ class StorageConfigError(InvalidInputError, StorageError):
         return " | ".join(parts)
 
 
+# code is the new structured identifier; legacy DEFAULT_ERROR_CODE inherited from
+# StorageConfigError (AAF-STR-003, deprecated, kept for back-compat — do not override).
 @dataclass(kw_only=True)
 class StorageBindingNotFoundError(StorageConfigError):
     """No Dapr component with the given name exists in the components directory.

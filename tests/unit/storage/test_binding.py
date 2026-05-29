@@ -1104,3 +1104,9 @@ class TestCreateStoreFromBindingOptional:
         with pytest.raises(StorageConfigError) as exc_info:
             create_store_from_binding_optional("my-store", components_dir=tmp_path)
         assert not isinstance(exc_info.value, StorageBindingNotFoundError)
+
+    def test_binding_not_found_error_carries_binding_name(self, tmp_path: Path) -> None:
+        """StorageBindingNotFoundError exposes the queried component name."""
+        with pytest.raises(StorageBindingNotFoundError) as exc_info:
+            create_store_from_binding("atlan-objectstore", components_dir=tmp_path)
+        assert exc_info.value.binding_name == "atlan-objectstore"
