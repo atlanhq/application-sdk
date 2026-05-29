@@ -46,9 +46,8 @@ services:
       - ATLAN_AUTH_TOKEN_URL=https://${CI_TENANT_DOMAIN}/auth/realms/default/protocol/openid-connect/token
       # Bridge: configurator → main.py (auth base URL)
       - ATLAN_AUTH_BASE_URL=https://${CI_TENANT_DOMAIN}
-      # Route App.upload() through the atlan-objectstore Dapr binding (S3)
-      # so publish-app can read the transformed data. DEPLOYMENT_OBJECT_STORE_NAME
-      # is what create_store_from_binding() reads; UPSTREAM_OBJECT_STORE_NAME is
-      # also set as it appears to affect the same routing indirectly.
-      - DEPLOYMENT_OBJECT_STORE_NAME=atlan-objectstore
+      # Route connector uploads through the atlan-objectstore Dapr binding (S3)
+      # so publish-app can read the transformed data. The configurator derives
+      # DEPLOYMENT_OBJECT_STORE_NAME from this value; setting UPSTREAM explicitly
+      # also mirrors real-world deployments where the two names may differ.
       - UPSTREAM_OBJECT_STORE_NAME=atlan-objectstore
