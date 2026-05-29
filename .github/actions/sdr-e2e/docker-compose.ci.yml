@@ -46,7 +46,3 @@ services:
       # Bridge: SDR_CLIENT_ID/SECRET → production SDK names for OAuth auth
       - ATLAN_AUTH_CLIENT_ID=${SDR_CLIENT_ID}
       - ATLAN_AUTH_CLIENT_SECRET=${SDR_CLIENT_SECRET}
-      # Route connector uploads through the atlan-objectstore Dapr binding (S3)
-      # so publish-app can read the transformed data.
-      - DEPLOYMENT_OBJECT_STORE_NAME=atlan-objectstore
-      - UPSTREAM_OBJECT_STORE_NAME=atlan-objectstore
