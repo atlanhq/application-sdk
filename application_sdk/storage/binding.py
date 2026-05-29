@@ -150,6 +150,46 @@ def _find_broken_metadata_fields(metadata_list: list[dict]) -> list[str]:
     return broken
 
 
+def is_binding_configured(
+    name: str,
+    *,
+    components_dir: Path | str = Path("./components"),
+) -> bool:
+    """Return True if a usable Dapr component named *name* exists.
+
+    Parses component YAMLs without constructing a store object — a lightweight
+    alternative to ``create_store_from_binding_optional(...) is not None`` when
+    you only need to detect binding presence without the cost of initialising
+    cloud SDK clients.
+
+    Returns False when the component is absent, has an unsupported binding
+    type, or has unresolvable metadata (template placeholders / missing env
+    vars for secretKeyRef entries).
+    """
+    import yaml  # noqa: PLC0415 — defensive: keep inline
+
+    components_path = Path(components_dir)
+    for yaml_file in sorted(components_path.glob("*.yaml")):
+        with yaml_file.open() as fh:
+            doc = yaml.safe_load(fh)
+        if (
+            doc
+            and doc.get("kind") == "Component"
+            and doc.get("metadata", {}).get("name") == name
+        ):
+            spec = doc.get("spec", {})
+            binding_type = spec.get("type", "")
+            store_kind = BINDING_TYPE_MAP.get(binding_type)
+            if store_kind is None:
+                return False
+            if store_kind != "local":
+                raw_metadata = spec.get("metadata", [])
+                if _find_broken_metadata_fields(raw_metadata):
+                    return False
+            return True
+    return False
+
+
 def _build_s3_config(
     name: str,
     meta: dict[str, str],

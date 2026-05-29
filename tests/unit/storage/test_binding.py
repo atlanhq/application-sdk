@@ -13,12 +13,15 @@ from application_sdk.storage.binding import (
     _AZURE_AUTHORITY_HOSTS,
     GCS_SERVICE_ACCOUNT_FIELDS,
     _coerce_bool,
+    _find_broken_metadata_fields,
     _nonempty,
     _resolve_metadata_value,
     create_store_from_binding,
     create_store_from_binding_optional,
+    is_binding_configured,
 )
 from application_sdk.storage.errors import (
+    StorageBindingBrokenError,
     StorageBindingNotFoundError,
     StorageConfigError,
 )
@@ -1110,3 +1113,232 @@ class TestCreateStoreFromBindingOptional:
         with pytest.raises(StorageBindingNotFoundError) as exc_info:
             create_store_from_binding("atlan-objectstore", components_dir=tmp_path)
         assert exc_info.value.binding_name == "atlan-objectstore"
+
+
+# ---------------------------------------------------------------------------
+# _find_broken_metadata_fields
+# ---------------------------------------------------------------------------
+
+
+class TestFindBrokenMetadataFields:
+    def test_template_placeholder_flagged(self) -> None:
+        items = [{"name": "bucket", "value": "{{tenant}}-data"}]
+        assert _find_broken_metadata_fields(items) == ["bucket"]
+
+    def test_clean_value_not_flagged(self) -> None:
+        items = [{"name": "bucket", "value": "my-bucket"}]
+        assert _find_broken_metadata_fields(items) == []
+
+    def test_unresolved_secret_ref_flagged(self, monkeypatch) -> None:
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        items = [
+            {
+                "name": "accessKey",
+                "secretKeyRef": {"name": "MISSING_VAR", "key": "MISSING_VAR"},
+            }
+        ]
+        assert _find_broken_metadata_fields(items) == ["accessKey"]
+
+    def test_resolved_secret_ref_not_flagged(self, monkeypatch) -> None:
+        monkeypatch.setenv("MY_KEY", "real-value")
+        items = [
+            {
+                "name": "accessKey",
+                "secretKeyRef": {"name": "MY_KEY", "key": "MY_KEY"},
+            }
+        ]
+        assert _find_broken_metadata_fields(items) == []
+
+    def test_empty_list_returns_empty(self) -> None:
+        assert _find_broken_metadata_fields([]) == []
+
+    def test_multiple_broken_fields_all_returned(self, monkeypatch) -> None:
+        monkeypatch.delenv("MISSING_A", raising=False)
+        monkeypatch.delenv("MISSING_B", raising=False)
+        items = [
+            {"name": "bucket", "value": "{{env}}-bucket"},
+            {"name": "key", "secretKeyRef": {"key": "MISSING_A"}},
+            {"name": "secret", "secretKeyRef": {"key": "MISSING_B"}},
+        ]
+        broken = _find_broken_metadata_fields(items)
+        assert broken == ["bucket", "key", "secret"]
+
+
+# ---------------------------------------------------------------------------
+# StorageBindingBrokenError detection in create_store_from_binding
+# ---------------------------------------------------------------------------
+
+
+class TestStorageBindingBrokenError:
+    def test_raises_for_template_placeholder(self, tmp_path: Path) -> None:
+        """Non-local binding with {{template}} placeholder raises StorageBindingBrokenError."""
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "objectstore"},
+            "spec": {
+                "type": "bindings.aws.s3",
+                "metadata": [
+                    {"name": "bucket", "value": "{{tenant}}-data"},
+                    {"name": "region", "value": "us-east-1"},
+                ],
+            },
+        }
+        import yaml
+
+        (components_dir / "objectstore.yaml").write_text(yaml.dump(doc))
+
+        with pytest.raises(StorageBindingBrokenError) as exc_info:
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        assert "bucket" in exc_info.value.broken_fields
+        assert exc_info.value.binding_name == "objectstore"
+
+    def test_raises_for_unresolved_secret_ref(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Non-local binding with unresolved secretKeyRef raises StorageBindingBrokenError."""
+        monkeypatch.delenv("UNSET_SECRET_KEY", raising=False)
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "objectstore"},
+            "spec": {
+                "type": "bindings.aws.s3",
+                "metadata": [
+                    {"name": "bucket", "value": "my-bucket"},
+                    {
+                        "name": "accessKey",
+                        "secretKeyRef": {
+                            "name": "UNSET_SECRET_KEY",
+                            "key": "UNSET_SECRET_KEY",
+                        },
+                    },
+                ],
+            },
+        }
+        import yaml
+
+        (components_dir / "objectstore.yaml").write_text(yaml.dump(doc))
+
+        with pytest.raises(StorageBindingBrokenError) as exc_info:
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        assert "accessKey" in exc_info.value.broken_fields
+
+    def test_optional_returns_none_for_broken_component(self, tmp_path: Path) -> None:
+        """create_store_from_binding_optional returns None for a broken component."""
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "objectstore"},
+            "spec": {
+                "type": "bindings.aws.s3",
+                "metadata": [
+                    {"name": "bucket", "value": "{{tenant}}-data"},
+                ],
+            },
+        }
+        import yaml
+
+        (components_dir / "objectstore.yaml").write_text(yaml.dump(doc))
+
+        result = create_store_from_binding_optional(
+            "objectstore", components_dir=components_dir
+        )
+        assert result is None
+
+    @patch("application_sdk.storage.factory.create_local_store")
+    def test_local_storage_exempt_from_broken_check(
+        self, mock_create_local: MagicMock, tmp_path: Path
+    ) -> None:
+        """bindings.localstorage with template placeholder is NOT flagged as broken."""
+        mock_create_local.return_value = MagicMock()
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "localstore"},
+            "spec": {
+                "type": "bindings.localstorage",
+                "metadata": [{"name": "rootPath", "value": "/data/{{tenant}}/storage"}],
+            },
+        }
+        import yaml
+
+        (components_dir / "localstore.yaml").write_text(yaml.dump(doc))
+
+        # Must not raise StorageBindingBrokenError — local storage is exempt.
+        create_store_from_binding("localstore", components_dir=components_dir)
+
+
+# ---------------------------------------------------------------------------
+# is_binding_configured
+# ---------------------------------------------------------------------------
+
+
+class TestIsBindingConfigured:
+    def test_returns_false_when_absent(self, tmp_path: Path) -> None:
+        assert is_binding_configured("nonexistent", components_dir=tmp_path) is False
+
+    def test_returns_true_for_valid_s3_component(self, tmp_path: Path) -> None:
+        components_dir = _write_component(
+            tmp_path, "objectstore", "bindings.aws.s3", {"bucket": "b"}
+        )
+        assert (
+            is_binding_configured("objectstore", components_dir=components_dir) is True
+        )
+
+    def test_returns_false_for_broken_component(self, tmp_path: Path) -> None:
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "objectstore"},
+            "spec": {
+                "type": "bindings.aws.s3",
+                "metadata": [{"name": "bucket", "value": "{{tenant}}-data"}],
+            },
+        }
+        import yaml
+
+        (components_dir / "objectstore.yaml").write_text(yaml.dump(doc))
+        assert (
+            is_binding_configured("objectstore", components_dir=components_dir) is False
+        )
+
+    def test_returns_false_for_unsupported_type(self, tmp_path: Path) -> None:
+        components_dir = _write_component(
+            tmp_path, "objectstore", "bindings.unknown", {}
+        )
+        assert (
+            is_binding_configured("objectstore", components_dir=components_dir) is False
+        )
+
+    def test_local_storage_with_placeholder_returns_true(self, tmp_path: Path) -> None:
+        """Local storage is exempt from broken-field checks."""
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "localstore"},
+            "spec": {
+                "type": "bindings.localstorage",
+                "metadata": [{"name": "rootPath", "value": "/data/{{tenant}}"}],
+            },
+        }
+        import yaml
+
+        (components_dir / "localstore.yaml").write_text(yaml.dump(doc))
+        assert (
+            is_binding_configured("localstore", components_dir=components_dir) is True
+        )

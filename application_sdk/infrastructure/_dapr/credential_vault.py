@@ -92,18 +92,15 @@ class DaprCredentialVault:
             import os  # noqa: PLC0415 — cold path
             from pathlib import Path  # noqa: PLC0415 — cold path
 
-            from application_sdk.storage import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                create_store_from_binding_optional,
+            from application_sdk.storage.binding import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                is_binding_configured,
             )
 
             components_dir = Path(
                 os.environ.get("DAPR_COMPONENTS_PATH", "./components")
             )
-            upstream_configured = (
-                create_store_from_binding_optional(
-                    UPSTREAM_OBJECT_STORE_NAME, components_dir=components_dir
-                )
-                is not None
+            upstream_configured = is_binding_configured(
+                UPSTREAM_OBJECT_STORE_NAME, components_dir=components_dir
             )
             credential_binding = (
                 UPSTREAM_OBJECT_STORE_NAME
