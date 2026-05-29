@@ -138,9 +138,8 @@ class TestEmitTokenRefreshEvent:
                 "application_sdk.execution._temporal.auth.APPLICATION_NAME",
                 "my-test-app",
             ),
-            mock.patch(
-                "application_sdk.execution._temporal.auth.DEPLOYMENT_NAME",
-                "my-deployment",
+            mock.patch.dict(
+                "os.environ", {"ATLAN_DEPLOYMENT_NAME": "my-deployment"}, clear=False
             ),
             mock.patch(_PUBLISH_TARGET) as mock_publish,
         ):
@@ -159,24 +158,27 @@ class TestEmitTokenRefreshEvent:
             assert "refresh_timestamp" in data
 
     @pytest.mark.asyncio
-    async def test_deployment_name_uses_deployment_name_constant(self) -> None:
-        """deployment_name in the event comes from the DEPLOYMENT_NAME constant."""
+    async def test_deployment_name_falls_back_to_app_name(self) -> None:
+        """When ATLAN_DEPLOYMENT_NAME is unset, deployment_name falls back to app_name."""
         manager = _make_manager()
         expires_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
+        import os
+
         with (
             mock.patch(
-                "application_sdk.execution._temporal.auth.DEPLOYMENT_NAME",
-                "pinned-deployment",
+                "application_sdk.execution._temporal.auth.APPLICATION_NAME",
+                "fallback-app",
             ),
             mock.patch(_PUBLISH_TARGET) as mock_publish,
         ):
+            os.environ.pop("ATLAN_DEPLOYMENT_NAME", None)
             mock_publish.return_value = None
 
             await manager._emit_token_refresh_event(expires_at)
 
             event = mock_publish.call_args[0][0]
-            assert event.data["deployment_name"] == "pinned-deployment"
+            assert event.data["deployment_name"] == "fallback-app"
 
     @pytest.mark.asyncio
     async def test_handles_none_expires_at(self) -> None:

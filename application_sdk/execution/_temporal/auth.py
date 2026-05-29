@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -257,7 +258,7 @@ class TemporalAuthManager:
             )
 
             app_name = APPLICATION_NAME
-            deployment_name = DEPLOYMENT_NAME
+            deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
             now = time.time()
             expires_at_ts = expires_at.timestamp() if expires_at else 0.0
             remaining = max(0.0, expires_at_ts - now)
