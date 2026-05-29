@@ -257,7 +257,21 @@ class TemporalAuthManager:
                 _publish_event_via_binding,
             )
 
-            app_name = APPLICATION_NAME
+            from application_sdk.app.registry import AppRegistry  # noqa: PLC0415 — match the inline-import pattern used by sibling event imports above
+
+            # Mirror _emit_worker_start_event (worker.py:405-407): the registry
+            # name set by @register_app is the canonical source of truth and is
+            # what worker_start sent to event-ingress at registration time.
+            # Fall back to APPLICATION_NAME (env-var-derived) only when the
+            # registry is empty, which would be unusual — registration happens
+            # at worker init, well before the first token refresh ~5 min later.
+            try:
+                registered_apps = AppRegistry.get_instance().list_all()
+                app_name = (
+                    registered_apps[0].name if registered_apps else APPLICATION_NAME
+                )
+            except Exception:
+                app_name = APPLICATION_NAME
             deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
             now = time.time()
             expires_at_ts = expires_at.timestamp() if expires_at else 0.0
