@@ -46,3 +46,7 @@ services:
       - ATLAN_AUTH_TOKEN_URL=https://${CI_TENANT_DOMAIN}/auth/realms/default/protocol/openid-connect/token
       # Bridge: configurator → main.py (auth base URL)
       - ATLAN_AUTH_BASE_URL=https://${CI_TENANT_DOMAIN}
+      # Route inter-service uploads (extract → publish) through the
+      # atlan-objectstore Dapr binding (S3) so publish-app can find them.
+      # Without this the SDK defaults to "objectstore" (localstorage).
+      - UPSTREAM_OBJECT_STORE_NAME=atlan-objectstore
