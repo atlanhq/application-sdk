@@ -44,6 +44,7 @@ from typing import Any
 
 import orjson
 
+from application_sdk.errors.base import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
     AtlanApiHttpError,
@@ -571,7 +572,7 @@ class AEWorkflowClient:
         while elapsed < timeout_seconds:
             try:
                 result = self.get_native_status(run_id)
-            except RuntimeError as e:
+            except AppError as e:
                 transient_streak += 1
                 if transient_streak >= max_transient_failures:
                     logger.error(
