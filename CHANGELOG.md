@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.14.0 (May 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.4...v3.14.0
+
+### Features
+
+- add SpillableDict utility to replace sqlitedict (CVE-2024-35515) (#1925) (by @adityachoudhury-cloud in [12ed6b1](https://github.com/atlanhq/application-sdk/commit/12ed6b1))
+- source-agnostic full-DAG e2e harness under testing.e2e (#1928) (by @cmgrote in [17da250](https://github.com/atlanhq/application-sdk/commit/17da250))
+
+### Bug Fixes
+
+- auto-provision credentials before /start [HYP-1220] (#1847) (by @tanishkhot in [a965ecb](https://github.com/atlanhq/application-sdk/commit/a965ecb))
+- use ATLAN_APPLICATION_NAME for token_refresh event payload (DISTR-517) (#1937) (by @Lalit3716-atlan in [ec1c271](https://github.com/atlanhq/application-sdk/commit/ec1c271))
+- normalise legacy quoted-CSV filter values for v3.13 deny-list (HYP-1560) (#1938) (by @Aryamanz29 in [ecec32b](https://github.com/atlanhq/application-sdk/commit/ecec32b))
+- route App.upload() to upstream store when configured (#1939) (by @cmgrote in [ac26e02](https://github.com/atlanhq/application-sdk/commit/ac26e02))
+- allow credential resolution in SDR and non-SDR deployments (#1941) (by @cmgrote in [118a58d](https://github.com/atlanhq/application-sdk/commit/118a58d))
+
+
 ## v3.13.4 (May 28, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.3...v3.13.4
