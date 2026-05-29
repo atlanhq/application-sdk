@@ -240,6 +240,48 @@ class StorageBindingNotFoundError(StorageConfigError):
 
 
 @dataclass(kw_only=True)
+class StorageBindingBrokenError(StorageConfigError):
+    """Dapr component YAML exists but has unresolvable configuration.
+
+    Raised when a component is found but contains template placeholders
+    (e.g. ``{{tenant}}``) or ``secretKeyRef`` entries whose env vars are
+    absent.  Subclass of ``StorageConfigError`` so ``except StorageConfigError:``
+    catch blocks keep working.  Distinct from ``StorageBindingNotFoundError``
+    (component absent) so callers can treat "broken but present" as "absent"
+    in optional contexts.
+    """
+
+    code: ClassVar[str] = "STORAGE_BINDING_BROKEN"
+    binding_name: str | None = None
+    broken_fields: list[str] | None = None
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        binding_name: str | None = None,
+        broken_fields: list[str] | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        StorageConfigError.__init__(
+            self, message=message, cause=cause, error_code=error_code
+        )
+        self.binding_name = binding_name
+        self.broken_fields = broken_fields or []
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        if self.binding_name:
+            parts.append(f"binding_name={self.binding_name}")
+        if self.broken_fields:
+            parts.append(f"broken_fields={', '.join(self.broken_fields)}")
+        if self.cause:
+            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+        return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
 class UnsafeUploadPathError(InvalidInputError):
     """Upload path is blocked — sensitive path, traversal, or user-defined block list."""
 
