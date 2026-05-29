@@ -312,8 +312,26 @@ jobs:
           # Loop bound covers the 30-min job timeout. The job-level
           # timeout-minutes already enforces an outer cap; this inner cap
           # avoids tight infinite loops if `gh run view` ever returns junk.
+          #
+          # Tolerate transient API errors (401/5xx/network blips) — a single
+          # failed `gh run view` should not fail the whole gate. Retry within
+          # the iteration with short backoff; on exhausted retries, log and
+          # continue to the next outer tick rather than killing publish.
           for i in $(seq 1 70); do
-            RESULT=$(gh run view "${RUN_ID}" --repo "${REPO}" --json status,conclusion,url)
+            RESULT=""
+            for attempt in 1 2 3; do
+              if RESULT=$(gh run view "${RUN_ID}" --repo "${REPO}" --json status,conclusion,url 2>&1); then
+                break
+              fi
+              echo "  iteration ${i} attempt ${attempt}/3: gh run view failed: ${RESULT}"
+              RESULT=""
+              sleep 5
+            done
+            if [ -z "${RESULT}" ]; then
+              echo "  iteration ${i}: API unreachable after 3 retries — will retry next tick"
+              sleep 25
+              continue
+            fi
             STATUS=$(echo "${RESULT}" | jq -r '.status')
             CONCLUSION=$(echo "${RESULT}" | jq -r '.conclusion // ""')
             URL=$(echo "${RESULT}" | jq -r '.url')
