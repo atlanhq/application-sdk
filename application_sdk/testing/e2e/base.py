@@ -196,18 +196,6 @@ class BaseE2ETest:
         oauth_client_id = os.environ.get("ATLAN_AUTH_CLIENT_ID", "")
         oauth_client_secret = os.environ.get("ATLAN_AUTH_CLIENT_SECRET", "")
 
-        # Log objectstore routing so flaky upload failures can be diagnosed.
-        # These env vars determine which Dapr binding the connector uses for
-        # inter-service uploads (extract → publish).
-        logger.info(
-            "objectstore env: DEPLOYMENT_OBJECT_STORE_NAME=%r "
-            "UPSTREAM_OBJECT_STORE_NAME=%r "
-            "ATLAN_AUTH_CLIENT_ID=%s",
-            os.environ.get("DEPLOYMENT_OBJECT_STORE_NAME", "(not set)"),
-            os.environ.get("UPSTREAM_OBJECT_STORE_NAME", "(not set)"),
-            "set" if oauth_client_id else "NOT SET",
-        )
-
         gh_run_id = os.environ.get("GITHUB_RUN_ID")
         self.run_id = (
             int(gh_run_id) if gh_run_id and gh_run_id.isdigit() else int(time.time())
