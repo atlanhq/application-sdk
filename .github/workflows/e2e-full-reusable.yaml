@@ -128,9 +128,6 @@ on:
       SDR_CLIENT_SECRET:
         description: Configurator OAuth client secret (CI_CLIENT_SECRET).
         required: true
-      ATLAN_BASE_URL:
-        description: Tenant base URL (e.g. https://devex.atlan.com).
-        required: true
       ATLAN_API_KEY:
         description: |
           Bearer for AE-management calls (/automation/api/v1/*). The
@@ -157,7 +154,9 @@ jobs:
       ATLAN_AUTH_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
       ATLAN_AUTH_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
       ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
-      ATLAN_BASE_URL: ${{ secrets.ATLAN_BASE_URL }}
+      # Derived from SDR_TEST_TENANT so ATLAN_BASE_URL is always the same
+      # tenant as CI_TENANT_DOMAIN — no risk of URL/credential mismatch.
+      ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
     steps:
       # codex-/return-dispatch on the apps-sdk side scans step *names*
       # for "distinct-id <value>". Always-run, no-op; lets the SDK PR's
