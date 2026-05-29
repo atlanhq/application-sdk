@@ -513,21 +513,6 @@ async def _create_infrastructure(
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 
-        # Upstream store is only distinct from the deployment store in SDR
-        # deployments where UPSTREAM_OBJECT_STORE_NAME is bound to a separate
-        # Dapr component.  When both env vars point at the same component name
-        # (the default), create_store_from_binding returns an equivalent store
-        # and App.upload() routing is transparent — non-SDR callers see no
-        # behavioral change.
-        upstream_store = (
-            create_store_from_binding(
-                UPSTREAM_OBJECT_STORE_NAME,
-                components_dir=components_dir,
-            )
-            if UPSTREAM_OBJECT_STORE_NAME != DEPLOYMENT_OBJECT_STORE_NAME
-            else None
-        )
-
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
@@ -535,7 +520,10 @@ async def _create_infrastructure(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=components_dir,
             ),
-            upstream_storage=upstream_store,
+            upstream_storage=create_store_from_binding(
+                UPSTREAM_OBJECT_STORE_NAME,
+                components_dir=components_dir,
+            ),
             event_binding=(
                 DaprBinding(dapr_client, EVENT_STORE_NAME)
                 if EVENT_STORE_NAME in registered_components

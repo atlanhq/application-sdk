@@ -593,11 +593,11 @@ class TestCreateInfrastructureUpstreamStore:
     def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
 
-    async def test_upstream_storage_is_none_when_names_match(
+    async def test_upstream_storage_always_created(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When UPSTREAM and DEPLOYMENT names are equal, upstream_storage is None."""
+        """upstream_storage is always created, even when names are equal (non-SDR)."""
         self._make_dapr_env(monkeypatch)
 
         with (
@@ -619,8 +619,8 @@ class TestCreateInfrastructureUpstreamStore:
         ):
             infra = await _create_infrastructure()
 
-        assert infra.upstream_storage is None
-        mock_store.assert_called_once()
+        assert infra.upstream_storage is not None
+        assert mock_store.call_count == 2
 
     async def test_upstream_storage_created_when_names_differ(
         self,
