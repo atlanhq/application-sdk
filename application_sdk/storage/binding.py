@@ -391,6 +391,7 @@ def create_store_from_binding(
     import yaml  # noqa: PLC0415 — defensive: keep inline
 
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageBindingNotFoundError,
         StorageConfigError,
     )
 
@@ -409,8 +410,9 @@ def create_store_from_binding(
             break
 
     if component is None:
-        raise StorageConfigError(
-            f"No Dapr component named '{name}' found in {components_path}"
+        raise StorageBindingNotFoundError(
+            f"No Dapr component named '{name}' found in {components_path}",
+            binding_name=name,
         )
 
     spec = component.get("spec", {})
@@ -504,12 +506,10 @@ def create_store_from_binding_optional(
             (unsupported binding type, missing required options, etc.).
     """
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageConfigError,
+        StorageBindingNotFoundError,
     )
 
     try:
         return create_store_from_binding(name, components_dir=components_dir)
-    except StorageConfigError as exc:
-        if f"No Dapr component named '{name}'" in str(exc):
-            return None
-        raise
+    except StorageBindingNotFoundError:
+        return None

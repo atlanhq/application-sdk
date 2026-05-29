@@ -39,6 +39,7 @@ from application_sdk.storage.binding import (
 )
 from application_sdk.storage.cloud import CloudStore
 from application_sdk.storage.errors import (
+    StorageBindingNotFoundError,
     StorageConfigError,
     StorageError,
     StorageNotFoundError,
@@ -79,4 +80,5 @@ __all__ = [
     "StorageNotFoundError",
     "StoragePermissionError",
     "StorageConfigError",
+    "StorageBindingNotFoundError",
 ]

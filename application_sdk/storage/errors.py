@@ -204,6 +204,40 @@ class StorageConfigError(InvalidInputError, StorageError):
 
 
 @dataclass(kw_only=True)
+class StorageBindingNotFoundError(StorageConfigError):
+    """No Dapr component with the given name exists in the components directory.
+
+    Subclass of ``StorageConfigError`` so existing ``except StorageConfigError:``
+    catch blocks keep working.  Use this type specifically to distinguish
+    "component absent" from other configuration errors (e.g. wrong binding type).
+    """
+
+    code: ClassVar[str] = "STORAGE_BINDING_NOT_FOUND"
+    binding_name: str | None = None
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        binding_name: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        StorageConfigError.__init__(
+            self, message=message, cause=cause, error_code=error_code
+        )
+        self.binding_name = binding_name
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        if self.binding_name:
+            parts.append(f"binding_name={self.binding_name}")
+        if self.cause:
+            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+        return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
 class UnsafeUploadPathError(InvalidInputError):
     """Upload path is blocked — sensitive path, traversal, or user-defined block list."""
 
