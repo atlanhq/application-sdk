@@ -21,6 +21,7 @@ import pytest
 
 from application_sdk.common.sql_filters import (
     get_database_names,
+    normalize_legacy_filter_value,
     prepare_filters,
     prepare_query,
     validate_filter_no_sql_injection,
@@ -164,3 +165,136 @@ class TestGetDatabaseNamesInjectionGate:
             )
         # SQL was never reached.
         sql_client.get_results.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# normalize_legacy_filter_value — translates pre-v3 quoted-CSV to v3 regex
+# alternation. Lets migration callers explicitly opt-in to the conversion
+# without weakening the SAFE_FILTER_PATTERN deny-list. (HYP-1560)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeLegacyFilterValue:
+    @pytest.mark.parametrize(
+        ("legacy", "expected"),
+        [
+            # Two items — the canonical migration shape this helper exists for.
+            ('"PREFIX_A.","PREFIX_B."', "PREFIX_A.|PREFIX_B."),
+            # Three items.
+            ('"x","y","z"', "x|y|z"),
+            # Single quoted item.
+            ('"only"', "only"),
+            # Items that look like proper regex fragments survive intact.
+            ('"^foo$","^bar$"', "^foo$|^bar$"),
+            # Stray empty item collapses cleanly so we don't emit an
+            # alternation branch matching the empty string.
+            ('"A",""', "A"),
+        ],
+    )
+    def test_legacy_shape_is_rewritten(self, legacy: str, expected: str) -> None:
+        assert normalize_legacy_filter_value(legacy) == expected
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            # Already-valid v3 single-regex values pass through unchanged.
+            "^prod_.*$",
+            r"^(prod|stage)_db\.[a-z]+$",
+            "PREFIX_A.|PREFIX_B.",
+            "schema_name",
+            "",
+            # Malformed legacy-ish shapes don't accidentally match.
+            '"unterminated',
+            'no-leading-quote"',
+            '"A",unquoted',
+        ],
+    )
+    def test_non_legacy_shape_passes_through(self, value: str) -> None:
+        assert normalize_legacy_filter_value(value) == value
+
+    def test_all_empty_items_returns_original(self) -> None:
+        # A purely empty payload like ``""`` has no meaningful items to
+        # promote; we return it as-is so the caller's validator surfaces
+        # the SQL-unsafe quote it actually is.
+        assert normalize_legacy_filter_value('""') == '""'
+
+    @pytest.mark.parametrize(
+        "legacy_with_forbidden_item",
+        [
+            # Items themselves carry deny-listed sequences. Even though
+            # the wrapping shape is the legacy CSV, the unwrapped result
+            # is still SQL-unsafe and must fail loudly rather than
+            # silently round-trip through the helper.
+            '"name;drop"',
+            '"a--b","c"',
+            '"a","b/*c"',
+            '"a","b\x00c"',
+        ],
+    )
+    def test_forbidden_item_after_unwrap_raises(
+        self, legacy_with_forbidden_item: str
+    ) -> None:
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            normalize_legacy_filter_value(legacy_with_forbidden_item)
+
+    @pytest.mark.parametrize("value", [None, 42, ["A", "B"], {"A": "B"}])
+    def test_non_string_input_passes_through(self, value: object) -> None:
+        # The helper is string-typed but defensively returns non-strings
+        # untouched so a caller threading dicts through doesn't blow up
+        # before reaching its own type guard.
+        assert normalize_legacy_filter_value(value) is value  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Raw-dict entry points must auto-normalise the legacy quoted-CSV shape
+# before the deny-list runs (HYP-1560). These callers bypass the typed
+# ``ExtractionInput`` BeforeValidator, so they each need their own
+# normalise-then-validate sequence to keep migrated workflow specs from
+# tripping the v3.13 SDK's stricter pattern.
+# ---------------------------------------------------------------------------
+
+
+class TestRawEntryPointLegacyNormalisation:
+    def test_prepare_query_temp_table_regex_legacy_is_normalised(self) -> None:
+        # Migrated workflow spec carrying the pre-v3 quoted-CSV shape
+        # for temp-table-regex now substitutes into the SQL template
+        # as a valid alternation regex rather than raising.
+        result = prepare_query(
+            "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+            {"metadata": {"temp-table-regex": '"PREFIX_A.","PREFIX_B."'}},
+            temp_table_regex_sql="AND name !~ '{exclude_table_regex}'",
+        )
+        # Expect the alternation regex inside the SQL literal — proves
+        # the value was rewritten BEFORE substitution, not after.
+        assert result is not None
+        assert "PREFIX_A.|PREFIX_B." in result
+        # And the original quoted-CSV form is gone — no quote or comma
+        # survived into the substituted SQL.
+        assert '","' not in result
+
+    def test_prepare_filters_include_legacy_does_not_trip_deny_list(self) -> None:
+        # The legacy quoted-CSV normalises to ``A|B`` before the deny-list
+        # runs, so the SQL-unsafe ``ValueError`` is NOT raised. A downstream
+        # ``parse_filter_input`` JSON decode may still fail on the
+        # normalised raw-regex shape — that's the pre-existing behaviour
+        # for raw-string filters and orthogonal to this PR. The contract
+        # this test pins: the legacy shape no longer fails the deny-list.
+        with pytest.raises(Exception) as exc_info:
+            prepare_filters('"A","B"', '{"^temp$": ["^staging$"]}')
+        assert "SQL-unsafe sequence" not in str(exc_info.value)
+
+    async def test_get_database_names_legacy_string_include_does_not_trip_deny_list(
+        self,
+    ) -> None:
+        # Same property as prepare_filters: the string-typed include-filter
+        # normalises before the deny-list runs.
+        sql_client = MagicMock()
+        sql_client.get_results = AsyncMock(return_value={"database_name": ["x"]})
+
+        with pytest.raises(Exception) as exc_info:
+            await get_database_names(
+                sql_client,
+                {"metadata": {"include-filter": '"db_a","db_b"'}},
+                "SELECT name FROM information_schema.databases",
+            )
+        assert "SQL-unsafe sequence" not in str(exc_info.value)

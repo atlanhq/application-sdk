@@ -174,8 +174,10 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    git merge --abort
    ```
    Submit minimal review: "PR has merge conflicts. Please rebase or
-   comment `@sdk-review` after resolving conflicts." Label `sdk-review-needs-rebase`.
-   EXIT.
+   comment `@sdk-review` after resolving conflicts." Set the verdict in
+   §3e to `NEEDS_REBASE` (the structured marker is `<!-- VERDICT:
+   NEEDS_REBASE -->`); the GHA layer applies the `sdk-review-needs-rebase`
+   label from there. EXIT.
 
 9. **Pre-commit cleanup** (eliminate style noise before review):
    ```bash
@@ -537,14 +539,76 @@ inline comment body:
 
 MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 
+### 2f-bis. PR Title Check (mandatory)
+
+**This check MUST run before §2g determines the final verdict. A title
+mismatch is treated as a Critical finding and forces verdict =
+NEEDS_FIXES — never READY_TO_MERGE — regardless of what the code review
+turned up.**
+
+Squash-merge means the PR title becomes the commit subject on main,
+which is what `release.py` (SDK) and `contract_toolkit_release.py`
+(toolkit) walk to compute the next semver. A mismatched title silently
+over-bumps or under-bumps the version. Catching this in review keeps
+the release pipeline honest.
+
+**Inputs:**
+- `/tmp/PR.json` → `.title` and `.headRefName` (already fetched in Phase 0)
+- The list of changed files. Get it once:
+  ```bash
+  gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > /tmp/PR_FILES.txt
+  ```
+
+**Categorize the changed files into three buckets:**
+
+| Bucket | Path prefix |
+|---|---|
+| `HAS_SDK` | `application_sdk/` |
+| `HAS_CT`  | `contract-toolkit/` |
+| `HAS_OTHER` | everything else (docs/, .github/, scripts/, tests/, .mothership/, etc.) |
+
+**Parse the title.** It must match conventional-commit shape:
+`<type>(<optional-scope>)<!?>: <description>`. Allowed types: `feat`,
+`fix`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
+`ci`, `revert`. If it doesn't match the shape at all, that's a
+`not_conventional` finding.
+
+**Apply the rule** (first match wins, based on which buckets are set):
+
+| Files touched | Required title | Reason |
+|---|---|---|
+| `application_sdk/` (with or without `contract-toolkit/` or `other`) | `feat(...): ...` or `fix(...): ...` — any scope, including no scope | SDK release walks every commit since the last `v*` tag; only `feat`/`fix` (or breaking `!`) drive a real bump |
+| `contract-toolkit/` only — no `application_sdk/` | `feat(contract-toolkit): ...` or `fix(contract-toolkit): ...` — scope **must** be `contract-toolkit` | Toolkit release walks commits filtered to `contract-toolkit/**`; the scope keeps the toolkit CHANGELOG entries readable |
+| Neither `application_sdk/` nor `contract-toolkit/` | Anything except `feat` or `fix` — `chore`/`docs`/`ci`/`refactor`/`perf`/`test`/`build`/`revert`/`style` | A `feat:` or `fix:` here would still trigger an SDK semver bump despite shipping no SDK code |
+
+**If the title fails the rule:**
+
+1. Add a Critical finding: `[TITLE] PR title doesn't match file scope.`
+   Body: explain what the title is, what the file buckets are, what
+   title shape is required, and give 1–2 concrete suggested rewrites.
+2. **Force verdict = `NEEDS_FIXES`** in §2g — title mismatch cannot
+   coexist with `READY_TO_MERGE` even if the code is otherwise clean.
+3. Record the result in the §3e summary's "PR Title Check" section
+   (see template) — exactly one line, either ✅ aligned or 🟥 with the
+   reason.
+
+**If the title passes:** also note in the §3e "PR Title Check" section
+that it aligned, so the human reading the verdict comment sees an
+explicit confirmation rather than absence of a complaint.
+
 ### 2g. Determine Verdict
 
 | Verdict | Condition | approval_recommendation |
 |---|---|---|
 | BLOCKED | G1/G2/G3/G5 violation | REJECT |
 | NEEDS_HUMAN | DESIGN_CHANGE scope | REQUEST_CHANGES |
-| NEEDS_FIXES | Critical, G4/G6, 3+ Important, CI failing | REQUEST_CHANGES |
-| READY_TO_MERGE | No Critical, < 3 Important, CI passing | APPROVE |
+| NEEDS_FIXES | Critical, G4/G6, **any Important**, CI failing, **OR §2f-bis title mismatch** | REQUEST_CHANGES |
+| READY_TO_MERGE | **0 Critical AND 0 Important**, CI passing, **AND §2f-bis title aligned** | APPROVE |
+
+`READY_TO_MERGE` is strict: a single Important finding forces
+`NEEDS_FIXES`. Nits do not block. If you believe an Important should
+be downgraded, downgrade it explicitly in §2d with a one-line reason
+— do not silently approve over the top of it.
 
 ### 2h. Challenge Mode (if Intent Inference picked Mode D)
 
@@ -593,51 +657,48 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
   **Fix:** <exact code suggestion if PATCH scope>
   ```
 
-### 3c. Verdict-Stamp: Labels Only (formal approval posted by the GHA runner)
+### 3c. Verdict-Stamp: Owned by the GHA runner (sandbox does nothing)
 
-There is no mothership-side handler, and the sandbox itself **does not
-post `gh pr review`**. The formal approval is posted **outside** the
-sandbox by the GHA workflow (`sdk-review.yml` → "Approve PR as
-atlan-ci" step), so the approval is recorded as `atlan-ci` and counts
-toward the `require_code_owner_review` rule on `main`.
-`mothership-ai[bot]` is a GitHub App and cannot be in CODEOWNERS.
+There is no mothership-side handler, and the sandbox **does not post
+`gh pr review`** and **does not apply labels**. Both happen outside
+the sandbox:
 
-The atlan-ci approval is **auto-dismissed the moment any human
-comments or reviews on the PR**, via the companion workflow
-`sdk-review-dismiss-on-human.yml`. So the policy is: bot
-green-lights, any human touching the PR returns the gate to "needs
-human approval." That gives the bot leverage to actually unblock
-merges (real code-owner approval, not advisory) without giving it
-the ability to solo-approve in the presence of human engagement.
+- **Approval**: `sdk-review-approve-on-verdict.yml` fires on
+  `issue_comment: created` from `mothership-ai[bot]` with the
+  `<!-- SDK_REVIEW -->` marker (within ~5s of the verdict comment
+  landing). It parses the verdict from the structured
+  `<!-- VERDICT: X -->` marker in §3e, applies the
+  `sdk-review-approved` / `sdk-review-needs-human` /
+  `sdk-review-needs-rebase` labels, sets the `sdk-review` commit
+  status, and posts the formal `atlan-ci` approval if the verdict is
+  `READY_TO_MERGE`. `sdk-review.yml`'s "Approve PR as atlan-ci" step
+  runs the same logic after the SSE stream ends as a fallback —
+  idempotency guards (label present + no existing approval) prevent
+  double-approval. atlan-ci is in CODEOWNERS, so its approval
+  satisfies `require_code_owner_review` on `main`;
+  `mothership-ai[bot]` is a GitHub App and can't be.
+- **Dismiss on human activity**: `sdk-review-dismiss-on-human.yml`
+  fires on `issue_comment` / `pull_request_review` from humans and
+  dismisses the atlan-ci approval + strips the label. So the bot can
+  unblock merges by itself until a human pushes back.
+- **Reset on push**: `sdk-review-reset-on-push.yml` fires on
+  `pull_request: synchronize` and strips the label + flips the
+  `sdk-review` status to pending on the new HEAD. Branch protection
+  separately auto-dismisses the approval (`dismiss_stale_reviews_on_push`).
+- **CI-failure downgrade**: `sdk-review-downgrade-on-ci-failure.yml`
+  fires on `check_suite: completed`; if a non-sdk-review check
+  failed on a HEAD that carries `sdk-review-approved`, it strips
+  the label, dismisses the approval, and flips status to failure.
 
-The sandbox is responsible only for **labels** here.
+**Implication for the sandbox**: don't `gh pr edit --add-label` or
+`gh pr review --approve` from inside the orchestration. The verdict
+flows out via the structured marker in the summary comment in §3e;
+the GHA layer reads that and does the rest.
 
-```bash
-# $GITHUB_TOKEN is set in Phase 0 step 3 (injected by dispatcher)
-PR=<pr_number>
-REPO="atlanhq/application-sdk"
-
-case "$VERDICT" in
-  "READY_TO_MERGE")
-    gh pr edit $PR --repo $REPO --add-label "sdk-review-approved"
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-needs-human" 2>/dev/null || true
-    ;;
-  "NEEDS_HUMAN")
-    gh pr edit $PR --repo $REPO --add-label "sdk-review-needs-human"
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-approved" 2>/dev/null || true
-    ;;
-  "NEEDS_FIXES"|"BLOCKED")
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-approved" 2>/dev/null || true
-    gh pr edit $PR --repo $REPO --remove-label "sdk-review-needs-human" 2>/dev/null || true
-    ;;
-esac
-```
-
-The verdict must also be written into the summary comment in §3e as
-a line `### Verdict: READY TO MERGE` (etc.) — the GHA runner greps
-that line out of the just-posted `<!-- SDK_REVIEW -->` comment
-to decide whether to call `gh pr review --approve`. Do not change
-the verdict line's prefix without updating the workflow's parser.
+The structured verdict marker is the contract. Keep
+`<!-- VERDICT: X -->` in sync with `### Verdict: ...` in the summary
+template. The token must be one of:
+`READY_TO_MERGE`, `NEEDS_FIXES`, `BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
 
 ### 3d. Resolve Inline Threads (on APPROVE)
 
@@ -677,12 +738,17 @@ Do NOT resolve threads from human reviewers.
 
 ### 3e. Summary
 
-Use this template. The leading `<!-- SDK_REVIEW -->` HTML
-comment is the marker the orchestration uses to find prior reviews
-on subsequent runs; do NOT remove it:
+Use this template. The leading `<!-- SDK_REVIEW -->` HTML comment is
+the marker the orchestration uses to find prior reviews on subsequent
+runs; do NOT remove it. The second marker `<!-- VERDICT: X -->` is the
+machine-readable verdict the GHA approval workflows parse — keep it
+in sync with the human-readable `### Verdict:` line below. The token
+after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
+`BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
 
 ```
 <!-- SDK_REVIEW -->
+<!-- VERDICT: READY_TO_MERGE | NEEDS_FIXES | BLOCKED | NEEDS_HUMAN | NEEDS_REBASE -->
 ## SDK <Review | Re-review> (mothership): PR #<number> — <title>
 
 ### Verdict: <READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW>
@@ -691,6 +757,10 @@ on subsequent runs; do NOT remove it:
 >  is this fixing symptoms or causes? What's the right path forward?>
 
 ---
+
+### PR Title Check                         <!-- ALWAYS present, from §2f-bis -->
+- ✅ **Aligned** — title \`<title>\` matches the file scope (<which bucket and why>). <!-- when passed -->
+- 🟥 **Needs change** — title \`<title>\` doesn't match the file scope. Files touched: <SDK|CT|OTHER buckets>. Required: <expected title shape>. Suggested rewrite: \`<example>\`. <!-- when failed; forces verdict = NEEDS_FIXES per §2f-bis -->
 
 ### Delta from previous review            <!-- ONLY when PRIOR_REVIEW non-empty -->
 - **Resolved (<N>)**: <one line per finding the author fixed>
@@ -701,9 +771,25 @@ on subsequent runs; do NOT remove it:
 
 ### Findings
 
+> **Format is MANDATORY: file-by-file grouped bullets.** Do NOT
+> substitute a Markdown table (`| Severity | Domain | Where | Summary |`).
+> Group findings under a bold file-path header, then one bullet per
+> finding starting with the severity. Each bullet MUST include the
+> domain tag in square brackets, the line reference (`L<n>` or
+> `L<n>-<m>`), a description, and an italicised `*Path: …*` clause
+> describing the fix. Findings spanning multiple files appear under
+> each affected file's header. Sort files alphabetically; within a
+> file, sort by severity (Critical → Important → Nit) then by line
+> number. PR-metadata-level findings (e.g. title mismatches) go under
+> a `**PR metadata**` pseudo-header.
+
 **`<path/to/file.py>`**
 - **Critical** [SEC] L42 — description. *Path: immediate fix — <what to do>*
 - **Important** [ARCH] L88 — description. *Path: follow-up ticket — <why>*
+- **Nit** [QUAL] L120 — description. *Path: optional cleanup — <why>*
+
+**`<path/to/other_file.py>`**
+- **Nit** [STRUCT] L15 — description. *Path: <…>*
 
 ### Holistic Recommendations (if any)
 - Root cause assessment: is this PR treating symptoms or causes?

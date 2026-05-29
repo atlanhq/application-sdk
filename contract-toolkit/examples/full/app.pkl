@@ -5,6 +5,7 @@
 ///   - pipeline: typed extract/parseQueries/publish overrides with errorHandling
 ///   - credentialUrlGroup: AdvancedJDBCUrlGroup (JDBC URL builder with two auth modes)
 ///   - credentialAuthOptions: JDBCUrlAuthOption with UrlPartMapping/UrlRef/UrlLiteral
+///   - ConditionalFieldSpec: small field-level conditional credential input
 ///   - uiConfig: TextInput, BooleanInput, NumericInput, Radio, DropDown, SqlTree,
 ///               conditional UIRule, CredentialInput, ConnectionCreator
 ///   - extraNodes: custom DAG node outside the typed pipeline
@@ -70,6 +71,28 @@ credentialUrlGroup = new AdvancedJDBCUrlGroup {
   }
   extraFields {
     new FieldSpec { name = "database"; displayName = "Database"; width = 4 }
+    new ConditionalFieldSpec {
+      name = "token_audience"
+      defaultValue = ""
+      conditions {
+        new Condition {
+          filter = new Dynamic {
+            `$or` {
+              new Dynamic { ["agent-json.auth-type"] = "token" }
+              new Dynamic { ["credential-guid.auth-type"] = "token" }
+            }
+          }
+          overrideRequired = true
+          overrideType = "string"
+          overrideUi = new Widget {
+            widget = "input"
+            label = "Token audience"
+            placeholder = "api://default"
+            grid = 4
+          }
+        }
+      }
+    }
   }
 }
 

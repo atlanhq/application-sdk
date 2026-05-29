@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.10.3] - 2026-05-28
+
+### Bug fixes
+
+- support credential checkbox and auto-derive auth-type hidden (#1873) ([944c290](https://github.com/atlanhq/application-sdk/commit/944c290))
+
 ## [0.10.2] - 2026-05-27
 
 ### Bug fixes
