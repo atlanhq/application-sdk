@@ -371,6 +371,10 @@ async def upload_file(
     Raises:
         StorageError: If the upload fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+
+    Note:
+        Zero-byte uploads are allowed but emit a warning — some S3-style backends
+        may not persist an empty object.  GCS and local stores handle them correctly.
     """
     resolved = _resolve_store(store)
     if normalize:
@@ -379,6 +383,14 @@ async def upload_file(
     path = Path(local_path)
     file_size = path.stat().st_size
     effective_chunk = _compute_part_size(file_size, chunk_size)
+
+    if file_size == 0:
+        logger.warning(
+            "Uploading zero-byte file to key '%s' — "
+            "some S3-style backends silently drop empty objects; "
+            "verify the object exists after upload if your store requires it.",
+            key,
+        )
 
     h = hashlib.sha256() if compute_hash else None
     started = time.monotonic()
@@ -394,7 +406,11 @@ async def upload_file(
                     if h is not None:
                         h.update(chunk)
                     await writer.write(chunk)
-    except Exception as exc:
+    except BaseException as exc:
+        # BaseException is the umbrella for Exception and its siblings
+        # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
+        # ensures cancellation mid-writer-close is logged rather than silently
+        # discarding the buffer and leaving no object in the store.
         elapsed_ms = (time.monotonic() - started) * 1000.0
         _log_storage_event(
             logging.WARNING,
@@ -405,11 +421,13 @@ async def upload_file(
             size_bytes=file_size,
             error_class=_exc_class_name(exc),
         )
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+        if isinstance(exc, Exception):
+            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
-        raise StorageError(
-            f"Failed to upload file to key '{key}'", key=key, cause=exc
-        ) from exc
+            raise StorageError(
+                f"Failed to upload file to key '{key}'", key=key, cause=exc
+            ) from exc
+        raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
