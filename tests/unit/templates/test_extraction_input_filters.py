@@ -203,4 +203,74 @@ class TestRealAEPayload:
         }
         result = ExtractionInput.model_validate(payload)
         assert isinstance(result.include_filter, str)
+
+
+class TestLegacyQuotedCsvNormalisation:
+    """Pre-v3 SaaS-agent quoted-CSV shape is auto-translated (HYP-1560).
+
+    Migrated workflow specs carry filter values like ``'"A","B"'`` that
+    the old agent parsed as a list of prefixes. The v3 contract takes
+    a single regex string and the BLDX-518 deny-list rejects the
+    quote/comma characters that shape requires — so without this
+    translation, every migrated tenant on the v3.13 SDK fails at
+    workflow-input decoding.
+    """
+
+    def test_temp_table_regex_legacy_csv_is_translated(self):
+        # Canonical migrated value: two prefixes the old agent OR'd
+        # together as separate LIKE patterns. Translate to a v3
+        # alternation regex so the connector's regex engine actually
+        # matches against table names.
+        payload = {"temp_table_regex": '"PREFIX_A.","PREFIX_B."'}
+        result = ExtractionInput.model_validate(payload)
+        assert result.temp_table_regex == "PREFIX_A.|PREFIX_B."
+
+    def test_temp_table_regex_v3_value_passes_through(self):
+        # A value that's already a valid v3 regex must not be mangled
+        # by the normaliser.
+        payload = {"temp_table_regex": "PREFIX_A.|PREFIX_B."}
+        result = ExtractionInput.model_validate(payload)
+        assert result.temp_table_regex == "PREFIX_A.|PREFIX_B."
+
+    def test_temp_table_regex_legacy_with_forbidden_item_still_rejected(self):
+        # Defence in depth: if a legacy item smuggles a forbidden
+        # sequence (e.g. ``--``), the normaliser's post-unwrap check
+        # raises — the bypass route cannot launder injection through
+        # the legacy shape.
+        payload = {"temp_table_regex": '"prefix","name--bad"'}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate(payload)
+
+    def test_include_filter_legacy_csv_is_translated(self):
+        # Same translation for the FilterMap | str fields when the
+        # string side of the union carries a legacy value.
+        payload = {"include_filter": '"prod","stage"'}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == "prod|stage"
+
+    def test_exclude_filter_legacy_csv_is_translated(self):
+        payload = {"exclude_filter": '"temp_a","temp_b"'}
+        result = ExtractionInput.model_validate(payload)
+        assert result.exclude_filter == "temp_a|temp_b"
+
+    def test_json_string_filter_is_not_mangled(self):
+        # JSON-shaped strings start with ``{`` and never match the
+        # legacy detector, so they pass through unchanged for the
+        # downstream parser.
+        payload = {"include_filter": '{"^prod$": ["^analytics$"]}'}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == '{"^prod$": ["^analytics$"]}'
+
+    def test_extraction_task_input_temp_table_regex_translated(self):
+        # The translation has to fire on ExtractionTaskInput too —
+        # per-task inputs are reconstructed from the workflow spec
+        # and re-validate the same fields.
+        payload = {"temp_table_regex": '"PREFIX_A.","PREFIX_B."'}
+        result = ExtractionTaskInput.model_validate(payload)
+        assert result.temp_table_regex == "PREFIX_A.|PREFIX_B."
+
+    def test_extraction_task_input_filter_translated(self):
+        payload = {"exclude_filter": '"temp_a","temp_b"'}
+        result = ExtractionTaskInput.model_validate(payload)
+        assert result.exclude_filter == "temp_a|temp_b"
         assert isinstance(result.exclude_filter, str)
