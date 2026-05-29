@@ -955,6 +955,19 @@ class App(ABC):
         is never re-executed on workflow replay even if the worker is replaced
         mid-run (e.g. a KEDA scale-down event).
 
+        **Store routing (SDR vs non-SDR):** this method targets the upstream
+        object store when one is configured (``UPSTREAM_OBJECT_STORE_NAME``
+        points to a distinct Dapr component), and falls back to the deployment
+        store otherwise.  In standard (non-SDR) deployments the two env vars
+        share the same default so routing is transparent.  In SDR deployments
+        the upstream store is Atlan's bucket — the correct destination for
+        extracted artifacts handed off to the publish app.
+
+        This routing applies **only** to ``App.upload()``.  The automatic
+        file-reference materialisation that transfers ``FileReference`` objects
+        between ``@task`` methods always uses the deployment store; use that
+        mechanism (not ``App.upload()``) for intermediate task-to-task data.
+
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.upload` directly.
 
@@ -984,7 +997,9 @@ class App(ABC):
             upload as _upload,
         )
 
-        store = self.context.storage
+        # Prefer the upstream store (SDR: Atlan's bucket for the extract→publish
+        # handoff); fall back to the deployment store (standard deployments).
+        store = self.context.upstream_storage or self.context.storage
         if store is None:
             raise ObjectStoreNotConfiguredError()
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
