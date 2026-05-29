@@ -15,9 +15,12 @@ Dapr metadata fields that have no obstore equivalent are silently ignored:
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -423,6 +426,15 @@ def create_store_from_binding(
         )
 
     meta = _parse_dapr_metadata(spec.get("metadata", []))
+    # Log binding resolution so objectstore routing can be verified in CI logs.
+    endpoint = meta.get("endpoint", meta.get("accountName", ""))
+    logger.info(
+        "create_store_from_binding: name=%r type=%r store_kind=%r endpoint=%r",
+        name,
+        binding_type,
+        store_kind,
+        endpoint or "(none)",
+    )
 
     if store_kind == "local":
         root_path = meta.get("rootPath", "./objectstore")
