@@ -380,6 +380,18 @@ async def upload_file(
     file_size = path.stat().st_size
     effective_chunk = _compute_part_size(file_size, chunk_size)
 
+    # An empty file means write() is never called and the writer close() is a
+    # no-op: S3-style backends don't issue any PUT, so the object silently
+    # doesn't exist. Fail loudly rather than succeeding with a phantom key.
+    if file_size == 0:
+        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+
+        raise StorageError(
+            f"Refusing to upload empty file to key '{key}' — "
+            "zero-byte writes produce no object in S3-style stores",
+            key=key,
+        )
+
     h = hashlib.sha256() if compute_hash else None
     started = time.monotonic()
     try:
@@ -394,7 +406,11 @@ async def upload_file(
                     if h is not None:
                         h.update(chunk)
                     await writer.write(chunk)
-    except Exception as exc:
+    except BaseException as exc:
+        # BaseException is the umbrella for Exception and its siblings
+        # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
+        # ensures cancellation mid-writer-close is logged rather than silently
+        # discarding the buffer and leaving no object in the store.
         elapsed_ms = (time.monotonic() - started) * 1000.0
         _log_storage_event(
             logging.WARNING,
@@ -405,32 +421,15 @@ async def upload_file(
             size_bytes=file_size,
             error_class=_exc_class_name(exc),
         )
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+        if isinstance(exc, Exception):
+            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
-        raise StorageError(
-            f"Failed to upload file to key '{key}'", key=key, cause=exc
-        ) from exc
+            raise StorageError(
+                f"Failed to upload file to key '{key}'", key=key, cause=exc
+            ) from exc
+        raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
-
-    # Verify the object is actually reachable after the write returns.
-    # obstore's writer context-manager exit does not guarantee the object
-    # is visible (e.g. misconfigured credentials can silently no-op the
-    # write while appearing to succeed). A HEAD request confirms durability.
-    # StorageError inherits retryable=True so Temporal will retry the
-    # activity automatically on ephemeral failures.
-    try:
-        await obstore.head_async(resolved, key)
-    except Exception as verify_exc:
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(
-            f"Upload to '{key}' appeared to succeed but the object is not "
-            f"readable — credentials or endpoint may be misconfigured",
-            key=key,
-            cause=verify_exc,
-        ) from verify_exc
-
     _log_storage_event(
         logging.DEBUG,
         "upload",
