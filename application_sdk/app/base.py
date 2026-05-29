@@ -963,10 +963,11 @@ class App(ABC):
         the upstream store is Atlan's bucket — the correct destination for
         extracted artifacts handed off to the publish app.
 
-        This routing applies **only** to ``App.upload()``.  The automatic
-        file-reference materialisation that transfers ``FileReference`` objects
-        between ``@task`` methods always uses the deployment store; use that
-        mechanism (not ``App.upload()``) for intermediate task-to-task data.
+        This routing applies to ``App.upload()`` and ``App.download()``.  The
+        automatic file-reference materialisation that transfers ``FileReference``
+        objects between ``@task`` methods always uses the deployment store; use
+        that mechanism (not ``App.upload()`` / ``App.download()``) for
+        intermediate task-to-task data.
 
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.upload` directly.
@@ -1029,6 +1030,11 @@ class App(ABC):
         If ``input.ref`` is provided and ``input.storage_path`` is empty, the
         ref's ``storage_path`` is used as the source.
 
+        **Store routing (SDR vs non-SDR):** mirrors ``App.upload()`` — reads
+        from the upstream store when one is configured, falling back to the
+        deployment store otherwise.  In SDR deployments the publish app uses
+        this to pull artifacts written by the extract app.
+
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.download` directly.
 
@@ -1040,14 +1046,12 @@ class App(ABC):
             ``DownloadOutput`` with a fully materialised ``FileReference``
             containing both ``storage_path`` and ``local_path``.
 
-        Example — download a file reference from a previous upload::
+        Example — SDR publish app consuming artifacts from the extract app::
 
-            async def run(self, input: InferInput) -> InferOutput:
-                dl = await self.download(
-                    DownloadInput(storage_path=input.model_ref.storage_path)
-                )
-                result = await self.run_inference(
-                    InferenceInput(model_path=dl.ref.local_path, data=input.data)
+            async def run(self, input: PublishInput) -> PublishOutput:
+                dl = await self.download(DownloadInput(ref=input.artifacts_ref))
+                return await self.publish_data(
+                    PublishInput(local_path=dl.ref.local_path)
                 )
 
         Example — re-materialise an existing FileReference::
@@ -1058,7 +1062,7 @@ class App(ABC):
             download as _download,
         )
 
-        store = self.context.storage
+        store = self.context.upstream_storage or self.context.storage
         if store is None:
             raise ObjectStoreNotConfiguredError()
 

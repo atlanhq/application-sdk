@@ -1657,6 +1657,64 @@ class TestUploadStoreRouting:
 
         assert mock_upload.call_args.kwargs["store"] is deployment_sentinel
 
+    async def test_download_uses_upstream_when_configured(self) -> None:
+        from application_sdk.app.context import AppContext
+        from application_sdk.contracts.storage import DownloadInput, DownloadOutput
+
+        upstream_sentinel = object()
+        deployment_sentinel = object()
+
+        class _DlApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        app = _DlApp()
+        app._context = AppContext(
+            app_name=app._app_name,
+            app_version="1",
+            run_id="run-1",
+            _storage=deployment_sentinel,  # type: ignore[arg-type]
+            _upstream_storage=upstream_sentinel,  # type: ignore[arg-type]
+        )
+
+        mock_result = DownloadOutput()
+        with mock.patch(
+            "application_sdk.storage.transfer.download",
+            new_callable=mock.AsyncMock,
+            return_value=mock_result,
+        ) as mock_download:
+            await app.download(DownloadInput(storage_path="artifacts/out"))
+
+        assert mock_download.call_args.kwargs["store"] is upstream_sentinel
+
+    async def test_download_falls_back_to_deployment_when_no_upstream(self) -> None:
+        from application_sdk.app.context import AppContext
+        from application_sdk.contracts.storage import DownloadInput, DownloadOutput
+
+        deployment_sentinel = object()
+
+        class _DlApp2(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        app = _DlApp2()
+        app._context = AppContext(
+            app_name=app._app_name,
+            app_version="1",
+            run_id="run-1",
+            _storage=deployment_sentinel,  # type: ignore[arg-type]
+        )
+
+        mock_result = DownloadOutput()
+        with mock.patch(
+            "application_sdk.storage.transfer.download",
+            new_callable=mock.AsyncMock,
+            return_value=mock_result,
+        ) as mock_download:
+            await app.download(DownloadInput(storage_path="artifacts/out"))
+
+        assert mock_download.call_args.kwargs["store"] is deployment_sentinel
+
 
 # =============================================================================
 # Inline-import smoke checks
