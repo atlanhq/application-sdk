@@ -968,10 +968,11 @@ class App(ABC):
         **Store routing (SDR vs non-SDR):** this method targets the upstream
         object store when one is configured (``UPSTREAM_OBJECT_STORE_NAME``
         points to a distinct Dapr component), and falls back to the deployment
-        store otherwise.  In standard (non-SDR) deployments the two env vars
-        share the same default so routing is transparent.  In SDR deployments
-        the upstream store is Atlan's bucket — the correct destination for
-        extracted artifacts handed off to the publish app.
+        store otherwise.  In standard (non-SDR) deployments only the deployment
+        binding is present, so ``upstream_storage`` is ``None`` and routing
+        falls back to the deployment store.  In SDR deployments the upstream
+        store is Atlan's bucket — the correct destination for extracted
+        artifacts handed off to the publish app.
 
         This routing applies to ``App.upload()`` and ``App.download()``.  The
         automatic file-reference materialisation that transfers ``FileReference``
@@ -1045,8 +1046,10 @@ class App(ABC):
 
         **Store routing (SDR vs non-SDR):** mirrors ``App.upload()`` — reads
         from the upstream store when one is configured, falling back to the
-        deployment store otherwise.  In SDR deployments the publish app uses
-        this to pull artifacts written by the extract app.
+        deployment store otherwise.  In standard (non-SDR) deployments only
+        the deployment binding is present, so ``upstream_storage`` is ``None``
+        and routing falls back to the deployment store.  In SDR deployments
+        the publish app uses this to pull artifacts written by the extract app.
 
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.download` directly.

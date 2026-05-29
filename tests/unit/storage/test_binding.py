@@ -16,8 +16,12 @@ from application_sdk.storage.binding import (
     _nonempty,
     _resolve_metadata_value,
     create_store_from_binding,
+    create_store_from_binding_optional,
 )
-from application_sdk.storage.errors import StorageConfigError
+from application_sdk.storage.errors import (
+    StorageBindingNotFoundError,
+    StorageConfigError,
+)
 
 
 def _write_component(
@@ -1077,3 +1081,26 @@ class TestGCSServiceAccountFieldsConstant:
             "universe_domain",
         }
         assert required == set(GCS_SERVICE_ACCOUNT_FIELDS)
+
+
+class TestCreateStoreFromBindingOptional:
+    def test_returns_none_when_component_absent(self, tmp_path: Path) -> None:
+        """Returns None when no component with the given name exists."""
+        result = create_store_from_binding_optional(
+            "nonexistent", components_dir=tmp_path
+        )
+        assert result is None
+
+    def test_reraises_for_misconfigured_component(self, tmp_path: Path) -> None:
+        """Propagates StorageConfigError when the component exists but is misconfigured."""
+        (tmp_path / "bad.yaml").write_text(
+            "kind: Component\n"
+            "metadata:\n"
+            "  name: my-store\n"
+            "spec:\n"
+            "  type: bindings.unsupported.type\n"
+            "  metadata: []\n"
+        )
+        with pytest.raises(StorageConfigError) as exc_info:
+            create_store_from_binding_optional("my-store", components_dir=tmp_path)
+        assert not isinstance(exc_info.value, StorageBindingNotFoundError)

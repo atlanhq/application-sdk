@@ -321,7 +321,10 @@ STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 #: Name of the deployment object store component in DAPR
 DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
-#: Name of the upstream object store component in DAPR
+#: Name of the upstream object store component in DAPR.
+#: Default differs from DEPLOYMENT_OBJECT_STORE_NAME so that non-SDR deployments
+#: — which only ship the deployment binding — cause create_store_from_binding_optional
+#: to return None, leaving upstream_storage unset and routing to fall back to storage.
 UPSTREAM_OBJECT_STORE_NAME = os.getenv(
     "UPSTREAM_OBJECT_STORE_NAME", "atlan-objectstore"
 )
