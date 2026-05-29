@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.13.4
-source-sha:    68f00c067a5b6d1137f83df5362c7c9570cdf88c
-source-date:   2026-05-29T17:49:01+01:00
+source-sha:    0c04cac72bf1a000f31295f7f4818385c3ce530d
+source-date:   2026-05-29T23:38:58+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 21 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 22 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1887,6 +1887,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `class CloudStore(store: ObjectStore, *, provider: str = 'unknown')`
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
+
+#### `StorageBindingBrokenError`
+
+- **Import:** `from application_sdk.storage import StorageBindingBrokenError`
+- **Signature:** `class StorageBindingBrokenError(message: str, ...)`
+- **Summary:** Dapr component YAML exists but has unresolvable configuration.
+- **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageBindingNotFoundError`
 

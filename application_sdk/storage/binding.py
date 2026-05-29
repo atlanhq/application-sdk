@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
+
+# Matches un-substituted Helm / Mustache template placeholders (e.g. {{tenant}}).
+_TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
 
 # GCP service account JSON fields injected from Kubernetes secret via Helm.
 GCS_SERVICE_ACCOUNT_FIELDS: tuple[str, ...] = (
@@ -123,6 +127,67 @@ def _parse_dapr_metadata(metadata_list: list[dict[str, str]]) -> dict[str, str]:
     return {
         item["name"]: _resolve_metadata_value(item) for item in (metadata_list or [])
     }
+
+
+def _find_broken_metadata_fields(metadata_list: list[dict]) -> list[str]:
+    """Return names of metadata fields that clearly cannot be resolved.
+
+    A field is considered broken when:
+    - Its ``value`` contains an un-substituted template placeholder (e.g. ``{{tenant}}``)
+    - It has a ``secretKeyRef`` whose referenced env var is not set
+    """
+    broken: list[str] = []
+    for item in metadata_list or []:
+        field_name = item.get("name", "<unknown>")
+        if "value" in item:
+            if _TEMPLATE_PLACEHOLDER_RE.search(str(item["value"])):
+                broken.append(field_name)
+        elif "secretKeyRef" in item:
+            ref = item["secretKeyRef"]
+            env_key = ref.get("key") or ref.get("name", "")
+            if env_key and os.environ.get(env_key) is None:
+                broken.append(field_name)
+    return broken
+
+
+def is_binding_configured(
+    name: str,
+    *,
+    components_dir: Path | str = Path("./components"),
+) -> bool:
+    """Return True if a usable Dapr component named *name* exists.
+
+    Parses component YAMLs without constructing a store object — a lightweight
+    alternative to ``create_store_from_binding_optional(...) is not None`` when
+    you only need to detect binding presence without the cost of initialising
+    cloud SDK clients.
+
+    Returns False when the component is absent, has an unsupported binding
+    type, or has unresolvable metadata (template placeholders / missing env
+    vars for secretKeyRef entries).
+    """
+    import yaml  # noqa: PLC0415 — defensive: keep inline
+
+    components_path = Path(components_dir)
+    for yaml_file in sorted(components_path.glob("*.yaml")):
+        with yaml_file.open() as fh:
+            doc = yaml.safe_load(fh)
+        if (
+            doc
+            and doc.get("kind") == "Component"
+            and doc.get("metadata", {}).get("name") == name
+        ):
+            spec = doc.get("spec", {})
+            binding_type = spec.get("type", "")
+            store_kind = BINDING_TYPE_MAP.get(binding_type)
+            if store_kind is None:
+                return False
+            if store_kind != "local":
+                raw_metadata = spec.get("metadata", [])
+                if _find_broken_metadata_fields(raw_metadata):
+                    return False
+            return True
+    return False
 
 
 def _build_s3_config(
@@ -394,6 +459,7 @@ def create_store_from_binding(
     import yaml  # noqa: PLC0415 — defensive: keep inline
 
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageBindingBrokenError,
         StorageBindingNotFoundError,
         StorageConfigError,
     )
@@ -427,7 +493,19 @@ def create_store_from_binding(
             f"Unsupported binding type: {binding_type!r} (component={name})"
         )
 
-    meta = _parse_dapr_metadata(spec.get("metadata", []))
+    raw_metadata = spec.get("metadata", [])
+    if store_kind != "local":
+        broken_fields = _find_broken_metadata_fields(raw_metadata)
+        if broken_fields:
+            raise StorageBindingBrokenError(
+                "Dapr component '%s' has unresolvable metadata "
+                "(template placeholders or missing env vars): %s"
+                % (name, ", ".join(broken_fields)),
+                binding_name=name,
+                broken_fields=broken_fields,
+            )
+
+    meta = _parse_dapr_metadata(raw_metadata)
     # Log binding resolution so objectstore routing can be verified in CI logs.
     endpoint = meta.get("endpoint", meta.get("accountName", ""))
     logger.info(
@@ -514,14 +592,27 @@ def create_store_from_binding_optional(
         named *name* exists in *components_dir*.
 
     Raises:
-        StorageConfigError: If the component exists but is misconfigured
-            (unsupported binding type, missing required options, etc.).
+        StorageConfigError: If the component exists but is genuinely
+            misconfigured (unsupported binding type, missing required options,
+            etc.).  Note that *broken* components — those with template
+            placeholders or unresolvable ``secretKeyRef`` env vars — are
+            treated as absent and return ``None`` with a warning instead of
+            raising.
     """
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageBindingBrokenError,
         StorageBindingNotFoundError,
     )
 
     try:
         return create_store_from_binding(name, components_dir=components_dir)
     except StorageBindingNotFoundError:
+        return None
+    except StorageBindingBrokenError as exc:
+        _get_logger().warning(
+            "Dapr component '%s' has unresolvable configuration "
+            "(broken fields: %s) — treating as absent",
+            name,
+            ", ".join(exc.broken_fields or []),
+        )
         return None
