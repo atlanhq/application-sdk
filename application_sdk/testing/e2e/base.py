@@ -34,17 +34,13 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar
+
+import orjson
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.testing.full_dag._errors import (
-    ManifestDagMissingError,
-    ManifestFileNotFoundError,
-    MissingHarnessClassAttrError,
-    MissingHarnessEnvError,
-)
-from application_sdk.testing.full_dag.client import AEWorkflowClient, DAGRunResult
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
     AgentSpec,
@@ -53,6 +49,13 @@ from application_sdk.testing.e2e.payload import (
     build_ae_payload,
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.full_dag._errors import (
+    ManifestDagMissingError,
+    ManifestFileNotFoundError,
+    MissingHarnessClassAttrError,
+    MissingHarnessEnvError,
+)
+from application_sdk.testing.full_dag.client import AEWorkflowClient, DAGRunResult
 
 logger = get_logger(__name__)
 
@@ -224,23 +227,37 @@ class BaseE2ETest:
         # the workflow runs.
         self._auto_admin_roles: tuple[str, ...] = ()
         self._auto_admin_users: tuple[str, ...] = ()
-        if not any([self.connection_admin_users, self.connection_admin_groups, self.connection_admin_roles]):
+        if not any(
+            [
+                self.connection_admin_users,
+                self.connection_admin_groups,
+                self.connection_admin_roles,
+            ]
+        ):
             try:
-                from pyatlan.client.atlan import AtlanClient  # type: ignore[import]
+                from pyatlan.client.atlan import (  # noqa: PLC0415; type: ignore[import]
+                    AtlanClient,
+                )
+
                 _pc = AtlanClient(base_url=tenant_url, api_key=api_token)
                 _guid = _pc.role_cache.get_id_for_name("$admin")
                 if _guid:
                     self._auto_admin_roles = (_guid,)
                     logger.info("Resolved $admin role GUID for connection: %s", _guid)
                 else:
-                    logger.warning("$admin role not found on tenant; connection may fail ATLAS-400-00-114")
+                    logger.warning(
+                        "$admin role not found on tenant; connection may fail ATLAS-400-00-114"
+                    )
                 # Also add the current API token's user to adminUsers so the
                 # teardown can purge the connection (the $admin role alone is
                 # insufficient when the service account doesn't hold that role).
                 _me = _pc.user.get_current()
                 if _me and _me.username:
                     self._auto_admin_users = (_me.username,)
-                    logger.info("Resolved current user for connection adminUsers: %s", _me.username)
+                    logger.info(
+                        "Resolved current user for connection adminUsers: %s",
+                        _me.username,
+                    )
             except Exception as _exc:
                 logger.warning(
                     "Could not resolve $admin role GUID or current user (%s). "
@@ -264,9 +281,15 @@ class BaseE2ETest:
             return
 
         try:
-            from pyatlan.client.atlan import AtlanClient  # type: ignore[import]
-            from pyatlan.model.assets import Asset  # type: ignore[import]
-            from pyatlan.model.fluent_search import FluentSearch  # type: ignore[import]
+            from pyatlan.client.atlan import (  # noqa: PLC0415; type: ignore[import]
+                AtlanClient,
+            )
+            from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
+                Asset,
+            )
+            from pyatlan.model.fluent_search import (  # noqa: PLC0415; type: ignore[import]
+                FluentSearch,
+            )
 
             tenant_url = os.environ.get("ATLAN_BASE_URL", "")
             api_token = os.environ.get("ATLAN_API_KEY", "")
@@ -334,8 +357,12 @@ class BaseE2ETest:
         # Fall back to auto-resolved values when no explicit admins are set.
         # _auto_admin_roles: the $admin role GUID (any tenant admin can manage)
         # _auto_admin_users: the current API token's username (so teardown can purge)
-        admin_roles = self.connection_admin_roles or getattr(self, "_auto_admin_roles", ())
-        admin_users = self.connection_admin_users or getattr(self, "_auto_admin_users", ())
+        admin_roles = self.connection_admin_roles or getattr(
+            self, "_auto_admin_roles", ()
+        )
+        admin_users = self.connection_admin_users or getattr(
+            self, "_auto_admin_users", ()
+        )
         return ConnectionSpec(
             name=self.connection_display_name,
             qualified_name=self.connection_qualified_name,
@@ -357,10 +384,12 @@ class BaseE2ETest:
         ``.model_dump(by_alias=True)`` exactly once when seeding the DAG.
         """
         spec = self.connection_spec()
-        return MustacheSubstitutions(
-            connection=ConnectionRef.model_validate(
-                {"typeName": "Connection", "attributes": spec.attributes()}
-            ),
+        return MustacheSubstitutions.model_validate(
+            {
+                "connection": ConnectionRef.model_validate(
+                    {"typeName": "Connection", "attributes": spec.attributes()}
+                )
+            }
         )
 
     def _credential_body(self) -> CredentialBody | None:
@@ -413,8 +442,6 @@ class BaseE2ETest:
 
     def _seed_dag_from_manifest(self, extract_task_queue: str) -> dict:
         """Load the connector's manifest.json and use it as the seed DAG."""
-        import json
-        from pathlib import Path
 
         path = Path(self.manifest_path)
         if not path.is_absolute():
@@ -429,7 +456,7 @@ class BaseE2ETest:
                 ),
                 resource_identifier=str(path),
             )
-        manifest = json.loads(path.read_text())
+        manifest = orjson.loads(path.read_bytes())
         dag = manifest.get("dag")
         if not isinstance(dag, dict) or not dag:
             raise ManifestDagMissingError(
@@ -495,7 +522,9 @@ class BaseE2ETest:
         Returns the slug to use for the subsequent submit.
         """
         if self.ae_workflow_slug:
-            logger.info("Using pre-existing AE workflow slug: %s", self.ae_workflow_slug)
+            logger.info(
+                "Using pre-existing AE workflow slug: %s", self.ae_workflow_slug
+            )
             return self.ae_workflow_slug
 
         name = (

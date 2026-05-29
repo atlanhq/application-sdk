@@ -156,14 +156,16 @@ class SQLAppE2ETest(BaseE2ETest):
         else:
             agent_json = None
 
-        return SQLMustacheSubstitutions(
-            connection=connection_ref,
-            extraction_method=self.mode.value,
-            agent_json=agent_json,
-            include_filter=self.include_filter,
-            exclude_filter=self.exclude_filter,
-            exclude_table_regex="",
-            preflight_check=True,
+        return SQLMustacheSubstitutions.model_validate(
+            {
+                "connection": connection_ref,
+                "extraction_method": self.mode.value,
+                "agent_json": agent_json,
+                "include_filter": self.include_filter,
+                "exclude_filter": self.exclude_filter,
+                "exclude_table_regex": "",
+                "preflight_check": True,
+            }
         )
 
     def _credential_body(self) -> CredentialBody | None:
