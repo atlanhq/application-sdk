@@ -193,12 +193,8 @@ class BaseE2ETest:
                 )
             )
 
-        oauth_client_id = os.environ.get("SDR_OAUTH_CLIENT_ID", "") or os.environ.get(
-            "ATLAN_AUTH_CLIENT_ID", ""
-        )
-        oauth_client_secret = os.environ.get(
-            "SDR_OAUTH_CLIENT_SECRET", ""
-        ) or os.environ.get("ATLAN_AUTH_CLIENT_SECRET", "")
+        oauth_client_id = os.environ.get("ATLAN_AUTH_CLIENT_ID", "")
+        oauth_client_secret = os.environ.get("ATLAN_AUTH_CLIENT_SECRET", "")
 
         gh_run_id = os.environ.get("GITHUB_RUN_ID")
         self.run_id = (

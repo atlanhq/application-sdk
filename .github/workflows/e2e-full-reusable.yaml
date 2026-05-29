@@ -163,8 +163,6 @@ jobs:
       ATLAN_AUTH_CLIENT_ID: ${{ secrets.SDR_OAUTH_CLIENT_ID }}
       ATLAN_AUTH_CLIENT_SECRET: ${{ secrets.SDR_OAUTH_CLIENT_SECRET }}
       ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
-      SDR_OAUTH_CLIENT_ID: ${{ secrets.SDR_OAUTH_CLIENT_ID }}
-      SDR_OAUTH_CLIENT_SECRET: ${{ secrets.SDR_OAUTH_CLIENT_SECRET }}
       # Derived from SDR_TEST_TENANT so ATLAN_BASE_URL is always the same
       # tenant as CI_TENANT_DOMAIN — no risk of URL/credential mismatch.
       ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
