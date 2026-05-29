@@ -3,22 +3,8 @@ kind: Component
 metadata:
   name: objectstore
 spec:
-  type: bindings.aws.s3
+  type: bindings.localstorage
   version: v1
-  # Points the connector's upload activity at the tenant's blobstorage
-  # proxy so uploads are readable by publish-app. ATLAN_AUTH_CLIENT_ID/
-  # SECRET are the per-tenant OAuth credentials wired by e2e-full-reusable.yaml;
-  # CI_TENANT_DOMAIN is the plain FQDN (no protocol) from SDR_TEST_TENANT.
   metadata:
-    - name: bucket
-      value: atlan-bucket
-    - name: region
-      value: us-east-1
-    - name: endpoint
-      value: https://${CI_TENANT_DOMAIN}/api/blobstorage
-    - name: accessKey
-      value: ${ATLAN_AUTH_CLIENT_ID}
-    - name: secretKey
-      value: ${ATLAN_AUTH_CLIENT_SECRET}
-    - name: forcePathStyle
-      value: "true"
+    - name: rootPath
+      value: /tmp/atlan-data
