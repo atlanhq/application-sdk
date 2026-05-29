@@ -350,7 +350,11 @@ def build_ae_payload(
         Dict ready to ``orjson.dumps`` and POST to
         ``/api/service/package-workflows?submit=true``.
     """
-    if mode is RunMode.AGENT and mustache_subs.credential is None and credential_body is None:
+    if (
+        mode is RunMode.AGENT
+        and mustache_subs.credential is None
+        and credential_body is None
+    ):
         pass  # openapi-style connectors with no credential are fine in agent mode
 
     label_key = f"orchestration.atlan.com/default-{connector_short_name}-{run_id}"
@@ -395,7 +399,10 @@ def build_ae_payload(
             {"name": "connection.name", "value": attrs["name"]},
             {"name": "connection.qualifiedName", "value": attrs["qualifiedName"]},
             {"name": "connection.allowQuery", "value": attrs["allowQuery"]},
-            {"name": "connection.allowQueryPreview", "value": attrs["allowQueryPreview"]},
+            {
+                "name": "connection.allowQueryPreview",
+                "value": attrs["allowQueryPreview"],
+            },
             {"name": "connection.rowLimit", "value": attrs["rowLimit"]},
             {"name": "connection.connectorName", "value": attrs["connectorName"]},
             {"name": "connection.sourceLogo", "value": attrs["sourceLogo"]},

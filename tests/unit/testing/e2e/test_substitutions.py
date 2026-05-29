@@ -47,7 +47,11 @@ class TestMustacheSubstitutionsAliases:
         assert "{{credential-guid}}" in dumped
         assert "{{connection}}" in dumped
         # No unknown keys
-        assert set(dumped.keys()) == {"{{credential}}", "{{credential-guid}}", "{{connection}}"}
+        assert set(dumped.keys()) == {
+            "{{credential}}",
+            "{{credential-guid}}",
+            "{{connection}}",
+        }
 
     def test_credential_guid_default(self) -> None:
         conn = _make_connection_ref()
@@ -89,7 +93,9 @@ class TestMustacheSubstitutionsAliases:
 class TestSQLMustacheSubstitutionsAliases:
     """SQLMustacheSubstitutions extends base with SQL mustache keys."""
 
-    def _make_sql_subs(self, agent_json: dict[str, Any] | None = None) -> SQLMustacheSubstitutions:
+    def _make_sql_subs(
+        self, agent_json: dict[str, Any] | None = None
+    ) -> SQLMustacheSubstitutions:
         return SQLMustacheSubstitutions(
             connection=_make_connection_ref(),
             extraction_method="agent",
