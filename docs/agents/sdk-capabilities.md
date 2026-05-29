@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.13.4
-source-sha:    d5871bc67ef9924be442ea57e13a9f8b714d4e41
-source-date:   2026-05-27T01:59:56+01:00
+source-sha:    68f00c067a5b6d1137f83df5362c7c9570cdf88c
+source-date:   2026-05-29T17:49:01+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 21 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1888,6 +1888,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
+#### `StorageBindingNotFoundError`
+
+- **Import:** `from application_sdk.storage import StorageBindingNotFoundError`
+- **Signature:** `class StorageBindingNotFoundError(message: str, ...)`
+- **Summary:** No Dapr component with the given name exists in the components directory.
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `StorageConfigError`
 
 - **Import:** `from application_sdk.storage import StorageConfigError`
@@ -1937,6 +1944,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import create_store_from_binding`
 - **Signature:** `create_store_from_binding(name: str, *, components_dir: Path | str = Path('./components'))`
 - **Summary:** Create an obstore store from a Dapr component binding YAML file.
+- **Defined in:** `application_sdk/storage/binding.py`
+
+#### `create_store_from_binding_optional`
+
+- **Import:** `from application_sdk.storage import create_store_from_binding_optional`
+- **Signature:** `create_store_from_binding_optional(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
 - **Defined in:** `application_sdk/storage/binding.py`
 
 #### `delete`
