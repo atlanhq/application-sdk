@@ -38,6 +38,8 @@ that runs in tier 3 (BLDX-1254). Tier 4/5 complement tier 3 by adding
 the tenant-side system-apps validation.
 """
 
+import warnings
+
 from application_sdk.testing.full_dag.base import BaseFullDAGE2ETest, RunMode
 from application_sdk.testing.full_dag.client import (
     AEWorkflowClient,
@@ -46,6 +48,12 @@ from application_sdk.testing.full_dag.client import (
 )
 from application_sdk.testing.full_dag.payload import build_ae_payload, build_seed_dag
 from application_sdk.testing.full_dag.sql_app import SQLAppE2EFullTest
+
+warnings.warn(
+    "application_sdk.testing.full_dag is deprecated; use application_sdk.testing.e2e",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 __all__ = [
     "AEWorkflowClient",

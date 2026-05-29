@@ -17,7 +17,7 @@ Full-DAG AE harness (new — subclass per connector)::
     from application_sdk.testing.e2e import BaseE2ETest, RunMode
     from application_sdk.testing.e2e import SQLAppE2ETest          # SQL connectors
     from application_sdk.testing.e2e.payload import AgentSpec, ConnectionSpec
-    from application_sdk.testing.full_dag.client import AEWorkflowClient
+    from application_sdk.testing.e2e.client import AEWorkflowClient
 """
 
 from application_sdk.testing.e2e.base import BaseE2ETest, FullDAGOutcome

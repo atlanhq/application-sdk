@@ -14,13 +14,13 @@ from typing import Any
 import pytest
 
 from application_sdk.contracts.types import ConnectionRef
-from application_sdk.testing.e2e.base import BaseE2ETest
-from application_sdk.testing.e2e.payload import RunMode
-from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
-from application_sdk.testing.full_dag._errors import (
+from application_sdk.testing.e2e._errors import (
     ManifestDagMissingError,
     ManifestFileNotFoundError,
 )
+from application_sdk.testing.e2e.base import BaseE2ETest
+from application_sdk.testing.e2e.payload import RunMode
+from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
 
 def _make_connection_ref() -> ConnectionRef:

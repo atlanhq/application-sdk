@@ -28,6 +28,7 @@ import os
 from typing import Any, ClassVar
 
 from application_sdk.contracts.types import ConnectionRef
+from application_sdk.testing.e2e._errors import AdminRoleNotResolvedError
 from application_sdk.testing.e2e.base import BaseE2ETest
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
@@ -39,7 +40,6 @@ from application_sdk.testing.e2e.payload import (
     build_seed_dag,
 )
 from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions
-from application_sdk.testing.full_dag._errors import AdminRoleNotResolvedError
 
 
 class SQLAppE2ETest(BaseE2ETest):
