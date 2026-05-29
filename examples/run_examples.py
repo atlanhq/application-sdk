@@ -293,7 +293,7 @@ def run_example(example: ExampleConfig) -> tuple[str, float]:
     # Drain stdout in a background thread so the child never blocks on a full
     # pipe buffer (Windows default: 4 KB; Linux: 64 KB).  Keep the last 200
     # lines so we can print them on failure.
-    output_buf: collections.deque[str] = collections.deque(maxlen=200)
+    output_buf: collections.deque[str] = collections.deque(maxlen=500)
 
     def _reader() -> None:
         assert proc.stdout is not None
