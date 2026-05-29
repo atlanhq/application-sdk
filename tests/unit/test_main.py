@@ -584,6 +584,75 @@ class TestCreateInfrastructureEventBinding:
         assert infra.event_binding is None
 
 
+class TestCreateInfrastructureUpstreamStore:
+    """Tests for _create_infrastructure() upstream_storage selection."""
+
+    _DAPR_CLIENT_MOD = "application_sdk.infrastructure._dapr.client"
+    _STORAGE_MOD = "application_sdk.storage"
+
+    def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+
+    async def test_upstream_storage_is_none_when_names_match(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When UPSTREAM and DEPLOYMENT names are equal, upstream_storage is None."""
+        self._make_dapr_env(monkeypatch)
+
+        with (
+            patch(
+                "application_sdk.main._log_dapr_components",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(f"{self._STORAGE_MOD}.create_store_from_binding") as mock_store,
+            patch(
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME", "objectstore"
+            ),
+            patch(
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME", "objectstore"
+            ),
+        ):
+            infra = await _create_infrastructure()
+
+        assert infra.upstream_storage is None
+        mock_store.assert_called_once()
+
+    async def test_upstream_storage_created_when_names_differ(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When UPSTREAM != DEPLOYMENT, upstream_storage is a distinct store."""
+        self._make_dapr_env(monkeypatch)
+
+        with (
+            patch(
+                "application_sdk.main._log_dapr_components",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(f"{self._STORAGE_MOD}.create_store_from_binding") as mock_store,
+            patch(
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
+                "deployment-store",
+            ),
+            patch(
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME", "upstream-store"
+            ),
+        ):
+            infra = await _create_infrastructure()
+
+        assert infra.upstream_storage is not None
+        assert mock_store.call_count == 2
+
+
 class TestInstallGracefulSignalHandlers:
     """Tests for _install_graceful_signal_handlers()."""
 

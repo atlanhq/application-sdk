@@ -980,13 +980,13 @@ class App(ABC):
             containing both ``local_path`` and ``storage_path``, plus ``file_count``
             indicating the number of files uploaded.
 
-        Example — upload a single file produced by an extraction task::
+        Example — SDR extract app handing off artifacts to the publish app::
 
-            async def run(self, input: PipelineInput) -> PipelineOutput:
-                extract = await self.extract_data(ExtractInput(source=input.source))
-                up = await self.upload(UploadInput(local_path=extract.output_file))
-                # up.ref is durable — safe to pass to a task on a different worker
-                await self.load_data(LoadInput(ref=up.ref))
+            async def run(self, input: ExtractInput) -> ExtractOutput:
+                result = await self.extract_data(ExtractInput(source=input.source))
+                up = await self.upload(UploadInput(local_path=result.output_file))
+                # Return the ref so the publish app can consume it as input
+                return ExtractOutput(artifacts_ref=up.ref)
 
         Example — upload an entire output directory::
 
