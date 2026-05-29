@@ -412,6 +412,25 @@ async def upload_file(
         ) from exc
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
+
+    # Verify the object is actually reachable after the write returns.
+    # obstore's writer context-manager exit does not guarantee the object
+    # is visible (e.g. misconfigured credentials can silently no-op the
+    # write while appearing to succeed). A HEAD request confirms durability.
+    # StorageError inherits retryable=True so Temporal will retry the
+    # activity automatically on ephemeral failures.
+    try:
+        await obstore.head_async(resolved, key)
+    except Exception as verify_exc:
+        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+
+        raise StorageError(
+            f"Upload to '{key}' appeared to succeed but the object is not "
+            f"readable — credentials or endpoint may be misconfigured",
+            key=key,
+            cause=verify_exc,
+        ) from verify_exc
+
     _log_storage_event(
         logging.DEBUG,
         "upload",
