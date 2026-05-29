@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.10.4] - 2026-05-29
+
+### Bug fixes
+
+- corrects generated output for credentials (#1928) ([17da250](https://github.com/atlanhq/application-sdk/commit/17da250))
+
 ## [0.10.3] - 2026-05-28
 
 ### Bug fixes
