@@ -955,6 +955,21 @@ class App(ABC):
         is never re-executed on workflow replay even if the worker is replaced
         mid-run (e.g. a KEDA scale-down event).
 
+        **Store routing (SDR vs non-SDR):** this method targets the upstream
+        object store when one is configured (``UPSTREAM_OBJECT_STORE_NAME``
+        points to a distinct Dapr component), and falls back to the deployment
+        store otherwise.  In standard (non-SDR) deployments only the deployment
+        binding is present, so ``upstream_storage`` is ``None`` and routing
+        falls back to the deployment store.  In SDR deployments the upstream
+        store is Atlan's bucket — the correct destination for extracted
+        artifacts handed off to the publish app.
+
+        This routing applies to ``App.upload()`` and ``App.download()``.  The
+        automatic file-reference materialisation that transfers ``FileReference``
+        objects between ``@task`` methods always uses the deployment store; use
+        that mechanism (not ``App.upload()`` / ``App.download()``) for
+        intermediate task-to-task data.
+
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.upload` directly.
 
@@ -967,24 +982,27 @@ class App(ABC):
             containing both ``local_path`` and ``storage_path``, plus ``file_count``
             indicating the number of files uploaded.
 
-        Example — upload a single file produced by an extraction task::
+        Example — SDR extract app handing off artifacts to the publish app::
 
-            async def run(self, input: PipelineInput) -> PipelineOutput:
-                extract = await self.extract_data(ExtractInput(source=input.source))
-                up = await self.upload(UploadInput(local_path=extract.output_file))
-                # up.ref is durable — safe to pass to a task on a different worker
-                await self.load_data(LoadInput(ref=up.ref))
+            async def run(self, input: ExtractInput) -> ExtractOutput:
+                result = await self.extract_data(ExtractInput(source=input.source))
+                up = await self.upload(UploadInput(local_path=result.output_file))
+                # Return the ref so the publish app can consume it as input
+                return ExtractOutput(artifacts_ref=up.ref)
 
         Example — upload an entire output directory::
 
             up = await self.upload(UploadInput(local_path="/tmp/output/"))
             # up.ref.file_count == number of files in the directory
         """
+
         from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             upload as _upload,
         )
 
-        store = self.context.storage
+        # Prefer the upstream store (SDR: Atlan's bucket for the extract→publish
+        # handoff); fall back to the deployment store (standard deployments).
+        store = self.context.upstream_storage or self.context.storage
         if store is None:
             raise ObjectStoreNotConfiguredError()
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
@@ -1014,6 +1032,13 @@ class App(ABC):
         If ``input.ref`` is provided and ``input.storage_path`` is empty, the
         ref's ``storage_path`` is used as the source.
 
+        **Store routing (SDR vs non-SDR):** mirrors ``App.upload()`` — reads
+        from the upstream store when one is configured, falling back to the
+        deployment store otherwise.  In standard (non-SDR) deployments only
+        the deployment binding is present, so ``upstream_storage`` is ``None``
+        and routing falls back to the deployment store.  In SDR deployments
+        the publish app uses this to pull artifacts written by the extract app.
+
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.download` directly.
 
@@ -1025,14 +1050,12 @@ class App(ABC):
             ``DownloadOutput`` with a fully materialised ``FileReference``
             containing both ``storage_path`` and ``local_path``.
 
-        Example — download a file reference from a previous upload::
+        Example — SDR publish app consuming artifacts from the extract app::
 
-            async def run(self, input: InferInput) -> InferOutput:
-                dl = await self.download(
-                    DownloadInput(storage_path=input.model_ref.storage_path)
-                )
-                result = await self.run_inference(
-                    InferenceInput(model_path=dl.ref.local_path, data=input.data)
+            async def run(self, input: PublishInput) -> PublishOutput:
+                dl = await self.download(DownloadInput(ref=input.artifacts_ref))
+                return await self.publish_data(
+                    PublishInput(local_path=dl.ref.local_path)
                 )
 
         Example — re-materialise an existing FileReference::
@@ -1043,10 +1066,9 @@ class App(ABC):
             download as _download,
         )
 
-        store = self.context.storage
+        store = self.context.upstream_storage or self.context.storage
         if store is None:
             raise ObjectStoreNotConfiguredError()
-
         # Resolve storage_path: explicit field takes precedence over ref.storage_path
         storage_path = input.storage_path
         if not storage_path and input.ref is not None:

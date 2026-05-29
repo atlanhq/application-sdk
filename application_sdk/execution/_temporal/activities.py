@@ -128,6 +128,7 @@ def create_activity_from_task(
             app_context._state_store = infra.state_store
             app_context._secret_store = infra.secret_store
             app_context._storage = infra.storage
+            app_context._upstream_storage = infra.upstream_storage
 
         app_instance._context = app_context
 
