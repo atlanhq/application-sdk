@@ -505,6 +505,7 @@ async def _create_infrastructure(
         )
         from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
             create_store_from_binding,
+            create_store_from_binding_optional,
         )
 
         await wait_for_dapr_sidecar()
@@ -520,7 +521,7 @@ async def _create_infrastructure(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=components_dir,
             ),
-            upstream_storage=create_store_from_binding(
+            upstream_storage=create_store_from_binding_optional(
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=components_dir,
             ),

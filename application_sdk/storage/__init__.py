@@ -1,10 +1,11 @@
 """Object storage module — direct obstore-backed I/O, no Dapr sidecar needed.
 
 Public API:
-    create_local_store(root_path)     → LocalStore (for local dev / testing)
-    create_memory_store()             → MemoryStore (for unit tests)
-    create_store_from_binding(...)    → ObjectStore parsed from Dapr component YAML
-    normalize_key(key)                → str  (path normalisation)
+    create_local_store(root_path)              → LocalStore (for local dev / testing)
+    create_memory_store()                      → MemoryStore (for unit tests)
+    create_store_from_binding(...)             → ObjectStore parsed from Dapr component YAML
+    create_store_from_binding_optional(...)    → ObjectStore | None (None if component absent)
+    normalize_key(key)                         → str  (path normalisation)
     upload_file(key, local_path)      → str  (streaming upload, returns sha256)
     download_file(key, local_path)    → str | None  (streaming download)
     delete(key, store=None)           → bool
@@ -32,7 +33,10 @@ from application_sdk.storage.batch import (
     upload_file_from_bytes,
     upload_prefix,
 )
-from application_sdk.storage.binding import create_store_from_binding
+from application_sdk.storage.binding import (
+    create_store_from_binding,
+    create_store_from_binding_optional,
+)
 from application_sdk.storage.cloud import CloudStore
 from application_sdk.storage.errors import (
     StorageConfigError,
@@ -55,6 +59,7 @@ __all__ = [
     "CloudStore",
     # Store factories
     "create_store_from_binding",
+    "create_store_from_binding_optional",
     "create_local_store",
     "create_memory_store",
     # Core ops

@@ -8,7 +8,7 @@ import signal
 import sys
 from pathlib import Path
 from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -593,11 +593,11 @@ class TestCreateInfrastructureUpstreamStore:
     def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
 
-    async def test_upstream_storage_always_created(
+    async def test_upstream_storage_none_when_component_absent(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """upstream_storage is always created, even when names are equal (non-SDR)."""
+        """upstream_storage is None in non-SDR deployments (no atlan-objectstore component)."""
         self._make_dapr_env(monkeypatch)
 
         with (
@@ -609,25 +609,24 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding") as mock_store,
+            patch(f"{self._STORAGE_MOD}.create_store_from_binding"),
             patch(
-                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME", "objectstore"
-            ),
-            patch(
-                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME", "objectstore"
-            ),
+                f"{self._STORAGE_MOD}.create_store_from_binding_optional",
+                return_value=None,
+            ) as mock_optional,
         ):
             infra = await _create_infrastructure()
 
-        assert infra.upstream_storage is not None
-        assert mock_store.call_count == 2
+        assert infra.upstream_storage is None
+        mock_optional.assert_called_once()
 
-    async def test_upstream_storage_created_when_names_differ(
+    async def test_upstream_storage_set_when_component_present(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When UPSTREAM != DEPLOYMENT, upstream_storage is a distinct store."""
+        """upstream_storage is a live store in SDR deployments (component present)."""
         self._make_dapr_env(monkeypatch)
+        upstream_store = MagicMock()
 
         with (
             patch(
@@ -638,19 +637,25 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding") as mock_store,
+            patch(f"{self._STORAGE_MOD}.create_store_from_binding") as mock_required,
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_optional",
+                return_value=upstream_store,
+            ) as mock_optional,
             patch(
                 "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
-                "deployment-store",
+                "objectstore",
             ),
             patch(
-                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME", "upstream-store"
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
+                "atlan-objectstore",
             ),
         ):
             infra = await _create_infrastructure()
 
-        assert infra.upstream_storage is not None
-        assert mock_store.call_count == 2
+        assert infra.upstream_storage is upstream_store
+        mock_required.assert_called_once_with("objectstore", components_dir=ANY)
+        mock_optional.assert_called_once_with("atlan-objectstore", components_dir=ANY)
 
 
 class TestInstallGracefulSignalHandlers:

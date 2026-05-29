@@ -477,3 +477,39 @@ def create_store_from_binding(
         )
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")
+
+
+def create_store_from_binding_optional(
+    name: str,
+    *,
+    components_dir: Path | str = Path("./components"),
+) -> ObjectStore | None:
+    """Create an obstore store from a Dapr component binding, or ``None`` if absent.
+
+    Identical to :func:`create_store_from_binding` except that a missing
+    component returns ``None`` instead of raising ``StorageConfigError``.
+    Use this for optional bindings (e.g. ``UPSTREAM_OBJECT_STORE_NAME``) that
+    are only present in certain deployment configurations.
+
+    Args:
+        name: The Dapr component name (e.g. ``"atlan-objectstore"``).
+        components_dir: Directory containing Dapr component YAML files.
+
+    Returns:
+        A configured obstore store instance, or ``None`` if no component
+        named *name* exists in *components_dir*.
+
+    Raises:
+        StorageConfigError: If the component exists but is misconfigured
+            (unsupported binding type, missing required options, etc.).
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageConfigError,
+    )
+
+    try:
+        return create_store_from_binding(name, components_dir=components_dir)
+    except StorageConfigError as exc:
+        if f"No Dapr component named '{name}'" in str(exc):
+            return None
+        raise
