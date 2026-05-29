@@ -5,15 +5,13 @@
 # own repo for connector-specific overrides (extra env vars, additional
 # volume mounts, etc.); the composite action picks it up automatically.
 #
-# Three env-var naming gaps between the configurator and main.py:
-#   Configurator writes             main.py reads
-#   ─────────────────────────────── ──────────────────────────────
-#   ATLAN_WORKFLOW_TLS_ENABLED      ATLAN_TEMPORAL_TLS_ENABLED
-#   ATLAN_AUTH_URL                  ATLAN_AUTH_TOKEN_URL
-#   ATLAN_BASE_URL                  ATLAN_AUTH_BASE_URL
-#
-# CI_TENANT_DOMAIN must be set in the environment before docker compose runs
-# (the composite action exports it as a job-level env var).
+# Naming gaps bridged here:
+#   CI secret / env var          SDK / production name
+#   ─────────────────────────── ──────────────────────────────────
+#   SDR_CLIENT_ID               ATLAN_AUTH_CLIENT_ID
+#   SDR_CLIENT_SECRET           ATLAN_AUTH_CLIENT_SECRET
+#   ATLAN_BASE_URL              ATLAN_AUTH_BASE_URL, ATLAN_AUTH_TOKEN_URL
+#   (configurator)              ATLAN_TEMPORAL_TLS_ENABLED
 #
 # GITHUB_WORKSPACE is an absolute path set by GitHub Actions and is used for
 # the secrets volume mount to avoid relative-path ambiguity across compose files.
@@ -42,14 +40,13 @@ services:
       - ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK=false
       # Bridge: configurator → main.py (TLS)
       - ATLAN_TEMPORAL_TLS_ENABLED=true
-      # Bridge: configurator → main.py (auth token URL)
-      - ATLAN_AUTH_TOKEN_URL=https://${CI_TENANT_DOMAIN}/auth/realms/default/protocol/openid-connect/token
-      # Bridge: configurator → main.py (auth base URL)
-      - ATLAN_AUTH_BASE_URL=https://${CI_TENANT_DOMAIN}
+      # Bridge: ATLAN_BASE_URL → production SDK names
+      - ATLAN_AUTH_TOKEN_URL=${ATLAN_BASE_URL}/auth/realms/default/protocol/openid-connect/token
+      - ATLAN_AUTH_BASE_URL=${ATLAN_BASE_URL}
+      # Bridge: SDR_CLIENT_ID/SECRET → production SDK names for OAuth auth
+      - ATLAN_AUTH_CLIENT_ID=${SDR_CLIENT_ID}
+      - ATLAN_AUTH_CLIENT_SECRET=${SDR_CLIENT_SECRET}
       # Route connector uploads through the atlan-objectstore Dapr binding (S3)
       # so publish-app can read the transformed data.
-      # DEPLOYMENT_OBJECT_STORE_NAME is what App.upload() reads via
-      # create_store_from_binding(); must be set explicitly because the
-      # configurator does not always emit it in its docker-compose output.
       - DEPLOYMENT_OBJECT_STORE_NAME=atlan-objectstore
       - UPSTREAM_OBJECT_STORE_NAME=atlan-objectstore

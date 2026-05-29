@@ -1,8 +1,8 @@
 atlan:
   deployment_name: "ci-${CI_RUN_SUFFIX}-sdr"
-  domain: "${CI_TENANT_DOMAIN}"
-  client_id: "${CI_CLIENT_ID}"
-  client_secret: "${CI_CLIENT_SECRET}"
+  domain: "${SDR_TEST_TENANT}"
+  client_id: "${SDR_CLIENT_ID}"
+  client_secret: "${SDR_CLIENT_SECRET}"
 
 objectstore:
   type: bindings.localstorage
