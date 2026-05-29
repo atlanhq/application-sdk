@@ -514,6 +514,18 @@ async def _create_infrastructure(
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 
+        upstream_storage = create_store_from_binding_optional(
+            UPSTREAM_OBJECT_STORE_NAME,
+            components_dir=components_dir,
+        )
+        if upstream_storage is None:
+            logger.warning(
+                "No Dapr component named '%s' found; App.upload/download will use "
+                "the deployment store. Configure this binding in SDR deployments to "
+                "route to the upstream bucket.",
+                UPSTREAM_OBJECT_STORE_NAME,
+            )
+
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
@@ -521,10 +533,7 @@ async def _create_infrastructure(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=components_dir,
             ),
-            upstream_storage=create_store_from_binding_optional(
-                UPSTREAM_OBJECT_STORE_NAME,
-                components_dir=components_dir,
-            ),
+            upstream_storage=upstream_storage,
             event_binding=(
                 DaprBinding(dapr_client, EVENT_STORE_NAME)
                 if EVENT_STORE_NAME in registered_components
