@@ -35,6 +35,7 @@ from application_sdk.testing.e2e.payload import (
     ConnectionSpec,
     DatabaseSpec,
     RunMode,
+    build_agent_json,
     build_seed_dag,
 )
 from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions
@@ -140,21 +141,11 @@ class SQLAppE2ETest(BaseE2ETest):
         agent = self.agent_spec()
         database = self.database_spec()
 
-        if agent is not None:
-            agent_json: dict[str, Any] | None = {
-                "host": database.host,
-                "port": database.port,
-                "auth-type": database.auth_type,
-                "agent-name": agent.agent_name,
-                "agent-type": agent.agent_type,
-                "key-type": agent.key_type,
-                "aws-auth-method": agent.aws_auth_method,
-                "azure-auth-method": agent.azure_auth_method,
-                "basic.username": f"SDR_{self.connector_short_name.upper()}_USERNAME",
-                "basic.password": f"SDR_{self.connector_short_name.upper()}_PASSWORD",
-            }
-        else:
-            agent_json = None
+        agent_json: dict[str, Any] | None = (
+            build_agent_json(database, agent, self.connector_short_name)
+            if agent is not None
+            else None
+        )
 
         return SQLMustacheSubstitutions.model_validate(
             {

@@ -129,6 +129,26 @@ class AgentSpec:
     azure_auth_method: str = "managed_identity"
 
 
+def build_agent_json(
+    database: DatabaseSpec,
+    agent: AgentSpec,
+    connector_short_name: str,
+) -> dict[str, Any]:
+    """Build the agent_json routing block for AGENT-mode extract args."""
+    return {
+        "host": database.host,
+        "port": database.port,
+        "auth-type": database.auth_type,
+        "agent-name": agent.agent_name,
+        "agent-type": agent.agent_type,
+        "key-type": agent.key_type,
+        "aws-auth-method": agent.aws_auth_method,
+        "azure-auth-method": agent.azure_auth_method,
+        "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
+        "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
+    }
+
+
 def build_seed_dag(
     *,
     connector_short_name: str,
@@ -185,18 +205,9 @@ def build_seed_dag(
         "temp_table_regex": temp_table_regex,
     }
     if mode is RunMode.AGENT and agent is not None and database is not None:
-        extract_args["agent_json"] = {
-            "host": database.host,
-            "port": database.port,
-            "auth-type": database.auth_type,
-            "agent-name": agent.agent_name,
-            "agent-type": agent.agent_type,
-            "key-type": agent.key_type,
-            "aws-auth-method": agent.aws_auth_method,
-            "azure-auth-method": agent.azure_auth_method,
-            "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
-            "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
-        }
+        extract_args["agent_json"] = build_agent_json(
+            database, agent, connector_short_name
+        )
 
     return {
         "extract": {
@@ -350,13 +361,6 @@ def build_ae_payload(
         Dict ready to ``orjson.dumps`` and POST to
         ``/api/service/package-workflows?submit=true``.
     """
-    if (
-        mode is RunMode.AGENT
-        and mustache_subs.credential is None
-        and credential_body is None
-    ):
-        pass  # openapi-style connectors with no credential are fine in agent mode
-
     label_key = f"orchestration.atlan.com/default-{connector_short_name}-{run_id}"
     ae_workflow_name = f"atlan-{connector_short_name}-{run_id}"
     ae_atlan_name = (

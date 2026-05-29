@@ -10,7 +10,7 @@ A connector test:
     from application_sdk.testing.e2e.payload import AgentSpec
 
     @pytest.mark.e2e
-    class TestOpenAPIE2E(OpenAPIGeneratedE2EBase):
+    class TestOpenAPIE2E(BaseE2ETest):
         mode = RunMode.AGENT
         connection_name_prefix = "e2e-ci"
         expected_min_asset_counts = {"APISpec": 1, "APIPath": 10}
