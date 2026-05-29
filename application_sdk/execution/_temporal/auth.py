@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -256,7 +257,7 @@ class TemporalAuthManager:
                 _publish_event_via_binding,
             )
 
-            app_name = os.environ.get("ATLAN_APP_NAME", "")
+            app_name = APPLICATION_NAME
             deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
             now = time.time()
             expires_at_ts = expires_at.timestamp() if expires_at else 0.0
