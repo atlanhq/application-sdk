@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.11.0] - 2026-05-29
+
+### Features
+
+- source-agnostic full-DAG e2e harness under testing.e2e (#1928) ([17da250](https://github.com/atlanhq/application-sdk/commit/17da250))
+
 ## [0.10.3] - 2026-05-28
 
 ### Bug fixes
