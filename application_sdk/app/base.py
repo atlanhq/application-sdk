@@ -144,6 +144,16 @@ def _safe_log(level: str, message: str, **attrs: Any) -> None:
             log_method(message)
 
 
+def _log_upstream_storage_fallback(context: "AppContext", operation: str) -> None:
+    """Log when upload/download falls back from upstream_storage to storage."""
+    context.logger.warning(
+        "upstream_storage is not configured; %s will use the deployment store. "
+        "Set UPSTREAM_OBJECT_STORE_NAME and provide the matching Dapr component "
+        "to route to the upstream bucket.",
+        operation,
+    )
+
+
 # =============================================================================
 # Error Classes
 # =============================================================================
@@ -994,6 +1004,7 @@ class App(ABC):
             up = await self.upload(UploadInput(local_path="/tmp/output/"))
             # up.ref.file_count == number of files in the directory
         """
+
         from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             upload as _upload,
         )
@@ -1003,6 +1014,8 @@ class App(ABC):
         store = self.context.upstream_storage or self.context.storage
         if store is None:
             raise ObjectStoreNotConfiguredError()
+        if self.context.upstream_storage is None:
+            _log_upstream_storage_fallback(self.context, "upload")
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
@@ -1065,6 +1078,8 @@ class App(ABC):
         store = self.context.upstream_storage or self.context.storage
         if store is None:
             raise ObjectStoreNotConfiguredError()
+        if self.context.upstream_storage is None:
+            _log_upstream_storage_fallback(self.context, "download")
 
         # Resolve storage_path: explicit field takes precedence over ref.storage_path
         storage_path = input.storage_path
