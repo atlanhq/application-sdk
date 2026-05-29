@@ -8,7 +8,6 @@ named activities.
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -200,6 +199,7 @@ async def _emit_worker_start_event(
         APP_SDK_VERSION,
         APP_TYPE,
         APPLICATION_VERSION,
+        DEPLOYMENT_NAME,
         PUBLISHED_AT,
         RELEASE_CHANNEL,
         RELEASE_ID,
@@ -217,7 +217,7 @@ async def _emit_worker_start_event(
         BindingError,
     )
 
-    deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
+    deployment_name = DEPLOYMENT_NAME
     host_part, _, port_part = host.partition(":")
 
     event_data = WorkerStartEventData(
