@@ -17,3 +17,4 @@ ADRs capture the architectural decisions behind the Application SDK — what was
 | [ADR-0011](0011-logging-level-guidelines.md) | Logging Level Guidelines |
 | [ADR-0012](0012-observability-consolidation.md) | Observability Consolidation |
 | [ADR-0013](0013-error-hierarchy-and-failure-taxonomy.md) | Error Hierarchy and Failure Taxonomy |
+| [ADR-0014](0014-workflow-preflight-gate.md) | Workflow-Side Preflight Gate |
