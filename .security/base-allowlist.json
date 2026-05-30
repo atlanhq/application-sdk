@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-05-30",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -618,6 +618,39 @@
     "reason": "Upstream fix available but need immediate unblock for v2.x.x releases for SDR locked app releases.",
     "expires": "2026-06-09",
     "added_by": "adityachoudhury-cloud",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2025-69421": {
+    "package": "openssl (Chainguard Wolfi)",
+    "severity": "HIGH",
+    "reason": "Base image - OpenSSL in Chainguard Wolfi base (application-sdk-main). Fix available upstream (3.0.19 / 3.3.6 / 3.4.4 / 3.5.5 / 3.6.1); awaiting SDK base image rebuild.",
+    "expires": "2026-06-29",
+    "added_by": "claude-mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-25537": {
+    "package": "jsonwebtoken",
+    "severity": "HIGH",
+    "reason": "Base image - Rust crate jsonwebtoken (Keats) in Dapr runtime (application-sdk-main). Fix available in >= 10.3.0; awaiting SDK base image rebuild with updated Dapr.",
+    "expires": "2026-06-29",
+    "added_by": "claude-mothership",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2026-25541": {
+    "package": "bytes",
+    "severity": "HIGH",
+    "reason": "Base image - Rust crate bytes (tokio-rs) in Dapr runtime (application-sdk-main). Fix available in >= 1.11.1; awaiting SDK base image rebuild with updated Dapr.",
+    "expires": "2026-06-29",
+    "added_by": "claude-mothership",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
