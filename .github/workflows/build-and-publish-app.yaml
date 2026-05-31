@@ -351,14 +351,164 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
           echo "::warning title=Tests failed (warn-only)::${WORKFLOW_FILE} concluded as ${CONCLUSION}. Publish proceeded; will block once enforcement lands. See: ${URL}"
 
+  # ── Job 0c: App certification — generic readiness checks (warn-only) ──────────
+  # Centralizes the certification layers that need NO per-app wiring, so every
+  # app is certified at publish time without editing its own workflows:
+  #   1. v3 shape         — tools.migrate_v3.check_migration (no deprecated
+  #                         imports, @task-only, typed Input/Output, …)
+  #   2. Contract drift   — `poe generate` must be a no-op vs the committed
+  #                         app/generated/ artifacts
+  #   3. Unit + coverage  — pytest tests/unit at the >=85% SDK coverage bar
+  #
+  # App-specific layers (integration, SDR, e2e/Playwright) are NOT run here —
+  # they need the app's own live stack + secrets and stay in the app's CI.
+  #
+  # WARN-ONLY during rollout (mirrors the unit-tests-gate DISTR-456 pattern):
+  # each check runs and annotates a verdict on the workflow summary, but the
+  # job exits 0 so publish proceeds even on ❌. The enforcement-flip PR
+  # restores blocking — see the "Certification verdict" step. Checks that
+  # don't apply to an app (no contract/app.pkl, no tests/unit, no poe) skip
+  # cleanly so non-conforming apps aren't hard-failed before they onboard.
+  #
+  # Only runs when `publish: true`. See docs/standards/app-certification.md.
+  certify:
+    name: Certify app (warn-only)
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: app
+          # Full history so the contract-drift `git diff` compares against the
+          # committed tree rather than a shallow snapshot.
+          fetch-depth: 0
+
+      - name: Checkout application-sdk (migration tooling)
+        # tools.migrate_v3 ships in the SDK repo, not the published package —
+        # pinned to main so the check tracks the latest released rules.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: sdk
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.7.3"
+
+      # ── 1. v3 shape ─────────────────────────────────────────────────────────
+      - name: Install SDK (migration tooling)
+        id: sdk_install
+        continue-on-error: true
+        working-directory: sdk
+        run: uv sync --all-extras --all-groups
+
+      - name: "v3 shape — check_migration"
+        id: check_migration
+        if: steps.sdk_install.outcome == 'success'
+        continue-on-error: true
+        working-directory: sdk
+        run: |
+          set -euo pipefail
+          if uv run python -m tools.migrate_v3.check_migration --no-color ../app; then
+            echo "check_migration: no FAILs"
+          else
+            echo "::warning::check_migration reported FAILs — see output above"
+            exit 1
+          fi
+
+      # ── 2. Contract drift ─────────────────────────────────────────────────────
+      - name: "Contract drift — poe generate must be a no-op"
+        id: contract_drift
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [ ! -f contract/app.pkl ]; then
+            echo "No contract/app.pkl — skipping contract-drift check."
+            exit 0
+          fi
+          uv sync --all-extras
+          if ! uv run poe --help >/dev/null 2>&1; then
+            echo "::warning::'poe' task runner not available — cannot run drift check."
+            exit 0
+          fi
+          uv run poe generate || { echo "::warning::'poe generate' failed"; exit 1; }
+          if ! git diff --exit-code -- app/generated/; then
+            echo "::warning::app/generated/ is stale — run 'poe generate' locally and commit."
+            exit 1
+          fi
+
+      # ── 3. Unit tests + coverage ──────────────────────────────────────────────
+      - name: "Unit tests + coverage (>=85%)"
+        id: unit
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [ ! -d tests/unit ]; then
+            echo "No tests/unit/ — skipping unit-coverage check."
+            exit 0
+          fi
+          uv sync --all-extras
+          uv run --with pytest-cov pytest tests/unit \
+            --cov=app --cov-report=term --cov-fail-under=85
+
+      # ── Verdict (warn-only) ───────────────────────────────────────────────────
+      - name: Certification verdict (warn-only)
+        if: always()
+        env:
+          CM: ${{ steps.check_migration.outcome }}
+          CD: ${{ steps.contract_drift.outcome }}
+          UT: ${{ steps.unit.outcome }}
+          SDK_INSTALL: ${{ steps.sdk_install.outcome }}
+        run: |
+          set -euo pipefail
+          render() {
+            case "$2" in
+              success) icon="✅" ;;
+              failure) icon="❌" ;;
+              skipped) icon="➖" ;;
+              *)       icon="❓" ;;
+            esac
+            echo "- $icon **$1** — $2"
+          }
+          {
+            echo "### App certification (warn-only)"
+            echo ""
+            render "v3 shape (check_migration)" "$CM"
+            render "Contract drift (poe generate)" "$CD"
+            render "Unit tests + coverage (>=85%)" "$UT"
+            echo ""
+            echo "**Warn-only during rollout — publish proceeds even on ❌.** Once the enforcement-flip PR lands, a ❌ here will block publish. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if [ "$SDK_INSTALL" != "success" ]; then
+            echo "::warning title=Certification incomplete::SDK install failed, so check_migration did not run."
+          fi
+          if [ "$CM" = "failure" ] || [ "$CD" = "failure" ] || [ "$UT" = "failure" ]; then
+            echo "::warning title=Certification failed (warn-only)::One or more certification checks failed; publish proceeded. Will block once enforcement lands."
+          fi
+          # WARN-ONLY: always succeed during rollout. The enforcement-flip PR
+          # replaces the line below with a non-zero exit when any check failed:
+          #   [ "$CM" != failure ] && [ "$CD" != failure ] && [ "$UT" != failure ]
+          exit 0
+
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel, unit-tests-gate]
-    # `needs: [validate-channel, unit-tests-gate]` only enforces ordering when
-    # those jobs run. When publish=false, both are skipped via their `if:` —
-    # which by default would propagate "skipped" to dependents. The condition
-    # below explicitly allows prepare to run when those jobs are skipped OR
-    # successful, but NOT when it failed.
+    needs: [validate-channel, unit-tests-gate, certify]
+    # `needs: [validate-channel, unit-tests-gate, certify]` only enforces
+    # ordering when those jobs run. When publish=false, all three are skipped
+    # via their `if:` — which by default would propagate "skipped" to
+    # dependents. The condition below explicitly allows prepare to run when
+    # those jobs are skipped OR successful, but NOT when one failed. `certify`
+    # is warn-only today (always exits 0), so it never trips this; once the
+    # enforcement-flip lands, a failing certify will correctly skip prepare →
+    # build → publish.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
     runs-on: ubuntu-latest
