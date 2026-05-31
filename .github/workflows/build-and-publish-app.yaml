@@ -351,7 +351,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
           echo "::warning title=Tests failed (warn-only)::${WORKFLOW_FILE} concluded as ${CONCLUSION}. Publish proceeded; will block once enforcement lands. See: ${URL}"
 
-  # ── Job 0c: App certification — generic readiness checks (warn-only) ──────────
+  # ── Job 0c: App certification — generic readiness checks ──────────────────────
   # Centralizes the certification layers that need NO per-app wiring, so every
   # app is certified at publish time without editing its own workflows:
   #   1. v3 shape         — tools.migrate_v3.check_migration (no deprecated
@@ -363,16 +363,18 @@ jobs:
   # App-specific layers (integration, SDR, e2e/Playwright) are NOT run here —
   # they need the app's own live stack + secrets and stay in the app's CI.
   #
-  # WARN-ONLY during rollout (mirrors the unit-tests-gate DISTR-456 pattern):
-  # each check runs and annotates a verdict on the workflow summary, but the
-  # job exits 0 so publish proceeds even on ❌. The enforcement-flip PR
-  # restores blocking — see the "Certification verdict" step. Checks that
-  # don't apply to an app (no contract/app.pkl, no tests/unit, no poe) skip
-  # cleanly so non-conforming apps aren't hard-failed before they onboard.
+  # Enforcement: layer 3 (unit tests + coverage) BLOCKS publish on ❌ — the
+  # verdict step exits non-zero, which trips `prepare`'s `if: !failure()` and
+  # skips build + publish. Layers 1 and 2 (v3 shape, contract drift) remain
+  # WARN-ONLY during rollout: each runs and annotates a verdict, but does not
+  # block (contract drift still needs the pkl toolchain on the runner before it
+  # can flip). See the "Certification verdict" step. Checks that don't apply to
+  # an app (no contract/app.pkl, no tests/unit, no poe) skip cleanly so
+  # non-conforming apps aren't hard-failed before they onboard.
   #
   # Only runs when `publish: true`. See docs/standards/app-certification.md.
   certify:
-    name: Certify app (warn-only)
+    name: Certify app
     if: inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -459,8 +461,13 @@ jobs:
           uv run --with pytest-cov pytest tests/unit \
             --cov=app --cov-report=term --cov-fail-under=85
 
-      # ── Verdict (warn-only) ───────────────────────────────────────────────────
-      - name: Certification verdict (warn-only)
+      # ── Verdict ───────────────────────────────────────────────────────────────
+      # Unit tests + coverage now ENFORCE: a ❌ there exits non-zero, which trips
+      # `prepare`'s `if: !failure()` and skips build + publish. v3 shape and
+      # contract drift remain warn-only during rollout — they annotate but do
+      # not block (their enforcement-flip is tracked separately; contract drift
+      # still needs the pkl toolchain on the runner first).
+      - name: Certification verdict
         if: always()
         env:
           CM: ${{ steps.check_migration.outcome }}
@@ -479,23 +486,34 @@ jobs:
             echo "- $icon **$1** — $2"
           }
           {
-            echo "### App certification (warn-only)"
+            echo "### App certification"
             echo ""
-            render "v3 shape (check_migration)" "$CM"
-            render "Contract drift (poe generate)" "$CD"
-            render "Unit tests + coverage (>=85%)" "$UT"
+            render "v3 shape (check_migration) — warn-only" "$CM"
+            render "Contract drift (poe generate) — warn-only" "$CD"
+            render "Unit tests + coverage (>=85%) — enforced" "$UT"
             echo ""
-            echo "**Warn-only during rollout — publish proceeds even on ❌.** Once the enforcement-flip PR lands, a ❌ here will block publish. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
+            echo "**Unit tests + coverage block publish on ❌.** v3 shape and contract drift remain warn-only during rollout — a ❌ there annotates but does not block. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
           } >> "${GITHUB_STEP_SUMMARY}"
           if [ "$SDK_INSTALL" != "success" ]; then
             echo "::warning title=Certification incomplete::SDK install failed, so check_migration did not run."
           fi
-          if [ "$CM" = "failure" ] || [ "$CD" = "failure" ] || [ "$UT" = "failure" ]; then
-            echo "::warning title=Certification failed (warn-only)::One or more certification checks failed; publish proceeded. Will block once enforcement lands."
+          if [ "$CM" = "failure" ] || [ "$CD" = "failure" ]; then
+            echo "::warning title=Certification warning (warn-only)::v3 shape and/or contract drift failed; publish proceeded (warn-only)."
           fi
-          # WARN-ONLY: always succeed during rollout. The enforcement-flip PR
-          # replaces the line below with a non-zero exit when any check failed:
-          #   [ "$CM" != failure ] && [ "$CD" != failure ] && [ "$UT" != failure ]
+          # Unit tests + coverage enforce: block publish when they fail. The
+          # `unit` step keeps `continue-on-error` so this verdict can render the
+          # full summary first, then exit non-zero here. v3 shape (CM) and
+          # contract drift (CD) stay warn-only — only UT blocks.
+          if [ "$UT" = "failure" ]; then
+            {
+              echo ""
+              echo "### ❌ Publish blocked — unit tests + coverage"
+              echo ""
+              echo "The centralized \`tests/unit\` + coverage (>=85%) check failed. Build and publish will not proceed until it passes. Fix the failing tests and re-run."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error title=Publish blocked::Unit tests + coverage check failed. Build and publish blocked."
+            exit 1
+          fi
           exit 0
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
@@ -506,9 +524,11 @@ jobs:
     # via their `if:` — which by default would propagate "skipped" to
     # dependents. The condition below explicitly allows prepare to run when
     # those jobs are skipped OR successful, but NOT when one failed. `certify`
-    # is warn-only today (always exits 0), so it never trips this; once the
-    # enforcement-flip lands, a failing certify will correctly skip prepare →
-    # build → publish.
+    # enforces its unit + coverage check: a failing run exits non-zero, which
+    # trips `failure()` here and correctly skips prepare → build → publish. Its
+    # other layers (v3 shape, contract drift) stay warn-only (always exit 0) so
+    # they never trip this yet. `unit-tests-gate` is warn-only on this branch;
+    # its enforcement-flip is tracked separately.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
     runs-on: ubuntu-latest

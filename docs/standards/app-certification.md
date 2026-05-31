@@ -37,20 +37,27 @@ The generic layers above don't need to know anything about the app's workflows
 them means an app gets v3-shape, contract-drift, and unit-coverage certification
 for free, with zero changes to its repo.
 
-## Rollout — warn-only
+## Enforcement
 
-The `certify` job is **warn-only** during rollout, mirroring the unit-tests-gate
-convention:
+| Layer | Mode |
+|-------|------|
+| **Unit + coverage** | **Enforced** — a ❌ exits the verdict step non-zero and blocks publish. |
+| **v3 shape** | Warn-only — annotated, does not block. |
+| **Contract drift** | Warn-only — annotated, does not block. |
 
-- Every check runs and the verdict is annotated on the workflow summary.
-- The job **always exits 0**, so publish proceeds even on a ❌.
-- The enforcement-flip PR replaces the final `exit 0` in the
-  "Certification verdict" step with a non-zero exit when any check failed.
-  Because `prepare` already lists `certify` in its `needs:`, a failing
-  certify will then skip `prepare → build → publish` automatically.
+How blocking works: the "Certification verdict" step exits non-zero when the
+unit + coverage check fails. Because `prepare` already lists `certify` in its
+`needs:` (with `if: !failure()`), a failing certify skips `prepare → build →
+publish` automatically — at minute 0, before any build minutes are spent.
+
+v3 shape and contract drift stay warn-only during rollout: every check runs and
+the verdict is annotated on the workflow summary, but only the unit check exits
+non-zero. Flipping the remaining two is tracked separately (contract drift needs
+the pkl toolchain on the runner first — see the rollout gaps below).
 
 Checks that don't apply to an app skip cleanly (➖) so non-conforming apps are
-never hard-failed before they onboard.
+never hard-failed before they onboard. In particular, an app with no
+`tests/unit/` directory skips the unit check (➖) and is **not** blocked.
 
 ## Known rollout gaps (before enforcement)
 
