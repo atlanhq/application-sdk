@@ -1324,10 +1324,26 @@ function exportTrendCSV(){
 // SDK-version filter state per category. Survives re-renders so the dropdown
 // keeps its selection even when the rest of the view is rebuilt.
 const _categorySdkFilter={connector:'all',system:'all'};
+const _categoryCveFilter={connector:'all',system:'all'};
 
 function setCategorySdkFilter(category,value){
     _categorySdkFilter[category]=value;
     renderCategoryView(category);
+}
+
+function setCategoryCveFilter(category,value){
+    _categoryCveFilter[category]=value;
+    renderCategoryView(category);
+}
+
+// Match a repo's total-CVE count against a bucket label from the dropdown.
+function _matchCveBucket(total,bucket){
+    if(bucket==='all')return true;
+    if(bucket==='0')return total===0;
+    if(bucket==='1-5')return total>=1&&total<=5;
+    if(bucket==='6-20')return total>=6&&total<=20;
+    if(bucket==='20+')return total>20;
+    return true;
 }
 
 // Render a self-contained dashboard for one category (connector | system)
@@ -1361,8 +1377,13 @@ function renderCategoryView(category){
         return 'other';
     };
     const currentSdk=_categorySdkFilter[category]||'all';
-    const repos=currentSdk==='all'?inCategory:inCategory.filter(r=>sdkBucket(D.repos[r].sdk_version)===currentSdk);
+    const currentCve=_categoryCveFilter[category]||'all';
+    const afterSdk=currentSdk==='all'?inCategory:inCategory.filter(r=>sdkBucket(D.repos[r].sdk_version)===currentSdk);
+    const repos=afterSdk.filter(r=>_matchCveBucket(D.repos[r].total||0,currentCve));
     const bucketCount=(b)=>inCategory.filter(r=>sdkBucket(D.repos[r].sdk_version)===b).length;
+    // Counts for CVE bucket dropdown — computed off the SDK-filtered set so
+    // the numbers update as the user narrows by SDK version.
+    const cveBucketCount=(b)=>afterSdk.filter(r=>_matchCveBucket(D.repos[r].total||0,b)).length;
 
     // Snapshot stats
     const repoSet=new Set(repos);
@@ -1402,8 +1423,13 @@ function renderCategoryView(category){
     const sdkOptions=[`<option value="all"${currentSdk==='all'?' selected':''}>All SDK versions (${inCategory.length})</option>`]
         .concat(allBuckets.filter(([b])=>bucketCount(b)>0).map(([b,label])=>`<option value="${b}"${b===currentSdk?' selected':''}>${esc(label)} (${bucketCount(b)})</option>`))
         .join('');
+    const cveBuckets=[['all','All'],['0','Clean (0)'],['1-5','1–5'],['6-20','6–20'],['20+','20+']];
+    const cveOptions=cveBuckets.map(([b,label])=>{
+        const n=b==='all'?afterSdk.length:cveBucketCount(b);
+        return `<option value="${b}"${b===currentCve?' selected':''}>${esc(label)} (${n})</option>`;
+    }).join('');
     const scopeLabel=currentSdk==='all'?'':`on ${currentSdk}`;
-    const scopeNote=currentSdk==='all'?`${repos.length} repo${repos.length===1?'':'s'} in scope`:`${repos.length} of ${inCategory.length} repo${inCategory.length===1?'':'s'} ${scopeLabel}`;
+    const scopeNote=(currentSdk==='all'&&currentCve==='all')?`${repos.length} repo${repos.length===1?'':'s'} in scope`:`${repos.length} of ${inCategory.length} repo${inCategory.length===1?'':'s'}${scopeLabel?' '+scopeLabel:''}`;
 
     el.innerHTML=`
         <div class="card" style="margin-bottom:16px;border-top:3px solid ${accent}">
@@ -1412,7 +1438,10 @@ function renderCategoryView(category){
                     <div class="card-title" style="margin:0">${catLabel} — Snapshot</div>
                     <div style="font-size:11px;color:#8c8fa3;margin-top:2px">${scopeNote}</div>
                 </div>
-                <div class="filter-group"><label>SDK</label><select onchange="setCategorySdkFilter('${category}',this.value)" style="margin-left:6px;min-width:160px">${sdkOptions}</select></div>
+                <div style="display:flex;gap:10px;align-items:center">
+                    <div class="filter-group"><label>SDK</label><select onchange="setCategorySdkFilter('${category}',this.value)" style="margin-left:6px;min-width:160px">${sdkOptions}</select></div>
+                    <div class="filter-group"><label>CVEs</label><select onchange="setCategoryCveFilter('${category}',this.value)" style="margin-left:6px;min-width:120px">${cveOptions}</select></div>
+                </div>
             </div>
             <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:14px">
                 <div class="stat" style="cursor:default"><div class="stat-icon" style="background:${accentBg};color:${accent}">&#128202;</div><div class="stat-value">${vs.length}</div><div class="stat-label">Unique CVEs</div></div>
