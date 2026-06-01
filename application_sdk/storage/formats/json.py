@@ -191,6 +191,7 @@ class JsonFileReader(Reader):
                     json_file,
                     chunksize=self.chunk_size,
                     lines=True,
+                    engine="python",
                 )
                 for chunk in json_reader_obj:
                     yield chunk
@@ -215,7 +216,10 @@ class JsonFileReader(Reader):
             logger.info("Reading %d JSON files as pandas dataframe", len(json_files))
 
             return pd.concat(
-                (pd.read_json(json_file, lines=True) for json_file in json_files),
+                (
+                    pd.read_json(json_file, lines=True, engine="python")
+                    for json_file in json_files
+                ),
                 ignore_index=True,
             )
 

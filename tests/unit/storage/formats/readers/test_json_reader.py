@@ -189,13 +189,15 @@ def _install_dummy_pandas(monkeypatch):
     dummy_pandas = types.ModuleType("pandas")
     call_log: list[dict] = []
 
-    def read_json(path, chunksize=None, lines=None):
-        call_log.append({"path": path, "chunksize": chunksize, "lines": lines})
+    def read_json(path, chunksize=None, lines=None, engine=None):
+        call_log.append(
+            {"path": path, "chunksize": chunksize, "lines": lines, "engine": engine}
+        )
         # Return two synthetic chunks for iteration
         return [f"chunk1-{os.path.basename(path)}", f"chunk2-{os.path.basename(path)}"]
 
     def concat(objs, ignore_index=None):
-        return "combined:" + ",".join(objs)
+        return "combined:" + ",".join(list(objs))
 
     dummy_pandas.read_json = read_json  # type: ignore[attr-defined]
     dummy_pandas.concat = concat  # type: ignore[attr-defined]
@@ -244,6 +246,7 @@ async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
             "path": os.path.join(path, "abc.json"),
             "chunksize": expected_chunksize,
             "lines": True,
+            "engine": "python",
         }
     ]
 
