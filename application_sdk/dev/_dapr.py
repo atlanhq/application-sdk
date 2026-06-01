@@ -200,7 +200,9 @@ spec:
 
 
 def _write_components(
-    components_dir: Path, objectstore_root: Path, eventstore_root: Path
+    components_dir: Path,
+    objectstore_root: Path = Path(DEFAULT_OBJECTSTORE_ROOT),
+    eventstore_root: Path = Path(DEFAULT_EVENTSTORE_ROOT),
 ) -> None:
     """Write the auto-generated Dapr component YAMLs into *components_dir*."""
     components_dir.mkdir(parents=True, exist_ok=True)
