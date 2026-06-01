@@ -315,14 +315,18 @@ jobs:
   # not openapi-app). Keeping them separate so the SDR path can grow
   # connectors independently of the legacy e2e path.
   #
-  # No label gate — the SDR connector suite (~3 min per app) auto-runs
-  # on every PR push so SDK changes are validated end-to-end against
-  # the connector fleet by default. Custom <repo>:<branch> labels
-  # still override the default matrix when a contributor wants to pin
-  # an alternate target branch for a specific connector.
+  # Label-gated on `sdr-e2e-test`. The SDR connector suite (~3 min per
+  # app) was previously auto-on, but the dispatched-from-SDK code path
+  # consistently red-failed inside atlan-configurator due to a CI
+  # secret gap (`atlan.client_secret: Client secret is required`) in
+  # downstream connector repos, blocking SDK PRs on environment state
+  # that's not part of any single PR's diff. Gating opt-in via the
+  # `sdr-e2e-test` label keeps the capability available while
+  # decoupling normal SDK PR signal from downstream secret health.
+  # Custom <repo>:<branch> labels still override the default matrix.
   sdr-matrix-builder:
     name: Build SDR Test Matrix
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'sdr-e2e-test')
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -388,10 +392,11 @@ jobs:
   sdr-e2e-apps:
     name: SDR Integration Tests (testcontainer) — ${{ matrix.repo_name }}
     needs: [changes, sdr-matrix-builder]
-    # No label gate — runs on every push to a non-fork, non-dependabot
-    # PR. ~3 min per connector and validates the SDR contract end-to-
-    # end, which is worth the spend on every SDK PR.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]' && needs.changes.outputs.code == 'true'
+    # Label-gated on `sdr-e2e-test`. See the comment block on
+    # `sdr-matrix-builder` above for the rationale (downstream CI
+    # secret gap was making this red on every SDK PR). Add the label
+    # to opt a PR back in to end-to-end SDR validation.
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'sdr-e2e-test') && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
