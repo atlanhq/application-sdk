@@ -179,48 +179,25 @@ async def test_download_file_error_propagation() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Helper to install dummy pandas module and capture read_json invocations
-def _install_dummy_pandas(monkeypatch):
-    """Install a dummy pandas module in sys.modules that tracks calls to read_json."""
-    import os
-    import sys
-    import types
-
-    dummy_pandas = types.ModuleType("pandas")
-    call_log: list[dict] = []
-
-    def read_json(path, chunksize=None, lines=None, engine=None):
-        call_log.append(
-            {"path": path, "chunksize": chunksize, "lines": lines, "engine": engine}
-        )
-        # Return two synthetic chunks for iteration
-        return [f"chunk1-{os.path.basename(path)}", f"chunk2-{os.path.basename(path)}"]
-
-    def concat(objs, ignore_index=None):
-        return "combined:" + ",".join(list(objs))
-
-    dummy_pandas.read_json = read_json  # type: ignore[attr-defined]
-    dummy_pandas.concat = concat  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "pandas", dummy_pandas)
-
-    return call_log
-
-
 @pytest.mark.asyncio
-async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
-    """Verify that read_batches streams chunks and respects chunk_size."""
+async def test_read_batches_with_pandas(monkeypatch, tmp_path) -> None:
+    """Verify that read_batches streams chunks, respects chunk_size, and handles large values."""
+    import pandas as pd  # noqa: PLC0415
 
-    file_names = ["abc.json"]
-    path = "/data"
-
-    expected_chunksize = 5
-    call_log = _install_dummy_pandas(monkeypatch)
+    # Write a JSONL file with 5 rows, including a value that would crash ujson
+    jsonl_file = tmp_path / "abc.json"
+    lines = [
+        '{"id": "row0", "big": 99999999999999999999, "val": 10}',
+        '{"id": "row1", "big": 99999999999999999999, "val": 20}',
+        '{"id": "row2", "big": 99999999999999999999, "val": 30}',
+        '{"id": "row3", "big": 99999999999999999999, "val": 40}',
+        '{"id": "row4", "big": 99999999999999999999, "val": 50}',
+    ]
+    jsonl_file.write_text("\n".join(lines) + "\n")
 
     async def dummy_download(path, file_extension, file_names=None):
-        return [os.path.join(path, fn) for fn in file_names] if file_names else []
+        return [str(jsonl_file)]
 
-    # Mock the base Input class method since JsonFileReader calls super()._download_files()
     monkeypatch.setattr(
         "application_sdk.storage.formats.json._download_files",
         dummy_download,
@@ -228,39 +205,31 @@ async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
     )
 
     json_input = JsonFileReader(
-        path=path,
-        file_names=file_names,
-        chunk_size=expected_chunksize,
+        path=str(tmp_path),
+        file_names=["abc.json"],
+        chunk_size=2,
         dataframe_type=DataframeType.pandas,
     )
 
     batches = json_input.read_batches()
     chunks = [chunk async for chunk in batches]
 
-    # Two chunks per file as defined in dummy pandas implementation
-    assert chunks == ["chunk1-abc.json", "chunk2-abc.json"]
-
-    # Confirm read_json was invoked with correct args
-    assert call_log == [
-        {
-            "path": os.path.join(path, "abc.json"),
-            "chunksize": expected_chunksize,
-            "lines": True,
-            "engine": "python",
-        }
-    ]
+    # 5 rows with chunk_size=2 should produce 3 chunks (2, 2, 1)
+    assert len(chunks) == 3
+    assert all(isinstance(c, pd.DataFrame) for c in chunks)
+    assert len(chunks[0]) == 2
+    assert len(chunks[1]) == 2
+    assert len(chunks[2]) == 1
+    assert list(chunks[0]["id"]) == ["row0", "row1"]
 
 
 @pytest.mark.asyncio
 async def test_read_batches_empty_file_list(monkeypatch) -> None:
     """An empty file list should result in no yielded batches."""
 
-    call_log = _install_dummy_pandas(monkeypatch)
-
     async def dummy_download(path, file_extension, file_names=None):
         return []
 
-    # Mock the base Input class method since JsonFileReader calls super()._download_files()
     monkeypatch.setattr(
         "application_sdk.storage.formats.json._download_files",
         dummy_download,
@@ -275,8 +244,6 @@ async def test_read_batches_empty_file_list(monkeypatch) -> None:
     batches = [chunk async for chunk in batches_result]
 
     assert batches == []
-    # No pandas.read_json calls should have been made
-    assert call_log == []
 
 
 # ---------------------------------------------------------------------------

@@ -186,15 +186,22 @@ class JsonFileReader(Reader):
             self._downloaded_files.extend(json_files)
             logger.info("Reading %d JSON files in batches", len(json_files))
 
+            # Read JSONL with orjson instead of pd.read_json to avoid
+            # ujson's "Value is too big!" error on large numeric values.
+            chunk_size = self.chunk_size or 100000
             for json_file in json_files:
-                json_reader_obj = pd.read_json(
-                    json_file,
-                    chunksize=self.chunk_size,
-                    lines=True,
-                    engine="python",
-                )
-                for chunk in json_reader_obj:
-                    yield chunk
+                batch: list[dict] = []
+                with open(json_file, "rb") as f:
+                    for line in f:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        batch.append(orjson.loads(stripped))
+                        if len(batch) >= chunk_size:
+                            yield pd.DataFrame(batch)
+                            batch = []
+                if batch:
+                    yield pd.DataFrame(batch)
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
@@ -215,13 +222,16 @@ class JsonFileReader(Reader):
             self._downloaded_files.extend(json_files)
             logger.info("Reading %d JSON files as pandas dataframe", len(json_files))
 
-            return pd.concat(
-                (
-                    pd.read_json(json_file, lines=True, engine="python")
-                    for json_file in json_files
-                ),
-                ignore_index=True,
-            )
+            # Read JSONL with orjson instead of pd.read_json to avoid
+            # ujson's "Value is too big!" error on large numeric values.
+            records: list[dict] = []
+            for json_file in json_files:
+                with open(json_file, "rb") as f:
+                    for line in f:
+                        stripped = line.strip()
+                        if stripped:
+                            records.append(orjson.loads(stripped))
+            return pd.DataFrame(records)
 
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
