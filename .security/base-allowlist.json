@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-06-01",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -618,6 +618,17 @@
     "reason": "Upstream fix available but need immediate unblock for v2.x.x releases for SDR locked app releases.",
     "expires": "2026-06-09",
     "added_by": "adityachoudhury-cloud",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "CVE-2025-69421": {
+    "package": "openssl",
+    "severity": "HIGH",
+    "reason": "Base image - OpenSSL NULL pointer dereference in PKCS12_item_decrypt_d2i_ex() (DoS only, no code execution or memory disclosure). No distro-level package fix available yet for the Chainguard base image; upstream OpenSSL patches exist but have not been packaged for the logan-ssis-app container OS.",
+    "expires": "2026-07-01",
+    "added_by": "mothership-ai",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
