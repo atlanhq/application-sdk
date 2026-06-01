@@ -3,6 +3,7 @@ import os
 import uuid
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
+from types import ModuleType
 from typing import TYPE_CHECKING, Union, cast
 
 from application_sdk.common.file_ops import SafeFileOps
@@ -28,7 +29,9 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-def _build_unified_daft_schema(parquet_files: list[str], daft_module) -> dict | None:
+def _build_unified_daft_schema(
+    parquet_files: list[str], daft_module: ModuleType
+) -> dict | None:
     """Build a daft schema dict from a set of parquet files.
 
     Reads each file's pyarrow schema (metadata-only, cheap), unifies them
