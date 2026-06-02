@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-06-02",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -46,6 +46,28 @@
     "reason": "Base image - Dapr runtime dependency",
     "expires": "2026-05-27",
     "added_by": "mananjain99",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "SNYK-GOLANG-GITHUBCOMHAMBAAVROV2-17130845": {
+    "package": "github.com/hamba/avro/v2",
+    "severity": "HIGH",
+    "reason": "Base image - Dapr pubsub dependency (hamba/avro v2.29.0). Snyk lists no upstream fix; tracking for the next base-image rebuild that includes a daprd dependency bump.",
+    "expires": "2026-07-02",
+    "added_by": "tejeshallampati-alt",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "SNYK-GOLANG-GITHUBCOMHAMBAAVROV2-17130851": {
+    "package": "github.com/hamba/avro/v2",
+    "severity": "HIGH",
+    "reason": "Base image - Dapr pubsub dependency (hamba/avro v2.29.0). Snyk lists no upstream fix; tracking for the next base-image rebuild that includes a daprd dependency bump.",
+    "expires": "2026-07-02",
+    "added_by": "tejeshallampati-alt",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
