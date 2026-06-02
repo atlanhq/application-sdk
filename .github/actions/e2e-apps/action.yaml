@@ -25,11 +25,11 @@ inputs:
     description: The target branch to test.
   workflow:
     required: false
-    default: e2e-integration-test.yaml
+    default: tests.yaml
     description: |
       Filename of the workflow to dispatch in the target repo. Defaults
-      to the historical e2e-integration-test.yaml. Set to
-      sdr-integration-tests.yaml for the SDR cross-repo path.
+      to tests.yaml. Set to sdr-integration-tests.yaml for the SDR
+      cross-repo path.
   workflow-inputs:
     required: false
     default: "{}"
