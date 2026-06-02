@@ -3,6 +3,7 @@ import os
 import uuid
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
+from types import ModuleType
 from typing import TYPE_CHECKING, Union, cast
 
 from application_sdk.common.file_ops import SafeFileOps
@@ -26,6 +27,51 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     import daft  # type: ignore
     import pandas as pd
+
+
+def _build_unified_daft_schema(
+    parquet_files: list[str], daft_module: ModuleType
+) -> dict | None:
+    """Build a daft schema dict from a set of parquet files.
+
+    Reads each file's pyarrow schema (metadata-only, cheap), unifies them
+    permissively, and promotes any null-typed column to ``pa.large_string()``.
+    Returns ``None`` on failure so the caller can fall back to daft's default
+    schema inference.
+
+    This guards two failure modes (see BLDX-837):
+
+    - Multi-file reads where early files have null-typed columns and later
+      files have string-typed columns. Without unification, daft silently
+      drops rows.
+    - All-null columns surface as Daft ``Null`` dtype, which breaks
+      downstream ``daft.sql(...)`` that applies utf8 functions like
+      ``SUBSTRING`` / ``REGEXP_REPLACE`` or ``CASE WHEN col IS NOT NULL``.
+
+    Returning ``None`` (the fallback path) re-exposes both risks, so the
+    failure is logged at WARNING — invisible DEBUG logs masked regressions
+    previously.
+    """
+    import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+    import pyarrow.parquet as pq_meta  # noqa: PLC0415 — optional dep: pyarrow.parquet
+
+    try:
+        pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
+        unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
+        return {
+            field.name: daft_module.DataType.from_arrow_type(
+                pa.large_string() if pa.types.is_null(field.type) else field.type
+            )
+            for field in unified
+        }
+    except (pa.ArrowException, OSError):
+        logger.warning(
+            "Parquet schema unification failed; falling back to daft default "
+            "inference. Mixed-schema multi-file reads may silently drop rows "
+            "and all-null columns may surface as Daft Null dtype. See BLDX-837.",
+            exc_info=True,
+        )
+        return None
 
 
 class ParquetFileReader(Reader):
@@ -335,8 +381,11 @@ class ParquetFileReader(Reader):
             self._downloaded_files.extend(parquet_files)
             logger.info("Reading %d parquet files with daft", len(parquet_files))
 
-            # Use the discovered/downloaded files directly
-            return daft.read_parquet(parquet_files)
+            # Unify parquet schemas before reading; falls back to default
+            # inference (schema=None) if pyarrow cannot unify. See BLDX-837
+            # and _build_unified_daft_schema for the failure modes guarded.
+            daft_schema = _build_unified_daft_schema(parquet_files, daft)
+            return daft.read_parquet(parquet_files, schema=daft_schema)
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
@@ -396,32 +445,10 @@ class ParquetFileReader(Reader):
             self._downloaded_files.extend(parquet_files)
             logger.info("Reading %d parquet files as daft batches", len(parquet_files))
 
-            # Unify parquet schemas before reading: when early files have
-            # null-typed columns and later files have string-typed columns,
-            # daft silently drops all data. We read each file's schema
-            # metadata (cheap), unify via pyarrow, and pass the result to
-            # daft so it reads all files with consistent types. See BLDX-837.
-            daft_schema = None
-            try:
-                import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
-                import pyarrow.parquet as pq_meta  # noqa: PLC0415 — optional dep: pyarrow.parquet
-
-                pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
-                unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
-                daft_schema = {
-                    field.name: daft.DataType.from_arrow_type(
-                        pa.large_string()
-                        if pa.types.is_null(field.type)
-                        else field.type
-                    )
-                    for field in unified
-                }
-            except Exception:
-                logger.debug(
-                    "Could not unify parquet schemas, falling back to daft default schema inference",
-                    exc_info=True,
-                )
-
+            # Unify parquet schemas before reading; falls back to default
+            # inference (schema=None) if pyarrow cannot unify. See BLDX-837
+            # and _build_unified_daft_schema for the failure modes guarded.
+            daft_schema = _build_unified_daft_schema(parquet_files, daft)
             lazy_df = daft.read_parquet(parquet_files, schema=daft_schema)
             total_rows = lazy_df.count_rows()
 

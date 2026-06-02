@@ -376,6 +376,25 @@ class QueryBasedTransformer(TransformerInterface):
         """
         import daft  # noqa: PLC0415 — optional dep: daft
 
+        # Promote any Null-typed input columns to Utf8. Daft resolves expression
+        # types at logical-plan creation, so SQL templates that apply utf8
+        # functions (SUBSTRING, REGEXP_REPLACE) or `CASE WHEN col IS NOT NULL`
+        # guards against an all-NULL parquet column fail with
+        # `DaftError::TypeError Expected input to be utf8 but received Null` —
+        # COALESCE rescues some forms but not all, so we cast at the source.
+        null_cols = [
+            field.name
+            for field in dataframe.schema()
+            if field.dtype == daft.DataType.null()
+        ]
+        if null_cols:
+            dataframe = dataframe.with_columns(
+                {
+                    name: daft.col(name).cast(daft.DataType.string())
+                    for name in null_cols
+                }
+            )
+
         # prepare default attributes
         default_attributes = {
             "connection_qualified_name": daft.lit(connection_qualified_name),
