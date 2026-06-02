@@ -393,6 +393,10 @@ jobs:
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
         # pinned to main so the check tracks the latest released rules.
+        # ORG_PAT_GITHUB is required because this workflow runs in the context
+        # of a consumer app repo whose GITHUB_TOKEN is scoped to that repo and
+        # cannot read other org repos (even public ones via cross-repo reusable
+        # workflow invocations). An org PAT grants the necessary read access.
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: atlanhq/application-sdk
@@ -410,7 +414,7 @@ jobs:
         id: sdk_install
         continue-on-error: true
         working-directory: sdk
-        run: uv sync --all-extras --all-groups
+        run: uv sync --all-extras
 
       - name: "v3 shape — check_migration"
         id: check_migration
@@ -450,8 +454,8 @@ jobs:
             exit 0
           fi
           uv run poe generate || { echo "::warning::'poe generate' failed"; exit 1; }
-          if ! git diff --exit-code -- app/generated/; then
-            echo "::warning::app/generated/ is stale — run 'poe generate' locally and commit."
+          if ! git diff --exit-code -- generated/; then
+            echo "::warning::generated/ is stale — run 'poe generate' locally and commit."
             exit 1
           fi
 
@@ -467,7 +471,7 @@ jobs:
             echo "No tests/unit/ — skipping."
             exit 0
           fi
-          uv run --with pytest-cov pytest tests/unit --cov=app --cov-report=term --data-file=.coverage
+          uv run --with pytest-cov pytest tests/unit --cov=app --cov-report=term
 
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
