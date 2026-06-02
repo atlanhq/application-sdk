@@ -490,9 +490,9 @@ jobs:
             echo ""
             render "v3 shape (check_migration) — warn-only" "$CM"
             render "Contract drift (poe generate) — warn-only" "$CD"
-            render "Unit tests + coverage (>=85%) — enforced" "$UT"
+            render "Unit tests + coverage (>=85%) — warn-only" "$UT"
             echo ""
-            echo "**Unit tests + coverage block publish on ❌.** v3 shape and contract drift remain warn-only during rollout — a ❌ there annotates but does not block. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
+            echo "All three checks are warn-only during rollout — a ❌ annotates but does not block. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
           } >> "${GITHUB_STEP_SUMMARY}"
           if [ "$SDK_INSTALL" != "success" ]; then
             echo "::warning title=Certification incomplete::SDK install failed, so check_migration did not run."
@@ -500,19 +500,8 @@ jobs:
           if [ "$CM" = "failure" ] || [ "$CD" = "failure" ]; then
             echo "::warning title=Certification warning (warn-only)::v3 shape and/or contract drift failed; publish proceeded (warn-only)."
           fi
-          # Unit tests + coverage enforce: block publish when they fail. The
-          # `unit` step keeps `continue-on-error` so this verdict can render the
-          # full summary first, then exit non-zero here. v3 shape (CM) and
-          # contract drift (CD) stay warn-only — only UT blocks.
           if [ "$UT" = "failure" ]; then
-            {
-              echo ""
-              echo "### ❌ Publish blocked — unit tests + coverage"
-              echo ""
-              echo "The centralized \`tests/unit\` + coverage (>=85%) check failed. Build and publish will not proceed until it passes. Fix the failing tests and re-run."
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "::error title=Publish blocked::Unit tests + coverage check failed. Build and publish blocked."
-            exit 1
+            echo "::warning title=Certification warning (warn-only)::Unit tests + coverage check failed; publish proceeded (warn-only)."
           fi
           exit 0
 

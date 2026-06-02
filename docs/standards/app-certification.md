@@ -39,35 +39,29 @@ for free, with zero changes to its repo.
 
 ## Enforcement
 
+All three layers are **warn-only** during the initial rollout — every check runs
+and the verdict is annotated on the workflow summary, but none exit non-zero or
+block publish.
+
 | Layer | Mode |
 |-------|------|
-| **Unit + coverage** | **Enforced** — a ❌ exits the verdict step non-zero and blocks publish. |
+| **Unit + coverage** | Warn-only — annotated, does not block. |
 | **v3 shape** | Warn-only — annotated, does not block. |
 | **Contract drift** | Warn-only — annotated, does not block. |
 
-How blocking works: the "Certification verdict" step exits non-zero when the
-unit + coverage check fails. Because `prepare` already lists `certify` in its
-`needs:` (with `if: !failure()`), a failing certify skips `prepare → build →
-publish` automatically — at minute 0, before any build minutes are spent.
-
-v3 shape and contract drift stay warn-only during rollout: every check runs and
-the verdict is annotated on the workflow summary, but only the unit check exits
-non-zero. Flipping the remaining two is tracked separately (contract drift needs
-the pkl toolchain on the runner first — see the rollout gaps below).
-
 Checks that don't apply to an app skip cleanly (➖) so non-conforming apps are
 never hard-failed before they onboard. In particular, an app with no
-`tests/unit/` directory skips the unit check (➖) and is **not** blocked.
+`tests/unit/` directory skips the unit check (➖).
 
 ## Known rollout gaps (before enforcement)
 
+- **Coverage threshold fixed at 85%.** Before flipping unit + coverage to
+  enforcing, verify active connector repos meet this bar. Raise the enforcement
+  question in `#pod-app-distribution`.
 - **Contract drift needs the pkl toolchain.** If `poe generate` requires pkl
-  and it isn't installed on the runner, the check is recorded as a failure and
-  (while warn-only) annotated. Installing pkl in the `certify` job is a
-  prerequisite for flipping contract-drift to blocking.
-- **Coverage threshold is fixed at 85%.** Matches the SDK tooling threshold; if
-  an app legitimately needs a different bar, raise it in `#pod-app-distribution`
-  rather than weakening the gate.
+  and it isn't installed on the runner, the check is recorded as a failure.
+  Installing pkl in the `certify` job is a prerequisite for flipping
+  contract-drift to blocking.
 
 ## Relationship to the other layers
 
