@@ -349,7 +349,7 @@ async def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
     try:
         ipaddress.ip_address(host_stripped)
     except ValueError:
-        pass
+        pass  # not a literal IP — fall through to DNS resolution below
     else:
         # Already a literal IP — no resolution to do, no SNI to preserve.
         return target_host, None

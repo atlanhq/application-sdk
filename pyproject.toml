@@ -289,6 +289,7 @@ extend-select = [
     "PLC0415", # imports must be at top of module — prevents broken-import-at-runtime bugs (e.g. PR #1543)
     "S110",    # try-except-pass detected
     "S112",    # try-except-continue detected
+    "LOG009",  # logger.warn() is deprecated — use .warning()
 ]
 
 [tool.ruff.lint.per-file-ignores]
