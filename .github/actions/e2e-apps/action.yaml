@@ -28,8 +28,8 @@ inputs:
     default: tests.yaml
     description: |
       Filename of the workflow to dispatch in the target repo. Defaults
-      to tests.yaml. Set to sdr-integration-tests.yaml for the SDR
-      cross-repo path.
+      to tests.yaml. Override only when a different workflow filename
+      should be dispatched.
   workflow-inputs:
     required: false
     default: "{}"
@@ -253,8 +253,7 @@ runs:
             // the reviewer sees the outcome + run link without having
             // to dig through the SDK PR's check_run list.
             const titlesByWorkflow = {
-              "sdr-integration-tests.yaml": `SDR Integration Tests (testcontainer) — ${repoName}`,
-              "e2e-full.yaml":               `E2E Full Tests (system apps) — ${repoName}`,
+              "tests.yaml": `Connector Tests — ${repoName}`,
             };
             const title = titlesByWorkflow[workflow] || `${workflow} — ${repoName}`;
             const statusLine =
