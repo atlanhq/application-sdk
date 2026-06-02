@@ -2,8 +2,7 @@
 """Create a Linear ticket for daily security scan findings, with dedup.
 
 Compared to a naive "create one ticket per run":
-- Every CRITICAL/HIGH finding is identified by a stable ID (Trivy CVE
-  or Snyk vuln id).
+- Every CRITICAL/HIGH finding is identified by a stable ID (Trivy CVE).
 - All previously-created issues are tagged with the ``vulnerabilities``
   label. We fetch every open issue carrying that label and look for a
   hidden marker line in each description:
@@ -51,10 +50,8 @@ from typing import Any
 LINEAR_URL = "https://api.linear.app/graphql"
 
 TRIVY_FILES = ["trivy-image-results.json", "trivy-fs-results.json"]
-SNYK_FILES = ["snyk-image-results.json", "snyk-python-results.json"]
 
 ACTIONABLE_SEVERITIES_TRIVY = {"CRITICAL", "HIGH"}
-ACTIONABLE_SEVERITIES_SNYK = {"critical", "high"}
 
 
 def gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -77,58 +74,10 @@ def gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     return payload["data"]
 
 
-def _iter_snyk_vuln_arrays(node: Any):
-    """Yield every ``vulnerabilities`` list found anywhere in ``node``,
-    mirroring jq's ``.. | .vulnerabilities? | arrays`` walk.
-
-    Snyk's container CLI emits vulnerabilities under several keys
-    depending on the target and CLI version: top-level
-    ``.vulnerabilities``, ``.applications[].vulnerabilities``,
-    ``.docker[].vulnerabilities``, ``.projects[].vulnerabilities``,
-    root-array multi-target outputs, etc. Walking the whole tree means
-    we don't have to keep up with each new shape — if it's named
-    ``vulnerabilities`` and is a list, we pick it up.
-    """
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key == "vulnerabilities" and isinstance(value, list):
-                yield value
-            else:
-                yield from _iter_snyk_vuln_arrays(value)
-    elif isinstance(node, list):
-        for item in node:
-            yield from _iter_snyk_vuln_arrays(item)
-
-
-def _ingest_snyk_vulns(
-    vulns: list[dict], fname: str, findings: dict[str, dict]
-) -> None:
-    for vuln in vulns or []:
-        if vuln.get("severity", "").lower() not in ACTIONABLE_SEVERITIES_SNYK:
-            continue
-        if (vuln.get("type") or "vuln") == "license":
-            continue
-        vid = vuln.get("id")
-        if not vid or vid in findings:
-            continue
-        findings[vid] = {
-            "id": vid,
-            "severity": vuln.get("severity", "").upper(),
-            "package": vuln.get("packageName") or vuln.get("name", ""),
-            "version": vuln.get("version", ""),
-            "fixed": ", ".join(vuln.get("fixedIn", []) or []) or "N/A",
-            "title": vuln.get("title", ""),
-            "source": "snyk",
-            "scanner_target": fname,
-        }
-
-
 def collect_findings() -> list[dict]:
-    """Build the list of CRITICAL/HIGH findings across all four scanners.
+    """Build the list of CRITICAL/HIGH findings across Trivy scanners.
 
     Each finding is a dict with id, severity, package, version, source.
-    Dedupes by id within the same source (Snyk reports the same vuln
-    once per vulnerable path).
     """
     findings: dict[str, dict] = {}
 
@@ -158,21 +107,6 @@ def collect_findings() -> list[dict]:
                     "source": "trivy",
                     "scanner_target": fname,
                 }
-
-    for fname in SNYK_FILES:
-        path = Path(fname)
-        if not path.exists():
-            continue
-        try:
-            data = json.loads(path.read_text())
-        except json.JSONDecodeError:
-            print(f"warning: {fname} is not valid JSON; skipping")
-            continue
-        # data may be a dict (single-target) OR a list (multi-target).
-        # _iter_snyk_vuln_arrays handles both — it yields every
-        # `vulnerabilities` array anywhere in the tree.
-        for vulns in _iter_snyk_vuln_arrays(data):
-            _ingest_snyk_vulns(vulns, fname, findings)
 
     return sorted(
         findings.values(), key=lambda v: (v["severity"] != "CRITICAL", v["id"])

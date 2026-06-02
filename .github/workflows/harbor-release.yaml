@@ -35,7 +35,7 @@ jobs:
           TAG_PREFIX_INPUT: ${{ inputs.tag_prefix }}
         run: |
           if [ "${{ github.event_name }}" = "release" ]; then
-            # Release builds use 'main' as the branch label for the Snyk import gate.
+            # Release builds use 'main' as the branch label.
             # Actual image tags are computed separately in the 'Compute image tags' step.
             echo "value=main" >> "$GITHUB_OUTPUT"
           elif [ -n "${TAG_PREFIX_INPUT:-}" ]; then
@@ -111,11 +111,6 @@ jobs:
         uses: ./.github/actions/secure-build-push-apps
         with:
           branch: ${{ steps.tag_prefix.outputs.value }}
-          snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
-          snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
-          snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTEGRATION_ID }}
-          snyk-integration-id: ${{ secrets.SNYK_INTEGRATION_ID }}
-          snyk-org-id: ${{ secrets.SNYK_ORG_ID }}
           context: .
           file: ./Dockerfile
           push: true

@@ -90,7 +90,6 @@ jobs:
 
           echo "Downloading scan results from run $RUN_ID"
           gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
-          gh run download "$RUN_ID" --name snyk-results --dir /tmp/scan-artifacts || echo "No snyk results"
 
       - name: Identify fixable vulnerabilities
         id: identify
@@ -132,35 +131,6 @@ jobs:
                           }
           except Exception as e:
               print(f"Trivy: {e}")
-
-          # Parse Snyk
-          try:
-              with open("/tmp/scan-artifacts/snyk_results.json") as f:
-                  snyk = json.load(f)
-              if not snyk.get("error"):
-                  for vuln in snyk.get("vulnerabilities", []):
-                      vid = vuln.get("id")
-                      if vid and vid not in all_vulns:
-                          all_vulns[vid] = {
-                              "id": vid,
-                              "package": vuln.get("packageName") or vuln.get("name", ""),
-                              "installed": vuln.get("version", ""),
-                              "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                              "source_type": "base_image",
-                          }
-                  for app in snyk.get("applications", []):
-                      for vuln in app.get("vulnerabilities", []):
-                          vid = vuln.get("id")
-                          if vid and vid not in all_vulns:
-                              all_vulns[vid] = {
-                                  "id": vid,
-                                  "package": vuln.get("packageName") or vuln.get("name", ""),
-                                  "installed": vuln.get("version", ""),
-                                  "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                                  "source_type": "app",
-                              }
-          except Exception as e:
-              print(f"Snyk: {e}")
 
           # Filter: only new (not allowlisted), app-level, Python, with fix available
           fixable = []

@@ -7,5 +7,6 @@ spec:
   type: bindings.localstorage
   ignoreErrors: true
   metadata:
+    # Must match DEFAULT_OBJECTSTORE_ROOT in application_sdk/dev/_dapr.py
     - name: rootPath
       value: "./local/dapr/objectstore"
