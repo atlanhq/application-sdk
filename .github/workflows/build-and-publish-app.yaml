@@ -55,11 +55,6 @@ on:
         required: false
         type: string
         default: "https://home.atlan.com"
-      snyk_monitor:
-        description: "Push scan results to Snyk UI dashboard via snyk container monitor (default: false)"
-        required: false
-        type: boolean
-        default: false
       release_tag:
         description: "Git tag of the release (e.g. v1.2.3) — when set, pushes a version-tag ladder to GHCR in addition to the standard branch tags. Pass github.event.release.tag_name for release events."
         required: false
@@ -874,7 +869,7 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Security scan — Trivy + Snyk + allowlist gate (non-blocking on merge path) ──
+  # ── Job 4: Security scan — Trivy + allowlist gate (non-blocking on merge path) ──
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
@@ -882,8 +877,6 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
     with:
       image: ${{ needs.prepare.outputs.ghcr_image }}
-      snyk_org: partner-images
-      snyk_monitor: ${{ inputs.snyk_monitor }}
       fail_on_findings: false
     secrets: inherit
 

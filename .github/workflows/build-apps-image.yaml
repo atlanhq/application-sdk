@@ -8,7 +8,6 @@
 # Optimisations:
 #   1. Parallel matrix build — amd64 and arm64 build in parallel with scoped GHA cache
 #   2. provenance: false — skips SLSA attestation (saves ~15s per arch)
-#   3. Snyk runs as a separate non-blocking job after the manifest is merged
 #
 # Usage in each app repo (.github/workflows/build-image.yaml):
 #
@@ -17,7 +16,7 @@
 #       uses: atlanhq/application-sdk/.github/workflows/build-apps-image.yaml@main
 #       with:
 #         ref: ${{ inputs.ref || github.ref }}
-#       secrets: inherit   # template only reads: ORG_PAT_GITHUB, SNYK_TOKEN, DOCKER_HUB_PAT_RW
+#       secrets: inherit   # template only reads: ORG_PAT_GITHUB, DOCKER_HUB_PAT_RW
 #                          # permissions are declared in this workflow — callers don't need to repeat them
 #
 name: Build Atlan App Image
@@ -35,7 +34,6 @@ on:
       ORG_PAT_GITHUB:
         required: true
         description: "Org-level PAT for GHCR login — needed to pull private base images from other repos in the org"
-      # Note: no SNYK_TOKEN needed — scanning is done with Trivy (no auth required)
       DOCKER_HUB_PAT_RW:
         required: false
         description: "DockerHub PAT (read/write) — only needed when atlan.yaml self_deployed_runtime=true"

@@ -78,4 +78,4 @@ certify ──────────┴─> prepare ─> build ─> merge ─>
 ```
 
 It complements — does not replace — the image security scan
-(`build-and-scan.yaml`, Trivy + Snyk + allowlist), which runs after the build.
+(`build-and-scan.yaml`, Trivy + allowlist), which runs after the build.
