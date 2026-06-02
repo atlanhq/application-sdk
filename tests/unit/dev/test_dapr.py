@@ -122,10 +122,12 @@ class TestWriteComponents:
         objectstore_root = tmp_path / "objects" / "nested"
         eventstore_root = tmp_path / "events" / "nested"
         assert not objectstore_root.exists()
+        assert not eventstore_root.exists()
 
         _write_components(components_dir, objectstore_root, eventstore_root)
 
         assert objectstore_root.is_dir()
+        assert eventstore_root.is_dir()
 
 
 class TestPickFreePort:
