@@ -306,37 +306,13 @@ jobs:
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Build dispatch inputs
-        id: dispatch-inputs
-        run: |
-          sha="${{ github.event.pull_request.head.sha }}"
-          has_e2e="${{ contains(github.event.pull_request.labels.*.name, 'e2e') }}"
-
-          # atlan-openapi-app pins the SDK via distinct_id (passed automatically
-          # by return-dispatch), so application_sdk_ref is not declared in its
-          # workflow_dispatch inputs. All other connectors use application_sdk_ref.
-          if [[ "${{ matrix.repo_name }}" == "atlan-openapi-app" ]]; then
-            if [[ "$has_e2e" == "true" ]]; then
-              echo 'inputs={"run_e2e":"true"}' >> "$GITHUB_OUTPUT"
-            else
-              echo 'inputs={}' >> "$GITHUB_OUTPUT"
-            fi
-          else
-            if [[ "$has_e2e" == "true" ]]; then
-              echo "inputs={\"application_sdk_ref\":\"$sha\",\"run_e2e\":\"true\"}" >> "$GITHUB_OUTPUT"
-            else
-              echo "inputs={\"application_sdk_ref\":\"$sha\"}" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
       - uses: "./.github/actions/e2e-apps"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
-          workflow-inputs: ${{ steps.dispatch-inputs.outputs.inputs }}
+          workflow-inputs: ${{ contains(github.event.pull_request.labels.*.name, 'e2e') && format('{{"application_sdk_ref":"{0}","run_e2e":"true"}}', github.event.pull_request.head.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
 
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)
