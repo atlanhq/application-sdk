@@ -370,14 +370,16 @@ jobs:
   # block (contract drift still needs the pkl toolchain on the runner before it
   # can flip). See the "Certification verdict" step. Checks that don't apply to
   # an app (no contract/app.pkl, no tests/unit, no poe) skip cleanly so
-  # non-conforming apps aren't hard-failed before they onboard.
+  # non-conforming apps aren't hard-failed before they onboard. A single
+  # `app_install` step (id: app_install) runs `uv sync --all-extras` once;
+  # contract-drift and unit tests both depend on it and are skipped if it fails.
   #
   # Only runs when `publish: true`. See docs/standards/app-certification.md.
   certify:
     name: Certify app
     if: inputs.publish
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout app
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
@@ -399,7 +401,7 @@ jobs:
           token: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           version: "0.7.3"
 
@@ -424,9 +426,17 @@ jobs:
             exit 1
           fi
 
-      # ── 2. Contract drift ─────────────────────────────────────────────────────
+      # ── 2. App dependencies ───────────────────────────────────────────────────
+      - name: Install app dependencies
+        id: app_install
+        continue-on-error: true
+        working-directory: app
+        run: uv sync --all-extras
+
+      # ── 3. Contract drift ─────────────────────────────────────────────────────
       - name: "Contract drift — poe generate must be a no-op"
         id: contract_drift
+        if: steps.app_install.outcome == 'success'
         continue-on-error: true
         working-directory: app
         run: |
@@ -435,7 +445,6 @@ jobs:
             echo "No contract/app.pkl — skipping contract-drift check."
             exit 0
           fi
-          uv sync --all-extras
           if ! uv run poe --help >/dev/null 2>&1; then
             echo "::warning::'poe' task runner not available — cannot run drift check."
             exit 0
@@ -446,9 +455,10 @@ jobs:
             exit 1
           fi
 
-      # ── 3. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
+      # ── 4. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
       - name: "Unit tests"
         id: unit
+        if: steps.app_install.outcome == 'success'
         continue-on-error: true
         working-directory: app
         run: |
@@ -457,8 +467,8 @@ jobs:
             echo "No tests/unit/ — skipping."
             exit 0
           fi
-          uv sync --all-extras
-          uv run --with pytest-cov pytest tests/unit --cov=app --cov-report=term
+          uv run --with pytest-cov pytest tests/unit --cov=app --cov-report=term --data-file=.coverage
+
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
         if: steps.unit.outcome == 'success'
@@ -466,7 +476,7 @@ jobs:
         working-directory: app
         run: |
           set -euo pipefail
-          uv run coverage report --fail-under=85
+          uv run coverage report --data-file=.coverage --fail-under=85
 
       # ── Verdict ───────────────────────────────────────────────────────────────
       # Unit test pass/fail (UT) ENFORCES: a ❌ exits non-zero, trips
@@ -481,6 +491,7 @@ jobs:
           UT: ${{ steps.unit.outcome }}
           COV: ${{ steps.coverage_threshold.outcome }}
           SDK_INSTALL: ${{ steps.sdk_install.outcome }}
+          APP_INSTALL: ${{ steps.app_install.outcome }}
         run: |
           set -euo pipefail
           render() {
@@ -492,18 +503,25 @@ jobs:
             esac
             echo "- $icon **$1** — $2"
           }
+          cm_label="v3 shape (check_migration) — warn-only"
+          [ "$SDK_INSTALL" != "success" ] && cm_label="$cm_label (sdk install failed)"
+          app_label=""
+          [ "$APP_INSTALL" != "success" ] && app_label=" (app install failed)"
           {
             echo "### App certification"
             echo ""
-            render "v3 shape (check_migration) — warn-only" "$CM"
-            render "Contract drift (poe generate) — warn-only" "$CD"
-            render "Unit tests — enforced" "$UT"
+            render "$cm_label" "$CM"
+            render "Contract drift (poe generate) — warn-only${app_label}" "$CD"
+            render "Unit tests — enforced${app_label}" "$UT"
             render "Coverage (>=85%) — warn-only" "$COV"
             echo ""
             echo "**Unit test pass/fail blocks publish on ❌.** Coverage threshold, v3 shape, and contract drift are warn-only during rollout. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
           } >> "${GITHUB_STEP_SUMMARY}"
           if [ "$SDK_INSTALL" != "success" ]; then
             echo "::warning title=Certification incomplete::SDK install failed, so check_migration did not run."
+          fi
+          if [ "$APP_INSTALL" != "success" ]; then
+            echo "::warning title=Certification incomplete::App install failed; contract drift and unit tests did not run."
           fi
           if [ "$CM" = "failure" ] || [ "$CD" = "failure" ]; then
             echo "::warning title=Certification warning (warn-only)::v3 shape and/or contract drift failed; publish proceeded (warn-only)."
