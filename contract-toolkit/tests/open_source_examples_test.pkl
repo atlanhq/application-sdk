@@ -23,6 +23,8 @@ local minimalInputPy: String = minimalApp.output.files["app/generated/_input.py"
 
 local publishControlsManifestJson: String = publishControlsApp.output.files["app/generated/manifest.json"].text
 local publishControlsInputPy: String = publishControlsApp.output.files["app/generated/_input.py"].text
+local bundleCrawlerInputPy: String = bundleApp.output.files["app/generated/crawler/_input.py"].text
+local bundleMinerInputPy: String = bundleApp.output.files["app/generated/miner/_input.py"].text
 
 facts {
   ["Minimal example generates all standard output files"] {
@@ -48,6 +50,18 @@ facts {
   ["Minimal example omits publish input fields"] {
     !minimalInputPy.contains("output_dir:")
     !minimalInputPy.contains("load_to_atlan:")
+  }
+
+  ["Minimal example emits only used SDK input imports"] {
+    minimalInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    !minimalInputPy.contains("from typing import")
+    !minimalInputPy.contains("from pydantic import")
+    !minimalInputPy.contains("from application_sdk.contracts.types import")
+    !minimalInputPy.contains("from application_sdk.credentials.ref import")
   }
 
   ["Full example demonstrates JDBC URL auth with two auth options"] {
@@ -98,6 +112,21 @@ facts {
     !fullInputPy.contains("dict[str, Any]")
   }
 
+  ["Full example emits isort-compatible SDK input imports"] {
+    fullInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "import json\n" +
+      "from typing import Annotated, Any, ClassVar\n\n" +
+      "from pydantic import Field, field_validator\n\n" +
+      "from application_sdk.contracts.types import MaxItems\n" +
+      "from application_sdk.credentials.ref import CredentialRef\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    !fullInputPy.contains("ConnectionRef")
+    !fullInputPy.contains("FileReference")
+  }
+
   ["Full example UIRules wire conditional field requirements"] {
     fullWorkflowJson.contains("\"anyOf\"")
     fullWorkflowJson.contains("\"enable_lineage\"")
@@ -146,6 +175,23 @@ facts {
     bundleApp.output.files.containsKey("app/generated/miner/miner.json")
     bundleApp.output.files.containsKey("app/generated/miner/manifest.json")
     bundleApp.output.files.containsKey("app/generated/miner/_input.py")
+  }
+
+  ["Bundle example emits isort-compatible per-entrypoint SDK input imports"] {
+    bundleCrawlerInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "from typing import ClassVar\n\n" +
+      "from application_sdk.credentials.ref import CredentialRef\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    bundleMinerInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    !bundleMinerInputPy.contains("from typing import")
+    !bundleMinerInputPy.contains("from pydantic import")
   }
 
   ["Bundle example hoists shared credential configmap to app/generated root"] {
