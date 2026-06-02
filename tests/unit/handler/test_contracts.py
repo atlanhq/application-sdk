@@ -460,3 +460,8 @@ class TestMetadataInputFieldTypes:
         )
         assert isinstance(inp.connection_config, BaseConnectionConfig)
         assert inp.connection_config.model_extra == {"host": "db"}
+
+    def test_metadata_template_key_aliases(self):
+        for key in ("metadata_template_key", "metadataTemplateKey", "type"):
+            inp = MetadataInput.model_validate({"credentials": [], key: "feedbacks"})
+            assert inp.metadata_template_key == "feedbacks"

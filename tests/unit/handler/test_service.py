@@ -810,6 +810,27 @@ class TestMetadataEndpoint:
         assert data[0]["children"][0]["value"] == "ws-1"
         assert data[0]["children"][1]["node_type"] == "workspace"
 
+    def test_metadata_template_key_forwarded_to_handler(self) -> None:
+        received: list[str] = []
+
+        class _MetadataTemplateCapture(_TestHandler):
+            async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+                received.append(input.metadata_template_key)
+                return ApiMetadataOutput(objects=[])
+
+        client = _make_client(handler=_MetadataTemplateCapture())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={
+                "credentials": {"host": "db.example.com"},
+                "metadataTemplateKey": "feedbacks",
+                "type": "accounts",
+            },
+        )
+
+        assert response.status_code == 200
+        assert received == ["feedbacks"]
+
     def test_metadata_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())
         response = client.post(
