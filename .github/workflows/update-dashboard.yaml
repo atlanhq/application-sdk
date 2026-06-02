@@ -97,10 +97,9 @@ jobs:
 
           echo "Downloading artifacts from run $RUN_ID"
           gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
-          gh run download "$RUN_ID" --name snyk-results --dir /tmp/scan-artifacts || echo "No snyk results"
 
           # If no scan results at all, skip dashboard update to avoid overwriting with zeros
-          if [ ! -f /tmp/scan-artifacts/trivy_results.json ] && [ ! -f /tmp/scan-artifacts/snyk_results.json ]; then
+          if [ ! -f /tmp/scan-artifacts/trivy_results.json ]; then
             echo "::warning::No scan artifacts found (expired?). Skipping dashboard update to preserve existing data."
             echo "has_artifacts=false" >> "$GITHUB_OUTPUT"
           else
@@ -180,68 +179,6 @@ jobs:
               print("Warning: no Trivy results")
           except json.JSONDecodeError as e:
               print(f"Warning: Trivy results invalid JSON: {e}")
-
-          # Parse Snyk
-          try:
-              with open("/tmp/scan-artifacts/snyk_results.json") as f:
-                  snyk = json.load(f)
-              if not snyk.get("error"):
-                  trivy_ids = {v["id"] for v in all_vulns}
-
-                  # Top-level vulns — infer source_type from package manager
-                  for vuln in snyk.get("vulnerabilities", []):
-                      vid = vuln.get("id")
-                      if vid:
-                          cves = vuln.get("identifiers", {}).get("CVE", [])
-                          if vid in trivy_ids or any(c in trivy_ids for c in cves):
-                              continue
-                          lang = vuln.get("language", "").lower()
-                          pkg_manager = vuln.get("packageManager", "").lower()
-                          is_app = lang in ("python", "js", "ruby") or pkg_manager in ("pip", "npm", "yarn", "poetry", "uv")
-                          entry = allowlist.get(vid)
-                          if entry:
-                              status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
-                          else:
-                              status = "new"
-                          if vid in base_ids:
-                              src = "base_image"
-                          else:
-                              src = "app" if is_app else "base_image"
-                          all_vulns.append({
-                              "id": vid,
-                              "severity": vuln.get("severity", "").upper(),
-                              "package": vuln.get("packageName") or vuln.get("name", ""),
-                              "installed": vuln.get("version", ""),
-                              "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                              "scanner": "snyk",
-                              "source_type": src,
-                              "status": status,
-                          })
-
-                  # Application dependencies
-                  for app in snyk.get("applications", []):
-                      for vuln in app.get("vulnerabilities", []):
-                          vid = vuln.get("id")
-                          if vid and vid not in trivy_ids:
-                              entry = allowlist.get(vid)
-                              if entry:
-                                  status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
-                              else:
-                                  status = "new"
-                              all_vulns.append({
-                                  "id": vid,
-                                  "severity": vuln.get("severity", "").upper(),
-                                  "package": vuln.get("packageName") or vuln.get("name", ""),
-                                  "installed": vuln.get("version", ""),
-                                  "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                                  "scanner": "snyk",
-                                  "source_type": "base_image" if vid in base_ids else "app",
-                                  "status": status,
-                              })
-          except FileNotFoundError:
-              print("Warning: no Snyk results")
-          except json.JSONDecodeError as e:
-              print(f"Warning: Snyk results invalid JSON: {e}")
 
           # Deduplicate
           seen = set()
