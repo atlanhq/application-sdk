@@ -64,7 +64,7 @@ def _build_unified_daft_schema(
             )
             for field in unified
         }
-    except (pa.ArrowInvalid, pa.ArrowNotImplementedError, OSError):
+    except (pa.ArrowException, OSError):
         logger.warning(
             "Parquet schema unification failed; falling back to daft default "
             "inference. Mixed-schema multi-file reads may silently drop rows "
