@@ -88,11 +88,20 @@ class UnsupportedFileExtensionError(InvalidInputError):
 
 @dataclass(kw_only=True)
 class ObjectStoreReadError(DependencyUnavailableError):
-    """Files were downloaded from the object store but no matching files were found."""
+    """Object store listing returned no files matching the expected extension.
+
+    Surfaces the prefix that was searched so operators can immediately tell
+    whether the upstream task wrote to the wrong path, was skipped entirely,
+    or if the configured prefix on this read side is wrong.
+    """
 
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
-    message: str = "Downloaded from object store but no matching files found"
+    message: str = (
+        "No matching files found in object store — verify the upstream task "
+        "wrote to this prefix and that the configured prefix is correct"
+    )
     service: str | None = "object_store"
+    path: str | None = None
     file_extension: str | None = None
 
 

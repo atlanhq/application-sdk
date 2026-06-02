@@ -209,6 +209,10 @@ async def test_no_matching_files_surfaces_read_error_not_download_error() -> Non
             await _download_files(path, ".json", None)
         assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
         assert not isinstance(exc_info.value, ObjectStoreDownloadError)
+        # Operator-visible fields: prefix + extension must round-trip so the
+        # alert tells you exactly what was searched.
+        assert exc_info.value.path == path
+        assert exc_info.value.file_extension == ".json"
 
 
 # ---------------------------------------------------------------------------

@@ -183,6 +183,7 @@ async def _download_files(
             return downloaded_paths
 
         raise ObjectStoreReadError(
+            path=path,
             file_extension=file_extension,
         )
 
