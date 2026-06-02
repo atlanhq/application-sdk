@@ -816,15 +816,6 @@ Generated branch (appended after the auth-type branches):
 }
 ```
 
-The frontend credential form coerces both sides to strings when matching, so a
-boolean checkbox value matches the `"true"` const. A field named in a rule's
-`required` is also hidden by default and revealed only while the rule's
-condition holds — the form gates visibility and requiredness together. Declare
-such fields `required = false` at the field level and let the rule drive both.
-`whenInputs` keys and `required` entries must reference credential-form property
-names at the level the `anyOf` is evaluated (the credential root for the plain
-flow). See `examples/publish-controls/app.pkl`.
-
 ### NamedWidget — Config.UIElement in credential forms
 
 ```pkl
