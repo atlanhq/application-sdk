@@ -74,8 +74,9 @@ class TestWriteComponents:
     def test_writes_all_five_components(self, tmp_path: Path) -> None:
         components_dir = tmp_path / "components"
         objectstore_root = tmp_path / "objects"
+        eventstore_root = tmp_path / "events"
 
-        _write_components(components_dir, objectstore_root)
+        _write_components(components_dir, objectstore_root, eventstore_root)
 
         expected = sorted(_COMPONENTS_YAML.keys())
         actual = sorted(p.name for p in components_dir.iterdir())
@@ -84,21 +85,33 @@ class TestWriteComponents:
     def test_objectstore_root_substituted(self, tmp_path: Path) -> None:
         components_dir = tmp_path / "components"
         objectstore_root = tmp_path / "objects"
+        eventstore_root = tmp_path / "events"
 
-        _write_components(components_dir, objectstore_root)
+        _write_components(components_dir, objectstore_root, eventstore_root)
 
         content = (components_dir / "objectstore.yaml").read_text()
         assert str(objectstore_root.resolve()) in content
         assert "bindings.localstorage" in content
 
+    def test_eventstore_root_substituted(self, tmp_path: Path) -> None:
+        components_dir = tmp_path / "components"
+        objectstore_root = tmp_path / "objects"
+        eventstore_root = tmp_path / "events"
+
+        _write_components(components_dir, objectstore_root, eventstore_root)
+
+        content = (components_dir / "eventstore.yaml").read_text()
+        assert str(eventstore_root.resolve()) in content
+        assert "bindings.localstorage" in content
+
     def test_statestore_uses_in_memory(self, tmp_path: Path) -> None:
         components_dir = tmp_path / "components"
-        _write_components(components_dir, tmp_path / "objects")
+        _write_components(components_dir, tmp_path / "objects", tmp_path / "events")
         assert "state.in-memory" in (components_dir / "statestore.yaml").read_text()
 
     def test_secretstore_uses_local_env(self, tmp_path: Path) -> None:
         components_dir = tmp_path / "components"
-        _write_components(components_dir, tmp_path / "objects")
+        _write_components(components_dir, tmp_path / "objects", tmp_path / "events")
         assert (
             "secretstores.local.env"
             in (components_dir / "secretstore.yaml").read_text()
@@ -107,11 +120,14 @@ class TestWriteComponents:
     def test_objectstore_root_created(self, tmp_path: Path) -> None:
         components_dir = tmp_path / "components"
         objectstore_root = tmp_path / "objects" / "nested"
+        eventstore_root = tmp_path / "events" / "nested"
         assert not objectstore_root.exists()
+        assert not eventstore_root.exists()
 
-        _write_components(components_dir, objectstore_root)
+        _write_components(components_dir, objectstore_root, eventstore_root)
 
         assert objectstore_root.is_dir()
+        assert eventstore_root.is_dir()
 
 
 class TestPickFreePort:

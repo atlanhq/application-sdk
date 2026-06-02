@@ -138,6 +138,9 @@ def _pick_free_port() -> int:
         return sock.getsockname()[1]
 
 
+DEFAULT_OBJECTSTORE_ROOT = "./local/dapr/objectstore"
+DEFAULT_EVENTSTORE_ROOT = "./local/dapr/eventstore"
+
 _COMPONENTS_YAML = {
     "statestore.yaml": """\
 apiVersion: dapr.io/v1alpha1
@@ -179,7 +182,7 @@ spec:
   version: v1
   metadata:
     - name: rootPath
-      value: {rootPath}
+      value: {objectstore_root}
 """,
     "eventstore.yaml": """\
 apiVersion: dapr.io/v1alpha1
@@ -191,18 +194,26 @@ spec:
   version: v1
   metadata:
     - name: rootPath
-      value: {rootPath}
+      value: {eventstore_root}
 """,
 }
 
 
-def _write_components(components_dir: Path, objectstore_root: Path) -> None:
+def _write_components(
+    components_dir: Path,
+    objectstore_root: Path = Path(DEFAULT_OBJECTSTORE_ROOT),
+    eventstore_root: Path = Path(DEFAULT_EVENTSTORE_ROOT),
+) -> None:
     """Write the auto-generated Dapr component YAMLs into *components_dir*."""
     components_dir.mkdir(parents=True, exist_ok=True)
     objectstore_root.mkdir(parents=True, exist_ok=True)
+    eventstore_root.mkdir(parents=True, exist_ok=True)
     for filename, template in _COMPONENTS_YAML.items():
         (components_dir / filename).write_text(
-            template.format(rootPath=str(objectstore_root.resolve()))
+            template.format(
+                objectstore_root=str(objectstore_root.resolve()),
+                eventstore_root=str(eventstore_root.resolve()),
+            )
         )
 
 
@@ -229,7 +240,8 @@ async def _wait_for_dapr_ready(http_port: int, timeout_s: float = 30.0) -> None:
 async def embedded_dapr(
     *,
     app_id: str = "atlan-app",
-    objectstore_root: str = "./local/objectstore",
+    objectstore_root: str = DEFAULT_OBJECTSTORE_ROOT,
+    eventstore_root: str = DEFAULT_EVENTSTORE_ROOT,
     log_level: str = "warn",
 ) -> AsyncIterator[EmbeddedDapr]:
     """Boot an embedded ``daprd`` for local app development.
@@ -238,8 +250,8 @@ async def embedded_dapr(
 
     * ``statestore`` — ``state.in-memory``
     * ``secretstore`` / ``deployment-secret-store`` — ``secretstores.local.env``
-    * ``objectstore`` / ``eventstore`` — ``bindings.localstorage`` rooted at
-      *objectstore_root*
+    * ``objectstore`` — ``bindings.localstorage`` rooted at *objectstore_root*
+    * ``eventstore`` — ``bindings.localstorage`` rooted at *eventstore_root*
 
     On entry the context manager sets ``DAPR_HTTP_PORT``, ``DAPR_GRPC_PORT``,
     and ``DAPR_COMPONENTS_PATH`` so callers (and any background observability
@@ -250,7 +262,7 @@ async def embedded_dapr(
     http_port = _pick_free_port()
     grpc_port = _pick_free_port()
     components_dir = Path(tempfile.mkdtemp(prefix="atlan-dapr-"))
-    _write_components(components_dir, Path(objectstore_root))
+    _write_components(components_dir, Path(objectstore_root), Path(eventstore_root))
 
     # Set env BEFORE spawning the subprocess so the observability sink's
     # flush cycle (which may fire during the ~3s daprd startup window) finds
