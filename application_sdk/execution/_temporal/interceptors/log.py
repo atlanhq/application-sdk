@@ -122,6 +122,9 @@ def _failure_details_from_detail(detail: Any) -> dict[str, str]:
             "failure.code": fd.code,
         }
     except Exception:
+        logger.debug(
+            "Failed to extract failure details for log enrichment", exc_info=True
+        )
         return {}
 
 
