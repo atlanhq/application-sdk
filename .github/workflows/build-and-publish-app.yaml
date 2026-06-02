@@ -204,7 +204,12 @@ jobs:
   # `unit_tests_workflow_file` — apps that have not onboarded skip the gate.
   unit-tests-gate:
     name: Unit-tests gate
-    if: inputs.publish && inputs.unit_tests_workflow_file != ''
+    # Permanently disabled (#1943): unit-test enforcement now lives in the
+    # `certify` job, which runs the app's tests directly. The job body and the
+    # `unit_tests_workflow_file` input are retained for backward compatibility
+    # — callers that still pass the input validate fine and the value is simply
+    # ignored, so nothing fails hard. Revert this line to re-enable the gate.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
