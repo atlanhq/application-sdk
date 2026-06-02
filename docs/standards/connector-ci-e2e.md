@@ -111,14 +111,15 @@ Threaded secrets the reusable workflow expects on the caller side:
 
 ## Cross-repo dispatch
 
-Two label-gated paths on apps-sdk PRs fan out to connector repos:
+A single always-on job (`connector-tests`) on apps-sdk PRs fans out to the connector matrix:
 
 | Job on apps-sdk PR | Connector workflow dispatched | Gating |
 |---|---|---|
-| `SDR Integration Tests (testcontainer) — <repo>` (matrix per adopter) | `sdr-integration-tests.yaml` | _none — auto on every push_ |
-| `E2E Full Tests (system apps) — <connector>` (per-connector job) | `e2e-full.yaml` | label `e2e-full-<connector>` |
+| `Connector Tests (<repo>)` (matrix over all registered connectors) | `tests.yaml` | _none — auto on every code-changing PR_ |
 
-Mechanism: `codex-/return-dispatch@v3` in `e2e-apps/action.yaml` fires `workflow_dispatch` on the target repo with the SDK PR's head SHA as `application_sdk_ref`. The connector's workflow has a Path B step that checks out `application-sdk` at that ref into `.application-sdk/` and invokes the SDR action via local-path (`./.application-sdk/.github/actions/sdr-e2e`). Worker image is built from the dispatched ref, host pytest runtime is re-pinned to it.
+The `tests.yaml` job in each connector runs unit + integration tests unconditionally. The full-DAG `e2e` job inside `tests.yaml` runs only when the SDK PR carries the `e2e` label — controlled via the `run_e2e` workflow input (`"true"` / `"false"`) passed by the dispatcher.
+
+Mechanism: `codex-/return-dispatch@v3` in `e2e-apps/action.yaml` fires `workflow_dispatch` on the target repo, passing `application_sdk_ref` (the SDK PR's head SHA, used by the connector to re-pin the SDK before running tests) and `run_e2e` (derived from whether the SDK PR has the `e2e` label).
 
 ### Sticky-comment behaviour
 
@@ -137,11 +138,11 @@ Single-pipeline apps invoking the action remotely (`@main`) never hit this code 
 ## Onboarding checklist for a new connector
 
 1. **Action manifest**: `app.yaml` at repo root (3 lines).
-2. **Workflows**: copy `.github/workflows/sdr-integration-tests.yaml` + `.github/workflows/e2e-full.yaml` from mysql-app; swap connector references.
+2. **Unified workflow**: copy `.github/workflows/tests.yaml` from mysql-app; swap connector references. This single file covers unit + integration tests (always) and full-DAG e2e (on the `e2e` label or `run_e2e=true` dispatch input).
 3. **Config dir**: create `.github/sdr-e2e/` (new) or `.github/e2e/` (legacy). Files: `docker-compose.ci.yml`, `e2e-full-docker-compose.yaml`, `e2e-full-components/`, `seed.sql`, `make-secrets.py`, `make-secrets-e2e-full.py`.
-4. **Tests**: `tests/sdr/test_<connector>_sdr.py` (`Scenario` instances), `tests/full_dag/test_<connector>_full_dag.py` (`SQLAppE2EFullTest` subclass).
+4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2EFullTest` subclass).
 5. **Repo secrets**: set the 7 entries from the table above.
-6. **SDK matrix**: add `<connector>-app` to apps-sdk's `sdr-matrix-builder` output so cross-repo dispatch fans out to your connector. For full-DAG, add a per-connector `e2e-full-<connector>` job in `pull_request.yaml`.
+6. **SDK matrix**: add `<connector>-app` to the `DEFAULT_MATRIX` in apps-sdk's `matrix-builder` job (`pull_request.yaml`) so `connector-tests` fans out to your connector automatically.
 
 ## Reference
 

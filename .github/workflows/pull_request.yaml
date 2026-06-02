@@ -311,6 +311,7 @@ jobs:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
+          workflow: tests.yaml
           workflow-inputs: |
             { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}", "run_e2e": "${{ contains(github.event.pull_request.labels.*.name, 'e2e') && 'true' || 'false' }}" }
 
