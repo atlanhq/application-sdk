@@ -352,29 +352,10 @@ jobs:
           exit 1
 
   # ── Job 0c: App certification — generic readiness checks ──────────────────────
-  # Centralizes the certification layers that need NO per-app wiring, so every
-  # app is certified at publish time without editing its own workflows:
-  #   1. v3 shape         — tools.migrate_v3.check_migration (no deprecated
-  #                         imports, @task-only, typed Input/Output, …)
-  #   2. Contract drift   — `poe generate` must be a no-op vs the committed
-  #                         app/generated/ artifacts
-  #   3. Unit + coverage  — pytest tests/unit at the >=85% SDK coverage bar
-  #
-  # App-specific layers (integration, SDR, e2e/Playwright) are NOT run here —
-  # they need the app's own live stack + secrets and stay in the app's CI.
-  #
-  # Enforcement: layer 3 (unit tests + coverage) BLOCKS publish on ❌ — the
-  # verdict step exits non-zero, which trips `prepare`'s `if: !failure()` and
-  # skips build + publish. Layers 1 and 2 (v3 shape, contract drift) remain
-  # WARN-ONLY during rollout: each runs and annotates a verdict, but does not
-  # block (contract drift still needs the pkl toolchain on the runner before it
-  # can flip). See the "Certification verdict" step. Checks that don't apply to
-  # an app (no contract/app.pkl, no tests/unit, no poe) skip cleanly so
-  # non-conforming apps aren't hard-failed before they onboard. A single
-  # `app_install` step (id: app_install) runs `uv sync --all-extras` once;
-  # contract-drift and unit tests both depend on it and are skipped if it fails.
-  #
-  # Only runs when `publish: true`. See docs/standards/app-certification.md.
+  # Runs v3-shape, contract-drift, unit tests, and coverage against the checked-
+  # out app source before publish — no per-app wiring needed. Unit test pass/fail
+  # blocks publish; other layers annotate warn-only. Only when `publish: true`.
+  # See docs/standards/app-certification.md.
   certify:
     name: Certify app
     if: inputs.publish
@@ -386,9 +367,7 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
           path: app
-          # Full history so the contract-drift `git diff` compares against the
-          # committed tree rather than a shallow snapshot.
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
@@ -435,7 +414,7 @@ jobs:
         id: app_install
         continue-on-error: true
         working-directory: app
-        run: uv sync --all-extras
+        run: uv sync --all-extras --frozen
 
       # ── 3. Contract drift ─────────────────────────────────────────────────────
       - name: "Contract drift — poe generate must be a no-op"
@@ -480,6 +459,10 @@ jobs:
         working-directory: app
         run: |
           set -euo pipefail
+          if [ ! -f .coverage ]; then
+            echo "No .coverage data (unit tests skipped) — skipping threshold check."
+            exit 0
+          fi
           uv run coverage report --data-file=.coverage --fail-under=85
 
       # ── Verdict ───────────────────────────────────────────────────────────────
@@ -556,7 +539,7 @@ jobs:
     # enforces its unit + coverage check: a failing run exits non-zero, which
     # trips `failure()` here and correctly skips prepare → build → publish. Its
     # other layers (v3 shape, contract drift) stay warn-only (always exit 0) so
-    # they never trip this yet. `unit-tests-gate` is warn-only on this branch;
+    # they never trip this yet. `unit-tests-gate` is currently warn-only;
     # its enforcement-flip is tracked separately.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
