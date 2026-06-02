@@ -945,6 +945,9 @@ def create_app_handler_service(
 
             # Resolve entry point and workflow name from the selected entrypoint.
             # Deferred to avoid a circular import at module load time.
+            from application_sdk.app.entrypoint import (  # noqa: PLC0415
+                resolve_default_entrypoint,
+            )
             from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
 
             app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
@@ -963,23 +966,27 @@ def create_app_handler_service(
                         detail="Invalid entrypoint.",
                     )
                 ep = entry_points[selected_entrypoint]
-            elif len(entry_points) == 1:
-                ep = next(iter(entry_points.values()))
-            elif len(entry_points) > 1:
-                logger.warning(
-                    "entrypoint required but not provided for multi-entry-point app %s; available: %s",
-                    app_name,
-                    sorted(entry_points.keys()),
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail="entrypoint is required for this app.",
-                )
             else:
-                # Fallback: no entry_points (shouldn't happen for a registered app)
-                raise HTTPException(
-                    status_code=500, detail="App has no registered entry points."
-                )
+                # No selector: resolve the default (single entry point, or the
+                # one marked default=True on a multi-entry-point app).
+                ep = resolve_default_entrypoint(entry_points)
+                if ep is None:
+                    if entry_points:
+                        logger.warning(
+                            "entrypoint required but not provided for multi-entry-point "
+                            "app %s with no default; available: %s",
+                            app_name,
+                            sorted(entry_points.keys()),
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail="entrypoint is required for this app.",
+                        )
+                    # No entry_points (shouldn't happen for a registered app)
+                    raise HTTPException(
+                        status_code=500,
+                        detail="App has no registered entry points.",
+                    )
 
             input_type = ep.input_type
             workflow_name = (
@@ -1811,6 +1818,78 @@ def create_app_handler_service(
             Do **not** add new callers of this endpoint.
         """
         return await get_manifest(entrypoint=entrypoint)
+
+    # ------------------------------------------------------------------
+    # Input-contract endpoint
+    # ------------------------------------------------------------------
+
+    @app.get("/workflows/v1/input-contract")
+    async def get_input_contract(entrypoint: str | None = None) -> Response:
+        """Return the input contract (JSON Schema) for an entry point.
+
+        This is the app's machine-readable input contract: exactly
+        ``AppInputContract.model_json_schema()`` for the selected entry point —
+        the same Pydantic model that ``/workflows/v1/start`` validates against.
+        Heracles consumes it to validate caller inputs and to discover which
+        fields are credentials (a field whose schema is a ``$ref`` to the
+        ``CredentialRef``/``AgentCredentialSpec`` def).
+
+        Entry-point resolution mirrors ``/workflows/v1/start``: an explicit
+        ``?entrypoint=`` selects it; a single-entry-point app resolves
+        automatically; a multi-entry-point app requires the param.
+        """
+        if entrypoint is not None and not _ENTRYPOINT_NAME_RE.match(entrypoint):
+            raise HTTPException(status_code=400, detail="Invalid entrypoint name")
+
+        # Deferred import to avoid a circular import at module load time
+        # (mirrors start_workflow above).
+        from application_sdk.app.entrypoint import (  # noqa: PLC0415
+            resolve_default_entrypoint,
+        )
+        from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
+
+        try:
+            app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
+        except Exception:  # AppNotFoundError / unregistered handler-only service
+            raise HTTPException(status_code=404, detail="App not registered") from None
+
+        entry_points = app_meta.entry_points
+        if entrypoint:
+            ep = entry_points.get(entrypoint)
+            if ep is None:
+                logger.warning(
+                    "Unknown entrypoint '%s' for app %s; available: %s",
+                    entrypoint,
+                    app_name,
+                    sorted(entry_points.keys()),
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No input contract for entrypoint {entrypoint!r}",
+                )
+        else:
+            # No selector: resolve the default (single entry point, or the one
+            # marked default=True on a multi-entry-point app).
+            ep = resolve_default_entrypoint(entry_points)
+            if ep is None:
+                if entry_points:
+                    raise HTTPException(
+                        status_code=400, detail="entrypoint is required for this app."
+                    )
+                raise HTTPException(
+                    status_code=500, detail="App has no registered entry points."
+                )
+
+        input_type = ep.input_type
+        if input_type is None:
+            raise HTTPException(
+                status_code=500, detail="Entry point has no input type."
+            )
+
+        return Response(
+            content=json.dumps(input_type.model_json_schema()),
+            media_type="application/json",
+        )
 
     # ------------------------------------------------------------------
     # Dev-only: local credential provisioning

@@ -548,6 +548,17 @@ class App(ABC):
                         f"output type {ep.output_type!r} must be a subclass of Output."
                     )
 
+            # At most one entry point may be marked default=True. A single
+            # entry point is the default implicitly, so the flag only matters
+            # for multi-entry-point apps; an ambiguous (>1) default is a
+            # developer error — raise loudly at registration.
+            defaults = [ep.name for ep in entry_points.values() if ep.default]
+            if len(defaults) > 1:
+                raise EntryPointContractError(
+                    f"{cls.__name__}: more than one default entry point "
+                    f"({sorted(defaults)}). At most one @entrypoint may set default=True."
+                )
+
             first_ep = next(iter(entry_points.values()))
             _apply_app_registration(
                 cls=cls,

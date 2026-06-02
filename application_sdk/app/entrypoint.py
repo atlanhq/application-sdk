@@ -38,7 +38,7 @@ Usage::
 
 import inspect
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, TypeVar, get_type_hints
 
@@ -102,6 +102,13 @@ class EntryPointMetadata:
 
     implicit: bool = False
     """True if derived from run() for backward-compat single-entry-point apps."""
+
+    default: bool = False
+    """True if this entry point is the app's default — used when a caller does
+    not specify ``?entrypoint=``. A single-entry-point app's only entry point is
+    always treated as the default regardless of this flag; for multi-entry-point
+    apps, at most one entry point may set ``default=True`` (validated at
+    registration)."""
 
 
 def _method_name_to_kebab(name: str) -> str:
@@ -190,6 +197,7 @@ def entrypoint(
     func: F | None = None,
     *,
     name: str | None = None,
+    default: bool = False,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as an independently-triggerable entry point.
 
@@ -227,6 +235,10 @@ def entrypoint(
         func: The function to decorate (when used without parentheses).
         name: Override the entry point name (defaults to method name in kebab-case).
             Useful for Argo DAG compatibility.
+        default: Mark this entry point as the app's default — resolved when a
+            caller omits ``?entrypoint=``. At most one entry point per app may set
+            this (validated at registration). A single-entry-point app does not
+            need it; its only entry point is the default implicitly.
 
     Raises:
         EntryPointContractError: If the method doesn't follow the contract pattern.
@@ -248,12 +260,32 @@ def entrypoint(
             input_type=input_type,
             output_type=output_type,
             method_name=fn_name,
+            default=default,
         )
         return fn
 
     if func is not None:
         return decorator(func)
     return decorator
+
+
+def resolve_default_entrypoint(
+    entry_points: "Mapping[str, EntryPointMetadata]",
+) -> EntryPointMetadata | None:
+    """Resolve the entry point to use when no ``?entrypoint=`` is provided.
+
+    Rules:
+    - Exactly one entry point → that one (single-entry-point apps need no flag).
+    - Multiple entry points → the single one marked ``default=True``.
+    - Zero entry points, or multiple with no/ambiguous default → ``None`` (the
+      caller must require an explicit entrypoint).
+    """
+    if len(entry_points) == 1:
+        return next(iter(entry_points.values()))
+    marked = [ep for ep in entry_points.values() if ep.default]
+    if len(marked) == 1:
+        return marked[0]
+    return None
 
 
 def is_entrypoint(obj: Any) -> bool:
