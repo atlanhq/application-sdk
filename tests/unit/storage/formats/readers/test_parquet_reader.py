@@ -3,11 +3,16 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.common.types import DataframeType
-from application_sdk.storage.formats.parquet import ParquetFileReader
+from application_sdk.storage.formats.parquet import (
+    ParquetFileReader,
+    _build_unified_daft_schema,
+)
 from application_sdk.storage.formats.utils import _download_files
 from application_sdk.testing.hypothesis.strategies.inputs.parquet_input import (
     parquet_input_config_strategy,
@@ -811,3 +816,143 @@ async def test_downloaded_files_tracked_on_read(monkeypatch) -> None:
 
     # Files should now be tracked
     assert reader._downloaded_files == downloaded_files
+
+
+# ---------------------------------------------------------------------------
+# Schema-unification tests (BLDX-837)
+#
+# Multi-file parquet reads where early files have null-typed columns and
+# later files have string-typed columns previously dropped rows silently.
+# Schema unification (promoting null → large_string before daft reads) is
+# now applied on both the non-batched and batched daft paths via
+# _build_unified_daft_schema. These tests lock that in.
+# ---------------------------------------------------------------------------
+
+
+try:
+    import daft  # noqa: F401 — availability probe for the test module
+
+    _DAFT_AVAILABLE = True
+except (
+    BaseException
+) as _daft_err:  # daft's Rust extension can panic on certain OTel envs
+    _DAFT_AVAILABLE = False
+    _DAFT_SKIP_REASON = f"daft unavailable: {_daft_err}"
+
+
+def _write_parquet(path: Path, schema: pa.Schema, rows: dict) -> str:
+    table = pa.Table.from_pydict(rows, schema=schema)
+    pq.write_table(table, path)
+    return str(path)
+
+
+@pytest.mark.skipif(
+    not _DAFT_AVAILABLE, reason="daft not importable in this environment"
+)
+class TestBuildUnifiedDaftSchema:
+    """Unit tests for the _build_unified_daft_schema helper."""
+
+    def test_promotes_null_field_to_large_string(self, tmp_path) -> None:
+        import daft  # local — module-level import is guarded above
+
+        f = _write_parquet(
+            tmp_path / "nulls.parquet",
+            pa.schema([("id", pa.int64()), ("remarks", pa.null())]),
+            {"id": [1, 2], "remarks": [None, None]},
+        )
+
+        schema = _build_unified_daft_schema([f], daft)
+
+        assert schema is not None
+        assert schema["remarks"] == daft.DataType.from_arrow_type(pa.large_string())
+        assert schema["id"] == daft.DataType.from_arrow_type(pa.int64())
+
+    def test_unifies_mixed_null_and_string_across_files(self, tmp_path) -> None:
+        import daft
+
+        f1 = _write_parquet(
+            tmp_path / "f1.parquet",
+            pa.schema([("id", pa.int64()), ("extra", pa.null())]),
+            {"id": [1, 2], "extra": [None, None]},
+        )
+        f2 = _write_parquet(
+            tmp_path / "f2.parquet",
+            pa.schema([("id", pa.int64()), ("extra", pa.string())]),
+            {"id": [3, 4], "extra": ["foo", "bar"]},
+        )
+
+        schema = _build_unified_daft_schema([f1, f2], daft)
+
+        assert schema is not None
+        # f1 had null, f2 had string — unify_schemas promotes to string,
+        # then the helper widens further to large_string. Either way the
+        # downstream daft.read_parquet won't silently drop the f2 rows.
+        assert schema["extra"] in (
+            daft.DataType.from_arrow_type(pa.string()),
+            daft.DataType.from_arrow_type(pa.large_string()),
+        )
+
+    def test_returns_none_on_invalid_input(self, tmp_path) -> None:
+        """Bad inputs (nonexistent file, empty list) fall back to None so
+        the caller passes ``schema=None`` to ``daft.read_parquet`` —
+        preserving today's default-inference behaviour rather than raising.
+
+        WARNING-level log emission is locked by the helper docstring and
+        code review; ``caplog`` cannot assert it because the SDK logger
+        is loguru-based (see tests/unit/storage/test_cloud.py:323)."""
+        import daft
+
+        # Nonexistent file → pq.read_schema raises FileNotFoundError (OSError).
+        bogus = str(tmp_path / "does-not-exist.parquet")
+        assert _build_unified_daft_schema([bogus], daft) is None
+
+        # Empty list → pa.unify_schemas raises ArrowInvalid.
+        assert _build_unified_daft_schema([], daft) is None
+
+
+@pytest.mark.skipif(
+    not _DAFT_AVAILABLE, reason="daft not importable in this environment"
+)
+class TestReadNonBatchedSchemaUnification:
+    """End-to-end: non-batched _get_daft_dataframe must apply schema unification.
+
+    Before this fix the non-batched reader called plain
+    `daft.read_parquet(parquet_files)` with no schema arg — the same
+    silent-data-loss bug PR #1186 closed for the batched path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mixed_schema_files_do_not_drop_rows(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        f1 = _write_parquet(
+            tmp_path / "f1.parquet",
+            pa.schema([("id", pa.int64()), ("extra", pa.null())]),
+            {"id": [1, 2], "extra": [None, None]},
+        )
+        f2 = _write_parquet(
+            tmp_path / "f2.parquet",
+            pa.schema([("id", pa.int64()), ("extra", pa.string())]),
+            {"id": [3, 4], "extra": ["foo", "bar"]},
+        )
+
+        async def fake_download(path, file_extension, file_names=None):
+            return [f1, f2]
+
+        monkeypatch.setattr(
+            "application_sdk.storage.formats.parquet._download_files",
+            fake_download,
+            raising=False,
+        )
+
+        reader = ParquetFileReader(
+            path=str(tmp_path), dataframe_type=DataframeType.daft
+        )
+        df = await reader.read()
+
+        result = df.to_pydict()
+        assert sorted(result["id"]) == [1, 2, 3, 4]  # no rows dropped
+        assert sorted(v for v in result["extra"] if v is not None) == [
+            "bar",
+            "foo",
+        ]
