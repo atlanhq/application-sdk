@@ -2396,7 +2396,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     credFieldLine +
     publishFieldBlock
   local usesAnnotated: Boolean = uiFieldLines.contains("Annotated[")
-  local usesAny: Boolean = uiFieldLines.contains("Any") || !objectStringCoercionFields.isEmpty
+  local usesAny: Boolean = uiFieldLines.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
   local usesClassVar: Boolean = includePublishInputFields
   local typingImports: List<String> = (new Listing {
     when (usesAnnotated) {
@@ -2413,7 +2413,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     (if (!objectStringCoercionFields.isEmpty) "import json\n" else "") +
     (if (!typingImports.isEmpty) "from typing import \(typingImports.join(", "))\n" else "")
   local pydanticImports: List<String> = (new Listing {
-    when (uiFieldLines.contains("Field(")) {
+    when (uiFieldLines.contains(" = Field(")) {
       "Field"
     }
     when (!objectStringCoercionFields.isEmpty) {
@@ -2423,13 +2423,13 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local pydanticImportLines: String =
     if (!pydanticImports.isEmpty) "from pydantic import \(pydanticImports.join(", "))\n" else ""
   local sdkTypeImports: List<String> = (new Listing {
-    when (uiFieldLines.contains("ConnectionRef")) {
+    when (uiFieldLines.contains(": ConnectionRef") || uiFieldLines.contains("list[ConnectionRef]")) {
       "ConnectionRef"
     }
-    when (uiFieldLines.contains("FileReference")) {
+    when (uiFieldLines.contains(": FileReference")) {
       "FileReference"
     }
-    when (uiFieldLines.contains("MaxItems")) {
+    when (uiFieldLines.contains("MaxItems(")) {
       "MaxItems"
     }
   }).toList()
