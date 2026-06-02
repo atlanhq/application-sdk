@@ -202,6 +202,7 @@ class LineagePublishStep {               // wraps LineagePublishNode
 | `credentialAuthHelp` | String? | null | Tooltip below auth-type radio. |
 | `credentialAuthWidth` | Int? | null | Grid width for auth-type radio. |
 | `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
+| `credentialExtraAnyOfRules` | Listing<UIRule> | `[]` | Extra `anyOf` branches appended to the credential `anyOf` block, beyond the auto-generated auth-type branches. Use for requirements keyed on inputs other than `auth-type`. Appended in both the plain and JDBC-URL flows. See [Extra credential anyOf rules](#extra-credential-anyof-rules). |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for hidden credential `name` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
 
@@ -773,6 +774,56 @@ available regardless of auth type instead of being duplicated in every option.
 `nestedExtraHeader` defaults to `"Advanced"`; JDBC-URL consumers override per
 option (`"Configuration"` for Azure AD, `"Domain Configuration"` for NTLM).
 `AuthOption` is `open` — see `JDBCUrlAuthOption` below for the JDBC-URL subclass.
+
+### Extra credential anyOf rules
+
+`anyOfRequiredFields` keys a conditional requirement off the **auth-type radio**.
+When the requirement depends on a different input, use the module-level
+`credentialExtraAnyOfRules`.
+
+The credential `anyOf` block is generated from `credentialAuthOptions`: one
+branch per key requiring the matching pane when `auth-type == <key>`. Each
+`UIRule` in `credentialExtraAnyOfRules` is appended as an additional branch
+using the same `whenInputs` → `properties.const` / `required` mapping as
+workflow-config rules. Branches are appended after the auth-type branches in
+both the plain auth-type flow and the JDBC-URL flow (the JDBC `anyOf` lives
+inside the `jdbcUrl` object). Defaults to empty, preserving existing output, and
+is only emitted when an `anyOf` block already exists (`credentialAuthOptions`
+non-null).
+
+```pkl
+credentialCommonFields {
+  new FieldSpec {
+    name = "enable_ssl"; fieldType = "checkbox"; defaultValue = "true"; required = false
+  }
+  new FieldSpec { name = "ssl_cert"; fieldType = "textarea"; required = false }
+}
+
+credentialExtraAnyOfRules {
+  new UIRule {
+    whenInputs { ["enable_ssl"] = "true" }
+    required { "ssl_cert" }
+  }
+}
+```
+
+Generated branch (appended after the auth-type branches):
+
+```json
+{
+  "properties": { "enable_ssl": { "const": "true" } },
+  "required": ["ssl_cert"]
+}
+```
+
+The frontend credential form coerces both sides to strings when matching, so a
+boolean checkbox value matches the `"true"` const. A field named in a rule's
+`required` is also hidden by default and revealed only while the rule's
+condition holds — the form gates visibility and requiredness together. Declare
+such fields `required = false` at the field level and let the rule drive both.
+`whenInputs` keys and `required` entries must reference credential-form property
+names at the level the `anyOf` is evaluated (the credential root for the plain
+flow). See `examples/publish-controls/app.pkl`.
 
 ### NamedWidget — Config.UIElement in credential forms
 
