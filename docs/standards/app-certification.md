@@ -18,7 +18,8 @@ and runs:
 |-------|---------|------------|
 | **v3 shape** | `tools.migrate_v3.check_migration` — no deprecated imports, `@task`-only, typed `Input`/`Output`, async clients, … | SDK install fails (annotated as incomplete) |
 | **Contract drift** | `poe generate` must produce no diff vs the committed `app/generated/` artifacts | no `contract/app.pkl`, or `poe` unavailable |
-| **Unit + coverage** | `pytest tests/unit --cov=app --cov-fail-under=85` | no `tests/unit/` directory |
+| **Unit tests** | `pytest tests/unit --cov=app --cov-report=term` | no `tests/unit/` directory |
+| **Coverage threshold** | `coverage report --fail-under=85` | unit tests skipped or failed |
 
 These are the layers that are **identical for every app**. App-specific layers
 — integration, SDR, and e2e/Playwright — are **not** run here: they need the
@@ -39,25 +40,28 @@ for free, with zero changes to its repo.
 
 ## Enforcement
 
-All three layers are **warn-only** during the initial rollout — every check runs
-and the verdict is annotated on the workflow summary, but none exit non-zero or
-block publish.
-
 | Layer | Mode |
 |-------|------|
-| **Unit + coverage** | Warn-only — annotated, does not block. |
+| **Unit tests** | **Enforced** — a ❌ exits the verdict step non-zero and blocks publish. |
+| **Coverage threshold** | Warn-only — annotated, does not block. |
 | **v3 shape** | Warn-only — annotated, does not block. |
 | **Contract drift** | Warn-only — annotated, does not block. |
 
+Unit test pass/fail is enforced: consistent with the `unit-tests-gate` job
+(PR #1945), a failing test run blocks publish. Coverage threshold, v3 shape,
+and contract drift remain warn-only during rollout — every check runs and the
+verdict is annotated on the workflow summary, but only a test failure exits
+non-zero.
+
 Checks that don't apply to an app skip cleanly (➖) so non-conforming apps are
 never hard-failed before they onboard. In particular, an app with no
-`tests/unit/` directory skips the unit check (➖).
+`tests/unit/` directory skips both the unit and coverage checks (➖).
 
 ## Known rollout gaps (before enforcement)
 
-- **Coverage threshold fixed at 85%.** Before flipping unit + coverage to
-  enforcing, verify active connector repos meet this bar. Raise the enforcement
-  question in `#pod-app-distribution`.
+- **Coverage threshold fixed at 85%.** Before flipping to enforcing, verify
+  active connector repos meet this bar. Raise the enforcement question in
+  `#pod-app-distribution`.
 - **Contract drift needs the pkl toolchain.** If `poe generate` requires pkl
   and it isn't installed on the runner, the check is recorded as a failure.
   Installing pkl in the `certify` job is a prerequisite for flipping

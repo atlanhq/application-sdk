@@ -446,33 +446,40 @@ jobs:
             exit 1
           fi
 
-      # ── 3. Unit tests + coverage ──────────────────────────────────────────────
-      - name: "Unit tests + coverage (>=85%)"
+      # ── 3. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
+      - name: "Unit tests"
         id: unit
         continue-on-error: true
         working-directory: app
         run: |
           set -euo pipefail
           if [ ! -d tests/unit ]; then
-            echo "No tests/unit/ — skipping unit-coverage check."
+            echo "No tests/unit/ — skipping."
             exit 0
           fi
           uv sync --all-extras
-          uv run --with pytest-cov pytest tests/unit \
-            --cov=app --cov-report=term --cov-fail-under=85
+          uv run --with pytest-cov pytest tests/unit --cov=app --cov-report=term
+      - name: "Coverage threshold (>=85%)"
+        id: coverage_threshold
+        if: steps.unit.outcome == 'success'
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          uv run coverage report --fail-under=85
 
       # ── Verdict ───────────────────────────────────────────────────────────────
-      # Unit tests + coverage now ENFORCE: a ❌ there exits non-zero, which trips
-      # `prepare`'s `if: !failure()` and skips build + publish. v3 shape and
-      # contract drift remain warn-only during rollout — they annotate but do
-      # not block (their enforcement-flip is tracked separately; contract drift
-      # still needs the pkl toolchain on the runner first).
+      # Unit test pass/fail (UT) ENFORCES: a ❌ exits non-zero, trips
+      # `prepare`'s `if: !failure()`, and skips build + publish.
+      # Coverage threshold (COV), v3 shape (CM), and contract drift (CD)
+      # are warn-only — they annotate but do not block.
       - name: Certification verdict
         if: always()
         env:
           CM: ${{ steps.check_migration.outcome }}
           CD: ${{ steps.contract_drift.outcome }}
           UT: ${{ steps.unit.outcome }}
+          COV: ${{ steps.coverage_threshold.outcome }}
           SDK_INSTALL: ${{ steps.sdk_install.outcome }}
         run: |
           set -euo pipefail
@@ -490,9 +497,10 @@ jobs:
             echo ""
             render "v3 shape (check_migration) — warn-only" "$CM"
             render "Contract drift (poe generate) — warn-only" "$CD"
-            render "Unit tests + coverage (>=85%) — warn-only" "$UT"
+            render "Unit tests — enforced" "$UT"
+            render "Coverage (>=85%) — warn-only" "$COV"
             echo ""
-            echo "All three checks are warn-only during rollout — a ❌ annotates but does not block. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
+            echo "**Unit test pass/fail blocks publish on ❌.** Coverage threshold, v3 shape, and contract drift are warn-only during rollout. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
           } >> "${GITHUB_STEP_SUMMARY}"
           if [ "$SDK_INSTALL" != "success" ]; then
             echo "::warning title=Certification incomplete::SDK install failed, so check_migration did not run."
@@ -500,8 +508,18 @@ jobs:
           if [ "$CM" = "failure" ] || [ "$CD" = "failure" ]; then
             echo "::warning title=Certification warning (warn-only)::v3 shape and/or contract drift failed; publish proceeded (warn-only)."
           fi
+          if [ "$COV" = "failure" ]; then
+            echo "::warning title=Certification warning (warn-only)::Coverage below 85%; publish proceeded (warn-only)."
+          fi
           if [ "$UT" = "failure" ]; then
-            echo "::warning title=Certification warning (warn-only)::Unit tests + coverage check failed; publish proceeded (warn-only)."
+            {
+              echo ""
+              echo "### ❌ Publish blocked — unit tests failed"
+              echo ""
+              echo "Fix the failing tests and re-run."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error title=Publish blocked::Unit tests failed. Build and publish blocked."
+            exit 1
           fi
           exit 0
 
