@@ -96,9 +96,10 @@ class ObjectStoreReadError(DependencyUnavailableError):
     """
 
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
-    message: str = (
-        "No matching files found in object store — verify the upstream task "
-        "wrote to this prefix and that the configured prefix is correct"
+    message: str = "No matching files found in object store."
+    suggested_action: str | None = (
+        "Verify the upstream task wrote to this prefix and that the "
+        "configured prefix is correct."
     )
     service: str | None = "object_store"
     path: str | None = None

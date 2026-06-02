@@ -213,6 +213,10 @@ async def test_no_matching_files_surfaces_read_error_not_download_error() -> Non
         # alert tells you exactly what was searched.
         assert exc_info.value.path == path
         assert exc_info.value.file_extension == ".json"
+        # `message` states what happened; `suggested_action` states what to
+        # do — kept separate per the AppError contract.
+        assert exc_info.value.suggested_action is not None
+        assert "upstream" in exc_info.value.suggested_action.lower()
 
 
 # ---------------------------------------------------------------------------
