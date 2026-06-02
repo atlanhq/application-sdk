@@ -2584,7 +2584,9 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
-        ["credential"] = "{{credential}}"
+        when (hasCredentialConfig) {
+          ["credential"] = "{{credential}}"
+        }
         for (argName, formField in manifestTopLevelArgs) {
           when (uiConfig.properties.containsKey(formField) && uiConfig.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
