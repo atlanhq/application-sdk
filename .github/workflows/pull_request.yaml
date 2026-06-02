@@ -312,8 +312,7 @@ jobs:
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
-          workflow-inputs: |
-            { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}", "run_e2e": "${{ contains(github.event.pull_request.labels.*.name, 'e2e') && 'true' || 'false' }}" }
+          workflow-inputs: ${{ contains(github.event.pull_request.labels.*.name, 'e2e') && format('{{"application_sdk_ref":"{0}","run_e2e":"true"}}', github.event.pull_request.head.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
 
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)
