@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-05-09",
+  "_updated": "2026-06-02",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -618,6 +618,17 @@
     "reason": "Upstream fix available but need immediate unblock for v2.x.x releases for SDR locked app releases.",
     "expires": "2026-06-09",
     "added_by": "adityachoudhury-cloud",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
+  },
+  "SNYK-GOLANG-GOLANGORGXNETIDNA-17116876": {
+    "package": "golang.org/x/net/idna",
+    "severity": "CRITICAL",
+    "reason": "Base image - Dapr runtime dependency. Fix (v0.54.0) lands when Dapr's daprd is rebuilt with the upstream golang.org/x/net bump; until then no actionable change in the SDK or downstream connectors.",
+    "expires": "2026-06-17",
+    "added_by": "tejeshallampati-alt",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
