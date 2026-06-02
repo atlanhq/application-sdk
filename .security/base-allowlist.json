@@ -7,17 +7,6 @@
     "CRITICAL": 15,
     "HIGH": 30
   },
-  "SNYK-GOLANG-GOOGLEGOLANGORGGRPC-15691172": {
-    "package": "google.golang.org/grpc",
-    "severity": "CRITICAL",
-    "reason": "Base image - Dapr runtime dependency",
-    "expires": "2026-05-27",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
   "CVE-2026-33186": {
     "package": "google.golang.org/grpc",
     "severity": "CRITICAL",
@@ -34,39 +23,6 @@
     "severity": "HIGH",
     "reason": "Base image - Dapr runtime dependency (Go stdlib used by daprd binary)",
     "expires": "2026-06-13",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GITHUBCOMGOJOSEGOJOSEV4-15875221": {
-    "package": "github.com/go-jose/go-jose/v4",
-    "severity": "HIGH",
-    "reason": "Base image - Dapr runtime dependency",
-    "expires": "2026-05-27",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GITHUBCOMJACKCPGXV5PGPROTO3-15923570": {
-    "package": "github.com/jackc/pgx/v5/pgproto3",
-    "severity": "HIGH",
-    "reason": "Base image - Dapr runtime dependency",
-    "expires": "2026-05-27",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GITHUBCOMJACKCPGXV5PGPROTO3-15923580": {
-    "package": "github.com/jackc/pgx/v5/pgproto3",
-    "severity": "HIGH",
-    "reason": "Base image - Dapr runtime dependency",
-    "expires": "2026-05-27",
     "added_by": "mananjain99",
     "fix_available_date": null,
     "compensating_controls": null,
@@ -128,39 +84,6 @@
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
   },
-  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELBAGGAGE-15928416": {
-    "package": "go.opentelemetry.io/otel/baggage",
-    "severity": "HIGH",
-    "reason": "Base image - OpenTelemetry Go dependency",
-    "expires": "2026-05-27",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELINTERNALGLOBAL-15928418": {
-    "package": "go.opentelemetry.io/otel/internal/global",
-    "severity": "HIGH",
-    "reason": "Base image - OpenTelemetry Go dependency",
-    "expires": "2026-05-27",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELPROPAGATION-15928420": {
-    "package": "go.opentelemetry.io/otel/propagation",
-    "severity": "HIGH",
-    "reason": "Base image - OpenTelemetry Go dependency",
-    "expires": "2026-05-27",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
   "CVE-2026-39883": {
     "package": "go.opentelemetry.io/otel/sdk",
     "severity": "HIGH",
@@ -187,28 +110,6 @@
     "package": "stdlib (Go)",
     "severity": "HIGH",
     "reason": "Base image - Go stdlib",
-    "expires": "2026-05-27",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELEXPORTERSOTLPOTLPTRACEOTLPTRACEHTTP-15954196": {
-    "package": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp",
-    "severity": "HIGH",
-    "reason": "Base image - OpenTelemetry Go dependency",
-    "expires": "2026-05-27",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELSDKRESOURCE-15954212": {
-    "package": "go.opentelemetry.io/otel/sdk/resource",
-    "severity": "HIGH",
-    "reason": "Base image - OpenTelemetry Go dependency",
     "expires": "2026-05-27",
     "added_by": "mananjain99",
     "fix_available_date": null,
@@ -266,17 +167,6 @@
     "reason": "Base image - Chainguard Wolfi system Python package",
     "expires": "2026-05-27",
     "added_by": "anuj-atlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-JS-NEXT-15954202": {
-    "package": "next",
-    "severity": "HIGH",
-    "reason": "Next.js pinned to ~16.1.6 due to router.replace static export regression in 16.2.x. Upgrade blocked until Next.js fixes the regression.",
-    "expires": "2026-05-27",
-    "added_by": "bichitra.sahoo",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
@@ -348,17 +238,6 @@
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
   },
-  "SNYK-GOLANG-GITHUBCOMMOBYSPDYSTREAMSPDY-16304822": {
-    "package": "github.com/moby/spdystream/spdy",
-    "severity": "HIGH",
-    "reason": "Base image - Go dependency. Same underlying issue as CVE-2026-35469 reported under Snyk's ID. Fix available in 0.5.1, awaiting SDK base rebuild.",
-    "expires": "2026-05-27",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
   "CVE-2023-45853": {
     "package": "zlib1g (Debian bookworm-slim)",
     "severity": "CRITICAL",
@@ -392,28 +271,6 @@
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
   },
-  "SNYK-JAVA-COMFASTERXMLJACKSONCORE-15907551": {
-    "package": "com.fasterxml.jackson.core:jackson-core",
-    "severity": "HIGH",
-    "reason": "Base image - Jackson Java transitive in application-sdk-main:2.7.3 (likely via Dapr tooling). No fix released upstream. Connector apps are Python at runtime and do not invoke Jackson code paths; review at expiry to track upstream patch availability.",
-    "expires": "2026-05-27",
-    "added_by": "vishalkatlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-JAVA-COMFASTERXMLJACKSONCORE-15365924": {
-    "package": "com.fasterxml.jackson.core:jackson-core",
-    "severity": "HIGH",
-    "reason": "Base image - Jackson Java transitive in application-sdk-main:2.7.3 (likely via Dapr tooling). No fix released upstream. Connector apps are Python at runtime and do not invoke Jackson code paths; review at expiry to track upstream patch availability.",
-    "expires": "2026-05-27",
-    "added_by": "vishalkatlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
   "CVE-2026-33871": {
     "package": "com.fasterxml.jackson.core:jackson-databind",
     "severity": "HIGH",
@@ -436,67 +293,12 @@
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
   },
-  "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2SERVICES3-16316411": {
-    "package": "github.com/aws/aws-sdk-go-v2/service/s3",
-    "severity": "HIGH",
-    "reason": "Base image - Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.97.3; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
-    "expires": "2026-05-29",
-    "added_by": "sachi-atlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2AWSPROTOCOLEVENTSTREAM-16316402": {
-    "package": "github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream",
-    "severity": "HIGH",
-    "reason": "Base image - Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.7.8; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
-    "expires": "2026-05-29",
-    "added_by": "sachi-atlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2SERVICEBEDROCKRUNTIME-16316405": {
-    "package": "github.com/aws/aws-sdk-go-v2/service/bedrockruntime",
-    "severity": "HIGH",
-    "reason": "Base image - Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.50.4; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
-    "expires": "2026-05-29",
-    "added_by": "sachi-atlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOV2SERVICEKINESIS-16316408": {
-    "package": "github.com/aws/aws-sdk-go-v2/service/kinesis",
-    "severity": "HIGH",
-    "reason": "Base image - Dapr 1.17 transitive Go AWS SDK dep in app-framework-golden bundle (consumed by SDK 2.x). Fix available in 1.43.5; awaiting Wolfi rebuild of app-framework-golden with newer aws-sdk-go-v2.",
-    "expires": "2026-05-29",
-    "added_by": "sachi-atlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
   "CVE-2026-41066": {
     "package": "lxml",
     "severity": "HIGH",
     "reason": "Connector transitive - lxml pulled in by redshift-connector (aws/amazon-redshift-python-driver). Fix is in lxml>=6.1.0, but redshift-connector 2.1.10 pins lxml<6.0.0 in its package metadata. Bumping lxml in connector apps forces a downgrade of redshift-connector to 2.1.7. Allowlisting until upstream relaxes the cap; tracking via aws/amazon-redshift-python-driver. Connector code uses lxml only for SOAP/XML parsing of trusted Redshift IAM responses, not untrusted input.",
     "expires": "2026-05-28",
     "added_by": "anuj-atlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOLANGORGXNETHTTP2-16535157": {
-    "package": "golang.org/x/net/http2",
-    "severity": "HIGH",
-    "reason": "Base image - daprd 1.17.6 (Wolfi dapr-daprd-1.17, already on latest -r2 revision). HTTP/2 infinite loop pinned upstream in dapr/dapr go.mod across v1.17.6, v1.18.0-rc.2, and master. Fix is in golang.org/x/net 0.53.0; awaiting upstream Dapr bump and subsequent Wolfi rebuild.",
-    "expires": "2026-06-07",
-    "added_by": "fyzanshaik-atlan",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
@@ -552,61 +354,6 @@
     "reason": "Base image - Rust dependency in Dapr runtime. Fix available in 0.103.13; awaiting SDK base image rebuild with updated Dapr.",
     "expires": "2026-06-08",
     "added_by": "TechyMT",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOLANGORGXCRYPTOSSH-16795342": {
-    "package": "golang.org/x/crypto/ssh",
-    "severity": "HIGH",
-    "reason": "Base image - Go dependency in Dapr runtime. Fix available in golang.org/x/crypto 0.52.0; awaiting upstream Dapr bump and subsequent Wolfi base image rebuild.",
-    "expires": "2026-06-21",
-    "added_by": "vaibhavatlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOLANGORGXCRYPTOSSH-16795344": {
-    "package": "golang.org/x/crypto/ssh",
-    "severity": "HIGH",
-    "reason": "Base image - Go dependency in Dapr runtime. Fix available in golang.org/x/crypto 0.52.0; awaiting upstream Dapr bump and subsequent Wolfi base image rebuild.",
-    "expires": "2026-06-21",
-    "added_by": "vaibhavatlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOLANGORGXCRYPTOSSH-16796326": {
-    "package": "golang.org/x/crypto/ssh",
-    "severity": "HIGH",
-    "reason": "Base image - Go dependency in Dapr runtime. Fix available in golang.org/x/crypto 0.52.0; awaiting upstream Dapr bump and subsequent Wolfi base image rebuild.",
-    "expires": "2026-06-21",
-    "added_by": "vaibhavatlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOLANGORGXCRYPTOSSH-16796332": {
-    "package": "golang.org/x/crypto/ssh",
-    "severity": "HIGH",
-    "reason": "Base image - Go dependency in Dapr runtime. Fix available in golang.org/x/crypto 0.52.0; awaiting upstream Dapr bump and subsequent Wolfi base image rebuild.",
-    "expires": "2026-06-21",
-    "added_by": "vaibhavatlan",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "SNYK-GOLANG-GOLANGORGXCRYPTOSSHKNOWNHOSTS-16796449": {
-    "package": "golang.org/x/crypto/ssh/knownhosts",
-    "severity": "HIGH",
-    "reason": "Base image - Go dependency in Dapr runtime (knownhosts subpackage of golang.org/x/crypto/ssh). Same root cause and fix as the four SSH CVEs allowlisted in #1842; missed in that batch because Snyk emits a separate ID for the knownhosts subpackage. Fix available in golang.org/x/crypto 0.52.0; awaiting upstream Dapr bump and subsequent Wolfi base image rebuild.",
-    "expires": "2026-06-21",
-    "added_by": "tejeshallampati-alt",
     "fix_available_date": null,
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
