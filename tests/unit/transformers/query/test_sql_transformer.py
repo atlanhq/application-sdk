@@ -282,6 +282,99 @@ def test_prepare_template_and_attributes(
     assert "connector_name" in result_df.column_names
 
 
+@patch("application_sdk.transformers.query.QueryBasedTransformer.generate_sql_query")
+def test_prepare_template_promotes_null_typed_columns_to_string(
+    mock_generate, sql_transformer
+):
+    """Null-typed input columns must be promoted to Utf8 before daft.sql.
+
+    Reproduces the failure mode that motivated this safeguard: an all-NULL
+    parquet column reaches the transformer with dtype `Null`, and the
+    templated SQL (SUBSTRING / REGEXP_REPLACE / CASE-WHEN-IS-NOT-NULL)
+    fails at plan creation. After the cast, the column is `String`.
+    """
+    mock_generate.return_value = ("SELECT * FROM dataframe", None)
+    df = daft.from_pydict({"name": ["a"], "remarks": [None]})
+    assert df.schema()["remarks"].dtype == daft.DataType.null()
+
+    result_df, _ = sql_transformer.prepare_template_and_attributes(
+        df, "wf", "wf-run", "default/pg/1", "test", "dummy_path"
+    )
+
+    assert result_df.schema()["remarks"].dtype == daft.DataType.string()
+    assert result_df.schema()["name"].dtype == daft.DataType.string()
+
+
+@patch("application_sdk.transformers.query.QueryBasedTransformer.generate_sql_query")
+def test_prepare_template_leaves_non_null_dtypes_untouched(
+    mock_generate, sql_transformer
+):
+    """Only Null-typed columns get cast; other dtypes pass through unchanged."""
+    mock_generate.return_value = ("SELECT * FROM dataframe", None)
+    df = daft.from_pydict(
+        {
+            "name": ["a", "b"],
+            "rows": [1, 2],
+            "flag": [True, False],
+            "remarks": [None, None],
+        }
+    )
+    assert df.schema()["rows"].dtype == daft.DataType.int64()
+    assert df.schema()["flag"].dtype == daft.DataType.bool()
+    assert df.schema()["remarks"].dtype == daft.DataType.null()
+
+    result_df, _ = sql_transformer.prepare_template_and_attributes(
+        df, "wf", "wf-run", "default/pg/1", "test", "dummy_path"
+    )
+
+    assert result_df.schema()["rows"].dtype == daft.DataType.int64()
+    assert result_df.schema()["flag"].dtype == daft.DataType.bool()
+    assert result_df.schema()["remarks"].dtype == daft.DataType.string()
+
+
+@patch("application_sdk.transformers.query.QueryBasedTransformer.generate_sql_query")
+def test_prepare_template_no_null_columns_is_noop(mock_generate, sql_transformer):
+    """When no column is Null-typed, the cast path is a no-op."""
+    mock_generate.return_value = ("SELECT * FROM dataframe", None)
+    df = daft.from_pydict({"name": ["a"], "remarks": ["r"]})
+    assert df.schema()["remarks"].dtype == daft.DataType.string()
+
+    result_df, _ = sql_transformer.prepare_template_and_attributes(
+        df, "wf", "wf-run", "default/pg/1", "test", "dummy_path"
+    )
+
+    assert result_df.schema()["remarks"].dtype == daft.DataType.string()
+
+
+@patch("application_sdk.transformers.query.QueryBasedTransformer.generate_sql_query")
+def test_prepare_template_enables_utf8_sql_on_null_column(
+    mock_generate, sql_transformer
+):
+    """After the cast, daft.sql with utf8 functions on the formerly-Null
+    column succeeds — the SUBSTRING / CASE-WHEN-IS-NOT-NULL patterns that
+    fail at plan creation on a `Null`-typed column work after promotion."""
+    mock_generate.return_value = ("SELECT * FROM dataframe", None)
+    df = daft.from_pydict({"name": ["a", "b"], "remarks": [None, None]})
+    assert df.schema()["remarks"].dtype == daft.DataType.null()
+
+    result_df, _ = sql_transformer.prepare_template_and_attributes(
+        df, "wf", "wf-run", "default/pg/1", "test", "dummy_path"
+    )
+
+    daft_table = result_df  # daft.sql resolves names from caller globals
+    globals()["daft_table"] = daft_table
+    out = daft.sql(
+        "SELECT name, "
+        "SUBSTRING(remarks, 1, 5) AS sub, "
+        "CASE WHEN remarks IS NOT NULL THEN SUBSTRING(remarks, 1, 5) ELSE '' END AS guarded "
+        "FROM daft_table"
+    ).to_pydict()
+
+    assert out["name"] == ["a", "b"]
+    assert out["sub"] == [None, None]
+    assert out["guarded"] == ["", ""]
+
+
 def test_transform_metadata_empty_dataframe(sql_transformer):
     """Test transform_metadata with empty dataframe"""
     empty_df = daft.from_pydict(

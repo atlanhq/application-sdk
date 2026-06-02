@@ -72,6 +72,7 @@ class DaprCredentialVault:
     ) -> None:
         # Deferred import: circular dependency with constants module
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
+            DEPLOYMENT_OBJECT_STORE_NAME,
             SECRET_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
         )
@@ -80,9 +81,33 @@ class DaprCredentialVault:
         )
 
         self._client = client
-        self._upstream = DaprBinding(
-            client, upstream_binding_name or UPSTREAM_OBJECT_STORE_NAME
-        )
+        if upstream_binding_name is not None:
+            credential_binding = upstream_binding_name
+        else:
+            # Mirror App.upload()/download(): use the upstream store when it is
+            # configured (component YAML present), fall back to the deployment
+            # store otherwise.  Heracles writes credential configs to whichever
+            # store the app is pointed at; in non-SDR / local / CI environments
+            # that is the deployment store.
+            import os  # noqa: PLC0415 — cold path
+            from pathlib import Path  # noqa: PLC0415 — cold path
+
+            from application_sdk.storage.binding import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                is_binding_configured,
+            )
+
+            components_dir = Path(
+                os.environ.get("DAPR_COMPONENTS_PATH", "./components")
+            )
+            upstream_configured = is_binding_configured(
+                UPSTREAM_OBJECT_STORE_NAME, components_dir=components_dir
+            )
+            credential_binding = (
+                UPSTREAM_OBJECT_STORE_NAME
+                if upstream_configured
+                else DEPLOYMENT_OBJECT_STORE_NAME
+            )
+        self._upstream = DaprBinding(client, credential_binding)
         self._secret_store_name: str = secret_store_name or SECRET_STORE_NAME
 
     async def get_credentials(self, credential_guid: str) -> dict[str, Any]:
@@ -333,8 +358,10 @@ def create_dapr_credential_vault(
 
     Args:
         client: Dapr client instance.
-        upstream_binding_name: Dapr binding component for the upstream S3 store.
-            Defaults to the ``UPSTREAM_OBJECT_STORE_NAME`` constant.
+        upstream_binding_name: Dapr binding component for the credential config store.
+            Defaults to ``UPSTREAM_OBJECT_STORE_NAME`` when its component YAML is
+            present (SDR / production), otherwise falls back to
+            ``DEPLOYMENT_OBJECT_STORE_NAME`` (local / CI / non-SDR).
         secret_store_name: Dapr secret store component name.
             Defaults to the ``SECRET_STORE_NAME`` constant.
 

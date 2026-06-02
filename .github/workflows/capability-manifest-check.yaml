@@ -32,12 +32,13 @@ name: Capability Manifest Check
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
 
 # Cancel in-flight runs when the PR receives a new push, so we don't
 # post duplicate sticky comments or waste runner time on stale SHAs.
 concurrency:
-  group: capability-manifest-check-${{ github.event.pull_request.number }}
+  group: capability-manifest-check-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 permissions:

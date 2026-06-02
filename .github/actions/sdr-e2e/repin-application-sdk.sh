@@ -46,12 +46,18 @@ pattern = re.compile(
 replaced, n = pattern.subn(new_line, src)
 
 if n == 0:
-    raise SystemExit(
-        "atlan-application-sdk source pin not found in pyproject.toml; "
-        "expected a line like:\n"
-        "  atlan-application-sdk = { git = \"...\", branch = \"...\" }\n"
-        "under [tool.uv.sources]."
-    )
+    # No existing [tool.uv.sources] entry — consumer repo uses PyPI.
+    # Insert the git override under [tool.uv.sources], creating the
+    # section if it doesn't exist.
+    if "[tool.uv.sources]" in src:
+        replaced = src.replace(
+            "[tool.uv.sources]",
+            f"[tool.uv.sources]\n{new_line}",
+            1,
+        )
+    else:
+        replaced = src + f"\n[tool.uv.sources]\n{new_line}\n"
+    print(f"No existing source pin found; inserted new entry for {ref}")
 
 if n > 1:
     # More than one pin is ambiguous — fail loudly rather than rewriting

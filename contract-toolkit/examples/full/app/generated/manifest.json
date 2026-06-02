@@ -1,0 +1,103 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Discover",
+      "app_name": "{app_name}",
+      "inputs": {
+        "workflow_type": "full-featured-example-workflow",
+        "app_name": "{app_name}",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-full-featured-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "credential_guid": "{{credential-guid}}",
+          "connection": "{{connection}}",
+          "include_filter": "{{include_filter}}",
+          "output_format": "{{output_format}}",
+          "max_results": "{{max_results}}",
+          "enable_lineage": "{{enable_lineage}}",
+          "load_to_atlan": "{{load-to-atlan}}",
+          "log_level": "{{log_level}}",
+          "lineage_depth": "{{lineage_depth}}",
+          "schemas": "{{schemas}}"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 7200
+      }
+    },
+    "qi": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Parse SQL Queries",
+      "app_name": "automation-engine",
+      "inputs": {
+        "workflow_type": "QueryIntelligenceWorkflow",
+        "app_name": "automation-engine",
+        "task_queue": "atlan-query-intelligence-{deployment_name}",
+        "args": {
+          "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+          "input_prefix": "$.extract.outputs.query_history_prefix",
+          "output_prefix": "$.extract.outputs.qi_output_prefix",
+          "sql_key": "QUERY_TEXT",
+          "catalog_key": "DATABASE_NAME",
+          "schema_key": "SCHEMA_NAME",
+          "timestamp_key": "START_TIME",
+          "mine_output_type": "parquet",
+          "parsing_mode": "fallback",
+          "vendor_name": "postgres"
+        }
+      },
+      "depends_on": {
+        "node_id": "extract"
+      }
+    },
+    "publish": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Publish to Atlas",
+      "app_name": "publish",
+      "inputs": {
+        "workflow_type": "PublishWorkflow",
+        "app_name": "publish",
+        "task_queue": "atlan-publish-{deployment_name}",
+        "args": {
+          "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+          "transformed_data_prefix": "$.extract.outputs.transformed_data_prefix",
+          "publish_state_prefix": "$.extract.outputs.publish_state_prefix",
+          "current_state_prefix": "$.extract.outputs.current_state_prefix",
+          "connection_creation_enabled": true,
+          "executor_enabled": "{{load-to-atlan}}",
+          "connection_entity": "{{connection}}",
+          "connection_cache_enabled": true,
+          "connection_cache_via_app_enabled": true,
+          "current_state_enabled": true,
+          "current_state_via_app_enabled": true
+        }
+      },
+      "depends_on": {
+        "node_id": "extract"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 14400
+      }
+    },
+    "notify": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Notify",
+      "app_name": "automation-engine",
+      "inputs": {
+        "workflow_type": "NotifyWorkflow",
+        "app_name": "automation-engine",
+        "task_queue": "atlan-automation-engine-{deployment_name}",
+        "args": {
+          "webhook_url": "$.extract.outputs.notify_webhook_url"
+        }
+      },
+      "depends_on": {
+        "node_id": "publish"
+      }
+    }
+  }
+}

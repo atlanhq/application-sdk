@@ -144,3 +144,42 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 ## Backend Selection
 
 The object-store backend is configured via Dapr component YAML at deploy time (see `components/objectstore.yaml` in the repo). No code changes are needed to switch between S3, GCS, Azure Blob, or local filesystem. For local development, the default components target a local filesystem path.
+
+---
+
+## Supported Auth Modes
+
+`create_store_from_binding` translates the Dapr component `spec.metadata` fields into the correct obstore configuration. Supported modes per provider:
+
+### S3 (`bindings.aws.s3` / `bindings.s3`)
+
+| Mode | Required fields |
+|------|----------------|
+| Static access key | `accessKey` + `secretKey` (+ optional `sessionToken` for temporary/STS-derived base creds) |
+| AssumeRole via STS | `assumeRoleArn` (+ optional `sessionName`, `accessKey`/`secretKey`/`sessionToken` for base identity) |
+| Instance profile / IRSA / env vars | Omit all credential fields |
+
+`boto3` and `azure-identity` are core SDK dependencies — no extra install is required for these auth modes. The `[iam_auth]` and `[azure]` extras are backwards-compatibility shims kept so connector `pyproject.toml` files that listed them continue to install without error.
+
+### Azure Blob (`bindings.azure.blobstorage`)
+
+Priority order when multiple modes are present: account key > SAS token > certificate > service principal > workload identity > managed identity.
+
+| Mode | Required fields |
+|------|----------------|
+| Account key | `accountKey` |
+| SAS token | `sasToken` or `sasKey` |
+| Certificate-based service principal | `azureTenantId` + `azureClientId` + (`azureCertificateFile` or `azureCertificate`) |
+| Service principal (client secret) | `azureTenantId` + `azureClientId` + `azureClientSecret` |
+| AKS Workload Identity | `azureTenantId` + `azureClientId` (no secret; AAD webhook injects `AZURE_FEDERATED_TOKEN_FILE`) |
+| User-assigned managed identity | `azureClientId` only |
+| System-assigned MI / DefaultAzureCredential | Omit all credential fields |
+
+Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChinaCloud`, `AzureUSGovernmentCloud`, `AzureGermanCloud`).
+
+### GCS (`bindings.gcp.bucket` / `bindings.gcs`)
+
+| Mode | Required fields |
+|------|----------------|
+| Inline service-account key | Any SA JSON field that includes `private_key` or `private_key_id` |
+| ADC / Workload Identity / metadata server | `bucket` + `project_id` only (no `private_key`) |

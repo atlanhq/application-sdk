@@ -7,7 +7,9 @@ Manages OAuth token lifecycle for long-running Temporal worker connections:
 
 Token exchange is delegated to ``credentials.oauth.OAuthTokenService``; this
 module owns only the Temporal-specific lifecycle (background loop, client
-api_key update, event emission).
+api_key update, event emission).  Clock-offset calibration and drift
+correction live in ``OAuthTokenService`` and are consumed here via the
+``clock_offset_seconds`` property.
 """
 
 from __future__ import annotations
@@ -17,9 +19,10 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
 
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -63,6 +66,11 @@ class TemporalAuthManager:
     long-running workers connected.  Token exchange is handled by an
     internal ``OAuthTokenService``; this class owns the Temporal-specific
     concerns (background loop timing, ``client.api_key`` update).
+
+    Clock-offset calibration is delegated to ``OAuthTokenService``.
+    ``_calculate_sleep_seconds`` reads ``clock_offset_seconds`` from the
+    service to correct for container clock drift without reinventing the
+    calibration logic here.
     """
 
     config: TemporalAuthConfig
@@ -249,7 +257,7 @@ class TemporalAuthManager:
                 _publish_event_via_binding,
             )
 
-            app_name = os.environ.get("ATLAN_APP_NAME", "")
+            app_name = APPLICATION_NAME
             deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
             now = time.time()
             expires_at_ts = expires_at.timestamp() if expires_at else 0.0
@@ -272,16 +280,27 @@ class TemporalAuthManager:
             logger.warning("Failed to emit token_refresh event", exc_info=True)
 
     def _calculate_sleep_seconds(self) -> float:
-        """Calculate how long to sleep before next refresh."""
-        expires_at = self._get_token_service().current_expires_at
+        """Calculate how long to sleep before next refresh.
+
+        ``OAuthTokenService.current_expires_at`` stores the server-issued JWT
+        exp claim (immune to container clock drift).
+        ``OAuthTokenService.clock_offset_seconds`` is the iat-derived
+        server–local offset calibrated on each exchange, so
+        ``time.time() + offset ≈ server_now`` even after a host sleep/wake cycle.
+
+        Negative remaining is clamped to ``_MIN_REFRESH_INTERVAL_SECONDS`` so
+        the loop never spins against the token endpoint.
+        """
+        svc = self._get_token_service()
+        expires_at = svc.current_expires_at
         if expires_at is None:
             return float(_MAX_REFRESH_INTERVAL_SECONDS)
 
-        now = datetime.now(UTC)
-        remaining = (expires_at - now).total_seconds()
+        server_now = time.time() + svc.clock_offset_seconds
+        remaining = expires_at.timestamp() - server_now
 
         if remaining <= 0:
-            return 0
+            return float(_MIN_REFRESH_INTERVAL_SECONDS)
 
         sleep = remaining / 2
         return max(

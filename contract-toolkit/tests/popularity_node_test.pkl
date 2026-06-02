@@ -4,22 +4,22 @@ amends "pkl:test"
 
 import "fixtures/popularity_default.pkl" as popularityApp
 import "fixtures/popularity_dynamic_overrides.pkl" as dynamicPopularityApp
-import "../src/NativeApp.pkl" as NativeApp
+import "../src/App.pkl" as App
 
-local workflowJson: String = popularityApp.output.files["popularity-node.json"].text
-local manifestJson: String = popularityApp.output.files["manifest.json"].text
-local inputPy: String = popularityApp.output.files["_input.py"].text
-local dynamicWorkflowJson: String = dynamicPopularityApp.output.files["popularity-dynamic-overrides.json"].text
-local dynamicManifestJson: String = dynamicPopularityApp.output.files["manifest.json"].text
-local dynamicInputPy: String = dynamicPopularityApp.output.files["_input.py"].text
-local defaultPopularityNode = new NativeApp.PopularityNode {
+local workflowJson: String = popularityApp.output.files["app/generated/popularity-node.json"].text
+local manifestJson: String = popularityApp.output.files["app/generated/manifest.json"].text
+local inputPy: String = popularityApp.output.files["app/generated/_input.py"].text
+local dynamicWorkflowJson: String = dynamicPopularityApp.output.files["app/generated/popularity-dynamic-overrides.json"].text
+local dynamicManifestJson: String = dynamicPopularityApp.output.files["app/generated/manifest.json"].text
+local dynamicInputPy: String = dynamicPopularityApp.output.files["app/generated/_input.py"].text
+local defaultPopularityNode = new App.PopularityNode {
   tenantId = "tenant"
   parsedDataPrefix = "parsed"
   minedDataPrefix = "mined"
   connectionCachePath = "cache.db"
   outputPrefix = "output"
 }
-local explicitStoragePopularityNode = new NativeApp.PopularityNode {
+local explicitStoragePopularityNode = new App.PopularityNode {
   tenantId = "tenant"
   parsedDataPrefix = "parsed"
   minedDataPrefix = "mined"
@@ -27,7 +27,7 @@ local explicitStoragePopularityNode = new NativeApp.PopularityNode {
   outputPrefix = "output"
   lakeProvider = "aws"
 }
-local templatedPopularityNode = new NativeApp.PopularityNode {
+local templatedPopularityNode = new App.PopularityNode {
   tenantId = "tenant"
   parsedDataPrefix = "parsed"
   minedDataPrefix = "mined"
@@ -40,7 +40,7 @@ local templatedPopularityNode = new NativeApp.PopularityNode {
   relationshipsOutputAttribution = "{{popularity-output-attribution}}"
   dryRun = "{{popularity-dry-run}}"
 }
-local extraArgsPopularityNode = new NativeApp.PopularityNode {
+local extraArgsPopularityNode = new App.PopularityNode {
   tenantId = "tenant"
   parsedDataPrefix = "parsed"
   minedDataPrefix = "mined"
@@ -134,6 +134,7 @@ facts {
     dynamicInputPy.contains("popularity_filter_errors: bool = False")
     dynamicInputPy.contains("popularity_output_attribution: bool = False")
     dynamicInputPy.contains("popularity_dry_run: bool = False")
+    dynamicInputPy.contains("popularity_custom_label: str = \"direct-default\"")
   }
   ["Popularity node omits storage override by default"] {
     !defaultPopularityNode.args.containsKey("lake_provider")
@@ -200,7 +201,7 @@ facts {
     // Pin the per-source guidance documented on the class — BigQuery
     // overrides for query_hash/query_text/queryType plus a sourceQueryTypeQi
     // sentinel for parsed parquet that doesn't carry SOURCE_QUERY_TYPE.
-    local bq = new NativeApp.PopularityMineColumnMapping {
+    local bq = new App.PopularityMineColumnMapping {
       queryId = "QUERY_ID"
       userName = "USER_EMAIL"
       warehouseName = "NULL"

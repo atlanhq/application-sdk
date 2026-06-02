@@ -30,7 +30,16 @@ runs:
       id: openconnect-connection
       with:
         max_attempts: ${{ fromJSON(inputs.max-attempts) }}
-        timeout_minutes: 10
+        # Per-attempt budget. With --max-time 60 on the curl test below, a
+        # real attempt completes (or fails) in well under a minute, so this
+        # is a safety net — kill any attempt that wedges instead of letting
+        # it consume the outer step's runner-enforced cap.
+        #
+        # Set below the outer step's timeout-minutes (5) so this inner
+        # best-effort timeout fires first when it can; the outer
+        # runner-enforced cap is the guarantee that the step terminates even
+        # if sudo/openconnect children ignore the inner SIGTERM.
+        timeout_minutes: 4
         shell: bash
         command: |
           echo "Connecting to GlobalProtect VPN using OpenConnect..."
@@ -58,14 +67,26 @@ runs:
 
           echo "Attempting OpenConnect to: ${{ inputs.portal-url }}"
 
-          # Create credentials file for OpenConnect
+          # Connect with openconnect in the background.
+          #
+          # >/tmp/openconnect.log 2>&1 is required: without it, the
+          # daemonized openconnect process inherits the step's stdout/stderr
+          # file descriptors and keeps them open for the lifetime of the VPN
+          # session. GitHub's log streamer treats the step as "in progress"
+          # until those FDs close, so the step badge in the UI never turns
+          # green even after the script exits and the next step starts
+          # running. Redirecting here detaches the daemon's stdio so the
+          # step closes cleanly. (stdin stays on the pipe so --passwd-on-stdin
+          # still reads the password; the pipe closes after echo and the
+          # daemon ends up with stdin at EOF, which is fine.)
           echo "${{ inputs.password }}" | sudo openconnect \
             --protocol=gp \
             --user="${{ inputs.username }}" \
             --passwd-on-stdin \
             --background \
-            "${{ inputs.portal-url }}" || {
+            "${{ inputs.portal-url }}" >/tmp/openconnect.log 2>&1 || {
             echo "OpenConnect connection failed"
+            cat /tmp/openconnect.log 2>/dev/null || true
             exit 1
           }
 
@@ -74,7 +95,12 @@ runs:
 
           # Initial connectivity test
           echo "Testing initial connectivity to Phoenix AI..."
-          time curl -k -sS https://phoenix-ai.atlan.com -o /dev/null
+          # --max-time 60 ensures a black-holed route (e.g. broken VPN
+          # split-tunnel) fails fast instead of burning the full retry-action
+          # timeout_minutes budget on a single hung TCP connection. 60s is
+          # comfortably above any healthy response time but well below the
+          # 5-min per-attempt cap.
+          time curl -k -sS --max-time 60 https://phoenix-ai.atlan.com -o /dev/null
 
           if [ $? -eq 0 ]; then
             echo "Initial connectivity test successful"

@@ -691,7 +691,7 @@ credentialConnectorDefault: String?
 /// Whether to emit top-level metadata keys on the credential configmap.
 credentialConfigIncludeTopLevelMetadata: Boolean = true
 
-/// Whether to emit `ui.hidden=false` on the auth-type radio.
+/// Whether to emit `ui.hidden` on the auth-type radio.
 credentialAuthIncludeHiddenFlag: Boolean = true
 
 // ---------------------------------------------------------------------------
@@ -898,6 +898,20 @@ class PublishNode extends DAGNode {
   /// `$.extract.outputs.tag_attachments_prefix`. Publish-app reads this prefix
   /// to load TagAttachment payloads for classification enrichment.
   tagAttachmentsPrefix: String? = null
+
+  /// Whether publish should read/write connection cache entries.
+  ///
+  /// Defaults to `false`. NativeApp.pkl has no typed pipeline step to inject
+  /// a context-sensitive default, so callers must set this explicitly when the
+  /// node should build the connection cache (e.g. `connectionCacheEnabled = true`
+  /// for an asset-crawler publish node).
+  connectionCacheEnabled: Boolean = false
+
+  /// Whether publish should resolve connection cache through app storage.
+  ///
+  /// Same default semantics as `connectionCacheEnabled` — set explicitly.
+  connectionCacheViaAppEnabled: Boolean = false
+
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -909,6 +923,8 @@ class PublishNode extends DAGNode {
     ["connection_creation_enabled"] = true
     ["executor_enabled"] = executorEnabled
     ["connection_entity"] = "{{connection}}"
+    ["connection_cache_enabled"] = connectionCacheEnabled
+    ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
   }
   dependsOn { upstream }
 }
@@ -1561,10 +1577,21 @@ class LineagePublishNode extends DAGNode {
   connectionEntity: String = "{{connection}}"
 
   /// Whether publish should read/write connection cache entries.
-  connectionCacheEnabled: Boolean = true
+  ///
+  /// Defaults to `false` for lineage publish because lineage entities
+  /// (`Process`, `ColumnProcess`) must not overwrite the connection cache that
+  /// the asset crawler built with `Database`/`Schema`/`Table` rows. Passing
+  /// `true` here causes the lineage publish to rebuild the cache from
+  /// lineage-stage data, destroying asset entries and breaking subsequent miner
+  /// runs. Set to `true` only when the lineage pipeline owns the connection
+  /// cache and no asset crawler shares it.
+  connectionCacheEnabled: Boolean = false
 
   /// Whether publish should resolve connection cache through app storage.
-  connectionCacheViaAppEnabled: Boolean = true
+  ///
+  /// Defaults to `false` for the same reason as `connectionCacheEnabled`:
+  /// lineage publish must not write into the shared connection cache.
+  connectionCacheViaAppEnabled: Boolean = false
 
   /// Whether publish should resolve current state through app storage.
   currentStateViaAppEnabled: Boolean = true
@@ -1656,7 +1683,7 @@ local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
       ["widget"] = if (f.sensitive || f.fieldType == "password") "password"
         else if (f.fieldType == "textarea") "TextInput"
         else if (f.fieldType == "number") "inputNumber"
-        else if (f.fieldType == "checkbox") "boolean"
+        else if (f.fieldType == "checkbox") "checkbox"
         else if (f.fieldType == "select" && f.options != null && f.options!!.length <= 4) "radio"
         else if (f.fieldType == "select") "select"
         else if (f.fieldType == "inputRepeater") "inputRepeater"
@@ -2001,7 +2028,7 @@ local function renderJdbcAuthTypeField(options: Mapping<String, AuthOption>): Ma
     ["enumNames"] = new Listing { for (k in directKeys) { options[k].label } }
     ["ui"] = new Mapping {
       ["widget"] = "radio"
-      ["hidden"] = false
+      ["hidden"] = credentialAuthHidden
       ["label"] = credentialAuthTitle
       when (credentialAuthHelp != null) { ["help"] = credentialAuthHelp }
       when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
@@ -2208,6 +2235,13 @@ local jdbcInvariant: Any =
       else null
   else null
 
+/// Auto-derived: hide the auth-type radio when the connector has a single auth
+/// option, since presenting a one-item radio adds no value. Auto-calculation
+/// keeps this in sync as connectors add or remove auth options — no manual
+/// flag to forget.
+local credentialAuthHidden: Boolean =
+  credentialAuthOptions != null && credentialAuthOptions!!.length == 1
+
 /// Generate the full credential configmap JSON.
 local function generateCredentialConfig(): Mapping<String, Any> =
   // Force invariant evaluation (local vals are lazy).
@@ -2272,7 +2306,7 @@ local function generateCredentialConfig(): Mapping<String, Any> =
           }
           ["ui"] = new Mapping {
             ["widget"] = "radio"
-            when (credentialAuthIncludeHiddenFlag) { ["hidden"] = false }
+            when (credentialAuthIncludeHiddenFlag) { ["hidden"] = credentialAuthHidden }
             ["label"] = credentialAuthTitle
             when (credentialAuthRules != null) { ["rules"] = credentialAuthRules }
             when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
@@ -2627,9 +2661,9 @@ local function toPyName(k: String): String = k.replaceAll("-", "_")
 local function getInputPyField(k: String, u: Config.UIElement): String =
   let (k = toPyName(k))
   if (u is Config.BooleanInput)
-    "\(k): bool = \(if ((u as Config.BooleanInput).defaultSelection) "True" else "False")"
+    "\(k): bool = \(if ((u as Config.BooleanInput).default) "True" else "False")"
   else if (u is Config.Switcher)
-    "\(k): bool = \(if ((u as Config.Switcher).defaultSelection) "True" else "False")"
+    "\(k): bool = \(if ((u as Config.Switcher).default) "True" else "False")"
   else if (u is Config.NumericInput)
     "\(k): int = \(if ((u as Config.NumericInput).default != null) (u as Config.NumericInput).default!!.toInt() else 0)"
   else if (u is Config.DateInput)
@@ -2669,7 +2703,7 @@ local function getInputPyField(k: String, u: Config.UIElement): String =
   else if (u is Config.CustomWidget)
     "\(k): str = \"\""
   else if (u is Config.TextInput)
-    "\(k): str = \"\(if ((u as Config.TextInput).defaultValue != null) (u as Config.TextInput).defaultValue!! else "")\""
+    "\(k): str = \"\(if ((u as Config.TextInput).default != null) (u as Config.TextInput).default!! else "")\""
   else if (u is Config.TextBoxInput)
     "\(k): str = \"\""
   else if (u is Config.ConditionalInput)

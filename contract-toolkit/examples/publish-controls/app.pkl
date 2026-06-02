@@ -5,30 +5,43 @@
 /// The app keeps the standard extract -> publish DAG, suppresses toolkit
 /// scaffolding fields from _input.py, and declares its own load-to-atlan UI
 /// toggle that flows to the publish node's executor_enabled argument.
-amends "../../src/NativeApp.pkl"
+amends "../../src/App.pkl"
 
-import "../../src/Config.pkl"
 import "../../src/Connectors.pkl"
 
 name = "publish-controls"
 displayName = "Publish Controls Example"
 connector = Connectors.TRINO
-workflowType = "PublishControlsWorkflow"
 icon = "https://assets.atlan.com/assets/trino.svg"
 credentialConnectorType = "jdbc"
-hasPublishInputFields = false
-publishExecutorEnabled = "{{load-to-atlan}}"
-extractActivityDisplayName = "Extract"
-publishActivityDisplayName = "Publish"
-extractNodeErrorHandling = new ErrorHandlingConfig {
-  startToCloseTimeoutSeconds = 14400
-}
-publishNodeErrorHandling = new ErrorHandlingConfig {
-  startToCloseTimeoutSeconds = 14400
+
+pipeline {
+  extract {
+    displayName = "Extract"
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 14400
+    }
+  }
+  publish {
+    includeInputFields = false
+    executorEnabled = "{{load-to-atlan}}"
+    displayName = "Publish"
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 14400
+    }
+  }
 }
 
 credentialCommonFields {
   new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+  new FieldSpec {
+    name = "enable_ssl"
+    displayName = "Enable SSL"
+    fieldType = "checkbox"
+    defaultValue = "true"
+    required = false
+    width = 4
+  }
 }
 
 credentialAuthOptions {
@@ -41,29 +54,26 @@ credentialAuthOptions {
   }
 }
 
-uiConfig {
+uiConfig = new UIConfig {
   tasks {
     ["Credential"] {
       inputs {
-        ["extraction-method"] = new Config.TextInput {
+        ["extraction-method"] = new TextInput {
           title = "Extraction method"
           defaultValue = "direct"
           hide = true
         }
-        ["credential-guid"] = new Config.CredentialInput {
-          title = ""
+        ["credential-guid"] = new CredentialInput {
           credType = "atlan-connectors-publish-controls"
-          placeholderText = "Credential Guid"
         }
       }
     }
     ["Connection"] {
       inputs {
-        ["connection"] = new Config.ConnectionCreator {
-          title = ""
+        ["connection"] = new ConnectionCreator {
           placeholderText = "Connection Name"
         }
-        ["load-to-atlan"] = new Config.BooleanInput {
+        ["load-to-atlan"] = new BooleanInput {
           title = "Load to Atlan"
           defaultSelection = true
           width = 4

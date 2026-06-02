@@ -155,6 +155,25 @@ class _RoutingOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-
     result: str = ""
 
 
+# Contracts for TestGetResultMultiEntrypointOutputType — must be at module
+# level because get_type_hints() resolves annotation strings against module
+# globals when 'from __future__ import annotations' is active.
+class _AlphaInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    pass
+
+
+class _AlphaOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    alpha_field: str = ""
+
+
+class _BetaInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    pass
+
+
+class _BetaOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    beta_field: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Helper: create test client
 # ---------------------------------------------------------------------------
@@ -3123,7 +3142,10 @@ class TestGetResultEndpoint:
 
         try:
             svc = self._setup()
+            desc = MagicMock()
+            desc.workflow_type = "res-test"  # single implicit entrypoint
             mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
             with (
@@ -3155,7 +3177,10 @@ class TestGetResultEndpoint:
 
         try:
             svc = self._setup()
+            desc = MagicMock()
+            desc.workflow_type = "res-test"
             mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
             with (
@@ -3217,6 +3242,155 @@ class TestGetResultEndpoint:
         client = _make_client()
         response = client.get("/workflows/v1/status/wf-1/run-1")
         assert response.status_code == 503
+
+
+class TestGetResultMultiEntrypointOutputType:
+    """Regression: /result must resolve per-entrypoint output_type from
+    desc.workflow_type, not use the app's first-registered type or None.
+
+    Original bug: _output_type on the App class was set to the first entry
+    point's Output type (alphabetically via dir()), so any workflow that ran
+    a different entry point would be deserialised with the wrong schema.
+
+    The fix uses desc.workflow_type (e.g. "app-name:beta") to look up the
+    correct EntryPointMetadata and pass its output_type to _get_workflow_result.
+    """
+
+    def _setup(self):
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+        class _MultiEpApp(App):
+            name = "multi-ep-test"
+
+            @entrypoint
+            async def alpha(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint
+            async def beta(self, input: _BetaInput) -> _BetaOutput:
+                return _BetaOutput()
+
+        return create_app_handler_service(
+            _TestHandler(),
+            app_name="multi-ep-test",
+            app_class=_MultiEpApp,
+            temporal_host="temporal:7233",
+        )
+
+    def _teardown(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @pytest.mark.parametrize(
+        "ep_name,expected_output_type",
+        [
+            ("alpha", _AlphaOutput),
+            ("beta", _BetaOutput),
+        ],
+    )
+    def test_result_completed_resolves_per_entrypoint_output_type(
+        self, ep_name: str, expected_output_type: type
+    ) -> None:
+        """Polling path: output_type passed to _get_workflow_result must match
+        the entrypoint encoded in desc.workflow_type, not the app's
+        first-registered type (_AlphaOutput) and not None."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+
+            desc = MagicMock()
+            desc.status.name = "COMPLETED"
+            desc.workflow_type = f"multi-ep-test:{ep_name}"
+
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+            captured: list[type | None] = []
+
+            async def _spy(client, *, workflow_id, output_type):
+                captured.append(output_type)
+                return {"result_field": "ok"}
+
+            with (
+                patch(
+                    "application_sdk.handler.service._get_temporal_client",
+                    new=AsyncMock(return_value=mock_client),
+                ),
+                patch(
+                    "application_sdk.handler.service._get_workflow_result",
+                    side_effect=_spy,
+                ),
+            ):
+                client = TestClient(svc)
+                response = client.get(f"/workflows/v1/result/wf-{ep_name}")
+
+            assert response.status_code == 200
+            assert len(captured) == 1
+            assert captured[0] is expected_output_type, (
+                f"For entrypoint {ep_name!r} expected output_type="
+                f"{expected_output_type.__name__!r}, got {captured[0]!r}. "
+                "The /result endpoint must resolve per-entrypoint output_type "
+                "from desc.workflow_type, not use the app-level first-registered "
+                "type or None."
+            )
+        finally:
+            self._teardown()
+
+    def test_result_wait_resolves_per_entrypoint_output_type(self) -> None:
+        """wait=True path: describe() must be called to obtain workflow_type
+        so the correct output_type can be resolved before waiting."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+
+            desc = MagicMock()
+            desc.workflow_type = "multi-ep-test:beta"
+
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+            captured: list[type | None] = []
+
+            async def _spy(client, *, workflow_id, output_type):
+                captured.append(output_type)
+                return {"result_field": "ok"}
+
+            with (
+                patch(
+                    "application_sdk.handler.service._get_temporal_client",
+                    new=AsyncMock(return_value=mock_client),
+                ),
+                patch(
+                    "application_sdk.handler.service._get_workflow_result",
+                    side_effect=_spy,
+                ),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/result/wf-beta-wait?wait=true")
+
+            assert response.status_code == 200
+            assert len(captured) == 1
+            assert captured[0] is _BetaOutput, (
+                f"For wait=True + 'beta' entrypoint expected output_type=_BetaOutput, "
+                f"got {captured[0]!r}. "
+                "The wait=True path must call describe() and resolve output_type "
+                "from desc.workflow_type."
+            )
+        finally:
+            self._teardown()
 
 
 class TestStartWorkflowExtras:
@@ -3341,6 +3515,80 @@ class TestStartWorkflowExtras:
             assert body["success"] is True
             assert "workflow_id" in body["data"]
             assert "run_id" in body["data"]
+        finally:
+            patcher.stop()
+
+
+class TestStartWorkflowExecutionTimeout:
+    """Tests for execution_timeout wiring in /workflows/v1/start."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _wire(self, app_cls, workflow_max_timeout_hours=None):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="timeout-test",
+            app_class=app_cls,
+            temporal_host="temporal:7233",
+            workflow_max_timeout_hours=workflow_max_timeout_hours,
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-id"
+        mock_handle.result_run_id = "run-id"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        return TestClient(svc, raise_server_exceptions=False), mock_client, patcher
+
+    def test_execution_timeout_set_when_configured(self) -> None:
+        """execution_timeout is passed to start_workflow when workflow_max_timeout_hours is set."""
+        from datetime import timedelta
+
+        from application_sdk.app.base import App
+
+        class _TApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, mock_client, patcher = self._wire(_TApp, workflow_max_timeout_hours=48)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] == timedelta(hours=48)
+        finally:
+            patcher.stop()
+
+    def test_execution_timeout_none_when_not_configured(self) -> None:
+        """execution_timeout is None when workflow_max_timeout_hours is not set."""
+        from application_sdk.app.base import App
+
+        class _TApp2(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, mock_client, patcher = self._wire(_TApp2)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] is None
         finally:
             patcher.stop()
 
@@ -3606,6 +3854,78 @@ class TestEventTriggerEndpoint:
         finally:
             self._teardown()
 
+    def test_event_execution_timeout_set_when_configured(self) -> None:
+        """execution_timeout is passed to start_workflow on the event route when configured."""
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+                workflow_max_timeout_hours=48,
+            )
+            mock_client = MagicMock()
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-id"
+            mock_handle.result_run_id = "run-id"
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post("/events/v1/event/t1", json={})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] == timedelta(hours=48)
+        finally:
+            self._teardown()
+
+    def test_event_execution_timeout_none_when_not_configured(self) -> None:
+        """execution_timeout is None on the event route when workflow_max_timeout_hours is unset."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            mock_client = MagicMock()
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-id"
+            mock_handle.result_run_id = "run-id"
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post("/events/v1/event/t1", json={})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] is None
+        finally:
+            self._teardown()
+
 
 class TestFrontendHomeEndpoint:
     """Tests for GET / (frontend index.html)."""
@@ -3784,7 +4104,7 @@ class TestWorkflowClientConfig:
         class _Cls:
             pass
 
-        cfg = WorkflowClientConfig(host="t:7233", app_class=_Cls)  # type: ignore[arg-type]
+        cfg = WorkflowClientConfig(host="t:7233", app_class=_Cls, app_name="test-app")  # type: ignore[arg-type]
         assert cfg.is_configured() is True
 
 

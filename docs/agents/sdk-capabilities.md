@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.12.0
-source-sha:    e57c1af666be8f7f34f78a95046c5227f78f9b19
-source-date:   2026-05-20T00:20:41+05:30
+sdk-version:   3.14.0
+source-sha:    0ef594aefde221c861d45a54d896d314ca1d906b
+source-date:   2026-06-01T18:50:15+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,19 +18,19 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 18 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 25 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 50 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 51 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 24 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 22 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -112,13 +112,6 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Standard run-result status used on :class:`Output`.
 - **Defined in:** `application_sdk/contracts/base.py`
 
-#### `PublishPreflightMixin`
-
-- **Import:** `from application_sdk.app import PublishPreflightMixin`
-- **Signature:** `class PublishPreflightMixin`
-- **Summary:** Mixin that adds a ``run_publish_preflight`` Temporal activity to an App.
-- **Defined in:** `application_sdk/app/preflight.py`
-
 #### `RetryableError`
 
 - **Import:** `from application_sdk.app import RetryableError`
@@ -169,6 +162,64 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import mcp_tool`
 - **Summary:** _(no docstring)_
+
+### Constants and Enums
+
+#### `InteractionUnfinishedPolicy`
+
+- **Import:** `from application_sdk.app import InteractionUnfinishedPolicy`
+- **Signature:** `InteractionUnfinishedPolicy`
+- **Summary:** Policy applied to in-flight runtime interactions when an app run exits.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `now`
+
+- **Import:** `from application_sdk.app import now`
+- **Signature:** `now`
+- **Summary:** Return the current time from the app run's perspective (deterministic).
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `query`
+
+- **Import:** `from application_sdk.app import query`
+- **Signature:** `query`
+- **Summary:** Declare a ``@query`` runtime interaction that reads live state without mutation.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `signal`
+
+- **Import:** `from application_sdk.app import signal`
+- **Signature:** `signal`
+- **Summary:** Declare a ``@signal`` runtime interaction on an App subclass.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `sleep`
+
+- **Import:** `from application_sdk.app import sleep`
+- **Signature:** `sleep`
+- **Summary:** Sleep for a given duration inside an app run (deterministic).
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `update`
+
+- **Import:** `from application_sdk.app import update`
+- **Signature:** `update`
+- **Summary:** Declare a ``@update`` runtime interaction that mutates state and returns a typed response.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `uuid4`
+
+- **Import:** `from application_sdk.app import uuid4`
+- **Signature:** `uuid4`
+- **Summary:** Generate a determinism-safe v4 UUID inside an app run.
+- **Defined in:** `application_sdk/app/__init__.py`
+
+#### `wait_condition`
+
+- **Import:** `from application_sdk.app import wait_condition`
+- **Signature:** `wait_condition`
+- **Summary:** Suspend ``run()`` or a runtime interaction until a predicate becomes ``True``.
+- **Defined in:** `application_sdk/app/__init__.py`
 
 ## `application_sdk.clients`
 
@@ -1150,6 +1201,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_EMPTY_UPLOAD`
+
+- **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
+- **Signature:** `STORAGE_EMPTY_UPLOAD`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `STORAGE_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
@@ -1410,20 +1468,6 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 ### Functions
-
-#### `check_atlan_publish_permission`
-
-- **Import:** `from application_sdk.handler import check_atlan_publish_permission`
-- **Signature:** `check_atlan_publish_permission(user_id: str, ...)`
-- **Summary:** Verify the triggering user can publish to the target Atlan connection.
-- **Defined in:** `application_sdk/handler/checks.py`
-
-#### `check_user_enabled`
-
-- **Import:** `from application_sdk.handler import check_user_enabled`
-- **Signature:** `check_user_enabled(user_id: str, bearer_token: str, *, heracles_url: str = '')`
-- **Summary:** Check whether the triggering user's account is active in Keycloak.
-- **Defined in:** `application_sdk/handler/checks.py`
 
 #### `create_app_handler_service`
 
@@ -1844,6 +1888,20 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
+#### `StorageBindingBrokenError`
+
+- **Import:** `from application_sdk.storage import StorageBindingBrokenError`
+- **Signature:** `class StorageBindingBrokenError(message: str, ...)`
+- **Summary:** Dapr component YAML exists but has unresolvable configuration.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageBindingNotFoundError`
+
+- **Import:** `from application_sdk.storage import StorageBindingNotFoundError`
+- **Signature:** `class StorageBindingNotFoundError(message: str, ...)`
+- **Summary:** No Dapr component with the given name exists in the components directory.
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `StorageConfigError`
 
 - **Import:** `from application_sdk.storage import StorageConfigError`
@@ -1893,6 +1951,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import create_store_from_binding`
 - **Signature:** `create_store_from_binding(name: str, *, components_dir: Path | str = Path('./components'))`
 - **Summary:** Create an obstore store from a Dapr component binding YAML file.
+- **Defined in:** `application_sdk/storage/binding.py`
+
+#### `create_store_from_binding_optional`
+
+- **Import:** `from application_sdk.storage import create_store_from_binding_optional`
+- **Signature:** `create_store_from_binding_optional(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
 - **Defined in:** `application_sdk/storage/binding.py`
 
 #### `delete`
@@ -2272,6 +2337,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `storage_subdir: str | None`
   - `tier: StorageTier` `= StorageTier.RETAINED`
   - `skip_if_exists: bool` `= False`
+  - `raise_on_empty: bool` `= False`
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 #### `UploadOutput`
@@ -2557,6 +2623,16 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
+#### `ExtractionTaskOutput`
+
+- **Import:** `from application_sdk.templates.contracts import ExtractionTaskOutput`
+- **Summary:** Output from a per-entity ``extract_*`` task.
+- **Fields:**
+  - `typename: str` `= ''`
+  - `total_record_count: int` `= 0`
+  - `raw_file: FileReference | None` — ``FileReference`` to the extract's raw output.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
 #### `FetchColumnsIncrementalInput`
 
 - **Import:** `from application_sdk.templates.contracts import FetchColumnsIncrementalInput`
@@ -2744,6 +2820,17 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `batches_local_dir: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
+#### `PrimeAuthOutput`
+
+- **Import:** `from application_sdk.templates.contracts import PrimeAuthOutput`
+- **Summary:** Output from the ``prime_sql_auth`` task (BLDX-1295).
+- **Fields:**
+  - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
+  - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means the probe
+  - `error_type: str | None` — Exception class name (e.g. ``OperationalError``) when ``success``
+  - `error_message: str | None` — Truncated exception message when ``success`` is ``False``.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
 #### `QueryBatchInput`
 
 - **Import:** `from application_sdk.templates.contracts import QueryBatchInput`
@@ -2834,21 +2921,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `TransformInput`
 
 - **Import:** `from application_sdk.templates.contracts import TransformInput`
-- **Summary:** Input for the transform_data task.
+- **Summary:** Input for transform tasks.
 - **Fields:**
-  - `typename: str` `= ''`
-  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)`
-  - `chunk_start: int` `= 0`
+  - `typename: str` `= ''` — **Deprecated** — kept for backward compatibility with existing
+  - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated and unused** — retained on the schema as a no-op
+  - `chunk_start: int` `= 0` — **Deprecated** — chunk-offset hint used by the legacy
+  - `raw_file: FileReference | None` — Durable ``FileReference`` to the matching extract's raw output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `TransformOutput`
 
 - **Import:** `from application_sdk.templates.contracts import TransformOutput`
-- **Summary:** Output from the transform_data task.
+- **Summary:** Output from the v3 ``transform_*`` tasks.
 - **Fields:**
   - `typename: str` `= ''`
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
+  - `transformed_file: FileReference | None` — ``FileReference`` to the transformed asset output.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `UpdateMarkerInput`

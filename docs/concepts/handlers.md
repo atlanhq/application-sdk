@@ -212,6 +212,23 @@ class MySQLHandler(Handler):
             ])
 ```
 
+## Workflow Execution Timeout
+
+By default the Temporal namespace ceiling applies to workflows started by the handler service. To cap execution time at the SDK level, set `ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS` in your deployment environment:
+
+| Env var | Default | Effect |
+|---|---|---|
+| `ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS` | unset (no SDK cap) | Maximum wall-clock hours a workflow may run before Temporal terminates it. Applies to every workflow started via `/workflows/v1/start` and `/events/v1/event/{event_id}`. |
+
+Non-positive values (`0`, negative numbers) are treated as unset and emit a boot-time warning. Set in `atlan.yaml`:
+
+```yaml
+# atlan.yaml
+env:
+  - name: ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS
+    value: "4"   # workflows are capped at 4 hours
+```
+
 ## Testing Handlers
 
 Test handlers by injecting mock infrastructure:

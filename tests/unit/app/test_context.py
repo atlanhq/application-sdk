@@ -119,6 +119,15 @@ class TestAppContextIdentity:
         ctx = AppContext(app_name="a", app_version="1")
         assert ctx.storage is None
 
+    def test_upstream_storage_returns_configured_store(self) -> None:
+        sentinel = object()
+        ctx = AppContext(app_name="a", app_version="1", _upstream_storage=sentinel)  # type: ignore[arg-type]
+        assert ctx.upstream_storage is sentinel
+
+    def test_upstream_storage_returns_none_by_default(self) -> None:
+        ctx = AppContext(app_name="a", app_version="1")
+        assert ctx.upstream_storage is None
+
 
 # ---------------------------------------------------------------------------
 # AppContext: state store contract

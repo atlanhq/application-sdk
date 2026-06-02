@@ -1,0 +1,86 @@
+name: "Register AE workflow from manifest"
+description: >
+  Register (create + publish) a connector app's Automation Engine workflow
+  straight from its app/generated/manifest.json. App-agnostic: the DAG, queues,
+  parsing_mode, and timeouts all come from the manifest, so callers never carry
+  a hand-copied DAG. Returns the workflow slug.
+
+inputs:
+  ae-url:
+    description: "AE base URL, e.g. https://<tenant>.atlan.com/automation"
+    required: true
+  token:
+    description: "Bearer token for AE (tenant ATLAN_API_KEY)"
+    required: true
+  name:
+    description: "Workflow display name (reused-or-created by name)"
+    required: true
+  deployment:
+    description: "Deployment tier; fills the manifest's {deployment_name} token in task queues"
+    required: false
+    default: "production"
+  cred-guid:
+    description: "Credential GUID (pre-existing in tenant vault)"
+    required: true
+  connection-qn:
+    description: "Connection qualified name"
+    required: true
+  connection-name:
+    description: "Connection display name"
+    required: true
+  extraction-method:
+    description: "Fills {{extraction-method}} in the manifest"
+    required: false
+    default: "direct"
+  values:
+    description: "Optional path to a JSON file extending/overriding the {{token}} map"
+    required: false
+    default: ""
+  manifest:
+    description: "Path to the generated manifest (relative to the checkout)"
+    required: false
+    default: "app/generated/manifest.json"
+  atlan-yaml:
+    description: "Path to atlan.yaml (source of the {app_name} token)"
+    required: false
+    default: "atlan.yaml"
+  connection-creation-enabled:
+    required: false
+    default: "false"
+  executor-enabled:
+    required: false
+    default: "true"
+  connection-cache-enabled:
+    required: false
+    default: "true"
+  connection-cache-via-app-enabled:
+    required: false
+    default: "true"
+
+outputs:
+  slug:
+    description: "The AE workflow slug that was created/updated and published"
+    value: ${{ steps.run.outputs.slug }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: run
+      shell: bash
+      run: |
+        bash "${{ github.action_path }}/ae-workflow.sh" \
+          --ae-url          "${{ inputs.ae-url }}" \
+          --token           "${{ inputs.token }}" \
+          --name            "${{ inputs.name }}" \
+          --deployment      "${{ inputs.deployment }}" \
+          --cred-guid       "${{ inputs.cred-guid }}" \
+          --connection-qn   "${{ inputs.connection-qn }}" \
+          --connection-name "${{ inputs.connection-name }}" \
+          --extraction-method "${{ inputs.extraction-method }}" \
+          --values          "${{ inputs.values }}" \
+          --manifest        "${{ inputs.manifest }}" \
+          --atlan-yaml      "${{ inputs.atlan-yaml }}" \
+          --connection-creation-enabled "${{ inputs.connection-creation-enabled }}" \
+          --executor-enabled "${{ inputs.executor-enabled }}" \
+          --connection-cache-enabled "${{ inputs.connection-cache-enabled }}" \
+          --connection-cache-via-app-enabled "${{ inputs.connection-cache-via-app-enabled }}"

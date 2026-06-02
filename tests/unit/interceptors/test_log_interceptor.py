@@ -164,6 +164,51 @@ class TestExtractFailureAttrs:
         exc.__context__ = exc
         assert _extract_failure_attrs(exc) == {}
 
+    def test_extracts_from_dict_details_post_serde(self):
+        # Workflow-side shape: after activity → workflow boundary, Temporal's
+        # pydantic_data_converter reconstructs ApplicationError.details from
+        # JSON without a target type, so the entry is a plain dict — not a
+        # FailureDetails model. The classifier must still recover the labels.
+        leaf = AuthError(message="bad creds")
+        wire = leaf.to_failure_details().model_dump(mode="json")
+        app_err = ApplicationError(
+            "bad creds",
+            wire,
+            type="AuthError",
+            non_retryable=True,
+        )
+        attrs = _extract_failure_attrs(app_err)
+        assert attrs == {
+            "failure.category": "AUTH",
+            "failure.audience": "USER",
+            "failure.code": "AUTH",
+        }
+
+    def test_extracts_from_dict_details_through_cause_chain(self):
+        # ActivityError-style wrapping: workflow catches ActivityError whose
+        # __cause__ is the rehydrated ApplicationError with dict-shaped details.
+        leaf = InvalidInputError(message="missing field", field="account")
+        wire = leaf.to_failure_details().model_dump(mode="json")
+        inner = ApplicationError(
+            "missing field", wire, type="InvalidInputError", non_retryable=True
+        )
+        outer = RuntimeError("Activity task failed")
+        outer.__cause__ = inner
+        attrs = _extract_failure_attrs(outer)
+        assert attrs["failure.category"] == "INVALID_INPUT"
+        assert attrs["failure.audience"] == "USER"
+
+    def test_ignores_unrelated_dict_details(self):
+        # ApplicationError.details may carry arbitrary user-supplied payloads.
+        # A dict that doesn't match the FailureDetails shape must not be
+        # mistaken for a typed envelope.
+        app_err = ApplicationError(
+            "oops",
+            {"unrelated": "payload"},
+            type="Custom",
+        )
+        assert _extract_failure_attrs(app_err) == {}
+
 
 # ---------------------------------------------------------------------------
 # TestLogWorkflowInboundInterceptor
@@ -450,6 +495,169 @@ class TestLogWorkflowInboundInterceptor:
             await interceptor.execute_workflow(MockExecuteWorkflowInput(headers={}))
 
         assert interceptor._correlation_id == "memo-id-123"
+
+    async def test_reads_correlation_id_from_args_when_no_memo_no_headers(
+        self, interceptor
+    ):
+        # Legacy args-based propagation: pre-v3 CorrelationContextInterceptor
+        # (still in use on SDK 2.8.7 callers like the automation-engine) puts
+        # correlation_id in the first arg dict. Priority 3 must surface it so
+        # the chain stays intact without forcing every caller to migrate to
+        # memo / header on start_workflow.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(
+                    headers={}, args=[{"correlation_id": "from-args-id"}]
+                )
+            )
+
+        assert interceptor._correlation_id == "from-args-id"
+
+    async def test_args_correlation_id_is_lower_priority_than_memo(self, interceptor):
+        # Memo wins over args — memo is the explicit / preferred channel.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {"correlation_id": "memo-wins"}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(
+                    headers={}, args=[{"correlation_id": "args-loses"}]
+                )
+            )
+
+        assert interceptor._correlation_id == "memo-wins"
+
+    async def test_args_correlation_id_is_lower_priority_than_header(self, interceptor):
+        # Header wins over args — header is the explicit / preferred channel
+        # for child-workflow inheritance.
+        payload = _encode_header("header-wins")
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(
+                    headers={"x-correlation-id": payload},
+                    args=[{"correlation_id": "args-loses"}],
+                )
+            )
+
+        assert interceptor._correlation_id == "header-wins"
+
+    async def test_falls_through_args_when_first_arg_is_not_a_dict(self, interceptor):
+        # Typed args (Pydantic model, dataclass, primitive) are skipped
+        # silently — those callers should use memo / header. Verifies we
+        # fall through to the uuid4 fallback instead of crashing.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=["just-a-string"])
+            )
+
+        assert interceptor._correlation_id != ""
+        assert interceptor._correlation_id != "just-a-string"
+        # Falls back to the priority-4 uuid4 path.
+        assert len(interceptor._correlation_id) == 36
+
+    async def test_falls_through_args_when_dict_lacks_correlation_id_key(
+        self, interceptor
+    ):
+        # Dict args without the magic key fall through cleanly to uuid4
+        # rather than raising or returning an empty string.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(
+                    headers={}, args=[{"workflow_id": "wf-1", "other": "field"}]
+                )
+            )
+
+        assert len(interceptor._correlation_id) == 36
+
+    async def test_reads_correlation_id_from_typed_object_with_attr(self, interceptor):
+        # Real-world v3 case: the SDK-generated workflow wrapper takes a
+        # typed ``Input`` instance (Pydantic model / dataclass / namespace).
+        # args[0] reaches the interceptor as that typed object, not a dict.
+        # We must still find correlation_id via attribute access.
+        @dataclass
+        class TypedInput:
+            workflow_id: str = "wf-1"
+            correlation_id: str = "from-typed-input"
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=[TypedInput()])
+            )
+
+        assert interceptor._correlation_id == "from-typed-input"
+
+    async def test_reads_correlation_id_from_pydantic_extra_bag(self, interceptor):
+        # Pydantic v2 models with ``model_config = ConfigDict(extra='allow')``
+        # stash undeclared fields on ``__pydantic_extra__``. The caller-supplied
+        # ``correlation_id`` lives there when the model doesn't declare it as
+        # a field. Cover that bag too.
+        class FakeExtraBagModel:
+            def __init__(self):
+                # No declared correlation_id attribute — only on the extras
+                # dict. ``getattr(self, 'correlation_id', None)`` returns None.
+                self.__pydantic_extra__ = {"correlation_id": "from-extras-bag"}
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=[FakeExtraBagModel()])
+            )
+
+        assert interceptor._correlation_id == "from-extras-bag"
+
+    async def test_falls_through_typed_object_without_correlation_id(self, interceptor):
+        # Typed object that genuinely has no correlation_id (no attribute
+        # declared, no pydantic extras bag) falls through to priority 4.
+        # Common case: v3 workflows whose Input contract doesn't carry the
+        # correlation field at all — those callers should use memo / header.
+        @dataclass
+        class TypedInputWithoutCorrId:
+            workflow_id: str = "wf-1"
+            some_other_field: int = 42
+
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=[TypedInputWithoutCorrId()])
+            )
+
+        # uuid4 fallback — 36 chars with hyphens.
+        assert len(interceptor._correlation_id) == 36
 
     async def test_reads_correlation_id_from_header(self, interceptor):
         payload = _encode_header("header-corr-id")

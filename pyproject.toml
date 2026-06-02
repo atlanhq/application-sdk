@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.12.0"
+version = "3.14.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -34,6 +34,11 @@ dependencies = [
     "python-dotenv>=1.1.0,<2.0.0",
     "pyyaml>=6.0.2,<7.0.0",
     "obstore>=0.9.1,<0.10.0",
+    # Cloud credential libraries — required at runtime for any storage auth mode;
+    # connectors don't know which auth mechanism a deployment will choose, so
+    # these cannot be optional extras.
+    "boto3>=1.38.6,<2.0.0",
+    "azure-identity>=1.15.0",
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
     "temporalio>=1.25.0,<2.0.0",
     "orjson>=3.11.6,<4.0.0",
@@ -64,24 +69,38 @@ sql = [
 ]
 # Daft transformer engine
 daft = [
-    "daft>=0.7.1,<0.8.0",
+    "daft==0.7.3",
 ]
-# Incremental extraction: sql + daft + RocksDB state store
+# Disk-backed RocksDB storage utilities (SpillableDict, rocksdb_utils).
+# Standalone extra — non-incremental connectors that want disk-backed
+# scratch state pull this in directly without needing the full
+# incremental analytics stack.
+storage = [
+    "rocksdict>=0.3.0",
+]
+# Incremental extraction: sql + daft + RocksDB state store.
+# Includes ``storage`` because the incremental TableScope pattern uses
+# RocksDB for state — keep one source of truth for the rocksdict pin.
 incremental = [
+    "atlan-application-sdk[storage]",
     "pandas>=2.2.3,<3.0.0",
     "pyarrow>=20.0.0,<23.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
     "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
-    "daft>=0.7.1,<0.8.0",
-    "rocksdict>=0.3.0",
+    "daft==0.7.3",
 ]
-# AWS IAM authentication for RDS/Redshift
+# Backwards-compatibility shim — boto3 promoted to core in v3.14; keeping this
+# extra means existing connector pyproject.toml files that specify [iam_auth]
+# continue to install without error.
 iam_auth = [
     "boto3>=1.38.6,<2.0.0",
 ]
 azure = [
+    # azure-identity promoted to core in v3.14 (same reason as iam_auth above).
     "azure-identity>=1.15.0",
+    # azure-storage-{blob,file-datalake} remain optional: only needed by connectors
+    # that use the Azure SDK directly (outside of obstore).
     "azure-storage-blob>=12.19.0",
     "azure-storage-file-datalake>=12.19.0",
 ]
@@ -127,6 +146,7 @@ test = [
     "pytest-timeout>=2.3.0,<3.0.0",
     "hypothesis>=6.114.0,<7.0.0",
     "trustme>=1.2.1,<2.0.0",
+    "pyjwt[crypto]>=2.12.0",
 ]
 examples = [
     "snowflake-sqlalchemy>=1.7.0,<2.0.0",
@@ -214,10 +234,13 @@ reportInvalidTypeForm = "warning"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-m 'not integration and not e2e'"
+addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration'"
 markers = [
     "integration: tests requiring local Temporal server",
     "e2e: tests requiring a live K8s cluster",
+    "s3_integration: tests requiring real AWS S3 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET)",
+    "azure_integration: tests requiring real Azure Blob Storage credentials (AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY)",
+    "gcs_integration: tests requiring real GCS credentials (GCS_BUCKET, GCS_PROJECT_ID, GOOGLE_APPLICATION_CREDENTIALS)",
 ]
 
 [tool.coverage.run]
@@ -266,6 +289,7 @@ extend-select = [
     "PLC0415", # imports must be at top of module — prevents broken-import-at-runtime bugs (e.g. PR #1543)
     "S110",    # try-except-pass detected
     "S112",    # try-except-continue detected
+    "LOG009",  # logger.warn() is deprecated — use .warning()
 ]
 
 [tool.ruff.lint.per-file-ignores]

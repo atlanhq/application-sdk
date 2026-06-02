@@ -3,7 +3,6 @@
 # Runs Trivy, checks findings against the centralized base-allowlist in the SDK
 # repo (.security/base-allowlist.json), posts a summary comment on PRs, and
 # fails on new/expired entries.
-# Snyk is handled separately via verify-snyk-status.yml (central org workflow).
 
 name: Atlan Application Trivy container scan
 

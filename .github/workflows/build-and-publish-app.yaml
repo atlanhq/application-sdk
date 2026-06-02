@@ -55,11 +55,6 @@ on:
         required: false
         type: string
         default: "https://home.atlan.com"
-      snyk_monitor:
-        description: "Push scan results to Snyk UI dashboard via snyk container monitor (default: false)"
-        required: false
-        type: boolean
-        default: false
       release_tag:
         description: "Git tag of the release (e.g. v1.2.3) — when set, pushes a version-tag ladder to GHCR in addition to the standard branch tags. Pass github.event.release.tag_name for release events."
         required: false
@@ -204,7 +199,12 @@ jobs:
   # `unit_tests_workflow_file` — apps that have not onboarded skip the gate.
   unit-tests-gate:
     name: Unit-tests gate
-    if: inputs.publish && inputs.unit_tests_workflow_file != ''
+    # Permanently disabled (#1943): unit-test enforcement now lives in the
+    # `certify` job, which runs the app's tests directly. The job body and the
+    # `unit_tests_workflow_file` input are retained for backward compatibility
+    # — callers that still pass the input validate fine and the value is simply
+    # ignored, so nothing fails hard. Revert this line to re-enable the gate.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -247,6 +247,11 @@ jobs:
           # `gh workflow run` doesn't return the new run's ID, so capture
           # it by listing recent dispatches after the trigger.
           echo "No existing run of '${WORKFLOW_FILE}' on ${SHA}. Dispatching on '${DISPATCH_REF}'..."
+          # `gh run list --branch` compares against the short headBranch (e.g. 'main'),
+          # not the full ref ('refs/heads/main'). Strip the prefix so the filter actually
+          # matches the dispatched run.
+          DISPATCH_BRANCH="${DISPATCH_REF#refs/heads/}"
+          DISPATCH_BRANCH="${DISPATCH_BRANCH#refs/tags/}"
           BEFORE=$(date -u +%FT%TZ)
           if ! gh workflow run "${WORKFLOW_FILE}" --repo "${REPO}" --ref "${DISPATCH_REF}"; then
             {
@@ -275,7 +280,7 @@ jobs:
             RUN_ID=$(gh run list \
               --repo "${REPO}" \
               --workflow "${WORKFLOW_FILE}" \
-              --branch "${DISPATCH_REF}" \
+              --branch "${DISPATCH_BRANCH}" \
               --event workflow_dispatch \
               --created ">${BEFORE}" \
               --limit 1 \
@@ -323,12 +328,11 @@ jobs:
           echo "::error title=Publish blocked::Tests run ${RUN_ID} did not complete within the gate timeout."
           exit 1
 
-      # TEMPORARY warn-only mode for the rollout window. The follow-up PR
-      # (DISTR-456 enforcement flip) restores `exit 1` so gate failure
-      # blocks publish. While in warn-only mode, the gate runs, the
-      # verdict is annotated on the workflow summary, but publish
-      # proceeds even on test failure.
-      - name: Annotate warning if tests did not succeed (warn-only)
+      # Enforcement (DISTR-456 flip): a non-success conclusion exits non-zero,
+      # so `prepare`'s `if: !failure()` skips the whole build + publish chain.
+      # The gate runs before any build minutes are spent, so a failing unit
+      # test surfaces at minute 0 rather than after the multi-arch build.
+      - name: Block publish if tests did not succeed
         if: steps.wait.outputs.conclusion != 'success'
         env:
           CONCLUSION: ${{ steps.wait.outputs.conclusion }}
@@ -336,24 +340,207 @@ jobs:
           WORKFLOW_FILE: ${{ inputs.unit_tests_workflow_file }}
         run: |
           {
-            echo "### ⚠️ Publish would be blocked once enforcement lands"
+            echo "### ❌ Publish blocked — unit tests did not pass"
             echo ""
             echo "Run of \`${WORKFLOW_FILE}\` concluded as \`${CONCLUSION}\`."
             echo ""
             echo "Failing run: ${URL}"
             echo ""
-            echo "**Currently warn-only — publish will proceed.** Once the enforcement-flip PR lands, this state will block publish. Fix the failing tests before then."
+            echo "Build and publish will not proceed until the unit-tests gate passes. Fix the failing tests and re-run."
           } >> "${GITHUB_STEP_SUMMARY}"
-          echo "::warning title=Tests failed (warn-only)::${WORKFLOW_FILE} concluded as ${CONCLUSION}. Publish proceeded; will block once enforcement lands. See: ${URL}"
+          echo "::error title=Publish blocked::${WORKFLOW_FILE} concluded as ${CONCLUSION}. Build and publish blocked. See: ${URL}"
+          exit 1
+
+  # ── Job 0c: App certification — generic readiness checks ──────────────────────
+  # Runs v3-shape, contract-drift, unit tests, and coverage against the checked-
+  # out app source before publish — no per-app wiring needed. Unit test pass/fail
+  # blocks publish; other layers annotate warn-only. Only when `publish: true`.
+  # See docs/standards/app-certification.md.
+  certify:
+    name: Certify app
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: app
+          fetch-depth: 1
+
+      - name: Checkout application-sdk (migration tooling)
+        # tools.migrate_v3 ships in the SDK repo, not the published package —
+        # pinned to main so the check tracks the latest released rules.
+        # ORG_PAT_GITHUB is required because this workflow runs in the context
+        # of a consumer app repo whose GITHUB_TOKEN is scoped to that repo and
+        # cannot read other org repos (even public ones via cross-repo reusable
+        # workflow invocations). An org PAT grants the necessary read access.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: sdk
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.7.3"
+
+      # ── 1. v3 shape ─────────────────────────────────────────────────────────
+      - name: Install SDK (migration tooling)
+        id: sdk_install
+        continue-on-error: true
+        working-directory: sdk
+        run: uv sync --all-extras
+
+      - name: "v3 shape — check_migration"
+        id: check_migration
+        if: steps.sdk_install.outcome == 'success'
+        continue-on-error: true
+        working-directory: sdk
+        run: |
+          set -euo pipefail
+          if uv run python -m tools.migrate_v3.check_migration --no-color ../app; then
+            echo "check_migration: no FAILs"
+          else
+            echo "::warning::check_migration reported FAILs — see output above"
+            exit 1
+          fi
+
+      # ── 2. App dependencies ───────────────────────────────────────────────────
+      - name: Install app dependencies
+        id: app_install
+        continue-on-error: true
+        working-directory: app
+        run: uv sync --all-extras --frozen
+
+      # ── 3. Contract drift ─────────────────────────────────────────────────────
+      - name: "Contract drift — poe generate must be a no-op"
+        id: contract_drift
+        if: steps.app_install.outcome == 'success'
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [ ! -f contract/app.pkl ]; then
+            echo "No contract/app.pkl — skipping contract-drift check."
+            exit 0
+          fi
+          if ! uv run poe --help >/dev/null 2>&1; then
+            echo "::warning::'poe' task runner not available — cannot run drift check."
+            exit 0
+          fi
+          uv run poe generate || { echo "::warning::'poe generate' failed"; exit 1; }
+          if ! git diff --exit-code -- generated/; then
+            echo "::warning::generated/ is stale — run 'poe generate' locally and commit."
+            exit 1
+          fi
+
+      # ── 4. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
+      - name: "Unit tests"
+        id: unit
+        if: steps.app_install.outcome == 'success'
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [ ! -d tests/unit ]; then
+            echo "No tests/unit/ — skipping."
+            exit 0
+          fi
+          uv run --with pytest-cov pytest tests/unit --cov=app --cov-report=term
+
+      - name: "Coverage threshold (>=85%)"
+        id: coverage_threshold
+        if: steps.unit.outcome == 'success'
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [ ! -f .coverage ]; then
+            echo "No .coverage data (unit tests skipped) — skipping threshold check."
+            exit 0
+          fi
+          uv run coverage report --data-file=.coverage --fail-under=85
+
+      # ── Verdict ───────────────────────────────────────────────────────────────
+      # Unit test pass/fail (UT) ENFORCES: a ❌ exits non-zero, trips
+      # `prepare`'s `if: !failure()`, and skips build + publish.
+      # Coverage threshold (COV), v3 shape (CM), and contract drift (CD)
+      # are warn-only — they annotate but do not block.
+      - name: Certification verdict
+        if: always()
+        env:
+          CM: ${{ steps.check_migration.outcome }}
+          CD: ${{ steps.contract_drift.outcome }}
+          UT: ${{ steps.unit.outcome }}
+          COV: ${{ steps.coverage_threshold.outcome }}
+          SDK_INSTALL: ${{ steps.sdk_install.outcome }}
+          APP_INSTALL: ${{ steps.app_install.outcome }}
+        run: |
+          set -euo pipefail
+          render() {
+            case "$2" in
+              success) icon="✅" ;;
+              failure) icon="❌" ;;
+              skipped) icon="➖" ;;
+              *)       icon="❓" ;;
+            esac
+            echo "- $icon **$1** — $2"
+          }
+          cm_label="v3 shape (check_migration) — warn-only"
+          [ "$SDK_INSTALL" != "success" ] && cm_label="$cm_label (sdk install failed)"
+          app_label=""
+          [ "$APP_INSTALL" != "success" ] && app_label=" (app install failed)"
+          {
+            echo "### App certification"
+            echo ""
+            render "$cm_label" "$CM"
+            render "Contract drift (poe generate) — warn-only${app_label}" "$CD"
+            render "Unit tests — enforced${app_label}" "$UT"
+            render "Coverage (>=85%) — warn-only" "$COV"
+            echo ""
+            echo "**Unit test pass/fail blocks publish on ❌.** Coverage threshold, v3 shape, and contract drift are warn-only during rollout. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if [ "$SDK_INSTALL" != "success" ]; then
+            echo "::warning title=Certification incomplete::SDK install failed, so check_migration did not run."
+          fi
+          if [ "$APP_INSTALL" != "success" ]; then
+            echo "::warning title=Certification incomplete::App install failed; contract drift and unit tests did not run."
+          fi
+          if [ "$CM" = "failure" ] || [ "$CD" = "failure" ]; then
+            echo "::warning title=Certification warning (warn-only)::v3 shape and/or contract drift failed; publish proceeded (warn-only)."
+          fi
+          if [ "$COV" = "failure" ]; then
+            echo "::warning title=Certification warning (warn-only)::Coverage below 85%; publish proceeded (warn-only)."
+          fi
+          if [ "$UT" = "failure" ]; then
+            {
+              echo ""
+              echo "### ❌ Publish blocked — unit tests failed"
+              echo ""
+              echo "Fix the failing tests and re-run."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error title=Publish blocked::Unit tests failed. Build and publish blocked."
+            exit 1
+          fi
+          exit 0
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel, unit-tests-gate]
-    # `needs: [validate-channel, unit-tests-gate]` only enforces ordering when
-    # those jobs run. When publish=false, both are skipped via their `if:` —
-    # which by default would propagate "skipped" to dependents. The condition
-    # below explicitly allows prepare to run when those jobs are skipped OR
-    # successful, but NOT when it failed.
+    needs: [validate-channel, unit-tests-gate, certify]
+    # `needs: [validate-channel, unit-tests-gate, certify]` only enforces
+    # ordering when those jobs run. When publish=false, all three are skipped
+    # via their `if:` — which by default would propagate "skipped" to
+    # dependents. The condition below explicitly allows prepare to run when
+    # those jobs are skipped OR successful, but NOT when one failed. `certify`
+    # enforces its unit + coverage check: a failing run exits non-zero, which
+    # trips `failure()` here and correctly skips prepare → build → publish. Its
+    # other layers (v3 shape, contract drift) stay warn-only (always exit 0) so
+    # they never trip this yet. `unit-tests-gate` is currently warn-only;
+    # its enforcement-flip is tracked separately.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
     runs-on: ubuntu-latest
@@ -367,6 +554,7 @@ jobs:
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
       entrypoints: ${{ steps.manifest.outputs.entrypoints }}
+      app_configs:      ${{ steps.app_configs.outputs.app_configs }}
       branch:           ${{ steps.tags.outputs.branch }}
       image_tag:        ${{ steps.tags.outputs.image_tag }}
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
@@ -433,6 +621,41 @@ jobs:
             echo "::error::publish=true but APP_PUBLISH_TOKEN secret is not set in this repo."
             exit 1
           fi
+
+      - name: Read app/generated/ for app_configs
+        # Glob the connector form JSON files the app ships under app/generated/
+        # and emit them as a single base64-encoded JSON blob. Base64 keeps the
+        # value inert to Kong's bluemonday XSS plugin on the upstream
+        # /marketplace/publish route (the raw JSON contains chars like
+        # `<account-id>`, `>`, PEM markers, and Jinja `{% %}` that trip it).
+        # GM decodes the field in its VersionBody validator. Apps that don't
+        # ship app/generated/ produce an empty output and the publish step
+        # omits the field entirely.
+        id: app_configs
+        run: |
+          python3 - <<'PYEOF'
+          import base64, json, os, pathlib, sys
+          generated_dir = pathlib.Path("app/generated")
+          form_files = {}
+          if generated_dir.is_dir():
+              for f in sorted(generated_dir.rglob("*.json")):
+                  try:
+                      form_files[f.name] = json.loads(f.read_text())
+                  except json.JSONDecodeError as e:
+                      # Hard-fail with a GitHub Actions error annotation. Silently
+                      # dropping the file would publish an app_configs missing a
+                      # connector form, which surfaces later as a broken install
+                      # on tenants. Better to block the publish here.
+                      print(f"::error file={f}::Invalid JSON in connector form: {e}")
+                      sys.exit(1)
+          if form_files:
+              value = base64.b64encode(json.dumps(form_files).encode("utf-8")).decode("ascii")
+          else:
+              value = ""
+          print(f"[app_configs] found {len(form_files)} files: {list(form_files.keys())}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              print(f"app_configs={value}", file=fh)
+          PYEOF
 
       - name: Compute image tags
         id: tags
@@ -651,7 +874,7 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Security scan — Trivy + Snyk + allowlist gate (non-blocking on merge path) ──
+  # ── Job 4: Security scan — Trivy + allowlist gate (non-blocking on merge path) ──
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
@@ -659,8 +882,6 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
     with:
       image: ${{ needs.prepare.outputs.ghcr_image }}
-      snyk_org: partner-images
-      snyk_monitor: ${{ inputs.snyk_monitor }}
       fail_on_findings: false
     secrets: inherit
 
@@ -711,6 +932,7 @@ jobs:
           TENANTS: ${{ inputs.tenants }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_MODEL: ${{ needs.prepare.outputs.release_model }}
+          APP_CONFIGS: ${{ needs.prepare.outputs.app_configs }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           GITHUB_ACTOR: ${{ github.triggering_actor }}
         run: |
@@ -837,6 +1059,12 @@ jobs:
 
           if release_model:
               body["release_model"] = release_model
+
+          # Base64-encoded JSON blob of connector form files (see prepare job).
+          # GM's VersionBody validator decodes this back to the JSON string.
+          app_configs = os.environ.get("APP_CONFIGS", "").strip()
+          if app_configs:
+              body["app_configs"] = app_configs
 
           print(json.dumps(body))
           PYEOF

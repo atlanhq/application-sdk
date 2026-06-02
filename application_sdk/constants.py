@@ -269,9 +269,14 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 )
 
 # REMOVED: HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT, GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
-# These were never used. See ExecutionSettings for the actual runtime values:
+# The env-var fallbacks for heartbeat and start-to-close timeouts are now read in
+# application_sdk/app/task.py (_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
+# _DEFAULT_TIMEOUT_SECONDS) and used as the defaults for TaskMetadata fields and
+# the @task decorator. Per-task overrides still take precedence.
+#   ATLAN_HEARTBEAT_TIMEOUT_SECONDS → default heartbeat_timeout_seconds for @task
+#   ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS → default timeout_seconds for @task
+# ExecutionSettings owns the graceful shutdown timeout:
 #   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
-#   - @task(timeout_seconds=..., heartbeat_timeout_seconds=...) for per-task timeouts
 
 #: Delay before initiating worker shutdown after receiving a termination signal.
 #: This gives the event loop time to flush in-flight activity completions
@@ -316,8 +321,13 @@ STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 #: Name of the deployment object store component in DAPR
 DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
-#: Name of the upstream object store component in DAPR
-UPSTREAM_OBJECT_STORE_NAME = os.getenv("UPSTREAM_OBJECT_STORE_NAME", "objectstore")
+#: Name of the upstream object store component in DAPR.
+#: Default differs from DEPLOYMENT_OBJECT_STORE_NAME so that non-SDR deployments
+#: — which only ship the deployment binding — cause create_store_from_binding_optional
+#: to return None, leaving upstream_storage unset and routing to fall back to storage.
+UPSTREAM_OBJECT_STORE_NAME = os.getenv(
+    "UPSTREAM_OBJECT_STORE_NAME", "atlan-objectstore"
+)
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 #: DAPR binding operation for creating resources

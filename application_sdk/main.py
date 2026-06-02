@@ -33,6 +33,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from application_sdk.common._env import env_int as _env_int
 from application_sdk.discovery import (
     load_app_class,
     load_handler_class,
@@ -181,6 +182,12 @@ class AppConfig:
     """Maximum concurrent object-store uploads/downloads.
     Reads same env var as constants.MAX_CONCURRENT_STORAGE_TRANSFERS."""
 
+    workflow_max_timeout_hours: int | None = None
+    """Maximum workflow execution timeout in hours. When set, passed as
+    execution_timeout to Temporal on every /workflows/v1/start call.
+    Reads env var ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS. None means no SDK-level
+    ceiling (Temporal namespace default applies)."""
+
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
         if not self.task_queue and self.app_module:
@@ -275,7 +282,17 @@ class AppConfig:
             else _env_int("ATLAN_HEALTH_PORT", 8081),
             service_name=service_name,
             # TLS
-            tls_enabled=_env_bool("ATLAN_TEMPORAL_TLS_ENABLED"),
+            # v2 compat: ATLAN_WORKFLOW_TLS_ENABLED is the legacy name; charts
+            # predating the v3 rename still set it. Fall back to the v2 name
+            # only when ATLAN_TEMPORAL_TLS_ENABLED is absent from the
+            # environment — an explicit ATLAN_TEMPORAL_TLS_ENABLED=false must
+            # still disable TLS even if a stale v2 value is left in place, so
+            # use a presence check rather than truthiness for the precedence.
+            tls_enabled=(
+                _env_bool("ATLAN_TEMPORAL_TLS_ENABLED")
+                if "ATLAN_TEMPORAL_TLS_ENABLED" in os.environ
+                else _env_bool("ATLAN_WORKFLOW_TLS_ENABLED")
+            ),
             tls_server_root_ca_cert_path=_env("ATLAN_TEMPORAL_TLS_CA_CERT_PATH"),
             tls_client_cert_path=_env("ATLAN_TEMPORAL_TLS_CLIENT_CERT_PATH"),
             tls_client_private_key_path=_env("ATLAN_TEMPORAL_TLS_CLIENT_KEY_PATH"),
@@ -303,6 +320,7 @@ class AppConfig:
             max_concurrent_storage_transfers=_env_int(
                 "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
             ),
+            workflow_max_timeout_hours=_parse_workflow_max_timeout_hours(),
         )
 
 
@@ -474,6 +492,7 @@ async def _create_infrastructure(
             EVENT_STORE_NAME,
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
+            UPSTREAM_OBJECT_STORE_NAME,
         )
         from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             DaprBinding,
@@ -486,6 +505,7 @@ async def _create_infrastructure(
         )
         from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
             create_store_from_binding,
+            create_store_from_binding_optional,
         )
 
         await wait_for_dapr_sidecar()
@@ -493,6 +513,19 @@ async def _create_infrastructure(
         components_dir = Path(os.environ.get("DAPR_COMPONENTS_PATH", "./components"))
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
+
+        upstream_storage = create_store_from_binding_optional(
+            UPSTREAM_OBJECT_STORE_NAME,
+            components_dir=components_dir,
+        )
+        if upstream_storage is None:
+            logger.warning(
+                "No Dapr component named '%s' found; App.upload/download will use "
+                "the deployment store. Configure this binding in SDR deployments to "
+                "route to the upstream bucket.",
+                UPSTREAM_OBJECT_STORE_NAME,
+            )
+
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
@@ -500,6 +533,7 @@ async def _create_infrastructure(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=components_dir,
             ),
+            upstream_storage=upstream_storage,
             event_binding=(
                 DaprBinding(dapr_client, EVENT_STORE_NAME)
                 if EVENT_STORE_NAME in registered_components
@@ -539,26 +573,17 @@ def _derive_task_queue(app_module: str) -> str:
     return f"{_derive_service_name(app_module)}-queue"
 
 
-def _env_int(key: str, default: int = 0) -> int:
-    """Read an int env var, returning ``default`` when unset, empty, or unparsable.
-
-    A malformed value like ``ATLAN_HANDLER_PORT="not-a-number"`` falls through
-    to the next key instead of crashing startup.
-    """
-    val = os.environ.get(key)
-    if not val:
-        return default
-    try:
-        return int(val)
-    except ValueError:
-        logger.warning(
-            "Ignoring non-integer env var %s=%r; falling back to default %d",
-            key,
-            val,
-            default,
-            exc_info=True,
-        )
-        return default
+def _parse_workflow_max_timeout_hours() -> int | None:
+    """Parse ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS, returning None for unset or non-positive values."""
+    hours = _env_int("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", 0)
+    if hours <= 0:
+        if hours < 0:
+            logger.warning(
+                "ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS=%d is non-positive; ignoring.",
+                hours,
+            )
+        return None
+    return hours
 
 
 def _build_dev_config(
@@ -954,6 +979,7 @@ def run_handler_mode(config: AppConfig) -> None:
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
+        workflow_max_timeout_hours=config.workflow_max_timeout_hours,
     )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1115,6 +1141,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_scopes=config.auth_scopes,
         enable_temporal_core_metrics=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
+        workflow_max_timeout_hours=config.workflow_max_timeout_hours,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
@@ -1187,6 +1214,8 @@ async def run_dev_combined(
     port: int | None = None,
     temporal_host: str | None = None,  # deprecated — ignored, kept for back-compat
     temporal_namespace: str | None = None,
+    temporal_ui: bool = False,
+    temporal_ui_port: int = 8233,
     task_queue: str | None = None,
 ) -> None:
     """Run worker + handler in a single process for local development.
@@ -1230,6 +1259,9 @@ async def run_dev_combined(
         temporal_namespace: Temporal namespace. Default precedence: kwarg →
             ``ATLAN_TEMPORAL_NAMESPACE`` → ``ATLAN_WORKFLOW_NAMESPACE`` →
             ``"default"``.
+        temporal_ui: Enable the embedded Temporal Web UI for local debugging.
+            Default ``False`` keeps the dev server headless.
+        temporal_ui_port: Temporal Web UI port. Defaults to ``8233``.
         task_queue: Task queue name. Default precedence: kwarg →
             ``ATLAN_TASK_QUEUE`` → ``"{app_name}-queue"``.
 
@@ -1275,9 +1307,15 @@ async def run_dev_combined(
     # startup and log spurious "objectstore upload failed" warnings.
     async with (
         embedded_dapr(app_id=app_name) as _dapr,
-        embedded_runtime(namespace=temporal_namespace or "default") as _rt,
+        embedded_runtime(
+            namespace=temporal_namespace or "default",
+            temporal_ui=temporal_ui,
+            temporal_ui_port=temporal_ui_port,
+        ) as _rt,
     ):
         del _dapr  # env-side-effect is sufficient; the dataclass is just for tests
+        if _rt.ui_url:
+            print(f"\nTemporal UI running at {_rt.ui_url}")
         await _run_dev_combined_inner(
             app_class=app_class,
             credential_stores=credential_stores,

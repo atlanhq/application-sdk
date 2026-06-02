@@ -1,0 +1,597 @@
+{
+  "icon": "https://assets.atlan.com/assets/fullscreen-open.svg",
+  "helpdeskLink": "",
+  "logo": "https://assets.atlan.com/assets/fullscreen-open.svg",
+  "connector": "postgres",
+  "defaultConnectorType": "jdbc",
+  "config": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Name",
+          "hidden": true,
+          "placeholder": "Host Name"
+        }
+      },
+      "connector": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Connector",
+          "hidden": true,
+          "placeholder": "Connector"
+        }
+      },
+      "connectorType": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "key": "_host",
+          "label": "connectorType",
+          "placeholder": "connectorType",
+          "hidden": true
+        }
+      },
+      "connectBy": {
+        "type": "string",
+        "enum": [
+          "host",
+          "url"
+        ],
+        "default": "host",
+        "required": true,
+        "enumNames": [
+          "Host",
+          "URL"
+        ],
+        "ui": {
+          "widget": "radio",
+          "hidden": false,
+          "label": "Connect by",
+          "rules": [
+            {
+              "required": true,
+              "message": "Please select a valid connection method"
+            }
+          ]
+        }
+      },
+      "jdbcUrl": {
+        "type": "conditional",
+        "conditions": [
+          {
+            "filter": {
+              "$and": [
+                {
+                  "extraction-method": "agent"
+                },
+                {
+                  "agent-json.auth-type": "basic"
+                }
+              ]
+            },
+            "ui": {
+              "widget": "AdvancedJDBCUrlGroup",
+              "urlPropertyId": "agent-json.extra.compiled_url",
+              "protocol": "",
+              "connectByPropertyId": "agent-json.connectBy",
+              "urlPartPropertyIdMapping": {
+                "hostname": "agent-json.host",
+                "searchParams": {
+                  "port": "agent-json.port"
+                }
+              }
+            }
+          },
+          {
+            "filter": {
+              "$and": [
+                {
+                  "extraction-method": "agent"
+                },
+                {
+                  "agent-json.auth-type": "token"
+                }
+              ]
+            },
+            "ui": {
+              "widget": "AdvancedJDBCUrlGroup",
+              "urlPropertyId": "agent-json.extra.compiled_url",
+              "protocol": "",
+              "connectByPropertyId": "agent-json.connectBy",
+              "urlPartPropertyIdMapping": {
+                "hostname": "agent-json.host",
+                "searchParams": {
+                  "port": "agent-json.port",
+                  "sslmode": "require"
+                }
+              }
+            }
+          },
+          {
+            "filter": {
+              "$and": [
+                {
+                  "extraction-method": "direct"
+                },
+                {
+                  "credential-guid.auth-type": "basic"
+                }
+              ]
+            },
+            "ui": {
+              "widget": "AdvancedJDBCUrlGroup",
+              "urlPropertyId": "credential-guid.extra.compiled_url",
+              "protocol": "",
+              "connectByPropertyId": "credential-guid.connectBy",
+              "urlPartPropertyIdMapping": {
+                "hostname": "credential-guid.host",
+                "searchParams": {
+                  "port": "credential-guid.port"
+                }
+              }
+            }
+          },
+          {
+            "filter": {
+              "$and": [
+                {
+                  "extraction-method": "direct"
+                },
+                {
+                  "credential-guid.auth-type": "token"
+                }
+              ]
+            },
+            "ui": {
+              "widget": "AdvancedJDBCUrlGroup",
+              "urlPropertyId": "credential-guid.extra.compiled_url",
+              "protocol": "",
+              "connectByPropertyId": "credential-guid.connectBy",
+              "urlPartPropertyIdMapping": {
+                "hostname": "credential-guid.host",
+                "searchParams": {
+                  "port": "credential-guid.port",
+                  "sslmode": "require"
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "extra.compiled_url": {
+            "type": "conditional",
+            "default": "",
+            "conditions": [
+              {
+                "filter": {
+                  "$or": [
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "agent"
+                        },
+                        {
+                          "agent-json.connectBy": "url"
+                        }
+                      ]
+                    },
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "direct"
+                        },
+                        {
+                          "credential-guid.connectBy": "url"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "required": true,
+                "type": "string",
+                "ui": {
+                  "label": "SQLAlchemy Connection URL",
+                  "addonBefore": "jdbc:postgresql://",
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter a valid URL"
+                    }
+                  ]
+                }
+              },
+              {
+                "filter": {
+                  "$or": [
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "agent"
+                        },
+                        {
+                          "agent-json.connectBy": "host"
+                        }
+                      ]
+                    },
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "direct"
+                        },
+                        {
+                          "credential-guid.connectBy": "host"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "type": "string",
+                "ui": {
+                  "label": "SQLAlchemy Connection URL",
+                  "addonBefore": "jdbc:postgresql://",
+                  "disabled": true
+                }
+              }
+            ],
+            "ui": {}
+          },
+          "host": {
+            "type": "conditional",
+            "conditions": [
+              {
+                "filter": {
+                  "$or": [
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "agent"
+                        },
+                        {
+                          "agent-json.connectBy": "host"
+                        }
+                      ]
+                    },
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "direct"
+                        },
+                        {
+                          "credential-guid.connectBy": "host"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "required": true,
+                "type": "string",
+                "ui": {
+                  "label": "Host",
+                  "placeholder": "host.example.com",
+                  "grid": 6,
+                  "feedback": true
+                }
+              },
+              {
+                "filter": {
+                  "$or": [
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "agent"
+                        },
+                        {
+                          "agent-json.connectBy": "url"
+                        }
+                      ]
+                    },
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "direct"
+                        },
+                        {
+                          "credential-guid.connectBy": "url"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "type": "string",
+                "ui": {
+                  "label": "Host",
+                  "placeholder": "host.example.com",
+                  "grid": 6,
+                  "feedback": true,
+                  "disabled": true
+                }
+              }
+            ],
+            "ui": {}
+          },
+          "port": {
+            "type": "conditional",
+            "default": 5432,
+            "conditions": [
+              {
+                "filter": {
+                  "$or": [
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "agent"
+                        },
+                        {
+                          "agent-json.connectBy": "host"
+                        }
+                      ]
+                    },
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "direct"
+                        },
+                        {
+                          "credential-guid.connectBy": "host"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "required": false,
+                "type": "number",
+                "ui": {
+                  "label": "Port",
+                  "placeholder": "5432",
+                  "grid": 3,
+                  "disabled": false
+                }
+              },
+              {
+                "filter": {
+                  "$or": [
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "agent"
+                        },
+                        {
+                          "agent-json.connectBy": "url"
+                        }
+                      ]
+                    },
+                    {
+                      "$and": [
+                        {
+                          "extraction-method": "direct"
+                        },
+                        {
+                          "credential-guid.connectBy": "url"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "type": "number",
+                "ui": {
+                  "label": "Port",
+                  "placeholder": "5432",
+                  "grid": 3,
+                  "disabled": true
+                }
+              }
+            ],
+            "ui": {}
+          },
+          "auth-type": {
+            "type": "conditional",
+            "conditions": [
+              {
+                "property": "extraction-method",
+                "value": "agent",
+                "enum": [
+                  "basic",
+                  "token"
+                ],
+                "enumNames": [
+                  "Basic",
+                  "Token"
+                ]
+              }
+            ],
+            "enum": [
+              "basic",
+              "token"
+            ],
+            "default": "basic",
+            "required": true,
+            "enumNames": [
+              "Basic",
+              "Token"
+            ],
+            "ui": {
+              "widget": "radio",
+              "hidden": false,
+              "label": "Authentication"
+            }
+          },
+          "basic": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "Basic Auth",
+              "hidden": true,
+              "nestedValue": false
+            },
+            "properties": {
+              "username": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "label": "Username",
+                  "grid": 4
+                }
+              },
+              "password": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "password",
+                  "label": "Password",
+                  "grid": 4
+                }
+              }
+            }
+          },
+          "token": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "Token Auth",
+              "hidden": true,
+              "nestedValue": false
+            },
+            "properties": {
+              "token": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "password",
+                  "label": "API Token",
+                  "grid": 8
+                }
+              }
+            }
+          },
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
+            },
+            "properties": {
+              "database": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "label": "Database",
+                  "grid": 4
+                }
+              },
+              "token_audience": {
+                "type": "conditional",
+                "default": "",
+                "conditions": [
+                  {
+                    "filter": {
+                      "$or": [
+                        {
+                          "agent-json.auth-type": "token"
+                        },
+                        {
+                          "credential-guid.auth-type": "token"
+                        }
+                      ]
+                    },
+                    "required": true,
+                    "type": "string",
+                    "ui": {
+                      "widget": "input",
+                      "label": "Token audience",
+                      "hidden": false,
+                      "help": "",
+                      "placeholder": "api://default",
+                      "grid": 4
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "ui": {
+          "widget": "AdvancedJDBCUrlGroup",
+          "urlPropertyId": "credential-guid.extra.compiled_url",
+          "connectByPropertyId": "credential-guid.connectBy",
+          "protocol": "",
+          "urlPartPropertyIdMapping": {}
+        },
+        "anyOf": [
+          {
+            "properties": {
+              "auth-type": {
+                "const": "basic"
+              }
+            },
+            "required": [
+              "basic"
+            ]
+          },
+          {
+            "properties": {
+              "auth-type": {
+                "const": "token"
+              }
+            },
+            "required": [
+              "token"
+            ]
+          }
+        ]
+      },
+      "basic": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "Basic Auth",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "label": "Username",
+              "grid": 4
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "password",
+              "label": "Password",
+              "grid": 4
+            }
+          }
+        }
+      },
+      "token": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "Token Auth",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "token": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "password",
+              "label": "API Token",
+              "grid": 8
+            }
+          }
+        }
+      }
+    }
+  }
+}

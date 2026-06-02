@@ -24,6 +24,9 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
+from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.execution._temporal.interceptors.log import _extract_failure_attrs
+
 _METER_NAME = "application_sdk.temporal"
 
 
@@ -56,6 +59,22 @@ def _workflow_duration():
     return _INSTRUMENTS["wf_dur"]
 
 
+def _workflow_failures_classified():
+    if "wf_fail_cls" not in _INSTRUMENTS:
+        _INSTRUMENTS["wf_fail_cls"] = _meter().create_counter(
+            "temporal.workflow.failures.classified",
+            unit="1",
+            description=(
+                "Workflow failures partitioned by failure.category and "
+                "failure.audience. Emitted for every failure across all "
+                "audiences (USER, PLATFORM, APP_OWNER); consumers filter at "
+                "query time — e.g. drop USER for actionable alerts, or keep "
+                "USER for customer-failure dashboards."
+            ),
+        )
+    return _INSTRUMENTS["wf_fail_cls"]
+
+
 def _activity_executions():
     if "act_exec" not in _INSTRUMENTS:
         _INSTRUMENTS["act_exec"] = _meter().create_counter(
@@ -86,6 +105,27 @@ def _activity_errors():
     return _INSTRUMENTS["act_err"]
 
 
+def _classify_failure(exc: BaseException | None) -> dict[str, str]:
+    """Extract bounded {category, audience} labels for the classified counter.
+
+    Reuses :func:`_extract_failure_attrs` from the log interceptor so log and
+    metric paths agree on classification. When extraction yields no SDK-typed
+    failure (raw ``ValueError`` / 3rd-party exception), falls back to
+    ``INTERNAL`` / ``APP_OWNER`` per the SDK doctrine that unowned failures
+    default to the app team (see :class:`Audience` docstring).
+    """
+    attrs = _extract_failure_attrs(exc)
+    if attrs:
+        return {
+            "failure.category": attrs["failure.category"],
+            "failure.audience": attrs["failure.audience"],
+        }
+    return {
+        "failure.category": FailureCategory.INTERNAL.value,
+        "failure.audience": Audience.APP_OWNER.value,
+    }
+
+
 class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         if workflow.unsafe.is_replaying():
@@ -97,10 +137,12 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         }
         start_ns = time.monotonic_ns()
         status = "OK"
+        exc_caught: BaseException | None = None
         try:
             return await self.next.execute_workflow(input)
-        except BaseException:
+        except BaseException as exc:
             status = "ERROR"
+            exc_caught = exc
             raise
         finally:
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
@@ -108,6 +150,12 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             try:
                 _workflow_executions().add(1, tagged)
                 _workflow_duration().record(duration_s, tagged)
+                if status == "ERROR":
+                    classified = _classify_failure(exc_caught)
+                    _workflow_failures_classified().add(
+                        1,
+                        {**attrs, **classified},
+                    )
             except Exception:  # noqa: S110 — best-effort observability; never block the workflow on metric emission
                 pass
 
@@ -152,6 +200,10 @@ class MetricsInterceptor(Interceptor):
     Instruments:
       * ``temporal.workflow.executions`` (counter)
       * ``temporal.workflow.duration`` (histogram, seconds)
+      * ``temporal.workflow.failures.classified`` (counter, partitioned by
+        ``failure.category`` and ``failure.audience`` — consumers filter at
+        query time, e.g. drop ``failure_audience="USER"`` for actionable
+        alerts)
       * ``temporal.activity.executions`` (counter)
       * ``temporal.activity.duration`` (histogram, seconds)
       * ``temporal.activity.errors`` (counter, partitioned by ``exception.type``)

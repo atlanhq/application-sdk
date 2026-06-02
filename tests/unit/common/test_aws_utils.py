@@ -124,6 +124,70 @@ class TestAWSUtils:
         assert result == "test_token"
 
     @patch("boto3.client")
+    def test_generate_aws_rds_token_with_iam_role_omits_external_id_when_blank(
+        self, mock_client
+    ):
+        """ExternalId must NOT be sent to STS when external_id is None or empty.
+
+        AWS STS rejects ExternalId shorter than 2 characters with
+        ParamValidationError. Trust policies that don't require an external
+        ID are valid; the SDK must not force one. Regression test for HYP-1445.
+        """
+        for blank in (None, ""):
+            mock_client.reset_mock()
+            mock_sts = MagicMock()
+            mock_rds = MagicMock()
+            mock_client.side_effect = [mock_sts, mock_rds]
+            mock_sts.assume_role.return_value = {
+                "Credentials": {
+                    "AccessKeyId": "test_key",
+                    "SecretAccessKey": "test_secret",
+                    "SessionToken": "test_token",
+                }
+            }
+            mock_rds.generate_db_auth_token.return_value = "test_token"
+
+            generate_aws_rds_token_with_iam_role(
+                role_arn="arn:aws:iam::123456789012:role/test-role",
+                host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+                user="test_user",
+                external_id=blank,
+            )
+
+            kwargs = mock_sts.assume_role.call_args.kwargs
+            assert "ExternalId" not in kwargs, (
+                f"ExternalId must not be passed when external_id={blank!r}; "
+                f"got {kwargs!r}"
+            )
+
+    @patch("boto3.client")
+    def test_generate_aws_rds_token_with_iam_role_passes_external_id_when_set(
+        self, mock_client
+    ):
+        """ExternalId must be forwarded verbatim to STS when provided."""
+        mock_sts = MagicMock()
+        mock_rds = MagicMock()
+        mock_client.side_effect = [mock_sts, mock_rds]
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "test_key",
+                "SecretAccessKey": "test_secret",
+                "SessionToken": "test_token",
+            }
+        }
+        mock_rds.generate_db_auth_token.return_value = "test_token"
+
+        generate_aws_rds_token_with_iam_role(
+            role_arn="arn:aws:iam::123456789012:role/test-role",
+            host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            user="test_user",
+            external_id="my-external-id",
+        )
+
+        kwargs = mock_sts.assume_role.call_args.kwargs
+        assert kwargs.get("ExternalId") == "my-external-id"
+
+    @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_role_error(self, mock_client):
         """Test error handling in RDS token generation with IAM role."""
         from botocore.exceptions import ClientError

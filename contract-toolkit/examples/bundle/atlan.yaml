@@ -1,0 +1,39 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: bundle
+display_name: Bundle Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/snowflake.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: false
+entrypoints:
+- name: crawler
+  display_name: Crawler
+  icon_url: https://assets.atlan.com/assets/snowflake.svg
+  type: connector
+  source: snowflake
+  source_category: database
+- name: miner
+  display_name: Query Miner
+  icon_url: https://assets.atlan.com/assets/snowflake.svg
+  type: connector
+  source: snowflake
+  source_category: database
+deploy:
+  execution_mode: native
+  splitDeploymentEnabled: true
+  dapr:
+    objectstore: false
+    secretstore: false
+    statestore: false
+    eventstore: false
+    subscription: false
+    configurationstore: false
+    lock: false
+  keda:
+    enabled: true
+    minReplicaCount: 0
+    temporal:
+      targetQueueSize: 5

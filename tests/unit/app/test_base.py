@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence as _Seq
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any as _Any
 from unittest import mock
 from uuid import UUID
 
 import pytest
+from temporalio import workflow as _wf  # _wf._Definition used for relay assertions
+from temporalio.common import RawValue as _RawValue
 
+from application_sdk.app import query, signal, update
 from application_sdk.app.base import (
     App,
     AppContextError,
@@ -1222,6 +1227,493 @@ class TestGenerateWorkflowClass:
             out = await wf_cls.run(mock.MagicMock(), _BLDXInput())
 
         assert isinstance(out, _BLDXOutput)
+
+
+# =============================================================================
+# Runtime interaction relay (BLDX-1283) — @signal / @query / @update on App
+# =============================================================================
+
+
+class TestWorkflowInteractionRelay:
+    """Pin that @signal / @query / @update declared on an App subclass are
+    lifted onto the generated wf_cls so the underlying runtime discovers them
+    and `handle.execute_update(...)` / `handle.signal(...)` resolve to the
+    App's methods at runtime.
+
+    Pre-BLDX-1283 these interactions were silently dropped because the
+    synthesized wf_cls only carried `run` — the runtime scans the generated
+    class, not the App class, so decorators on App methods were invisible.
+    """
+
+    def _make_ep(self, input_type: type, output_type: type) -> EntryPointMetadata:
+        return EntryPointMetadata(
+            name="run",
+            input_type=input_type,
+            output_type=output_type,
+            method_name="run",
+            implicit=True,
+        )
+
+    def test_signal_interaction_is_registered_on_wf_cls(self) -> None:
+        class _SignalApp(App):
+            def __init__(self) -> None:
+                self.ping_count: int = 0
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @signal
+            async def ping(self) -> None:
+                self.ping_count += 1
+
+        wf_cls = generate_workflow_class(
+            _SignalApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        assert "ping" in defn.signals
+
+    def test_update_interaction_is_registered_on_wf_cls(self) -> None:
+        class _UpdateApp(App):
+            def __init__(self) -> None:
+                self.state = "running"
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @update
+            async def pause_run(self, input: _BLDXInput) -> _BLDXOutput:
+                self.state = f"paused:{input.value}"
+                return _BLDXOutput(result=self.state)
+
+        wf_cls = generate_workflow_class(
+            _UpdateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        assert "pause_run" in defn.updates
+
+    def test_query_interaction_is_registered_on_wf_cls(self) -> None:
+        class _QueryApp(App):
+            def __init__(self) -> None:
+                self.counter = 7
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @query
+            def get_counter(self) -> _BLDXOutput:
+                return _BLDXOutput(result=str(self.counter))
+
+        wf_cls = generate_workflow_class(
+            _QueryApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        assert "get_counter" in defn.queries
+
+    @pytest.mark.asyncio
+    async def test_relay_delegates_to_shared_app_instance(self) -> None:
+        """Interaction relay must mutate the same App instance _run sees, not a fresh one."""
+
+        class _StateApp(App):
+            def __init__(self) -> None:
+                self.state = "init"
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result=self.state)
+
+            @update
+            async def set_state(self, input: _BLDXInput) -> _BLDXOutput:
+                self.state = input.value
+                return _BLDXOutput(result=self.state)
+
+        wf_cls = generate_workflow_class(
+            _StateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        # Spin up a wf_cls instance (mirrors Temporal's per-run construction).
+        wf_inst = wf_cls()
+        assert isinstance(wf_inst._app_instance, _StateApp)
+        assert wf_inst._app_instance.state == "init"
+
+        # Drive the relay directly — the same path Temporal uses internally via
+        # the rebound _UpdateDefinition.fn. State must mutate the very instance
+        # _run will later read from.
+        await wf_cls.set_state(wf_inst, _BLDXInput(value="paused"))
+        assert wf_inst._app_instance.state == "paused"
+
+    def test_validator_is_preserved_through_relay(self) -> None:
+        class _ValidatedApp(App):
+            def __init__(self) -> None:
+                self.state = ""
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @update
+            async def set_value(self, input: _BLDXInput) -> _BLDXOutput:
+                self.state = input.value
+                return _BLDXOutput(result=self.state)
+
+            @set_value.validator
+            def _validate(self, input: _BLDXInput) -> None:
+                if not input.value:
+                    raise ValueError("value must be non-empty")
+
+        wf_cls = generate_workflow_class(
+            _ValidatedApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        update_defn = defn.updates["set_value"]
+        assert update_defn.validator is not None
+
+        # Bound validator must hit the App's _validate and surface the ValueError
+        # — confirming the validator relay routes through _app_instance.
+        wf_inst = wf_cls()
+        with pytest.raises(ValueError, match="non-empty"):
+            update_defn.bind_validator(wf_inst)(_BLDXInput(value=""))
+
+    def test_dynamic_update_interaction_is_supported(self) -> None:
+        # Define the class via exec with explicit globals so the
+        # ``Sequence[RawValue]`` annotation in the dynamic-interaction signature
+        # resolves at decoration time (the underlying runtime inspects
+        # the annotation eagerly to validate dynamic-interaction shape under
+        # ``from __future__ import annotations``).
+        ns: dict[str, _Any] = {
+            "update": update,
+            "_Seq": _Seq,
+            "_RawValue": _RawValue,
+            "App": App,
+            "_BLDXInput": _BLDXInput,
+            "_BLDXOutput": _BLDXOutput,
+        }
+        exec(  # noqa: S102 — defined in tests; deterministic input
+            "class _DynamicApp(App):\n"
+            "    def __init__(self):\n"
+            "        self.last_call = ('', 0)\n"
+            "    async def run(self, input: _BLDXInput) -> _BLDXOutput:\n"
+            "        return _BLDXOutput(result='ok')\n"
+            "    @update(dynamic=True)\n"
+            "    async def fallback(self, name: str, args: _Seq[_RawValue]) -> None:\n"
+            "        self.last_call = (name, len(args))\n",
+            ns,
+        )
+        _DynamicApp = ns["_DynamicApp"]
+
+        wf_cls = generate_workflow_class(
+            _DynamicApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        # Dynamic interactions are keyed by None in the registration map.
+        assert None in defn.updates
+
+    def test_app_without_interactions_yields_no_registrations(self) -> None:
+        """Regression: apps that don't declare interactions must not gain spurious entries."""
+
+        class _PlainApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        wf_cls = generate_workflow_class(
+            _PlainApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        defn = _wf._Definition.from_class(wf_cls)
+        assert defn is not None
+        assert dict(defn.signals) == {}
+        assert dict(defn.queries) == {}
+        assert dict(defn.updates) == {}
+
+    # ------------------------------------------------------------------
+    # Contract enforcement tests
+    # ------------------------------------------------------------------
+
+    def test_signal_with_extra_params_raises_contract_error(self) -> None:
+        """@signal with params other than self is rejected at class-definition time."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadSignalApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @signal
+            async def ping(self, msg: str) -> None:
+                pass
+
+        with pytest.raises(InvalidInputError, match="no parameters besides self"):
+            generate_workflow_class(
+                _BadSignalApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_query_with_non_output_return_raises_contract_error(self) -> None:
+        """@query returning a non-Output type is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadQueryApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @query
+            def get_state(self) -> str:
+                return "running"
+
+        with pytest.raises(InvalidInputError, match="subclass of Output"):
+            generate_workflow_class(
+                _BadQueryApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_query_with_params_raises_contract_error(self) -> None:
+        """@query with params other than self is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadQueryApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @query
+            def get_value(self, key: str) -> _BLDXOutput:
+                return _BLDXOutput(result=key)
+
+        with pytest.raises(InvalidInputError, match="no parameters besides self"):
+            generate_workflow_class(
+                _BadQueryApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_update_with_non_input_param_raises_contract_error(self) -> None:
+        """@update whose param is not an Input subclass is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadUpdateApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @update
+            async def set_value(self, value: str) -> _BLDXOutput:
+                return _BLDXOutput(result=value)
+
+        with pytest.raises(InvalidInputError, match="subclass of Input"):
+            generate_workflow_class(
+                _BadUpdateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_update_with_non_output_return_raises_contract_error(self) -> None:
+        """@update returning a non-Output type is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadUpdateApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @update
+            async def set_value(self, input: _BLDXInput) -> str:
+                return input.value
+
+        with pytest.raises(InvalidInputError, match="subclass of Output"):
+            generate_workflow_class(
+                _BadUpdateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_update_with_wrong_param_count_raises_contract_error(self) -> None:
+        """@update with 0 or 2+ params besides self is rejected."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        class _BadUpdateApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+            @update
+            async def noop(self) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        with pytest.raises(InvalidInputError, match="exactly one parameter"):
+            generate_workflow_class(
+                _BadUpdateApp, self._make_ep(_BLDXInput, _BLDXOutput)
+            )
+
+    def test_dynamic_interactions_skip_contract_enforcement(self) -> None:
+        """Dynamic interactions (name=None) are exempt from contract enforcement."""
+        ns: dict[str, _Any] = {
+            "update": update,
+            "_Seq": _Seq,
+            "_RawValue": _RawValue,
+            "App": App,
+            "_BLDXInput": _BLDXInput,
+            "_BLDXOutput": _BLDXOutput,
+        }
+        exec(  # noqa: S102
+            "class _DynamicApp(App):\n"
+            "    async def run(self, input: _BLDXInput) -> _BLDXOutput:\n"
+            "        return _BLDXOutput(result='ok')\n"
+            "    @update(dynamic=True)\n"
+            "    async def fallback(self, name: str, args: _Seq[_RawValue]) -> None:\n"
+            "        pass\n",
+            ns,
+        )
+        _DynamicApp = ns["_DynamicApp"]
+        # Must not raise despite non-Input/Output signature.
+        wf_cls = generate_workflow_class(
+            _DynamicApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        defn = _wf._Definition.from_class(wf_cls)
+        assert None in defn.updates
+
+    def test_wf_init_creates_fresh_app_instance_per_run(self) -> None:
+        """Each wf_cls() call constructs a fresh App instance (one per workflow run)."""
+
+        class _IsolatedApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        wf_cls = generate_workflow_class(
+            _IsolatedApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        inst_a = wf_cls()
+        inst_b = wf_cls()
+        assert inst_a._app_instance is not inst_b._app_instance
+
+
+# =============================================================================
+# App.upload() — store routing
+# =============================================================================
+
+
+class TestUploadStoreRouting:
+    """App.upload() routes to upstream_storage when configured, else storage."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    async def test_upload_uses_upstream_when_configured(self) -> None:
+        from application_sdk.app.context import AppContext
+        from application_sdk.contracts.storage import UploadInput, UploadOutput
+
+        upstream_sentinel = object()
+        deployment_sentinel = object()
+
+        class _UpApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        app = _UpApp()
+        app._context = AppContext(
+            app_name=app._app_name,
+            app_version="1",
+            run_id="run-1",
+            _storage=deployment_sentinel,  # type: ignore[arg-type]
+            _upstream_storage=upstream_sentinel,  # type: ignore[arg-type]
+        )
+
+        mock_result = UploadOutput()
+        with mock.patch(
+            "application_sdk.storage.transfer.upload",
+            new_callable=mock.AsyncMock,
+            return_value=mock_result,
+        ) as mock_upload:
+            await app.upload(UploadInput(local_path="/tmp/out"))
+
+        assert mock_upload.call_args.kwargs["store"] is upstream_sentinel
+
+    async def test_upload_falls_back_to_deployment_when_no_upstream(self) -> None:
+        from application_sdk.app.context import AppContext
+        from application_sdk.contracts.storage import UploadInput, UploadOutput
+
+        deployment_sentinel = object()
+
+        class _UpApp2(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        app = _UpApp2()
+        app._context = AppContext(
+            app_name=app._app_name,
+            app_version="1",
+            run_id="run-1",
+            _storage=deployment_sentinel,  # type: ignore[arg-type]
+        )
+
+        mock_result = UploadOutput()
+        with mock.patch(
+            "application_sdk.storage.transfer.upload",
+            new_callable=mock.AsyncMock,
+            return_value=mock_result,
+        ) as mock_upload:
+            await app.upload(UploadInput(local_path="/tmp/out"))
+
+        assert mock_upload.call_args.kwargs["store"] is deployment_sentinel
+
+    async def test_download_uses_upstream_when_configured(self) -> None:
+        from application_sdk.app.context import AppContext
+        from application_sdk.contracts.storage import DownloadInput, DownloadOutput
+
+        upstream_sentinel = object()
+        deployment_sentinel = object()
+
+        class _DlApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        app = _DlApp()
+        app._context = AppContext(
+            app_name=app._app_name,
+            app_version="1",
+            run_id="run-1",
+            _storage=deployment_sentinel,  # type: ignore[arg-type]
+            _upstream_storage=upstream_sentinel,  # type: ignore[arg-type]
+        )
+
+        mock_result = DownloadOutput()
+        with mock.patch(
+            "application_sdk.storage.transfer.download",
+            new_callable=mock.AsyncMock,
+            return_value=mock_result,
+        ) as mock_download:
+            await app.download(DownloadInput(storage_path="artifacts/out"))
+
+        assert mock_download.call_args.kwargs["store"] is upstream_sentinel
+
+    async def test_download_falls_back_to_deployment_when_no_upstream(self) -> None:
+        from application_sdk.app.context import AppContext
+        from application_sdk.contracts.storage import DownloadInput, DownloadOutput
+
+        deployment_sentinel = object()
+
+        class _DlApp2(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        app = _DlApp2()
+        app._context = AppContext(
+            app_name=app._app_name,
+            app_version="1",
+            run_id="run-1",
+            _storage=deployment_sentinel,  # type: ignore[arg-type]
+        )
+
+        mock_result = DownloadOutput()
+        with mock.patch(
+            "application_sdk.storage.transfer.download",
+            new_callable=mock.AsyncMock,
+            return_value=mock_result,
+        ) as mock_download:
+            await app.download(DownloadInput(storage_path="artifacts/out"))
+
+        assert mock_download.call_args.kwargs["store"] is deployment_sentinel
 
 
 # =============================================================================

@@ -15,7 +15,7 @@ optional_triggers:
   - "what does the SDK expose"
   - "list public methods of the SDK"
 owner: connector-platform-team
-last_updated: "2026-05-04"
+last_updated: "2026-05-27"
 staleness_days: 30
 inputs:
   - mode: "create | refresh | verify (auto-detected from existing state)"

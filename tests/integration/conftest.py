@@ -15,15 +15,17 @@ from uuid import uuid4
 import pytest
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(autouse=True)
 def _integration_env_vars():
-    """Disable interceptors and Dapr sinks for the integration test session.
+    """Disable interceptors and Dapr sinks for the duration of each integration test.
 
-    Using a session-scoped fixture rather than module-level os.environ calls
-    prevents these settings from leaking into unit tests when the full test
-    suite is run with ``pytest tests/``.  The module-level pattern runs at
-    conftest import time (before any tests) and poisons the process env for
-    tests in other directories that rely on the defaults.
+    Function-scoped — setup runs before every integration test, teardown
+    restores ``os.environ`` after each test. Function scope is required
+    because session-scoped autouse would activate for the first integration
+    test that runs and leak its env-var mutations to every later test in
+    the same ``pytest tests/`` session (including unit tests that follow,
+    if any integration test reaches the fixture before the unit job's
+    ``test_on_complete`` tests run — see BLDX-1283 PR fallout).
     """
     overrides = {
         "ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK": "false",

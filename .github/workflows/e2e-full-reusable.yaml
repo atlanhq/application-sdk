@@ -120,32 +120,20 @@ on:
         default: ""
     secrets:
       SDR_TEST_TENANT:
-        description: Tenant DNS short name read by the configurator.
+        description: Tenant FQDN (e.g. devex.atlan.com — no https:// prefix). ATLAN_BASE_URL is derived from this.
         required: true
       SDR_CLIENT_ID:
-        description: Configurator OAuth client id (CI_CLIENT_ID).
+        description: OAuth client id — used by the configurator and for runtime auth (Temporal, objectstore).
         required: true
       SDR_CLIENT_SECRET:
-        description: Configurator OAuth client secret (CI_CLIENT_SECRET).
-        required: true
-      ATLAN_BASE_URL:
-        description: Tenant base URL (e.g. https://devex.atlan.com).
+        description: OAuth client secret matching SDR_CLIENT_ID.
         required: true
       ATLAN_API_KEY:
         description: |
-          Bearer for AE-management calls (/automation/api/v1/*). The
-          API-key service account carries realm-admin which the OAuth
-          client does not — verified on devex.
+          API key for AE-management calls (/automation/api/v1/*) and
+          pyatlan asset queries. Required because the API-key service
+          account carries realm-admin which the OAuth client does not.
         required: true
-      SDR_OAUTH_CLIENT_ID:
-        description: |
-          OAuth client id used by the Dapr S3 binding (via the tenant's
-          /api/blobstorage proxy) and by pyatlan for asset queries.
-          Optional — falls back to API-key bearer when absent.
-        required: false
-      SDR_OAUTH_CLIENT_SECRET:
-        description: Matching OAuth client secret.
-        required: false
 
 jobs:
   e2e-full:
@@ -160,15 +148,12 @@ jobs:
       statuses: write
       packages: write
     env:
-      CI_TENANT_DOMAIN: ${{ secrets.SDR_TEST_TENANT }}
-      CI_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
-      CI_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
-      ATLAN_AUTH_CLIENT_ID: ${{ secrets.SDR_OAUTH_CLIENT_ID }}
-      ATLAN_AUTH_CLIENT_SECRET: ${{ secrets.SDR_OAUTH_CLIENT_SECRET }}
+      SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
       ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
-      SDR_OAUTH_CLIENT_ID: ${{ secrets.SDR_OAUTH_CLIENT_ID }}
-      SDR_OAUTH_CLIENT_SECRET: ${{ secrets.SDR_OAUTH_CLIENT_SECRET }}
-      ATLAN_BASE_URL: ${{ secrets.ATLAN_BASE_URL }}
+      # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
+      ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
     steps:
       # codex-/return-dispatch on the apps-sdk side scans step *names*
       # for "distinct-id <value>". Always-run, no-op; lets the SDK PR's

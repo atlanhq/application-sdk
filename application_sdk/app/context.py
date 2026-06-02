@@ -213,6 +213,7 @@ class AppContext:
     _state_store: "StateStore | None" = field(default=None, repr=False)
     _secret_store: "SecretStore | None" = field(default=None, repr=False)
     _storage: "ObjectStore | None" = field(default=None, repr=False)
+    _upstream_storage: "ObjectStore | None" = field(default=None, repr=False)
     _logger: Any = field(default=None, repr=False)
     _cancelled: bool = field(default=False, repr=False)
 
@@ -329,6 +330,17 @@ class AppContext:
             await download_file("input/data.parquet", local_path, self.context.storage)
         """
         return self._storage
+
+    @property
+    def upstream_storage(self) -> "ObjectStore | None":
+        """Upstream object store, or ``None`` if not configured.
+
+        Present only in SDR deployments where ``UPSTREAM_OBJECT_STORE_NAME`` is
+        bound to a separate Dapr component pointing at Atlan's bucket.  In
+        standard (non-SDR) deployments this is ``None`` and ``App.upload()``
+        falls back to ``storage`` (the deployment store).
+        """
+        return self._upstream_storage
 
     def log_debug(self, message: str, **kwargs: Any) -> None:
         """Log a debug message."""
