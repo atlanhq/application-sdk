@@ -55,6 +55,11 @@ on:
         required: false
         type: string
         default: "https://home.atlan.com"
+      snyk_monitor:
+        description: "Deprecated: Snyk has been removed. Accepted for backward compatibility and ignored. Remove from your caller and this input will be deleted in a future release."
+        required: false
+        type: boolean
+        default: false
       release_tag:
         description: "Git tag of the release (e.g. v1.2.3) — when set, pushes a version-tag ladder to GHCR in addition to the standard branch tags. Pass github.event.release.tag_name for release events."
         required: false
@@ -84,6 +89,20 @@ permissions:
   checks: read
 
 jobs:
+  # ── Deprecation notice ───────────────────────────────────────────────────────
+  # Surfaces a workflow-summary warning when a caller still passes
+  # `snyk_monitor: true` so consumers see the deprecation in their logs.
+  # Independent job — never blocks anything else.
+  snyk-monitor-deprecation:
+    name: Deprecation Notice (snyk_monitor)
+    if: inputs.snyk_monitor
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Warn about deprecated snyk_monitor input
+        run: |
+          echo "::warning title=snyk_monitor is deprecated::Snyk scanning has been removed from this workflow. The 'snyk_monitor' input is accepted for backward compatibility but ignored — remove it from your caller. The input will be deleted in a future release."
+
   # ── Job 0: Channel + branch gate ─────────────────────────────────────────────
   # 'all'-channel releases reach every production tenant, so they MUST come
   # from the protected `main` branch. Fail here (before the multi-arch build
