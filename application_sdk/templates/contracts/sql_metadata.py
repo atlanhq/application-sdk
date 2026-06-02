@@ -9,7 +9,13 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import orjson
-from pydantic import Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from application_sdk.common.sql_filters import (
     SAFE_FILTER_PATTERN,
@@ -54,6 +60,20 @@ def _coerce_filter_value(v: Any) -> FilterMap | str:
 
 class ExtractionInput(Input):
     """Top-level input for a SQL metadata extraction run."""
+
+    # Heracles injects the workflow creator as the kebab-case ``user-id`` DAG
+    # arg. The base Input validator only *warns* on unknown keys (it does not
+    # remap), so without this alias ``user-id`` would be silently dropped and
+    # the publish-preflight activity would never fire. populate_by_name keeps
+    # construction by the ``user_id`` field name working too (tests, by-name
+    # serde round-trips).
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("user_id", "user-id"),
+    )
+    """Keycloak user GUID of the workflow creator (HYP-829 publish preflight)."""
 
     workflow_id: str = ""
     """Temporal workflow ID for this run."""

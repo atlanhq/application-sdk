@@ -1,307 +1,142 @@
-"""Unit tests for handler.checks — check_user_enabled and check_atlan_publish_permission.
+"""Unit tests for the thin user-publish-check client (HYP-829).
 
-All HTTP calls are mocked with unittest.mock so no real network is required.
+checks.check_user_publish_preflight is a small async wrapper around Heracles'
+``POST /workflows/preflight/user-publish-check``. The user-enabled and
+publish-permission logic itself lives server-side in Heracles, so these tests
+only cover the client contract: URL/payload/headers, response parsing, and the
+non-200 error path.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import json as _json
+
+import httpx
+import pytest
 
 from application_sdk.handler.checks import (
-    check_atlan_publish_permission,
-    check_user_enabled,
+    _default_heracles_url,
+    check_user_publish_preflight,
 )
-from application_sdk.handler.contracts import PreflightCheck
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-HERACLES = "http://heracles.test"
-TOKEN_URL = "http://keycloak.test/token"
-CLIENT_ID = "atlan-backend"
-CLIENT_SECRET = "secret"
-USER_ID = "user-uuid-1234"
-BEARER = "svc-token"
-CONN_QN = "default/hive/1234567890"
 
 
-def _mock_response(status_code: int, json_body: object) -> MagicMock:
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.json.return_value = json_body
-    resp.text = str(json_body)
-    return resp
+def _patch_async_client(monkeypatch, handler):
+    """Route httpx.AsyncClient through a MockTransport using the given handler."""
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *a, **k: real_async_client(
+            *a, **{**k, "transport": httpx.MockTransport(handler)}
+        ),
+    )
 
 
-def _async_client_ctx(mock_resp: MagicMock) -> MagicMock:
-    """Return a context manager whose .get/.post returns mock_resp."""
-    client = AsyncMock()
-    client.get = AsyncMock(return_value=mock_resp)
-    client.post = AsyncMock(return_value=mock_resp)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=client)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    return ctx, client
+class TestCheckUserPublishPreflight:
+    async def test_posts_expected_payload_and_returns_parsed_body(self, monkeypatch):
+        captured = {}
 
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["auth"] = request.headers.get("Authorization")
+            captured["body"] = _json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "passed": True,
+                    "failed_checks": [],
+                    "message": "All user publish preflight checks passed.",
+                },
+            )
 
-# ---------------------------------------------------------------------------
-# check_user_enabled
-# ---------------------------------------------------------------------------
+        _patch_async_client(monkeypatch, handler)
 
-
-class TestCheckUserEnabled:
-    async def test_enabled_user_passes(self):
-        resp = _mock_response(
-            200, {"username": "alice", "email": "alice@acme.com", "enabled": True}
+        result = await check_user_publish_preflight(
+            user_id="user-abc",
+            connection_qualified_name="default/snowflake/123",
+            bearer_token="svc-tok",
+            heracles_url="http://heracles:5201",
         )
-        ctx, client = _async_client_ctx(resp)
 
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient", return_value=ctx
-        ):
-            result = await check_user_enabled(USER_ID, BEARER, heracles_url=HERACLES)
-
-        assert isinstance(result, PreflightCheck)
-        assert result.passed is True
-        assert result.name == "UserEnabled"
-        assert "alice" in result.message
-        client.get.assert_awaited_once()
-
-    async def test_disabled_user_fails(self):
-        resp = _mock_response(
-            200, {"username": "bob", "email": "bob@acme.com", "enabled": False}
+        assert result["passed"] is True
+        assert captured["url"] == (
+            "http://heracles:5201/workflows/preflight/user-publish-check"
         )
-        ctx, _ = _async_client_ctx(resp)
+        assert captured["auth"] == "Bearer svc-tok"
+        assert captured["body"] == {
+            "user_id": "user-abc",
+            "connection_qualified_name": "default/snowflake/123",
+        }
 
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient", return_value=ctx
-        ):
-            result = await check_user_enabled(USER_ID, BEARER, heracles_url=HERACLES)
+    async def test_trailing_slash_in_heracles_url_is_normalised(self, monkeypatch):
+        captured = {}
 
-        assert result.passed is False
-        assert "disabled" in result.message.lower()
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={"passed": True, "failed_checks": [], "message": ""})
 
-    async def test_heracles_404_returns_failed(self):
-        resp = _mock_response(404, {"error": "not found"})
-        ctx, _ = _async_client_ctx(resp)
+        _patch_async_client(monkeypatch, handler)
 
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient", return_value=ctx
-        ):
-            result = await check_user_enabled(USER_ID, BEARER, heracles_url=HERACLES)
-
-        assert result.passed is False
-        assert "404" in result.message
-
-    async def test_missing_enabled_field_treated_as_disabled(self):
-        # User record with no 'enabled' key — falsy → disabled
-        resp = _mock_response(200, {"username": "ghost"})
-        ctx, _ = _async_client_ctx(resp)
-
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient", return_value=ctx
-        ):
-            result = await check_user_enabled(USER_ID, BEARER, heracles_url=HERACLES)
-
-        assert result.passed is False
-
-    async def test_network_error_returns_failed(self):
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(side_effect=Exception("connection refused"))
-        ctx.__aexit__ = AsyncMock(return_value=False)
-
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient", return_value=ctx
-        ):
-            result = await check_user_enabled(USER_ID, BEARER, heracles_url=HERACLES)
-
-        assert result.passed is False
-        assert "connection refused" in result.message
-
-
-# ---------------------------------------------------------------------------
-# check_atlan_publish_permission
-# ---------------------------------------------------------------------------
-
-
-class TestCheckAtlanPublishPermission:
-    def _make_clients(
-        self,
-        user_resp: MagicMock,
-        token_resp: MagicMock,
-        eval_resp: MagicMock,
-    ):
-        """Three sequential httpx.AsyncClient contexts."""
-        clients = []
-
-        for resp in [user_resp, token_resp, eval_resp]:
-            client = AsyncMock()
-            client.get = AsyncMock(return_value=resp)
-            client.post = AsyncMock(return_value=resp)
-            ctx = MagicMock()
-            ctx.__aenter__ = AsyncMock(return_value=client)
-            ctx.__aexit__ = AsyncMock(return_value=False)
-            clients.append(ctx)
-
-        side_effects = iter(clients)
-        return side_effects
-
-    async def test_all_permissions_granted(self):
-        user_resp = _mock_response(200, {"username": "alice", "enabled": True})
-        token_resp = _mock_response(200, {"access_token": "impersonation-tok"})
-        eval_resp = _mock_response(
-            200,
-            [
-                {"action": "ENTITY_CREATE", "allowed": True},
-                {"action": "ENTITY_UPDATE", "allowed": True},
-                {"action": "ENTITY_DELETE", "allowed": True},
-            ],
+        await check_user_publish_preflight(
+            user_id="u",
+            connection_qualified_name="c",
+            bearer_token="t",
+            heracles_url="http://heracles:5201/",
         )
-        side_effects = self._make_clients(user_resp, token_resp, eval_resp)
-
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient",
-            side_effect=side_effects,
-        ):
-            results = await check_atlan_publish_permission(
-                USER_ID,
-                BEARER,
-                CONN_QN,
-                heracles_url=HERACLES,
-                token_url=TOKEN_URL,
-                client_id=CLIENT_ID,
-                client_secret=CLIENT_SECRET,
-            )
-
-        assert len(results) == 2
-        assert all(r.passed for r in results)
-        names = {r.name for r in results}
-        assert "UserEnabled" in names
-        assert "AtlanPublishPermission" in names
-
-    async def test_user_disabled_both_checks_fail(self):
-        user_resp = _mock_response(200, {"username": "bob", "enabled": False})
-        # Token exchange returns 403 for disabled user
-        token_resp = _mock_response(403, {"error": "disabled"})
-        eval_resp = _mock_response(200, [])  # never reached
-        side_effects = self._make_clients(user_resp, token_resp, eval_resp)
-
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient",
-            side_effect=side_effects,
-        ):
-            results = await check_atlan_publish_permission(
-                USER_ID,
-                BEARER,
-                CONN_QN,
-                heracles_url=HERACLES,
-                token_url=TOKEN_URL,
-                client_id=CLIENT_ID,
-                client_secret=CLIENT_SECRET,
-            )
-
-        user_check = next(r for r in results if r.name == "UserEnabled")
-        perm_check = next(r for r in results if r.name == "AtlanPublishPermission")
-        assert user_check.passed is False
-        assert perm_check.passed is False
-        assert "disabled" in perm_check.message.lower()
-
-    async def test_permission_denied_fails(self):
-        user_resp = _mock_response(200, {"username": "carol", "enabled": True})
-        token_resp = _mock_response(200, {"access_token": "impersonation-tok"})
-        eval_resp = _mock_response(
-            200,
-            [
-                {"action": "ENTITY_CREATE", "allowed": False},
-                {"action": "ENTITY_UPDATE", "allowed": False},
-                {"action": "ENTITY_DELETE", "allowed": True},
-            ],
+        assert captured["url"] == (
+            "http://heracles:5201/workflows/preflight/user-publish-check"
         )
-        side_effects = self._make_clients(user_resp, token_resp, eval_resp)
 
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient",
-            side_effect=side_effects,
-        ):
-            results = await check_atlan_publish_permission(
-                USER_ID,
-                BEARER,
-                CONN_QN,
-                heracles_url=HERACLES,
-                token_url=TOKEN_URL,
-                client_id=CLIENT_ID,
-                client_secret=CLIENT_SECRET,
+    async def test_passes_through_failed_verdict(self, monkeypatch):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "passed": False,
+                    "failed_checks": ["UserEnabled", "AtlanPublishPermission"],
+                    "message": "User user-bob failed publish preflight checks",
+                },
             )
 
-        perm_check = next(r for r in results if r.name == "AtlanPublishPermission")
-        assert perm_check.passed is False
-        assert "ENTITY_CREATE" in perm_check.message
-        assert "ENTITY_UPDATE" in perm_check.message
+        _patch_async_client(monkeypatch, handler)
 
-    async def test_no_impersonation_creds_skips_permission_check(self):
-        user_resp = _mock_response(200, {"username": "dave", "enabled": True})
-        ctx, _ = _async_client_ctx(user_resp)
+        result = await check_user_publish_preflight(
+            user_id="user-bob",
+            connection_qualified_name="default/snowflake/123",
+            bearer_token="svc-tok",
+        )
 
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient", return_value=ctx
-        ):
-            results = await check_atlan_publish_permission(
-                USER_ID,
-                BEARER,
-                CONN_QN,
-                heracles_url=HERACLES,
-                # no token_url / client_id / client_secret
+        assert result["passed"] is False
+        assert result["failed_checks"] == ["UserEnabled", "AtlanPublishPermission"]
+
+    async def test_raises_on_non_200(self, monkeypatch):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, text="service unavailable")
+
+        _patch_async_client(monkeypatch, handler)
+
+        with pytest.raises(ValueError) as exc_info:
+            await check_user_publish_preflight(
+                user_id="user-abc",
+                connection_qualified_name="default/snowflake/123",
+                bearer_token="svc-tok",
             )
 
-        perm_check = next(r for r in results if r.name == "AtlanPublishPermission")
-        assert perm_check.passed is True
-        assert "skipped" in perm_check.message.lower()
+        assert "503" in str(exc_info.value)
 
-    async def test_bad_client_secret_fails_permission_check(self):
-        user_resp = _mock_response(200, {"username": "eve", "enabled": True})
-        token_resp = _mock_response(401, {"error": "invalid_client"})
-        eval_resp = _mock_response(200, [])
-        side_effects = self._make_clients(user_resp, token_resp, eval_resp)
 
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient",
-            side_effect=side_effects,
-        ):
-            results = await check_atlan_publish_permission(
-                USER_ID,
-                BEARER,
-                CONN_QN,
-                heracles_url=HERACLES,
-                token_url=TOKEN_URL,
-                client_id=CLIENT_ID,
-                client_secret="wrong-secret",
-            )
+class TestDefaultHeraclesURL:
+    def test_prefers_internal_url(self, monkeypatch):
+        monkeypatch.setenv("ATLAN_INTERNAL_HERACLES_URL", "http://internal:5201")
+        monkeypatch.setenv("HERACLES_URL", "http://other:5201")
+        assert _default_heracles_url() == "http://internal:5201"
 
-        perm_check = next(r for r in results if r.name == "AtlanPublishPermission")
-        assert perm_check.passed is False
+    def test_falls_back_to_heracles_url(self, monkeypatch):
+        monkeypatch.delenv("ATLAN_INTERNAL_HERACLES_URL", raising=False)
+        monkeypatch.setenv("HERACLES_URL", "http://other:5201")
+        assert _default_heracles_url() == "http://other:5201"
 
-    async def test_empty_connection_qname_runs_with_empty_entity_list(self):
-        # With empty connection_qname the code still does the full token exchange
-        # and calls /evaluates — which returns an empty list (no denied entries).
-        user_resp = _mock_response(200, {"username": "frank", "enabled": True})
-        token_resp = _mock_response(200, {"access_token": "impersonation-tok"})
-        eval_resp = _mock_response(200, [])  # no entries → no denials → passes
-        side_effects = self._make_clients(user_resp, token_resp, eval_resp)
-
-        with patch(
-            "application_sdk.handler.checks.httpx.AsyncClient",
-            side_effect=side_effects,
-        ):
-            results = await check_atlan_publish_permission(
-                USER_ID,
-                BEARER,
-                "",
-                heracles_url=HERACLES,
-                token_url=TOKEN_URL,
-                client_id=CLIENT_ID,
-                client_secret=CLIENT_SECRET,
-            )
-
-        perm_check = next(r for r in results if r.name == "AtlanPublishPermission")
-        assert perm_check.passed is True
+    def test_localhost_default(self, monkeypatch):
+        monkeypatch.delenv("ATLAN_INTERNAL_HERACLES_URL", raising=False)
+        monkeypatch.delenv("HERACLES_URL", raising=False)
+        assert _default_heracles_url() == "http://localhost:5201"

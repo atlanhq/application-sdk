@@ -6,10 +6,7 @@ creating FastAPI applications.
 """
 
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
-from application_sdk.handler.checks import (
-    check_atlan_publish_permission,
-    check_user_enabled,
-)
+from application_sdk.handler.checks import check_user_publish_preflight
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -55,8 +52,7 @@ __all__ = [
     "PreflightStatus",
     "SqlMetadataObject",
     "SqlMetadataOutput",
-    "check_atlan_publish_permission",
-    "check_user_enabled",
+    "check_user_publish_preflight",
     "create_app_handler_service",
     "run_app_handler_service",
 ]

@@ -38,10 +38,7 @@ from pydantic import Field
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import MaxItems
-from application_sdk.handler.checks import (
-    check_atlan_publish_permission,
-    check_user_enabled,
-)
+from application_sdk.handler.checks import check_user_publish_preflight
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -195,7 +192,7 @@ class PublishPreflightMixin:
         if not user_id:
             logger.warning(
                 "run_publish_preflight: user_id not present in input — skipping checks. "
-                "Add 'user_id: str = \"\"' to your workflow Input dataclass."
+                "Add 'user_id: str = \"\"' (alias 'user-id') to your workflow Input."
             )
             return PreflightOutput(
                 passed=True,
@@ -214,58 +211,40 @@ class PublishPreflightMixin:
                 message="Preflight skipped — service credentials not configured.",
             )
 
-        token_url = os.environ.get("ATLAN_AUTH_URL", "")
-        client_id_key = os.environ.get(
-            "ATLAN_AUTH_CLIENT_ID_KEY", "ATLAN_AUTH_CLIENT_ID"
-        )
-        client_secret_key = os.environ.get(
-            "ATLAN_AUTH_CLIENT_SECRET_KEY", "ATLAN_AUTH_CLIENT_SECRET"
-        )
-
-        from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — cold path
-            get_deployment_secret,
-        )
-
-        # Same dual-source pattern as _get_service_token: Dapr secret store
-        # when available, env var fallback when not (e.g. on app pods that
-        # don't ship the deployment-secret-store Dapr component).
-        client_id = await get_deployment_secret(client_id_key) or os.environ.get(
-            client_id_key, ""
-        )
-        client_secret = await get_deployment_secret(
-            client_secret_key
-        ) or os.environ.get(client_secret_key, "")
-
-        if connection_qname:
-            checks = await check_atlan_publish_permission(
+        # The user-enabled + publish-permission logic lives server-side in
+        # Heracles (HYP-829). A single call returns the verdict; the SDK no
+        # longer does user lookup / token-exchange / evaluates itself.
+        try:
+            result = await check_user_publish_preflight(
                 user_id=user_id,
-                bearer_token=bearer_token,
                 connection_qualified_name=connection_qname,
+                bearer_token=bearer_token,
                 heracles_url=heracles_url,
-                token_url=token_url,
-                client_id=client_id,
-                client_secret=client_secret,
             )
-        else:
-            checks = [
-                await check_user_enabled(
-                    user_id, bearer_token, heracles_url=heracles_url
-                )
-            ]
+        except Exception as exc:  # noqa: BLE001 — fail open on any transport/HTTP error
+            logger.warning(
+                "run_publish_preflight: check call failed (%s) — skipping (fail-open).",
+                exc,
+            )
+            return PreflightOutput(
+                passed=True,
+                checks=[],
+                message=f"Preflight skipped — check unavailable: {exc}",
+            )
 
-        checks_as_dicts = [c.model_dump() for c in checks]
-        failed = [c for c in checks if not c.passed]
+        passed = bool(result.get("passed", True))
+        failed_checks = result.get("failed_checks") or []
+        message = result.get("message", "")
 
-        if failed:
-            first_failure = failed[0].message
+        if not passed:
             logger.error(
                 "run_publish_preflight FAILED user_id=%s connection=%s failed_checks=%s",
                 user_id,
                 connection_qname,
-                [c.name for c in failed],
+                failed_checks,
             )
             raise AppPermissionError(
-                message=first_failure,
+                message=message or f"Publish preflight failed: {failed_checks}",
             )
 
         logger.info(
@@ -275,6 +254,6 @@ class PublishPreflightMixin:
         )
         return PreflightOutput(
             passed=True,
-            checks=checks_as_dicts,
-            message="All publish preflight checks passed.",
+            checks=[],
+            message=message or "All publish preflight checks passed.",
         )

@@ -128,35 +128,29 @@ class TestRunPublishPreflightSkipPaths:
 
 
 class TestRunPublishPreflightActivePaths:
-    """When the gate runs to completion, PreflightOutput.checks contains the
-    serialised check results — verify the list is populated and well-shaped.
+    """When user_id + service token are present, run_publish_preflight makes a
+    single call to Heracles' consolidated user-publish-check and acts on the
+    verdict: pass through, raise on failure, or fail open on transport error.
     """
 
-    async def test_passes_when_all_checks_pass(self):
-        """user_id + token + connection → runs check_atlan_publish_permission;
-        when all checks pass, returns PreflightOutput(passed=True, checks=...).
-        """
-        from application_sdk.handler.contracts import PreflightCheck
-
+    async def test_passes_when_heracles_reports_passed(self):
+        """user_id + token → calls check_user_publish_preflight; passed verdict
+        returns PreflightOutput(passed=True)."""
         host = _Host()
-        fake_checks = [
-            PreflightCheck(name="UserEnabled", passed=True, message="active"),
-            PreflightCheck(
-                name="AtlanPublishPermission", passed=True, message="granted"
-            ),
-        ]
         with (
             patch(
                 "application_sdk.app.preflight._get_service_token",
                 new=AsyncMock(return_value="svc-tok"),
             ),
             patch(
-                "application_sdk.app.preflight.check_atlan_publish_permission",
-                new=AsyncMock(return_value=fake_checks),
-            ),
-            patch(
-                "application_sdk.infrastructure.secrets.get_deployment_secret",
-                new=AsyncMock(return_value=""),
+                "application_sdk.app.preflight.check_user_publish_preflight",
+                new=AsyncMock(
+                    return_value={
+                        "passed": True,
+                        "failed_checks": [],
+                        "message": "All user publish preflight checks passed.",
+                    }
+                ),
             ),
         ):
             out = await host.run_publish_preflight(
@@ -167,32 +161,28 @@ class TestRunPublishPreflightActivePaths:
             )
 
         assert out.passed is True
-        assert len(out.checks) == 2
-        assert out.message == "All publish preflight checks passed."
+        assert out.checks == []
+        assert "passed" in out.message.lower()
 
-    async def test_raises_when_any_check_fails(self):
-        """Failed check → AppPermissionDeniedError with the first failure message."""
+    async def test_raises_when_heracles_reports_failed(self):
+        """Failed verdict → AppPermissionDeniedError carrying Heracles' message."""
         from application_sdk.errors.leaves import AppPermissionDeniedError
-        from application_sdk.handler.contracts import PreflightCheck
 
         host = _Host()
-        fake_checks = [
-            PreflightCheck(
-                name="UserEnabled", passed=False, message="User bob is disabled"
-            ),
-        ]
         with (
             patch(
                 "application_sdk.app.preflight._get_service_token",
                 new=AsyncMock(return_value="svc-tok"),
             ),
             patch(
-                "application_sdk.app.preflight.check_atlan_publish_permission",
-                new=AsyncMock(return_value=fake_checks),
-            ),
-            patch(
-                "application_sdk.infrastructure.secrets.get_deployment_secret",
-                new=AsyncMock(return_value=""),
+                "application_sdk.app.preflight.check_user_publish_preflight",
+                new=AsyncMock(
+                    return_value={
+                        "passed": False,
+                        "failed_checks": ["UserEnabled"],
+                        "message": "User user-bob failed publish preflight checks: UserEnabled",
+                    }
+                ),
             ),
             pytest.raises(AppPermissionDeniedError) as exc_info,
         ):
@@ -203,5 +193,30 @@ class TestRunPublishPreflightActivePaths:
                 )
             )
 
-        assert "bob" in str(exc_info.value)
-        assert "disabled" in str(exc_info.value).lower()
+        assert "user-bob" in str(exc_info.value)
+        assert "UserEnabled" in str(exc_info.value)
+
+    async def test_fails_open_when_heracles_unreachable(self):
+        """A transport/HTTP error from the check must not block the workflow —
+        the activity returns passed=True with a skip message (fail-open)."""
+        host = _Host()
+        with (
+            patch(
+                "application_sdk.app.preflight._get_service_token",
+                new=AsyncMock(return_value="svc-tok"),
+            ),
+            patch(
+                "application_sdk.app.preflight.check_user_publish_preflight",
+                new=AsyncMock(side_effect=ValueError("user-publish-check returned 503")),
+            ),
+        ):
+            out = await host.run_publish_preflight(
+                _MinimalInput(
+                    user_id="user-abc",
+                    connection_qualified_name="default/hive/123",
+                )
+            )
+
+        assert out.passed is True
+        assert out.checks == []
+        assert "unavailable" in out.message.lower() or "skipped" in out.message.lower()

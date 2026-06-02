@@ -65,6 +65,7 @@ import orjson
 from temporalio import workflow as _temporal_workflow
 
 from application_sdk.app.base import App
+from application_sdk.app.preflight import PreflightInput, PublishPreflightMixin
 from application_sdk.app.task import task
 from application_sdk.common.sql_filters import normalize_filters
 from application_sdk.constants import (
@@ -127,7 +128,7 @@ def _orjson_default(obj: Any) -> Any:
     )
 
 
-class SqlApp(App):
+class SqlApp(PublishPreflightMixin, App):
     """Consolidated SQL metadata extraction App.
 
     Subclass and set:
@@ -477,6 +478,22 @@ class SqlApp(App):
         Override for custom orchestration (e.g. sequential fetches, multi-DB).
         Use ``build_task_input()`` to construct typed inputs.
         """
+        # ── Phase 0: Publish preflight — fail fast before any extraction ──
+        # First activity in every run. Verifies the creator's account is
+        # enabled and may publish to the target connection (HYP-829). Skips
+        # gracefully when user_id / service creds are unavailable; raises
+        # AppPermissionDeniedError (non-retryable) when a check fails, so a
+        # disabled or unauthorised user burns zero extraction compute.
+        preflight_conn_qn = ""
+        if input.connection and input.connection.attributes:
+            preflight_conn_qn = input.connection.attributes.qualified_name or ""
+        await self.run_publish_preflight(
+            PreflightInput(
+                user_id=getattr(input, "user_id", "") or "",
+                connection_qualified_name=preflight_conn_qn,
+            )
+        )
+
         cred_ref = self._resolve_credential_ref(input)
 
         task_input = self.build_task_input(

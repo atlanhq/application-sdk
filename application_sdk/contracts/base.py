@@ -74,7 +74,7 @@ from typing import (
 )
 
 import orjson
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
 from application_sdk.contracts.types import MaxItems
@@ -259,6 +259,17 @@ class Input(BaseModel):
             for field in cls.model_fields.values()
             if field.alias is not None
         )
+        # Also treat validation aliases as known — a field declared with
+        # ``validation_alias=AliasChoices("a", "b")`` (or a plain string alias)
+        # accepts those keys, so they are NOT dropped and must not warn.
+        for field in cls.model_fields.values():
+            va = field.validation_alias
+            if va is None:
+                continue
+            if isinstance(va, str):
+                known.add(va)
+            elif isinstance(va, AliasChoices):
+                known.update(c for c in va.choices if isinstance(c, str))
         extras = sorted(
             str(k) for k in data if k not in known and not str(k).startswith("_")
         )
