@@ -2521,56 +2521,62 @@ local function e2eSubsSkip(): Set<String> =
   if (e2eSubsParent() == "SQLMustacheSubstitutions") e2eSubsSqlSkip
   else e2eSubsBaseSkip
 
+// Line-length-aware Field line: inlines if ≤ 88 chars, wraps otherwise.
+local function fmtSubsField(pyName: String, typeStr: String, defaultExpr: String, k: String): String =
+  let (inline = "    \(pyName): \(typeStr) = Field(\(defaultExpr), alias=\"{{\(k)}}\")")
+  if (inline.length <= 88) inline
+  else "    \(pyName): \(typeStr) = Field(\n        \(defaultExpr),\n        alias=\"{{\(k)}}\",\n    )"
+
 // Returns a typed pydantic Field line for a substitution field, or null to skip.
 local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
   let (pyName = toPyName(k))
   if (u is Widgets.ConnectionCreator || u is Widgets.ConnectionSelector || u is Widgets.ConnectionRefInput)
     null
   else if (u is Widgets.BooleanInput)
-    "    \(pyName): bool = Field(default=\(if ((u as Widgets.BooleanInput).default) "True" else "False"), alias=\"{{\(k)}}\")"
+    fmtSubsField(pyName, "bool", "default=\(if ((u as Widgets.BooleanInput).default) "True" else "False")", k)
   else if (u is Widgets.Switcher)
-    "    \(pyName): bool = Field(default=\(if ((u as Widgets.Switcher).default) "True" else "False"), alias=\"{{\(k)}}\")"
+    fmtSubsField(pyName, "bool", "default=\(if ((u as Widgets.Switcher).default) "True" else "False")", k)
   else if (u is Widgets.NumericInput)
     let (d = (u as Widgets.NumericInput).default)
-    "    \(pyName): int = Field(default=\(if (d != null) d!!.toInt() else 0), alias=\"{{\(k)}}\")"
+    fmtSubsField(pyName, "int", "default=\(if (d != null) d!!.toInt() else 0)", k)
   else if (u is Widgets.Radio)
     let (radio = u as Widgets.Radio)
     let (vals = radio.possibleValues.keys.toList())
     if (!vals.isEmpty)
       let (litStr = (new Listing { for (v in vals) { "\"\(v)\"" } }).toList().join(", "))
       let (defVal = if (radio.default != null) radio.default!! else vals.first)
-      "    \(pyName): Literal[\(litStr)] = Field(default=\"\(defVal)\", alias=\"{{\(k)}}\")"
+      fmtSubsField(pyName, "Literal[\(litStr)]", "default=\"\(defVal)\"", k)
     else
-      "    \(pyName): str = Field(default=\"\(if (radio.default != null) radio.default!! else "")\", alias=\"{{\(k)}}\")"
+      fmtSubsField(pyName, "str", "default=\"\(if (radio.default != null) radio.default!! else "")\"", k)
   else if (u is Widgets.DropDown)
     let (dd = u as Widgets.DropDown)
     let (vals = dd.possibleValues.keys.toList())
     if (!vals.isEmpty && !dd.multiSelect)
       let (litStr = (new Listing { for (v in vals) { "\"\(v)\"" } }).toList().join(", "))
       let (defVal = if (dd.default != null) dd.default!! else vals.first)
-      "    \(pyName): Literal[\(litStr)] = Field(default=\"\(defVal)\", alias=\"{{\(k)}}\")"
+      fmtSubsField(pyName, "Literal[\(litStr)]", "default=\"\(defVal)\"", k)
     else
-      "    \(pyName): str = Field(default=\"\(if (dd.default != null) dd.default!! else "")\", alias=\"{{\(k)}}\")"
+      fmtSubsField(pyName, "str", "default=\"\(if (dd.default != null) dd.default!! else "")\"", k)
   else if (u is Widgets.ConditionalInput)
     let (ci = u as Widgets.ConditionalInput)
     if (ci.outputValueType == "object")
-      "    \(pyName): dict[str, Any] | None = Field(default=None, alias=\"{{\(k)}}\")"
+      fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
     else if (ci.baseWidgetType == "radio" && ci.baseEnum != null && !ci.baseEnum!!.isEmpty)
       let (litStr = (new Listing { for (v in ci.baseEnum!!) { "\"\(v)\"" } }).toList().join(", "))
       let (defVal = if (ci.default != null) ci.default!!.toString() else ci.baseEnum!!.toList().first)
-      "    \(pyName): Literal[\(litStr)] = Field(default=\"\(defVal)\", alias=\"{{\(k)}}\")"
+      fmtSubsField(pyName, "Literal[\(litStr)]", "default=\"\(defVal)\"", k)
     else
-      "    \(pyName): str = Field(default=\"\(if (ci.default != null) ci.default!!.toString() else "")\", alias=\"{{\(k)}}\")"
+      fmtSubsField(pyName, "str", "default=\"\(if (ci.default != null) ci.default!!.toString() else "")\"", k)
   else if (u is Widgets.SqlTree || u is Widgets.NestedInput || u is Widgets.APITree ||
       u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
-    "    \(pyName): dict[str, Any] | None = Field(default=None, alias=\"{{\(k)}}\")"
+    fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
   else
     // TextInput, PasswordInput, CredentialInput, TextBoxInput, etc. → str
     let (defVal =
       if (u is Widgets.TextInput && (u as Widgets.TextInput).default != null)
         (u as Widgets.TextInput).default!!
       else "")
-    "    \(pyName): str = Field(default=\"\(defVal)\", alias=\"{{\(k)}}\")"
+    fmtSubsField(pyName, "str", "default=\"\(defVal)\"", k)
 
 local function generateE2EBasePy(): FileOutput = new FileOutput {
   local baseClass = e2eBaseClass()
