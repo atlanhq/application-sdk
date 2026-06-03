@@ -2209,6 +2209,13 @@ local credentialConfigOutput: FileOutput = new FileOutput {
 
 local function toPyName(k: String): String = k.replaceAll("-", "_")
 
+local function getPyDefaultFactoryField(k: String, fieldType: String, factory: String): String =
+  let (line = "\(k): \(fieldType) = Field(default_factory=\(factory))")
+  if (line.length <= 84)
+    line
+  else
+    "\(k): \(fieldType) = Field(\n        default_factory=\(factory)\n    )"
+
 local function getInputPyField(k: String, u: Widgets.UIElement): String =
   let (k = toPyName(k))
   if (u is Widgets.BooleanInput)
@@ -2225,7 +2232,7 @@ local function getInputPyField(k: String, u: Widgets.UIElement): String =
     "\(k): ConnectionRef | None = None"
   else if (u is Widgets.ConnectionRefInput)
     (if ((u as Widgets.ConnectionRefInput).multiSelect)
-      "\(k): Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_factory=list)"
+      getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
     else
       "\(k): ConnectionRef | None = None")
   else if (u is Widgets.ConnectionSelector)
@@ -2235,12 +2242,12 @@ local function getInputPyField(k: String, u: Widgets.UIElement): String =
   else if (u is Widgets.PasswordInput)
     "\(k): str = \"\""
   else if (u is Widgets.TagsInput)
-    "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
   else if (u is Widgets.InputRepeater)
-    "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
   else if (u is Widgets.DropDown)
     (if ((u as Widgets.DropDown).multiSelect)
-      "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
     else
       "\(k): str = \"\(if ((u as Widgets.DropDown).default != null) (u as Widgets.DropDown).default!! else "")\"")
   else if (u is Widgets.Radio)
@@ -2260,16 +2267,16 @@ local function getInputPyField(k: String, u: Widgets.UIElement): String =
   else if (u is Widgets.ConditionalInput)
     (let (ci = u as Widgets.ConditionalInput)
       if (ci.outputValueType == "object")
-        "\(k): Annotated[dict[str, Any], MaxItems(1000)] = Field(default_factory=dict)"
+        getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
       else
         "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
   else if (u is Widgets.SqlTree)
     // Values are bounded strings (schema names / JSON-encoded selections); `str` avoids
     // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
     // leaf values (e.g. booleans) to str during model construction.
-    "\(k): Annotated[dict[str, str], MaxItems(1000)] = Field(default_factory=dict)"
+    getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
   else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
-    "\(k): Annotated[dict[str, Any], MaxItems(1000)] = Field(default_factory=dict)"
+    getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
   else
     "\(k): str = \"\""
 
@@ -2339,6 +2346,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "                return parsed\n" +
     "        return value\n\n"
   else ""
+  local objectStringCoercionSeparator: String =
+    if (!uiFieldLines.isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
   local credFieldLine: String = if (credentialFieldName != null && !skipFields.contains(credentialFieldName!!))
     "    \(credentialFieldName!!): CredentialRef | None = None\n"
   else ""
@@ -2382,20 +2391,64 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local classBody: String =
     publishHashExcludeBlock +
     uiFieldLines +
+    objectStringCoercionSeparator +
     objectStringCoercionBlock +
     credFieldLine +
     publishFieldBlock
+  local usesAnnotated: Boolean = uiFieldLines.contains("Annotated[")
+  local usesAny: Boolean = uiFieldLines.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+  local usesClassVar: Boolean = includePublishInputFields
+  local typingImports: List<String> = (new Listing {
+    when (usesAnnotated) {
+      "Annotated"
+    }
+    when (usesAny) {
+      "Any"
+    }
+    when (usesClassVar) {
+      "ClassVar"
+    }
+  }).toList()
+  local stdlibImportLines: String =
+    (if (!objectStringCoercionFields.isEmpty) "import json\n" else "") +
+    (if (!typingImports.isEmpty) "from typing import \(typingImports.join(", "))\n" else "")
+  local pydanticImports: List<String> = (new Listing {
+    when (uiFieldLines.contains(" = Field(")) {
+      "Field"
+    }
+    when (!objectStringCoercionFields.isEmpty) {
+      "field_validator"
+    }
+  }).toList()
+  local pydanticImportLines: String =
+    if (!pydanticImports.isEmpty) "from pydantic import \(pydanticImports.join(", "))\n" else ""
+  local sdkTypeImports: List<String> = (new Listing {
+    when (uiFieldLines.contains(": ConnectionRef") || uiFieldLines.contains("list[ConnectionRef]")) {
+      "ConnectionRef"
+    }
+    when (uiFieldLines.contains(": FileReference")) {
+      "FileReference"
+    }
+    when (uiFieldLines.contains("MaxItems(")) {
+      "MaxItems"
+    }
+  }).toList()
+  local firstPartyImportLines: String =
+    (if (!sdkTypeImports.isEmpty)
+      "from application_sdk.contracts.types import \(sdkTypeImports.join(", "))\n"
+    else "") +
+    (if (!credFieldLine.isEmpty) "from application_sdk.credentials.ref import CredentialRef\n" else "") +
+    "from application_sdk.templates.contracts import ExtractionInput\n"
+  local inputImportBlock: String =
+    "from __future__ import annotations\n\n" +
+    (if (!stdlibImportLines.isEmpty) stdlibImportLines + "\n" else "") +
+    (if (!pydanticImportLines.isEmpty) pydanticImportLines + "\n" else "") +
+    firstPartyImportLines +
+    "\n\n"
   text =
     "# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.\n" +
     "# To regenerate: pkl eval -m . contract/app.pkl\n" +
-    "from __future__ import annotations\n" +
-    (if (!objectStringCoercionFields.isEmpty) "import json\n" else "") +
-    "from typing import Annotated, Any, ClassVar\n" +
-    "from pydantic import Field\(if (!objectStringCoercionFields.isEmpty) ", field_validator" else "")\n" +
-    "from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems\n" +
-    "from application_sdk.credentials.ref import CredentialRef\n" +
-    "from application_sdk.templates.contracts import ExtractionInput\n" +
-    "\n\n" +
+    inputImportBlock +
     "class AppInputContract(ExtractionInput):\n" +
     (if (classBody.isEmpty) "    pass\n" else classBody)
 }
