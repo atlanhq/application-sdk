@@ -1,0 +1,191 @@
+name: ae-full-dag-local-reusable
+
+# Reusable: run a connector's FULL Automation Engine DAG entirely inside the
+# GitHub runner (local Temporal + Dapr + every worker the manifest references),
+# register the workflow straight from app/generated/manifest.json, submit it,
+# and assert every DAG node reaches COMPLETED.
+#
+# Manifest-driven end to end:
+#   • which apps boot           ← .github/actions/ae-stack-up (reads dag queues)
+#   • the registered DAG/queues  ← .github/actions/ae-workflow (reads manifest)
+#   • which nodes are polled     ← manifest dag keys (this workflow)
+#
+# A connector's per-repo file collapses to ~10 lines:
+#
+#     name: AE Full-DAG Local
+#     on:
+#       workflow_dispatch:
+#       pull_request:
+#         types: [labeled]
+#     jobs:
+#       ae:
+#         if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ae-full-dag'
+#         uses: atlanhq/application-sdk/.github/workflows/ae-full-dag-local-reusable.yaml@main
+#         with:
+#           app-name: monte-carlo
+#           creds-script: .github/e2e/inject-creds.sh
+#         secrets: inherit
+#
+# The ONLY connector-specific input is `creds-script` — the source credential
+# shape can't come from the manifest. It POSTs the source creds to the connector
+# worker's dev local-vault (http://localhost:3001/workflows/v1/dev/local-vault)
+# and echoes `cred_guid=<guid>` on its last line. Plus, for sources needing
+# system packages (ODBC etc.), an optional `system-deps-script`.
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: 'Connector short name (matches atlan.yaml `name`).'
+        required: true
+        type: string
+      deployment:
+        description: "Deployment tier; fills {deployment_name} in queues."
+        required: false
+        type: string
+        default: ci
+      creds-script:
+        description: "Path (in connector repo) to the source-cred injector; echoes `cred_guid=<guid>`."
+        required: true
+        type: string
+      system-deps-script:
+        description: "Optional path to a script installing source system deps (ODBC, JCo, ...)."
+        required: false
+        type: string
+        default: ""
+      connection-qn:
+        description: "Connection qualified name. Default default/<app-name>/<deployment>."
+        required: false
+        type: string
+        default: ""
+      connection-name:
+        description: "Connection display name. Default ci_<app-name>."
+        required: false
+        type: string
+        default: ""
+      timeout-minutes:
+        required: false
+        type: number
+        default: 120
+    secrets:
+      ORG_PAT_GITHUB:
+        description: "PAT to clone the private sibling app repos."
+        required: true
+      ATLAN_BASE_URL:
+        description: "Tenant URL for the publish app's OAuth (only if the DAG publishes)."
+        required: false
+      ATLAN_CLIENT_ID:
+        required: false
+      ATLAN_CLIENT_SECRET:
+        required: false
+
+jobs:
+  ae-full-dag:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: ae-full-dag-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Checkout connector
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          path: ${{ inputs.app-name }}
+
+      - name: Install source system deps
+        if: inputs.system-deps-script != ''
+        shell: bash
+        working-directory: ${{ inputs.app-name }}
+        run: bash "${{ inputs.system-deps-script }}"
+
+      - name: Bring up AE stack (manifest-driven)
+        id: stack
+        uses: atlanhq/application-sdk/.github/actions/ae-stack-up@main
+        with:
+          app-name: ${{ inputs.app-name }}
+          deployment: ${{ inputs.deployment }}
+          org-pat-github: ${{ secrets.ORG_PAT_GITHUB }}
+          atlan-base-url: ${{ secrets.ATLAN_BASE_URL }}
+          atlan-client-id: ${{ secrets.ATLAN_CLIENT_ID }}
+          atlan-client-secret: ${{ secrets.ATLAN_CLIENT_SECRET }}
+
+      - name: Inject source credentials
+        id: creds
+        shell: bash
+        working-directory: ${{ inputs.app-name }}
+        run: |
+          set -euo pipefail
+          GUID=$(bash "${{ inputs.creds-script }}" | sed -n 's/^cred_guid=//p' | tail -1)
+          [ -n "$GUID" ] || { echo "::error::creds-script did not echo cred_guid="; exit 1; }
+          echo "cred_guid=$GUID" >> "$GITHUB_OUTPUT"
+          echo "Provisioned credential: $GUID"
+
+      - name: Register AE workflow from manifest
+        id: register
+        uses: atlanhq/application-sdk/.github/actions/ae-workflow@main
+        with:
+          ae-url: ${{ steps.stack.outputs.ae-url }}
+          token: "local"                       # local AE has no auth gate in dev mode
+          name: "${{ inputs.app-name }} full-DAG CI - ${{ github.run_id }}"
+          deployment: ${{ inputs.deployment }}
+          cred-guid: ${{ steps.creds.outputs.cred_guid }}
+          connection-qn: ${{ inputs.connection-qn != '' && inputs.connection-qn || format('default/{0}/{1}', inputs.app-name, inputs.deployment) }}
+          connection-name: ${{ inputs.connection-name != '' && inputs.connection-name || format('ci_{0}', inputs.app-name) }}
+          manifest: ${{ inputs.app-name }}/app/generated/manifest.json
+          atlan-yaml: ${{ inputs.app-name }}/atlan.yaml
+          # CI: dry-run publish (no real Atlas write / cache population).
+          connection-creation-enabled: "false"
+          executor-enabled: "false"
+          connection-cache-enabled: "false"
+          connection-cache-via-app-enabled: "false"
+
+      - name: Submit run and assert every DAG node completes
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.temporalio/bin:$PATH"
+          SLUG="${{ steps.register.outputs.slug }}"
+          AE="${{ steps.stack.outputs.ae-url }}"
+
+          RUN=$(curl -sf -X POST "${AE}/api/v1/workflows/${SLUG}/submit" -H 'Content-Type: application/json' -d '{}')
+          RUN_GUID=$(echo "$RUN" | python3 -c "import json,sys;print(json.load(sys.stdin)['data']['guid'])")
+          echo "Run: $RUN_GUID"
+
+          # Node ids to poll come straight from the manifest dag.
+          NODES=$(python3 -c "import json;print(' '.join(json.load(open('${{ inputs.app-name }}/app/generated/manifest.json'))['dag'].keys()))")
+          echo "Polling DAG nodes: $NODES"
+
+          wait_for() { # workflow-id label timeout
+            local wf="$1" label="$2" to="${3:-900}" elapsed=0
+            while [ $elapsed -lt $to ]; do
+              local st
+              st=$(temporal workflow describe --workflow-id "$wf" 2>/dev/null | awk '/^\s+Status/{print $2}' | head -1 || echo NOT_STARTED)
+              echo "  $label: $st (${elapsed}s)"
+              case "$st" in
+                COMPLETED) return 0 ;;
+                FAILED|TERMINATED|CANCELED) echo "::error::$label $st"; return 1 ;;
+              esac
+              sleep 10; elapsed=$((elapsed+10))
+            done
+            echo "::error::$label timed out after ${to}s"; return 1
+          }
+
+          rc=0
+          for node in $NODES; do
+            wait_for "${RUN_GUID}-${node}" "$node" 900 || rc=1
+          done
+
+          echo "### AE full-DAG run \`${RUN_GUID}\`" >> "$GITHUB_STEP_SUMMARY"
+          temporal workflow list --query "WorkflowId STARTS_WITH '${RUN_GUID}'" 2>/dev/null \
+            | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
+          exit $rc
+
+      - name: Dump logs on failure
+        if: failure()
+        shell: bash
+        run: for f in logs/*.log; do echo "===== $f ====="; tail -60 "$f"; done 2>/dev/null || true
