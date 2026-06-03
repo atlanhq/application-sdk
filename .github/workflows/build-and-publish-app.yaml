@@ -604,7 +604,11 @@ jobs:
             CONFIG_ARGS=(--config .gitleaks.toml)
           fi
           set +e
+          # --redact: replace secret values with "REDACTED" in the report, so
+          # the raw secret never lands on disk. The summary/Slack steps read only
+          # File/StartLine/RuleID anyway, but this is defense-in-depth.
           gitleaks dir \
+            --redact \
             --report-format json \
             --report-path /tmp/gitleaks-report.json \
             "${CONFIG_ARGS[@]}" \
