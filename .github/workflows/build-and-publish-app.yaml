@@ -75,9 +75,9 @@ on:
       APP_PUBLISH_TOKEN:
         required: false
         description: "API token for marketplace publish — required when publish=true"
-      LEAK_SCAN_SLACK_WEBHOOK:
+      SLACK_LEAK_SCAN_WEBHOOK:
         required: false
-        description: "Slack incoming-webhook URL for credential-leak (creds-into-logs) WARNINGS. Warnings are non-blocking; when this is unset the Slack ping is skipped. Never receives secret values — only file:line locations."
+        description: "Slack incoming-webhook URL (hooks.slack.com) for credential-leak (creds-into-logs) WARNINGS. Org-level secret, passed via `secrets: inherit` — same convention as SLACK_DEP_COOLDOWN_WEBHOOK. Warnings are non-blocking; when unset the Slack ping is skipped. Never receives secret values — only file:line locations."
 
 permissions:
   contents: read
@@ -687,30 +687,37 @@ jobs:
           fi
 
       - name: Notify Slack on warnings
-        # Warn-only signal → Slack. Skipped silently when the webhook secret is
-        # not configured, so apps that haven't set it still publish cleanly.
+        # Warn-only signal → Slack. Gated on the step OUTPUT (not the secret):
+        # secrets are unavailable in `if:`, so the secret presence is checked
+        # inside the step instead. Mirrors reusable-dep-cooldown.yml.
         if: always() && steps.gitleaks.outcome == 'success' && (steps.credscan.outputs.blocking || '0') != '0'
         env:
-          SLACK_WEBHOOK: ${{ secrets.LEAK_SCAN_SLACK_WEBHOOK }}
-          WARN: ${{ steps.credscan.outputs.blocking }}
+          WEBHOOK: ${{ secrets.SLACK_LEAK_SCAN_WEBHOOK }}
           CRIT: ${{ steps.credscan.outputs.critical }}
           HIGH: ${{ steps.credscan.outputs.high }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          if [ -z "${SLACK_WEBHOOK:-}" ]; then
-            echo "::notice::LEAK_SCAN_SLACK_WEBHOOK not set — skipping Slack notification."
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::notice::SLACK_LEAK_SCAN_WEBHOOK not set — skipping Slack notification."
             exit 0
           fi
+          # Host allowlist: refuse to send if the secret is ever tampered to
+          # point somewhere other than Slack.
+          case "$WEBHOOK" in
+            https://hooks.slack.com/*) ;;
+            *) echo "::warning::SLACK_LEAK_SCAN_WEBHOOK is not a hooks.slack.com URL — refusing to send."; exit 0 ;;
+          esac
           V=/tmp/leak-gate-verdict.json
           # Top 10 locations only — never secret values.
           LOCS=$(jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "• `\(.file):\(.line)` (\(.pattern_id), \(.severity))"' "$V" | head -10)
           TEXT=$(printf ':warning: *Credential-leak warnings* in *%s* (publish NOT blocked)\n%s critical, %s high reaching log/CLI sinks.\n%s\n<%s|View run>' \
             "$REPO" "$CRIT" "$HIGH" "$LOCS" "$RUN_URL")
-          # jq builds the JSON so the message is safely escaped.
+          # jq builds the JSON so the message is safely escaped. --fail/--max-time
+          # so a hung Slack endpoint can't stall or fail the job (warn-only).
           jq -n --arg t "$TEXT" '{text: $t}' \
-            | curl -sS -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK" \
+            | curl -sS --fail --max-time 10 -X POST -H 'Content-type: application/json' --data @- "$WEBHOOK" \
             || echo "::warning::Slack notification failed (non-blocking)."
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────

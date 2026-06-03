@@ -53,10 +53,17 @@ When the creds-into-logs scan produces CRITICAL/HIGH findings:
 
 - A **run-summary** section lists the finding **locations** (`file:line`,
   pattern id, identifier, severity) — never secret values.
-- If the caller sets the optional **`LEAK_SCAN_SLACK_WEBHOOK`** secret (a Slack
-  incoming-webhook URL), the job posts the same location-only summary to that
-  channel with a link to the run. When the secret is unset, the Slack step is
+- If the optional **`SLACK_LEAK_SCAN_WEBHOOK`** secret is set (a
+  `hooks.slack.com` incoming-webhook URL), the job posts the same location-only
+  summary to that channel with a link to the run. When unset, the Slack step is
   skipped silently.
+
+  Set it **once at the org level** and let apps pick it up via `secrets:
+  inherit` — the same convention as `SLACK_DEP_COOLDOWN_WEBHOOK`
+  (`atlanhq/.github` → `reusable-dep-cooldown.yml`). There is no shared generic
+  Slack secret in the org; each pipeline uses its own `SLACK_<purpose>_WEBHOOK`.
+  The webhook URL itself encodes the destination channel. The step refuses to
+  POST anywhere other than `hooks.slack.com`.
 
 ## The creds-into-logs scanner
 
