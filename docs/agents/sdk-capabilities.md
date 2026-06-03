@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.14.0
-source-sha:    0ef594aefde221c861d45a54d896d314ca1d906b
-source-date:   2026-06-01T18:50:15+05:30
+source-sha:    e84e1f49890c498a8419f7af5737cb62b15ff29f
+source-date:   2026-06-03T12:16:55+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2464,6 +2464,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the fetch_metadata handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
+  - `metadata_template_key: str` `= Field(default='', validation_alias=(AliasChoices('metadata_template_key', 'metadataTemplateKey', 'type')))` — Metadata source routing key for multi-source metadata widgets.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
   - `object_filter: str` `= ''` — Filter pattern (e.g., 'public.*', 'mydb.myschema.*').
   - `include_fields: bool` `= True` — Whether to include field/column details.
