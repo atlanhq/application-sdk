@@ -22,10 +22,12 @@ Detection model
 
 Output
 ------
-Writes a verdict JSON (same shape the publish gate consumes) and exits:
-  - 0  -> no blocking (CRITICAL/HIGH) findings  (decision="pass")
-  - 1  -> one or more blocking findings         (decision="fail")
-Any uncaught exception propagates as a non-zero exit, so the gate fails closed.
+Writes a verdict JSON (the source of truth the workflow reads) and exits:
+  - 0  -> no CRITICAL/HIGH findings  (decision="pass")
+  - 1  -> one or more CRITICAL/HIGH  (decision="fail")
+The exit code is advisory: in the publish gate this scan is WARN-ONLY (the
+workflow annotates the run + pings Slack on findings but does not block — only
+the companion gitleaks hardcoded-secret scan blocks the publish).
 
 Secret values are NEVER recorded or printed — only file, line, pattern id,
 matched identifier, and severity.
@@ -196,6 +198,54 @@ def _strip_comment(line: str, ext: str) -> str:
 # `len(creds)` / `list(creds.keys())` reveals shape/presence, not the value.
 _META_BUILTIN = re.compile(r"(bool|type|len|dir|id|isinstance|repr|hasattr)\s*\([^)]*$")
 
+# Fields of a credential object that are NOT the secret. Logging these reveals
+# connection metadata, not a credential value. Normalized (no separators).
+# Deliberately excludes password/secret/token/key/clientsecret/etc.
+NON_SECRET_FIELDS = {
+    "host",
+    "hostname",
+    "port",
+    "account",
+    "accountid",
+    "user",
+    "username",
+    "userid",
+    "project",
+    "projectid",
+    "region",
+    "zone",
+    "type",
+    "authtype",
+    "scheme",
+    "url",
+    "uri",
+    "endpoint",
+    "server",
+    "database",
+    "db",
+    "schema",
+    "warehouse",
+    "role",
+    "catalog",
+    "namespace",
+    "driver",
+    "dialect",
+    "name",
+    "id",
+    "email",
+    "tenant",
+    "tenantid",
+    "clientid",
+    "impersonateuser",
+    "path",
+    "method",
+    "protocol",
+    "format",
+    "version",
+    "status",
+    "kind",
+}
+
 
 _BRACE = re.compile(r"\{[^{}]*\}")
 _IS_NONE = re.compile(r"[\w\[\]'\".]*\s+is\s+(not\s+)?none\b", re.IGNORECASE)
@@ -250,6 +300,23 @@ def _is_metadata_access(code: str, var_start: int, var_end: int) -> bool:
     # Wrapped in a metadata builtin: bool(creds), type(creds), len(creds), ...
     if _META_BUILTIN.search(before):
         return True
+    # Boolean negation `not creds` — a presence check, not the value.
+    if re.search(r"\bnot\s+$", before):
+        return True
+    # Accessing a known NON-secret field of a credential object logs that
+    # field, not the secret: creds['host'], creds.get("authType"),
+    # creds.account, ... Unknown / secret-named fields (password, token,
+    # secret_key, ...) are NOT in the set, so they still flag.
+    # `\w*` first absorbs the rest of the identifier (the regex group may match
+    # only a prefix, e.g. `credential` of `credentials`).
+    fld = re.match(
+        r"""\w*\s*(?:\[\s*['"]([\w-]+)['"]\s*\]|\.\s*get\s*\(\s*['"]([\w-]+)['"]|\.\s*([A-Za-z_]\w*))""",
+        after,
+    )
+    if fld:
+        field = _norm(fld.group(1) or fld.group(2) or fld.group(3) or "")
+        if field in NON_SECRET_FIELDS:
+            return True
     # The identifier is itself a quoted string literal (e.g. a dict key in a
     # membership/`.get()` test: `'credentials' in cfg`), not a value reference.
     # Allow trailing word chars (the matched token may be a prefix, e.g.
@@ -300,6 +367,13 @@ def _iter_source_files(root: str):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for name in filenames:
+            # Skip security rule-definition files: they legitimately contain
+            # sink-pattern strings like `print(... credentials ...)` that are
+            # rules, not leaks (e.g. an app's own .semgrep.yml).
+            if name in (".semgrep.yml", ".semgrep.yaml") or name.endswith(
+                (".semgrep.yml", ".semgrep.yaml")
+            ):
+                continue
             if os.path.splitext(name)[1].lower() in EXTS:
                 full = os.path.join(dirpath, name)
                 yield full, os.path.relpath(full, root)

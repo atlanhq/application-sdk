@@ -75,6 +75,9 @@ on:
       APP_PUBLISH_TOKEN:
         required: false
         description: "API token for marketplace publish — required when publish=true"
+      LEAK_SCAN_SLACK_WEBHOOK:
+        required: false
+        description: "Slack incoming-webhook URL for credential-leak (creds-into-logs) WARNINGS. Warnings are non-blocking; when this is unset the Slack ping is skipped. Never receives secret values — only file:line locations."
 
 permissions:
   contents: read
@@ -528,22 +531,18 @@ jobs:
           fi
           exit 0
 
-  # ── Job 0d: Credential-leak gate — block publish on any leak ──────────────────
-  # Two deterministic layers, both blocking, run before any build minutes are
-  # spent so a leak surfaces at minute 0. No LLM, no token, no network beyond
-  # checkout + the pinned gitleaks download.
-  #   1. Hardcoded secrets: gitleaks over the checked-out source for committed
-  #      secrets (API keys, tokens, private keys). Honors an app-level
-  #      .gitleaks.toml allowlist.
-  #   2. Creds-into-logs: a regex scanner (scan.py) for credentials reaching
-  #      log/print/format/CLI-arg sinks (the APP-1602 audit class). Mirrors the
-  #      nightly credential-leak-scan's sink pattern set + severity rubric, with
-  #      the LLM triage replaced by static heuristics (masking-helper skip,
-  #      metadata-identifier exclusion, code-vs-message-string check, test-path
-  #      downgrade) plus an app-level .credential-leak-allow allowlist.
-  #      CRITICAL/HIGH findings block; MEDIUM/LOW are reported only.
-  # Only runs when publish=true (matches validate-channel / certify). A failure
-  # here trips prepare's `!failure()` and skips build + publish.
+  # ── Job 0d: Credential-leak gate ──────────────────────────────────────────────
+  # Two deterministic layers (no LLM, no token), run before any build minutes:
+  #   1. Hardcoded secrets (gitleaks) — BLOCKING. A committed secret (API key,
+  #      token, private key) fails the job, which trips prepare's `!failure()`
+  #      and skips build + publish. High precision; honors .gitleaks.toml.
+  #   2. Creds-into-logs (scan.py) — WARN-ONLY. Flags credentials reaching
+  #      log/print/format/CLI sinks (the APP-1602 audit class). Pure-regex
+  #      detection has an irreducible false-positive rate (it cannot always tell
+  #      a logged secret value from a logged non-secret field), so it does NOT
+  #      block: it annotates the run summary and pings Slack when there are
+  #      warnings. Honors an app-level .credential-leak-allow allowlist.
+  # Only runs when publish=true (matches validate-channel / certify).
   # See docs/standards/credential-leak-gate.md.
   leak-scan:
     name: Credential leak gate
@@ -630,50 +629,89 @@ jobs:
           fi
           echo "gitleaks: no hardcoded secrets found."
 
-      # ── Layer 2: deterministic creds-into-logs scan (regex, no LLM) ───────────
-      - name: Creds-into-logs scan
+      # ── Layer 2: creds-into-logs scan (regex, no LLM) — WARN-ONLY ─────────────
+      - name: Creds-into-logs scan (warn-only)
         id: credscan
+        # `|| true`: this layer never fails the job. scan.py exits non-zero when
+        # it finds CRITICAL/HIGH, but here that is advisory — only gitleaks
+        # (Layer 1) blocks the publish. The verdict JSON is the source of truth.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           python3 sdk/.github/scripts/credential-leak-gate/scan.py \
             --root app \
-            --report /tmp/leak-gate-verdict.json
+            --report /tmp/leak-gate-verdict.json || true
+          # Surface counts for the summary + Slack steps. Defaults are safe if
+          # the scan errored (warn-only — an operational failure must not block).
+          V=/tmp/leak-gate-verdict.json
+          if [ -f "$V" ] && jq empty "$V" 2>/dev/null; then
+            echo "findings=$(jq -r '.summary.total_findings // 0' "$V")" >> "$GITHUB_OUTPUT"
+            echo "blocking=$(jq -r '.summary.blocking // 0' "$V")" >> "$GITHUB_OUTPUT"
+            echo "critical=$(jq -r '.summary.critical // 0' "$V")" >> "$GITHUB_OUTPUT"
+            echo "high=$(jq -r '.summary.high // 0' "$V")" >> "$GITHUB_OUTPUT"
+            echo "medium=$(jq -r '.summary.medium // 0' "$V")" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=Creds-into-logs scan incomplete::No valid verdict produced; reporting 0 (warn-only, publish not blocked)."
+            echo "findings=0" >> "$GITHUB_OUTPUT"
+            echo "blocking=0" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Enforce creds-into-logs verdict
-        # always() so a non-zero scan exit (blocking findings) still renders the
-        # summary instead of being swallowed by the failed previous step.
+      - name: Creds-into-logs report (run summary)
         if: always() && steps.gitleaks.outcome == 'success'
+        env:
+          WARN: ${{ steps.credscan.outputs.blocking || '0' }}
+          CRIT: ${{ steps.credscan.outputs.critical || '0' }}
+          HIGH: ${{ steps.credscan.outputs.high || '0' }}
+          MED: ${{ steps.credscan.outputs.medium || '0' }}
         run: |
           set -euo pipefail
-          VERDICT=/tmp/leak-gate-verdict.json
-          # Fail closed: a missing or malformed verdict blocks the publish.
-          if [ ! -f "$VERDICT" ] || ! jq empty "$VERDICT" 2>/dev/null; then
-            echo "::error title=Publish blocked::creds-into-logs scan produced no valid verdict JSON. Gate fails closed."
-            exit 1
-          fi
-          DECISION=$(jq -r '.decision // "fail"' "$VERDICT")
-          BLOCKING=$(jq -r '.summary.blocking // 0' "$VERDICT")
-          CRIT=$(jq -r '.summary.critical // 0' "$VERDICT")
-          HIGH=$(jq -r '.summary.high // 0' "$VERDICT")
-          MED=$(jq -r '.summary.medium // 0' "$VERDICT")
-          if [ "$DECISION" != "pass" ] || [ "$BLOCKING" -gt 0 ]; then
+          V=/tmp/leak-gate-verdict.json
+          if [ "${WARN}" -gt 0 ]; then
             {
-              echo "### ❌ Publish blocked — credential(s) reaching log/CLI sinks"
+              echo "### ⚠️ Credential leak warnings (non-blocking)"
               echo ""
-              echo "${BLOCKING} blocking finding(s) (${CRIT} critical, ${HIGH} high). Locations only (values never recorded):"
+              echo "gitleaks: ✅ no hardcoded secrets (blocking layer passed)."
               echo ""
-              jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "- `\(.file):\(.line)` — \(.pattern_id) (var: \(.variable_name), \(.severity))"' "$VERDICT"
+              echo "Creds-into-logs found ${WARN} likely finding(s) (${CRIT} critical, ${HIGH} high). **This does not block the publish** — review and fix, or allowlist confirmed false positives in \`.credential-leak-allow\`. Locations only (values never recorded):"
               echo ""
-              echo "Route the credential through the SDK redaction helper before the sink, or drop the log line. Confirmed false positives go in \`.credential-leak-allow\`. See docs/standards/credential-leak-gate.md."
+              jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "- `\(.file):\(.line)` — \(.pattern_id) (var: \(.variable_name), \(.severity))"' "$V"
+              echo ""
+              echo "See docs/standards/credential-leak-gate.md."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error title=Publish blocked::${BLOCKING} credential-leak finding(s) reach a log/CLI sink."
-            exit 1
+            echo "::warning title=Credential-leak warnings::${WARN} credential(s) may reach a log/CLI sink (non-blocking). See run summary."
+          else
+            {
+              echo "### ✅ Credential leak gate"
+              echo ""
+              echo "gitleaks: ✅ no hardcoded secrets (blocking). Creds-into-logs: ✅ no warnings (${MED} medium, non-blocking)."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-          {
-            echo "### ✅ Credential leak gate passed"
-            echo ""
-            echo "gitleaks: 0 hardcoded secrets. Creds-into-logs: 0 blocking findings (${MED} medium reported, non-blocking)."
-          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify Slack on warnings
+        # Warn-only signal → Slack. Skipped silently when the webhook secret is
+        # not configured, so apps that haven't set it still publish cleanly.
+        if: always() && steps.gitleaks.outcome == 'success' && (steps.credscan.outputs.blocking || '0') != '0'
+        env:
+          SLACK_WEBHOOK: ${{ secrets.LEAK_SCAN_SLACK_WEBHOOK }}
+          WARN: ${{ steps.credscan.outputs.blocking }}
+          CRIT: ${{ steps.credscan.outputs.critical }}
+          HIGH: ${{ steps.credscan.outputs.high }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SLACK_WEBHOOK:-}" ]; then
+            echo "::notice::LEAK_SCAN_SLACK_WEBHOOK not set — skipping Slack notification."
+            exit 0
+          fi
+          V=/tmp/leak-gate-verdict.json
+          # Top 10 locations only — never secret values.
+          LOCS=$(jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "• `\(.file):\(.line)` (\(.pattern_id), \(.severity))"' "$V" | head -10)
+          TEXT=$(printf ':warning: *Credential-leak warnings* in *%s* (publish NOT blocked)\n%s critical, %s high reaching log/CLI sinks.\n%s\n<%s|View run>' \
+            "$REPO" "$CRIT" "$HIGH" "$LOCS" "$RUN_URL")
+          # jq builds the JSON so the message is safely escaped.
+          jq -n --arg t "$TEXT" '{text: $t}' \
+            | curl -sS -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK" \
+            || echo "::warning::Slack notification failed (non-blocking)."
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
@@ -686,10 +724,11 @@ jobs:
     # run exits non-zero, which trips `failure()` here and correctly skips
     # prepare → build → publish. Its other layers (v3 shape, contract drift)
     # stay warn-only (always exit 0) so they never trip this yet.
-    # `leak-scan` enforces: a confirmed hardcoded secret (gitleaks) or a
-    # surviving CRITICAL/HIGH creds-into-logs finding exits non-zero, tripping
-    # `failure()` here and blocking the publish. `unit-tests-gate` is currently
-    # warn-only; its enforcement-flip is tracked separately.
+    # `leak-scan` blocks ONLY on its gitleaks (hardcoded-secret) layer: that
+    # step exits non-zero, fails the job, and trips `failure()` here to skip the
+    # publish. Its creds-into-logs layer is warn-only (annotates + pings Slack,
+    # never fails the job), so warnings do not block. `unit-tests-gate` is
+    # currently warn-only; its enforcement-flip is tracked separately.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
     runs-on: ubuntu-latest

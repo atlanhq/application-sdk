@@ -82,6 +82,38 @@ def test_logging_raw_credential_object_still_blocks(tmp_path: Path) -> None:
     assert result["decision"] == "fail"
 
 
+def test_logging_non_secret_field_is_not_a_leak(tmp_path: Path) -> None:
+    # Accessing a non-secret field of a credential object logs that field,
+    # not the secret value.
+    _write(
+        tmp_path,
+        "h.py",
+        "logger.info(f\"host: {credentials['host']}\")\n"
+        "logger.info(f\"authType={credentials.get('authType')}\")\n"
+        'logger.debug(f"user: {self._credentials.impersonate_user}")\n'
+        'logger.info(f"empty: {not credentials if isinstance(credentials, dict) else 0}")\n',
+    )
+    result = scan.scan(str(tmp_path))
+    assert result["findings"] == []
+
+
+def test_logging_secret_field_still_blocks(tmp_path: Path) -> None:
+    # Accessing a secret-named field MUST still flag.
+    _write(
+        tmp_path,
+        "h.py",
+        "logger.info(f\"pw: {credentials['password']}\")\n",
+    )
+    result = scan.scan(str(tmp_path))
+    assert result["decision"] == "fail"
+
+
+def test_semgrep_rule_file_is_skipped(tmp_path: Path) -> None:
+    _write(tmp_path, ".semgrep.yml", "    - pattern: print(... , credentials, ...)\n")
+    result = scan.scan(str(tmp_path))
+    assert result["findings"] == []
+
+
 def test_helm_set_is_medium_non_blocking(tmp_path: Path) -> None:
     _write(tmp_path, "deploy.sh", "helm upgrade app --set password=$DB_PASSWORD\n")
     result = scan.scan(str(tmp_path))

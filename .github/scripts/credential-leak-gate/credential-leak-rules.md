@@ -10,11 +10,13 @@ directory, driven by the `leak-scan` job in
 > `skills/credential-leak-scan/references/credential-leak-rules.md`,
 > the canonical source maintained by the nightly credential-leak scan.
 > The nightly scan is detection + tracking (Linear tickets, ClickHouse) and
-> uses an LLM to triage candidates; this copy is the **blocking publish gate**
-> — same sink pattern set and severity rubric, but **deterministic**: the LLM
-> triage/adversarial stages are replaced by static heuristics (see "Deterministic
-> gate notes" below). **Keep the pattern set + severity rubric in sync** when
-> either side changes. The pattern IDs are stable — do not rename them.
+> uses an LLM to triage candidates; this copy drives the **publish-time gate**
+> — same sink pattern set and severity rubric, but **deterministic** (the LLM
+> triage/adversarial stages are replaced by static heuristics, see below) and
+> **warn-only** (creds-into-logs findings annotate the run + ping Slack; they do
+> not block — only the gitleaks hardcoded-secret layer blocks). **Keep the
+> pattern set + severity rubric in sync** when either side changes. The pattern
+> IDs are stable — do not rename them.
 
 > **Deterministic gate notes (how `scan.py` diverges from the nightly):**
 > - **`fstring-interp` is folded into the sinks, not standalone.** An f-string
@@ -27,8 +29,11 @@ directory, driven by the `leak-scan` job in
 >   matched token is a metadata identifier (`credential_name`, `secret_id`,
 >   `credential_guid`, …); or the credential identifier appears only inside a
 >   message string literal, never referenced as code.
-> - **Severity gating.** CRITICAL/HIGH block the publish; MEDIUM/LOW are
->   reported only. `helm-set` and findings in test/fixture paths cap at MEDIUM.
+> - **Non-secret field access.** Logging `creds['host']` / `creds.get('authType')`
+>   / `creds.account` reveals connection metadata, not the secret value.
+> - **Severity (warn-only).** CRITICAL/HIGH raise a warning + Slack ping;
+>   MEDIUM/LOW are counted only. `helm-set` and test/fixture paths cap at MEDIUM.
+>   Nothing here blocks the publish — only the gitleaks layer does.
 > - **Allowlist.** An app-level `.credential-leak-allow` file suppresses
 >   confirmed false positives (`path` to ignore a file, `path:lineno` for a
 >   single line).
@@ -114,9 +119,10 @@ Applied only when the triage verdict is `LEAK`.
 | MEDIUM | Credential passed as CLI `--set` arg in test/e2e scripts, OR credential logged behind a feature flag / debug log. |
 | LOW | Credential-adjacent identifier reaches a sink but the value is structurally non-sensitive (e.g., a redacted URI format template where the credential is always masked). |
 
-**Publish-gate blocking threshold:** `CRITICAL` and `HIGH` surviving the gate
-block the publish. `MEDIUM`/`LOW` are reported in the verdict and the job
-summary but do **not** block (they are tracked by the nightly scan).
+**Publish-gate warning threshold:** `CRITICAL` and `HIGH` raise a non-blocking
+warning (run summary + Slack). `MEDIUM`/`LOW` are counted in the verdict only.
+The creds-into-logs layer never blocks the publish — only the gitleaks
+hardcoded-secret layer does.
 
 ---
 
