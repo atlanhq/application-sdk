@@ -56,7 +56,8 @@ class SQLMustacheSubstitutions(MustacheSubstitutions):
     Used by :class:`~application_sdk.testing.e2e.sql_app.SQLAppE2ETest`;
     subclassable further for SQL connectors whose manifest declares
     additional mustache keys (driven by the connector's ``app.pkl`` via
-    codegen — see ``contract-toolkit/src/E2EOutput.pkl``).
+    codegen — see ``generateE2ESubstitutionsPy()`` in
+    ``contract-toolkit/src/App.pkl``).
     """
 
     extraction_method: str = Field(default="", alias="{{extraction-method}}")
