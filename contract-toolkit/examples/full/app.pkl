@@ -34,9 +34,6 @@ pipeline {
     sqlKey = "QUERY_TEXT"
     catalogKey = "DATABASE_NAME"
     schemaKey = "SCHEMA_NAME"
-    timestampKey = "START_TIME"
-    mineOutputType = "parquet"
-    parsingMode = "fallback"
     inputPrefix = "$.extract.outputs.query_history_prefix"
     outputPrefix = "$.extract.outputs.qi_output_prefix"
   }

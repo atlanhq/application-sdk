@@ -645,10 +645,18 @@ open class QueryIntelligenceNode extends DAGNode {
 
   schemaKey: String = "SCHEMA_NAME"
 
+  /// Deprecated: QI no longer filters records by timestamp. The arg is still
+  /// emitted for back-compat but is ignored by the QI app.
+  @Deprecated { message = "QI no longer filters records by timestamp; this field is ignored." }
   timestampKey: String = "START_TIME"
 
-  mineOutputType: "parquet"|"json" = "parquet"
+  /// `"json"` is the default for new integrations. `"parquet"` remains valid
+  /// for legacy miner-style inputs but should not be used by new contracts.
+  mineOutputType: "parquet"|"json" = "json"
 
+  /// Deprecated: parsing strategy is tuned internally by QI based on workload.
+  /// The arg is still emitted for back-compat but is ignored.
+  @Deprecated { message = "Parsing mode is now tuned internally by QI; this field is ignored." }
   parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
 
   extraFilter: String?
@@ -657,16 +665,25 @@ open class QueryIntelligenceNode extends DAGNode {
 
   ignoreOrphans: Boolean|String? = null
 
+  /// Deprecated: all columns/fields are preserved in JSON mode (the default).
+  /// The arg is still emitted when set but is ignored by the QI app.
+  @Deprecated { message = "All columns/fields are preserved in JSON mode; this field is ignored." }
   columnsToPreserve: String?
 
   relatedAssetsOutputPrefix: String?
 
+  /// Deprecated: parser artifacts are no longer consumed via this key. The arg
+  /// is still emitted when set but is ignored.
+  @Deprecated { message = "No longer used by QI." }
   parserArtifactsKey: String?
 
   connectionCacheKey: String?
 
   currentStatePrefix: String?
 
+  /// Deprecated: instance name is read from QI app environment variables, not
+  /// per-workflow inputs. The arg is still emitted when set but is ignored.
+  @Deprecated { message = "Instance name is read from QI app environment, not workflow args; this field is ignored." }
   instanceName: String?
 
   hidden _qiArgsCheck: Any =

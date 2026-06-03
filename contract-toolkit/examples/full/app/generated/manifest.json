@@ -45,7 +45,7 @@
           "catalog_key": "DATABASE_NAME",
           "schema_key": "SCHEMA_NAME",
           "timestamp_key": "START_TIME",
-          "mine_output_type": "parquet",
+          "mine_output_type": "json",
           "parsing_mode": "fallback",
           "vendor_name": "postgres"
         }
