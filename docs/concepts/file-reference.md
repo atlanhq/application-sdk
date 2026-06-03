@@ -36,12 +36,32 @@ failures.
 | Task B always needs what task A produced, and the file is always present | `FileReference` field (eager, default) | SDK downloads it before task B runs. |
 | Task B only sometimes needs the file (e.g. only when `mode == "full"`) | `Annotated[FileReference \| None, Lazy()]` | SDK skips the download; task B fetches on demand with `fetch()`. |
 | Multiple tasks all share the same large manifest file | Single `FileReference` passed through the chain | SDK downloads it exactly once per task via dedup. |
-| Push a completed artifact so it appears in the Atlan UI after the run | `await self.upload(UploadInput(..., tier=StorageTier.RETAINED))` | Writes to a stable run-scoped prefix that the platform indexes. |
+| Push a completed artifact so it appears in the Atlan UI after the run | `await self.upload(UploadInput(local_path=...))` | `RETAINED` is the default tier — writes to a stable run-scoped prefix that the platform indexes. |
 | Write a file that must persist across multiple runs (e.g. incremental bookmark) | `await self.upload(UploadInput(..., tier=StorageTier.PERSISTENT))` | Writes to a fixed path not cleaned up between runs. |
 | Directory of output files (e.g. partitioned Parquet) from task A to task B | `FileReference(local_path=str(dir_path))` — same API, directory-aware | SDK uploads all files in the directory and re-creates the structure on download. |
+| Pass intermediate data between tasks using `App.upload()` | **Don't — use `FileReference`** | `App.upload()` routes to Atlan's `atlan-objectstore` in SDR, polluting it with internal artifacts; bypasses SHA-256 dedup; and doesn't wire into cross-worker auto-materialization. |
 
 **Key rule:** `FileReference` is for *within-run* transfer. `App.upload()` is
 for *durable outbound* delivery.
+
+> **Anti-pattern: `App.upload()` for task-to-task data.** Using `App.upload()` to
+> move data between tasks — instead of `FileReference` — causes three distinct harms:
+>
+> 1. **Wrong bucket.** In SDR, `App.upload()` routes to the Atlan-owned
+>    `atlan-objectstore`. Intermediate pipeline data (raw SQL rows, partial
+>    transforms) pollutes Atlan's bucket with artifacts that the publish app treats
+>    as connector output.
+> 2. **Bypasses SHA-256 dedup.** The `FileReference` interceptor maintains a
+>    `.sha256` sidecar so re-transfers across workers are skipped automatically.
+>    `App.upload()` performs a full upload on every call — no dedup, no sidecar,
+>    no skip.
+> 3. **No cross-worker auto-materialization.** `FileReference` input fields are
+>    automatically re-downloaded before a task runs when the local file is absent
+>    (cross-worker fault tolerance). `App.upload()` produces a bare `FileReference`
+>    without wiring it into the SDK's materialization machinery.
+>
+> For task-to-task data: declare `FileReference` on your `Output` and `Input`
+> contracts — the interceptor handles persistence and materialization automatically.
 
 ### Which store does each API write to?
 
@@ -401,10 +421,7 @@ from application_sdk.contracts.types import StorageTier
 
 # Inside run() or a @task method:
 upload_result = await self.upload(
-    UploadInput(
-        local_path="/tmp/output/tables.parquet",
-        tier=StorageTier.RETAINED,
-    )
+    UploadInput(local_path="/tmp/output/tables.parquet")  # RETAINED is the default tier
 )
 # upload_result.ref is now a durable FileReference
 # storage_path will be something like:
@@ -439,9 +456,7 @@ upload_result = await self.upload(
 
 ```python
 # In the extract task:
-upload_result = await self.upload(
-    UploadInput(local_path=extract_output.db_path, tier=StorageTier.RETAINED)
-)
+upload_result = await self.upload(UploadInput(local_path=extract_output.db_path))
 
 # Pass the durable ref to the transform task:
 transform_input = TransformInput(source_db=upload_result.ref)
@@ -484,8 +499,7 @@ async def transform(self, input: TransformInput) -> TransformOutput:
 
 # In the run() method — push result for the platform to index:
 result = await self.upload(
-    UploadInput(local_path=transform_output.result_parquet.local_path,
-                tier=StorageTier.RETAINED)
+    UploadInput(local_path=transform_output.result_parquet.local_path)  # RETAINED is the default
 )
 # result.ref.storage_path is stable and survives workflow completion
 ```
@@ -537,7 +551,6 @@ class MyConnector(App):
         upload = await self.upload(
             UploadInput(
                 local_path=transform_out.result_parquet.local_path,
-                tier=StorageTier.RETAINED,
                 storage_subdir="argo-artifacts",
             )
         )
@@ -648,7 +661,7 @@ return Output(ref=FileReference(local_path=str(result), tier=StorageTier.RETAINE
 # The Atlan platform cannot index this on its own
 
 # CORRECT — use App.upload() to push to a stable, platform-visible path:
-await self.upload(UploadInput(local_path=str(result), tier=StorageTier.RETAINED))
+await self.upload(UploadInput(local_path=str(result)))  # RETAINED is the default tier
 ```
 
 ---
@@ -705,12 +718,7 @@ await self.upload_to_atlan(UploadInput(output_path=input.output_path))
 **Replacement:**
 
 ```python
-up = await self.upload(
-    UploadInput(
-        local_path=input.output_path,
-        tier=StorageTier.RETAINED,
-    )
-)
+up = await self.upload(UploadInput(local_path=input.output_path))
 records_uploaded = up.ref.file_count or 0
 ```
 

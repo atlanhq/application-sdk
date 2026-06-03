@@ -905,7 +905,7 @@ async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
 The task names, input/output contracts, and write helper differ per connector type; the `FileReference` shape is the same for all. Downstream tasks accept `FileReference` on their typed input and read via `input.tables_file.local_path`. As the final app step prior to handing off to the Publish (or other) system app, explicitly call `self.upload()` from `run()`:
 
 ```python
-await self.upload(UploadInput(local_path=output_file_path, tier=StorageTier.RETAINED))
+await self.upload(UploadInput(local_path=output_file_path))  # RETAINED is the default tier
 ```
 
 **StorageTier choices** for `UploadInput`:

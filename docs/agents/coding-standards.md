@@ -87,16 +87,22 @@ To hand off artifacts to Atlan system apps (publish, lineage, quality), call
 `atlan-objectstore` (`infra.upstream_storage`) in SDR deployments:
 
 ```python
-from application_sdk.contracts import UploadInput, StorageTier
+from application_sdk.contracts import UploadInput
 
 async def run(self, input: MyInput) -> MyOutput:
     fetch_out = await self.fetch_data(input)
     # Required: push artifact to Atlan's upstream store
-    await self.upload(
-        UploadInput(local_path=fetch_out.output_path, tier=StorageTier.RETAINED)
-    )
+    await self.upload(UploadInput(local_path=fetch_out.output_path))  # RETAINED is the default tier
     return fetch_out
 ```
+
+**Anti-pattern: calling `App.upload()` for task-to-task data.** `App.upload()` routes
+to `atlan-objectstore` in SDR — using it for intermediate pipeline data (instead of
+`FileReference`) has three harms: pollutes Atlan's bucket with internal artifacts;
+bypasses SHA-256 dedup (every call is a full re-upload, even for identical files);
+and does not wire into cross-worker auto-materialization. Declare `FileReference` on
+task `Input`/`Output` contracts instead — the interceptor handles persistence and
+re-download automatically.
 
 See [file-reference.md § App-to-app hand-off](../concepts/file-reference.md) and
 [ADR-0014](../adr/0014-two-store-storage-architecture.md) for the full rationale.

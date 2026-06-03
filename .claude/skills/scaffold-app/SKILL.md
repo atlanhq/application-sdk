@@ -163,7 +163,7 @@ For REST connectors, subclass `App` directly with custom `@task` methods and an 
 
 ```python
 from application_sdk.app import App, task
-from application_sdk.contracts import UploadInput, StorageTier
+from application_sdk.contracts import UploadInput
 
 class {Name}App(App):
     @task(timeout_seconds=3600)
@@ -179,12 +179,7 @@ class {Name}App(App):
         # FileReferences to the customer-owned objectstore. Omitting this call
         # produces a silent failure in SDR — the DAG succeeds but nothing is published.
         # See docs/concepts/file-reference.md and ADR-0014.
-        await self.upload(
-            UploadInput(
-                local_path=fetch_out.output_path,
-                tier=StorageTier.RETAINED,
-            )
-        )
+        await self.upload(UploadInput(local_path=fetch_out.output_path))
         return fetch_out
 ```
 

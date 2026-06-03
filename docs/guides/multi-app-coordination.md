@@ -118,7 +118,7 @@ class MyExtractor(App):
     async def transform(self, input: TransformInput) -> ExtractionOutput:
         path = "/tmp/output.parquet"
         write_parquet(path, records)
-        up = await self.upload(UploadInput(local_path=path, tier=StorageTier.RETAINED))
+        up = await self.upload(UploadInput(local_path=path))
         return ExtractionOutput(parquet_file=up.ref)
 ```
 

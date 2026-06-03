@@ -135,6 +135,16 @@ async def run(self, input: ExtractionInput) -> ExtractionOutput:
   S3 and publishes nothing. SQL connectors built on `SqlApp` should include the
   explicit upload in their `run()` override; the `SqlApp` base class will add
   this call in a future SDK release.
+- **`App.upload()` misuse.** Calling `App.upload()` for task-to-task data —
+  instead of `FileReference` — has three distinct harms: (1) in SDR it routes to
+  Atlan's `atlan-objectstore`, polluting it with intermediate pipeline artifacts
+  that the publish app treats as connector output; (2) it bypasses SHA-256 dedup —
+  every call uploads the full file even if an identical file already exists in the
+  store; (3) it does not wire into the SDK's cross-worker auto-materialization —
+  the resulting `FileReference` will not be automatically re-downloaded if a
+  downstream task lands on a different worker. The correct tool for task-to-task
+  data is `FileReference` on the contract; the interceptor handles persistence and
+  materialization automatically.
 - **Two stores to configure.** SDR deployments need both components provisioned.
   The atlan-configurator handles this automatically; custom deployments must
   ensure `atlan-objectstore` is present if the connector hands off to Atlan

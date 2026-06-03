@@ -167,12 +167,7 @@ class MyConnectorApp(App):
         # only writes FileReferences to the customer-owned objectstore (infra.storage).
         # Omitting this call produces a silent failure in SDR — the DAG succeeds but
         # the publish app finds nothing. See ADR-0014.
-        await self.upload(
-            UploadInput(
-                local_path=fetch_out.output_path,
-                tier=StorageTier.RETAINED,
-            )
-        )
+        await self.upload(UploadInput(local_path=fetch_out.output_path))
         return ExtractionOutput(
             output_path=fetch_out.output_path,
             record_count=fetch_out.record_count,

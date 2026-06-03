@@ -285,7 +285,7 @@ Wire them into extract/transform tasks on your `App` subclass:
 ```python
 # app/app.py
 from application_sdk.app import App, task
-from application_sdk.contracts import Input, Output, FileReference, UploadInput, StorageTier
+from application_sdk.contracts import Input, Output, FileReference, UploadInput
 from app.api_types import TopicRecord
 from app.asset_mapper import map_topic
 
@@ -323,12 +323,7 @@ class MyConnector(App):
         # so the publish app can read it. The activity interceptor only writes FileReferences
         # to the customer-owned objectstore (infra.storage). Omitting this call produces a
         # silent failure in SDR — the DAG succeeds but nothing is published. See ADR-0014.
-        await self.upload(
-            UploadInput(
-                local_path=transform_out.file.local_path,
-                tier=StorageTier.RETAINED,
-            )
-        )
+        await self.upload(UploadInput(local_path=transform_out.file.local_path))
         return MyOutput(...)
 ```
 

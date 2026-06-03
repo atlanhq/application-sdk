@@ -330,10 +330,7 @@ class MyConnector(App):
         fetch_out = await self.fetch(input)
         # App.upload() routes to Atlan's upstream store (atlan-objectstore in SDR).
         # Call it from run(), not from within a @task.
-        await self.upload(UploadInput(
-            local_path="/tmp/data.parquet",
-            tier=StorageTier.RETAINED,
-        ))
+        await self.upload(UploadInput(local_path="/tmp/data.parquet"))
         return fetch_out
 ```
 

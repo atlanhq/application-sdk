@@ -263,7 +263,7 @@ The core of your connector is a `SqlMetadataExtractor` subclass. Override `@task
 ```python
 # app/connector.py
 import asyncio
-from application_sdk.contracts import UploadInput, StorageTier
+from application_sdk.contracts import UploadInput
 from application_sdk.templates import SqlMetadataExtractor
 from application_sdk.templates.contracts import (
     ExtractionInput,
@@ -394,12 +394,7 @@ class PostgresApp(SqlMetadataExtractor):
         # Explicit hand-off to Atlan: routes through atlan-objectstore in SDR so
         # the publish app can read it. The interceptor only writes to infra.storage
         # (customer-owned). Omitting this call is a silent failure. See ADR-0014.
-        await self.upload(
-            UploadInput(
-                local_path=input.output_path,
-                tier=StorageTier.RETAINED,
-            )
-        )
+        await self.upload(UploadInput(local_path=input.output_path))
 
         return ExtractionOutput(
             databases_extracted=db_result.total_record_count,

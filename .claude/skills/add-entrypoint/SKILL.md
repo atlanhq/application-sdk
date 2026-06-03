@@ -85,7 +85,7 @@ class MyConnector(App):
         # Omitting this call is a silent failure: the DAG succeeds but Atlan's
         # publish app finds nothing in its bucket. See docs/concepts/file-reference.md.
         #
-        # await self.upload(UploadInput(local_path=out.output_path, tier=StorageTier.RETAINED))
+        # await self.upload(UploadInput(local_path=out.output_path))  # RETAINED is the default tier
         return {EntrypointName}Output(record_count=out.count)
 
     @task(timeout_seconds=3600, auto_heartbeat_seconds=30)
