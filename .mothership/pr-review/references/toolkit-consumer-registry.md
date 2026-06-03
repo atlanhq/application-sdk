@@ -7,7 +7,7 @@ in public PR comments. Public review text must use capability aliases only.
 
 ## Public Aliases
 
-Use these aliases in review comments:
+Use these aliases in review comments under `### Cross-Repo Validation`:
 
 - `UI rendering compatibility`
 - `Manifest substitution compatibility`
@@ -70,6 +70,21 @@ Write the result of every mandatory capability to `/tmp/TOOLKIT_VALIDATION.md`
 using the public alias and one of: `validated`, `not applicable`, `needs rerun`.
 The public PR summary may include these status names, but not the private
 repository, path, or SHA evidence.
+
+Public cross-repo validation wording should be confirmation-oriented:
+
+```text
+### Cross-Repo Validation
+- UI rendering compatibility: validated
+- Manifest substitution compatibility: validated
+- Workflow execution contract: not applicable
+- Generated SDK input contract: validated
+- Representative app pattern: not applicable
+```
+
+Do not include consumer repository names, package names, branch names, SHAs,
+local checkout paths, private app filenames, or system-app implementation
+details. Put that evidence only in `/tmp/TOOLKIT_VALIDATION.md` or sandbox logs.
 
 | Capability alias | PR-bound input | Minimum check | Failure means |
 |---|---|---|---|

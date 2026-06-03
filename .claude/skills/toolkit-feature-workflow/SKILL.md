@@ -97,7 +97,7 @@ Post a concise review with these sections:
 ### Affected Toolkit Surfaces
 - <surface>: <why it is affected>
 
-### Compatibility Checks
+### Cross-Repo Validation
 - UI rendering compatibility: validated | not applicable | needs rerun
 - Manifest substitution compatibility: validated | not applicable | needs rerun
 - Workflow execution contract: validated | not applicable | needs rerun
@@ -114,6 +114,9 @@ Post a concise review with these sections:
 Public findings can mention generated artifact names such as `manifest.json`,
 `_input.py`, or workflow/credential config, but must not mention private consumer
 repo paths or internal app file paths.
+The cross-repo section must confirm capability-level validation only; it must
+not list consumer repository names, package names, branch names, SHAs, local
+paths, or system-app implementation details.
 
 Before posting, run `.mothership/pr-review/scripts/redact-toolkit-public-review.sh`
 on the summary and inline comment bodies.

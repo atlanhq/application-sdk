@@ -25,6 +25,8 @@ them for private validation only. Public findings must use sanitized capability
 aliases such as `UI rendering compatibility`, `Manifest substitution
 compatibility`, `Workflow execution contract`, `Generated SDK input contract`,
 and `Representative app pattern`.
+The public summary should expose these as `### Cross-Repo Validation`, not as
+consumer repository details.
 
 ## What To Check
 
@@ -84,7 +86,7 @@ Return valid JSON only:
       "reason": "Node args changed"
     }
   ],
-  "compatibility_checks": [
+  "cross_repo_validation": [
     {
       "alias": "Manifest substitution compatibility",
       "status": "validated",
@@ -119,3 +121,8 @@ Return valid JSON only:
 
 Severity must be one of `BLOCKING`, `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, or
 `INFO`. Only report findings with confidence >= 0.80.
+
+The `cross_repo_validation` array is private reasoning input for the summary.
+When writing the public summary, include only `alias` and `status`; do not
+include `evidence` if it names private consumers, branches, SHAs, package names,
+local paths, or system-app implementation details.

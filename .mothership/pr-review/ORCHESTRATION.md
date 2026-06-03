@@ -374,7 +374,7 @@ amend/import `/workspace/application-sdk/contract-toolkit/src/*.pkl`. If no
 PR-bound command or inspection is possible, mark that capability `needs rerun`
 and do not approve.
 
-Each mandatory capability must append exactly one sanitized status line to
+Each mandatory capability must append exactly one private status line to
 `/tmp/TOOLKIT_VALIDATION.md`:
 
 ```text
@@ -387,6 +387,10 @@ Each mandatory capability must append exactly one sanitized status line to
 
 Allowed statuses are `validated`, `not applicable`, and `needs rerun`. Any
 `needs rerun` status forces `NEEDS_HUMAN`.
+The public review must mirror these as a `### Cross-Repo Validation` section
+using only capability aliases and status values. Do not include private
+consumer repository names, package names, branch names, SHAs, local paths, or
+system-app implementation details in the public section.
 
 For representative app patterns, inspect PR title, body, and diff for trigger
 terms from the registry. Clone/fetch only the matching pattern repos. Optional
@@ -951,7 +955,7 @@ after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 ### Affected Toolkit Surfaces             <!-- ONLY when review_scope=contract-toolkit or mixed-sdk-toolkit -->
 - `<surface>` — <why it is affected>
 
-### Compatibility Checks                  <!-- ONLY when review_scope=contract-toolkit or mixed-sdk-toolkit -->
+### Cross-Repo Validation                 <!-- ONLY when review_scope=contract-toolkit or mixed-sdk-toolkit -->
 - UI rendering compatibility: validated | not applicable | needs rerun
 - Manifest substitution compatibility: validated | not applicable | needs rerun
 - Workflow execution contract: validated | not applicable | needs rerun
