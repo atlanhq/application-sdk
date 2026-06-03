@@ -164,8 +164,6 @@ REDACT = re.compile(
 # String literals (single/double quoted, non-greedy). Used to decide whether a
 # credential identifier is referenced as code vs only inside a message string.
 STRING_LIT = re.compile(r"""(['"]).*?\1""")
-# f-string / template-literal interpolation of a credential identifier.
-INTERP = re.compile(r"""[{$]\s*[^{}]*""" + CRED + r"""[^{}]*[}]?""", re.IGNORECASE)
 
 
 @dataclass
@@ -194,15 +192,71 @@ def _strip_comment(line: str, ext: str) -> str:
     return line
 
 
-def _referenced_as_code(line: str) -> bool:
-    """True when the credential identifier is used as a value/variable, not just
-    as a word inside a log-message string literal."""
-    if INTERP.search(line):
+# Metadata-accessor builtins: logging `bool(creds)` / `type(creds)` /
+# `len(creds)` / `list(creds.keys())` reveals shape/presence, not the value.
+_META_BUILTIN = re.compile(r"(bool|type|len|dir|id|isinstance|repr|hasattr)\s*\([^)]*$")
+
+
+_BRACE = re.compile(r"\{[^{}]*\}")
+_IS_NONE = re.compile(r"[\w\[\]'\".]*\s+is\s+(not\s+)?none\b", re.IGNORECASE)
+LOGGING_SINKS = (
+    "logger-call",
+    "print-call",
+    "console-call",
+    "go-fmt-call",
+    "rust-println",
+)
+
+
+def _logging_leak_var(code: str) -> str | None:
+    """For a logging-style sink line, return the credential identifier that
+    actually reaches the sink *as a value*, or None when every occurrence is
+    derived metadata (keys()/bool()/type()/membership/`_name` suffix/presence
+    check) or appears only inside a plain message string.
+
+    Evaluating every occurrence — not just the greedy regex capture — avoids
+    misreading lines like `f"{list(creds.keys())} {creds_else}"`.
+    """
+    str_spans = [(m.start(), m.end()) for m in STRING_LIT.finditer(code)]
+    interp_spans = [(m.start(), m.end()) for m in _BRACE.finditer(code)]
+    for m in CRED_BARE.finditer(code):
+        s, e = m.start(), m.end()
+        if META_SUFFIX.match(code[e:]):
+            continue
+        if _is_metadata_access(code, s, e):
+            continue
+        if _IS_NONE.match(code[e:]):  # `creds is None` / `is not None`
+            continue
+        in_interp = any(a <= s < b for a, b in interp_spans)
+        in_string = any(a <= s < b for a, b in str_spans)
+        # A value reference is interpolated, or sits outside any string literal
+        # (bare variable / kwarg / concatenation). A bare word inside a message
+        # string is not a leak.
+        if in_interp or not in_string:
+            return m.group("var")
+    return None
+
+
+def _is_metadata_access(code: str, var_start: int, var_end: int) -> bool:
+    """True when the credential identifier reaches the sink only as derived
+    metadata (key names, a bool/type/len, or a string-literal dict key) rather
+    than as the secret value itself. These are the dominant false positives on
+    real connector apps (`logger.info(f"keys: {list(creds.keys())}")`)."""
+    before = code[:var_start]
+    after = code[var_end:]
+    # `creds.keys()` / `creds['x'].keys()` — logging key NAMES, not values.
+    if re.match(r"[\w\[\]'\"]*\.\s*keys\s*\(", after):
         return True
-    # Strip quoted string literals; if the identifier still appears, it is being
-    # referenced as code (a variable, kwarg, concatenation, CLI arg, ...).
-    stripped = STRING_LIT.sub("", line)
-    return CRED_BARE.search(stripped) is not None
+    # Wrapped in a metadata builtin: bool(creds), type(creds), len(creds), ...
+    if _META_BUILTIN.search(before):
+        return True
+    # The identifier is itself a quoted string literal (e.g. a dict key in a
+    # membership/`.get()` test: `'credentials' in cfg`), not a value reference.
+    # Allow trailing word chars (the matched token may be a prefix, e.g.
+    # `credential` of `credentials`) before the closing quote.
+    if before[-1:] in ("'", '"') and re.match(r"\w*['\"]", after):
+        return True
+    return False
 
 
 def _norm(var: str) -> str:
@@ -282,18 +336,30 @@ def scan(root: str) -> dict:
                     break
                 if REDACT.search(code):
                     break  # value masked before the sink — not a leak
-                var = m.groupdict().get("var") or ""
+                if pattern_id in LOGGING_SINKS:
+                    # Evaluate every credential occurrence: a leak requires one
+                    # that reaches the sink as a value, not derived metadata
+                    # (keys()/bool()/type()/membership/presence/`_name` suffix)
+                    # or a bare word in a message string.
+                    var = _logging_leak_var(code) or ""
+                    if not var:
+                        break
+                else:
+                    var = m.groupdict().get("var") or ""
+                    # Metadata, not a secret value: `credential_name`,
+                    # `secret_id`, ... (suffix immediately after the token).
+                    if META_SUFFIX.search(code[m.end("var") :]):
+                        break
+                    # Secure shell idiom, not a leak: piping a secret into a
+                    # command's stdin (`echo "$PASSWORD" | docker login
+                    # --password-stdin`) feeds the value to stdin, not a
+                    # log/console sink — the *recommended* way to pass a secret.
+                    # Skip when the echo/printf is piped on, or `--*-stdin` used.
+                    if pattern_id == "shell-echo" and (
+                        "-stdin" in code or re.search(r"(?<!\|)\|(?!\|)", code)
+                    ):
+                        break
                 var_norm = _norm(var)
-                # Metadata, not a secret value: `credential_name`, `secret_id`,
-                # `credential_guid`, ... (suffix immediately after the token).
-                if META_SUFFIX.search(code[m.end("var") :]):
-                    break
-                # Static triage: only a real leak if referenced as code.
-                if pattern_id not in (
-                    "shell-echo",
-                    "helm-set",
-                ) and not _referenced_as_code(code):
-                    break
                 counter += 1
                 sev = _severity(var_norm, pattern_id, is_test)
                 findings.append(

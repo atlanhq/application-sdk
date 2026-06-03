@@ -55,6 +55,33 @@ def test_metadata_identifier_is_not_a_leak(tmp_path: Path) -> None:
     assert result["findings"] == []
 
 
+def test_logging_credential_keys_is_not_a_leak(tmp_path: Path) -> None:
+    # Logging key NAMES / shape, not the value — the dominant FP on real apps.
+    _write(
+        tmp_path,
+        "h.py",
+        'logger.info(f"keys: {list(credentials.keys())}")\n'
+        'logger.debug(f"has pwd: {bool(password)}")\n'
+        'logger.error(f"type: {type(credentials)}")\n'
+        "logger.info(f\"present: {'credentials' in cfg}\")\n",
+    )
+    result = scan.scan(str(tmp_path))
+    assert result["findings"] == []
+    assert result["decision"] == "pass"
+
+
+def test_logging_raw_credential_object_still_blocks(tmp_path: Path) -> None:
+    # The genuine April-audit leak class: the raw object reaches the sink.
+    _write(
+        tmp_path,
+        "h.js",
+        'console.log("returning credentials:", credentials)\n',
+    )
+    result = scan.scan(str(tmp_path))
+    assert _by_file(result)["h.js"]["severity"] in ("CRITICAL", "HIGH")
+    assert result["decision"] == "fail"
+
+
 def test_helm_set_is_medium_non_blocking(tmp_path: Path) -> None:
     _write(tmp_path, "deploy.sh", "helm upgrade app --set password=$DB_PASSWORD\n")
     result = scan.scan(str(tmp_path))
@@ -62,6 +89,26 @@ def test_helm_set_is_medium_non_blocking(tmp_path: Path) -> None:
     assert finding["severity"] == "MEDIUM"
     assert result["summary"]["blocking"] == 0
     assert result["decision"] == "pass"
+
+
+def test_password_stdin_pipe_is_not_a_leak(tmp_path: Path) -> None:
+    # The recommended secure docker-login idiom: secret piped to stdin, never
+    # a log/console sink. Present in most app repos' CI scaffold.
+    _write(
+        tmp_path,
+        "ci/registry-login.sh",
+        'echo "$PASSWORD" | docker login "$REG" -u "$USER" --password-stdin\n',
+    )
+    result = scan.scan(str(tmp_path))
+    assert result["findings"] == []
+    assert result["decision"] == "pass"
+
+
+def test_bare_echo_of_secret_still_flagged(tmp_path: Path) -> None:
+    # No pipe / stdin — echoes the secret to stdout (CI log). Still a leak.
+    _write(tmp_path, "run.sh", 'echo "password=$DB_PASSWORD"\n')
+    result = scan.scan(str(tmp_path))
+    assert _by_file(result)["run.sh"]["pattern_id"] == "shell-echo"
 
 
 def test_test_path_is_capped_at_medium(tmp_path: Path) -> None:
