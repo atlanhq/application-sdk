@@ -2655,10 +2655,10 @@ local function generateE2ECredentialPy(): FileOutput? =
   else new FileOutput {
     local cname = pascalCase(name)
 
-    // First auth option key (for auth_type default value).
-    local firstAuthKey: String = (new Listing {
-      for (k, v in credentialAuthOptions!!) { k }
-    }).toList().first
+    // Default auth type: honour credentialAuthDefault when set, fall back to first key.
+    local firstAuthKey: String =
+      credentialAuthDefault ??
+      (new Listing { for (k, v in credentialAuthOptions!!) { k } }).toList().first
 
     // Common top-level FieldSpec entries from either credentialUrlGroup or credentialCommonFields.
     local commonSpecs: List<FieldSpec> = (new Listing {

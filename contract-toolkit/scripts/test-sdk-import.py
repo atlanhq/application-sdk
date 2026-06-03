@@ -10,13 +10,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
 
-# Expected class names by file stem.
-_E2E_CLASSES = {
-    "_e2e_base": None,  # class name varies; just check importability
-    "_e2e_credential": None,
-    "_e2e_substitutions": None,
-}
-
 
 def _load_module(path: Path) -> tuple[object | None, str | None]:
     """Return (module, error_msg) pair."""
