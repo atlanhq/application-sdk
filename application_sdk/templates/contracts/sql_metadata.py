@@ -339,39 +339,27 @@ class PrimeAuthOutput(Output):
     ``caching_sha2_password``) before the parallel ``_extract_entity``
     burst.
 
-    Failure-as-data contract:
-        ``prime_sql_auth`` deliberately catches probe exceptions and
-        reports them as ``success=False`` on this output rather than
-        raising. ``run()`` inspects ``success`` and short-circuits with
-        a structured ``AuthError`` before the parallel extract burst.
+    Failure semantics — *raise, do not return*:
+        ``prime_sql_auth`` raises a typed :class:`AppError` on failure
+        (either propagating one the connector raised, or classifying a
+        raw driver exception at the catch site).  The standard ``@task``
+        wrapper translates the raised ``AppError`` into a Temporal
+        ``ApplicationError`` carrying the full ``to_failure_details()``
+        envelope, preserving audience / category / code on the wire and
+        setting ``non_retryable`` from the leaf's effective retryability.
+        Retry stacking is bounded by ``retry_max_attempts=1`` on the
+        ``@task`` decorator — the only failure mode that can re-run the
+        activity is a Temporal-level event (start-to-close timeout,
+        worker eviction, OOM), and those re-run regardless of whether
+        the body raises or returns failure data, so there is no
+        observability or safety benefit to a bespoke failure envelope.
 
-        Why return-not-raise: the failure mode this task targets is
-        cache-cold auth rejection (``Access denied``). Retrying that
-        through Temporal's activity-level retry just stacks the source's
-        ``failed_login_attempts`` counter — i.e. accelerates the lockout
-        cycle the prime was added to prevent. Returning structured
-        failure to ``run()`` makes the short-circuit explicit, keeps
-        the contextual error visible in Temporal activity-complete
-        events, and removes the auto-retry that was actively harmful.
+    This output only carries success-path observability; on failure the
+    workflow never receives it because the activity has already raised.
     """
 
     duration_ms: float = 0.0
     """Wall-clock time spent on the probe connection + ``SELECT 1`` + close."""
-
-    success: bool = True
-    """Whether the probe completed cleanly. ``False`` means the probe
-    raised; ``run()`` will short-circuit the workflow with an
-    ``AuthError`` carrying ``error_type`` / ``error_message``."""
-
-    error_type: str | None = None
-    """Exception class name (e.g. ``OperationalError``) when ``success``
-    is ``False``. ``None`` on success."""
-
-    error_message: str | None = None
-    """Truncated exception message when ``success`` is ``False``.
-    ``None`` on success. Secrets in the underlying driver message are
-    sanitised by the SDK error-wrapping layer; this field is the raw
-    short summary for observability."""
 
 
 class ExtractionTaskOutput(Output):

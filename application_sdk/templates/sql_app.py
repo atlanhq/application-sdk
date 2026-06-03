@@ -84,6 +84,7 @@ from application_sdk.constants import (
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors.base import AppError
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
@@ -284,30 +285,33 @@ class SqlApp(App):
             MSSQL, Snowflake on most setups), this is harmless overhead
             — a single ~100ms probe round-trip per workflow run.
 
-        Failure semantics (return-not-raise + zero Temporal retries):
-            If the probe fails (auth rejected, network unreachable,
-            wrong host, etc.) this task catches the exception, populates
-            ``success=False`` + ``error_type`` + ``error_message`` on the
-            returned ``PrimeAuthOutput``, and lets ``run()`` short-circuit
-            the workflow with a typed error (``AuthError``,
-            ``AppTimeoutError`` or ``DependencyUnavailableError``
-            depending on ``error_type``).
+        Failure semantics — raise typed AppError on failure:
+            Two cases:
 
-            Why return failure instead of raising and letting Temporal
-            retry: the failure mode this task was added to prevent is
-            cache-cold auth rejection. Retrying it via Temporal's
-            activity-level retry stacks the source's
-            ``failed_login_attempts`` counter on each attempt — i.e. it
-            accelerates the very lockout cycle the prime exists to
-            avoid. The ``retry_max_attempts=1`` override on the ``@task``
-            decorator above is load-bearing: the body try/except only
-            catches Python exceptions, not Temporal-level failures
-            (start-to-close timeout, worker eviction, heartbeat timeout,
-            OOM) — those would re-run the activity even with this body
-            structure, re-stacking the counter. Workflow-level retry
-            (re-running the whole extraction after operator action)
-            remains available and is the correct retry layer for
-            transient blips.
+            - **Connector-raised typed leaf** (e.g. ``IamTokenGenerationError``,
+              ``MysqlSourceUnreachableError``, ``AwsAssumeRoleError``):
+              the ``except AppError: raise`` clause propagates it
+              unchanged.  The ``@task`` wrapper translates raised
+              ``AppError`` into a Temporal ``ApplicationError`` whose
+              payload is ``e.to_failure_details()`` and whose
+              ``non_retryable`` flag mirrors ``e.effective_retryable``,
+              so audience / category / code reach the wire intact.
+            - **Raw driver exception** (``OperationalError``,
+              ``TimeoutError``, …): the ``except Exception`` clause
+              classifies into a typed leaf via
+              :py:meth:`_classify_driver_exception` and raises that —
+              the same wire-envelope path applies.
+
+            Retry safety:
+            ``retry_max_attempts=1`` on the ``@task`` decorator is the
+            load-bearing guard against retry stacking on the source's
+            ``failed_login_attempts`` counter.  The body's try/except
+            cannot catch Temporal-level events (start-to-close timeout,
+            worker eviction, OOM) — those re-run the activity regardless
+            of whether the body raises or returns failure data, so a
+            return-not-raise envelope buys nothing here.  Workflow-level
+            retry (re-running the whole extraction after operator
+            action) remains the correct layer for transient blips.
         """
         start = time.perf_counter()
         try:
@@ -320,68 +324,96 @@ class SqlApp(App):
                 await client.get_results("SELECT 1")
             finally:
                 await client.close()
-        except Exception as exc:
-            duration_ms = (time.perf_counter() - start) * 1000.0
-            # Truncate driver messages so the contract field stays bounded;
-            # secret-sanitisation happens later when run() wraps this into
-            # an AuthError (errors.base._sanitize_cause_repr).
-            error_message = str(exc)
-            if len(error_message) > 500:
-                error_message = error_message[:500] + "…"
-            # exc_info=True preserves the traceback in worker logs even
-            # though the exception is being converted to structured return
-            # data. For most failures the class+message is sufficient, but
-            # the long-tail (TLS negotiation, driver bugs, version skew)
-            # is only diagnosable from the original frames.
+        except AppError:
+            # Already typed by the connector (e.g. ``IamTokenGenerationError``,
+            # ``MysqlSourceUnreachableError``, ``AwsAssumeRoleError``).
+            # The ``@task`` wrapper translates this into a Temporal
+            # ``ApplicationError`` carrying the full
+            # ``to_failure_details()`` envelope (audience, category,
+            # code) and sets ``non_retryable`` from the leaf's
+            # ``effective_retryable``.  ``retry_max_attempts=1`` on the
+            # decorator is the load-bearing guard against retry
+            # stacking — Python-level try/except cannot catch
+            # Temporal-level failures (start-to-close timeout, worker
+            # eviction, OOM) regardless of return-vs-raise, so there is
+            # no observability win to converting this into a
+            # return-failure envelope.
             logger.error(
-                "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
-                "before parallel extract burst to avoid stacking failed_login_attempts "
-                "on the source.",
-                duration_ms,
+                "SQL auth cache prime FAILED after %.1fms (typed AppError) — "
+                "propagating to short-circuit before parallel extract burst.",
+                (time.perf_counter() - start) * 1000.0,
+                exc_info=True,
+            )
+            raise
+        except Exception as exc:
+            # Untyped driver exception (raw ``OperationalError``,
+            # ``TimeoutError``, …).  Classify into a typed ``AppError``
+            # at the catch site — this is the connector-of-last-resort
+            # path for connectors that have not yet wrapped driver
+            # errors into their own typed leaves.  Raise so the
+            # standard ``@task`` wrapper handles the wire envelope
+            # uniformly.
+            logger.error(
+                "SQL auth cache prime FAILED after %.1fms (%s) — classifying "
+                "into typed AppError before propagating to short-circuit.",
+                (time.perf_counter() - start) * 1000.0,
                 type(exc).__name__,
                 exc_info=True,
             )
-            return PrimeAuthOutput(
-                duration_ms=duration_ms,
-                success=False,
-                error_type=type(exc).__name__,
-                error_message=error_message,
-            )
+            raise SqlApp._classify_driver_exception(exc) from exc
         duration_ms = (time.perf_counter() - start) * 1000.0
         logger.info(
             "SQL auth cache primed in %.1fms before parallel extract fan-out",
             duration_ms,
         )
-        return PrimeAuthOutput(duration_ms=duration_ms, success=True)
+        return PrimeAuthOutput(duration_ms=duration_ms)
 
     # =====================================================================
-    # prime_sql_auth failure classifier (BLDX-1295)
+    # prime_sql_auth driver-exception classifier (BLDX-1295)
     # =====================================================================
 
     @staticmethod
-    def _classify_prime_failure(prime_result: PrimeAuthOutput) -> Exception:
-        """Map a failed ``PrimeAuthOutput`` to the right typed error.
+    def _classify_driver_exception(exc: Exception) -> Exception:
+        """Map a raw (non-``AppError``) driver exception to a typed leaf.
 
-        Painting every probe failure as ``AuthError`` would mis-direct
-        on-call: a DBA who follows the lockout-specific
+        Only invoked for exceptions that are NOT already :class:`AppError`
+        subclasses.  Connectors that raise typed leaves directly (e.g.
+        ``IamTokenGenerationError``, ``MysqlSourceUnreachableError``)
+        bypass this method entirely — their typing flows through the
+        ``@task`` wrapper unchanged, preserving the connector's chosen
+        audience / category / code on the wire envelope.
+
+        This classifier exists for the "last-mile" cases where a
+        connector has not (yet) wrapped its driver exceptions into typed
+        leaves.  Painting every probe failure as ``AuthError`` would
+        mis-direct on-call: a DBA who follows the lockout-specific
         ``suggested_action`` for a DNS misconfiguration wastes time on
-        a non-existent account-lockout. We discriminate based on
-        ``error_type`` / ``error_message`` and raise:
+        a non-existent account-lockout.  We discriminate as:
 
-        - ``AuthError`` for actual credential rejections
-          (``Access denied``, MySQL code 1045,
-          ``AuthenticationError`` class names).
+        - ``AuthError`` for credential rejections
+          (``Access denied``, MySQL code 1045, ``AuthenticationError``
+          class names).
         - ``AppTimeoutError`` for probe timeouts (``TimeoutError`` /
           ``asyncio.TimeoutError`` / message contains ``timed out``).
-        - ``DependencyUnavailableError`` for network / DNS / TLS /
-          connection-refused failures — the source is presumed
-          reachable but didn't respond cleanly.
+        - ``DependencyUnavailableError`` (PLATFORM-audienced) for
+          network / DNS / TLS / connection-refused failures.  Note the
+          audience is PLATFORM because the SDK cannot know whether the
+          unreachable target is Atlan infra or a customer source —
+          connectors that *do* know (every SQL connector) should raise
+          their own USER-audienced typed leaf at the connect call site
+          and bypass this fallback entirely.
         - ``InternalError`` as the last-resort fallback so we never
           return ``None`` and never accidentally swallow an unknown
           driver exception class.
         """
-        error_type = prime_result.error_type or ""
-        error_message = prime_result.error_message or ""
+        error_type = type(exc).__name__
+        error_message = str(exc)
+        # Truncate driver messages so the resulting AppError's payload
+        # stays bounded in Temporal event history.  Secret sanitisation
+        # happens later in ``AppError.to_failure_details`` via
+        # ``_sanitize_cause_repr``.
+        if len(error_message) > 500:
+            error_message = error_message[:500] + "…"
         msg_lower = error_message.lower()
 
         is_timeout = "timeout" in error_type.lower() or "timed out" in msg_lower
@@ -441,9 +473,11 @@ class SqlApp(App):
             )
 
         # Network / DNS / TLS / connection-refused / generic
-        # OperationalError without an auth-keyword message. Default to
-        # DependencyUnavailableError — actionable guidance is "fix the
-        # network path, the source itself may be fine."
+        # OperationalError without an auth-keyword message.  Falls back
+        # to PLATFORM-audienced DependencyUnavailableError — connectors
+        # that know the target is customer-owned should raise their own
+        # USER-audienced leaf at the connect site and bypass this branch
+        # (see classmethod docstring).
         network_class_hints = (
             "connectionerror",
             "connectionrefused",
@@ -487,7 +521,7 @@ class SqlApp(App):
                 "Inspect the worker logs (the prime task logs the original "
                 "traceback via exc_info=True). The error type was not "
                 "recognised as auth / timeout / network — please file a "
-                "ticket so the classifier in SqlApp._classify_prime_failure "
+                "ticket so the classifier in SqlApp._classify_driver_exception "
                 "can be extended."
             ),
         )
@@ -753,17 +787,14 @@ class SqlApp(App):
         # subsequent parallel connections then take the fast-auth path
         # and never trip ``FAILED_LOGIN_ATTEMPTS`` lockouts.
         #
-        # Failure handling: prime_sql_auth catches probe exceptions and
-        # returns them as ``success=False`` on its output. We classify
-        # ``error_type`` / ``error_message`` and raise the matching typed
-        # error so operators get actionable guidance for the *actual*
-        # failure mode (not a one-size-fits-all auth-lockout message —
-        # which would mislead an on-call investigating a DNS or TLS
-        # misconfiguration). The parallel extract burst still never
-        # runs on prime failure regardless of which error type we raise.
-        prime_result = await self.prime_sql_auth(task_input)
-        if not prime_result.success:
-            raise self._classify_prime_failure(prime_result)
+        # Failure handling: prime_sql_auth raises a typed AppError
+        # directly on failure — connector-raised leaves propagate as-is
+        # via the @task wrapper (preserving audience/category/code on
+        # the wire); raw driver exceptions are classified into typed
+        # leaves at the activity's catch site by
+        # ``_classify_driver_exception`` before being raised.  Either
+        # way, the parallel extract burst never runs on prime failure.
+        await self.prime_sql_auth(task_input)
 
         # ── Phase 1: Extract — SQL rows → raw JSONL ─────────────────────
         db_result, schema_result, table_result, column_result = await asyncio.gather(

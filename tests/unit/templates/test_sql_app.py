@@ -1698,17 +1698,15 @@ class TestPrimeSqlAuth:
         """When the probe query itself raises (network blip, intermittent
         auth fail), the client must still be closed so the connection
         doesn't leak — otherwise repeated failures pile up sockets.
-
-        Note: post-review (PR #1835), prime_sql_auth catches the probe
-        exception and returns ``PrimeAuthOutput(success=False, ...)``
-        rather than re-raising. We still assert the inner ``client.close()``
-        was awaited so the connection is released cleanly before the
-        structured failure is reported upward.
+        Closing happens via the inner ``finally`` block, so it must
+        complete before the activity's catch site classifies and
+        re-raises the failure as a typed ``AppError``.
         """
+        from application_sdk.errors.leaves import InternalError
 
         class _ExplodingClient(FakeSQLClient):
             async def run_query(self, query, batch_size=100000):
-                raise RuntimeError("boom")  # simulate auth/network failure
+                raise RuntimeError("boom")
 
             async def get_results(self, query):
                 raise RuntimeError("boom")
@@ -1718,56 +1716,100 @@ class TestPrimeSqlAuth:
         fake.close = close_mock  # type: ignore[method-assign]
 
         with patch.object(SqlApp, "_init_sql_client", new=AsyncMock(return_value=fake)):
-            result = await app.prime_sql_auth(self._build_input())
+            # Raw ``RuntimeError`` is unrecognised by the driver-exception
+            # classifier and falls into the InternalError last-resort
+            # branch.  Closing the client is the real point of this test.
+            with pytest.raises(InternalError):
+                await app.prime_sql_auth(self._build_input())
 
         close_mock.assert_awaited_once()
-        # Failure is now returned as data, not raised.
-        assert isinstance(result, PrimeAuthOutput)
-        assert result.success is False
-        assert result.error_type == "RuntimeError"
-        assert result.error_message is not None and "boom" in result.error_message
 
-    async def test_prime_sql_auth_returns_failure_when_init_raises(self, app):
-        """If client construction itself raises (e.g. credential resolution
-        failed, host unresolvable), ``prime_sql_auth`` still reports the
-        failure as structured data rather than letting Temporal retry —
-        retrying that on the auth-cache probe path stacks the source's
-        ``failed_login_attempts`` counter and is the exact behaviour the
-        prime exists to avoid. Pinned by the PR #1835 reviewer's request."""
+    async def test_prime_sql_auth_raises_typed_error_when_init_raises(self, app):
+        """If client construction itself raises (e.g. credential
+        resolution failed, host unresolvable), ``prime_sql_auth``
+        classifies the driver exception and raises a typed leaf — the
+        ``@task`` wrapper translates that into ``ApplicationError``
+        with the wire envelope intact.  ``retry_max_attempts=1`` on
+        the task decorator prevents Temporal from retrying and
+        stacking the source's ``failed_login_attempts`` counter.
+        """
+        from application_sdk.errors.leaves import DependencyUnavailableError
 
         async def _exploding_init(_self, _input):
             raise ConnectionError("could not resolve host 'mysql.bad'")
 
         with patch.object(SqlApp, "_init_sql_client", new=_exploding_init):
-            result = await app.prime_sql_auth(self._build_input())
+            # ``ConnectionError`` matches the network-class hints in the
+            # classifier so it routes to ``DependencyUnavailableError``
+            # carrying the original message as ``network_error``.
+            with pytest.raises(DependencyUnavailableError) as exc_info:
+                await app.prime_sql_auth(self._build_input())
 
-        assert result.success is False
-        assert result.error_type == "ConnectionError"
-        assert (
-            result.error_message is not None
-            and "could not resolve host" in result.error_message
-        )
+        err = exc_info.value
+        assert err.service == "sql_source"
+        assert err.network_error and "could not resolve host" in err.network_error
 
-    async def test_prime_sql_auth_truncates_long_error_message(self, app):
+    async def test_prime_sql_auth_propagates_typed_apperror_unchanged(self, app):
+        """When the probe catches an exception that is already a typed
+        :class:`AppError` subclass — connector raised it from the
+        client's connect path — the activity must re-raise it
+        unchanged so the connector's audience / category / code reach
+        the wire envelope via the ``@task`` wrapper.  This is the
+        load-bearing path that lets connectors do their own
+        classification (e.g. ``IamTokenGenerationError``,
+        ``MysqlSourceUnreachableError``) without the SDK re-deriving
+        anything via string match.
+        """
+        from application_sdk.common.aws_utils_errors import AwsAssumeRoleError
+        from application_sdk.errors.categories import Audience
+
+        class _StsDeniedClient(FakeSQLClient):
+            async def get_results(self, query):
+                raise AwsAssumeRoleError(cause=RuntimeError("STS denied"))
+
+        fake = _StsDeniedClient()
+        with patch.object(SqlApp, "_init_sql_client", new=AsyncMock(return_value=fake)):
+            with pytest.raises(AwsAssumeRoleError) as exc_info:
+                await app.prime_sql_auth(self._build_input())
+
+        err = exc_info.value
+        # Class identity preserved — no reconstruction, no string-match
+        # re-classification.  The ``@task`` wrapper handles
+        # serialisation via ``to_failure_details()``.
+        assert type(err) is AwsAssumeRoleError
+        # Wire envelope: USER / PERMISSION_AWS_ROLE, exactly as the
+        # leaf's ClassVars declare.
+        envelope = err.to_failure_details()
+        assert envelope.audience is Audience.USER
+        assert envelope.code == "PERMISSION_AWS_ROLE"
+
+    async def test_prime_sql_auth_truncates_long_classified_message(self, app):
         """Driver error strings can be huge (full server response dumps).
-        The contract field caps at 500 chars + ellipsis so the
-        ``PrimeAuthOutput`` envelope stays bounded in activity-event
-        payloads."""
+        ``_classify_driver_exception`` truncates at 500 chars + ellipsis
+        so the resulting typed ``AppError``'s payload stays bounded in
+        Temporal event history.
+        """
 
         long_message = "x" * 2000
 
         class _ExplodingClient(FakeSQLClient):
             async def get_results(self, query):
-                raise RuntimeError(long_message)
+                # OperationalError lookalike — routes through the
+                # network branch which embeds the message into
+                # ``network_error``.
+                raise type("OperationalError", (Exception,), {})(long_message)
 
         fake = _ExplodingClient()
         with patch.object(SqlApp, "_init_sql_client", new=AsyncMock(return_value=fake)):
-            result = await app.prime_sql_auth(self._build_input())
+            with pytest.raises(Exception) as exc_info:
+                await app.prime_sql_auth(self._build_input())
 
-        assert result.success is False
-        assert result.error_message is not None
-        assert len(result.error_message) == 501  # 500 chars + ellipsis
-        assert result.error_message.endswith("…")
+        # The classifier truncates ``str(exc)`` to 500 chars + ellipsis
+        # before embedding it into the typed leaf.
+        err = exc_info.value
+        truncated = getattr(err, "network_error", None) or err.message
+        assert truncated.endswith("…")
+        assert len(truncated) <= 600  # 500 chars + ellipsis + small framing
 
     # ── Bug-reproduction via call ordering ──────────────────────────────
 
@@ -1934,16 +1976,16 @@ class TestPrimeSqlAuth:
             ), f"{ext} must run after prime_sql_auth; got order: {call_order}"
 
     async def test_prime_failure_short_circuits_run(self):
-        """When ``prime_sql_auth`` reports ``success=False`` (credential
-        failure, network unreachable), ``run()`` must abort BEFORE the
+        """When ``prime_sql_auth`` raises a typed ``AppError`` (e.g.
+        ``AuthError`` from the driver-exception classifier on an
+        ``Access denied`` from MySQL), ``run()`` must abort BEFORE the
         parallel extract burst. Otherwise we'd flood the source with N
         parallel auth-failure attempts — the exact behaviour the prime
         is meant to prevent.
 
-        Post-review (PR #1835): prime returns structured failure
-        instead of raising. ``run()`` translates it into a typed
-        ``AuthError`` that names the prime step + the underlying
-        driver error + a recommended fix path.
+        The activity now raises the typed leaf directly (via the
+        ``@task`` wrapper's AppError → ApplicationError translation),
+        so ``run()`` doesn't need any classification logic of its own.
         """
         from application_sdk.errors.leaves import AuthError
 
@@ -1956,19 +1998,23 @@ class TestPrimeSqlAuth:
             )
         )
 
+        # prime_sql_auth raises AuthError (as it would after
+        # _classify_driver_exception sees an ``Access denied`` message).
+        auth_err = AuthError(
+            message="SQL auth-cache prime rejected by source (OperationalError)",
+            auth_method="sql_client",
+            failure_reason="(1045, \"Access denied for user 'foo'@'1.2.3.4'\")",
+            suggested_action=(
+                "Verify credentials; check FAILED_LOGIN_ATTEMPTS lockout."
+            ),
+        )
+
         with (
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
             patch.object(
                 SqlApp,
                 "prime_sql_auth",
-                new=AsyncMock(
-                    return_value=PrimeAuthOutput(
-                        duration_ms=12.3,
-                        success=False,
-                        error_type="OperationalError",
-                        error_message="(1045, \"Access denied for user 'foo'@'1.2.3.4'\")",
-                    ),
-                ),
+                new=AsyncMock(side_effect=auth_err),
             ),
             patch.object(SqlApp, "extract_databases", new=extract_called),
             patch.object(SqlApp, "extract_schemas", new=extract_called),
@@ -1979,46 +2025,36 @@ class TestPrimeSqlAuth:
                 await app.run(ExtractionInput(output_path="/tmp/test"))
 
         extract_called.assert_not_called()
+        # The raised AuthError must propagate unchanged — no
+        # re-classification on the run() side.
+        assert exc_info.value is auth_err
 
-        # The raised AuthError must carry actionable context — the prime
-        # step is named, the underlying driver error is surfaced as
-        # failure_reason, and the suggestion mentions FAILED_LOGIN_ATTEMPTS
-        # so an operator knows what to check before retrying.
-        err = exc_info.value
-        assert "rejected by source" in err.message.lower()
-        assert "OperationalError" in err.message
-        assert err.failure_reason and "Access denied" in err.failure_reason
-        assert err.auth_method == "sql_client"
-        assert err.suggested_action and "FAILED_LOGIN_ATTEMPTS" in err.suggested_action
-
-    async def test_prime_failure_yields_auth_error_with_no_temporal_retry(self):
-        """Pin the BLDX-1295 retry-semantics decision: the structured
-        AuthError raised by ``run()`` on prime failure is
-        ``effective_retryable=False``. This is what stops Temporal from
-        auto-retrying the run-level activity and stacking the source's
-        ``failed_login_attempts`` counter on each retry — the original
-        ``@task(retry_max_attempts=3)`` on the prime itself was the
-        bug; this test pins that we don't reintroduce auto-retry on the
-        failure path.
+    async def test_prime_failure_yields_app_error_non_retryable(self):
+        """Pin the BLDX-1295 retry-semantics decision: AppError leaves
+        raised on the prime failure path have ``effective_retryable``
+        controlled by the leaf, not by the prime probe itself.  For
+        ``AuthError`` (non-retryable by default) this means the
+        ``@task`` wrapper sets ``non_retryable=True`` on the resulting
+        Temporal ``ApplicationError`` — Temporal will not auto-retry
+        and stack the source's ``failed_login_attempts`` counter.
         """
         from application_sdk.errors.leaves import AuthError
 
         app = SqlApp.__new__(SqlApp)
         app._app_name = "test-app"
 
+        auth_err = AuthError(
+            message="prime rejected by source",
+            auth_method="sql_client",
+            failure_reason="Access denied",
+        )
+
         with (
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
             patch.object(
                 SqlApp,
                 "prime_sql_auth",
-                new=AsyncMock(
-                    return_value=PrimeAuthOutput(
-                        duration_ms=10.0,
-                        success=False,
-                        error_type="OperationalError",
-                        error_message="Access denied",
-                    ),
-                ),
+                new=AsyncMock(side_effect=auth_err),
             ),
             patch.object(SqlApp, "extract_databases", new=AsyncMock()),
             patch.object(SqlApp, "extract_schemas", new=AsyncMock()),
@@ -2028,20 +2064,28 @@ class TestPrimeSqlAuth:
             with pytest.raises(AuthError) as exc_info:
                 await app.run(ExtractionInput(output_path="/tmp/test"))
 
+        # AuthError defaults to non-retryable; the @task wrapper reads
+        # this to set ApplicationError.non_retryable.
         assert exc_info.value.effective_retryable is False
 
     @pytest.mark.parametrize(
-        "error_type,error_message",
+        "exc_type,exc_message",
         [
-            ("TimeoutError", "operation timed out after 60s"),
-            ("AsyncioTimeoutError", "deadline exceeded"),
-            ("OperationalError", "(2013) Lost connection during query — timed out"),
+            (type("TimeoutError", (Exception,), {}), "operation timed out after 60s"),
+            (
+                type("AsyncioTimeoutError", (Exception,), {}),
+                "deadline exceeded",
+            ),
+            (
+                type("OperationalError", (Exception,), {}),
+                "(2013) Lost connection during query — timed out",
+            ),
         ],
     )
-    async def test_prime_timeout_raises_app_timeout_error(
-        self, error_type, error_message
+    async def test_classify_driver_exception_routes_timeouts(
+        self, exc_type, exc_message
     ):
-        """Probe failures classified as timeouts must surface as
+        """Raw driver exceptions classified as timeouts route to
         ``AppTimeoutError`` — NOT ``AuthError`` — so the on-call's
         ``suggested_action`` is "check network reachability" rather
         than "run ACCOUNT UNLOCK". Pinned by application-sdk#1835
@@ -2049,111 +2093,107 @@ class TestPrimeSqlAuth:
         """
         from application_sdk.errors.leaves import AppTimeoutError
 
-        app = SqlApp.__new__(SqlApp)
-        app._app_name = "test-app"
+        result = SqlApp._classify_driver_exception(exc_type(exc_message))
 
-        with (
-            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
-            patch.object(
-                SqlApp,
-                "prime_sql_auth",
-                new=AsyncMock(
-                    return_value=PrimeAuthOutput(
-                        duration_ms=60_000.0,
-                        success=False,
-                        error_type=error_type,
-                        error_message=error_message,
-                    ),
-                ),
-            ),
-            patch.object(SqlApp, "extract_databases", new=AsyncMock()),
-            patch.object(SqlApp, "extract_schemas", new=AsyncMock()),
-            patch.object(SqlApp, "extract_tables", new=AsyncMock()),
-            patch.object(SqlApp, "extract_columns", new=AsyncMock()),
-        ):
-            with pytest.raises(AppTimeoutError) as exc_info:
-                await app.run(ExtractionInput(output_path="/tmp/test"))
-
-        err = exc_info.value
-        assert err.operation == "prime_sql_auth"
-        # AppTimeoutError doesn't define a structured ``failure_reason``
-        # field — driver message is inlined into ``message`` instead.
-        assert error_message in err.message
-        assert err.suggested_action and "network reachability" in err.suggested_action
+        assert isinstance(result, AppTimeoutError)
+        assert result.operation == "prime_sql_auth"
+        assert exc_message in result.message
+        assert (
+            result.suggested_action
+            and "network reachability" in result.suggested_action
+        )
 
     @pytest.mark.parametrize(
-        "error_type,error_message",
+        "exc_type,exc_message",
         [
-            ("ConnectionRefusedError", "[Errno 111] Connection refused"),
-            ("gaierror", "[Errno -2] Name or service not known"),
-            ("SSLError", "[SSL: CERTIFICATE_VERIFY_FAILED]"),
             (
-                "OperationalError",
+                type("ConnectionRefusedError", (Exception,), {}),
+                "[Errno 111] Connection refused",
+            ),
+            (
+                type("gaierror", (Exception,), {}),
+                "[Errno -2] Name or service not known",
+            ),
+            (
+                type("SSLError", (Exception,), {}),
+                "[SSL: CERTIFICATE_VERIFY_FAILED]",
+            ),
+            (
+                type("OperationalError", (Exception,), {}),
                 "(2003) Can't connect to MySQL server on 'db.example.com'",
             ),
         ],
     )
-    async def test_prime_network_failure_raises_dependency_unavailable(
-        self, error_type, error_message
+    async def test_classify_driver_exception_routes_network_failures(
+        self, exc_type, exc_message
     ):
-        """Probe failures that look like network / DNS / TLS /
-        connection-refused must surface as
-        ``DependencyUnavailableError``. The on-call guidance must NOT
-        suggest a credentials check (the credentials path was never
-        exercised) and must NOT suggest ACCOUNT UNLOCK (no failed
-        login attempts were made). Pinned by application-sdk#1835
-        mothership comment-3287630230 (HIGH).
+        """Network / DNS / TLS / connection-refused failures (no auth
+        keywords in message) route to ``DependencyUnavailableError``.
+        PLATFORM-audienced by default — connectors that know the
+        target is a customer-owned source should raise their own
+        USER-audienced leaf at the connect site and bypass this
+        branch entirely (see ``MysqlSourceUnreachableError`` in
+        atlan-mysql-app).
         """
         from application_sdk.errors.leaves import DependencyUnavailableError
 
-        app = SqlApp.__new__(SqlApp)
-        app._app_name = "test-app"
+        result = SqlApp._classify_driver_exception(exc_type(exc_message))
 
-        with (
-            patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
-            patch.object(
-                SqlApp,
-                "prime_sql_auth",
-                new=AsyncMock(
-                    return_value=PrimeAuthOutput(
-                        duration_ms=50.0,
-                        success=False,
-                        error_type=error_type,
-                        error_message=error_message,
-                    ),
-                ),
-            ),
-            patch.object(SqlApp, "extract_databases", new=AsyncMock()),
-            patch.object(SqlApp, "extract_schemas", new=AsyncMock()),
-            patch.object(SqlApp, "extract_tables", new=AsyncMock()),
-            patch.object(SqlApp, "extract_columns", new=AsyncMock()),
-        ):
-            with pytest.raises(DependencyUnavailableError) as exc_info:
-                await app.run(ExtractionInput(output_path="/tmp/test"))
-
-        err = exc_info.value
-        assert err.service == "sql_source"
-        assert err.network_error == error_message
-        # Must steer the operator toward network/DNS investigation, and
-        # explicitly NOT toward auth-lockout work. The classifier's
-        # actual phrasing is "this is not a lockout situation — do not
-        # run ACCOUNT UNLOCK" (a helpful disclaimer), so check the
-        # positive guidance is network-shaped.
-        assert err.suggested_action and "DNS" in err.suggested_action
+        assert isinstance(result, DependencyUnavailableError)
+        assert result.service == "sql_source"
+        assert result.network_error == exc_message
+        # Steer toward network/DNS investigation, NOT toward
+        # auth-lockout work.
+        assert result.suggested_action and "DNS" in result.suggested_action
         assert (
-            err.suggested_action and "FAILED_LOGIN_ATTEMPTS" not in err.suggested_action
+            result.suggested_action
+            and "FAILED_LOGIN_ATTEMPTS" not in result.suggested_action
         )
 
-    async def test_prime_unknown_error_class_falls_back_to_internal(self):
-        """Last-resort: a driver throws an unrecognised exception class.
-        The classifier must NOT swallow it as auth — it returns
-        ``InternalError`` so the on-call sees "unclassified" and knows
-        to inspect worker logs (where ``exc_info=True`` preserves the
-        full traceback). Pinned by application-sdk#1835 mothership
-        comment-3287630230 (HIGH).
+    async def test_classify_driver_exception_falls_back_to_internal(self):
+        """Last-resort: an unrecognised driver exception class routes to
+        ``InternalError`` with ``classification_pending=True`` so
+        on-call sees ``unclassified`` and knows to inspect worker
+        logs (where ``exc_info=True`` preserves the full traceback).
         """
         from application_sdk.errors.leaves import InternalError
 
+        unknown = type("WeirdVendorSpecificError", (Exception,), {})(
+            "something we have never seen before"
+        )
+        result = SqlApp._classify_driver_exception(unknown)
+
+        assert isinstance(result, InternalError)
+        assert "unclassified" in result.message.lower()
+        assert (
+            result.suggested_action
+            and "_classify_driver_exception" in result.suggested_action
+        )
+
+    async def test_prime_propagates_typed_apperror_unchanged_through_run(self):
+        """When ``prime_sql_auth`` raises a typed ``AppError`` subclass
+        the connector defined (e.g. ``AwsAssumeRoleError`` carrying
+        ``USER / PERMISSION_AWS_ROLE``), ``run()`` lets it propagate
+        unchanged.  No re-classification, no reconstruction —
+        the ``@task`` wrapper preserves audience/category/code via
+        ``to_failure_details()``.
+
+        Pre-fix: the prime probe caught the AppError, stuffed it into
+        ``PrimeAuthOutput.success=False`` with a bare class name, and
+        a workflow-side string-match classifier re-derived the type —
+        landing on ``InternalError`` for any class name the matcher
+        didn't recognise (``AwsAssumeRoleError`` was the production
+        case for rocketcompanies' nightly SLA bleed).
+
+        Post-fix: ``prime_sql_auth`` re-raises typed AppErrors and the
+        wrapper handles serialisation.  This test pins the end-to-end
+        wire shape so we don't regress.
+        """
+        from application_sdk.common.aws_utils_errors import AwsAssumeRoleError
+        from application_sdk.errors.categories import Audience
+
+        sts_err = AwsAssumeRoleError(cause=RuntimeError("STS denied"))
+
         app = SqlApp.__new__(SqlApp)
         app._app_name = "test-app"
 
@@ -2162,25 +2202,21 @@ class TestPrimeSqlAuth:
             patch.object(
                 SqlApp,
                 "prime_sql_auth",
-                new=AsyncMock(
-                    return_value=PrimeAuthOutput(
-                        duration_ms=10.0,
-                        success=False,
-                        error_type="WeirdVendorSpecificError",
-                        error_message="something we have never seen before",
-                    ),
-                ),
+                new=AsyncMock(side_effect=sts_err),
             ),
             patch.object(SqlApp, "extract_databases", new=AsyncMock()),
             patch.object(SqlApp, "extract_schemas", new=AsyncMock()),
             patch.object(SqlApp, "extract_tables", new=AsyncMock()),
             patch.object(SqlApp, "extract_columns", new=AsyncMock()),
         ):
-            with pytest.raises(InternalError) as exc_info:
+            with pytest.raises(AwsAssumeRoleError) as exc_info:
                 await app.run(ExtractionInput(output_path="/tmp/test"))
 
         err = exc_info.value
-        assert "unclassified" in err.message.lower()
-        assert (
-            err.suggested_action and "_classify_prime_failure" in err.suggested_action
-        )
+        # Same identity — no reconstruction.
+        assert err is sts_err
+        # Wire envelope carries USER / PERMISSION_AWS_ROLE from the
+        # leaf's ClassVars via to_failure_details().
+        envelope = err.to_failure_details()
+        assert envelope.audience is Audience.USER
+        assert envelope.code == "PERMISSION_AWS_ROLE"
