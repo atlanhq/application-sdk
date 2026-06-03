@@ -528,19 +528,165 @@ jobs:
           fi
           exit 0
 
+  # ── Job 0d: Credential-leak gate — block publish on any leak ──────────────────
+  # Two deterministic layers, both blocking, run before any build minutes are
+  # spent so a leak surfaces at minute 0. No LLM, no token, no network beyond
+  # checkout + the pinned gitleaks download.
+  #   1. Hardcoded secrets: gitleaks over the checked-out source for committed
+  #      secrets (API keys, tokens, private keys). Honors an app-level
+  #      .gitleaks.toml allowlist.
+  #   2. Creds-into-logs: a regex scanner (scan.py) for credentials reaching
+  #      log/print/format/CLI-arg sinks (the APP-1602 audit class). Mirrors the
+  #      nightly credential-leak-scan's sink pattern set + severity rubric, with
+  #      the LLM triage replaced by static heuristics (masking-helper skip,
+  #      metadata-identifier exclusion, code-vs-message-string check, test-path
+  #      downgrade) plus an app-level .credential-leak-allow allowlist.
+  #      CRITICAL/HIGH findings block; MEDIUM/LOW are reported only.
+  # Only runs when publish=true (matches validate-channel / certify). A failure
+  # here trips prepare's `!failure()` and skips build + publish.
+  # See docs/standards/credential-leak-gate.md.
+  leak-scan:
+    name: Credential leak gate
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: app
+          fetch-depth: 1
+
+      - name: Checkout SDK gate assets
+        # Pull only the vendored scanner + ruleset from the SDK at main, so the
+        # gate is self-contained at publish time (no private cross-repo fetch of
+        # the connector-pulse nightly skill). ORG_PAT_GITHUB grants the
+        # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: sdk
+          sparse-checkout: .github/scripts/credential-leak-gate
+          sparse-checkout-cone-mode: false
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # ── Layer 1: deterministic hardcoded-secret scan (gitleaks) ───────────────
+      - name: Install gitleaks
+        env:
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION=8.21.2
+          curl -sSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: gitleaks — hardcoded secrets
+        id: gitleaks
+        working-directory: app
+        run: |
+          set -euo pipefail
+          # Scan the working tree, not git history: a publish checkout is a
+          # single shallow commit. Drop .git so gitleaks doesn't walk internals.
+          rm -rf .git
+          CONFIG_ARGS=()
+          if [ -f .gitleaks.toml ]; then
+            echo "Using app-level .gitleaks.toml allowlist"
+            CONFIG_ARGS=(--config .gitleaks.toml)
+          fi
+          set +e
+          gitleaks dir \
+            --report-format json \
+            --report-path /tmp/gitleaks-report.json \
+            "${CONFIG_ARGS[@]}" \
+            .
+          RC=$?
+          set -e
+          COUNT=$(jq 'length' /tmp/gitleaks-report.json 2>/dev/null || echo 0)
+          if [ "$RC" -ne 0 ] || [ "$COUNT" -gt 0 ]; then
+            # Emit redacted finding LOCATIONS only — never the secret value
+            # (the report's Secret/Match fields are not printed or uploaded).
+            {
+              echo "### ❌ Publish blocked — hardcoded secret(s) detected"
+              echo ""
+              echo "gitleaks found ${COUNT} hardcoded secret(s) in the source. Locations only (values withheld):"
+              echo ""
+              jq -r '.[] | "- `\(.File):\(.StartLine)` — rule: \(.RuleID)"' /tmp/gitleaks-report.json 2>/dev/null || true
+              echo ""
+              echo "Remove the secret(s), **rotate** any that were committed, and re-run. Allowlist confirmed false positives in \`.gitleaks.toml\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Publish blocked::gitleaks found ${COUNT} hardcoded secret(s). See workflow summary."
+            exit 1
+          fi
+          echo "gitleaks: no hardcoded secrets found."
+
+      # ── Layer 2: deterministic creds-into-logs scan (regex, no LLM) ───────────
+      - name: Creds-into-logs scan
+        id: credscan
+        run: |
+          set -euo pipefail
+          python3 sdk/.github/scripts/credential-leak-gate/scan.py \
+            --root app \
+            --report /tmp/leak-gate-verdict.json
+
+      - name: Enforce creds-into-logs verdict
+        # always() so a non-zero scan exit (blocking findings) still renders the
+        # summary instead of being swallowed by the failed previous step.
+        if: always() && steps.gitleaks.outcome == 'success'
+        run: |
+          set -euo pipefail
+          VERDICT=/tmp/leak-gate-verdict.json
+          # Fail closed: a missing or malformed verdict blocks the publish.
+          if [ ! -f "$VERDICT" ] || ! jq empty "$VERDICT" 2>/dev/null; then
+            echo "::error title=Publish blocked::creds-into-logs scan produced no valid verdict JSON. Gate fails closed."
+            exit 1
+          fi
+          DECISION=$(jq -r '.decision // "fail"' "$VERDICT")
+          BLOCKING=$(jq -r '.summary.blocking // 0' "$VERDICT")
+          CRIT=$(jq -r '.summary.critical // 0' "$VERDICT")
+          HIGH=$(jq -r '.summary.high // 0' "$VERDICT")
+          MED=$(jq -r '.summary.medium // 0' "$VERDICT")
+          if [ "$DECISION" != "pass" ] || [ "$BLOCKING" -gt 0 ]; then
+            {
+              echo "### ❌ Publish blocked — credential(s) reaching log/CLI sinks"
+              echo ""
+              echo "${BLOCKING} blocking finding(s) (${CRIT} critical, ${HIGH} high). Locations only (values never recorded):"
+              echo ""
+              jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "- `\(.file):\(.line)` — \(.pattern_id) (var: \(.variable_name), \(.severity))"' "$VERDICT"
+              echo ""
+              echo "Route the credential through the SDK redaction helper before the sink, or drop the log line. Confirmed false positives go in \`.credential-leak-allow\`. See docs/standards/credential-leak-gate.md."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Publish blocked::${BLOCKING} credential-leak finding(s) reach a log/CLI sink."
+            exit 1
+          fi
+          {
+            echo "### ✅ Credential leak gate passed"
+            echo ""
+            echo "gitleaks: 0 hardcoded secrets. Creds-into-logs: 0 blocking findings (${MED} medium reported, non-blocking)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel, unit-tests-gate, certify]
-    # `needs: [validate-channel, unit-tests-gate, certify]` only enforces
-    # ordering when those jobs run. When publish=false, all three are skipped
-    # via their `if:` — which by default would propagate "skipped" to
-    # dependents. The condition below explicitly allows prepare to run when
-    # those jobs are skipped OR successful, but NOT when one failed. `certify`
-    # enforces its unit + coverage check: a failing run exits non-zero, which
-    # trips `failure()` here and correctly skips prepare → build → publish. Its
-    # other layers (v3 shape, contract drift) stay warn-only (always exit 0) so
-    # they never trip this yet. `unit-tests-gate` is currently warn-only;
-    # its enforcement-flip is tracked separately.
+    needs: [validate-channel, unit-tests-gate, certify, leak-scan]
+    # `needs: [...]` only enforces ordering when those jobs run. When
+    # publish=false, all of them are skipped via their `if:` — which by default
+    # would propagate "skipped" to dependents. The condition below explicitly
+    # allows prepare to run when those jobs are skipped OR successful, but NOT
+    # when one failed. `certify` enforces its unit + coverage check: a failing
+    # run exits non-zero, which trips `failure()` here and correctly skips
+    # prepare → build → publish. Its other layers (v3 shape, contract drift)
+    # stay warn-only (always exit 0) so they never trip this yet.
+    # `leak-scan` enforces: a confirmed hardcoded secret (gitleaks) or a
+    # surviving CRITICAL/HIGH creds-into-logs finding exits non-zero, tripping
+    # `failure()` here and blocking the publish. `unit-tests-gate` is currently
+    # warn-only; its enforcement-flip is tracked separately.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
     runs-on: ubuntu-latest
