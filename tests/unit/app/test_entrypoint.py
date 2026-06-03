@@ -13,6 +13,7 @@ from application_sdk.app.entrypoint import (
     entrypoint,
     get_entrypoint_metadata,
     is_entrypoint,
+    resolve_default_entrypoint,
 )
 from application_sdk.app.registry import AppRegistry
 from application_sdk.contracts.base import Input, Output
@@ -383,3 +384,292 @@ class TestEntrypointAppRegistration:
         assert isinstance(meta.entry_points, types.MappingProxyType)
         with pytest.raises(TypeError):
             meta.entry_points["injected"] = meta.entry_points["work"]  # type: ignore[index]
+
+
+# ---------------------------------------------------------------------------
+# Tests: mixed run() + @entrypoint registration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _RunInput(Input):
+    source: str = ""
+
+
+@dataclass
+class _RunOutput(Output):
+    count: int = 0
+
+
+@dataclass
+class _AlphaInput(Input):
+    alpha: str = ""
+
+
+@dataclass
+class _AlphaOutput(Output):
+    alpha_result: str = ""
+
+
+@dataclass
+class _BetaInput(Input):
+    beta: str = ""
+
+
+@dataclass
+class _BetaOutput(Output):
+    beta_result: str = ""
+
+
+class TestMixedEntrypointRegistration:
+    """Tests for App registration when run() and @entrypoint methods coexist."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_registries(self, clean_app_registry, clean_task_registry) -> None:  # type: ignore[no-untyped-def]
+        pass
+
+    # ── Scenario 1: run() only ────────────────────────────────────────────
+
+    def test_run_only_registers_implicit_entry_point(self) -> None:
+        """run()-only app registers a single implicit entry point named 'run'."""
+
+        class RunOnlyApp(App):
+            async def run(self, input: _RunInput) -> _RunOutput:
+                return _RunOutput()
+
+        meta = AppRegistry.get_instance().get("run-only-app")
+        assert list(meta.entry_points.keys()) == ["run"]
+        ep = meta.entry_points["run"]
+        assert ep.implicit is True
+        assert ep.input_type is _RunInput
+        assert ep.output_type is _RunOutput
+
+    def test_run_only_is_resolved_as_default(self) -> None:
+        """resolve_default_entrypoint returns the implicit run() ep for run()-only apps."""
+
+        class RunOnlyDefaultApp(App):
+            async def run(self, input: _RunInput) -> _RunOutput:
+                return _RunOutput()
+
+        meta = AppRegistry.get_instance().get("run-only-default-app")
+        resolved = resolve_default_entrypoint(meta.entry_points)
+        assert resolved is not None
+        assert resolved.name == "run"
+
+    # ── Scenario 2: @entrypoint only (single) ────────────────────────────
+
+    def test_single_entrypoint_only_registers(self) -> None:
+        """A single @entrypoint app registers that entry point (no run())."""
+
+        class SingleEpOnlyApp(App):
+            @entrypoint
+            async def ingest(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+        meta = AppRegistry.get_instance().get("single-ep-only-app")
+        assert "ingest" in meta.entry_points
+        assert "run" not in meta.entry_points
+        ep = meta.entry_points["ingest"]
+        assert ep.implicit is False
+        assert ep.input_type is _AlphaInput
+        assert ep.output_type is _AlphaOutput
+
+    def test_single_entrypoint_only_is_resolved_as_default(self) -> None:
+        """resolve_default_entrypoint returns the sole @entrypoint for single-ep apps."""
+
+        class SingleEpDefaultApp(App):
+            @entrypoint
+            async def process(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+        meta = AppRegistry.get_instance().get("single-ep-default-app")
+        resolved = resolve_default_entrypoint(meta.entry_points)
+        assert resolved is not None
+        assert resolved.name == "process"
+
+    # ── Scenario 3: @entrypoints (multiple) ──────────────────────────────
+
+    def test_multiple_entrypoints_all_register(self) -> None:
+        """All @entrypoint methods register when multiple are defined."""
+
+        class MultiEpOnlyApp(App):
+            @entrypoint
+            async def alpha_work(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint
+            async def beta_work(self, input: _BetaInput) -> _BetaOutput:
+                return _BetaOutput()
+
+        meta = AppRegistry.get_instance().get("multi-ep-only-app")
+        assert "alpha-work" in meta.entry_points
+        assert "beta-work" in meta.entry_points
+        assert "run" not in meta.entry_points
+        assert meta.entry_points["alpha-work"].input_type is _AlphaInput
+        assert meta.entry_points["beta-work"].input_type is _BetaInput
+
+    # ── Scenario 4: run() + single @entrypoint, no explicit default ───────
+
+    def test_run_and_single_entrypoint_run_is_auto_default(self) -> None:
+        """run() is auto-marked default=True when mixed with a single @entrypoint."""
+
+        class MixedNoDefaultApp(App):
+            @entrypoint
+            async def extract(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            async def run(self, input: _RunInput) -> _RunOutput:
+                return _RunOutput()
+
+        meta = AppRegistry.get_instance().get("mixed-no-default-app")
+        assert "run" in meta.entry_points
+        assert "extract" in meta.entry_points
+
+        run_ep = meta.entry_points["run"]
+        extract_ep = meta.entry_points["extract"]
+        assert run_ep.default is True
+        assert extract_ep.default is False
+
+    def test_run_and_single_entrypoint_resolve_returns_run(self) -> None:
+        """resolve_default_entrypoint returns run() in the mixed case with no explicit default."""
+
+        class MixedResolveApp(App):
+            @entrypoint
+            async def mine(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            async def run(self, input: _RunInput) -> _RunOutput:
+                return _RunOutput()
+
+        meta = AppRegistry.get_instance().get("mixed-resolve-app")
+        resolved = resolve_default_entrypoint(meta.entry_points)
+        assert resolved is not None
+        assert resolved.name == "run"
+        assert resolved.implicit is True
+
+    # ── Scenario 5: run() + @entrypoint(default=True) — must fail ────────
+
+    def test_run_and_entrypoint_with_explicit_default_raises(self) -> None:
+        """@entrypoint(default=True) alongside run() raises EntryPointContractError.
+
+        run() has permanent default-precedence in mixed apps; explicitly marking
+        another entry point as default is prohibited.
+        """
+        import types
+
+        with pytest.raises(EntryPointContractError, match="default-precedence"):
+
+            async def _run(self: object, input: _RunInput) -> _RunOutput:
+                return _RunOutput()
+
+            @entrypoint(default=True)
+            async def _extract(self: object, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            types.new_class(
+                "RunWithDefaultEpApp",
+                (App,),
+                {},
+                lambda ns: ns.update({"run": _run, "extract": _extract}),
+            )
+
+    # ── Scenario 6: multiple @entrypoints, no explicit default ────────────
+
+    def test_multiple_entrypoints_no_explicit_default_auto_marks_first(self) -> None:
+        """First @entrypoint alphabetically is auto-marked default when none is explicit.
+
+        _scan_entrypoints uses dir() which returns names in alphabetical order,
+        so 'alpha-work' precedes 'beta-work' and is auto-selected.
+        """
+
+        class MultiEpNoDefaultApp(App):
+            @entrypoint
+            async def alpha_task(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint
+            async def beta_task(self, input: _BetaInput) -> _BetaOutput:
+                return _BetaOutput()
+
+        meta = AppRegistry.get_instance().get("multi-ep-no-default-app")
+        alpha_ep = meta.entry_points["alpha-task"]
+        beta_ep = meta.entry_points["beta-task"]
+        assert alpha_ep.default is True
+        assert beta_ep.default is False
+
+    def test_multiple_entrypoints_no_explicit_default_resolve_returns_first(
+        self,
+    ) -> None:
+        """resolve_default_entrypoint returns the auto-marked first ep."""
+
+        class MultiEpNoDefaultResolveApp(App):
+            @entrypoint
+            async def alpha_step(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint
+            async def beta_step(self, input: _BetaInput) -> _BetaOutput:
+                return _BetaOutput()
+
+        meta = AppRegistry.get_instance().get("multi-ep-no-default-resolve-app")
+        resolved = resolve_default_entrypoint(meta.entry_points)
+        assert resolved is not None
+        assert resolved.name == "alpha-step"
+
+    # ── Scenario 7: multiple @entrypoints, one explicit default ──────────
+
+    def test_multiple_entrypoints_explicit_default_is_respected(self) -> None:
+        """@entrypoint(default=True) on one ep is respected; others stay default=False."""
+
+        class MultiEpExplicitDefaultApp(App):
+            @entrypoint
+            async def alpha_run(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def beta_run(self, input: _BetaInput) -> _BetaOutput:
+                return _BetaOutput()
+
+        meta = AppRegistry.get_instance().get("multi-ep-explicit-default-app")
+        assert meta.entry_points["alpha-run"].default is False
+        assert meta.entry_points["beta-run"].default is True
+
+    def test_multiple_entrypoints_explicit_default_resolve_returns_marked(self) -> None:
+        """resolve_default_entrypoint returns the explicitly marked ep."""
+
+        class MultiEpExplicitResolveApp(App):
+            @entrypoint
+            async def alpha_pipe(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def beta_pipe(self, input: _BetaInput) -> _BetaOutput:
+                return _BetaOutput()
+
+        meta = AppRegistry.get_instance().get("multi-ep-explicit-resolve-app")
+        resolved = resolve_default_entrypoint(meta.entry_points)
+        assert resolved is not None
+        assert resolved.name == "beta-pipe"
+
+    # ── Scenario 8: multiple @entrypoints, multiple explicit defaults ─────
+
+    def test_multiple_entrypoints_multiple_explicit_defaults_raises(self) -> None:
+        """Two @entrypoint(default=True) decorations raise EntryPointContractError."""
+        import types
+
+        with pytest.raises(EntryPointContractError, match="more than one default"):
+
+            @entrypoint(default=True)
+            async def _alpha(self: object, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def _beta(self: object, input: _BetaInput) -> _BetaOutput:
+                return _BetaOutput()
+
+            types.new_class(
+                "MultiDefaultEpApp",
+                (App,),
+                {},
+                lambda ns: ns.update({"alpha": _alpha, "beta": _beta}),
+            )
