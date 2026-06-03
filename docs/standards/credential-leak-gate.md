@@ -65,6 +65,11 @@ When the creds-into-logs scan produces CRITICAL/HIGH findings:
   The webhook URL itself encodes the destination channel. The step refuses to
   POST anywhere other than `hooks.slack.com`.
 
+  **Destination channel:** `#temp-int-studio-test` (`C0ALP5HSTCG`) — create the
+  incoming webhook against this channel and store its URL as the org secret.
+  (A test channel suits the current warn-only rollout; repoint the webhook to a
+  permanent channel later without any workflow change.)
+
 ## The creds-into-logs scanner
 
 `scan.py` mirrors the canonical ruleset in
