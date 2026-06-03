@@ -43,13 +43,51 @@ def test_input(path: Path) -> bool:
     return True
 
 
+_E2E_CLASS_SUFFIX = {
+    "_e2e_base": "GeneratedE2EBase",
+    "_e2e_credential": "CredentialBody",
+    "_e2e_substitutions": "MustacheSubstitutions",
+}
+
+
 def test_e2e(path: Path) -> bool:
-    """Verify an _e2e_*.py file imports without error."""
+    """Verify an _e2e_*.py file imports and exposes the expected generated class."""
     mod, err = _load_module(path)
     if mod is None:
         print(f"FAIL: {path} — {err}")
         return False
-    print(f"  OK: {path}")
+
+    suffix = _E2E_CLASS_SUFFIX.get(path.stem)
+    if suffix:
+        # Prefer the longest name (most-specific subclass) so we don't accidentally
+        # pick up the imported base class (e.g. CredentialBody itself).
+        matches = sorted(
+            [n for n in dir(mod) if n.endswith(suffix) and not n.startswith("_")],
+            key=len,
+            reverse=True,
+        )
+        if not matches:
+            print(f"FAIL: {path} — no class ending in '{suffix}' found")
+            return False
+        cls = getattr(mod, matches[0])
+        if path.stem == "_e2e_base":
+            # BaseE2ETest subclasses are not Pydantic models; verify required harness attrs.
+            for attr in (
+                "connector_short_name",
+                "argo_package_name",
+                "argo_template_name",
+            ):
+                if not hasattr(cls, attr):
+                    print(f"FAIL: {path} — {matches[0]} missing required attr '{attr}'")
+                    return False
+            print(f"  OK: {path} ({matches[0]})")
+        else:
+            if not hasattr(cls, "model_fields"):
+                print(f"FAIL: {path} — {matches[0]} is not a Pydantic model")
+                return False
+            print(f"  OK: {path} ({matches[0]}, {len(cls.model_fields)} fields)")
+    else:
+        print(f"  OK: {path}")
     return True
 
 

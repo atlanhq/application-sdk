@@ -5,9 +5,11 @@ subclass in ``app/generated/_e2e_credential.py`` via
 ``generateE2ECredentialPy()`` in ``contract-toolkit/src/App.pkl``. Fields are
 derived from the union of: ``credentialUrlGroup`` host/port/extraFields,
 ``credentialSharedExtraFields``, ``credentialCommonFields``,
-``credentialAuthOptions[*].fields`` (auth-specific fields become Optional),
-and ``credentialAuthOptions[*].extraFields`` (emitted as a nested
-``<Connector>CredentialBodyExtra`` model). Aliases use the AE-payload-body key names.
+``credentialAuthOptions[*].fields`` (auth-specific fields keep their type
+with a sentinel default — ``""`` for str, ``0`` for int; conditional common
+fields become ``Optional``), and ``credentialAuthOptions[*].extraFields``
+(emitted as a nested ``<Connector>CredentialBodyExtra`` model).
+Aliases use the AE-payload-body key names.
 
 Connectors with ``hasCredentialConfig = false`` (e.g. openapi → public
 source) do not emit this file; their ``_credential_body()`` returns ``None``.

@@ -2487,12 +2487,16 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
 
 // ── e2e code generation ───────────────────────────────────────────────────────
 
+// Escape a string for use inside a Python double-quoted literal.
+local function escapePyStr(s: String): String =
+  s.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n").replaceAll("\r", "\\r")
+
 local function capitalizeFirst(s: String): String =
   if (s.isEmpty) s else s.take(1).toUpperCase() + s.drop(1)
 
 local function pascalCase(s: String): String =
   (new Listing {
-    for (seg in s.split(Regex("[\\-_]+"))) { capitalizeFirst(seg) }
+    for (seg in s.split(Regex("[^A-Za-z0-9]+"))) { capitalizeFirst(seg) }
   }).toList().join("")
 
 // SQL-family categories drive SQLAppE2ETest / SQLMustacheSubstitutions selection.
@@ -2588,12 +2592,12 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
     "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
-    "    connector_short_name = \"\(name)\"\n" +
-    "    argo_package_name = \"\(argoPackageName)\"\n" +
-    "    argo_template_name = \"\(argoTemplateName)\"\n" +
-    "    app_service_url = \"\(appServiceUrl)\"\n" +
-    (if (emitConnType) "    connection_type = \"\(connector!!.value)\"\n" else "") +
-    (if (emitConnCat) "    connection_category = \"\(connector!!.category)\"\n" else "")
+    "    connector_short_name = \"\(escapePyStr(name))\"\n" +
+    "    argo_package_name = \"\(escapePyStr(argoPackageName))\"\n" +
+    "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
+    "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
+    (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +
+    (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "")
 }
 
 local function generateE2ESubstitutionsPy(): FileOutput? =
@@ -2780,7 +2784,7 @@ local function generateE2ECredentialPy(): FileOutput? =
     local extraModelBlock =
       if (hasExtraModel)
         "\n\nclass \(cname)CredentialBodyExtra(BaseModel):\n" +
-        "    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)\n\n" +
+        "    model_config = ConfigDict(frozen=True, populate_by_name=True, serialize_by_alias=True)\n\n" +
         extraModelLines
       else ""
 
