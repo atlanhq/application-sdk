@@ -3023,14 +3023,19 @@ output =
         ["app.yaml"] = appYamlOutput
       }
 
-      // ── single-entrypoint mode (entrypoints is empty; uiConfig is set) ────
-      when (uiConfig != null && entrypoints.isEmpty) {
-        ["app/generated/\(workflowConfigName).json"] = workflowConfigOutput
-        when (hasCredentialConfig && credentialAuthOptions != null) {
-          ["app/generated/\(connectorConfigName).json"] = credentialConfigOutput
+      // ── single-entrypoint mode ────────────────────────────────────────────
+      when (entrypoints.isEmpty) {
+        // uiConfig-dependent runtime artifacts
+        when (uiConfig != null) {
+          ["app/generated/\(workflowConfigName).json"] = workflowConfigOutput
+          when (hasCredentialConfig && credentialAuthOptions != null) {
+            ["app/generated/\(connectorConfigName).json"] = credentialConfigOutput
+          }
+          ["app/generated/manifest.json"] = manifestOutput
+          ["app/generated/_input.py"] = generateInputClassPy()
+          ["app/generated/__init__.py"] = new FileOutput { text = "" }
         }
-        ["app/generated/manifest.json"] = manifestOutput
-        ["app/generated/_input.py"] = generateInputClassPy()
+        // e2e test-harness artifacts (independent of uiConfig)
         ["app/generated/_e2e_base.py"] = generateE2EBasePy()
         when (_e2eCredOutput != null) {
           ["app/generated/_e2e_credential.py"] = _e2eCredOutput!!
@@ -3038,7 +3043,6 @@ output =
         when (_e2eSubsOutput != null) {
           ["app/generated/_e2e_substitutions.py"] = _e2eSubsOutput!!
         }
-        ["app/generated/__init__.py"] = new FileOutput { text = "" }
       }
 
       // ── multi-entrypoint mode (entrypoints is non-empty) ──────────────────
