@@ -47,6 +47,18 @@ job, which trips `failure()` and skips the whole `prepare → build → merge �
 publish` chain. The creds-into-logs layer is warn-only — it never fails the
 job, so its findings (and any scanner error) do not block the publish.
 
+## Slack alerts
+
+If the optional `SLACK_LEAK_SCAN_WEBHOOK` secret is set, the job pings Slack in
+**two** cases (locations only — never secret values):
+
+| Trigger | Message | Publish |
+|---------|---------|---------|
+| gitleaks finds a hardcoded secret | `:no_entry: Publish BLOCKED — hardcoded secret(s)` | **blocked** |
+| creds-into-logs finds CRITICAL/HIGH | `:warning: Credential-leak warnings (publish NOT blocked)` | proceeds |
+
+When the secret is unset, both Slack steps skip silently.
+
 ## Warnings: run summary + Slack
 
 When the creds-into-logs scan produces CRITICAL/HIGH findings:

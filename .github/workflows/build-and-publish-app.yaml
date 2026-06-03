@@ -629,6 +629,36 @@ jobs:
           fi
           echo "gitleaks: no hardcoded secrets found."
 
+      - name: Notify Slack on hardcoded-secret block
+        # The gitleaks layer hard-blocks the publish — alert Slack too. Runs only
+        # when the gitleaks step failed. Same webhook + host allowlist + hardened
+        # curl as the warn-only creds-into-logs notifier. Posts finding LOCATIONS
+        # only (never the secret value). Exits 0 so it can't mask the block.
+        if: always() && steps.gitleaks.outcome == 'failure'
+        env:
+          WEBHOOK: ${{ secrets.SLACK_LEAK_SCAN_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::notice::SLACK_LEAK_SCAN_WEBHOOK not set — skipping Slack notification."
+            exit 0
+          fi
+          case "$WEBHOOK" in
+            https://hooks.slack.com/*) ;;
+            *) echo "::warning::SLACK_LEAK_SCAN_WEBHOOK is not a hooks.slack.com URL — refusing to send."; exit 0 ;;
+          esac
+          R=/tmp/gitleaks-report.json
+          COUNT=$(jq 'length' "$R" 2>/dev/null || echo "?")
+          # Top 10 locations only — the report's Secret/Match fields are never read.
+          LOCS=$(jq -r '.[] | "• `\(.File):\(.StartLine)` (rule: \(.RuleID))"' "$R" 2>/dev/null | head -10)
+          TEXT=$(printf ':no_entry: *Publish BLOCKED — hardcoded secret(s)* in *%s*\ngitleaks found %s secret(s) in source. Remove and *rotate* them. Locations only (values withheld):\n%s\n<%s|View run>' \
+            "$REPO" "$COUNT" "$LOCS" "$RUN_URL")
+          jq -n --arg t "$TEXT" '{text: $t}' \
+            | curl -sS --fail --max-time 10 -X POST -H 'Content-type: application/json' --data @- "$WEBHOOK" \
+            || echo "::warning::Slack notification failed (non-blocking)."
+
       # ── Layer 2: creds-into-logs scan (regex, no LLM) — WARN-ONLY ─────────────
       - name: Creds-into-logs scan (warn-only)
         id: credscan
