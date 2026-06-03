@@ -138,11 +138,10 @@ jobs:
           connection-name: ${{ inputs.connection-name != '' && inputs.connection-name || format('ci_{0}', inputs.app-name) }}
           manifest: ${{ inputs.app-name }}/app/generated/manifest.json
           atlan-yaml: ${{ inputs.app-name }}/atlan.yaml
-          # executor-enabled MUST be true or the submit registers the run but
-          # never dispatches the DAG (every node stays NOT_STARTED). Publish
-          # still stays dry-run via the connection-cache flags below.
+          # executor-enabled is a PUBLISH dry-run flag (per ae-workflow.sh), not
+          # DAG execution — keep it false so publish stays dry-run in CI.
           connection-creation-enabled: "false"
-          executor-enabled: "true"
+          executor-enabled: "false"
           connection-cache-enabled: "false"
           connection-cache-via-app-enabled: "false"
 
@@ -161,12 +160,14 @@ jobs:
           echo "Run: $RUN_GUID"
 
           EXPECTED=$(python3 -c "import json;print(len(json.load(open('${{ inputs.app-name }}/app/generated/manifest.json'))['dag']))")
-          echo "Expecting $EXPECTED DAG node workflow(s)"
+          echo "Expecting >= $EXPECTED node workflow(s) (+1 orchestrator)"
 
-          # Discover the actual child workflows for this run instead of guessing
-          # their IDs. Counts come from the run-prefixed Temporal workflows.
+          # This is a fresh single-run Temporal, so we don't need to guess child
+          # workflow IDs (AE names them off an internal GUID, not the submit
+          # guid). Just count ALL workflows by status and wait until everything
+          # settles. Dumps the full list each tick for visibility.
           snapshot() {
-            temporal workflow list --query "WorkflowId STARTS_WITH '${RUN_GUID}'" -o json 2>/dev/null \
+            temporal workflow list --limit 100 -o json 2>/dev/null \
               | python3 -c "
           import json,sys
           try: rows=json.load(sys.stdin) or []
@@ -181,22 +182,20 @@ jobs:
           "
           }
 
-          GRACE=300; MAX=4500; elapsed=0; rc=0
+          GRACE=300; MAX=1800; elapsed=0; rc=0
           while [ $elapsed -lt $MAX ]; do
             read -r total comp fail run < <(snapshot)
             total=${total:-0}; comp=${comp:-0}; fail=${fail:-0}; run=${run:-0}
             echo "  [${elapsed}s] workflows=$total completed=$comp failed=$fail running=$run"
-            if [ "$fail" -gt 0 ]; then echo "::error::a DAG workflow failed"; rc=1; break; fi
-            if [ "$total" -ge "$EXPECTED" ] && [ "$comp" -ge "$EXPECTED" ]; then echo "All $EXPECTED nodes completed."; rc=0; break; fi
+            if [ "$fail" -gt 0 ]; then echo "::error::a workflow failed/terminated"; rc=1; break; fi
+            # settled: at least EXPECTED nodes completed and nothing still running
+            if [ "$comp" -ge "$EXPECTED" ] && [ "$run" -eq 0 ] && [ "$total" -gt 0 ]; then echo "Run settled: $comp completed."; rc=0; break; fi
             if [ "$total" -eq 0 ] && [ "$elapsed" -ge "$GRACE" ]; then
-              echo "::error::no DAG workflows dispatched within ${GRACE}s — submit/executor or queue problem"
-              echo "--- all recent Temporal workflows (for diagnosis) ---"
-              temporal workflow list --limit 30 2>/dev/null || true
-              rc=1; break
+              echo "::error::no workflows dispatched within ${GRACE}s — submit/queue problem"; rc=1; break
             fi
             sleep 10; elapsed=$((elapsed+10))
           done
-          [ $elapsed -lt $MAX ] || { echo "::error::run did not finish within ${MAX}s"; rc=1; }
+          [ $elapsed -lt $MAX ] || { echo "::error::run did not settle within ${MAX}s"; echo '--- full workflow list ---'; temporal workflow list --limit 50 2>/dev/null || true; rc=1; }
 
           echo "### AE full-DAG run \`${RUN_GUID}\`" >> "$GITHUB_STEP_SUMMARY"
           temporal workflow list --query "WorkflowId STARTS_WITH '${RUN_GUID}'" 2>/dev/null \
