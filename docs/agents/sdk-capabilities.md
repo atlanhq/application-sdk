@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.14.0
-source-sha:    0ef594aefde221c861d45a54d896d314ca1d906b
-source-date:   2026-06-01T18:50:15+05:30
+source-sha:    20086c1483e19616448e5a9f3199d426275731dc
+source-date:   2026-06-03T18:07:09+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2826,9 +2826,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Output from the ``prime_sql_auth`` task (BLDX-1295).
 - **Fields:**
   - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
-  - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means the probe
-  - `error_type: str | None` — Exception class name (e.g. ``OperationalError``) when ``success``
-  - `error_message: str | None` — Truncated exception message when ``success`` is ``False``.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `QueryBatchInput`
