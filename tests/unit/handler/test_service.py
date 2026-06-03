@@ -823,13 +823,34 @@ class TestMetadataEndpoint:
             "/workflows/v1/metadata",
             json={
                 "credentials": {"host": "db.example.com"},
-                "metadataTemplateKey": "feedbacks",
-                "type": "accounts",
+                "metadata_template_key": "feedbacks",
             },
         )
 
         assert response.status_code == 200
         assert received == ["feedbacks"]
+
+    def test_metadata_non_canonical_keys_do_not_populate_template_key(self) -> None:
+        received: list[str] = []
+
+        class _MetadataTemplateCapture(_TestHandler):
+            async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+                received.append(input.metadata_template_key)
+                return ApiMetadataOutput(objects=[])
+
+        client = _make_client(handler=_MetadataTemplateCapture())
+        for key in ("metadataTemplateKey", "type"):
+            response = client.post(
+                "/workflows/v1/metadata",
+                json={
+                    "credentials": {"host": "db.example.com"},
+                    key: "feedbacks",
+                },
+            )
+
+            assert response.status_code == 200
+
+        assert received == ["", ""]
 
     def test_metadata_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())

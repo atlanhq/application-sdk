@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
@@ -362,18 +362,8 @@ class MetadataInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use for metadata discovery."""
 
-    metadata_template_key: str = Field(
-        default="",
-        validation_alias=AliasChoices(
-            "metadata_template_key",
-            "metadataTemplateKey",
-            "type",
-        ),
-    )
-    """Metadata source routing key for multi-source metadata widgets.
-
-    The ``type`` alias is accepted for legacy platform metadata requests.
-    """
+    metadata_template_key: str = ""
+    """Metadata source routing key for multi-source metadata widgets."""
 
     connection_config: BaseConnectionConfig = Field(
         default_factory=BaseConnectionConfig
