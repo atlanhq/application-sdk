@@ -370,7 +370,10 @@ class MetadataInput(BaseModel):
             "type",
         ),
     )
-    """Metadata source routing key for multi-source metadata widgets."""
+    """Metadata source routing key for multi-source metadata widgets.
+
+    The ``type`` alias is accepted for legacy platform metadata requests.
+    """
 
     connection_config: BaseConnectionConfig = Field(
         default_factory=BaseConnectionConfig
