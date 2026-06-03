@@ -4,6 +4,17 @@ Entry points generate Temporal workflows at worker startup. Each entry point can
 triggered independently via HTTP POST /workflows/v1/start?entrypoint=<name>.
 The body field 'workflow_type' is also accepted as a transitional fallback.
 
+Default entrypoint resolution (when ?entrypoint= is omitted):
+
+    App shape                                   Default
+    ------------------------------------------  ----------------------------------------
+    run() only                                  run() — implicit default (backward compat)
+    Single @entrypoint                          that entry point (len==1 rule)
+    Multiple @entrypoints, none explicit        first alphabetically, auto-marked default
+    Multiple @entrypoints, one default=True     that one
+    Multiple @entrypoints, multiple default=True  error at class definition time
+    run() + @entrypoint(s)                      run() always; @entrypoint(default=True) raises
+
 Usage::
 
     from application_sdk.app import App, entrypoint, task
