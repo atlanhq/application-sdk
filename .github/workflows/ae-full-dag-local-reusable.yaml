@@ -48,6 +48,16 @@ on:
         description: "Path (in connector repo) to the source-cred injector; echoes `cred_guid=<guid>`."
         required: true
         type: string
+      app-module:
+        description: "ATLAN_APP_MODULE for the connector worker (e.g. app.extractor:MSSQLMetadataExtractor)."
+        required: false
+        type: string
+        default: ""
+      handler-module:
+        description: "ATLAN_HANDLER_MODULE — required so the worker registers the real extraction workflow (not DefaultHandler/SDR)."
+        required: false
+        type: string
+        default: ""
       system-deps-script:
         description: "Optional path to a script installing source system deps (ODBC, JCo, ...)."
         required: false
@@ -109,6 +119,8 @@ jobs:
         with:
           app-name: ${{ inputs.app-name }}
           deployment: ${{ inputs.deployment }}
+          app-module: ${{ inputs.app-module }}
+          handler-module: ${{ inputs.handler-module }}
           org-pat-github: ${{ secrets.ORG_PAT_GITHUB }}
           atlan-base-url: ${{ secrets.ATLAN_BASE_URL }}
           atlan-client-id: ${{ secrets.ATLAN_CLIENT_ID }}

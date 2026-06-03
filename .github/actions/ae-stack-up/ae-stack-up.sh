@@ -209,8 +209,13 @@ done
 # The connector worker (always; serves the extract node + the dev local-vault).
 # ATLAN_DEPLOYMENT_NAME=local unlocks /workflows/v1/dev/local-vault (else 403);
 # the queue stays atlan-<app>-<deployment> via the explicit ATLAN_TASK_QUEUE.
-start_worker "$APP_DIR" "${APP_NAME}-app" "$APP_NAME" "atlan-${APP_NAME}-${DEPLOYMENT}" \
-  "ATLAN_LOCAL_DEVELOPMENT=true ATLAN_HANDLER_HOST=0.0.0.0 ATLAN_DEPLOYMENT_NAME=local"
+# ATLAN_APP_MODULE/ATLAN_HANDLER_MODULE MUST be set or the worker comes up with
+# DefaultHandler (SDR workflows only) and the AE-dispatched extraction workflow
+# never gets picked up — the child workflow then runs forever.
+CONN_EXTRA="ATLAN_LOCAL_DEVELOPMENT=true ATLAN_HANDLER_HOST=0.0.0.0 ATLAN_DEPLOYMENT_NAME=local"
+[ -n "${APP_MODULE:-}" ]     && CONN_EXTRA="$CONN_EXTRA ATLAN_APP_MODULE=${APP_MODULE}"
+[ -n "${HANDLER_MODULE:-}" ] && CONN_EXTRA="$CONN_EXTRA ATLAN_HANDLER_MODULE=${HANDLER_MODULE}"
+start_worker "$APP_DIR" "${APP_NAME}-app" "$APP_NAME" "atlan-${APP_NAME}-${DEPLOYMENT}" "$CONN_EXTRA"
 wait_ready "${APP_NAME}-app" "atlan-${APP_NAME}-${DEPLOYMENT}" 90
 
 # Publish OAuth .env bits are passed via extra-env when publish is needed.

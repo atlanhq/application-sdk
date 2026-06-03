@@ -22,6 +22,14 @@ inputs:
     description: "Manifest path relative to the connector checkout."
     required: false
     default: "app/generated/manifest.json"
+  app-module:
+    description: "ATLAN_APP_MODULE for the connector worker (e.g. app.extractor:MSSQLMetadataExtractor)."
+    required: false
+    default: ""
+  handler-module:
+    description: "ATLAN_HANDLER_MODULE for the connector worker (e.g. app.handler:MSSQLHandler). Required so the worker registers the real extraction workflow, not DefaultHandler/SDR."
+    required: false
+    default: ""
   org-pat-github:
     description: "PAT to clone the private sibling app repos (AE/publish/qi/lineage)."
     required: true
@@ -55,6 +63,8 @@ runs:
         APP_DIR: ${{ inputs.app-dir != '' && format('{0}/{1}', github.workspace, inputs.app-dir) || format('{0}/{1}', github.workspace, inputs.app-name) }}
         DEPLOYMENT: ${{ inputs.deployment }}
         MANIFEST_PATH: ${{ inputs.manifest-path }}
+        APP_MODULE: ${{ inputs.app-module }}
+        HANDLER_MODULE: ${{ inputs.handler-module }}
         ORG_PAT_GITHUB: ${{ inputs.org-pat-github }}
         ATLAN_BASE_URL: ${{ inputs.atlan-base-url }}
         ATLAN_CLIENT_ID: ${{ inputs.atlan-client-id }}
