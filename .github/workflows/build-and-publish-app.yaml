@@ -453,7 +453,12 @@ jobs:
             echo "No tests/unit/ — skipping."
             exit 0
           fi
-          uv run --with pytest-cov pytest tests/unit --cov=app --cov-report=term
+          # --all-groups so the app's test dependency group (pytest plugins like
+          # pytest-asyncio, etc.) is installed. `uv run` otherwise re-syncs to only
+          # the default groups, pruning any test deps an app keeps in a non-default
+          # group — which silently breaks async/plugin-dependent suites and trips
+          # this gate on a packaging gap rather than a real failure.
+          uv run --all-groups --with pytest-cov pytest tests/unit --cov=app --cov-report=term
 
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
