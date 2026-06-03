@@ -1456,18 +1456,18 @@ class QueryIntelligenceNode extends DAGNode {
   sqlKey: String
   catalogKey: String = "DATABASE_NAME"
   schemaKey: String = "SCHEMA_NAME"
-  timestampKey: String = "START_TIME"
-  mineOutputType: "parquet"|"json" = "parquet"
-  parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
+  @Deprecated timestampKey: String = "START_TIME"
+  mineOutputType: "parquet"|"json" = "json"
+  @Deprecated parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
   extraFilter: String?
   indirectLineage: Boolean|String? = null
   ignoreOrphans: Boolean|String? = null
-  columnsToPreserve: String?
+  @Deprecated columnsToPreserve: String?
   relatedAssetsOutputPrefix: String?
-  parserArtifactsKey: String?
+  @Deprecated parserArtifactsKey: String?
   connectionCacheKey: String?
   currentStatePrefix: String?
-  instanceName: String?
+  @Deprecated instanceName: String?
 }
 ```
 
@@ -1476,6 +1476,23 @@ Validation enforced at `pkl eval` time:
 
 Cloud bucket and backend are resolved from the QI app's pod environment, not
 per-workflow args. Configure storage at the QI app deployment, not on this node.
+
+**Deprecated fields (kept for back-compat, ignored by the QI app):**
+
+| Field | Reason |
+|---|---|
+| `timestampKey` | QI no longer filters records by timestamp. |
+| `parsingMode` | Parsing strategy is now tuned internally by QI per workload. |
+| `columnsToPreserve` | All columns/fields are preserved in JSON mode (now the default). |
+| `parserArtifactsKey` | No longer consumed by QI. |
+| `instanceName` | Instance name is read from QI app environment variables, not workflow args. |
+
+These fields still emit their corresponding args into `manifest.json` when set,
+but the QI app discards them. New contracts should not set them.
+
+**`mineOutputType` default flipped to `"json"`.** New integrations get JSON
+automatically. `"parquet"` remains valid for legacy miner-style inputs but
+should not be used by new contracts.
 
 Typical crawler-style example:
 
@@ -1486,9 +1503,6 @@ extraNodes {
     sqlKey = "attributes.definition"
     catalogKey = "attributes.databaseName"
     schemaKey = "attributes.schemaName"
-    timestampKey = ""
-    mineOutputType = "json"
-    parsingMode = "competitive"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
   }
@@ -1571,9 +1585,8 @@ Per-source guidance for the source-shape fields:
 - `sourceQueryTypeQi`: SQL expression projected as `SOURCE_QUERY_TYPE` on the
   parsed-data view (`v_qi`). Snowflake / BigQuery parsed_data carry this
   column natively; Databricks parsed_data does NOT, so set
-  `"NULL::VARCHAR"` there. Also set `"NULL::VARCHAR"` for any source whose
-  Query Intelligence step is configured with a `columnsToPreserve` that
-  omits `SOURCE_QUERY_TYPE` (e.g. BigQuery today).
+  `"NULL::VARCHAR"` there. Set `"NULL::VARCHAR"` for any source whose
+  parsed_data does not natively expose `SOURCE_QUERY_TYPE`.
 - `parsedDataKeepFilter`: SQL predicate applied at `v_qi` build time to keep
   only popularity-relevant parsed rows. Default is QI's `OUTPUT_FLAGS`
   bitmask — bit 25 (Gudusoft, `33554432`) plus bit 26 (sqlglot,
@@ -1813,9 +1826,6 @@ extraNodes {
     sqlKey = "attributes.definition"
     catalogKey = "attributes.databaseName"
     schemaKey = "attributes.schemaName"
-    timestampKey = ""
-    mineOutputType = "json"
-    parsingMode = "competitive"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
   }
@@ -1911,8 +1921,6 @@ extraNodes {
     sqlKey = "rendered_source"
     catalogKey = "datasource/database"
     schemaKey = ""
-    timestampKey = ""
-    mineOutputType = "json"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.qi_output_prefix"
   }
