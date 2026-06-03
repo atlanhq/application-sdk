@@ -425,7 +425,7 @@ upload_result = await self.upload(
 )
 # upload_result.ref is now a durable FileReference
 # storage_path will be something like:
-# artifacts/apps/myapp/workflows/wf-123/run-456/file_refs/tables.parquet
+# artifacts/apps/myapp/workflows/run-abc123/tables.parquet
 ```
 
 #### Pattern 2 — Upload to a known subdir (e.g. argo-artifacts pattern)

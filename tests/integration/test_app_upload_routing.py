@@ -93,9 +93,12 @@ async def test_app_upload_routes_to_upstream_when_present(tmp_path):
     storage_path = result.ref.storage_path
     assert storage_path is not None
 
-    # The file must be findable in upstream
+    # The file must be findable in upstream (excluding .sha256 sidecars)
     upstream_keys = await list_keys("", store=upstream_store)
-    assert any(storage_path in key or key in storage_path for key in upstream_keys), (
+    non_sidecar_upstream = [k for k in upstream_keys if not k.endswith(".sha256")]
+    assert any(
+        storage_path in key or key in storage_path for key in non_sidecar_upstream
+    ), (
         f"App.upload() did not route to upstream_storage. "
         f"Expected key containing '{storage_path}' in upstream, found: {upstream_keys}"
     )
@@ -139,9 +142,12 @@ async def test_app_upload_falls_back_when_upstream_none(tmp_path):
     storage_path = result.ref.storage_path
     assert storage_path is not None
 
-    # The file must be in the deployment store (fallback)
+    # The file must be in the deployment store (fallback, excluding .sha256 sidecars)
     deployment_keys = await list_keys("", store=deployment_store)
-    assert any(storage_path in key or key in storage_path for key in deployment_keys), (
+    non_sidecar_deployment = [k for k in deployment_keys if not k.endswith(".sha256")]
+    assert any(
+        storage_path in key or key in storage_path for key in non_sidecar_deployment
+    ), (
         f"App.upload() did not fall back to deployment store when upstream is None. "
         f"Expected key containing '{storage_path}' in deployment, found: {deployment_keys}"
     )

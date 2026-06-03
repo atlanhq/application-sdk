@@ -201,7 +201,7 @@ class MyConnectorApp(App):
                         atlan_entity = _transform_entity(entity)
                         f.write(json.dumps(atlan_entity) + "\n")
                         record_count += 1
-                page += 1
+                    page += 1
         finally:
             await client.close()
 

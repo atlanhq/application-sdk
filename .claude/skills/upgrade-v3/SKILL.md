@@ -910,11 +910,13 @@ await self.upload(UploadInput(local_path=output_file_path))  # RETAINED is the d
 
 **StorageTier choices** for `UploadInput`:
 
-| Tier | Prefix | Cleanup |
-|------|--------|---------|
-| `StorageTier.TRANSIENT` | `file_refs/{uuid}/` | Auto-deleted after run |
-| `StorageTier.RETAINED` | `artifacts/apps/{app}/workflows/{wf}/{run}/` | Kept; default for published artifacts |
-| `StorageTier.PERSISTENT` | `persistent-artifacts/apps/{app}/` | Never deleted; use for long-term state |
+| Tier | Key pattern (App.upload) | Cleanup |
+|------|--------------------------|---------|
+| `StorageTier.TRANSIENT` | `file_refs/{filename}` | Auto-deleted after run |
+| `StorageTier.RETAINED` | `artifacts/apps/{app}/workflows/{run_id}/{filename}` | Kept; default for published artifacts |
+| `StorageTier.PERSISTENT` | `persistent-artifacts/apps/{app}/{filename}` | Never deleted; use for long-term state |
+
+Note: the `{uuid}` key format (e.g. `file_refs/{uuid}`) is used by the automatic FileReference interceptor when persisting `@task` outputs — `App.upload()` uses `{filename}` directly.
 
 Note that `App.upload()` is NOT necessary inside each `@task` — task-to-task uploading/downloading of files within the same app is handled _automatically_ purely by virtue of a `FileReference` being included in the Output of a task (automatically uploaded to `objectstore`, if not already there) or the Input of a task (automatically downloaded, if not already present on the worker).
 
