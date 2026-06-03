@@ -14,6 +14,7 @@ COMMENTER_INTENT, etc.). Follow
 2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map
 3. `.mothership/pr-review/references/retro-log.md` — **MANDATORY: do-not-flag list.** Every candidate finding MUST be checked against the patterns here; matches are withdrawn silently with no inline comment or auto-fix.
 4. `.mothership/pr-review/references/*.md` + `modes/*.md` + `agents/*.md`
+5. For `contract-toolkit/**` PRs: `contract-toolkit/AGENTS.md`, `.mothership/pr-review/agents/toolkit-review.md`, and `.mothership/pr-review/references/toolkit-consumer-registry.md`
 
 PR metadata and the authoritative diff are fetched in Phase 0 via
 `gh pr view` / `gh pr diff` and written to `/tmp/PR.json` and
@@ -29,6 +30,15 @@ PR metadata and the authoritative diff are fetched in Phase 0 via
 - **Dependency direction**: `app/` -> `execution/` -> `infrastructure/` (NEVER reverse)
 - **Credential pattern**: `CredentialRef` in contracts, `CredentialResolver` in `@task` only
 - **Blocking ops**: use `self.run_in_thread()` for blocking operations in `@task`
+
+## Contract Toolkit Review Context
+
+For PRs that touch `contract-toolkit/**`, review generated artifact contracts,
+toolkit API fit, and private downstream compatibility instead of applying
+SDK-only Temporal/Dapr assumptions. The reviewer must classify affected
+surfaces, run the relevant private consumer checks, and sanitize public output.
+Do not expose internal consumer repo names, internal file paths, or clone
+locations in PR comments.
 
 ### Determinism Rules (Temporal replay safety)
 
