@@ -1,6 +1,12 @@
 ---
 name: toolkit-feature-workflow
-description: Use when reviewing an application-sdk PR that changes contract-toolkit behavior, generated contract artifacts, toolkit examples, or toolkit docs. Runs toolkit-only PR review mode: classify affected generated surfaces, perform mandatory private downstream compatibility validation through Mothership/Rover, and post sanitized review findings without exposing internal consumer repo paths.
+description: >-
+  Use when reviewing an application-sdk PR that changes contract-toolkit behavior,
+  generated contract artifacts, toolkit examples, or toolkit docs. Runs
+  toolkit-only PR review mode: classify affected generated surfaces, perform
+  mandatory private downstream compatibility validation through Mothership/Rover,
+  and post sanitized review findings without exposing internal consumer repo
+  paths.
 ---
 
 # Toolkit PR Review Workflow
