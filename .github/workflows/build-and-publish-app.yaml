@@ -50,11 +50,6 @@ on:
         required: false
         type: string
         default: "https://home.atlan.com"
-      snyk_monitor:
-        description: "Push scan results to Snyk UI dashboard via snyk container monitor (default: false)"
-        required: false
-        type: boolean
-        default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -365,8 +360,6 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
     with:
       image: ${{ needs.prepare.outputs.ghcr_image }}
-      snyk_org: partner-images
-      snyk_monitor: ${{ inputs.snyk_monitor }}
       fail_on_findings: false
     secrets: inherit
 
