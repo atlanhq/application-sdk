@@ -11,7 +11,8 @@ Hierarchy:
 * :class:`SQLMustacheSubstitutions` — SQL additions: extraction-method,
   agent-json, filters, preflight-check.
 * Per-connector subclasses live in ``app/generated/_e2e_substitutions.py``
-  (codegen'd from ``contract/app.pkl`` via ``contract-toolkit``).
+  (codegen'd from ``contract/app.pkl`` via ``generateE2ESubstitutionsPy()``
+  in ``contract-toolkit/src/App.pkl``).
 """
 
 from __future__ import annotations
