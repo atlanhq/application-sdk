@@ -185,6 +185,127 @@ jobs:
             | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
           exit $rc
 
+      - name: Print count summary
+        if: always()
+        shell: bash
+        env:
+          APP_NAME: ${{ inputs.app-name }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re, ast
+
+          LOGS = "logs"
+          app = os.environ["APP_NAME"]
+          # Log files written by ae-stack-up (app-id -> logs/<app-id>.log).
+          EXTRACT = f"{LOGS}/{app}-app.log"
+          PUBLISH = f"{LOGS}/publish-app.log"
+          QI      = f"{LOGS}/query-intelligence.log"
+          LINEAGE = f"{LOGS}/lineage-app.log"
+
+          def lines(p):
+              try:
+                  return open(p, encoding="utf-8", errors="replace").read().splitlines()
+              except FileNotFoundError:
+                  return []
+
+          out = []
+
+          # ── Extract: SDK APP_VITALS (generic across connectors) ──────────────
+          vitals = re.compile(r"APP_VITALS \| app_vitals\.act\.completed \| (\{.*\})")
+          fetch, transform = {}, {}
+          for ln in lines(EXTRACT):
+              m = vitals.search(ln)
+              if not m:
+                  continue
+              try:
+                  d = json.loads(m.group(1))
+              except Exception:
+                  continue
+              if d.get("status") != "succeeded":
+                  continue
+              suf = d.get("activity_type", "").split(":")[-1]
+              cnt = d.get("assets_processed", 0)
+              if suf.startswith("fetch_"):
+                  fetch[suf[6:]] = cnt
+              elif suf.startswith("transform_"):
+                  transform[suf[10:]] = cnt
+
+          # ── Publish / lineage-publish (shared publish app, generic) ──────────
+          wfid = re.compile(r"Workflow ID:\s+(\S+)\s+Run ID:")
+          part = re.compile(r"partition_count=(\d+)\s+synced_entities_count=(\d+)\s+transformed_entities_count=(\d+)")
+          stats = re.compile(r"Statistics collected:\s+(\d+) created,\s+(\d+) updated,\s+(\d+) deleted")
+          comp = re.compile(r"Compaction complete:\s+(\d+) entities")
+          pub = {"publish": {}, "lineage-publish": {}}
+          tag = None
+          for ln in lines(PUBLISH):
+              w = wfid.search(ln)
+              if w:
+                  tag = "lineage-publish" if w.group(1).endswith("-lineage-publish") else ("publish" if w.group(1).endswith("-publish") else None)
+              if not tag:
+                  continue
+              for rx, keys in ((part, ("partitions","synced","transformed")), (stats, ("created","updated","deleted")), (comp, ("compacted",))):
+                  m = rx.search(ln)
+                  if m:
+                      for i, k in enumerate(keys):
+                          pub[tag][k] = int(m.group(i+1))
+
+          # ── QI (only if the DAG ran it) ──────────────────────────────────────
+          qi = {}
+          for ln in lines(QI):
+              m = re.search(r"parse completed with:\s*(\{[^}]*\})", ln)
+              if m:
+                  try: qi = ast.literal_eval(m.group(1))
+                  except Exception: pass
+
+          # ── Lineage (only if the DAG ran it) ─────────────────────────────────
+          lin = {}
+          for key, rx in (("artifacts", r"Found (\d+) artifacts"),
+                          ("table_procs", r"Workflow complete: (\d+) table"),
+                          ("col_procs", r"Workflow complete:.*?(\d+) column processes")):
+              for ln in lines(LINEAGE):
+                  m = re.search(rx, ln)
+                  if m: lin[key] = int(m.group(1))
+
+          # ── Render Markdown to the Step Summary ──────────────────────────────
+          published = pub["publish"].get("compacted", 0)
+          out.append(f"## {app} — full-DAG counts\n")
+          out.append("### Extract\n")
+          out.append("| Asset Type | Fetched | Transformed | Published |")
+          out.append("|---|---:|---:|---:|")
+          types = sorted(set(fetch) | set(transform))
+          for t in types:
+              out.append(f"| {t} | {fetch.get(t,'-')} | {transform.get(t,'-')} | |")
+          out.append(f"| **TOTAL** | **{sum(fetch.values())}** | **{sum(transform.values())}** | **{published}** |")
+
+          out.append("\n### Publish")
+          out.append("| Stage | Partitions | Synced | Transformed | Compacted | Created | Updated | Deleted |")
+          out.append("|---|---:|---:|---:|---:|---:|---:|---:|")
+          for stage in ("publish", "lineage-publish"):
+              p = pub[stage]
+              if p:
+                  out.append(f"| {stage} | {p.get('partitions',0)} | {p.get('synced',0)} | {p.get('transformed',0)} | {p.get('compacted',0)} | {p.get('created',0)} | {p.get('updated',0)} | {p.get('deleted',0)} |")
+
+          if qi:
+              out.append("\n### Query Intelligence")
+              out.append("| Total | Parsed | Lineage | Tables | Errors |")
+              out.append("|---:|---:|---:|---:|---:|")
+              err = sum(int(v) for k,v in qi.items() if isinstance(v,(int,float)) and k.startswith("sqlglotError"))
+              out.append(f"| {qi.get('totalQueries',0)} | {qi.get('sqlglotProcessed',0)} | {qi.get('sqlglotLineageGenerated',0)} | {qi.get('sqlglotTablesDetected',0)} | {err} |")
+
+          if lin:
+              out.append("\n### Lineage")
+              out.append("| Artifacts | Table Procs | Col Procs |")
+              out.append("|---:|---:|---:|")
+              out.append(f"| {lin.get('artifacts',0)} | {lin.get('table_procs',0)} | {lin.get('col_procs',0)} |")
+
+          text = "\n".join(out)
+          print(text)
+          sp = os.environ.get("GITHUB_STEP_SUMMARY")
+          if sp:
+              with open(sp, "a") as f:
+                  f.write(text + "\n")
+          PYEOF
+
       - name: Dump logs on failure
         if: failure()
         shell: bash
