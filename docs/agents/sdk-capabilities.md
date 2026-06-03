@@ -145,7 +145,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `@entrypoint`
 
 - **Import:** `from application_sdk.app import entrypoint`
-- **Signature:** `entrypoint(func: F | None = None, *, name: str | None = None) -> F | Callable[[F], F]`
+- **Signature:** `entrypoint(func: F | None = None, *, name: str | None = None, default: bool = False) -> F | Callable[[F], F]`
 - **Summary:** Decorator to mark a method as an independently-triggerable entry point.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
