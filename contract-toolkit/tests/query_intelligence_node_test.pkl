@@ -11,6 +11,19 @@ local defaultQueryIntelligenceNode = new App.QueryIntelligenceNode {
   sqlKey = "QUERY_TEXT"
 }
 
+// Explicit overrides of the @Deprecated fields. Used to verify the back-compat
+// path: setting these still flows through to manifest args even though the QI
+// app ignores them. New contracts should NOT set these fields.
+local deprecatedOverrideNode = new App.QueryIntelligenceNode {
+  vendorName = "athena"
+  sqlKey = "QUERY_TEXT"
+  timestampKey = "EVENT_TS"
+  parsingMode = "competitive"
+  columnsToPreserve = "FOO,BAR"
+  parserArtifactsKey = "artifacts/parser.tar.gz"
+  instanceName = "primary"
+}
+
 // Boolean-literal form — typed Boolean still accepted (back-compat).
 local boolLiteralNode = new App.QueryIntelligenceNode {
   vendorName = "athena"
@@ -41,9 +54,19 @@ facts {
     defaultQueryIntelligenceNode.args["catalog_key"] == "DATABASE_NAME"
     defaultQueryIntelligenceNode.args["schema_key"] == "SCHEMA_NAME"
     defaultQueryIntelligenceNode.args["timestamp_key"] == "START_TIME"
-    defaultQueryIntelligenceNode.args["mine_output_type"] == "parquet"
+    defaultQueryIntelligenceNode.args["mine_output_type"] == "json"
     defaultQueryIntelligenceNode.args["parsing_mode"] == "fallback"
     defaultQueryIntelligenceNode.args["vendor_name"] == "athena"
+  }
+
+  // Back-compat: @Deprecated fields still emit args when set. The QI app
+  // ignores them, but the manifest contract is preserved.
+  ["QueryIntelligenceNode still emits args for @Deprecated fields when set"] {
+    deprecatedOverrideNode.args["timestamp_key"] == "EVENT_TS"
+    deprecatedOverrideNode.args["parsing_mode"] == "competitive"
+    deprecatedOverrideNode.args["columns_to_preserve"] == "FOO,BAR"
+    deprecatedOverrideNode.args["parser_artifacts_key"] == "artifacts/parser.tar.gz"
+    deprecatedOverrideNode.args["instance_name"] == "primary"
   }
 
   ["QueryIntelligenceNode omits deployment-owned and deprecated args"] {

@@ -6,6 +6,13 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.10.5] - 2026-06-03
+
+### Bug fixes
+
+- update QI contract (#1971) ([a6345f6](https://github.com/atlanhq/application-sdk/commit/a6345f6))
+- emit lint-clean generated input contracts (#1967) ([c1dcdde](https://github.com/atlanhq/application-sdk/commit/c1dcdde))
+
 ## [0.10.4] - 2026-05-29
 
 ### Bug fixes
