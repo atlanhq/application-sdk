@@ -138,9 +138,11 @@ jobs:
           connection-name: ${{ inputs.connection-name != '' && inputs.connection-name || format('ci_{0}', inputs.app-name) }}
           manifest: ${{ inputs.app-name }}/app/generated/manifest.json
           atlan-yaml: ${{ inputs.app-name }}/atlan.yaml
-          # CI: dry-run publish (no real Atlas write / cache population).
+          # executor-enabled MUST be true or the submit registers the run but
+          # never dispatches the DAG (every node stays NOT_STARTED). Publish
+          # still stays dry-run via the connection-cache flags below.
           connection-creation-enabled: "false"
-          executor-enabled: "false"
+          executor-enabled: "true"
           connection-cache-enabled: "false"
           connection-cache-via-app-enabled: "false"
 
@@ -153,32 +155,48 @@ jobs:
           AE="${{ steps.stack.outputs.ae-url }}"
 
           RUN=$(curl -sf -X POST "${AE}/api/v1/workflows/${SLUG}/submit" -H 'Content-Type: application/json' -d '{}')
-          RUN_GUID=$(echo "$RUN" | python3 -c "import json,sys;print(json.load(sys.stdin)['data']['guid'])")
+          echo "submit response: $RUN"
+          RUN_GUID=$(echo "$RUN" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('data',{}).get('guid') or d.get('guid',''))")
+          [ -n "$RUN_GUID" ] || { echo "::error::submit returned no run guid"; exit 1; }
           echo "Run: $RUN_GUID"
 
-          # Node ids to poll come straight from the manifest dag.
-          NODES=$(python3 -c "import json;print(' '.join(json.load(open('${{ inputs.app-name }}/app/generated/manifest.json'))['dag'].keys()))")
-          echo "Polling DAG nodes: $NODES"
+          EXPECTED=$(python3 -c "import json;print(len(json.load(open('${{ inputs.app-name }}/app/generated/manifest.json'))['dag']))")
+          echo "Expecting $EXPECTED DAG node workflow(s)"
 
-          wait_for() { # workflow-id label timeout
-            local wf="$1" label="$2" to="${3:-900}" elapsed=0
-            while [ $elapsed -lt $to ]; do
-              local st
-              st=$(temporal workflow describe --workflow-id "$wf" 2>/dev/null | awk '/^\s+Status/{print $2}' | head -1 || echo NOT_STARTED)
-              echo "  $label: $st (${elapsed}s)"
-              case "$st" in
-                COMPLETED) return 0 ;;
-                FAILED|TERMINATED|CANCELED) echo "::error::$label $st"; return 1 ;;
-              esac
-              sleep 10; elapsed=$((elapsed+10))
-            done
-            echo "::error::$label timed out after ${to}s"; return 1
+          # Discover the actual child workflows for this run instead of guessing
+          # their IDs. Counts come from the run-prefixed Temporal workflows.
+          snapshot() {
+            temporal workflow list --query "WorkflowId STARTS_WITH '${RUN_GUID}'" -o json 2>/dev/null \
+              | python3 -c "
+          import json,sys
+          try: rows=json.load(sys.stdin) or []
+          except Exception: rows=[]
+          def gid(r): return ((r.get('execution') or {}).get('workflowId')) or r.get('workflowId','?')
+          st={gid(r): str(r.get('status','')) for r in rows}
+          comp=sum('COMPLETED' in v for v in st.values())
+          fail=sum(any(x in v for x in ('FAILED','TERMINATED','CANCELED','TIMED_OUT')) for v in st.values())
+          run =sum('RUNNING' in v for v in st.values())
+          for w,v in sorted(st.items()): print('   ', w, v.replace('WORKFLOW_EXECUTION_STATUS_',''), file=sys.stderr)
+          print(f'{len(st)} {comp} {fail} {run}')
+          "
           }
 
-          rc=0
-          for node in $NODES; do
-            wait_for "${RUN_GUID}-${node}" "$node" 900 || rc=1
+          GRACE=300; MAX=4500; elapsed=0; rc=0
+          while [ $elapsed -lt $MAX ]; do
+            read -r total comp fail run < <(snapshot)
+            total=${total:-0}; comp=${comp:-0}; fail=${fail:-0}; run=${run:-0}
+            echo "  [${elapsed}s] workflows=$total completed=$comp failed=$fail running=$run"
+            if [ "$fail" -gt 0 ]; then echo "::error::a DAG workflow failed"; rc=1; break; fi
+            if [ "$total" -ge "$EXPECTED" ] && [ "$comp" -ge "$EXPECTED" ]; then echo "All $EXPECTED nodes completed."; rc=0; break; fi
+            if [ "$total" -eq 0 ] && [ "$elapsed" -ge "$GRACE" ]; then
+              echo "::error::no DAG workflows dispatched within ${GRACE}s — submit/executor or queue problem"
+              echo "--- all recent Temporal workflows (for diagnosis) ---"
+              temporal workflow list --limit 30 2>/dev/null || true
+              rc=1; break
+            fi
+            sleep 10; elapsed=$((elapsed+10))
           done
+          [ $elapsed -lt $MAX ] || { echo "::error::run did not finish within ${MAX}s"; rc=1; }
 
           echo "### AE full-DAG run \`${RUN_GUID}\`" >> "$GITHUB_STEP_SUMMARY"
           temporal workflow list --query "WorkflowId STARTS_WITH '${RUN_GUID}'" 2>/dev/null \
