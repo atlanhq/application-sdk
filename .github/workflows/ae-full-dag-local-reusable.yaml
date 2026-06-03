@@ -105,7 +105,7 @@ jobs:
 
       - name: Bring up AE stack (manifest-driven)
         id: stack
-        uses: atlanhq/application-sdk/.github/actions/ae-stack-up@main
+        uses: atlanhq/application-sdk/.github/actions/ae-stack-up@fix/ae-stack-up-local-vault
         with:
           app-name: ${{ inputs.app-name }}
           deployment: ${{ inputs.deployment }}
