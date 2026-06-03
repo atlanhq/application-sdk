@@ -78,6 +78,14 @@ class MyConnector(App):
         out = await self.{fetch_task_name}(
             {FetchTask}Input(connection_id=input.connection_id, ...)
         )
+        # If this entrypoint hands artifacts to a downstream Atlan system app
+        # (publish, lineage, quality), call App.upload() here — not from inside @task.
+        # The @task FileReference interceptor writes only to the customer-owned
+        # objectstore; App.upload() routes to atlan-objectstore in SDR deployments.
+        # Omitting this call is a silent failure: the DAG succeeds but Atlan's
+        # publish app finds nothing in its bucket. See docs/concepts/file-reference.md.
+        #
+        # await self.upload(UploadInput(local_path=out.output_path, tier=StorageTier.RETAINED))
         return {EntrypointName}Output(record_count=out.count)
 
     @task(timeout_seconds=3600, auto_heartbeat_seconds=30)

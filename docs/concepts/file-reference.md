@@ -43,6 +43,32 @@ failures.
 **Key rule:** `FileReference` is for *within-run* transfer. `App.upload()` is
 for *durable outbound* delivery.
 
+### Which store does each API write to?
+
+These two APIs route to **different object stores**:
+
+| API | Store | Who can read it |
+|-----|-------|-----------------|
+| `FileReference` (via interceptor) | `objectstore` — `infra.storage`, customer-owned | Other tasks in the same deployment |
+| `App.upload()` | `atlan-objectstore` — `infra.upstream_storage`, Atlan-owned (in SDR); falls back to `infra.storage` in local dev | Atlan system apps (publish, QI, lineage) and the Atlan UI |
+
+The activity interceptor's persist step always writes `FileReference` objects to
+`infra.storage` (`objectstore`). This is intentional: intermediate task outputs
+stay inside the customer's deployment perimeter and never cross into Atlan's
+infrastructure unless the connector explicitly decides to hand them off.
+
+`App.upload()` uses `upstream_storage or storage`. In SDR deployments
+`upstream_storage` is the `atlan-objectstore` Dapr binding (pointing to
+`{tenant}/api/blobstorage`), so `App.upload()` routes to Atlan's S3.
+
+**Consequence for connector authors:** if your connector produces artifacts that
+Atlan's publish app must consume, you must call `App.upload()` explicitly from
+`run()` — the interceptor alone is not sufficient. Omitting the explicit call
+produces a silent failure: the DAG runs to completion but the publish app finds
+nothing in Atlan's S3 and publishes zero assets. See
+[ADR-0014](../adr/0014-two-store-storage-architecture.md) for the full
+rationale.
+
 ---
 
 ## Part 1 — FileReference
@@ -173,7 +199,8 @@ return BookmarkOutput(
 #### Persist (output side)
 
 After your `@task` returns an Output containing an ephemeral `FileReference`
-(one with `local_path` set but `is_durable=False`), the SDK automatically:
+(one with `local_path` set but `is_durable=False`), the SDK automatically
+uploads it to **`infra.storage`** (`objectstore` — the deployment store):
 
 1. Computes the storage path from the tier prefix.
 2. Uploads the local file (or all files in a local directory) to the store.

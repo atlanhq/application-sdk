@@ -285,7 +285,7 @@ Wire them into extract/transform tasks on your `App` subclass:
 ```python
 # app/app.py
 from application_sdk.app import App, task
-from application_sdk.contracts import Input, Output, FileReference
+from application_sdk.contracts import Input, Output, FileReference, UploadInput, StorageTier
 from app.api_types import TopicRecord
 from app.asset_mapper import map_topic
 
@@ -314,7 +314,30 @@ class MyConnector(App):
         local_path = "/tmp/topics_assets.jsonl"
         write_jsonl(local_path, assets)  # your serialisation helper
         return TransformOutput(file=FileReference.from_local(local_path))  # framework auto-uploads
+
+    async def run(self, input: MyInput) -> MyOutput:
+        fetch_out = await self.extract_topics(input)
+        transform_out = await self.transform_topics(TransformInput(file=fetch_out.file))
+
+        # Required explicit hand-off: routes through atlan-objectstore (Atlan-owned) in SDR
+        # so the publish app can read it. The activity interceptor only writes FileReferences
+        # to the customer-owned objectstore (infra.storage). Omitting this call produces a
+        # silent failure in SDR — the DAG succeeds but nothing is published. See ADR-0014.
+        await self.upload(
+            UploadInput(
+                local_path=transform_out.file.local_path,
+                tier=StorageTier.RETAINED,
+            )
+        )
+        return MyOutput(...)
 ```
+
+> **Two-store rule:** `FileReference` + the activity interceptor = **task-to-task** durability,
+> customer-owned `objectstore`. `App.upload()` = **app-to-app** hand-off, Atlan-owned
+> `atlan-objectstore` in SDR. These are two distinct stores. Forgetting `App.upload()` is a
+> silent failure — all activities succeed but Atlan's publish app sees nothing. See
+> [ADR-0014](../adr/0014-two-store-storage-architecture.md) and
+> [file-reference.md](../concepts/file-reference.md).
 
 ### Rules for mapper functions
 

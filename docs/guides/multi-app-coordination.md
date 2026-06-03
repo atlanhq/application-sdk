@@ -124,6 +124,8 @@ class MyExtractor(App):
 
 The downstream app receives the `FileReference.storage_path` (object-store path) via the AE args substitution and downloads it before processing.
 
+When `atlan-objectstore` is bound, `App.upload()` writes to Atlan's S3 so downstream AE nodes (publish, lineage) can read it. Without the explicit `self.upload()` call, downstream nodes see nothing — the DAG succeeds but the publish app finds no artifact in its bucket. See [ADR-0014](../adr/0014-two-store-storage-architecture.md).
+
 ---
 
 ## Observability Across Apps

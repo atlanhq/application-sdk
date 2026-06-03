@@ -11,7 +11,7 @@ A connector that:
 1. Authenticates with an API using an API key
 2. Fetches entities (e.g. tables, pipelines, dashboards)
 3. Writes JSONL output to object storage
-4. Uploads the output to Atlan via `upload_to_atlan`
+4. Uploads the output to Atlan via `App.upload()`
 
 ## Project Setup
 
@@ -137,12 +137,11 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 
 from application_sdk.app import App, task
+from application_sdk.contracts import UploadInput, StorageTier
 from application_sdk.credentials import CredentialResolver, api_key_ref
 from application_sdk.infrastructure import get_infrastructure
-from application_sdk.storage import upload_file
 
 from app.clients import MyApiClient
 from app.contracts import (
@@ -163,6 +162,17 @@ class MyConnectorApp(App):
                 days_back=input.days_back,
             )
         )
+        # Explicit hand-off to Atlan: routes through atlan-objectstore (Atlan-owned)
+        # in SDR deployments so the publish app can read it. The activity interceptor
+        # only writes FileReferences to the customer-owned objectstore (infra.storage).
+        # Omitting this call produces a silent failure in SDR — the DAG succeeds but
+        # the publish app finds nothing. See ADR-0014.
+        await self.upload(
+            UploadInput(
+                local_path=fetch_out.output_path,
+                tier=StorageTier.RETAINED,
+            )
+        )
         return ExtractionOutput(
             output_path=fetch_out.output_path,
             record_count=fetch_out.record_count,
@@ -181,32 +191,24 @@ class MyConnectorApp(App):
             base_url=raw.get("base_url", "https://api.example.com"),
         )
 
+        os.makedirs(input.output_path, exist_ok=True)
         output_file = os.path.join(input.output_path, "entities.jsonl")
         record_count = 0
 
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".jsonl", delete=False
-            ) as tmp:
+            with open(output_file, "w") as f:
                 page = 1
                 while True:
                     entities = await client.get_entities(page=page)
                     if not entities:
                         break
                     for entity in entities:
-                        # Transform to Atlan entity format
                         atlan_entity = _transform_entity(entity)
-                        tmp.write(json.dumps(atlan_entity) + "\n")
+                        f.write(json.dumps(atlan_entity) + "\n")
                         record_count += 1
-                    page += 1
-
-                tmp_path = tmp.name
-
-            await upload_file(output_file, tmp_path)
+                page += 1
         finally:
             await client.close()
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
 
         return FetchEntitiesOutput(
             output_path=input.output_path,
@@ -215,7 +217,6 @@ class MyConnectorApp(App):
 
 
 def _transform_entity(raw: dict) -> dict:
-    """Transform a raw API entity to Atlan entity format."""
     return {
         "typeName": "Table",
         "attributes": {
@@ -226,7 +227,12 @@ def _transform_entity(raw: dict) -> dict:
     }
 ```
 
-The connector above inherits directly from `App`. For connectors that need to push output to Atlan's upstream store, `BaseMetadataExtractor` (a subclass of `App`) provides a built-in `upload_to_atlan` task that handles the transfer. Both patterns are supported; the direct `App` approach shown here gives more explicit control.
+> **Silent-failure rule:** `App.upload()` in `run()` is required for any data that Atlan system apps
+> (publish, QI, lineage) must consume. The activity interceptor only writes `FileReference` objects
+> to the **customer-owned** `objectstore` (`infra.storage`). In SDR deployments, `App.upload()`
+> routes through `atlan-objectstore` (`infra.upstream_storage`, Atlan-owned). Connectors that omit
+> this call produce a silent failure — the DAG completes normally but the publish app finds nothing
+> in Atlan's bucket. See [ADR-0014](../adr/0014-two-store-storage-architecture.md).
 
 ## Local Development
 

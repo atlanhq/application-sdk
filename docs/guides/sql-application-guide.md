@@ -263,6 +263,7 @@ The core of your connector is a `SqlMetadataExtractor` subclass. Override `@task
 ```python
 # app/connector.py
 import asyncio
+from application_sdk.contracts import UploadInput, StorageTier
 from application_sdk.templates import SqlMetadataExtractor
 from application_sdk.templates.contracts import (
     ExtractionInput,
@@ -390,6 +391,16 @@ class PostgresApp(SqlMetadataExtractor):
             self.fetch_columns(task_input),
         )
 
+        # Explicit hand-off to Atlan: routes through atlan-objectstore in SDR so
+        # the publish app can read it. The interceptor only writes to infra.storage
+        # (customer-owned). Omitting this call is a silent failure. See ADR-0014.
+        await self.upload(
+            UploadInput(
+                local_path=input.output_path,
+                tier=StorageTier.RETAINED,
+            )
+        )
+
         return ExtractionOutput(
             databases_extracted=db_result.total_record_count,
             schemas_extracted=schema_result.total_record_count,
@@ -404,7 +415,8 @@ Each `@task` method becomes a Temporal activity. The `run()` method orchestrates
 
 1. **Fetch phase** --- fetch databases, schemas, tables, and columns **in parallel** via `asyncio.gather`
 2. **Transform phase** --- map raw results to pyatlan entities using the asset mapper
-3. **Return** --- aggregate counts into an `ExtractionOutput`
+3. **Upload** --- `App.upload()` pushes the final output to `atlan-objectstore` (Atlan-owned) so the publish app can index it. This explicit call is required — the activity interceptor only writes `FileReference` objects to the customer-owned `objectstore`. See [ADR-0014](../adr/0014-two-store-storage-architecture.md).
+4. **Return** --- aggregate counts into an `ExtractionOutput`
 
 ### Available task methods
 
@@ -492,17 +504,19 @@ class FetchDatabasesOutput(Output):
 
 ### FileReference for large data
 
-When a task produces data too large for a Temporal payload, use `FileReference`. The SDK uploads it to object storage automatically:
+When a task produces data too large for a Temporal payload, use `FileReference`. The SDK uploads it to the **customer-owned deployment store** (`objectstore`) automatically when the task returns:
 
 ```python
 from application_sdk.contracts import FileReference
 
 class FetchOutput(Output):
-    results: FileReference  # automatically uploaded on task output
+    results: FileReference  # automatically uploaded on task output (to infra.storage)
 
 class ProcessInput(Input):
     results: FileReference  # automatically downloaded on task input
 ```
+
+`FileReference` is for **task-to-task** transfer within a run. To hand off artifacts to Atlan system apps (publish, QI, lineage), call `App.upload()` explicitly from `run()` — the interceptor's auto-upload only writes to the customer-owned store and is not visible to Atlan. See [file-reference.md](../concepts/file-reference.md) and [ADR-0014](../adr/0014-two-store-storage-architecture.md).
 
 ## Entry Point
 

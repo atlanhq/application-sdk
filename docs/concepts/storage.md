@@ -4,6 +4,50 @@ The SDK uses `obstore` for all object storage operations, bypassing the Dapr sid
 
 ---
 
+## Two-Store Architecture
+
+The SDK maintains two distinct object-store references, each serving a different
+purpose:
+
+| Dapr component | SDK reference | Owner | Purpose |
+|----------------|--------------|-------|---------|
+| `objectstore` | `infra.storage` | Customer / deployment | Task-to-task `FileReference` durability within a run |
+| `atlan-objectstore` | `infra.upstream_storage` | Atlan | Final artifact hand-off to Atlan system apps (publish, QI, lineage) |
+
+**Task-to-task transfers** use `infra.storage`. The activity interceptor
+automatically uploads every `FileReference` returned from a `@task` to this
+store, keeping all intermediate data inside the customer's deployment perimeter.
+`objectstore` can be any backend the customer controls (S3, Azure Blob, GCS,
+local disk) — Atlan's infrastructure never reads from it.
+
+**App-to-app hand-off** uses `infra.upstream_storage`. When a connector's
+extract activity produces artifacts that Atlan's publish or lineage apps must
+consume, the connector calls `App.upload()` explicitly. In SDR deployments
+`upstream_storage` points to `atlan-objectstore` (Atlan's S3-compatible
+blobstorage proxy); in local dev it is `None` and `App.upload()` falls back to
+the deployment store.
+
+```
+Connector run (customer's cluster)
+  @task extract  ──► FileReference ──► objectstore (infra.storage, customer-owned)
+  @task transform ──► FileReference ──► objectstore
+  run()          ──► App.upload()  ──► atlan-objectstore (infra.upstream_storage, Atlan-owned)
+                                         │
+                                         ▼
+                                  Atlan publish app reads → Atlas
+```
+
+**The key rule:** rely on the interceptor for intra-run durability; call
+`App.upload()` explicitly for any data that must cross into Atlan's
+infrastructure. Relying on the interceptor alone for the app-to-app
+hand-off produces a silent failure — all DAG nodes succeed but the publish
+app finds nothing to publish.
+
+See [ADR-0014](../adr/0014-two-store-storage-architecture.md) for the full
+rationale, fallback behaviour, and consequences.
+
+---
+
 ## Basic Operations
 
 ```python

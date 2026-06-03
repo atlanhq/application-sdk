@@ -53,7 +53,7 @@ class ClickHouseWorkflow(IncrementalSQLMetadataExtractionWorkflow):
             activities.prepare_column_extraction_queries,
             activities.execute_single_column_batch,
             activities.write_current_state,
-            activities.upload_to_atlan,
+            activities.upload_to_atlan,  # v2-native activity; v3 equivalent: self.upload(UploadInput(...))
             activities.update_incremental_marker,
             activities.save_workflow_state,
         ]
@@ -89,7 +89,7 @@ The `run()` method in `IncrementalSQLMetadataExtractionWorkflow` executes:
 │  super().run(workflow_config)                             │
 │  → fetch_databases → fetch_schemas → fetch_tables        │
 │  → fetch_columns (SKIPPED if incremental)                │
-│  → fetch_procedures → transform_data → upload_to_atlan   │
+│  → fetch_procedures → transform_data → App.upload()       │
 ├─────────────────────────────────────────────────────────┤
 │ Phase 3: Incremental Column Extraction                   │
 │          (only if is_incremental_ready() == True)        │

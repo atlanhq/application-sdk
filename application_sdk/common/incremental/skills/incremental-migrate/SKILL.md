@@ -289,7 +289,7 @@ Execute each brick fully before starting the next. Halt on failure and report.
    - `read_marker` -- calls SDK `fetch_marker_from_storage` with configurable prepone
    - `read_previous_<entity>_list` -- downloads previous scope from S3 via ObjectStore
    - `persist_incremental_state` -- writes marker + entity lists + cache to S3
-     (GUARD-IMPL-01: this MUST be the last activity, after upload_to_atlan)
+     (GUARD-IMPL-01: this MUST be the last activity, after App.upload())
 
    **Modified** `<app_path>/app/models.py`:
    - `incremental_enabled: bool = False`
@@ -329,7 +329,7 @@ Execute each brick fully before starting the next. Halt on failure and report.
      - Modify expensive extraction to use only changed entity IDs
      - `backfill_unchanged_<entities>` after fresh extraction
    - Add short-circuit: if 0 entities changed, skip expensive extraction entirely
-   - Add `persist_incremental_state` AFTER `upload_to_atlan` (GUARD-IMPL-01)
+   - Add `persist_incremental_state` AFTER `App.upload()` (GUARD-IMPL-01)
    - Register all new activities in `get_activities()`
    - Update `<app_path>/app/templates/workflow.json` to add incremental UI toggles
 5. Verify the workflow modifications.

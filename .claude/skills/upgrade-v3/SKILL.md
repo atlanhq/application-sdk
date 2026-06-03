@@ -883,6 +883,13 @@ If you find yourself reaching for threads in a hot loop, reconsider — fully-as
 
 ### `self.upload()` + `FileReference` — never hand-roll uploads
 
+**Two-store architecture.** The SDK has two distinct object stores:
+
+- **`objectstore`** (Dapr component, customer-owned) — the **deployment store** (`infra.storage`). The `FileReference` activity interceptor auto-uploads task outputs here. Task-to-task only.
+- **`atlan-objectstore`** (Dapr component, Atlan-owned) — the **upstream store** (`infra.upstream_storage`). Only present in SDR deployments. This is where Atlan system apps (publish, lineage, quality) look for artifacts. `App.upload()` routes here automatically when the component is bound; falls back to `objectstore` in local dev.
+
+**Silent-failure rule.** If a connector returns a `FileReference` from a `@task` but never calls `App.upload()` from `run()`, the DAG completes successfully but the publish app finds nothing in Atlan's bucket. The Temporal UI shows no error. Always call `App.upload()` from `run()` as the final publish step.
+
 Each fetch task writes to a local file and returns a typed `FileReference` on its output. For example, in a SQL connector:
 
 ```python
@@ -895,13 +902,21 @@ async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
     )
 ```
 
-The task names, input/output contracts, and write helper differ per connector type; the `FileReference` shape is the same for all. Downstream tasks accept `FileReference` on their typed input and read via `input.tables_file.local_path`. As the final app step prior to handing off to the Publish (or other) system app, explicitly call `self.upload()` on the final output:
+The task names, input/output contracts, and write helper differ per connector type; the `FileReference` shape is the same for all. Downstream tasks accept `FileReference` on their typed input and read via `input.tables_file.local_path`. As the final app step prior to handing off to the Publish (or other) system app, explicitly call `self.upload()` from `run()`:
 
 ```python
-await self.upload(UploadInput(local_path=output_file_path, storage_path=storage_path))
+await self.upload(UploadInput(local_path=output_file_path, tier=StorageTier.RETAINED))
 ```
 
-Note that this is NOT necessary inside each task — task-to-task uploading/downloading of files within the same app is handled _automatically_ purely by virtue of a `FileReference` being included in the Output of a task (automatically uploaded, if not already in the object store) or the Input of a task (automatically downloaded, if not already present in the worker).
+**StorageTier choices** for `UploadInput`:
+
+| Tier | Prefix | Cleanup |
+|------|--------|---------|
+| `StorageTier.TRANSIENT` | `file_refs/{uuid}/` | Auto-deleted after run |
+| `StorageTier.RETAINED` | `artifacts/apps/{app}/workflows/{wf}/{run}/` | Kept; default for published artifacts |
+| `StorageTier.PERSISTENT` | `persistent-artifacts/apps/{app}/` | Never deleted; use for long-term state |
+
+Note that `App.upload()` is NOT necessary inside each `@task` — task-to-task uploading/downloading of files within the same app is handled _automatically_ purely by virtue of a `FileReference` being included in the Output of a task (automatically uploaded to `objectstore`, if not already there) or the Input of a task (automatically downloaded, if not already present on the worker).
 
 **Selective materialization with `Lazy()`:** If a task declares a `FileReference` input field it doesn't always need (e.g. a heavy artifact only read under certain conditions), mark it `Lazy` to skip the automatic pre-download:
 
@@ -921,7 +936,7 @@ Call `await fetch(ref)` from `application_sdk.storage.reference` inside the task
 Reasons every connector must use this shape:
 
 - `self.upload()` is an SDK `@task` with a dedicated retry policy and activity-level recording. A worker swap mid-run will not re-upload; a hand-rolled `obstore.put` will.
-- The "shared `output_path` directory" + `upload_to_atlan()` scan-the-directory pattern from v2 is gone. Each task owns its file.
+- The "shared `output_path` directory" + `upload_to_atlan()` (v2 deprecated) scan-the-directory pattern is gone. Each task owns its file.
 - AE downstream nodes (`qi`, `lineage-app`, `publish`) JSONPath against `FileReference` outputs, not directory prefixes.
 
 **Forbidden:** `obstore.*` calls in app code, custom `JsonFileWriter` / `ParquetFileWriter` instantiation, calling `application_sdk.execution._temporal.activity_utils.get_object_store_prefix` (or anything else from a `_`-prefixed SDK module).

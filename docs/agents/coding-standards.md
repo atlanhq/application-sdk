@@ -72,6 +72,35 @@ Use `FileReference` for any data that cannot fit in Temporal's 2 MB payload limi
 See `docs/concepts/file-reference.md` for the full guide: decision matrix, lifecycle,
 the `Lazy()` marker for selective materialization, dedup behaviour, and observability events.
 
+### App-to-app hand-off (required for SDR deployments)
+
+`FileReference` auto-durability writes to the **customer-owned `objectstore`**
+(`infra.storage`) — it is designed for task-to-task data passing within a single run.
+
+**Silent-failure rule:** if a connector returns a `FileReference` from a `@task` but
+never calls `App.upload()` from `run()`, the DAG completes successfully but the publish
+app finds nothing in Atlan's bucket. This produces no error — the failure is invisible
+in the Temporal UI.
+
+To hand off artifacts to Atlan system apps (publish, lineage, quality), call
+`App.upload()` explicitly from `run()` — it routes to the Atlan-owned
+`atlan-objectstore` (`infra.upstream_storage`) in SDR deployments:
+
+```python
+from application_sdk.contracts import UploadInput, StorageTier
+
+async def run(self, input: MyInput) -> MyOutput:
+    fetch_out = await self.fetch_data(input)
+    # Required: push artifact to Atlan's upstream store
+    await self.upload(
+        UploadInput(local_path=fetch_out.output_path, tier=StorageTier.RETAINED)
+    )
+    return fetch_out
+```
+
+See [file-reference.md § App-to-app hand-off](../concepts/file-reference.md) and
+[ADR-0014](../adr/0014-two-store-storage-architecture.md) for the full rationale.
+
 ## Replacing `ParquetFileWriter` / `JsonFileWriter` (v4.0 removal path)
 
 `ParquetFileWriter`, `JsonFileWriter`, `ParquetFileReader`, and `JsonFileReader`

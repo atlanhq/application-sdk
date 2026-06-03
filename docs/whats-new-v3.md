@@ -270,6 +270,16 @@ class MyConnector(App):
         return await self.process(ProcessInput(results=fetch_out.results))
 ```
 
+> **Two-store routing.** `FileReference` auto-durability writes to the customer-owned
+> `objectstore` (`infra.storage`) — intended for task-to-task data passing within a run.
+> To hand off artifacts to Atlan system apps (publish, lineage, quality), call
+> `App.upload()` explicitly from `run()` — it routes to the Atlan-owned
+> `atlan-objectstore` (`infra.upstream_storage`) in SDR deployments. Relying on the
+> `FileReference` interceptor alone for the Atlan hand-off is a silent failure in SDR:
+> the DAG succeeds but the publish app finds nothing in its bucket.
+> See [ADR-0014](adr/0014-two-store-storage-architecture.md) and
+> [File Reference guide](concepts/file-reference.md).
+
 #### Contract evolution rules
 
 Because Temporal may replay a workflow with a payload serialised before you deployed a new
@@ -314,13 +324,17 @@ class MyConnector(App):
 
         # Secret store
         api_key = await self.context.get_secret("my-api-key")
-
-        # Object storage (upload/download via built-in App tasks)
-        result = await self.upload(UploadInput(
-            local_path="/tmp/data.parquet",
-            storage_path="output/data.parquet",
-        ))
         ...
+
+    async def run(self, input: FetchInput) -> FetchOutput:
+        fetch_out = await self.fetch(input)
+        # App.upload() routes to Atlan's upstream store (atlan-objectstore in SDR).
+        # Call it from run(), not from within a @task.
+        await self.upload(UploadInput(
+            local_path="/tmp/data.parquet",
+            tier=StorageTier.RETAINED,
+        ))
+        return fetch_out
 ```
 
 **The key improvements:**
@@ -554,7 +568,7 @@ from application_sdk.credentials import AtlanClientMixin, atlan_api_token_ref
 
 class MyConnector(AtlanClientMixin, App):
     @task
-    async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
+    async def call_atlan_api(self, input: MyInput) -> MyOutput:
         ref = atlan_api_token_ref("atlan-token")
         client = await self.get_or_create_async_atlan_client(ref)
         # client is an AsyncAtlanClient, cached per run
