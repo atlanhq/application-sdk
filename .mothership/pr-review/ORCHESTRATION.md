@@ -66,6 +66,19 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
    ```
 
+4b. **Reset per-run review artifacts** — these files are load-bearing signals
+    across later phases, so never let a prior iteration in the same sandbox
+    affect the current verdict or public post:
+    ```bash
+    rm -f /tmp/TOOLKIT_ROVER_NOTE.md
+    : > /tmp/TOOLKIT_VALIDATION.md
+    : > /tmp/TOOLKIT_PR_ARTIFACTS.txt
+    : > /tmp/TOOLKIT_CHANGED_FILES.txt
+    : > /tmp/TOOLKIT_CONSUMERS.md
+    mkdir -p /tmp/inline-comments
+    find /tmp/inline-comments -type f \( -name '*.md' -o -name '*.json' \) -delete
+    ```
+
 5. **Stale SHA guard** — bail if the PR has moved since dispatch:
    ```bash
    CURRENT_SHA=$(jq -r '.headRefOid' /tmp/PR.json)
@@ -788,7 +801,7 @@ explicit confirmation rather than absence of a complaint.
 |---|---|---|
 | BLOCKED | G1/G2/G3/G5 violation | REJECT |
 | NEEDS_HUMAN | DESIGN_CHANGE scope | REQUEST_CHANGES |
-| NEEDS_HUMAN | `/tmp/TOOLKIT_ROVER_NOTE.md` exists or `/tmp/TOOLKIT_VALIDATION.md` has any mandatory toolkit compatibility check with status `needs rerun` | REQUEST_CHANGES |
+| NEEDS_HUMAN | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit`, and non-empty `/tmp/TOOLKIT_ROVER_NOTE.md` exists or `/tmp/TOOLKIT_VALIDATION.md` has any mandatory toolkit compatibility check with status `needs rerun` | REQUEST_CHANGES |
 | NEEDS_FIXES | Critical, G4/G6, **any Important**, CI failing, **OR §2f-bis title mismatch** | REQUEST_CHANGES |
 | READY_TO_MERGE | **0 Critical AND 0 Important**, CI passing, **AND §2f-bis title aligned** | APPROVE |
 
@@ -835,6 +848,11 @@ in the findings array — put those in the summary or inline comment body instea
 For BLOCKING/CRITICAL/HIGH findings, create inline comments:
 - `file` and `line` must be in DIFF.patch (added lines only)
 - Max 15 inline comments
+- Write each inline body to `/tmp/inline-comments/<n>.md` and the matching
+  path/line metadata to `/tmp/inline-comments/<n>.json` before Phase 3f. The
+  staged markdown file is the only source allowed for the posted `body`.
+  Do not post from an in-memory body string for toolkit reviews; that bypasses
+  the redaction gate.
 - Format:
   ```
   **[SEVERITY]** [TAG] — description
@@ -1065,6 +1083,10 @@ gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 # specific path + line in the diff. The formal verdict review
 # (--approve | --comment) is already submitted in §3c — do NOT submit
 # a second `gh pr review` here.
+#
+# For toolkit reviews, every inline body must already exist under
+# /tmp/inline-comments/*.md and must have passed the redaction gate above.
+# Post inline comments by reading the body from that staged file only.
 
 # Commit status — set the sdk-review check explicitly.
 gh api "repos/$REPO/statuses/$HEAD_SHA" \
