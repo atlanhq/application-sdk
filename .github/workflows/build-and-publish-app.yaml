@@ -661,8 +661,8 @@ jobs:
           R=/tmp/gitleaks-report.json
           COUNT=$(jq 'length' "$R" 2>/dev/null || echo "?")
           # Top 10 locations only — the report's Secret/Match fields are never read.
-          LOCS=$(jq -r '.[] | "• `\(.File):\(.StartLine)` (rule: \(.RuleID))"' "$R" 2>/dev/null | head -10)
-          TEXT=$(printf ':no_entry: *Publish BLOCKED — hardcoded secret(s)* in *%s*\ngitleaks found %s secret(s) in source. Remove and *rotate* them. Locations only (values withheld):\n%s\n<%s|View run>' \
+          LOCS=$(jq -r '.[] | "• `\(.File):\(.StartLine)` — \(.RuleID)"' "$R" 2>/dev/null | head -10)
+          TEXT=$(printf ':no_entry: *Publish BLOCKED — hardcoded secret(s)*\n*App repo:* `%s`\ngitleaks found %s secret(s) in source. Remove and *rotate* them — locations below (values withheld):\n%s\n<%s|View workflow run>' \
             "$REPO" "$COUNT" "$LOCS" "$RUN_URL")
           jq -n --arg t "$TEXT" '{text: $t}' \
             | curl -sS --fail --max-time 10 -X POST -H 'Content-type: application/json' --data @- "$WEBHOOK" \
@@ -750,8 +750,8 @@ jobs:
           esac
           V=/tmp/leak-gate-verdict.json
           # Top 10 locations only — never secret values.
-          LOCS=$(jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "• `\(.file):\(.line)` (\(.pattern_id), \(.severity))"' "$V" | head -10)
-          TEXT=$(printf ':warning: *Credential-leak warnings* in *%s* (publish NOT blocked)\n%s critical, %s high reaching log/CLI sinks.\n%s\n<%s|View run>' \
+          LOCS=$(jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "• `\(.file):\(.line)` — \(.pattern_id) (\(.severity))"' "$V" | head -10)
+          TEXT=$(printf ':warning: *Credential-leak warning — publish NOT blocked*\n*App repo:* `%s`\n%s critical, %s high credential(s) reaching log/CLI sinks — locations below (values withheld):\n%s\n<%s|View workflow run>' \
             "$REPO" "$CRIT" "$HIGH" "$LOCS" "$RUN_URL")
           # jq builds the JSON so the message is safely escaped. --fail/--max-time
           # so a hung Slack endpoint can't stall or fail the job (warn-only).
