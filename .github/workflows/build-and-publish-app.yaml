@@ -576,14 +576,17 @@ jobs:
 
       # ── Layer 1: deterministic hardcoded-secret scan (gitleaks) ───────────────
       - name: Install gitleaks
-        env:
-          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
           set -euo pipefail
           GITLEAKS_VERSION=8.21.2
+          # Pin the artifact by SHA-256 (not just version): the checksum is
+          # hardcoded here, so a tampered release asset fails verification
+          # rather than being trusted because it sits at the right URL.
+          GITLEAKS_SHA256=5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
           curl -sSL \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version

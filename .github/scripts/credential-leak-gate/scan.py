@@ -194,7 +194,7 @@ def _strip_comment(line: str, ext: str) -> str:
     return line
 
 
-def _referenced_as_code(line: str, var_norm: str) -> bool:
+def _referenced_as_code(line: str) -> bool:
     """True when the credential identifier is used as a value/variable, not just
     as a word inside a log-message string literal."""
     if INTERP.search(line):
@@ -292,7 +292,7 @@ def scan(root: str) -> dict:
                 if pattern_id not in (
                     "shell-echo",
                     "helm-set",
-                ) and not _referenced_as_code(code, var_norm):
+                ) and not _referenced_as_code(code):
                     break
                 counter += 1
                 sev = _severity(var_norm, pattern_id, is_test)
