@@ -434,6 +434,27 @@ jobs:
           sudo mv /tmp/pkl /usr/local/bin/pkl
           pkl --version
 
+      # Most app `poe generate` tasks invoke `pkl eval --ca-certificates
+      # ~/.pkl-ca-bundle.pem ...` — that path is Atlan's local-dev convention
+      # (per atlan-cli's defaultCert and ~20 connector pyproject.toml files)
+      # for honoring the corporate proxy/VPN CA. GitHub runners have no such
+      # file, so pkl fails with "Cannot find CA certificate file" BEFORE it
+      # can resolve `@app-contract-toolkit/NativeApp.pkl` over HTTPS. Seed
+      # ~/.pkl-ca-bundle.pem from the runner's system trust store so every
+      # app's `--ca-certificates ~/.pkl-ca-bundle.pem` resolves to a valid
+      # bundle in CI without app-side changes.
+      - name: Seed pkl CA bundle from system trust store
+        if: steps.app_install.outcome == 'success'
+        run: |
+          set -euo pipefail
+          SYSTEM_CA="/etc/ssl/certs/ca-certificates.crt"
+          if [ ! -f "$SYSTEM_CA" ]; then
+            echo "::warning::System CA bundle $SYSTEM_CA not found; skipping pkl CA seed."
+            exit 0
+          fi
+          cp "$SYSTEM_CA" "$HOME/.pkl-ca-bundle.pem"
+          echo "Seeded $HOME/.pkl-ca-bundle.pem from $SYSTEM_CA"
+
       # ── 3. Contract drift (enforced) ─────────────────────────────────────────
       # Failure here exits non-zero and (via the standard step-fail cascade)
       # also fails the job. Unit tests + coverage below use `always() &&` so
