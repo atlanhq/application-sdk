@@ -419,6 +419,21 @@ jobs:
         working-directory: app
         run: uv sync --all-extras --frozen
 
+      # PKL is required by pkl-based apps' `poe generate` (run in the Contract
+      # drift step below, which does `rm -rf app/generated && pkl eval ...`).
+      # The contract-toolkit-* workflows install it but this Certify job did
+      # not, so for pkl apps `poe generate` failed with `pkl: not found` AFTER
+      # wiping app/generated — breaking the enforced unit-test step.
+      - name: Install PKL
+        if: steps.app_install.outcome == 'success'
+        run: |
+          set -euo pipefail
+          PKL_VERSION="0.27.2"
+          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+          chmod +x /tmp/pkl
+          sudo mv /tmp/pkl /usr/local/bin/pkl
+          pkl --version
+
       # ── 3. Contract drift ─────────────────────────────────────────────────────
       - name: "Contract drift — poe generate must be a no-op"
         id: contract_drift
