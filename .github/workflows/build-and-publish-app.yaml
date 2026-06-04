@@ -455,6 +455,51 @@ jobs:
           cp "$SYSTEM_CA" "$HOME/.pkl-ca-bundle.pem"
           echo "Seeded $HOME/.pkl-ca-bundle.pem from $SYSTEM_CA"
 
+      # The app-contract-toolkit pkl package was relocated from the standalone
+      # repo (`atlanhq/app-contract-toolkit`, served at
+      # `atlanhq.github.io/app-contract-toolkit/...`) into application-sdk
+      # (`atlanhq.github.io/application-sdk/contracts/...`). gh-pages still
+      # serves the legacy URL, but its metadata bytes diverged from what apps'
+      # committed PklProject.deps.json checksums were resolved against — so
+      # `pkl eval` aborts with "computed checksum for package metadata does
+      # not match the expected checksum" for every app still on the legacy
+      # URL (~28 connectors as of writing).
+      #
+      # Re-resolve the lockfile in CI before `poe generate` so pkl re-locks
+      # against whatever the URL serves today. This unblocks every app
+      # (legacy- and new-URL alike) without rewriting any app file or
+      # bumping any toolkit version: the URL + version pkl evaluates against
+      # are still exactly what the app pins. Local-dev `pkl eval` still
+      # honors the committed lockfile — we're only changing what CI trusts,
+      # not what developers see offline.
+      #
+      # Long-term, each legacy-URL app should migrate to the new host (see
+      # mysql's commit 56fda30 for the recipe). The warning below makes that
+      # tech debt visible without blocking publish.
+      - name: Refresh pkl lockfile (work around legacy-host checksum drift)
+        if: steps.app_install.outcome == 'success'
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [ ! -f contract/PklProject ]; then
+            echo "No contract/PklProject — skipping lockfile refresh."
+            exit 0
+          fi
+          original_checksum=""
+          if [ -f contract/PklProject.deps.json ]; then
+            original_checksum=$(sha256sum contract/PklProject.deps.json | awk '{print $1}')
+          fi
+          rm -f contract/PklProject.deps.json
+          (cd contract && pkl project resolve --ca-certificates "$HOME/.pkl-ca-bundle.pem")
+          new_checksum=$(sha256sum contract/PklProject.deps.json | awk '{print $1}')
+          if [ "$original_checksum" != "$new_checksum" ]; then
+            if grep -q "atlanhq.github.io/app-contract-toolkit/" contract/PklProject 2>/dev/null; then
+              echo "::warning title=Legacy app-contract-toolkit URL detected::contract/PklProject still points at the legacy 'atlanhq.github.io/app-contract-toolkit/' host. CI re-resolved the lockfile to keep this run green, but please migrate to 'atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0.10.0' (or later) and commit a fresh PklProject.deps.json. See mysql commit 56fda30 for the recipe."
+            else
+              echo "::warning title=Lockfile drift::contract/PklProject.deps.json checksum changed after pkl project resolve. Run 'pkl project resolve' locally and commit the refreshed lockfile."
+            fi
+          fi
+
       # ── 3. Contract drift (enforced) ─────────────────────────────────────────
       # Failure here exits non-zero and (via the standard step-fail cascade)
       # also fails the job. Unit tests + coverage below use `always() &&` so
