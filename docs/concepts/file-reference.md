@@ -104,7 +104,7 @@ class FileReference(BaseModel, frozen=True):
     storage_path: str | None = None    # object-store key (set after persist)
     is_durable: bool = False           # True once uploaded to the store
     tier: StorageTier = StorageTier.TRANSIENT
-    file_count: int | None = None      # set for directories; number of files
+    file_count: int = 1                # number of files; >1 for directory uploads
     auto_materialize: bool = True      # False = SDK never touches this ref
 ```
 
@@ -359,57 +359,65 @@ await self.upload(input: UploadInput) -> UploadOutput
 
 ```python
 class UploadInput(BaseModel):
-    local_path: str                            # required: path to the file on disk
+    local_path: str = ""                       # path to the file or directory on disk
     tier: StorageTier = StorageTier.RETAINED   # where to store it
     storage_path: str | None = None            # override the full destination key
     storage_subdir: str | None = None          # append a subdir under the run prefix
     skip_if_exists: bool = False               # skip upload when remote SHA-256 matches
+    raise_on_empty: bool = False               # raise if the upload produces 0 files
 ```
 
 | Field | Required | Description |
 |---|---|---|
-| `local_path` | Yes | Absolute path to the file to upload. |
+| `local_path` | Yes | Path to the file or directory to upload. Defaults to `""` (must be set before calling `App.upload()`). |
 | `tier` | No (default `RETAINED`) | Tier that controls the destination prefix and cleanup policy. |
 | `storage_path` | No | Fully-qualified destination key. Overrides the auto-generated path. Use this when you need an exact fixed path (e.g. `argo-artifacts/spec.json`). |
 | `storage_subdir` | No | Subdirectory appended under the run prefix. Useful for grouping related uploads without spelling out the full path. |
 | `skip_if_exists` | No (default `False`) | When `True`, skip uploading files whose SHA-256 already matches the stored `{key}.sha256` sidecar. Useful for retried tasks and idempotent re-uploads. |
+| `raise_on_empty` | No (default `False`) | When `True`, raise `StorageEmptyUploadError` if the upload completes with zero files (e.g. `local_path` pointed at an empty directory). Leave `False` for incremental extractors where a quiet run legitimately produces no output; set `True` when zero files indicates a bug. |
 
 ### Path Computation
 
 When `storage_path` is **not** set, the destination key is computed as:
 
 ```
-{run_prefix}/{tier_subdir}/{filename}
+{app_prefix}/{filename}
 ```
 
-Where `run_prefix` is:
+Where `app_prefix` depends on the tier:
 
-```
-artifacts/apps/{app_name}/workflows/{workflow_id}/{run_id}
-```
-
-And `tier_subdir` depends on the tier:
-
-| Tier | tier_subdir |
+| Tier | `app_prefix` (= destination key without filename) |
 |---|---|
-| `RETAINED` | `file_refs/` |
-| `PERSISTENT` | (uses `persistent-artifacts/` as the base, ignores run_prefix) |
+| `RETAINED` (default) | `artifacts/apps/{app_name}/workflows/{run_id}` |
+| `TRANSIENT` | `file_refs` |
+| `PERSISTENT` | `persistent-artifacts/apps/{app_name}` |
 
-When `storage_subdir` is set:
+> **Note:** the `{uuid}` segment (e.g. `file_refs/{uuid}/tables.parquet`) only appears when the **FileReference activity interceptor** auto-persists a ref returned from a `@task` — that path is computed by `StorageTier.auto_persist_key()`, not by `App.upload()`. `App.upload()` uses `StorageTier.upload_prefix()`, which puts the file directly under `{app_prefix}/{filename}`.
+
+When `storage_subdir` is set, it is appended between the run prefix and the filename:
 
 ```
-{run_prefix}/{storage_subdir}/{filename}
+artifacts/apps/{app_name}/workflows/{run_id}/{storage_subdir}/{filename}
 ```
+
+TRANSIENT and PERSISTENT tiers ignore `storage_subdir`.
 
 ### UploadOutput
 
 ```python
 class UploadOutput(BaseModel):
     ref: FileReference    # durable ref pointing at the uploaded file
+    synced: bool = False  # True if at least one file was actually transferred
+    reason: str = ""      # human-readable outcome, e.g. "uploaded" or "skipped:hash_match"
 ```
 
-The returned `ref` is already durable (`is_durable=True`, `storage_path` set).
-You can pass it as a `FileReference` field on a subsequent task's Input.
+| Field | Description |
+|---|---|
+| `ref` | Durable `FileReference` with `is_durable=True` and `storage_path` set. `file_count` reflects the number of files uploaded (1 for a single file, N for a directory). |
+| `synced` | `True` if at least one file was transferred to the store. `False` when all files were skipped (e.g. `skip_if_exists=True` and every file already matched its SHA-256 sidecar). |
+| `reason` | Short string describing the transfer outcome. Typical values: `"uploaded"`, `"skipped:hash_match"`, `"empty"`. Useful for logging. |
+
+The returned `ref` is already durable — you can pass it as a `FileReference` field on a subsequent task's Input.
 
 ### Usage Patterns
 
