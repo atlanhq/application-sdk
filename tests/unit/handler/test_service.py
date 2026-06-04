@@ -4719,6 +4719,74 @@ class TestInputContractEndpoint:
         )
         assert resp.status_code == 400
 
+    @staticmethod
+    def _inject_generated_contract(ep_module: str, contract_cls: type):
+        """Register a fake app/generated/{ep}/_input.py:AppInputContract in
+        sys.modules so _published_input_contract can import it. Returns the list
+        of injected module paths for cleanup."""
+        import sys
+        import types
+
+        paths = ["app", "app.generated", f"app.generated.{ep_module}"]
+        for p in paths:
+            sys.modules.setdefault(p, types.ModuleType(p))
+        leaf = f"app.generated.{ep_module}._input"
+        mod = types.ModuleType(leaf)
+        mod.AppInputContract = contract_cls
+        sys.modules[leaf] = mod
+        return paths + [leaf]
+
+    def test_prefers_generated_app_input_contract(self) -> None:
+        """When app/generated/{ep}/_input.py:AppInputContract is importable, the
+        endpoint returns its (rich) schema, not the thin runtime input_type."""
+        import sys
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _GenContract(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+            region: str = "region-us"
+
+        class _MultiEpGen(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        injected = self._inject_generated_contract("extract", _GenContract)
+        try:
+            resp = self._client(_MultiEpGen).get(
+                "/workflows/v1/input-contract?entrypoint=extract"
+            )
+            assert resp.status_code == 200
+            # rich generated contract, not the thin _RoutingInput
+            assert resp.json() == _GenContract.model_json_schema()
+            assert "region" in resp.json()["properties"]
+            # the entrypoint with no generated module still falls back
+            resp_load = self._client(_MultiEpGen).get(
+                "/workflows/v1/input-contract?entrypoint=load"
+            )
+            assert resp_load.json() == _RoutingInput.model_json_schema()
+        finally:
+            for p in injected:
+                sys.modules.pop(p, None)
+
+    def test_published_contract_falls_back_to_input_type(self) -> None:
+        """No generated module → _published_input_contract returns input_type."""
+        from application_sdk.app.entrypoint import EntryPointMetadata
+        from application_sdk.handler.service import _published_input_contract
+
+        ep = EntryPointMetadata(
+            name="no-generated-here",
+            input_type=_RoutingInput,
+            output_type=_RoutingOutput,
+            method_name="no_generated_here",
+        )
+        assert _published_input_contract(ep) is _RoutingInput
+
 
 class TestDefaultEntrypoint:
     """Tests for default-entrypoint resolution (@entrypoint(default=True))."""
