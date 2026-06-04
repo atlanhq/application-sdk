@@ -1222,6 +1222,7 @@ jobs:
           APP_ID: ${{ needs.prepare.outputs.app_id }}
           APP_NAME: ${{ needs.prepare.outputs.app_name }}
           DEPLOY_CONFIG: ${{ needs.prepare.outputs.deploy_config }}
+          ENABLE_SDR: ${{ needs.prepare.outputs.enable_sdr }}
           SDK_VERSION: ${{ needs.prepare.outputs.sdk_version }}
           ENTRYPOINTS: ${{ needs.prepare.outputs.entrypoints }}
           CHANNEL: ${{ inputs.channel }}
@@ -1330,6 +1331,13 @@ jobs:
           }
 
           config = os.environ.get("DEPLOY_CONFIG", "").strip()
+          # SDR capability rides inside the opaque config YAML — GM stores
+          # versions.config as raw TEXT and echoes it back in the tenant
+          # catalog, so LM can gate "Install on more environments" per app
+          # without a GM schema change. Only injected when true: absence
+          # means not SDR-capable (keeps non-SDR configs byte-identical).
+          if os.environ.get("ENABLE_SDR", "").strip() == "true":
+              config = f"self_deployed_runtime: true\n{config}".strip()
           if config:
               body["config"] = config
 
