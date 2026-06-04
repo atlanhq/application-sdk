@@ -362,6 +362,9 @@ class MetadataInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use for metadata discovery."""
 
+    metadata_template_key: str = ""
+    """Metadata source routing key for multi-source metadata widgets."""
+
     connection_config: BaseConnectionConfig = Field(
         default_factory=BaseConnectionConfig
     )

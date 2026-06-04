@@ -460,3 +460,14 @@ class TestMetadataInputFieldTypes:
         )
         assert isinstance(inp.connection_config, BaseConnectionConfig)
         assert inp.connection_config.model_extra == {"host": "db"}
+
+    def test_metadata_template_key_accepts_canonical_field(self):
+        inp = MetadataInput.model_validate(
+            {"credentials": [], "metadata_template_key": "feedbacks"}
+        )
+        assert inp.metadata_template_key == "feedbacks"
+
+    def test_metadata_template_key_does_not_accept_non_canonical_fields(self):
+        for key in ("metadataTemplateKey", "type"):
+            inp = MetadataInput.model_validate({"credentials": [], key: "feedbacks"})
+            assert inp.metadata_template_key == ""
