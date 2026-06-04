@@ -1,0 +1,24 @@
+/// Fixture: app that opts out of the run-level failure-notification node.
+///
+/// Exercises `notifyOnFailure = false` — the toggle utility/internal apps use
+/// so they do not append (and thus self-trigger) the notify-on-failure node.
+amends "../../src/App.pkl"
+
+name = "notify-disabled"
+displayName = "Notify Disabled"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+notifyOnFailure = false
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}
