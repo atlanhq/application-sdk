@@ -434,11 +434,14 @@ jobs:
           sudo mv /tmp/pkl /usr/local/bin/pkl
           pkl --version
 
-      # ── 3. Contract drift ─────────────────────────────────────────────────────
+      # ── 3. Contract drift (enforced) ─────────────────────────────────────────
+      # Failure here exits non-zero and (via the standard step-fail cascade)
+      # also fails the job. Unit tests + coverage below use `always() &&` so
+      # they still run and report — the user sees every signal in one pass —
+      # even though the job's final status is already failed.
       - name: "Contract drift — poe generate must be a no-op"
         id: contract_drift
         if: steps.app_install.outcome == 'success'
-        continue-on-error: true
         working-directory: app
         run: |
           set -euo pipefail
@@ -450,16 +453,16 @@ jobs:
             echo "::warning::'poe' task runner not available — cannot run drift check."
             exit 0
           fi
-          uv run poe generate || { echo "::warning::'poe generate' failed"; exit 1; }
+          uv run poe generate || { echo "::error::'poe generate' failed"; exit 1; }
           if ! git diff --exit-code -- generated/; then
-            echo "::warning::generated/ is stale — run 'poe generate' locally and commit."
+            echo "::error::generated/ is stale — run 'poe generate' locally and commit."
             exit 1
           fi
 
       # ── 4. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
       - name: "Unit tests"
         id: unit
-        if: steps.app_install.outcome == 'success'
+        if: always() && steps.app_install.outcome == 'success'
         continue-on-error: true
         working-directory: app
         run: |
@@ -477,7 +480,7 @@ jobs:
 
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
-        if: steps.unit.outcome == 'success'
+        if: always() && steps.unit.outcome == 'success'
         continue-on-error: true
         working-directory: app
         run: |
@@ -489,10 +492,12 @@ jobs:
           uv run coverage report --data-file=.coverage --fail-under=85
 
       # ── Verdict ───────────────────────────────────────────────────────────────
-      # Unit test pass/fail (UT) ENFORCES: a ❌ exits non-zero, trips
-      # `prepare`'s `if: !failure()`, and skips build + publish.
-      # Coverage threshold (COV), v3 shape (CM), and contract drift (CD)
-      # are warn-only — they annotate but do not block.
+      # Unit test pass/fail (UT) and contract drift (CD) ENFORCE: a ❌ exits
+      # non-zero, trips `prepare`'s `if: !failure()`, and skips build + publish.
+      # (CD's enforcement comes from the step itself — no continue-on-error.
+      # The verdict re-checks CD only to render the summary correctly.)
+      # Coverage threshold (COV) and v3 shape (CM) are warn-only — they
+      # annotate but do not block.
       - name: Certification verdict
         if: always()
         env:
@@ -521,11 +526,11 @@ jobs:
             echo "### App certification"
             echo ""
             render "$cm_label" "$CM"
-            render "Contract drift (poe generate) — warn-only${app_label}" "$CD"
+            render "Contract drift (poe generate) — enforced${app_label}" "$CD"
             render "Unit tests — enforced${app_label}" "$UT"
             render "Coverage (>=85%) — warn-only" "$COV"
             echo ""
-            echo "**Unit test pass/fail blocks publish on ❌.** Coverage threshold, v3 shape, and contract drift are warn-only during rollout. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
+            echo "**Unit tests and contract drift block publish on ❌.** Coverage threshold and v3 shape are warn-only during rollout. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
           } >> "${GITHUB_STEP_SUMMARY}"
           if [ "$SDK_INSTALL" != "success" ]; then
             echo "::warning title=Certification incomplete::SDK install failed, so check_migration did not run."
@@ -533,11 +538,20 @@ jobs:
           if [ "$APP_INSTALL" != "success" ]; then
             echo "::warning title=Certification incomplete::App install failed; contract drift and unit tests did not run."
           fi
-          if [ "$CM" = "failure" ] || [ "$CD" = "failure" ]; then
-            echo "::warning title=Certification warning (warn-only)::v3 shape and/or contract drift failed; publish proceeded (warn-only)."
+          if [ "$CM" = "failure" ]; then
+            echo "::warning title=Certification warning (warn-only)::v3 shape failed; publish proceeded (warn-only)."
           fi
           if [ "$COV" = "failure" ]; then
             echo "::warning title=Certification warning (warn-only)::Coverage below 85%; publish proceeded (warn-only)."
+          fi
+          if [ "$CD" = "failure" ]; then
+            {
+              echo ""
+              echo "### ❌ Publish blocked — contract drift"
+              echo ""
+              echo "\`poe generate\` either failed or produced changes in \`app/generated/\`. Run it locally and commit the diff."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error title=Publish blocked::Contract drift detected. Build and publish blocked."
           fi
           if [ "$UT" = "failure" ]; then
             {
@@ -547,6 +561,8 @@ jobs:
               echo "Fix the failing tests and re-run."
             } >> "${GITHUB_STEP_SUMMARY}"
             echo "::error title=Publish blocked::Unit tests failed. Build and publish blocked."
+          fi
+          if [ "$CD" = "failure" ] || [ "$UT" = "failure" ]; then
             exit 1
           fi
           exit 0
@@ -781,10 +797,10 @@ jobs:
     # publish=false, all of them are skipped via their `if:` — which by default
     # would propagate "skipped" to dependents. The condition below explicitly
     # allows prepare to run when those jobs are skipped OR successful, but NOT
-    # when one failed. `certify` enforces its unit + coverage check: a failing
-    # run exits non-zero, which trips `failure()` here and correctly skips
-    # prepare → build → publish. Its other layers (v3 shape, contract drift)
-    # stay warn-only (always exit 0) so they never trip this yet.
+    # when one failed. `certify` enforces unit tests and contract drift: a
+    # failing run exits non-zero, which trips `failure()` here and correctly
+    # skips prepare → build → publish. Its other layers (v3 shape, coverage
+    # threshold) stay warn-only (always exit 0) so they never trip this yet.
     # `leak-scan` blocks ONLY on its gitleaks (hardcoded-secret) layer: that
     # step exits non-zero, fails the job, and trips `failure()` here to skip the
     # publish. Its creds-into-logs layer is warn-only (annotates + pings Slack,
