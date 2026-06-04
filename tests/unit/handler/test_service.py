@@ -4738,7 +4738,7 @@ class TestDefaultEntrypoint:
     def test_resolver_rules(self) -> None:
         from application_sdk.app.entrypoint import (
             EntryPointMetadata,
-            resolve_default_entrypoint,
+            _resolve_default_entrypoint,
         )
 
         def _ep(name: str, *, default: bool = False) -> EntryPointMetadata:
@@ -4752,17 +4752,17 @@ class TestDefaultEntrypoint:
 
         a, b = _ep("a"), _ep("b")
         # single → that one
-        assert resolve_default_entrypoint({"a": a}) is a
+        assert _resolve_default_entrypoint({"a": a}) is a
         # multi, one default → the default
         bd = _ep("b", default=True)
-        assert resolve_default_entrypoint({"a": a, "b": bd}) is bd
+        assert _resolve_default_entrypoint({"a": a, "b": bd}) is bd
         # multi, no default → None
-        assert resolve_default_entrypoint({"a": a, "b": b}) is None
+        assert _resolve_default_entrypoint({"a": a, "b": b}) is None
         # multi, ambiguous (>1 default) → None
         ad = _ep("a", default=True)
-        assert resolve_default_entrypoint({"a": ad, "b": bd}) is None
+        assert _resolve_default_entrypoint({"a": ad, "b": bd}) is None
         # empty → None
-        assert resolve_default_entrypoint({}) is None
+        assert _resolve_default_entrypoint({}) is None
 
     def test_multiple_defaults_raise_at_registration(self) -> None:
         from application_sdk.app.base import App

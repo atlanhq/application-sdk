@@ -20,6 +20,13 @@ import obstore as obs
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
+from application_sdk.app._ep_registration import (
+    _apply_app_registration,
+    _build_entry_points,
+    _collect_implicit_ep,
+    _register_tasks,
+    _scan_entrypoints,
+)
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
     ObjectStoreNotConfiguredError,
@@ -29,13 +36,8 @@ from application_sdk.app.context import (
     TaskExecutionContext,
     _is_atlan_logger,
 )
-from application_sdk.app.entrypoint import (
-    EntryPointContractError,
-    EntryPointMetadata,
-    get_entrypoint_metadata,
-    is_entrypoint,
-)
-from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
+from application_sdk.app.entrypoint import EntryPointMetadata
+from application_sdk.app.registry import AppMetadata
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
@@ -498,8 +500,8 @@ class App(ABC):
         This is called when a class inherits from App. It:
         1. Derives the app name from the class name if not specified
         2. Collects explicit @entrypoint methods and/or the implicit run() entry point
-        3. Combines them — run() and @entrypoint methods may coexist
-        4. Validates and registers with the AppRegistry
+        3. Delegates building/validation to _build_entry_points
+        4. Registers with the AppRegistry via _apply_app_registration
 
         Skip registration if:
         - The class was already registered
@@ -524,155 +526,16 @@ class App(ABC):
         if abstract_methods - {"run"}:
             return
 
-        # ── Collect explicit @entrypoint methods ──────────────────────────
         explicit_eps = _scan_entrypoints(cls)
+        implicit_ep = _collect_implicit_ep(cls, App.run)
 
-        # ── Collect implicit run() entry point ────────────────────────────
-        # Register classes that have a concrete run() available — either:
-        #   - Explicitly defined in the class's own __dict__, OR
-        #   - Inherited from an intermediate parent (not the App.run stub).
-        # Skip when cls.run resolves to the App.run stub (no override) or is abstract.
-        implicit_ep: EntryPointMetadata | None = None
-        if "run" in cls.__dict__:
-            run_method: Any = cls.__dict__["run"]
-        elif cls.run is not App.run:
-            run_method = cls.run
-        else:
-            run_method = None
+        entry_points = _build_entry_points(cls, implicit_ep, explicit_eps)
+        if not entry_points:
+            return
 
-        if run_method is not None and not getattr(
-            run_method, "__isabstractmethod__", False
-        ):
-            try:
-                hints = get_type_hints(cls.run)
-            except Exception:
-                # Annotations cannot be resolved (e.g. unresolved forward refs,
-                # missing imports). Log and skip run() — explicit @entrypoints
-                # (if any) are still registered below.
-                _task_logger.warning(
-                    "Skipping run() as entry point for %s: get_type_hints failed "
-                    "to resolve annotations (likely an unresolved forward reference "
-                    "or missing import). run() will not be included as an entry point.",
-                    cls.__name__,
-                    exc_info=True,
-                )
-            else:
-                input_type = hints.get("input")
-                output_type = hints.get("return")
-
-                if input_type is None or output_type is None:
-                    raise EntryPointContractError(
-                        f"run() on {cls.__name__} must have type annotations: "
-                        f"async def run(self, input: <Input subclass>) -> <Output subclass>"
-                    )
-                if not (isinstance(input_type, type) and issubclass(input_type, Input)):
-                    raise EntryPointContractError(
-                        f"run() on {cls.__name__}: input type {input_type!r} must be "
-                        f"a subclass of Input."
-                    )
-                if not (
-                    isinstance(output_type, type) and issubclass(output_type, Output)
-                ):
-                    raise EntryPointContractError(
-                        f"run() on {cls.__name__}: output type {output_type!r} must be "
-                        f"a subclass of Output."
-                    )
-                # Using the base Input/Output directly is an error — concrete apps must
-                # define their own narrowed dataclass types.
-                if input_type is Input:
-                    raise EntryPointContractError(
-                        f"run() on {cls.__name__}: input type must be a concrete subclass "
-                        f"of Input, not Input itself. Define a dedicated dataclass."
-                    )
-                if output_type is Output:
-                    raise EntryPointContractError(
-                        f"run() on {cls.__name__}: output type must be a concrete subclass "
-                        f"of Output, not Output itself. Define a dedicated dataclass."
-                    )
-
-                implicit_ep = EntryPointMetadata(
-                    name="run",
-                    input_type=input_type,
-                    output_type=output_type,
-                    method_name="run",
-                    implicit=True,
-                    default=False,  # adjusted below when mixed with explicit eps
-                )
-
-        if not explicit_eps and implicit_ep is None:
-            return  # Nothing to register
-
-        # ── Build combined entry_points ────────────────────────────────────
-        # run() always comes first so it is the natural "primary" entry point
-        # for backward-compat ordering.
-        entry_points: dict[str, EntryPointMetadata] = {}
-
-        if implicit_ep is not None:
-            if explicit_eps:
-                # Mixed: run() always has default-precedence. Using
-                # @entrypoint(default=True) alongside run() is prohibited —
-                # run() owns the default and the conflict is never resolvable.
-                explicit_defaults = [
-                    ep.name for ep in explicit_eps.values() if ep.default
-                ]
-                if explicit_defaults:
-                    raise EntryPointContractError(
-                        f"{cls.__name__}: cannot use @entrypoint(default=True) when "
-                        f"run() is also implemented — run() always has default-precedence "
-                        f"in mixed apps. Remove default=True from "
-                        f"{sorted(explicit_defaults)} or remove the run() override."
-                    )
-            # run() is default=True in mixed mode (explicit_eps non-empty);
-            # run()-only apps leave default=False and rely on the len==1 path.
-            implicit_ep = replace(implicit_ep, default=bool(explicit_eps))
-            entry_points["run"] = implicit_ep
-
-        # Every explicit @entrypoint must follow the single-dataclass contract.
-        # Unlike run() (which silently skips template base classes), @entrypoint
-        # decoration is always intentional — raise loudly on a bad signature.
-        for ep in explicit_eps.values():
-            if not (
-                isinstance(ep.input_type, type) and issubclass(ep.input_type, Input)
-            ):
-                raise EntryPointContractError(
-                    f"Entry point '{ep.name}' on {cls.__name__}: "
-                    f"input type {ep.input_type!r} must be a subclass of Input."
-                )
-            if not (
-                isinstance(ep.output_type, type) and issubclass(ep.output_type, Output)
-            ):
-                raise EntryPointContractError(
-                    f"Entry point '{ep.name}' on {cls.__name__}: "
-                    f"output type {ep.output_type!r} must be a subclass of Output."
-                )
-            entry_points[ep.name] = ep
-
-        # For @entrypoint-only apps with multiple entry points and no explicit
-        # default, auto-mark the first (alphabetical order, via dir()) as default
-        # so resolve_default_entrypoint always finds exactly one.
-        if implicit_ep is None and len(entry_points) > 1:
-            if not any(ep.default for ep in entry_points.values()):
-                first_name = next(iter(entry_points))
-                entry_points[first_name] = replace(
-                    entry_points[first_name], default=True
-                )
-
-        # ── Validate default count ─────────────────────────────────────────
-        # At most one entry point across the combined set may be the default.
-        # A single entry point is always the default via resolve_default_entrypoint's
-        # len==1 path, so the flag only matters for multi-entry-point apps.
-        defaults = [ep.name for ep in entry_points.values() if ep.default]
-        if len(defaults) > 1:
-            raise EntryPointContractError(
-                f"{cls.__name__}: more than one default entry point "
-                f"({sorted(defaults)}). At most one entry point may be the default — "
-                f"mark one @entrypoint(default=True) or let run() remain the default."
-            )
-
-        # ── Register ───────────────────────────────────────────────────────
         # App-level _input_type/_output_type come from the default entry point
-        # (or the first registered, for single-entry-point apps where
-        # resolve_default_entrypoint uses the len==1 path).
+        # (or the first registered for single-entry-point apps where
+        # _resolve_default_entrypoint uses the len==1 path).
         default_ep = next(
             (ep for ep in entry_points.values() if ep.default),
             next(iter(entry_points.values())),
@@ -1365,112 +1228,11 @@ class App(ABC):
 
 
 # =============================================================================
-# Registration helpers
+# Registration helpers — see application_sdk/app/_ep_registration.py
 # =============================================================================
-
-
-def _register_tasks(cls: type, app_name: str) -> None:
-    """Register all @task decorated methods for an App class.
-
-    Args:
-        cls: The App class.
-        app_name: The app's registered name.
-    """
-    task_registry = TaskRegistry.get_instance()
-
-    # Scan the class for @task decorated methods
-    for attr_name in dir(cls):
-        if attr_name.startswith("_"):
-            continue
-
-        attr = getattr(cls, attr_name, None)
-        if attr is None:
-            continue
-
-        if is_task(attr):
-            task_meta = get_task_metadata(attr)
-            if task_meta:
-                # Create a copy with the app name set
-                task_meta_copy = replace(task_meta, app_name=app_name)
-                # Register the task
-                task_registry.register(app_name, task_meta_copy)
-
-
-def _scan_entrypoints(cls: type) -> "dict[str, EntryPointMetadata]":
-    """Scan a class for @entrypoint-decorated methods.
-
-    Args:
-        cls: The App class to scan.
-
-    Returns:
-        Dict mapping entry point name to EntryPointMetadata.
-    """
-    # deferred import: circular dependency (entrypoint imports App)
-    entry_points: dict[str, EntryPointMetadata] = {}
-    for attr_name in dir(cls):
-        if attr_name.startswith("_"):
-            continue
-        attr = getattr(cls, attr_name, None)
-        if attr is None:
-            continue
-        if is_entrypoint(attr):
-            ep_meta = get_entrypoint_metadata(attr)
-            if ep_meta is not None:
-                entry_points[ep_meta.name] = ep_meta
-    return entry_points
-
-
-def _apply_app_registration(
-    cls: "type[App]",
-    name: str,
-    version: str,
-    description: str,
-    tags: dict[str, str] | None,
-    passthrough_modules: set[str] | None,
-    input_type: type[Input],
-    output_type: type[Output],
-    entry_points: "dict[str, EntryPointMetadata] | None" = None,
-) -> None:
-    """Register an App class with the AppRegistry.
-
-    Args:
-        cls: The App class to register.
-        name: App name.
-        version: Semantic version string.
-        description: Human-readable description.
-        tags: Optional tags for categorization.
-        passthrough_modules: Modules to pass through sandbox.
-        input_type: Input dataclass type.
-        output_type: Output dataclass type.
-        entry_points: Entry point metadata keyed by entry point name.
-    """
-    # Mark as registered to prevent duplicate registration
-    cls._app_registered = True
-
-    # Set class attributes
-    cls._app_name = name
-    cls._app_version = version
-    cls._input_type = input_type
-    cls._output_type = output_type
-
-    # Register with the global app registry
-    registry = AppRegistry.get_instance()
-    metadata = registry.register(
-        name=name,
-        version=version,
-        app_cls=cls,
-        input_type=input_type,
-        output_type=output_type,
-        description=description,
-        tags=tags,
-        passthrough_modules=passthrough_modules,
-        entry_points=entry_points or {},
-        allow_override=True,
-    )
-    cls._app_metadata = metadata
-
-    # Register all @task decorated methods
-    _register_tasks(cls, name)
+# _register_tasks, _collect_implicit_ep, _scan_entrypoints,
+# _build_entry_points, _apply_app_registration are imported at the top of this
+# module from _ep_registration and re-exported via __all__ for backward compat.
 
 
 # Cache generated workflow classes keyed by (app_cls, entry_point_name) so

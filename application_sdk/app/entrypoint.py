@@ -280,10 +280,12 @@ def entrypoint(
     return decorator
 
 
-def resolve_default_entrypoint(
+def _resolve_default_entrypoint(
     entry_points: "Mapping[str, EntryPointMetadata]",
 ) -> EntryPointMetadata | None:
     """Resolve the entry point to use when no ``?entrypoint=`` is provided.
+
+    Internal helper — not part of the public SDK surface.
 
     Rules:
     - Exactly one entry point → that one (single-entry-point apps need no flag).

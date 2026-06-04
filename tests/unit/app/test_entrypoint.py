@@ -10,10 +10,10 @@ from application_sdk.app.base import App
 from application_sdk.app.entrypoint import (
     EntryPointContractError,
     EntryPointMetadata,
+    _resolve_default_entrypoint,
     entrypoint,
     get_entrypoint_metadata,
     is_entrypoint,
-    resolve_default_entrypoint,
 )
 from application_sdk.app.registry import AppRegistry
 from application_sdk.contracts.base import Input, Output
@@ -445,14 +445,14 @@ class TestMixedEntrypointRegistration:
         assert ep.output_type is _RunOutput
 
     def test_run_only_is_resolved_as_default(self) -> None:
-        """resolve_default_entrypoint returns the implicit run() ep for run()-only apps."""
+        """_resolve_default_entrypoint returns the implicit run() ep for run()-only apps."""
 
         class RunOnlyDefaultApp(App):
             async def run(self, input: _RunInput) -> _RunOutput:
                 return _RunOutput()
 
         meta = AppRegistry.get_instance().get("run-only-default-app")
-        resolved = resolve_default_entrypoint(meta.entry_points)
+        resolved = _resolve_default_entrypoint(meta.entry_points)
         assert resolved is not None
         assert resolved.name == "run"
 
@@ -475,7 +475,7 @@ class TestMixedEntrypointRegistration:
         assert ep.output_type is _AlphaOutput
 
     def test_single_entrypoint_only_is_resolved_as_default(self) -> None:
-        """resolve_default_entrypoint returns the sole @entrypoint for single-ep apps."""
+        """_resolve_default_entrypoint returns the sole @entrypoint for single-ep apps."""
 
         class SingleEpDefaultApp(App):
             @entrypoint
@@ -483,7 +483,7 @@ class TestMixedEntrypointRegistration:
                 return _AlphaOutput()
 
         meta = AppRegistry.get_instance().get("single-ep-default-app")
-        resolved = resolve_default_entrypoint(meta.entry_points)
+        resolved = _resolve_default_entrypoint(meta.entry_points)
         assert resolved is not None
         assert resolved.name == "process"
 
@@ -531,7 +531,7 @@ class TestMixedEntrypointRegistration:
         assert extract_ep.default is False
 
     def test_run_and_single_entrypoint_resolve_returns_run(self) -> None:
-        """resolve_default_entrypoint returns run() in the mixed case with no explicit default."""
+        """_resolve_default_entrypoint returns run() in the mixed case with no explicit default."""
 
         class MixedResolveApp(App):
             @entrypoint
@@ -542,7 +542,7 @@ class TestMixedEntrypointRegistration:
                 return _RunOutput()
 
         meta = AppRegistry.get_instance().get("mixed-resolve-app")
-        resolved = resolve_default_entrypoint(meta.entry_points)
+        resolved = _resolve_default_entrypoint(meta.entry_points)
         assert resolved is not None
         assert resolved.name == "run"
         assert resolved.implicit is True
@@ -600,7 +600,7 @@ class TestMixedEntrypointRegistration:
     def test_multiple_entrypoints_no_explicit_default_resolve_returns_first(
         self,
     ) -> None:
-        """resolve_default_entrypoint returns the auto-marked first ep."""
+        """_resolve_default_entrypoint returns the auto-marked first ep."""
 
         class MultiEpNoDefaultResolveApp(App):
             @entrypoint
@@ -612,7 +612,7 @@ class TestMixedEntrypointRegistration:
                 return _BetaOutput()
 
         meta = AppRegistry.get_instance().get("multi-ep-no-default-resolve-app")
-        resolved = resolve_default_entrypoint(meta.entry_points)
+        resolved = _resolve_default_entrypoint(meta.entry_points)
         assert resolved is not None
         assert resolved.name == "alpha-step"
 
@@ -635,7 +635,7 @@ class TestMixedEntrypointRegistration:
         assert meta.entry_points["beta-run"].default is True
 
     def test_multiple_entrypoints_explicit_default_resolve_returns_marked(self) -> None:
-        """resolve_default_entrypoint returns the explicitly marked ep."""
+        """_resolve_default_entrypoint returns the explicitly marked ep."""
 
         class MultiEpExplicitResolveApp(App):
             @entrypoint
@@ -647,7 +647,7 @@ class TestMixedEntrypointRegistration:
                 return _BetaOutput()
 
         meta = AppRegistry.get_instance().get("multi-ep-explicit-resolve-app")
-        resolved = resolve_default_entrypoint(meta.entry_points)
+        resolved = _resolve_default_entrypoint(meta.entry_points)
         assert resolved is not None
         assert resolved.name == "beta-pipe"
 
