@@ -116,4 +116,4 @@ Automatically split large payloads into chunks, reassemble transparently.
 
 **`MaxItems`** (`application_sdk/contracts/types.py`): `@dataclass(frozen=True)` constraint marker used with `Annotated`.
 
-**`FileReference`** (`application_sdk/contracts/types.py`): frozen Pydantic `BaseModel` with fields `local_path`, `storage_path`, `is_durable`, `file_count`, and `tier (StorageTier)`. Store large data via `application_sdk.storage.upload_file()` and pass only the reference through Temporal.
+**`FileReference`** (`application_sdk/contracts/types.py`): frozen Pydantic `BaseModel` with fields `local_path`, `storage_path`, `is_durable`, `file_count`, and `tier (StorageTier)`. Store large data via `application_sdk.storage.upload_file()` and pass only the reference through Temporal. For the two-store routing of `FileReference` (task-to-task, customer-owned `objectstore`) and `App.upload()` (app-to-app, Atlan-owned `atlan-objectstore`), see [ADR-0014](0014-two-store-storage-architecture.md).

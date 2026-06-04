@@ -194,7 +194,7 @@ await upload_file("artifacts/output.json", local_path="/tmp/output.json")
 await download_file("artifacts/output.json", local_path="/tmp/output.json")
 ```
 
-Higher-level: `App` provides `self.upload()` and `self.download()` framework tasks for directory-level transfer with automatic `FileReference` tracking for cleanup. See [ADR-0005](../adr/0005-infrastructure-abstraction.md).
+Higher-level: `App` provides `self.upload()` and `self.download()` framework tasks for directory-level transfer with automatic `FileReference` tracking for cleanup. `self.upload()` routes to the Atlan-owned `atlan-objectstore` in SDR deployments (the hand-off to Atlan system apps like publish and lineage) and falls back to `objectstore` in local dev — the two-store split is handled automatically. See [ADR-0005](../adr/0005-infrastructure-abstraction.md) and [ADR-0014](../adr/0014-two-store-storage-architecture.md).
 
 ---
 

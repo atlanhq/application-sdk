@@ -168,6 +168,11 @@ class MyConnector(App):
         return await self.process(ProcessInput(results=fetch_out.results))
 ```
 
+`FileReference` handles task-to-task data passing within a run (automatic via the activity
+interceptor). For hand-off to Atlan system apps (publish, lineage, quality), call
+`App.upload()` explicitly from `run()` — see [storage.md](storage.md) and
+[file-reference.md](file-reference.md) for the two-store routing details.
+
 ## Auto-Discovery
 
 You do not register tasks manually. When your `App` subclass is defined, `App.__init_subclass__` scans it for `@task` methods and registers them in the `TaskRegistry`. The worker discovers all registered tasks at startup via `create_worker()`.
