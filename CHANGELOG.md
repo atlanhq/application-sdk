@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.15.0 (June 05, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.14.0...v3.15.0
+
+### Features
+
+- recommend embedded_runtime pattern for v3 (#1955) (by @vaibhavatlan in [915977c](https://github.com/atlanhq/application-sdk/commit/915977c))
+- align docs and skills with two-store storage architecture (ADR-0014) (#1982) (by @cmgrote in [44a113e](https://github.com/atlanhq/application-sdk/commit/44a113e))
+- /workflows/v1/input-contract + default entrypoint resolution (#1965) (by @OnkarVO7 in [40d7e92](https://github.com/atlanhq/application-sdk/commit/40d7e92))
+- App.upload FileReference fallback for cross-pod safety and SHA-256 dedup (BLDX-1377) (#2000) (by @cmgrote in [2ef2858](https://github.com/atlanhq/application-sdk/commit/2ef2858))
+
+### Bug Fixes
+
+- null-typed column safeguards at transformer + parquet reader (#1946) (by @vaibhavatlan in [6012944](https://github.com/atlanhq/application-sdk/commit/6012944))
+- align embedded Dapr store roots with static components (#1952) (by @cmgrote in [f203fcf](https://github.com/atlanhq/application-sdk/commit/f203fcf))
+- preserve ObjectStoreReadError classification in _download_files (#1959) (by @vaibhavatlan in [df95b55](https://github.com/atlanhq/application-sdk/commit/df95b55))
+- install all dependency groups when running app unit tests (#1974) (by @mustafahasankhan in [bac2752](https://github.com/atlanhq/application-sdk/commit/bac2752))
+- clearer Slack messages — label the app repo (#1977) (by @AtMrun in [1739a67](https://github.com/atlanhq/application-sdk/commit/1739a67))
+- preserve metadata template routing key in MetadataInput (#1968) (by @fyzanshaik-atlan in [92e4657](https://github.com/atlanhq/application-sdk/commit/92e4657))
+- harden key-type handling for None + non-primitive keys (#2001) (by @adityachoudhury-cloud in [d16878b](https://github.com/atlanhq/application-sdk/commit/d16878b))
+
+
 ## v3.14.0 (May 29, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.4...v3.14.0
