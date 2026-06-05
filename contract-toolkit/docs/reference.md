@@ -106,6 +106,16 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `workflowTypeOverride` | String? | null | Explicit workflow type (used as-is, overrides `workflowType`). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
+### E2E Test Harness
+
+These three fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `argoPackageName` | String | `"@atlan/{name}"` | Argo WorkflowTemplate package name. Override when the app uses a scoped or non-standard Argo package. |
+| `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
+| `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+
 ### Pipeline Block
 
 The typed `pipeline` block replaces per-flag properties. Each step is nullable to opt out.
@@ -1294,6 +1304,11 @@ condition trees. It is mutually exclusive with `dependsOn`. For pre-built nodes
 that define a default `dependsOn`, set `dependsOn = null` before setting
 `dependsOnCondition`.
 
+The reserved `workflow_failure` tag is the only node-less tag condition the
+toolkit permits. It is run-level, not node-level: Automation Engine evaluates it
+for finalizer nodes once the workflow run fails. This is used by
+`NotificationNode`; other tags still require `nodeId`.
+
 ```pkl
 class DependencyCondition {
   nodeId: String?
@@ -1309,6 +1324,14 @@ Direct condition:
 dependsOnCondition = new DependencyCondition {
   nodeId = "extract"
   tag = "success"
+}
+```
+
+Run-level failure finalizer condition:
+
+```pkl
+dependsOnCondition = new DependencyCondition {
+  tag = "workflow_failure"
 }
 ```
 
@@ -1468,6 +1491,46 @@ For built-in extract/default publish retry and timeout policy, use
 `extractNodeErrorHandling` and `publishNodeErrorHandling`. These fields emit
 manifest `error_handling` without replacing the generated nodes, and only accept
 workflow-safe `ErrorHandlingConfig` values. See `examples/publish-controls/`.
+
+### NotificationNode
+
+Pre-built run-failure notification system node. The toolkit appends it
+automatically as `notify-on-failure` when `notifyOnFailure = true`:
+
+```pkl
+class NotificationNode extends DAGNode {
+  displayName = "Notify on workflow failure"
+  workflowType = "NotificationWorkflow"
+  appName = "notification-app"
+  dependsOnCondition = new DependencyCondition { tag = "workflow_failure" }
+  args {
+    ["metadata"] {
+      ["notification_type"] = "workflow_failure_alert"
+      ["workflow_name"] = "$.workflow.name"
+      ["workflow_qualified_name"] = "$.workflow.qualified_name"
+      ["workflow_slug"] = "$.workflow.slug"
+      ["status"] = "$.workflow.status"
+      ["run_details_url"] = "$.workflow.run_url"
+      ["workflow_run_guid"] = "$.workflow.run_id"
+      ["error_message"] = "$.failure.message"
+      ["error_category"] = "$.failure.category"
+      ["suggested_action"] = "$.failure.suggested_action"
+      ["failed_node_id"] = "$.failure.node_id"
+      ["failed_activity"] = "$.failure.activity"
+    }
+  }
+}
+```
+
+It renders `app_name = "notification-app"` and
+`task_queue = "atlan-notification-app-{deployment_name}"`. Automation Engine
+resolves the `$.workflow.*` and `$.failure.*` placeholders when the finalizer
+runs, then the notification app fans the alert out to the tenant's enabled
+integrations. The finalizer uses `$.workflow.status`; Automation Engine exposes
+the effective terminal workflow status for this run-level failure node.
+
+Set `notifyOnFailure = false` for utility/system apps that must not self-notify.
+To replace the default target or payload, define `extraNodes["notify-on-failure"]`.
 
 ### QueryIntelligenceNode
 

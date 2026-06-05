@@ -7,7 +7,9 @@
 // (a node-less DependencyCondition) so Automation Engine runs it once per failed
 // run and dispatches the notification app, which fans the alert out to the
 // tenant's enabled integrations. Utility/internal apps opt out via
-// `notifyOnFailure = false`.
+// `notifyOnFailure = false`. AE owns the finalizer behavior and resolves the
+// `$.workflow.*` / `$.failure.*` placeholders; the toolkit owns the manifest
+// shape and the templated arg set.
 
 amends "pkl:test"
 
@@ -15,6 +17,34 @@ import "pkl:json"
 import "fixtures/default_pipeline.pkl" as defaultApp
 import "fixtures/notify_disabled.pkl" as disabledApp
 import "../src/App.pkl" as App
+
+// App that retargets the notify node via extraNodes (replaces the default).
+local overrideApp = (App) {
+  name = "notify-override"
+  displayName = "Notify Override"
+  icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+  hasCredentialConfig = false
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator {
+            placeholderText = "Connection Name"
+          }
+        }
+      }
+    }
+  }
+
+  extraNodes {
+    ["notify-on-failure"] = new App.NotificationNode {
+      displayName = "Custom notify on failure"
+      appName = "custom-notification-app"
+      taskQueue = "custom-notification-queue"
+    }
+  }
+}
 
 // Default app (no pipeline block, notifyOnFailure defaults true).
 local defaultManifest = new json.Parser { useMapping = true }.parse(
@@ -30,6 +60,11 @@ local disabledManifest = new json.Parser { useMapping = true }.parse(
 )
 local disabledDag = disabledManifest["dag"]
 
+local overrideManifest = new json.Parser { useMapping = true }.parse(
+  overrideApp.output.files["app/generated/manifest.json"].text
+)
+local overrideNode = overrideManifest["dag"]["notify-on-failure"]
+
 facts {
   // -----------------------------------------------------------------------
   // Default: the node is appended with no app-level wiring.
@@ -40,8 +75,10 @@ facts {
   }
 
   ["Notify node dispatches the notification app workflow"] {
-    notifyNode["inputs"]["workflow_type"] == "NotificationWorkflow"
+    notifyNode["activity_name"] == "execute_workflow"
+    notifyNode["activity_display_name"] == "Notify on workflow failure"
     notifyNode["app_name"] == "notification-app"
+    notifyNode["inputs"]["workflow_type"] == "NotificationWorkflow"
     notifyNode["inputs"]["app_name"] == "notification-app"
   }
 
@@ -103,6 +140,14 @@ facts {
     disabledDag["publish"] != null
   }
 
+  // extraNodes["notify-on-failure"] replaces the auto-generated node.
+  ["extraNodes can replace the notify-on-failure node"] {
+    overrideNode["activity_display_name"] == "Custom notify on failure"
+    overrideNode["app_name"] == "custom-notification-app"
+    overrideNode["inputs"]["app_name"] == "custom-notification-app"
+    overrideNode["inputs"]["task_queue"] == "custom-notification-queue"
+  }
+
   // -----------------------------------------------------------------------
   // Class-level defaults: precise per-type assertions without manifest noise.
   // -----------------------------------------------------------------------
@@ -118,6 +163,7 @@ facts {
     local n = new App.NotificationNode {}
     n.dependsOnCondition.tag == "workflow_failure"
     n.dependsOnCondition.nodeId == null
+    n.dependsOnCondition._conditionShapeCheck == null
   }
 
   // The reserved tag is the one node-less DependencyCondition the shape check

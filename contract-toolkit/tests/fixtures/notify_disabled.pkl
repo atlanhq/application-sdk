@@ -2,6 +2,8 @@
 ///
 /// Exercises `notifyOnFailure = false` — the toggle utility/internal apps use
 /// so they do not append (and thus self-trigger) the notify-on-failure node.
+/// Utility and system apps use this so their own failures don't dispatch the
+/// notification app recursively.
 amends "../../src/App.pkl"
 
 name = "notify-disabled"

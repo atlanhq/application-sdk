@@ -1,0 +1,572 @@
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+import "../src/Connectors.pkl"
+import "../examples/full/app.pkl" as fullExampleApp
+
+// ── Fixture helpers ────────────────────────────────────────────────────────────
+
+// Minimal uiConfig used by fixtures that only need the base file (no custom subs).
+local minimalUiConfig = new App.UIConfig {
+  tasks {
+    ["Connection"] {
+      inputs {
+        ["connection"] = new App.ConnectionCreator { placeholderText = "Connection" }
+      }
+    }
+  }
+}
+
+// Non-SQL connector (API category) — uses BaseE2ETest / MustacheSubstitutions.
+local apiApp = (App) {
+  name = "my-api"
+  displayName = "My API App"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.API
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// SQL connector (database category) — uses SQLAppE2ETest / SQLMustacheSubstitutions.
+local postgresApp = (App) {
+  name = "pg-connector"
+  displayName = "Postgres Connector"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.POSTGRES
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// App with default connector (warehouse) — connection_category should be omitted.
+local warehouseApp = (App) {
+  name = "snowflake-connector"
+  displayName = "Snowflake Connector"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.SNOWFLAKE
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// App where connector.value == name — connection_type should be omitted.
+local selfNamedApp = (App) {
+  name = "snowflake"
+  displayName = "Snowflake"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.SNOWFLAKE
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// App with custom argo/service overrides.
+local overrideApp = (App) {
+  name = "my-connector"
+  displayName = "My Connector"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  hasCredentialConfig = false
+  argoPackageName = "@custom/scope"
+  argoTemplateName = "custom-template"
+  appServiceUrl = "http://custom.svc.local"
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// App with diverse widget types for getSubsFieldLine coverage.
+local widgetApp = (App) {
+  name = "widget-test"
+  displayName = "Widget Test"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.POSTGRES
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["bool_field"] = new App.BooleanInput { title = "Bool"; default = true }
+          ["num_field"] = new App.NumericInput { title = "Num"; default = 42 }
+          ["radio_field"] = new App.Radio {
+            title = "Radio"
+            possibleValues { ["alpha"] = "Alpha"; ["beta"] = "Beta" }
+            default = "alpha"
+          }
+          ["dropdown_field"] = new App.DropDown {
+            title = "DropDown"
+            possibleValues { ["x"] = "X"; ["y"] = "Y"; ["z"] = "Z" }
+            default = "x"
+          }
+          ["multi_field"] = new App.DropDown {
+            title = "Multi"
+            multiSelect = true
+            possibleValues { ["p"] = "P"; ["q"] = "Q" }
+          }
+          ["tree_field"] = new App.SqlTree {
+            title = "Tree"
+            sqlQuery = "show schemas"
+            credentialType = "test-cred"
+          }
+          ["text_field"] = new App.TextInput { title = "Text"; default = "hello" }
+          ["connection"] = new App.ConnectionCreator { placeholderText = "Conn" }
+        }
+      }
+    }
+  }
+}
+
+// App where all uiConfig fields are in the SQL skip-set → substitutions file omitted.
+local allSkippedApp = (App) {
+  name = "skipped-test"
+  displayName = "Skipped Test"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.POSTGRES
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Connection"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator { placeholderText = "Conn" }
+          ["credential-guid"] = new App.CredentialInput { credType = "cred" }
+          ["include_filter"] = new App.TextInput { title = "Include" }
+        }
+      }
+    }
+  }
+}
+
+// Credential app: single auth option.
+local singleAuthApp = (App) {
+  name = "single-auth"
+  displayName = "Single Auth"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.POSTGRES
+  hasCredentialConfig = true
+  credentialConnectorType = "rest"
+  credentialCommonFields {
+    new App.FieldSpec { name = "host"; displayName = "Host" }
+    new App.FieldSpec { name = "port"; fieldType = "number"; displayName = "Port"; defaultValue = "5432" }
+  }
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+  }
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// Credential app: two auth options — auth-specific fields get sentinel defaults.
+local multiAuthApp = (App) {
+  name = "multi-auth"
+  displayName = "Multi Auth"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.POSTGRES
+  hasCredentialConfig = true
+  credentialConnectorType = "rest"
+  credentialCommonFields {
+    new App.FieldSpec { name = "host"; displayName = "Host" }
+  }
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+    ["token"] = new App.AuthOption {
+      label = "Token"
+      fields {
+        new App.FieldSpec { name = "token"; sensitive = true; displayName = "Token" }
+      }
+    }
+  }
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// Credential app: uses credentialAuthDefault to override auth_type default.
+local authDefaultApp = (App) {
+  name = "auth-default-test"
+  displayName = "Auth Default Test"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.POSTGRES
+  hasCredentialConfig = true
+  credentialConnectorType = "rest"
+  credentialAuthDefault = "token"
+  credentialCommonFields {
+    new App.FieldSpec { name = "host"; displayName = "Host" }
+  }
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+      }
+    }
+    ["token"] = new App.AuthOption {
+      label = "Token"
+      fields {
+        new App.FieldSpec { name = "token"; sensitive = true; displayName = "Token" }
+      }
+    }
+  }
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// App with no credential config — _e2e_credential.py should not be emitted.
+// noCredApp has no uiConfig to verify _e2e_base.py is emitted regardless.
+local noCredApp = (App) {
+  name = "no-cred"
+  displayName = "No Cred"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+}
+
+// Credential app with extraFields in an auth option — triggers CredentialBodyExtra emission.
+local extraFieldsApp = (App) {
+  name = "extra-fields"
+  displayName = "Extra Fields"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.POSTGRES
+  hasCredentialConfig = true
+  credentialConnectorType = "rest"
+  credentialCommonFields {
+    new App.FieldSpec { name = "host"; displayName = "Host" }
+  }
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+      extraFields {
+        new App.FieldSpec { name = "schema"; displayName = "Schema" }
+        new App.FieldSpec { name = "timeout"; fieldType = "number"; displayName = "Timeout"; defaultValue = "30" }
+      }
+    }
+  }
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+
+// ── Capture output text ────────────────────────────────────────────────────────
+
+local apiBase: String = apiApp.output.files["app/generated/_e2e_base.py"].text
+local postgresBase: String = postgresApp.output.files["app/generated/_e2e_base.py"].text
+local warehouseBase: String = warehouseApp.output.files["app/generated/_e2e_base.py"].text
+local selfNamedBase: String = selfNamedApp.output.files["app/generated/_e2e_base.py"].text
+local overrideBase: String = overrideApp.output.files["app/generated/_e2e_base.py"].text
+local widgetSubs: String = widgetApp.output.files["app/generated/_e2e_substitutions.py"].text
+local singleAuthCred: String = singleAuthApp.output.files["app/generated/_e2e_credential.py"].text
+local multiAuthCred: String = multiAuthApp.output.files["app/generated/_e2e_credential.py"].text
+local authDefaultCred: String = authDefaultApp.output.files["app/generated/_e2e_credential.py"].text
+local fullCredPy: String = fullExampleApp.output.files["app/generated/_e2e_credential.py"].text
+local fullSubsPy: String = fullExampleApp.output.files["app/generated/_e2e_substitutions.py"].text
+local extraFieldsCred: String = extraFieldsApp.output.files["app/generated/_e2e_credential.py"].text
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
+facts {
+
+  // ── _e2e_base.py: banner and structure ──────────────────────────────────────
+
+  ["_e2e_base.py emits DO-NOT-EDIT banner"] {
+    apiBase.contains("# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.")
+    apiBase.contains("# Regenerate with: pkl eval -m . contract/app.pkl")
+  }
+
+  ["_e2e_base.py always emitted even without connector"] {
+    noCredApp.output.files.containsKey("app/generated/_e2e_base.py")
+  }
+
+  // ── _e2e_base.py: base class routing ────────────────────────────────────────
+
+  ["Non-SQL connector uses BaseE2ETest"] {
+    apiBase.contains("from application_sdk.testing.e2e import BaseE2ETest")
+    apiBase.contains("class MyApiGeneratedE2EBase(BaseE2ETest):")
+  }
+
+  ["SQL connector (database) uses SQLAppE2ETest"] {
+    postgresBase.contains("from application_sdk.testing.e2e import SQLAppE2ETest")
+    postgresBase.contains("class PgConnectorGeneratedE2EBase(SQLAppE2ETest):")
+  }
+
+  // ── _e2e_base.py: required harness attributes ────────────────────────────────
+
+  ["_e2e_base.py emits connector_short_name from name"] {
+    apiBase.contains("connector_short_name = \"my-api\"")
+    postgresBase.contains("connector_short_name = \"pg-connector\"")
+  }
+
+  ["_e2e_base.py emits default argo_package_name from name"] {
+    apiBase.contains("argo_package_name = \"@atlan/my-api\"")
+  }
+
+  ["_e2e_base.py emits default argo_template_name from name"] {
+    apiBase.contains("argo_template_name = \"atlan-my-api\"")
+  }
+
+  ["_e2e_base.py emits default app_service_url from name"] {
+    apiBase.contains("app_service_url = \"http://my-api.my-api-app.svc.cluster.local\"")
+  }
+
+  ["_e2e_base.py respects overridden argo/service fields"] {
+    overrideBase.contains("argo_package_name = \"@custom/scope\"")
+    overrideBase.contains("argo_template_name = \"custom-template\"")
+    overrideBase.contains("app_service_url = \"http://custom.svc.local\"")
+  }
+
+  // ── _e2e_base.py: connection_type and connection_category emission ────────────
+
+  ["connection_type emitted when connector.value != name"] {
+    postgresBase.contains("connection_type = \"postgres\"")
+  }
+
+  ["connection_type omitted when connector.value == name"] {
+    !selfNamedBase.contains("connection_type =")
+  }
+
+  ["connection_category emitted when category is not warehouse"] {
+    // API has category "API", postgres has "database" — both should emit
+    apiBase.contains("connection_category = \"API\"")
+    postgresBase.contains("connection_category = \"database\"")
+  }
+
+  ["connection_category omitted when category is warehouse (SDK default)"] {
+    !warehouseBase.contains("connection_category =")
+  }
+
+  // ── _e2e_base.py: pascalCase name → class name ───────────────────────────────
+
+  ["pascalCase converts hyphenated name to PascalCase class name"] {
+    postgresBase.contains("PgConnectorGeneratedE2EBase")
+  }
+
+  ["pascalCase handles names with dots and other non-alphanumeric chars"] {
+    // overrideApp name = "my-connector" → MyConnector
+    overrideBase.contains("MyConnectorGeneratedE2EBase")
+  }
+
+  // ── _e2e_substitutions.py: not emitted when no custom fields ─────────────────
+
+  ["_e2e_substitutions.py omitted when all uiConfig fields are in parent skip-set"] {
+    !allSkippedApp.output.files.containsKey("app/generated/_e2e_substitutions.py")
+  }
+
+  ["_e2e_substitutions.py omitted when uiConfig is null"] {
+    !noCredApp.output.files.containsKey("app/generated/_e2e_substitutions.py")
+  }
+
+  // ── _e2e_substitutions.py: parent class routing ──────────────────────────────
+
+  ["SQL connector substitutions extend SQLMustacheSubstitutions"] {
+    widgetSubs.contains("from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions")
+    widgetSubs.contains("class WidgetTestMustacheSubstitutions(SQLMustacheSubstitutions):")
+  }
+
+  ["Non-SQL connector substitutions extend MustacheSubstitutions"] {
+    local apiWidgetApp = (App) {
+      name = "api-widget"
+      displayName = "API Widget"
+      icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+      connector = Connectors.API
+      hasCredentialConfig = false
+      pipeline { publish = null }
+      uiConfig = new App.UIConfig {
+        tasks {
+          ["Configuration"] {
+            inputs {
+              ["custom_field"] = new App.TextInput { title = "Custom" }
+            }
+          }
+        }
+      }
+    }
+    local subs = apiWidgetApp.output.files["app/generated/_e2e_substitutions.py"].text
+    subs.contains("from application_sdk.testing.e2e.substitutions import MustacheSubstitutions")
+    subs.contains("class ApiWidgetMustacheSubstitutions(MustacheSubstitutions):")
+  }
+
+  // ── _e2e_substitutions.py: widget-type dispatch ──────────────────────────────
+
+  ["BooleanInput with default=true emits bool field with True default"] {
+    widgetSubs.contains("bool_field: bool = Field(default=True, alias=\"{{bool_field}}\")")
+  }
+
+  ["NumericInput emits int field with numeric default"] {
+    widgetSubs.contains("num_field: int = Field(default=42, alias=\"{{num_field}}\")")
+  }
+
+  ["Radio with possibleValues emits Literal type"] {
+    // 90 chars → fmtSubsField wraps to multi-line form
+    widgetSubs.contains("radio_field: Literal[\"alpha\", \"beta\"] = Field(\n        default=\"alpha\",\n        alias=\"{{radio_field}}\",\n    )")
+  }
+
+  ["DropDown (single-select) with possibleValues emits Literal type"] {
+    // 90 chars → fmtSubsField wraps to multi-line form
+    widgetSubs.contains("dropdown_field: Literal[\"x\", \"y\", \"z\"] = Field(\n        default=\"x\",\n        alias=\"{{dropdown_field}}\",\n    )")
+  }
+
+  ["DropDown with multiSelect=true emits str (not Literal)"] {
+    widgetSubs.contains("multi_field: str = Field(default=\"\", alias=\"{{multi_field}}\")")
+    !widgetSubs.contains("Literal[\"p\",")
+  }
+
+  ["SqlTree emits dict[str, Any] | None"] {
+    widgetSubs.contains("tree_field: dict[str, Any] | None = Field(default=None, alias=\"{{tree_field}}\")")
+  }
+
+  ["TextInput with default emits str field with that default"] {
+    widgetSubs.contains("text_field: str = Field(default=\"hello\", alias=\"{{text_field}}\")")
+  }
+
+  ["ConnectionCreator is skipped in substitutions"] {
+    !widgetSubs.contains("connection:")
+    !widgetSubs.contains("alias=\"{{connection}}\"")
+  }
+
+  ["SQL parent-class fields (include_filter etc.) are skipped for SQL connector"] {
+    // allSkippedApp has include_filter but is SQL → should be skipped entirely
+    !allSkippedApp.output.files.containsKey("app/generated/_e2e_substitutions.py")
+  }
+
+  ["Substitutions imports Literal and Any only when used"] {
+    widgetSubs.contains("from typing import Any, Literal")
+  }
+
+  ["Substitutions omits typing import when no Literal/Any fields"] {
+    local strOnlyApp = (App) {
+      name = "str-only"
+      displayName = "Str Only"
+      icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+      connector = Connectors.API
+      hasCredentialConfig = false
+      pipeline { publish = null }
+      uiConfig = new App.UIConfig {
+        tasks {
+          ["Configuration"] {
+            inputs {
+              ["my_text"] = new App.TextInput { title = "Text" }
+            }
+          }
+        }
+      }
+    }
+    local subs = strOnlyApp.output.files["app/generated/_e2e_substitutions.py"].text
+    !subs.contains("from typing import")
+  }
+
+  // ── _e2e_substitutions.py: alias preserves original key casing ────────────────
+
+  ["Substitution alias preserves original kebab-case key"] {
+    // widgetApp has bool_field (underscore) — alias should reflect the original key
+    widgetSubs.contains("alias=\"{{bool_field}}\"")
+  }
+
+  // ── _e2e_credential.py: not emitted without credential config ─────────────────
+
+  ["_e2e_credential.py not emitted when hasCredentialConfig=false"] {
+    !noCredApp.output.files.containsKey("app/generated/_e2e_credential.py")
+  }
+
+  // ── _e2e_credential.py: banner, imports, class structure ─────────────────────
+
+  ["_e2e_credential.py emits banner and CredentialBody import"] {
+    singleAuthCred.contains("# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.")
+    singleAuthCred.contains("from application_sdk.testing.e2e.credential import CredentialBody")
+  }
+
+  ["_e2e_credential.py emits correct class name"] {
+    singleAuthCred.contains("class SingleAuthCredentialBody(CredentialBody):")
+  }
+
+  // ── _e2e_credential.py: synthetic fields ─────────────────────────────────────
+
+  ["Credential body emits synthetic name field"] {
+    singleAuthCred.contains("name: str = Field(alias=\"name\")")
+  }
+
+  ["Credential body emits auth_type with first auth key as default"] {
+    singleAuthCred.contains("auth_type: str = Field(default=\"basic\", alias=\"authType\")")
+  }
+
+  ["credentialAuthDefault overrides first-key default for auth_type"] {
+    authDefaultCred.contains("auth_type: str = Field(default=\"token\", alias=\"authType\")")
+  }
+
+  // ── _e2e_credential.py: common fields ────────────────────────────────────────
+
+  ["Common FieldSpec without default emits required field (no default=)"] {
+    singleAuthCred.contains("host: str = Field(alias=\"host\")")
+  }
+
+  ["Common numeric FieldSpec with defaultValue emits int field"] {
+    singleAuthCred.contains("port: int = Field(default=5432, alias=\"port\")")
+  }
+
+  // ── _e2e_credential.py: auth-specific fields get sentinel defaults ────────────
+
+  ["Single auth option: fields with no defaultValue get empty sentinel"] {
+    singleAuthCred.contains("username: str = Field(default=\"\", alias=\"username\")")
+    singleAuthCred.contains("password: str = Field(default=\"\", alias=\"password\")")
+  }
+
+  ["Multi-auth: fields present in only one option get empty sentinel"] {
+    // username/password only in basic, token only in token
+    multiAuthCred.contains("username: str = Field(default=\"\", alias=\"username\")")
+    multiAuthCred.contains("password: str = Field(default=\"\", alias=\"password\")")
+    multiAuthCred.contains("token: str = Field(default=\"\", alias=\"token\")")
+  }
+
+  ["Multi-auth: all auth-specific fields appear in single unified class body"] {
+    multiAuthCred.contains("class MultiAuthCredentialBody(CredentialBody):")
+    // All three auth fields in one class
+    multiAuthCred.contains("username:")
+    multiAuthCred.contains("password:")
+    multiAuthCred.contains("token:")
+  }
+
+  // ── _e2e_credential.py: Extra model frozen ───────────────────────────────────
+
+  ["CredentialBodyExtra uses frozen=True in ConfigDict"] {
+    // extraFieldsApp has extraFields → triggers nested Extra model generation
+    extraFieldsCred.contains("ConfigDict(frozen=True, populate_by_name=True, serialize_by_alias=True)")
+  }
+
+  ["CredentialBodyExtra contains extraFields as typed fields"] {
+    extraFieldsCred.contains("class ExtraFieldsCredentialBodyExtra(BaseModel):")
+    extraFieldsCred.contains("schema: str")
+    extraFieldsCred.contains("timeout: int = Field(default=30")
+  }
+
+  // ── _e2e_credential.py: ConditionalFieldSpec becomes str | None ───────────────
+
+  ["ConditionalFieldSpec in URL group emits str | None field"] {
+    fullCredPy.contains("token_audience: str | None = Field(default=None, alias=\"token_audience\")")
+  }
+
+  // ── fmtSubsField: line-length wrapping ───────────────────────────────────────
+
+  ["Long Literal field is wrapped to multi-line (>88 chars)"] {
+    // output_format: Literal["parquet", "json"] + alias exceeds 88 chars
+    fullSubsPy.contains("output_format: Literal[\"parquet\", \"json\"] = Field(\n        default=\"parquet\",\n        alias=\"{{output_format}}\",\n    )")
+  }
+
+  ["Short field stays single-line (≤88 chars)"] {
+    // max_results: int = Field(default=500, alias="{{max_results}}") fits in 88 chars
+    fullSubsPy.contains("max_results: int = Field(default=500, alias=\"{{max_results}}\")")
+  }
+
+}

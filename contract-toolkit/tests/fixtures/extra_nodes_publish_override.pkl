@@ -1,0 +1,40 @@
+/// Fixture: app that declares both `pipeline.publish` (with `lineagePublish`)
+/// AND an `extraNodes["publish"]` override. Used to verify that the override
+/// keeps the typed publish node's position in the emitted DAG (between
+/// `lineage-app` and `lineage-publish`) instead of being appended at the end.
+amends "../../src/App.pkl"
+
+name = "extra-nodes-publish-override"
+displayName = "Extra Nodes Publish Override"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = new PublishStep {
+    lineagePublish = new LineagePublishStep {}
+  }
+}
+
+extraNodes {
+  ["publish"] = new PublishNode {
+    connectionCacheEnabled = true
+    connectionCacheViaAppEnabled = true
+    currentStateEnabled = true
+    currentStateViaAppEnabled = true
+    args {
+      ["delete_percentage_circuit_breaker"] = 90.0
+    }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}
