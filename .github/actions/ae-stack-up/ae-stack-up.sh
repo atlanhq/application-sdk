@@ -82,7 +82,7 @@ mkdir -p "$SHARED_ROOT"
 
 write_components() {
   # $1 = app checkout dir
-  mkdir -p "$1/components"
+  mkdir -p "$1/components" "$1/local/dapr"   # local/dapr must exist for the sqlite statestore
   cat > "$1/components/objectstore.yaml" <<EOF
 apiVersion: dapr.io/v1alpha1
 kind: Component
@@ -153,7 +153,10 @@ start_worker() {
   write_components "$dir"
   ( cd "$dir" && uv sync --all-groups >/dev/null 2>&1 || uv sync >/dev/null 2>&1 || true )
   log "starting $appid (queue=$queue, port=$app_port)"
-  ( cd "$dir" && env $extra \
+  # $extra is placed LAST so a worker can override a default (e.g. the connector
+  # sets ATLAN_DEPLOYMENT_NAME=local to unlock the dev local-vault while still
+  # listening on the explicit ATLAN_TASK_QUEUE below).
+  ( cd "$dir" && env \
       ATLAN_APPLICATION_NAME="$appname" \
       ATLAN_DEPLOYMENT_NAME="$DEPLOYMENT" \
       ATLAN_WORKFLOW_HOST=localhost ATLAN_WORKFLOW_PORT=7233 \
@@ -161,6 +164,7 @@ start_worker() {
       ATLAN_APP_HTTP_PORT="$app_port" ATLAN_HANDLER_PORT="$app_port" \
       ATLAN_DAPR_HTTP_PORT="$dhttp" ATLAN_DAPR_GRPC_PORT="$dgrpc" \
       ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS="0.0.0.0:${prom}" \
+      $extra \
       dapr run --app-id "$appid" --app-port "$app_port" \
         --dapr-http-port "$dhttp" --dapr-grpc-port "$dgrpc" \
         --dapr-internal-grpc-port "$dinternal" --metrics-port "$metrics" \
@@ -203,8 +207,15 @@ for i in $(seq 1 60); do
 done
 
 # The connector worker (always; serves the extract node + the dev local-vault).
-start_worker "$APP_DIR" "${APP_NAME}-app" "$APP_NAME" "atlan-${APP_NAME}-${DEPLOYMENT}" \
-  "ATLAN_LOCAL_DEVELOPMENT=true ATLAN_HANDLER_HOST=0.0.0.0"
+# ATLAN_DEPLOYMENT_NAME=local unlocks /workflows/v1/dev/local-vault (else 403);
+# the queue stays atlan-<app>-<deployment> via the explicit ATLAN_TASK_QUEUE.
+# ATLAN_APP_MODULE/ATLAN_HANDLER_MODULE MUST be set or the worker comes up with
+# DefaultHandler (SDR workflows only) and the AE-dispatched extraction workflow
+# never gets picked up — the child workflow then runs forever.
+CONN_EXTRA="ATLAN_LOCAL_DEVELOPMENT=true ATLAN_HANDLER_HOST=0.0.0.0 ATLAN_DEPLOYMENT_NAME=local"
+[ -n "${APP_MODULE:-}" ]     && CONN_EXTRA="$CONN_EXTRA ATLAN_APP_MODULE=${APP_MODULE}"
+[ -n "${HANDLER_MODULE:-}" ] && CONN_EXTRA="$CONN_EXTRA ATLAN_HANDLER_MODULE=${HANDLER_MODULE}"
+start_worker "$APP_DIR" "${APP_NAME}-app" "$APP_NAME" "atlan-${APP_NAME}-${DEPLOYMENT}" "$CONN_EXTRA"
 wait_ready "${APP_NAME}-app" "atlan-${APP_NAME}-${DEPLOYMENT}" 90
 
 # Publish OAuth .env bits are passed via extra-env when publish is needed.

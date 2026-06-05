@@ -703,10 +703,13 @@ class FieldSpec {
   helpText: String?                      // Tooltip
   required: Boolean = true
   includeRequiredWhenFalse: Boolean = false
-  sensitive: Boolean = false             // true → password widget
-  fieldType: FieldType = "text"          // text|password|textarea|select|number|checkbox|url|email
+  sensitive: Boolean = false             // true → password widget unless fieldType is an upload widget
+  fieldType: FieldType = "text"          // text|password|textarea|select|number|checkbox|url|email|inputRepeater|fileUpload|credentialFileInput
   options: Listing<String>?              // For select fields
   optionLabels: Mapping<String, String>? // Display labels for options
+  fileTypes: Listing<String>?            // For upload widgets: accepted extensions or MIME types
+  fileMetadata: Boolean = true           // For upload widgets: emit metadata JSON mode
+  removeBeforeUpload: Boolean = false    // For upload widgets: emit legacy remove-before-upload flag
   defaultValue: String?                  // Pre-filled value
   validationRegex: String?               // Regex pattern
   width: Int = 8                         // Grid: 8=full, 4=half, 2=quarter
@@ -752,6 +755,8 @@ configmaps. New apps should normally leave them at their defaults.
 | `fieldType = "checkbox"` | `checkbox` |
 | `fieldType = "textarea"` | `TextInput` |
 | `fieldType = "inputRepeater"` | `inputRepeater` |
+| `fieldType = "fileUpload"` | `fileUpload` |
+| `fieldType = "credentialFileInput"` | `credentialFileInput` |
 | Default | `input` |
 
 ## ConditionalFieldSpec — Conditional Credential Field
@@ -819,6 +824,15 @@ open class AuthOption {
 Use `NamedWidget` when a workflow-style `Config.UIElement` needs a key inside
 the credential form. `fields`, `extraFields`, and `postExtraFields` all preserve
 declaration order.
+
+Use `fieldType = "fileUpload"` for credential fields that should render the
+frontend upload-only credential widget. Use `fieldType = "credentialFileInput"`
+for frontend's credential file-reference input: uploaded files are stored as JSON
+upload references, while typed reference values (for example secret-store keys or
+`objectstore://` paths) remain plain strings. The generated schema remains
+`type = "string"` and emits the selected upload widget plus optional `ui.accept`
+from `fileTypes`, `ui.fileMetadata`, and opt-in `ui.removeBeforeUpload` when the
+widget is emitted.
 
 Use `credentialSharedExtraFields` when the same `extra` metadata should be
 available regardless of auth type instead of being duplicated in every option.
@@ -1175,7 +1189,7 @@ connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_fact
 |---|---|---|---|
 | `NestedInput` | `nested` | `dict[str, Any]` | `inputs` — sub-element map |
 | `Sage` / `SageV2` | `sage` / `sageV2` | `str` | `checks` — preflight definitions. `connectorConfig` + `selectedCredentialGuid` route per-dialect checks to a selected connection's configmap. |
-| `FileUploader` | `fileUpload` | `FileReference \| None` | `fileTypes` |
+| `FileUploader` | `fileUpload` | `FileReference \| None` | `fileTypes`, optional `removeBeforeUpload` |
 | `AgentSelector` | `agent` | `dict[str, Any]` | `agentConfigEntries` — use `Listing<Any>` with `Mapping` for nested objects needing `"default"` keys |
 | `InfoBanner` | `infoBanner` | omitted by default | Static markdown banner with `bannerType`, `content`, optional `iconName`, `hideBannerIcon`, and `linkConfig`. Defaults to `includeInManifest=false` and `includeInInput=false`. Use `widgetName = "InfoBanner"` for credential banners that need that casing. |
 | `Switcher` | `switcher` | `bool` | Boolean switch with `switchTitle`, `defaultSelection`, optional `begin`, and `toastConfig`. Can be used in credential configs through `NamedWidget`. |
