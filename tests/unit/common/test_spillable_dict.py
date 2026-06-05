@@ -211,10 +211,102 @@ class TestSpillableDict:
 
     def test_contains_accepts_non_str(self) -> None:
         """__contains__ signature is `key: object` (protocol). Passing a
-        non-str shouldn't raise — should just return False since we only
-        ever store str keys."""
+        non-str shouldn't raise — should just return False if the key
+        wasn't stored, regardless of type."""
         with SpillableDict() as d:
             d["k"] = "v"
             # These should not raise — just return False
             assert (123 in d) is False
             assert (None in d) is False  # type: ignore[operator]
+            assert ([1, 2] in d) is False  # unhashable-style probe
+            assert (object() in d) is False
+
+
+class TestSpillableDictKeyTypeGuards:
+    """Defensive guards on the four entry points so the dict behaves like
+    standard dict/sqlitedict for None and non-primitive keys.
+
+    rocksdict accepts (str, int, float, bool, bytes) as keys; anything else
+    raises internally with a TypeError. Connector callers pass None for
+    optional join keys (e.g. dbtcore source rows without an associated
+    job), which previously crashed the whole workflow. These guards
+    return safe defaults instead.
+
+    Mirrors the behaviour the ``atlan-dbt-app/.../RobustSpillableDict``
+    subclass implemented before being folded back into the SDK
+    (atlan-dbt-app PR #173 → application-sdk follow-up).
+    """
+
+    def test_get_none_returns_default(self) -> None:
+        with SpillableDict() as d:
+            d["k"] = "v"
+            assert d.get(None) is None  # type: ignore[arg-type]
+            assert d.get(None, "fallback") == "fallback"  # type: ignore[arg-type]
+
+    def test_get_unsupported_type_returns_default(self) -> None:
+        with SpillableDict() as d:
+            d["k"] = "v"
+            assert d.get([1, 2, 3], "miss") == "miss"  # type: ignore[arg-type]
+            assert d.get(object(), "miss") == "miss"  # type: ignore[arg-type]
+            assert d.get({"unhashable": "but valid arg"}, "miss") == "miss"  # type: ignore[arg-type]
+
+    def test_getitem_unsupported_type_raises_keyerror(self) -> None:
+        with SpillableDict() as d:
+            with pytest.raises(KeyError):
+                _ = d[None]  # type: ignore[index]
+            with pytest.raises(KeyError):
+                _ = d[[1, 2]]  # type: ignore[index]
+            with pytest.raises(KeyError):
+                _ = d[object()]  # type: ignore[index]
+
+    def test_setitem_none_is_silent_noop(self) -> None:
+        """Connector code paths set d[jobId] = info even when jobId is
+        None (job-less source rows). Silently drop the write rather than
+        force every caller to guard."""
+        with SpillableDict() as d:
+            d[None] = "ignored"  # type: ignore[index]
+            assert (None in d) is False  # type: ignore[operator]
+            # The store stays empty — the None write didn't sneak under
+            # some other key.
+            assert len(d) == 0
+            # A real key after the noop still works.
+            d["k"] = "v"
+            assert d["k"] == "v"
+            assert len(d) == 1
+
+    def test_setitem_other_non_primitive_raises_loudly(self) -> None:
+        """Anything other than None must surface rocksdict's TypeError —
+        we don't silently drop list/dict/object writes, otherwise a caller
+        bug (forgetting to stringify a key) becomes silent data loss."""
+        with SpillableDict() as d:
+            with pytest.raises((TypeError, Exception)):
+                d[[1, 2]] = "loud"  # type: ignore[index]
+            with pytest.raises((TypeError, Exception)):
+                d[object()] = "loud"  # type: ignore[index]
+
+    def test_delitem_none_raises_keyerror(self) -> None:
+        with SpillableDict() as d, pytest.raises(KeyError):
+            del d[None]  # type: ignore[arg-type]
+
+    def test_delitem_unsupported_type_raises_keyerror(self) -> None:
+        with SpillableDict() as d:
+            with pytest.raises(KeyError):
+                del d[[1, 2]]  # type: ignore[arg-type]
+            with pytest.raises(KeyError):
+                del d[object()]  # type: ignore[arg-type]
+
+    def test_all_supported_primitive_key_types_round_trip(self) -> None:
+        """All five RocksDB-supported types work as keys end-to-end."""
+        with SpillableDict() as d:
+            d["s"] = "via-str"
+            d[42] = "via-int"
+            d[3.14] = "via-float"
+            d[True] = "via-bool"
+            d[b"bk"] = "via-bytes"
+            assert d.get("s") == "via-str"
+            assert d.get(42) == "via-int"
+            assert d.get(3.14) == "via-float"
+            assert d.get(True) == "via-bool"
+            assert d.get(b"bk") == "via-bytes"
+            for k in ("s", 42, 3.14, True, b"bk"):
+                assert k in d
