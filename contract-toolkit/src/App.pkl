@@ -312,7 +312,7 @@ entrypoints: Listing<Entrypoint> = new Listing {}
 // ── Credential field types ────────────────────────────────────────────────────
 
 /// Supported field types for credential UI generation.
-typealias FieldType = "text"|"password"|"textarea"|"select"|"number"|"checkbox"|"url"|"email"|"inputRepeater"
+typealias FieldType = "text"|"password"|"textarea"|"select"|"number"|"checkbox"|"url"|"email"|"inputRepeater"|"fileUpload"|"credentialFileInput"
 
 /// A single credential field definition.
 class FieldSpec {
@@ -335,6 +335,15 @@ class FieldSpec {
   options: Listing<String>?
 
   optionLabels: Mapping<String, String>?
+
+  /// File extensions or MIME types accepted by file upload credential fields.
+  fileTypes: Listing<String>?
+
+  /// Whether file upload fields return upload metadata JSON.
+  fileMetadata: Boolean = true
+
+  /// Whether file upload fields should remove the prior upload before accepting a replacement.
+  removeBeforeUpload: Boolean = false
 
   defaultValue: String?
 
@@ -1362,7 +1371,9 @@ local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
 
   ["ui"] = new Mapping {
     when (f.includeUiWidget) {
-      ["widget"] = if (f.sensitive || f.fieldType == "password") "password"
+      ["widget"] = if (f.fieldType == "fileUpload") "fileUpload"
+        else if (f.fieldType == "credentialFileInput") "credentialFileInput"
+        else if (f.sensitive || f.fieldType == "password") "password"
         else if (f.fieldType == "textarea") "TextInput"
         else if (f.fieldType == "number") "inputNumber"
         else if (f.fieldType == "checkbox") "checkbox"
@@ -1382,6 +1393,11 @@ local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
     when (f.feedback != null) { ["feedback"] = f.feedback }
     when (f.message != null) { ["message"] = f.message }
     when (f.byocDisabled != null) { ["BYOCdisabled"] = f.byocDisabled }
+    when (f.includeUiWidget) {
+      when ((f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") && f.fileTypes != null) { ["accept"] = f.fileTypes!!.toList() }
+      when (f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") { ["fileMetadata"] = f.fileMetadata }
+      when ((f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") && f.removeBeforeUpload) { ["removeBeforeUpload"] = true }
+    }
     when (f.validationRules != null) {
       ["rules"] = f.validationRules
     }

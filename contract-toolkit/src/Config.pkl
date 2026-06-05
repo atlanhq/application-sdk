@@ -499,6 +499,9 @@ class Widget {
   /// Whether the widget should return file metadata.
   fileMetadata: Boolean?
 
+  /// Whether the UI should remove the prior upload before accepting a replacement.
+  removeBeforeUpload: Boolean?
+
   /// Most distant past value that can be selected through the widget.
   min: Int?
 
@@ -978,6 +981,7 @@ class ConnectionRefInput extends UIElement {
 /// | `hide` | | whether the widget will be shown in the UI (false) or not (true) | `false` |
 /// | `helpText` | | informational text to place in a hover-over to describe the use of the input | `""` |
 /// | `placeholderText` | | example text to place within the widget to exemplify its use | `""` |
+/// | `removeBeforeUpload` | | whether the UI should remove the prior upload before accepting a replacement | `false` |
 class FileUploader extends UIElement {
   fixed type = "string"
   required: Boolean? = false // Necessary for generated Kotlin copy method override
@@ -988,11 +992,15 @@ class FileUploader extends UIElement {
   /// Example text to place within the widget to exemplify its use.
   hidden placeholderText: String = ""
 
+  /// Whether the UI should remove the prior upload before accepting a replacement.
+  hidden removeBeforeUpload: Boolean = false
+
   /// (Generated) Internal configuration for the UI's rendering.
   fixed ui {
     widget = "fileUpload"
     placeholder = placeholderText
     accept = fileTypes.toList()
+    when (removeBeforeUpload) { removeBeforeUpload = true }
     fileMetadata = true
   }
 }

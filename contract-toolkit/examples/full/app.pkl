@@ -120,6 +120,22 @@ credentialAuthOptions {
     }
     fields {
       new FieldSpec { name = "token"; sensitive = true; displayName = "API Token"; width = 8 }
+      new FieldSpec {
+        name = "ca_cert-file"
+        displayName = "CA Certificate File"
+        fieldType = "fileUpload"
+        fileTypes { ".crt"; ".pem" }
+        removeBeforeUpload = true
+        required = false
+      }
+      new FieldSpec {
+        name = "keytab-file"
+        displayName = "Keytab File"
+        fieldType = "credentialFileInput"
+        placeholder = "Upload a file, type a secret-store key, or objectstore://path"
+        fileTypes { ".keytab"; "application/kerberos-keytab" }
+        required = false
+      }
     }
   }
 }
