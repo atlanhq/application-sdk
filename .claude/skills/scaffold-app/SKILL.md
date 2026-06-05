@@ -157,7 +157,31 @@ class {Name}App(SqlMetadataExtractor):
         return FetchDatabasesOutput(chunk_count=1, total_record_count=10)
 ```
 
-For REST connectors, subclass `App` directly with custom `@task` methods.
+The `SqlMetadataExtractor` base `run()` already calls `App.upload()` to hand off artifacts to Atlan. Do not override `run()` without also calling `super().run(input)` or explicitly calling `await self.upload(...)` — omitting the upload is a silent failure in SDR deployments.
+
+For REST connectors, subclass `App` directly with custom `@task` methods and an explicit `App.upload()` call in `run()`:
+
+```python
+from application_sdk.app import App, task
+from application_sdk.contracts import UploadInput
+
+class {Name}App(App):
+    @task(timeout_seconds=3600)
+    async def fetch_entities(self, input: {Name}Input) -> {Name}Output:
+        # ... fetch and write results to input.output_path ...
+        return {Name}Output(output_path=input.output_path, record_count=count)
+
+    async def run(self, input: {Name}Input) -> {Name}Output:
+        fetch_out = await self.fetch_entities(input)
+
+        # Required: push output to Atlan's upstream store (atlan-objectstore in SDR)
+        # so the publish app can index it. The activity interceptor only writes
+        # FileReferences to the customer-owned objectstore. Omitting this call
+        # produces a silent failure in SDR — the DAG succeeds but nothing is published.
+        # See docs/concepts/file-reference.md and ADR-0014.
+        await self.upload(UploadInput(local_path=fetch_out.output_path))
+        return fetch_out
+```
 
 ### 8. Generate `app/clients.py` (SQL only)
 

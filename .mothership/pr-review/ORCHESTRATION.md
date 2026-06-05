@@ -66,13 +66,26 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
    ```
 
+4b. **Reset per-run review artifacts** — these files are load-bearing signals
+    across later phases, so never let a prior iteration in the same sandbox
+    affect the current verdict or public post:
+    ```bash
+    rm -f /tmp/TOOLKIT_ROVER_NOTE.md
+    : > /tmp/TOOLKIT_VALIDATION.md
+    : > /tmp/TOOLKIT_PR_ARTIFACTS.txt
+    : > /tmp/TOOLKIT_CHANGED_FILES.txt
+    : > /tmp/TOOLKIT_CONSUMERS.md
+    mkdir -p /tmp/inline-comments
+    find /tmp/inline-comments -type f \( -name '*.md' -o -name '*.json' \) -delete
+    ```
+
 5. **Stale SHA guard** — bail if the PR has moved since dispatch:
    ```bash
    CURRENT_SHA=$(jq -r '.headRefOid' /tmp/PR.json)
    if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
      echo "PR moved from $HEAD_SHA to $CURRENT_SHA since dispatch — aborting cleanly."
      # Submit a minimal review so the status check doesn't stay pending,
-     # then exit. A fresh @test-sdk-review on the new HEAD gets a new session.
+     # then exit. A fresh @sdk-review on the new HEAD gets a new session.
      exit 0
    fi
    ```
@@ -89,7 +102,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    - `.mothership/review.yaml`
 
 6b. **Load prior review into context (re-review continuity)** — if a
-    previous `<!-- TEST_SDK_REVIEW -->` summary comment exists on this
+    previous `<!-- SDK_REVIEW -->` summary comment exists on this
     PR, read its full body and write it to `/tmp/PRIOR_REVIEW.md`. The
     body becomes **input** to Phase 2 reasoning (not just a labeling
     reference for §2d at the end): it tells the agents what was flagged
@@ -99,23 +112,22 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     ```bash
     PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
       --paginate \
-      --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
+      --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
 
     if [ -n "$PRIOR_REVIEW" ]; then
       printf '%s\n' "$PRIOR_REVIEW" > /tmp/PRIOR_REVIEW.md
-      echo "[bootstrap] prior test-sdk-review summary found — loaded into /tmp/PRIOR_REVIEW.md"
+      echo "[bootstrap] prior sdk-review summary found — loaded into /tmp/PRIOR_REVIEW.md"
     else
       : > /tmp/PRIOR_REVIEW.md
-      echo "[bootstrap] no prior test-sdk-review summary — fresh review"
+      echo "[bootstrap] no prior sdk-review summary — fresh review"
     fi
     ```
 
     **CRITICAL — jq idiom:** wrap the selection in `[ ... ] | last`
     and take `.body` from the array element. A naive
     `--jq '.[] | select(...) | .body' | head -1` collapses the raw
-    multiline body to its first line (the `<!-- TEST_SDK_REVIEW -->`
+    multiline body to its first line (the `<!-- SDK_REVIEW -->`
     HTML marker) and silently drops the entire review content.
-    Same shape-of-bug as claude.yml:822-823 is set up to avoid.
 
     Every subsequent phase that reasons about the PR (Phase 2 agents,
     cross-model debias, verdict determination) should treat
@@ -126,7 +138,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     counts as a "new" finding vs a known-and-discussed one.
 
 7. **§Intent Inference** — interpret `COMMENTER_INTENT` (free-form text
-   the human typed after `@test-sdk-review`) and set the mode for this run.
+   the human typed after `@sdk-review`) and set the mode for this run.
    The workflow does NOT parse commands — that is your job.
 
    Apply these rules in order; first match wins. If `COMMENTER_INTENT`
@@ -175,8 +187,10 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    git merge --abort
    ```
    Submit minimal review: "PR has merge conflicts. Please rebase or
-   comment `@test-sdk-review` after resolving conflicts." Label `test-sdk-review-needs-rebase`.
-   EXIT.
+   comment `@sdk-review` after resolving conflicts." Set the verdict in
+   §3e to `NEEDS_REBASE` (the structured marker is `<!-- VERDICT:
+   NEEDS_REBASE -->`); the GHA layer applies the `sdk-review-needs-rebase`
+   label from there. EXIT.
 
 9. **Pre-commit cleanup** (eliminate style noise before review):
    ```bash
@@ -228,12 +242,21 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
 
 12. **Smart agent routing** — classify the PR:
     ```bash
-    TOTAL_FILES=$(grep -c '^+++ b/' /tmp/DIFF.patch || echo 0)
-    TEST_FILES=$(grep -c '^+++ b/tests/' /tmp/DIFF.patch || echo 0)
-    DOC_FILES=$(grep -c '^+++ b/docs/' /tmp/DIFF.patch || echo 0)
-    CONFIG_FILES=$(grep -cE '^\+\+\+ b/(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' /tmp/DIFF.patch || echo 0)
+    gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > /tmp/PR_FILES.txt
+    TOTAL_FILES=$(wc -l < /tmp/PR_FILES.txt)
+    CT_FILES=$(grep -cE '^contract-toolkit/' /tmp/PR_FILES.txt || true)
+    SDK_FILES=$(grep -cE '^application_sdk/' /tmp/PR_FILES.txt || true)
+    TEST_FILES=$(grep -cE '^(tests/|contract-toolkit/tests/)' /tmp/PR_FILES.txt || true)
+    DOC_FILES=$(grep -cE '^(docs/|contract-toolkit/docs/|.*README\.md$)' /tmp/PR_FILES.txt || true)
+    CONFIG_FILES=$(grep -cE '^(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' /tmp/PR_FILES.txt || true)
     SOURCE_FILES=$((TOTAL_FILES - TEST_FILES - DOC_FILES - CONFIG_FILES))
     ```
+   This file-list based classification includes deleted files; do not classify
+   only from `+++ b/` diff headers.
+   - If `CT_FILES > 0 && SDK_FILES == 0 && CONFIG_FILES == 0` → `review_scope=contract-toolkit`
+     (toolkit-review.md only; mandatory private consumer validation based on affected surface)
+   - If `CT_FILES > 0 && (SDK_FILES > 0 || CONFIG_FILES > 0)` → `review_scope=mixed-sdk-toolkit`
+     (standard SDK review agents + toolkit-review.md)
    - If `SOURCE_FILES == 0 && TEST_FILES > 0` → `review_scope=tests-only`
      (QUALITY agent only — focused on test patterns, coverage, assertions)
    - If `SOURCE_FILES == 0 && DOC_FILES > 0 && TEST_FILES == 0` → `review_scope=docs-only`
@@ -267,13 +290,176 @@ rg "warnings\.warn\|DeprecationWarning" <file>          # deprecated?
 
 Build annotations: lines, callers, DUMPING_GROUND/V3_REPLACEMENT/DEPRECATED flags.
 
-### 1b. Dispatch Reachability Agent (if review_scope=full)
+### 1b. Dispatch Reachability Agent (if review_scope=full or mixed-sdk-toolkit)
 
 Use Agent tool to dispatch `agents/reachability.md` — classifies each
 changed symbol as temporal-workflow, temporal-activity, public-http,
 internal, test, or dead.
 
-Skip if review_scope is tests-only, docs-only, or config-only.
+Skip if review_scope is contract-toolkit, tests-only, docs-only, or config-only.
+
+### 1b-toolkit. Private Toolkit Consumer Setup (if review_scope=contract-toolkit or mixed-sdk-toolkit)
+
+Read:
+
+- `contract-toolkit/AGENTS.md`
+- `.mothership/pr-review/agents/toolkit-review.md`
+- `.mothership/pr-review/references/toolkit-consumer-registry.md`
+
+Classify the affected toolkit surfaces from `/tmp/DIFF.patch`. Then clone or
+reuse every mandatory consumer target from the registry. This validation setup
+is mandatory for affected surfaces; do not approve if a required check cannot
+run.
+
+Create a private validation ledger. This is the source of truth for toolkit
+compatibility status and verdict gating:
+
+```bash
+: > /tmp/TOOLKIT_VALIDATION.md
+printf '## Toolkit Validation Ledger\n\n' >> /tmp/TOOLKIT_VALIDATION.md
+```
+
+First run local PR-bound toolkit checks when toolkit source, examples, or
+generated output changed:
+
+```bash
+contract-toolkit/scripts/regenerate-all.sh
+contract-toolkit/scripts/check-invariants.sh
+(cd contract-toolkit && pkl test tests/*.pkl)
+uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py
+git diff --check
+```
+
+If any command fails due to PR code or stale generated output, add a finding.
+If the command cannot run due to Rover environment/tooling failure, create
+`/tmp/TOOLKIT_ROVER_NOTE.md` with the sanitized note below.
+
+Record successful local checks privately:
+
+```bash
+printf -- '- Generated SDK input contract: validated (local generated imports and Pkl tests passed)\n' >> /tmp/TOOLKIT_VALIDATION.md
+```
+
+Capture PR-generated artifacts as the input to downstream checks. Do not use a
+consumer repository's released toolkit dependency as proof for this PR:
+
+```bash
+find contract-toolkit/examples -path '*/generated/*' -type f | sort > /tmp/TOOLKIT_PR_ARTIFACTS.txt
+git diff --name-only -- contract-toolkit/examples contract-toolkit/src > /tmp/TOOLKIT_CHANGED_FILES.txt
+```
+
+Use `/tmp/toolkit-review-consumers` for scratch clones:
+
+```bash
+mkdir -p /tmp/toolkit-review-consumers
+
+# Core consumers. Use existing /workspace checkout if present; otherwise clone.
+# Record branch and SHA privately in /tmp/TOOLKIT_CONSUMERS.md.
+for spec in \
+  "atlan-frontend beta" \
+  "blaze main" \
+  "heracles beta" \
+  "atlan-automation-engine-app main"
+do
+  repo="${spec% *}"
+  branch="${spec#* }"
+  if [ -d "/workspace/${repo}/.git" ]; then
+    target="/workspace/${repo}"
+  else
+    target="/tmp/toolkit-review-consumers/${repo}"
+    if [ ! -d "${target}/.git" ] && ! git clone "https://github.com/atlanhq/${repo}.git" "${target}"; then
+      printf '%s\n' "Review note: one required compatibility check could not be completed due to a Rover execution issue. Please re-run @sdk-review or request human review before merge." > /tmp/TOOLKIT_ROVER_NOTE.md
+      continue
+    fi
+  fi
+  if ! git -C "${target}" fetch origin "${branch}"; then
+    printf '%s\n' "Review note: one required compatibility check could not be completed due to a Rover execution issue. Please re-run @sdk-review or request human review before merge." > /tmp/TOOLKIT_ROVER_NOTE.md
+    continue
+  fi
+  printf '%s %s %s\n' "${repo}" "origin/${branch}" "$(git -C "${target}" rev-parse "origin/${branch}")" >> /tmp/TOOLKIT_CONSUMERS.md
+done
+```
+
+Cloning/fetching only establishes the validation target. It is not validation.
+For each affected capability, run the corresponding minimum actionable check in
+the registry using PR-generated artifacts or a scratch contract rewritten to
+amend/import `/workspace/application-sdk/contract-toolkit/src/*.pkl`. If no
+PR-bound command or inspection is possible, mark that capability `needs rerun`
+and do not approve.
+
+Each mandatory capability must append exactly one private status line to
+`/tmp/TOOLKIT_VALIDATION.md`:
+
+```text
+- UI rendering compatibility: validated (<private evidence recorded>)
+- Manifest substitution compatibility: validated (<private evidence recorded>)
+- Workflow execution contract: validated (<private evidence recorded>)
+- Generated SDK input contract: validated (<private evidence recorded>)
+- Representative app pattern: not applicable (<why>)
+```
+
+Allowed statuses are `validated`, `not applicable`, and `needs rerun`. Any
+`needs rerun` status forces `NEEDS_HUMAN`.
+The public review must mirror these as a `### Cross-Repo Validation` section
+using only capability aliases and status values. Do not include private
+consumer repository names, package names, branch names, SHAs, local paths, or
+system-app implementation details in the public section.
+
+For representative app patterns, inspect PR title, body, and diff for trigger
+terms from the registry. Clone/fetch only the matching pattern repos. Optional
+field additions do not require adoption in the representative app unless the PR
+claims compatibility or changes required generated/runtime behavior.
+
+Use these pattern specs after a trigger match:
+
+```bash
+# Pattern specs: "<pattern> <repo> <branch>"
+# query-intelligence atlan-query-intelligence-app main
+# publish atlan-publish-app main
+# popularity atlan-popularity-app main
+# lineage atlan-lineage-app main
+```
+
+For each matched pattern, reuse `/workspace/<repo>` if present, otherwise clone
+to `/tmp/toolkit-review-consumers/<repo>`, fetch the listed branch, and append
+the private SHA to `/tmp/TOOLKIT_CONSUMERS.md`.
+
+When validating a representative app contract, work only in a scratch copy. If
+the contract imports `@app-contract-toolkit/...`, rewrite that scratch copy to
+import the PR checkout source under
+`/workspace/application-sdk/contract-toolkit/src/` before running `pkl eval`.
+
+Scratch rewrite pattern:
+
+```bash
+scratch="/tmp/toolkit-review-consumers/scratch/<pattern>"
+mkdir -p "$scratch"
+cp -R "<consumer-contract-dir>"/. "$scratch"/
+rg -l '@app-contract-toolkit/' "$scratch" \
+  | xargs perl -0pi -e 's#@app-contract-toolkit/#/workspace/application-sdk/contract-toolkit/src/#g'
+pkl eval -m "$scratch/generated" "$scratch/app.pkl"
+```
+
+If the representative app does not have a contract yet, do not fail adoption.
+Validate the generic PR-generated artifact shape and record the representative
+pattern as `not applicable` with the reason.
+
+All consumer repo names, local paths, and SHAs are private evidence. Public PR
+comments may only use capability aliases:
+
+- `UI rendering compatibility`
+- `Manifest substitution compatibility`
+- `Workflow execution contract`
+- `Generated SDK input contract`
+- `Representative app pattern`
+
+If clone/fetch/auth/network fails for a mandatory target, create
+`/tmp/TOOLKIT_ROVER_NOTE.md` with exactly this public note and continue to
+Phase 2 so the review can request a rerun or human review:
+
+```text
+Review note: one required compatibility check could not be completed due to a Rover execution issue. Please re-run @sdk-review or request human review before merge.
+```
 
 ### 1c. Prepare Context by Tier
 
@@ -374,7 +560,7 @@ done
 ```
 > **Large PR (N files, M lines).** Full review applied to X high-risk files.
 > Hunk review applied to Y medium-risk files. Z low-risk files skipped.
-> Re-run `@test-sdk-review` on specific files if needed.
+> Re-run `@sdk-review` on specific files if needed.
 ```
 
 #### Single-file overflow (any tier)
@@ -431,6 +617,8 @@ Based on `review_scope`, dispatch agents via the Agent tool:
 | review_scope | Agents dispatched |
 |---|---|
 | `full` | correctness.md + quality.md + structure.md (all 3) |
+| `contract-toolkit` | toolkit-review.md only |
+| `mixed-sdk-toolkit` | correctness.md + quality.md + structure.md + toolkit-review.md |
 | `tests-only` | quality.md only |
 | `tests-focused` | quality.md + correctness.md (lightweight) |
 | `config-only` | correctness.md only |
@@ -438,6 +626,17 @@ Based on `review_scope`, dispatch agents via the Agent tool:
 
 Each agent receives: PR diff (or partition), full file contents,
 holistic annotations, their reference rules, reachability output.
+For `mixed-sdk-toolkit`, partition context by path: SDK agents receive only
+`application_sdk/**`, SDK tests, and config files relevant to SDK behavior;
+`toolkit-review.md` receives `contract-toolkit/**` and toolkit-related config.
+Do not send `contract-toolkit/**` content to SDK agents for Temporal/Dapr
+review.
+For `toolkit-review.md`, also pass `contract-toolkit/AGENTS.md`,
+`.mothership/pr-review/references/toolkit-consumer-registry.md`,
+`/tmp/TOOLKIT_CONSUMERS.md` when present, `/tmp/TOOLKIT_VALIDATION.md`,
+`/tmp/TOOLKIT_PR_ARTIFACTS.txt`, and `/tmp/TOOLKIT_ROVER_NOTE.md` when
+present. The toolkit agent must not include private consumer repo names, paths,
+or SHAs in public findings.
 
 **Degradation priority** (if running over time budget):
 1. Drop STRUCTURE agent first (holistic opinions, least urgent)
@@ -452,6 +651,7 @@ After Wave 1, call GPT to challenge your findings.
 
 **Skip conditions** (no adversarial):
 - `review_scope` is tests-only, config-only, or docs-only
+- `review_scope` is contract-toolkit and toolkit-review.md produced zero findings
 - `review_tier` is "staged" (massive PR — too much context for one GPT call)
 - Wave 1 produced zero findings (nothing to challenge)
 - Time budget already over 70% consumed
@@ -511,7 +711,7 @@ silently breaks downstream consumers):
 ```bash
 PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
   --paginate \
-  --jq '[.[] | select(.body | contains("<!-- TEST_SDK_REVIEW -->"))] | last | .body // ""')
+  --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
 ```
 
 Labeling rules:
@@ -538,14 +738,77 @@ inline comment body:
 
 MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 
+### 2f-bis. PR Title Check (mandatory)
+
+**This check MUST run before §2g determines the final verdict. A title
+mismatch is treated as a Critical finding and forces verdict =
+NEEDS_FIXES — never READY_TO_MERGE — regardless of what the code review
+turned up.**
+
+Squash-merge means the PR title becomes the commit subject on main,
+which is what `release.py` (SDK) and `contract_toolkit_release.py`
+(toolkit) walk to compute the next semver. A mismatched title silently
+over-bumps or under-bumps the version. Catching this in review keeps
+the release pipeline honest.
+
+**Inputs:**
+- `/tmp/PR.json` → `.title` and `.headRefName` (already fetched in Phase 0)
+- The list of changed files. Get it once:
+  ```bash
+  gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > /tmp/PR_FILES.txt
+  ```
+
+**Categorize the changed files into three buckets:**
+
+| Bucket | Path prefix |
+|---|---|
+| `HAS_SDK` | `application_sdk/` |
+| `HAS_CT`  | `contract-toolkit/` |
+| `HAS_OTHER` | everything else (docs/, .github/, scripts/, tests/, .mothership/, etc.) |
+
+**Parse the title.** It must match conventional-commit shape:
+`<type>(<optional-scope>)<!?>: <description>`. Allowed types: `feat`,
+`fix`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
+`ci`, `revert`. If it doesn't match the shape at all, that's a
+`not_conventional` finding.
+
+**Apply the rule** (first match wins, based on which buckets are set):
+
+| Files touched | Required title | Reason |
+|---|---|---|
+| `application_sdk/` (with or without `contract-toolkit/` or `other`) | `feat(...): ...` or `fix(...): ...` — any scope, including no scope | SDK release walks every commit since the last `v*` tag; only `feat`/`fix` (or breaking `!`) drive a real bump |
+| `contract-toolkit/` only — no `application_sdk/` | `feat(contract-toolkit): ...` or `fix(contract-toolkit): ...` — scope **must** be `contract-toolkit` | Toolkit release walks commits filtered to `contract-toolkit/**`; the scope keeps the toolkit CHANGELOG entries readable |
+| Neither `application_sdk/` nor `contract-toolkit/` | Anything except `feat` or `fix` — `chore`/`docs`/`ci`/`refactor`/`perf`/`test`/`build`/`revert`/`style` | A `feat:` or `fix:` here would still trigger an SDK semver bump despite shipping no SDK code |
+
+**If the title fails the rule:**
+
+1. Add a Critical finding: `[TITLE] PR title doesn't match file scope.`
+   Body: explain what the title is, what the file buckets are, what
+   title shape is required, and give 1–2 concrete suggested rewrites.
+2. **Force verdict = `NEEDS_FIXES`** in §2g — title mismatch cannot
+   coexist with `READY_TO_MERGE` even if the code is otherwise clean.
+3. Record the result in the §3e summary's "PR Title Check" section
+   (see template) — exactly one line, either ✅ aligned or 🟥 with the
+   reason.
+
+**If the title passes:** also note in the §3e "PR Title Check" section
+that it aligned, so the human reading the verdict comment sees an
+explicit confirmation rather than absence of a complaint.
+
 ### 2g. Determine Verdict
 
 | Verdict | Condition | approval_recommendation |
 |---|---|---|
 | BLOCKED | G1/G2/G3/G5 violation | REJECT |
 | NEEDS_HUMAN | DESIGN_CHANGE scope | REQUEST_CHANGES |
-| NEEDS_FIXES | Critical, G4/G6, 3+ Important, CI failing | REQUEST_CHANGES |
-| READY_TO_MERGE | No Critical, < 3 Important, CI passing | APPROVE |
+| NEEDS_HUMAN | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit`, and non-empty `/tmp/TOOLKIT_ROVER_NOTE.md` exists or `/tmp/TOOLKIT_VALIDATION.md` has any mandatory toolkit compatibility check with status `needs rerun` | REQUEST_CHANGES |
+| NEEDS_FIXES | Critical, G4/G6, **any Important**, CI failing, **OR §2f-bis title mismatch** | REQUEST_CHANGES |
+| READY_TO_MERGE | **0 Critical AND 0 Important**, CI passing, **AND §2f-bis title aligned** | APPROVE |
+
+`READY_TO_MERGE` is strict: a single Important finding forces
+`NEEDS_FIXES`. Nits do not block. If you believe an Important should
+be downgraded, downgrade it explicitly in §2d with a one-line reason
+— do not silently approve over the top of it.
 
 ### 2h. Challenge Mode (if Intent Inference picked Mode D)
 
@@ -585,6 +848,11 @@ in the findings array — put those in the summary or inline comment body instea
 For BLOCKING/CRITICAL/HIGH findings, create inline comments:
 - `file` and `line` must be in DIFF.patch (added lines only)
 - Max 15 inline comments
+- Write each inline body to `/tmp/inline-comments/<n>.md` and the matching
+  path/line metadata to `/tmp/inline-comments/<n>.json` before Phase 3f. The
+  staged markdown file is the only source allowed for the posted `body`.
+  Do not post from an in-memory body string for toolkit reviews; that bypasses
+  the redaction gate.
 - Format:
   ```
   **[SEVERITY]** [TAG] — description
@@ -594,56 +862,48 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
   **Fix:** <exact code suggestion if PATCH scope>
   ```
 
-### 3c. Verdict-Stamp: Labels Only (formal approval posted by the GHA runner)
+### 3c. Verdict-Stamp: Owned by the GHA runner (sandbox does nothing)
 
-There is no mothership-side handler, and the sandbox itself **does not
-post `gh pr review`**. The formal approval is posted **outside** the
-sandbox by the GHA workflow (`test-sdk-review.yml` → "Approve PR as
-atlan-ci" step), so the approval is recorded as `atlan-ci` and counts
-toward the `require_code_owner_review` rule on `main`.
-`mothership-ai[bot]` is a GitHub App and cannot be in CODEOWNERS —
-same pattern claude.yml uses for the production reviewer.
+There is no mothership-side handler, and the sandbox **does not post
+`gh pr review`** and **does not apply labels**. Both happen outside
+the sandbox:
 
-The atlan-ci approval is **auto-dismissed the moment any human
-comments or reviews on the PR**, via the companion workflow
-`test-sdk-review-dismiss-on-human.yml`. So the policy is: bot
-green-lights, any human touching the PR returns the gate to "needs
-human approval." That gives the bot leverage to actually unblock
-merges (real code-owner approval, not advisory) without giving it
-the ability to solo-approve in the presence of human engagement.
+- **Approval**: `sdk-review-approve-on-verdict.yml` fires on
+  `issue_comment: created` from `mothership-ai[bot]` with the
+  `<!-- SDK_REVIEW -->` marker (within ~5s of the verdict comment
+  landing). It parses the verdict from the structured
+  `<!-- VERDICT: X -->` marker in §3e, applies the
+  `sdk-review-approved` / `sdk-review-needs-human` /
+  `sdk-review-needs-rebase` labels, sets the `sdk-review` commit
+  status, and posts the formal `atlan-ci` approval if the verdict is
+  `READY_TO_MERGE`. `sdk-review.yml`'s "Approve PR as atlan-ci" step
+  runs the same logic after the SSE stream ends as a fallback —
+  idempotency guards (label present + no existing approval) prevent
+  double-approval. atlan-ci is in CODEOWNERS, so its approval
+  satisfies `require_code_owner_review` on `main`;
+  `mothership-ai[bot]` is a GitHub App and can't be.
+- **Dismiss on human activity**: `sdk-review-dismiss-on-human.yml`
+  fires on `issue_comment` / `pull_request_review` from humans and
+  dismisses the atlan-ci approval + strips the label. So the bot can
+  unblock merges by itself until a human pushes back.
+- **Reset on push**: `sdk-review-reset-on-push.yml` fires on
+  `pull_request: synchronize` and strips the label + flips the
+  `sdk-review` status to pending on the new HEAD. Branch protection
+  separately auto-dismisses the approval (`dismiss_stale_reviews_on_push`).
+- **CI-failure downgrade**: `sdk-review-downgrade-on-ci-failure.yml`
+  fires on `check_suite: completed`; if a non-sdk-review check
+  failed on a HEAD that carries `sdk-review-approved`, it strips
+  the label, dismisses the approval, and flips status to failure.
 
-The sandbox is responsible only for **labels** here. Labels are
-**prefixed `test-`** to keep the experimental reviewer's signals
-separate from the production `@sdk-review` flow (which uses the
-un-prefixed `sdk-review-approved` / `needs-human-review` labels). Do
-NOT touch the production labels from this orchestration.
+**Implication for the sandbox**: don't `gh pr edit --add-label` or
+`gh pr review --approve` from inside the orchestration. The verdict
+flows out via the structured marker in the summary comment in §3e;
+the GHA layer reads that and does the rest.
 
-```bash
-# $GITHUB_TOKEN is set in Phase 0 step 3 (injected by dispatcher)
-PR=<pr_number>
-REPO="atlanhq/application-sdk"
-
-case "$VERDICT" in
-  "READY_TO_MERGE")
-    gh pr edit $PR --repo $REPO --add-label "test-sdk-review-approved"
-    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
-    ;;
-  "NEEDS_HUMAN")
-    gh pr edit $PR --repo $REPO --add-label "test-sdk-review-needs-human"
-    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
-    ;;
-  "NEEDS_FIXES"|"BLOCKED")
-    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-approved" 2>/dev/null || true
-    gh pr edit $PR --repo $REPO --remove-label "test-sdk-review-needs-human" 2>/dev/null || true
-    ;;
-esac
-```
-
-The verdict must also be written into the summary comment in §3e as
-a line `### Verdict: READY TO MERGE` (etc.) — the GHA runner greps
-that line out of the just-posted `<!-- TEST_SDK_REVIEW -->` comment
-to decide whether to call `gh pr review --approve`. Do not change
-the verdict line's prefix without updating the workflow's parser.
+The structured verdict marker is the contract. Keep
+`<!-- VERDICT: X -->` in sync with `### Verdict: ...` in the summary
+template. The token must be one of:
+`READY_TO_MERGE`, `NEEDS_FIXES`, `BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
 
 ### 3d. Resolve Inline Threads (on APPROVE)
 
@@ -683,15 +943,21 @@ Do NOT resolve threads from human reviewers.
 
 ### 3e. Summary
 
-Use this template. The leading `<!-- TEST_SDK_REVIEW -->` HTML
-comment is the marker the orchestration uses to find prior reviews
-on subsequent runs; do NOT remove it or use the production
-`<!-- SDK_REVIEW_V2 -->` marker (that belongs to the production
-@sdk-review flow):
+Use this template. The leading `<!-- SDK_REVIEW -->` HTML comment is
+the marker the orchestration uses to find prior reviews on subsequent
+runs; do NOT remove it. The second marker `<!-- VERDICT: X -->` is the
+machine-readable verdict the GHA approval workflows parse — keep it
+in sync with the human-readable `### Verdict:` line below. The token
+after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
+`BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
 
 ```
-<!-- TEST_SDK_REVIEW -->
-## Test SDK <Review | Re-review> (mothership): PR #<number> — <title>
+<!-- SDK_REVIEW -->
+<!-- VERDICT: READY_TO_MERGE | NEEDS_FIXES | BLOCKED | NEEDS_HUMAN | NEEDS_REBASE -->
+## SDK <Review | Re-review> (mothership): PR #<number> — <title>
+<!-- For review_scope=contract-toolkit, write this heading as:
+     "Contract Toolkit <Review | Re-review> (mothership)".
+     Keep the SDK_REVIEW marker above unchanged. -->
 
 ### Verdict: <READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW>
 
@@ -699,6 +965,20 @@ on subsequent runs; do NOT remove it or use the production
 >  is this fixing symptoms or causes? What's the right path forward?>
 
 ---
+
+### PR Title Check                         <!-- ALWAYS present, from §2f-bis -->
+- ✅ **Aligned** — title \`<title>\` matches the file scope (<which bucket and why>). <!-- when passed -->
+- 🟥 **Needs change** — title \`<title>\` doesn't match the file scope. Files touched: <SDK|CT|OTHER buckets>. Required: <expected title shape>. Suggested rewrite: \`<example>\`. <!-- when failed; forces verdict = NEEDS_FIXES per §2f-bis -->
+
+### Affected Toolkit Surfaces             <!-- ONLY when review_scope=contract-toolkit or mixed-sdk-toolkit -->
+- `<surface>` — <why it is affected>
+
+### Cross-Repo Validation                 <!-- ONLY when review_scope=contract-toolkit or mixed-sdk-toolkit -->
+- UI rendering compatibility: validated | not applicable | needs rerun
+- Manifest substitution compatibility: validated | not applicable | needs rerun
+- Workflow execution contract: validated | not applicable | needs rerun
+- Generated SDK input contract: validated | not applicable | needs rerun
+- Representative app pattern: validated | not applicable | needs rerun
 
 ### Delta from previous review            <!-- ONLY when PRIOR_REVIEW non-empty -->
 - **Resolved (<N>)**: <one line per finding the author fixed>
@@ -709,9 +989,25 @@ on subsequent runs; do NOT remove it or use the production
 
 ### Findings
 
+> **Format is MANDATORY: file-by-file grouped bullets.** Do NOT
+> substitute a Markdown table (`| Severity | Domain | Where | Summary |`).
+> Group findings under a bold file-path header, then one bullet per
+> finding starting with the severity. Each bullet MUST include the
+> domain tag in square brackets, the line reference (`L<n>` or
+> `L<n>-<m>`), a description, and an italicised `*Path: …*` clause
+> describing the fix. Findings spanning multiple files appear under
+> each affected file's header. Sort files alphabetically; within a
+> file, sort by severity (Critical → Important → Nit) then by line
+> number. PR-metadata-level findings (e.g. title mismatches) go under
+> a `**PR metadata**` pseudo-header.
+
 **`<path/to/file.py>`**
 - **Critical** [SEC] L42 — description. *Path: immediate fix — <what to do>*
 - **Important** [ARCH] L88 — description. *Path: follow-up ticket — <why>*
+- **Nit** [QUAL] L120 — description. *Path: optional cleanup — <why>*
+
+**`<path/to/other_file.py>`**
+- **Nit** [STRUCT] L15 — description. *Path: <…>*
 
 ### Holistic Recommendations (if any)
 - Root cause assessment: is this PR treating symptoms or causes?
@@ -719,6 +1015,9 @@ on subsequent runs; do NOT remove it or use the production
 
 ### Strengths
 - <what the PR does well>
+
+### Review Note                           <!-- ONLY when /tmp/TOOLKIT_ROVER_NOTE.md exists -->
+<contents of /tmp/TOOLKIT_ROVER_NOTE.md>
 
 ---
 **CI:** all passing | N failing
@@ -729,13 +1028,16 @@ on subsequent runs; do NOT remove it or use the production
 
 **Title selection — "Review" vs "Re-review":**
 - If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first
-  `<!-- TEST_SDK_REVIEW -->` comment on the PR) → use **"Test SDK
-  Review (mothership)"**.
-- If a prior summary exists → use **"Test SDK Re-review (mothership)"**.
+  `<!-- SDK_REVIEW -->` comment on the PR) → use **"SDK Review
+  (mothership)"**.
+- If a prior summary exists → use **"SDK Re-review (mothership)"**.
   This tells the human reading the PR-comment timeline that this
   pass loaded the previous review as context and reasoned about
   deltas (per Phase 0 §6b + §2d), not that it ignored history and
   reran the full review from scratch.
+- If `review_scope=contract-toolkit`, replace `SDK` in the visible
+  heading with `Contract Toolkit`. Keep `<!-- SDK_REVIEW -->` unchanged
+  because the approval workflow parses that stable marker.
 
 **Delta section — only on re-reviews:**
 - Omit the entire `### Delta from previous review` block on a first
@@ -761,8 +1063,19 @@ There is no mothership-side `submit-review` endpoint. Use the
 comment and each finding as an inline review comment.
 
 ```bash
+# Redaction gate for toolkit reviews. Public review bodies must not include
+# private consumer repo names, scratch paths, or fetched SHAs. If this fires,
+# rewrite the public body using capability aliases before posting.
+if [ "$review_scope" = "contract-toolkit" ] || [ "$review_scope" = "mixed-sdk-toolkit" ]; then
+  .mothership/pr-review/scripts/redact-toolkit-public-review.sh /tmp/review-summary.md
+  for body in /tmp/inline-comments/*.md; do
+    [ -f "$body" ] || continue
+    .mothership/pr-review/scripts/redact-toolkit-public-review.sh "$body"
+  done
+fi
+
 # Summary comment (the body built in 3a, including the
-# <!-- TEST_SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
+# <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
 gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 
 # Inline finding comments — post one per finding via
@@ -770,14 +1083,14 @@ gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 # specific path + line in the diff. The formal verdict review
 # (--approve | --comment) is already submitted in §3c — do NOT submit
 # a second `gh pr review` here.
+#
+# For toolkit reviews, every inline body must already exist under
+# /tmp/inline-comments/*.md and must have passed the redaction gate above.
+# Post inline comments by reading the body from that staged file only.
 
-# Commit status — set the test-sdk-review check explicitly.
-# This MUST be `test-sdk-review`, NOT `sdk-review` — the production
-# @sdk-review (claude.yml) reviewer owns the `sdk-review` context;
-# writing there would hijack its signal. The experimental reviewer
-# uses `test-sdk-review` so the two never collide on the merge box.
+# Commit status — set the sdk-review check explicitly.
 gh api "repos/$REPO/statuses/$HEAD_SHA" \
-  -f context="test-sdk-review" \
+  -f context="sdk-review" \
   -f state="$STATE" \
   -f description="$DESCRIPTION"
 # where STATE ∈ success|failure|pending and DESCRIPTION ≤ 140 chars
@@ -881,7 +1194,7 @@ Submit minimal:
 ```json
 {
   "approval_recommendation": "REQUEST_CHANGES",
-  "summary": "Test SDK Review (mothership) could not complete: <reason>. Re-trigger with @test-sdk-review.",
+  "summary": "SDK Review (mothership) could not complete: <reason>. Re-trigger with @sdk-review.",
   "findings": []
 }
 ```

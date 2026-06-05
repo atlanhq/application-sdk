@@ -159,6 +159,91 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
     return v
 
 
+# ---------------------------------------------------------------------------
+# Legacy quoted-CSV → v3 alternation regex (HYP-1560).
+#
+# Pre-v3 SaaS-agent callers serialised multi-value filter fields
+# (``temp-table-regex``, ``include-filter``, ``exclude-filter``) as a
+# quoted, comma-separated list — e.g. ``'"PREFIX_A.","PREFIX_B."'`` for
+# two temp-table prefixes the agent then matched independently. The v3
+# contract is a single regex string, and the BLDX-518 deny-list above
+# rejects the ``"`` and ``,`` characters that shape requires. Migration
+# tooling that round-trips the legacy workflow specs unchanged trips
+# Pydantic validation on every run after the v3.13 SDK bump.
+#
+# ``normalize_legacy_filter_value`` lets a migration caller explicitly
+# translate the legacy shape into a deny-list-clean alternation regex
+# (``A|B``) before it hits the validator. Inputs that don't match the
+# legacy shape pass through unchanged, so legitimate v3 single-regex
+# values aren't perturbed.
+# ---------------------------------------------------------------------------
+
+# Anchored at both ends. Matches one or more double-quoted items
+# separated by literal ``,``: ``"A"``, ``"A","B"``, ``"A","B","C"``, …
+# The item body intentionally allows everything except ``"`` so we
+# don't try to interpret embedded escapes — the legacy SaaS agent
+# never produced them. Whatever lives inside the quotes is re-checked
+# against the SAFE_FILTER_PATTERN deny-list after normalisation, so a
+# legacy value smuggling ``--`` or ``;`` still fails loudly.
+_LEGACY_QUOTED_CSV_RE: re.Pattern[str] = re.compile(r'^"[^"]*"(?:,"[^"]*")*$')
+
+
+def normalize_legacy_filter_value(value: str) -> str:
+    """Translate a legacy quoted-CSV filter value into a v3 alternation regex.
+
+    The pre-v3 SaaS agent serialised multi-value filter fields as a
+    double-quoted, comma-separated list. The v3 contract expects a
+    single regex string and the SQL-injection deny-list (see
+    :data:`SAFE_FILTER_PATTERN`) rejects the quote/comma characters
+    that shape carries, so legacy workflow specs round-tripped through
+    v3 validation now fail at input decoding.
+
+    This helper recognises the legacy shape and re-emits it as an
+    equivalent regex alternation::
+
+        '"PREFIX_A.","PREFIX_B."'  →  'PREFIX_A.|PREFIX_B.'
+        '"only"'                   →  'only'
+        '"x","y","z"'              →  'x|y|z'
+
+    Values that don't match the legacy shape pass through unchanged,
+    so a legitimate v3 single-regex value like ``'^prod_.*$'`` or an
+    already-normalised ``'A|B'`` is returned as-is. The output is run
+    through :func:`validate_filter_no_sql_injection` before being
+    returned, so a legacy value with a forbidden sequence inside an
+    item (e.g. ``'"name--bad"'``) raises ``ValueError`` rather than
+    deferring the failure to a later SQL-substitution call site.
+
+    Args:
+        value: A filter value, possibly in the legacy quoted-CSV shape.
+
+    Returns:
+        ``value`` unchanged when it isn't a legacy quoted-CSV shape;
+        otherwise the equivalent alternation regex.
+
+    Raises:
+        ValueError: When normalisation produces a value that still
+            contains a sequence forbidden by the deny-list.
+    """
+    if not isinstance(value, str) or not _LEGACY_QUOTED_CSV_RE.match(value):
+        return value
+
+    # Each split chunk is a complete ``"..."`` token; strip the outer
+    # quotes to recover the original item. Drop empty items so a stray
+    # ``""`` (or ``"A",""``) collapses cleanly rather than producing a
+    # bogus empty branch in the alternation regex.
+    items = [chunk[1:-1] for chunk in value.split(",")]
+    items = [item for item in items if item]
+    if not items:
+        # All-empty input — let the caller's validator surface the
+        # original (still-quoted) value as the SQL-unsafe ValueError
+        # it actually is, rather than silently returning ``""``.
+        return value
+
+    normalised = "|".join(items)
+    validate_filter_no_sql_injection(normalised)
+    return normalised
+
+
 def extract_database_names_from_regex_common(
     normalized_regex: str,
     empty_default: str,
@@ -294,6 +379,11 @@ def prepare_query(
         # sequences into the substituted templates.
         temp_table_regex = metadata.get("temp-table-regex")
         if isinstance(temp_table_regex, str):
+            # Translate legacy quoted-CSV shape to a v3 alternation regex
+            # before applying the deny-list. Without this, raw-dict
+            # callers (which bypass the typed ``ExtractionInput``
+            # validators) still trip on migrated workflow specs.
+            temp_table_regex = normalize_legacy_filter_value(temp_table_regex)
             validate_filter_no_sql_injection(temp_table_regex)
         if temp_table_regex and temp_table_regex_sql is not None:
             temp_table_regex_sql = temp_table_regex_sql.format(
@@ -377,6 +467,10 @@ async def get_database_names(
     # names into SQL. ``prepare_query`` does its own validation on the
     # fall-through path; this catches the case where the include-filter
     # carries database names that are returned directly to the caller.
+    # HYP-1560: normalise the legacy quoted-CSV shape on string inputs
+    # so migrated workflow specs validate cleanly here too.
+    if isinstance(raw_include, str):
+        raw_include = normalize_legacy_filter_value(raw_include)
     if isinstance(raw_include, (str, dict)):
         validate_filter_no_sql_injection(raw_include)
     database_names = parse_filter_input(raw_include)
@@ -443,9 +537,13 @@ def prepare_filters(
     # step raises on non-JSON strings, which would mask the deny-list
     # check for raw-regex callers (``"prefix'injection"`` would surface
     # as a JSONDecodeError instead of the SQL-unsafe ValueError).
+    # HYP-1560: normalise legacy quoted-CSV strings first so migrated
+    # workflow specs surviving the v3.13 SDK bump still validate.
     if isinstance(include_filter_str, str):
+        include_filter_str = normalize_legacy_filter_value(include_filter_str)
         validate_filter_no_sql_injection(include_filter_str)
     if isinstance(exclude_filter_str, str):
+        exclude_filter_str = normalize_legacy_filter_value(exclude_filter_str)
         validate_filter_no_sql_injection(exclude_filter_str)
 
     include_filter = parse_filter_input(include_filter_str)

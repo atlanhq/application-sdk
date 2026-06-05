@@ -105,7 +105,7 @@ Dapr component names are read at module-import time (not at runtime) because the
 | `STATE_STORE_NAME` | `statestore` | Dapr state store component name. |
 | `SECRET_STORE_NAME` | `secretstore` | Dapr secret store component name. |
 | `DEPLOYMENT_OBJECT_STORE_NAME` | `objectstore` | Dapr object store for workflow outputs and artifacts. |
-| `UPSTREAM_OBJECT_STORE_NAME` | `objectstore` | Dapr object store for uploading data to the Atlan platform. |
+| `UPSTREAM_OBJECT_STORE_NAME` | `atlan-objectstore` | Dapr object store for uploading data to the Atlan platform (SDR deployments only). If the named component is absent, `upstream_storage` is `None` and `App.upload()`/`App.download()` fall back to the deployment store. See [ADR-0014](adr/0014-two-store-storage-architecture.md). |
 | `EVENT_STORE_NAME` | `eventstore` | Dapr pub/sub component name. |
 | `DEPLOYMENT_SECRET_STORE_NAME` | `deployment-secret-store` | Dapr secret store holding deployment-scoped secrets (auth credentials, etc.). |
 | `DAPR_MAX_GRPC_MESSAGE_LENGTH` | `104857600` (100 MB) | Maximum gRPC message size in bytes for Dapr client calls. Increase for apps that move large payloads through Dapr state or bindings. |

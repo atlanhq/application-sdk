@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any
 
 import obstore as obs
-from obstore.store import AzureStore, GCSStore, ObjectStore, S3Store
+from obstore.store import ObjectStore
 
 from application_sdk.storage.errors import (
     StorageConfigError,
@@ -425,18 +425,8 @@ def _infer_auth_type(extra: dict[str, Any]) -> str:
 
 
 def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
-    """Create an S3 store from credentials.
-
-    BLDX-1155: customer-facing buckets traverse the public internet — exactly
-    the path most likely to time out on large extracts.  Plumb the SDK
-    defaults for ``client_options`` + ``retry_config`` so every CloudStore
-    inherits the same 30-minute request budget as the in-tenant Dapr store.
-    """
-    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
-        log_obstore_config,
-        obstore_client_options,
-        obstore_retry_config,
-    )
+    """Create an S3 store from credentials."""
+    from application_sdk.storage._obstore_config import make_s3_store  # noqa: PLC0415
 
     bucket = extra.get("s3_bucket", "")
     if not bucket:
@@ -459,29 +449,12 @@ def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStor
         config["aws_role_session_name"] = "cloud-store-session"
         _log().debug("S3 role-based auth configured")
 
-    client_options = obstore_client_options()
-    retry_config = obstore_retry_config()
-    log_obstore_config(
-        "cloud-s3", client_options=client_options, retry_config=retry_config
-    )
-    return S3Store(
-        bucket=bucket,
-        config=config,
-        client_options=client_options,
-        retry_config=retry_config,
-    )
+    return make_s3_store(bucket, config or None, label="cloud-s3")
 
 
 def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
-    """Create a GCS store from credentials.
-
-    BLDX-1155: see :func:`_create_s3_store`; same plumbing applies.
-    """
-    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
-        log_obstore_config,
-        obstore_client_options,
-        obstore_retry_config,
-    )
+    """Create a GCS store from credentials."""
+    from application_sdk.storage._obstore_config import make_gcs_store  # noqa: PLC0415
 
     bucket = extra.get("gcs_bucket", "")
     if not bucket:
@@ -492,28 +465,13 @@ def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectSto
     if sa_json:
         gcs_config["google_service_account_key"] = sa_json
 
-    client_options = obstore_client_options()
-    retry_config = obstore_retry_config()
-    log_obstore_config(
-        "cloud-gcs", client_options=client_options, retry_config=retry_config
-    )
-    return GCSStore(
-        bucket=bucket,
-        config=gcs_config if gcs_config else None,
-        client_options=client_options,
-        retry_config=retry_config,
-    )
+    return make_gcs_store(bucket, gcs_config if gcs_config else None, label="cloud-gcs")
 
 
 def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
-    """Create an Azure (ADLS) store from credentials.
-
-    BLDX-1155: see :func:`_create_s3_store`; same plumbing applies.
-    """
+    """Create an Azure (ADLS) store from credentials."""
     from application_sdk.storage._obstore_config import (  # noqa: PLC0415
-        log_obstore_config,
-        obstore_client_options,
-        obstore_retry_config,
+        make_azure_store,
     )
 
     storage_account = extra.get("storage_account_name", "")
@@ -541,14 +499,4 @@ def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectS
         if access_key:
             az_config["azure_storage_client_secret"] = access_key
 
-    client_options = obstore_client_options()
-    retry_config = obstore_retry_config()
-    log_obstore_config(
-        "cloud-azure", client_options=client_options, retry_config=retry_config
-    )
-    return AzureStore(
-        container_name=container,
-        config=az_config,
-        client_options=client_options,
-        retry_config=retry_config,
-    )
+    return make_azure_store(container, az_config, label="cloud-azure")

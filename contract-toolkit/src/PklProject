@@ -5,7 +5,7 @@ amends "pkl:Project"
 package {
   name = "app-contract-toolkit"
   baseUri = "package://atlanhq.github.io/application-sdk/contracts/\(name)"
-  version = "0.10.2"
+  version = "0.10.5"
   packageZipUrl = "https://atlanhq.github.io/application-sdk/contracts/\(name)@\(version).zip"
   sourceCode = "https://github.com/atlanhq/application-sdk"
   sourceCodeUrlScheme = "\(sourceCode)/blob/contract-toolkit-v\(version)/contract-toolkit/src%{path}#L%{line}-L%{endLine}"

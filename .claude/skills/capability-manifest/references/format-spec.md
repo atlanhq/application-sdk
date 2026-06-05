@@ -122,11 +122,14 @@ Strongly-typed Inputs/Outputs for SDK methods. All inherit from
 #### `UploadInput`
 
 - **Import:** `from application_sdk.contracts import UploadInput`
-- **Summary:** Input contract for ObjectStore.upload.
+- **Summary:** Input contract for `App.upload()` — explicit app-to-app hand-off to Atlan's upstream store.
 - **Fields:**
-  - `source: str` — local path
-  - `key: str` — destination object-store key
-  - `tier: StorageTier` `= StorageTier.HOT` — storage tier
+  - `local_path: str` — local filesystem path to the file to upload
+  - `tier: StorageTier` `= StorageTier.RETAINED` — controls destination prefix and cleanup policy
+  - `storage_path: str | None` `= None` — override the auto-generated destination key
+  - `storage_subdir: str | None` `= None` — subdirectory appended under the run prefix
+  - `skip_if_exists: bool` `= False` — skip when remote SHA-256 already matches
+  - `raise_on_empty: bool` `= False` — raise if the local path has no files to upload
 - **Defined in:** `application_sdk/contracts/storage.py`
 ```
 

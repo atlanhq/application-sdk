@@ -133,13 +133,14 @@ class TestEmitTokenRefreshEvent:
         manager = _make_manager()
         expires_at = datetime(2026, 6, 15, 10, 30, 0, tzinfo=UTC)
 
-        env_vars = {
-            "ATLAN_APP_NAME": "my-test-app",
-            "ATLAN_DEPLOYMENT_NAME": "my-deployment",
-        }
-
         with (
-            mock.patch.dict("os.environ", env_vars, clear=False),
+            mock.patch(
+                "application_sdk.execution._temporal.auth.APPLICATION_NAME",
+                "my-test-app",
+            ),
+            mock.patch.dict(
+                "os.environ", {"ATLAN_DEPLOYMENT_NAME": "my-deployment"}, clear=False
+            ),
             mock.patch(_PUBLISH_TARGET) as mock_publish,
         ):
             mock_publish.return_value = None
@@ -158,22 +159,20 @@ class TestEmitTokenRefreshEvent:
 
     @pytest.mark.asyncio
     async def test_deployment_name_falls_back_to_app_name(self) -> None:
-        """When ATLAN_DEPLOYMENT_NAME is unset, deployment_name equals app_name."""
+        """When ATLAN_DEPLOYMENT_NAME is unset, deployment_name falls back to app_name."""
         manager = _make_manager()
         expires_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
-        # Set only ATLAN_APP_NAME, ensure ATLAN_DEPLOYMENT_NAME is absent
-        env_overrides = {"ATLAN_APP_NAME": "fallback-app"}
+        import os
 
         with (
-            mock.patch.dict("os.environ", env_overrides, clear=False),
+            mock.patch(
+                "application_sdk.execution._temporal.auth.APPLICATION_NAME",
+                "fallback-app",
+            ),
             mock.patch(_PUBLISH_TARGET) as mock_publish,
         ):
-            # Remove ATLAN_DEPLOYMENT_NAME if it happens to be set
-            import os
-
             os.environ.pop("ATLAN_DEPLOYMENT_NAME", None)
-
             mock_publish.return_value = None
 
             await manager._emit_token_refresh_event(expires_at)

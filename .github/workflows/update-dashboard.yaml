@@ -65,15 +65,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SCAN_WORKFLOW: ${{ inputs.scan_workflow }}
+          # When invoked via workflow_run (the normal path), this is the run
+          # that just completed and uploaded the artifacts we want. Reading
+          # it directly avoids the prior "gh run list latest" race where
+          # an older run could be picked if API listing lagged behind.
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           mkdir -p /tmp/scan-artifacts
 
-          RUN_ID=$(gh run list \
-            --workflow="${SCAN_WORKFLOW}" \
-            --status=completed \
-            --limit=5 \
-            --json databaseId,conclusion \
-            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+          # Prefer the triggering workflow_run's ID. Fall back to "latest
+          # completed run of SCAN_WORKFLOW" only for manual workflow_dispatch
+          # invocations (where TRIGGER_RUN_ID is empty).
+          if [ -n "$TRIGGER_RUN_ID" ]; then
+            RUN_ID="$TRIGGER_RUN_ID"
+            echo "Using triggering run: $RUN_ID"
+          else
+            RUN_ID=$(gh run list \
+              --workflow="${SCAN_WORKFLOW}" \
+              --status=completed \
+              --limit=5 \
+              --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+            echo "Manual dispatch fallback — latest completed run: $RUN_ID"
+          fi
 
           if [ -z "$RUN_ID" ]; then
             echo "::warning::No completed runs found for workflow ${SCAN_WORKFLOW}"
@@ -83,10 +97,9 @@ jobs:
 
           echo "Downloading artifacts from run $RUN_ID"
           gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
-          gh run download "$RUN_ID" --name snyk-results --dir /tmp/scan-artifacts || echo "No snyk results"
 
           # If no scan results at all, skip dashboard update to avoid overwriting with zeros
-          if [ ! -f /tmp/scan-artifacts/trivy_results.json ] && [ ! -f /tmp/scan-artifacts/snyk_results.json ]; then
+          if [ ! -f /tmp/scan-artifacts/trivy_results.json ]; then
             echo "::warning::No scan artifacts found (expired?). Skipping dashboard update to preserve existing data."
             echo "has_artifacts=false" >> "$GITHUB_OUTPUT"
           else
@@ -167,68 +180,6 @@ jobs:
           except json.JSONDecodeError as e:
               print(f"Warning: Trivy results invalid JSON: {e}")
 
-          # Parse Snyk
-          try:
-              with open("/tmp/scan-artifacts/snyk_results.json") as f:
-                  snyk = json.load(f)
-              if not snyk.get("error"):
-                  trivy_ids = {v["id"] for v in all_vulns}
-
-                  # Top-level vulns — infer source_type from package manager
-                  for vuln in snyk.get("vulnerabilities", []):
-                      vid = vuln.get("id")
-                      if vid:
-                          cves = vuln.get("identifiers", {}).get("CVE", [])
-                          if vid in trivy_ids or any(c in trivy_ids for c in cves):
-                              continue
-                          lang = vuln.get("language", "").lower()
-                          pkg_manager = vuln.get("packageManager", "").lower()
-                          is_app = lang in ("python", "js", "ruby") or pkg_manager in ("pip", "npm", "yarn", "poetry", "uv")
-                          entry = allowlist.get(vid)
-                          if entry:
-                              status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
-                          else:
-                              status = "new"
-                          if vid in base_ids:
-                              src = "base_image"
-                          else:
-                              src = "app" if is_app else "base_image"
-                          all_vulns.append({
-                              "id": vid,
-                              "severity": vuln.get("severity", "").upper(),
-                              "package": vuln.get("packageName") or vuln.get("name", ""),
-                              "installed": vuln.get("version", ""),
-                              "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                              "scanner": "snyk",
-                              "source_type": src,
-                              "status": status,
-                          })
-
-                  # Application dependencies
-                  for app in snyk.get("applications", []):
-                      for vuln in app.get("vulnerabilities", []):
-                          vid = vuln.get("id")
-                          if vid and vid not in trivy_ids:
-                              entry = allowlist.get(vid)
-                              if entry:
-                                  status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
-                              else:
-                                  status = "new"
-                              all_vulns.append({
-                                  "id": vid,
-                                  "severity": vuln.get("severity", "").upper(),
-                                  "package": vuln.get("packageName") or vuln.get("name", ""),
-                                  "installed": vuln.get("version", ""),
-                                  "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                                  "scanner": "snyk",
-                                  "source_type": "base_image" if vid in base_ids else "app",
-                                  "status": status,
-                              })
-          except FileNotFoundError:
-              print("Warning: no Snyk results")
-          except json.JSONDecodeError as e:
-              print(f"Warning: Snyk results invalid JSON: {e}")
-
           # Deduplicate
           seen = set()
           unique = []
@@ -238,20 +189,40 @@ jobs:
                   unique.append(v)
 
           # Write per-repo data file (not shared data.json)
-          # Extract SDK version from Dockerfile
+          # Extract SDK version from the repo's Dockerfile. Compared to the
+          # previous "open ./Dockerfile, take first FROM, stop", this:
+          #   1. Searches common Dockerfile locations (./Dockerfile, deploy/,
+          #      docker/) — many repos put their Dockerfile in a subdir.
+          #   2. Reads ALL FROM lines, then prefers one whose image matches a
+          #      known SDK base registry — so multi-stage builds whose first
+          #      FROM is a builder layer (node:20-alpine etc.) no longer leak
+          #      that builder tag into the SDK version column.
+          #   3. Falls back to the LAST FROM (final runtime stage) when no
+          #      SDK-base FROM is found. Same "no :tag → unknown" behaviour.
           import re as _re
           sdk_version = "unknown"
-          try:
-              with open("Dockerfile") as f:
-                  for line in f:
-                      if line.strip().startswith("FROM "):
-                          image = line.strip().split()[1]
-                          # Extract tag after ':'
-                          if ":" in image:
-                              sdk_version = image.split(":")[-1]
-                          break
-          except FileNotFoundError:
-              pass
+          SDK_BASE_PATTERNS = (
+              "registry.atlan.com/public/app-runtime-base",
+              "registry.atlan.com/public/application-sdk",
+              "ghcr.io/atlanhq/application-sdk-main",
+          )
+          dockerfile_candidates = ["Dockerfile", "deploy/Dockerfile", "docker/Dockerfile"]
+          froms = []
+          for path in dockerfile_candidates:
+              try:
+                  with open(path) as f:
+                      for line in f:
+                          s = line.strip()
+                          if s.startswith("FROM "):
+                              froms.append(s.split()[1])
+                  break  # use the first existing Dockerfile
+              except FileNotFoundError:
+                  continue
+          chosen = next((i for i in froms if any(p in i for p in SDK_BASE_PATTERNS)), None)
+          if not chosen and froms:
+              chosen = froms[-1]
+          if chosen and ":" in chosen:
+              sdk_version = chosen.split(":")[-1]
 
           repo_slug = repo_name.replace("/", "_")
           app_count = sum(1 for v in unique if v["source_type"] == "app")

@@ -56,7 +56,7 @@
         ],
         "ui": {
           "widget": "radio",
-          "hidden": false,
+          "hidden": true,
           "label": "Authentication"
         }
       },

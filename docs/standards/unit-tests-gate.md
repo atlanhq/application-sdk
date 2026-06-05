@@ -1,11 +1,19 @@
 # Unit-Tests Gate Contract
 
-The `build-and-publish-app.yaml` reusable workflow refuses to publish a version
-unless the app's `unit_tests_workflow_file` has completed successfully for the
+> **Most apps no longer need this.** The generic certification layers — v3
+> shape, contract drift, and **unit tests + coverage** — now run centrally in
+> the `certify` job with no per-app wiring. See
+> [`app-certification.md`](./app-certification.md). This gate remains for apps
+> that want the publish step to additionally block on their **own** test
+> workflow (e.g. integration/e2e jobs that the centralized job can't run).
+
+The `build-and-publish-app.yaml` reusable workflow can block a publish until
+the app's `unit_tests_workflow_file` has completed successfully for the
 publish SHA. The gate tracks runs by ID (not by check name), so apps don't
 need any particular naming convention on their test jobs.
 
-This document defines the contract every consumer repo must satisfy.
+This document defines the contract a consumer repo must satisfy **if it opts
+into this gate**.
 
 ## Why this exists
 
@@ -41,8 +49,8 @@ Tracked under [DISTR-456 — App Certification Framework][distr-456].
 
 ## Caller setup
 
-Every consumer of the SDK's `build-and-publish-app.yaml` MUST set
-`unit_tests_workflow_file`:
+To opt into this gate, a consumer of the SDK's `build-and-publish-app.yaml`
+sets `unit_tests_workflow_file`:
 
 ```yaml
 jobs:
@@ -50,12 +58,14 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main
     with:
       publish: ${{ github.event.inputs.publish != 'false' }}
-      unit_tests_workflow_file: "unit-tests.yml"   # required
+      unit_tests_workflow_file: "unit-tests.yml"   # opt-in
     secrets: inherit
 ```
 
-Omitting this input is a startup-time error — `workflow_call` rejects the call
-because `unit_tests_workflow_file` has no default.
+The input is **optional** and defaults to `""`. When unset, this gate is
+**skipped entirely** — apps onboard at their own pace and existing callers are
+unaffected. (The generic unit-coverage check still runs in the centralized
+`certify` job regardless; see [`app-certification.md`](./app-certification.md).)
 
 ## Reference template — `.github/workflows/unit-tests.yml`
 
@@ -109,7 +119,7 @@ jobs:
 | Tests workflow already ran on this commit, still `in_progress` | Gate polls the existing run until completion |
 | Tests workflow has not run on this commit | Gate dispatches `unit_tests_workflow_file` on the publish ref and waits |
 | `unit_tests_workflow_file` doesn't exist / lacks `workflow_dispatch:` | Gate fails at dispatch with onboarding instructions |
-| `unit_tests_workflow_file` not set by caller | `workflow_call` fails immediately (no default) |
+| `unit_tests_workflow_file` not set by caller | Gate is skipped entirely (input defaults to `""`) |
 
 ## Branch publishes (`workflow_dispatch` from a feature branch)
 

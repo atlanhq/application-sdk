@@ -4,6 +4,50 @@ The SDK uses `obstore` for all object storage operations, bypassing the Dapr sid
 
 ---
 
+## Two-Store Architecture
+
+The SDK maintains two distinct object-store references, each serving a different
+purpose:
+
+| Dapr component | SDK reference | Owner | Purpose |
+|----------------|--------------|-------|---------|
+| `objectstore` | `infra.storage` | Customer / deployment | Task-to-task `FileReference` durability within a run |
+| `atlan-objectstore` | `infra.upstream_storage` | Atlan | Final artifact hand-off to Atlan system apps (publish, QI, lineage) |
+
+**Task-to-task transfers** use `infra.storage`. The activity interceptor
+automatically uploads every `FileReference` returned from a `@task` to this
+store, keeping all intermediate data inside the customer's deployment perimeter.
+`objectstore` can be any backend the customer controls (S3, Azure Blob, GCS,
+local disk) — Atlan's infrastructure never reads from it.
+
+**App-to-app hand-off** uses `infra.upstream_storage`. When a connector's
+extract activity produces artifacts that Atlan's publish or lineage apps must
+consume, the connector calls `App.upload()` explicitly. In SDR deployments
+`upstream_storage` points to `atlan-objectstore` (Atlan's S3-compatible
+blobstorage proxy); in local dev it is `None` and `App.upload()` falls back to
+the deployment store.
+
+```
+Connector run (customer's cluster)
+  @task extract  ──► FileReference ──► objectstore (infra.storage, customer-owned)
+  @task transform ──► FileReference ──► objectstore
+  run()          ──► App.upload()  ──► atlan-objectstore (infra.upstream_storage, Atlan-owned)
+                                         │
+                                         ▼
+                                  Atlan publish app reads → Atlas
+```
+
+**The key rule:** rely on the interceptor for intra-run durability; call
+`App.upload()` explicitly for any data that must cross into Atlan's
+infrastructure. Relying on the interceptor alone for the app-to-app
+hand-off produces a silent failure — all DAG nodes succeed but the publish
+app finds nothing to publish.
+
+See [ADR-0014](../adr/0014-two-store-storage-architecture.md) for the full
+rationale, fallback behaviour, and consequences.
+
+---
+
 ## Basic Operations
 
 ```python
@@ -144,3 +188,42 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 ## Backend Selection
 
 The object-store backend is configured via Dapr component YAML at deploy time (see `components/objectstore.yaml` in the repo). No code changes are needed to switch between S3, GCS, Azure Blob, or local filesystem. For local development, the default components target a local filesystem path.
+
+---
+
+## Supported Auth Modes
+
+`create_store_from_binding` translates the Dapr component `spec.metadata` fields into the correct obstore configuration. Supported modes per provider:
+
+### S3 (`bindings.aws.s3` / `bindings.s3`)
+
+| Mode | Required fields |
+|------|----------------|
+| Static access key | `accessKey` + `secretKey` (+ optional `sessionToken` for temporary/STS-derived base creds) |
+| AssumeRole via STS | `assumeRoleArn` (+ optional `sessionName`, `accessKey`/`secretKey`/`sessionToken` for base identity) |
+| Instance profile / IRSA / env vars | Omit all credential fields |
+
+`boto3` and `azure-identity` are core SDK dependencies — no extra install is required for these auth modes. The `[iam_auth]` and `[azure]` extras are backwards-compatibility shims kept so connector `pyproject.toml` files that listed them continue to install without error.
+
+### Azure Blob (`bindings.azure.blobstorage`)
+
+Priority order when multiple modes are present: account key > SAS token > certificate > service principal > workload identity > managed identity.
+
+| Mode | Required fields |
+|------|----------------|
+| Account key | `accountKey` |
+| SAS token | `sasToken` or `sasKey` |
+| Certificate-based service principal | `azureTenantId` + `azureClientId` + (`azureCertificateFile` or `azureCertificate`) |
+| Service principal (client secret) | `azureTenantId` + `azureClientId` + `azureClientSecret` |
+| AKS Workload Identity | `azureTenantId` + `azureClientId` (no secret; AAD webhook injects `AZURE_FEDERATED_TOKEN_FILE`) |
+| User-assigned managed identity | `azureClientId` only |
+| System-assigned MI / DefaultAzureCredential | Omit all credential fields |
+
+Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChinaCloud`, `AzureUSGovernmentCloud`, `AzureGermanCloud`).
+
+### GCS (`bindings.gcp.bucket` / `bindings.gcs`)
+
+| Mode | Required fields |
+|------|----------------|
+| Inline service-account key | Any SA JSON field that includes `private_key` or `private_key_id` |
+| ADC / Workload Identity / metadata server | `bucket` + `project_id` only (no `private_key`) |

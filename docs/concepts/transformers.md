@@ -16,7 +16,7 @@ Raw SQL query results (daft.DataFrame)
   Atlas entity JSONL
         │
         ▼
-  upload_to_atlan() → Atlan ingestion API
+  App.upload() → atlan-objectstore (Atlan-owned)
 ```
 
 This pipeline is used internally by `SqlMetadataExtractor.transform_data()`. If you subclass `SqlMetadataExtractor` today without overriding `transform_data()`, you are running through this legacy path.

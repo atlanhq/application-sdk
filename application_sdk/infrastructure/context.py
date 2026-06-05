@@ -40,6 +40,7 @@ class InfrastructureContext:
     state_store: StateStore | None = field(default=None)
     secret_store: SecretStore | None = field(default=None)
     storage: ObjectStore | None = field(default=None)
+    upstream_storage: ObjectStore | None = field(default=None)
     event_binding: Binding | None = field(default=None)
     _dapr_client: Any = field(default=None, repr=False)
 

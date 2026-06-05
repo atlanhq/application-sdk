@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.13.2
-source-sha:    802c1284630b7045881ed7eb1b1dd884168214fd
-source-date:   2026-05-25T22:48:09+05:30
+sdk-version:   3.14.0
+source-sha:    e84e1f49890c498a8419f7af5737cb62b15ff29f
+source-date:   2026-06-03T12:16:55+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 19 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 22 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -145,7 +145,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `@entrypoint`
 
 - **Import:** `from application_sdk.app import entrypoint`
-- **Signature:** `entrypoint(func: F | None = None, *, name: str | None = None) -> F | Callable[[F], F]`
+- **Signature:** `entrypoint(func: F | None = None, *, name: str | None = None, default: bool = False) -> F | Callable[[F], F]`
 - **Summary:** Decorator to mark a method as an independently-triggerable entry point.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
@@ -1888,6 +1888,20 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
+#### `StorageBindingBrokenError`
+
+- **Import:** `from application_sdk.storage import StorageBindingBrokenError`
+- **Signature:** `class StorageBindingBrokenError(message: str, ...)`
+- **Summary:** Dapr component YAML exists but has unresolvable configuration.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageBindingNotFoundError`
+
+- **Import:** `from application_sdk.storage import StorageBindingNotFoundError`
+- **Signature:** `class StorageBindingNotFoundError(message: str, ...)`
+- **Summary:** No Dapr component with the given name exists in the components directory.
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `StorageConfigError`
 
 - **Import:** `from application_sdk.storage import StorageConfigError`
@@ -1937,6 +1951,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import create_store_from_binding`
 - **Signature:** `create_store_from_binding(name: str, *, components_dir: Path | str = Path('./components'))`
 - **Summary:** Create an obstore store from a Dapr component binding YAML file.
+- **Defined in:** `application_sdk/storage/binding.py`
+
+#### `create_store_from_binding_optional`
+
+- **Import:** `from application_sdk.storage import create_store_from_binding_optional`
+- **Signature:** `create_store_from_binding_optional(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
 - **Defined in:** `application_sdk/storage/binding.py`
 
 #### `delete`
@@ -2443,6 +2464,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the fetch_metadata handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
+  - `metadata_template_key: str` `= ''` — Metadata source routing key for multi-source metadata widgets.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
   - `object_filter: str` `= ''` — Filter pattern (e.g., 'public.*', 'mydb.myschema.*').
   - `include_fields: bool` `= True` — Whether to include field/column details.

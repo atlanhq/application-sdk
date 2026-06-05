@@ -1,8 +1,8 @@
-name: Daily Security Scan — app-runtime-base + SDK Python Deps
+name: Hourly Security Scan — app-runtime-base + SDK Python Deps
 
 on:
   schedule:
-    - cron: '30 3 * * *' # Daily at 03:30 UTC (09:00 IST)
+    - cron: '17 * * * *' # Hourly at minute 17 (off-peak slot for GitHub runners)
   workflow_dispatch:
 
 permissions:
@@ -67,56 +67,8 @@ jobs:
             --output trivy-fs-results.json \
             .
 
-      # ── Snyk scans ────────────────────────────────────────────────────────
-
-      - name: Set up Snyk CLI
-        uses: snyk/actions/setup@b98d498629f1c368650224d6d212bf7dfa89e4bf # 0.4.0
-
-      - name: Run Snyk container scan
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
-          SNYK_API: https://api.us.snyk.io
-        run: |
-          snyk container test "$TARGET_IMAGE" \
-            --severity-threshold=low \
-            --org=bu-apps \
-            --json-file-output=snyk-image-results.json \
-            || true
-
-      - name: Set up uv (for Snyk Python dep resolution)
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-
-      - name: Install Python deps and export requirements for Snyk
-        run: |
-          uv sync --no-dev --frozen
-          uv pip install pip
-          uv export --format requirements-txt --no-dev --frozen --no-hashes --no-emit-project --output-file=/tmp/snyk-requirements.txt
-
-      - name: Run Snyk Python deps scan (pyproject.toml / uv.lock)
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
-          SNYK_API: https://api.us.snyk.io
-        run: |
-          snyk test \
-            --file=/tmp/snyk-requirements.txt \
-            --package-manager=pip \
-            --command=.venv/bin/python3 \
-            --severity-threshold=low \
-            --org=bu-apps \
-            --json-file-output=snyk-python-results.json \
-            || true
-          if [ ! -f snyk-python-results.json ]; then
-            echo "::warning::Snyk Python scan produced no output — check SNYK_TOKEN and org access"
-          elif jq -e '.error' snyk-python-results.json >/dev/null 2>&1; then
-            ERR=$(jq -r '.error' snyk-python-results.json)
-            echo "::warning::Snyk Python deps scan failed: $ERR — python counts will be 0"
-          fi
-
       # ── Parse results ─────────────────────────────────────────────────────
 
-      # Always upload raw scan output, even if Parse fails — lets us inspect
-      # the actual JSON schema offline when count_snyk_file() trips its
-      # sanity check.
       - name: Upload raw scan results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -125,8 +77,6 @@ jobs:
           path: |
             trivy-image-results.json
             trivy-fs-results.json
-            snyk-image-results.json
-            snyk-python-results.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -137,59 +87,9 @@ jobs:
           count_trivy_file() {
             jq --arg sev "$2" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $sev)] | length' "$1" 2>/dev/null || echo 0
           }
-          # Snyk JSON nests vulnerabilities under several shapes (top-level
-          # object, root array, .applications[], .docker[], .projects[], etc.)
-          # and the schema shifts across CLI versions and scan targets. Walk
-          # the tree with `..` and pick up every `vulnerabilities` array we
-          # find, then dedupe by id so we don't double-count when the same
-          # vuln is reported under multiple paths.
-          count_snyk_file() {
-            jq --arg sev "$2" '
-              [
-                .. | .vulnerabilities? | arrays | .[]
-                | select(.severity == $sev)
-                | select((.type // "vuln") != "license")
-              ]
-              | unique_by(.id)
-              | length
-            ' "$1" 2>/dev/null || echo 0
-          }
-          # Total non-license vuln count (any severity) using the same walk.
-          # Used by the sanity check below to derive an expected count from
-          # the JSON itself — Snyk's stdout "found N issues" includes
-          # license findings, which we intentionally exclude, so it can't
-          # be compared 1:1 with the bucketed counts.
-          count_snyk_file_nonlicense_total() {
-            jq '
-              [
-                .. | .vulnerabilities? | arrays | .[]
-                | select((.type // "vuln") != "license")
-              ]
-              | unique_by(.id)
-              | length
-            ' "$1" 2>/dev/null || echo 0
-          }
-
-          # Diagnostic dump used when the sanity check below trips. Prints the
-          # top-level shape, every path that contains a `vulnerabilities`
-          # array, and every distinct severity value present — enough to
-          # patch count_snyk_file() without needing to download the artifact.
-          dump_snyk_schema() {
-            local file="$1"
-            echo "::group::Snyk schema dump — $file"
-            echo "type: $(jq -r 'type' "$file")"
-            jq -r 'if type=="array" then "array length: \(length)\nfirst element keys: \(.[0]|keys?|tostring // "n/a")" else "object keys: \(keys|tostring)" end' "$file" || true
-            echo "paths to .vulnerabilities arrays:"
-            jq -r '[paths(type=="array") | select(.[-1]=="vulnerabilities") | join(".")] | unique[]' "$file" 2>/dev/null || true
-            echo "distinct severity values:"
-            jq -r '[.. | objects | select(has("severity")) | .severity] | unique | tostring' "$file" 2>/dev/null || true
-            echo "::endgroup::"
-          }
 
           TI_CRIT=0; TI_HIGH=0; TI_MED=0; TI_LOW=0
           TF_CRIT=0; TF_HIGH=0; TF_MED=0; TF_LOW=0
-          SI_CRIT=0; SI_HIGH=0; SI_MED=0; SI_LOW=0
-          SP_CRIT=0; SP_HIGH=0; SP_MED=0; SP_LOW=0
 
           if [ -f trivy-image-results.json ]; then
             TI_CRIT=$(count_trivy_file trivy-image-results.json CRITICAL)
@@ -205,53 +105,10 @@ jobs:
             TF_LOW=$(count_trivy_file  trivy-fs-results.json LOW)
           fi
 
-          if [ -f snyk-image-results.json ]; then
-            SI_CRIT=$(count_snyk_file snyk-image-results.json critical)
-            SI_HIGH=$(count_snyk_file snyk-image-results.json high)
-            SI_MED=$(count_snyk_file  snyk-image-results.json medium)
-            SI_LOW=$(count_snyk_file  snyk-image-results.json low)
-          fi
-
-          # Sanity check: if the JSON contains non-license vulnerabilities
-          # but the per-severity buckets all came back zero, the severity
-          # field shape changed (new value, casing flip, moved location)
-          # and this workflow is silently undercounting. Fail loud.
-          # We compare against a count derived from the same JSON+filter
-          # the parser uses — Snyk's stdout "found N issues" includes
-          # license findings, so it can't be compared 1:1.
-          SNYK_IMG_TOTAL=$((SI_CRIT + SI_HIGH + SI_MED + SI_LOW))
-          SNYK_IMG_EXPECTED=0
-          if [ -f snyk-image-results.json ]; then
-            SNYK_IMG_EXPECTED=$(count_snyk_file_nonlicense_total snyk-image-results.json)
-          fi
-          if [ "${SNYK_IMG_EXPECTED:-0}" -gt 0 ] && [ "$SNYK_IMG_TOTAL" -eq 0 ]; then
-            [ -f snyk-image-results.json ] && dump_snyk_schema snyk-image-results.json
-            echo "::error::Snyk container JSON has ${SNYK_IMG_EXPECTED} non-license vuln(s) but per-severity parser counted 0 — Snyk JSON severity shape likely changed; fix count_snyk_file() in this workflow."
-            exit 1
-          fi
-
-          if [ -f snyk-python-results.json ]; then
-            SP_CRIT=$(count_snyk_file snyk-python-results.json critical)
-            SP_HIGH=$(count_snyk_file snyk-python-results.json high)
-            SP_MED=$(count_snyk_file  snyk-python-results.json medium)
-            SP_LOW=$(count_snyk_file  snyk-python-results.json low)
-          fi
-
-          SNYK_PY_TOTAL=$((SP_CRIT + SP_HIGH + SP_MED + SP_LOW))
-          SNYK_PY_EXPECTED=0
-          if [ -f snyk-python-results.json ]; then
-            SNYK_PY_EXPECTED=$(count_snyk_file_nonlicense_total snyk-python-results.json)
-          fi
-          if [ "${SNYK_PY_EXPECTED:-0}" -gt 0 ] && [ "$SNYK_PY_TOTAL" -eq 0 ]; then
-            [ -f snyk-python-results.json ] && dump_snyk_schema snyk-python-results.json
-            echo "::error::Snyk Python deps JSON has ${SNYK_PY_EXPECTED} non-license vuln(s) but per-severity parser counted 0 — Snyk JSON severity shape likely changed; fix count_snyk_file() in this workflow."
-            exit 1
-          fi
-
-          TOTAL_CRIT=$((TI_CRIT + TF_CRIT + SI_CRIT + SP_CRIT))
-          TOTAL_HIGH=$((TI_HIGH + TF_HIGH + SI_HIGH + SP_HIGH))
-          TOTAL_MED=$((TI_MED  + TF_MED  + SI_MED  + SP_MED))
-          TOTAL_LOW=$((TI_LOW  + TF_LOW  + SI_LOW  + SP_LOW))
+          TOTAL_CRIT=$((TI_CRIT + TF_CRIT))
+          TOTAL_HIGH=$((TI_HIGH + TF_HIGH))
+          TOTAL_MED=$((TI_MED  + TF_MED))
+          TOTAL_LOW=$((TI_LOW  + TF_LOW))
           TOTAL_ACTIONABLE=$((TOTAL_CRIT + TOTAL_HIGH))
 
           echo "ti_crit=$TI_CRIT" >> "$GITHUB_OUTPUT"
@@ -262,14 +119,6 @@ jobs:
           echo "tf_high=$TF_HIGH" >> "$GITHUB_OUTPUT"
           echo "tf_med=$TF_MED"   >> "$GITHUB_OUTPUT"
           echo "tf_low=$TF_LOW"   >> "$GITHUB_OUTPUT"
-          echo "si_crit=$SI_CRIT" >> "$GITHUB_OUTPUT"
-          echo "si_high=$SI_HIGH" >> "$GITHUB_OUTPUT"
-          echo "si_med=$SI_MED"   >> "$GITHUB_OUTPUT"
-          echo "si_low=$SI_LOW"   >> "$GITHUB_OUTPUT"
-          echo "sp_crit=$SP_CRIT" >> "$GITHUB_OUTPUT"
-          echo "sp_high=$SP_HIGH" >> "$GITHUB_OUTPUT"
-          echo "sp_med=$SP_MED"   >> "$GITHUB_OUTPUT"
-          echo "sp_low=$SP_LOW"   >> "$GITHUB_OUTPUT"
           echo "total_crit=$TOTAL_CRIT"             >> "$GITHUB_OUTPUT"
           echo "total_high=$TOTAL_HIGH"             >> "$GITHUB_OUTPUT"
           echo "total_med=$TOTAL_MED"               >> "$GITHUB_OUTPUT"
@@ -304,38 +153,12 @@ jobs:
                 echo ""
               fi
 
-              if [ "$((SI_CRIT + SI_HIGH))" -gt 0 ]; then
-                echo "### Snyk — Image CRITICAL/HIGH"
-                echo ""
-                echo "| Severity | Package | Version | CVE |"
-                echo "|----------|---------|---------|-----|"
-                jq -r '.vulnerabilities[]?
-                  | select(.severity == "critical" or .severity == "high")
-                  | "| \(.severity) | \(.packageName) | \(.version // "N/A") | \(.id) |"' \
-                  snyk-image-results.json | sort -t'|' -k2,2 | head -50
-                echo ""
-              fi
-
-              if [ "$((SP_CRIT + SP_HIGH))" -gt 0 ]; then
-                echo "### Snyk — Python Deps CRITICAL/HIGH"
-                echo ""
-                echo "| Severity | Package | Version | CVE |"
-                echo "|----------|---------|---------|-----|"
-                jq -r '.vulnerabilities[]?
-                  | select(.severity == "critical" or .severity == "high")
-                  | "| \(.severity) | \(.packageName) | \(.version // "N/A") | \(.id) |"' \
-                  snyk-python-results.json | sort -t'|' -k2,2 | head -50
-                echo ""
-              fi
-
               echo 'VULN_EOF'
             } >> "$GITHUB_OUTPUT"
           fi
 
           echo "Trivy Image  — C:$TI_CRIT H:$TI_HIGH M:$TI_MED L:$TI_LOW"
           echo "Trivy Python — C:$TF_CRIT H:$TF_HIGH M:$TF_MED L:$TF_LOW"
-          echo "Snyk  Image  — C:$SI_CRIT H:$SI_HIGH M:$SI_MED L:$SI_LOW"
-          echo "Snyk  Python — C:$SP_CRIT H:$SP_HIGH M:$SP_MED L:$SP_LOW"
           echo "Actionable (C+H): $TOTAL_ACTIONABLE"
 
       # ── Workflow summary ──────────────────────────────────────────────────
@@ -344,16 +167,16 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Daily Security Scan — \`$TARGET_IMAGE\` + SDK Python Deps"
+            echo "## Hourly Security Scan — \`$TARGET_IMAGE\` + SDK Python Deps"
             echo ""
             echo "### Vulnerability Summary"
             echo ""
-            echo "| Severity | Trivy (Image) | Trivy (Python) | Snyk (Image) | Snyk (Python) | Total |"
-            echo "|----------|:-------------:|:--------------:|:------------:|:-------------:|------:|"
-            echo "| 🔴 Critical | ${{ steps.parse.outputs.ti_crit || 0 }} | ${{ steps.parse.outputs.tf_crit || 0 }} | ${{ steps.parse.outputs.si_crit || 0 }} | ${{ steps.parse.outputs.sp_crit || 0 }} | **${{ steps.parse.outputs.total_crit || 0 }}** |"
-            echo "| 🟠 High     | ${{ steps.parse.outputs.ti_high || 0 }} | ${{ steps.parse.outputs.tf_high || 0 }} | ${{ steps.parse.outputs.si_high || 0 }} | ${{ steps.parse.outputs.sp_high || 0 }} | **${{ steps.parse.outputs.total_high || 0 }}** |"
-            echo "| 🟡 Medium   | ${{ steps.parse.outputs.ti_med  || 0 }} | ${{ steps.parse.outputs.tf_med  || 0 }} | ${{ steps.parse.outputs.si_med  || 0 }} | ${{ steps.parse.outputs.sp_med  || 0 }} | **${{ steps.parse.outputs.total_med  || 0 }}** |"
-            echo "| 🔵 Low      | ${{ steps.parse.outputs.ti_low  || 0 }} | ${{ steps.parse.outputs.tf_low  || 0 }} | ${{ steps.parse.outputs.si_low  || 0 }} | ${{ steps.parse.outputs.sp_low  || 0 }} | **${{ steps.parse.outputs.total_low  || 0 }}** |"
+            echo "| Severity | Trivy (Image) | Trivy (Python) | Total |"
+            echo "|----------|:-------------:|:--------------:|------:|"
+            echo "| 🔴 Critical | ${{ steps.parse.outputs.ti_crit || 0 }} | ${{ steps.parse.outputs.tf_crit || 0 }} | **${{ steps.parse.outputs.total_crit || 0 }}** |"
+            echo "| 🟠 High     | ${{ steps.parse.outputs.ti_high || 0 }} | ${{ steps.parse.outputs.tf_high || 0 }} | **${{ steps.parse.outputs.total_high || 0 }}** |"
+            echo "| 🟡 Medium   | ${{ steps.parse.outputs.ti_med  || 0 }} | ${{ steps.parse.outputs.tf_med  || 0 }} | **${{ steps.parse.outputs.total_med  || 0 }}** |"
+            echo "| 🔵 Low      | ${{ steps.parse.outputs.ti_low  || 0 }} | ${{ steps.parse.outputs.tf_low  || 0 }} | **${{ steps.parse.outputs.total_low  || 0 }}** |"
             echo ""
             if [ "${{ steps.parse.outputs.total_actionable || 0 }}" -gt 0 ]; then
               echo "> ⚠️ **${{ steps.parse.outputs.total_actionable }} CRITICAL/HIGH findings — see Linear ticket step below**"

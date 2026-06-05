@@ -13,7 +13,7 @@ description: |
   Caller is responsible for:
   - Checking out the PR (this action does NOT call actions/checkout)
   - Setting the standard CI tenant secrets as job-level env vars:
-    CI_TENANT_DOMAIN, CI_CLIENT_ID, CI_CLIENT_SECRET
+    SDR_TEST_TENANT, SDR_CLIENT_ID, SDR_CLIENT_SECRET
   - Setting any connector-specific secrets the test class reads
     (typically E2E_<APP>_HOST/PORT/USERNAME/PASSWORD/DATABASE)
   - Providing a secrets-bundle script at the configured path that writes
@@ -400,18 +400,18 @@ runs:
     # into /etc/hosts via compose extra_hosts so the resolver only ever
     # sees A records.
     #
-    # Hostnames are derived from CI_TENANT_DOMAIN
+    # Hostnames are derived from SDR_TEST_TENANT
     # (convention: <tenant>.atlan.com → <tenant>-temporal.atlan.com).
     - name: Resolve Temporal + auth hostnames to IPv4
       shell: bash
       run: |
         set -euo pipefail
-        if [ -z "${CI_TENANT_DOMAIN:-}" ]; then
-          echo "::error::CI_TENANT_DOMAIN is not set; the caller workflow must export it as a job-level env var."
+        if [ -z "${SDR_TEST_TENANT:-}" ]; then
+          echo "::error::SDR_TEST_TENANT is not set; the caller workflow must export it as a job-level env var."
           exit 1
         fi
-        AUTH_HOST="$CI_TENANT_DOMAIN"
-        TEMPORAL_HOST="${CI_TENANT_DOMAIN%.atlan.com}-temporal.atlan.com"
+        AUTH_HOST="$SDR_TEST_TENANT"
+        TEMPORAL_HOST="${SDR_TEST_TENANT%.atlan.com}-temporal.atlan.com"
         AUTH_IPV4=$(dig +short A "$AUTH_HOST" | head -1)
         TEMPORAL_IPV4=$(dig +short A "$TEMPORAL_HOST" | head -1)
         if [ -z "$AUTH_IPV4" ] || [ -z "$TEMPORAL_IPV4" ]; then
@@ -507,7 +507,7 @@ runs:
         else:
             summary_files = []
 
-        tenant = os.environ.get("CI_TENANT_DOMAIN", "")
+        tenant = os.environ.get("SDR_TEST_TENANT", "")
         # Preserve scenario insertion order (== test execution order) within
         # each class so the output is deterministic.
         by_class: dict[str, list[str]] = {}
@@ -672,7 +672,7 @@ runs:
       shell: bash
       run: |
         mkdir -p results
-        docker compose ${{ steps.compose_files.outputs.files }} logs >> results/sdr-container.log 2>&1 || true
+        docker compose ${{ steps.compose_files.outputs.files }} logs 2>&1 | tee results/sdr-container.log || true
 
     - name: Tear down SDR container
       if: always()
@@ -698,7 +698,7 @@ runs:
       if: always()
       shell: bash
       env:
-        CI_TENANT_DOMAIN: ${{ env.CI_TENANT_DOMAIN }}
+        SDR_TEST_TENANT: ${{ env.SDR_TEST_TENANT }}
       run: |
         uv run python3 - <<'PYEOF'
         import os
@@ -774,7 +774,7 @@ runs:
                 f.write("markdown=\n")
             raise SystemExit
 
-        tenant = os.environ.get("CI_TENANT_DOMAIN", "")
+        tenant = os.environ.get("SDR_TEST_TENANT", "")
         lines: list[str] = ["### Extracted + transformed assets", ""]
         for idx, cid in enumerate(cids, start=1):
             wf = wf_id_by_cid.get(cid, "")

@@ -48,7 +48,11 @@ class SnowflakeApp(App):
         ...
 ```
 
-Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-point-name}`). All entry points share the same `@task` methods, handler, and `AppContext`. Trigger a specific entry point via `POST /workflows/v1/start?entrypoint=<name>`. See [Entry Points](entry-points.md) for full detail.
+Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-point-name}`). All entry points share the same `@task` methods, handler, and `AppContext`. Trigger a specific entry point via `POST /workflows/v1/start?entrypoint=<name>`.
+
+`run()` and `@entrypoint` methods can also **coexist** in the same class — useful when migrating an existing `run()`-only app incrementally. `run()` is always the default entry point in that case.
+
+See [Entry Points — Default entrypoint resolution](entry-points.md#default-entrypoint-resolution) for the full resolution rules.
 
 ## Orchestration in run()
 
@@ -187,8 +191,10 @@ class MyConnector(App):
 
 ### Built-in Cleanup Tasks
 
-Two cleanup tasks are available on every `App`:
+Two cleanup tasks and two transfer tasks are available on every `App`:
 
+- `upload(UploadInput(...))` — pushes a local file or directory to object storage. Routes to the Atlan-owned `atlan-objectstore` (`infra.upstream_storage`) in SDR deployments; falls back to the customer-owned `objectstore` (`infra.storage`) in local dev. This is the explicit hand-off step that downstream Atlan system apps (publish, lineage, quality) consume. See [file-reference.md](file-reference.md) and [ADR-0014](../adr/0014-two-store-storage-architecture.md).
+- `download(DownloadInput(...))` — pulls a file or directory from object storage to a local path.
 - `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **then** convention-based temp directories (using `input.extra_paths` if provided, otherwise `ATLAN_CLEANUP_BASE_PATHS`, otherwise the default temp path).
 - `cleanup_storage()` — removes object store artifacts by tier:
   - `StorageTier.TRANSIENT` refs are always removed.

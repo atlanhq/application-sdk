@@ -14,6 +14,7 @@ COMMENTER_INTENT, etc.). Follow
 2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map
 3. `.mothership/pr-review/references/retro-log.md` — **MANDATORY: do-not-flag list.** Every candidate finding MUST be checked against the patterns here; matches are withdrawn silently with no inline comment or auto-fix.
 4. `.mothership/pr-review/references/*.md` + `modes/*.md` + `agents/*.md`
+5. For `contract-toolkit/**` PRs: `contract-toolkit/AGENTS.md`, `.mothership/pr-review/agents/toolkit-review.md`, and `.mothership/pr-review/references/toolkit-consumer-registry.md`
 
 PR metadata and the authoritative diff are fetched in Phase 0 via
 `gh pr view` / `gh pr diff` and written to `/tmp/PR.json` and
@@ -29,6 +30,15 @@ PR metadata and the authoritative diff are fetched in Phase 0 via
 - **Dependency direction**: `app/` -> `execution/` -> `infrastructure/` (NEVER reverse)
 - **Credential pattern**: `CredentialRef` in contracts, `CredentialResolver` in `@task` only
 - **Blocking ops**: use `self.run_in_thread()` for blocking operations in `@task`
+
+## Contract Toolkit Review Context
+
+For PRs that touch `contract-toolkit/**`, review generated artifact contracts,
+toolkit API fit, and private downstream compatibility instead of applying
+SDK-only Temporal/Dapr assumptions. The reviewer must classify affected
+surfaces, run the relevant private consumer checks, and sanitize public output.
+Do not expose internal consumer repo names, internal file paths, or clone
+locations in PR comments.
 
 ### Determinism Rules (Temporal replay safety)
 
@@ -100,7 +110,7 @@ Don't just say "this is wrong." Say what the right path forward is.
 - Follow ORCHESTRATION.md EXACTLY. Do not skip phases.
 - Read-only on cloned repos. Do not `git push` EXCEPT for CI fixes in Phase 3f.
 - Post reviews via `gh pr comment` / `gh pr review` / `gh api` from inside the sandbox (see ORCHESTRATION 3f). No mothership-side review handler exists.
-- After posting the review: manage SDK labels via `gh pr edit` (see ORCHESTRATION 3c).
+- After posting the review: do NOT apply SDK labels yourself — the GHA layer parses the structured `<!-- VERDICT: X -->` marker and owns labels, the `sdk-review` commit status, and the atlan-ci approval. See ORCHESTRATION 3c.
 - After posting on APPROVE: resolve bot inline threads via GraphQL (see ORCHESTRATION 3d).
 - PATCH scope findings: include exact fix code in suggested_fix.
 - DESIGN_CHANGE scope: flag for human, NEVER auto-fix.

@@ -106,6 +106,16 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `workflowTypeOverride` | String? | null | Explicit workflow type (used as-is, overrides `workflowType`). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
+### E2E Test Harness
+
+These three fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `argoPackageName` | String | `"@atlan/{name}"` | Argo WorkflowTemplate package name. Override when the app uses a scoped or non-standard Argo package. |
+| `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
+| `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+
 ### Pipeline Block
 
 The typed `pipeline` block replaces per-flag properties. Each step is nullable to opt out.
@@ -201,9 +211,11 @@ class LineagePublishStep {               // wraps LineagePublishNode
 | `credentialAuthPlaceholder` | String? | null | Placeholder for auth-type radio. |
 | `credentialAuthHelp` | String? | null | Tooltip below auth-type radio. |
 | `credentialAuthWidth` | Int? | null | Grid width for auth-type radio. |
-| `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type values hidden during credential creation. |
+| `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for hidden credential `name` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
+
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
 
 ### Workflow Config
 
@@ -375,6 +387,8 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for the hidden credential `name` field. |
 | `credentialConnectorDefault` | String? | null | Optional default for the hidden credential `connector` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. When set, every `credentialAuthOptions` entry must be a `JDBCUrlAuthOption`. See [AdvancedJDBCUrlGroup](#advancedjdbcurlgroup--hostrlarrowurl-jdbc-credential-form). |
+
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
 
 ### Workflow Config
 
@@ -647,10 +661,13 @@ class FieldSpec {
   helpText: String?                      // Tooltip
   required: Boolean = true
   includeRequiredWhenFalse: Boolean = false
-  sensitive: Boolean = false             // true → password widget
-  fieldType: FieldType = "text"          // text|password|textarea|select|number|checkbox|url|email
+  sensitive: Boolean = false             // true → password widget unless fieldType is an upload widget
+  fieldType: FieldType = "text"          // text|password|textarea|select|number|checkbox|url|email|inputRepeater|fileUpload|credentialFileInput
   options: Listing<String>?              // For select fields
   optionLabels: Mapping<String, String>? // Display labels for options
+  fileTypes: Listing<String>?            // For upload widgets: accepted extensions or MIME types
+  fileMetadata: Boolean = true           // For upload widgets: emit metadata JSON mode
+  removeBeforeUpload: Boolean = false    // For upload widgets: emit legacy remove-before-upload flag
   defaultValue: String?                  // Pre-filled value
   validationRegex: String?               // Regex pattern
   width: Int = 8                         // Grid: 8=full, 4=half, 2=quarter
@@ -693,9 +710,11 @@ configmaps. New apps should normally leave them at their defaults.
 | `fieldType = "number"` | `inputNumber` |
 | `fieldType = "select"` (≤4 options) | `radio` |
 | `fieldType = "select"` (>4 options) | `select` |
-| `fieldType = "checkbox"` | `boolean` |
+| `fieldType = "checkbox"` | `checkbox` |
 | `fieldType = "textarea"` | `TextInput` |
 | `fieldType = "inputRepeater"` | `inputRepeater` |
+| `fieldType = "fileUpload"` | `fileUpload` |
+| `fieldType = "credentialFileInput"` | `credentialFileInput` |
 | Default | `input` |
 
 ## ConditionalFieldSpec — Conditional Credential Field
@@ -737,8 +756,10 @@ new ConditionalFieldSpec {
 }
 ```
 
-For connector-specific condition trees, add a focused example or Pkl test that
-pins the generated credential JSON shape.
+For an executable example, see `examples/full/app.pkl`, where
+`token_audience` is a field-level `ConditionalFieldSpec` that appears only for
+token auth. For connector-specific condition trees, add a focused example or Pkl
+test that pins the generated credential JSON shape.
 
 ## AuthOption — Auth Type Definition
 
@@ -761,6 +782,15 @@ open class AuthOption {
 Use `NamedWidget` when a workflow-style `Config.UIElement` needs a key inside
 the credential form. `fields`, `extraFields`, and `postExtraFields` all preserve
 declaration order.
+
+Use `fieldType = "fileUpload"` for credential fields that should render the
+frontend upload-only credential widget. Use `fieldType = "credentialFileInput"`
+for frontend's credential file-reference input: uploaded files are stored as JSON
+upload references, while typed reference values (for example secret-store keys or
+`objectstore://` paths) remain plain strings. The generated schema remains
+`type = "string"` and emits the selected upload widget plus optional `ui.accept`
+from `fileTypes`, `ui.fileMetadata`, and opt-in `ui.removeBeforeUpload` when the
+widget is emitted.
 
 Use `credentialSharedExtraFields` when the same `extra` metadata should be
 available regardless of auth type instead of being duplicated in every option.
@@ -1117,7 +1147,7 @@ connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_fact
 |---|---|---|---|
 | `NestedInput` | `nested` | `dict[str, Any]` | `inputs` — sub-element map |
 | `Sage` / `SageV2` | `sage` / `sageV2` | `str` | `checks` — preflight definitions. `connectorConfig` + `selectedCredentialGuid` route per-dialect checks to a selected connection's configmap. |
-| `FileUploader` | `fileUpload` | `FileReference \| None` | `fileTypes` |
+| `FileUploader` | `fileUpload` | `FileReference \| None` | `fileTypes`, optional `removeBeforeUpload` |
 | `AgentSelector` | `agent` | `dict[str, Any]` | `agentConfigEntries` — use `Listing<Any>` with `Mapping` for nested objects needing `"default"` keys |
 | `InfoBanner` | `infoBanner` | omitted by default | Static markdown banner with `bannerType`, `content`, optional `iconName`, `hideBannerIcon`, and `linkConfig`. Defaults to `includeInManifest=false` and `includeInInput=false`. Use `widgetName = "InfoBanner"` for credential banners that need that casing. |
 | `Switcher` | `switcher` | `bool` | Boolean switch with `switchTitle`, `defaultSelection`, optional `begin`, and `toastConfig`. Can be used in credential configs through `NamedWidget`. |
@@ -1450,18 +1480,18 @@ class QueryIntelligenceNode extends DAGNode {
   sqlKey: String
   catalogKey: String = "DATABASE_NAME"
   schemaKey: String = "SCHEMA_NAME"
-  timestampKey: String = "START_TIME"
-  mineOutputType: "parquet"|"json" = "parquet"
-  parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
+  @Deprecated timestampKey: String = "START_TIME"
+  mineOutputType: "parquet"|"json" = "json"
+  @Deprecated parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
   extraFilter: String?
   indirectLineage: Boolean|String? = null
   ignoreOrphans: Boolean|String? = null
-  columnsToPreserve: String?
+  @Deprecated columnsToPreserve: String?
   relatedAssetsOutputPrefix: String?
-  parserArtifactsKey: String?
+  @Deprecated parserArtifactsKey: String?
   connectionCacheKey: String?
   currentStatePrefix: String?
-  instanceName: String?
+  @Deprecated instanceName: String?
 }
 ```
 
@@ -1470,6 +1500,23 @@ Validation enforced at `pkl eval` time:
 
 Cloud bucket and backend are resolved from the QI app's pod environment, not
 per-workflow args. Configure storage at the QI app deployment, not on this node.
+
+**Deprecated fields (kept for back-compat, ignored by the QI app):**
+
+| Field | Reason |
+|---|---|
+| `timestampKey` | QI no longer filters records by timestamp. |
+| `parsingMode` | Parsing strategy is now tuned internally by QI per workload. |
+| `columnsToPreserve` | All columns/fields are preserved in JSON mode (now the default). |
+| `parserArtifactsKey` | No longer consumed by QI. |
+| `instanceName` | Instance name is read from QI app environment variables, not workflow args. |
+
+These fields still emit their corresponding args into `manifest.json` when set,
+but the QI app discards them. New contracts should not set them.
+
+**`mineOutputType` default flipped to `"json"`.** New integrations get JSON
+automatically. `"parquet"` remains valid for legacy miner-style inputs but
+should not be used by new contracts.
 
 Typical crawler-style example:
 
@@ -1480,9 +1527,6 @@ extraNodes {
     sqlKey = "attributes.definition"
     catalogKey = "attributes.databaseName"
     schemaKey = "attributes.schemaName"
-    timestampKey = ""
-    mineOutputType = "json"
-    parsingMode = "competitive"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
   }
@@ -1565,9 +1609,8 @@ Per-source guidance for the source-shape fields:
 - `sourceQueryTypeQi`: SQL expression projected as `SOURCE_QUERY_TYPE` on the
   parsed-data view (`v_qi`). Snowflake / BigQuery parsed_data carry this
   column natively; Databricks parsed_data does NOT, so set
-  `"NULL::VARCHAR"` there. Also set `"NULL::VARCHAR"` for any source whose
-  Query Intelligence step is configured with a `columnsToPreserve` that
-  omits `SOURCE_QUERY_TYPE` (e.g. BigQuery today).
+  `"NULL::VARCHAR"` there. Set `"NULL::VARCHAR"` for any source whose
+  parsed_data does not natively expose `SOURCE_QUERY_TYPE`.
 - `parsedDataKeepFilter`: SQL predicate applied at `v_qi` build time to keep
   only popularity-relevant parsed rows. Default is QI's `OUTPUT_FLAGS`
   bitmask — bit 25 (Gudusoft, `33554432`) plus bit 26 (sqlglot,
@@ -1807,9 +1850,6 @@ extraNodes {
     sqlKey = "attributes.definition"
     catalogKey = "attributes.databaseName"
     schemaKey = "attributes.schemaName"
-    timestampKey = ""
-    mineOutputType = "json"
-    parsingMode = "competitive"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
   }
@@ -1905,8 +1945,6 @@ extraNodes {
     sqlKey = "rendered_source"
     catalogKey = "datasource/database"
     schemaKey = ""
-    timestampKey = ""
-    mineOutputType = "json"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.qi_output_prefix"
   }

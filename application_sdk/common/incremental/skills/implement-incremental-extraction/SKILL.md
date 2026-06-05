@@ -82,7 +82,7 @@ Phase 1: Setup
 
 Phase 2: Base Extraction (inherited from BaseSQLMetadataExtractionWorkflow)
   fetch_databases → fetch_schemas → fetch_tables → fetch_columns (skipped if incremental)
-  → fetch_procedures → transform_data → upload_to_atlan
+  → fetch_procedures → transform_data → App.upload()
 
 Phase 3: Incremental Column Extraction (if prerequisites met)
   prepare_column_extraction_queries → execute_single_column_batch (parallel) → transform_data

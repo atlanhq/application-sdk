@@ -1,0 +1,72 @@
+name: "AE stack up (manifest-driven)"
+description: >
+  Boot the local Automation Engine stack for a connector full-DAG test.
+  Reads app/generated/manifest.json and starts ONLY the apps the DAG
+  references — always the Automation Engine + the connector; publish /
+  query-intelligence / lineage workers are started conditionally based on
+  the manifest's task queues. No hand-listed app set, no per-connector DAG.
+
+inputs:
+  app-name:
+    description: "Connector short name (matches atlan.yaml `name`, e.g. monte-carlo)."
+    required: true
+  app-dir:
+    description: "Connector checkout dir (relative to workspace). Default: <app-name>."
+    required: false
+    default: ""
+  deployment:
+    description: "Deployment tier; fills {deployment_name} in manifest task queues."
+    required: false
+    default: "ci"
+  manifest-path:
+    description: "Manifest path relative to the connector checkout."
+    required: false
+    default: "app/generated/manifest.json"
+  app-module:
+    description: "ATLAN_APP_MODULE for the connector worker (e.g. app.extractor:MSSQLMetadataExtractor)."
+    required: false
+    default: ""
+  handler-module:
+    description: "ATLAN_HANDLER_MODULE for the connector worker (e.g. app.handler:MSSQLHandler). Required so the worker registers the real extraction workflow, not DefaultHandler/SDR."
+    required: false
+    default: ""
+  org-pat-github:
+    description: "PAT to clone the private sibling app repos (AE/publish/qi/lineage)."
+    required: true
+  atlan-base-url:
+    description: "Tenant base URL for the publish app's OAuth (only used if the DAG publishes)."
+    required: false
+    default: ""
+  atlan-client-id:
+    required: false
+    default: ""
+  atlan-client-secret:
+    required: false
+    default: ""
+
+outputs:
+  ae-url:
+    description: "Local Automation Engine base URL."
+    value: ${{ steps.up.outputs.ae-url }}
+  started-apps:
+    description: "Space-separated list of started app ids."
+    value: ${{ steps.up.outputs.started-apps }}
+
+runs:
+  using: composite
+  steps:
+    - id: up
+      shell: bash
+      env:
+        WORKSPACE: ${{ github.workspace }}
+        APP_NAME: ${{ inputs.app-name }}
+        APP_DIR: ${{ inputs.app-dir != '' && format('{0}/{1}', github.workspace, inputs.app-dir) || format('{0}/{1}', github.workspace, inputs.app-name) }}
+        DEPLOYMENT: ${{ inputs.deployment }}
+        MANIFEST_PATH: ${{ inputs.manifest-path }}
+        APP_MODULE: ${{ inputs.app-module }}
+        HANDLER_MODULE: ${{ inputs.handler-module }}
+        ORG_PAT_GITHUB: ${{ inputs.org-pat-github }}
+        ATLAN_BASE_URL: ${{ inputs.atlan-base-url }}
+        ATLAN_CLIENT_ID: ${{ inputs.atlan-client-id }}
+        ATLAN_CLIENT_SECRET: ${{ inputs.atlan-client-secret }}
+      run: bash "${{ github.action_path }}/ae-stack-up.sh"

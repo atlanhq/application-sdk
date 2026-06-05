@@ -13,6 +13,7 @@ from pydantic import Field, field_validator, model_validator
 
 from application_sdk.common.sql_filters import (
     SAFE_FILTER_PATTERN,
+    normalize_legacy_filter_value,
     validate_filter_no_sql_injection,
 )
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
@@ -42,13 +43,19 @@ def _coerce_filter_value(v: Any) -> FilterMap | str:
 
     - ``dict`` → pass through (structured filter map from AE)
     - ``list`` → wrap as ``{".*": <list>}``
-    - ``str`` → pass through (JSON string or raw regex)
+    - ``str`` → normalise the legacy quoted-CSV shape (``'"A","B"'`` →
+      ``'A|B'``) so migrated workflow specs from the pre-v3 SaaS-agent
+      world still validate; JSON-encoded filter strings and plain
+      regex values pass through unchanged (see
+      :func:`application_sdk.common.sql_filters.normalize_legacy_filter_value`).
     - ``None`` → empty string
     """
     if v is None:
         return ""
     if isinstance(v, list):
         return {".*": v}
+    if isinstance(v, str):
+        return normalize_legacy_filter_value(v)
     return v
 
 
@@ -173,6 +180,15 @@ class ExtractionInput(Input):
     def _coerce_filter(cls, v: Any) -> FilterMap | str:
         return _coerce_filter_value(v)
 
+    @field_validator("temp_table_regex", mode="before")
+    @classmethod
+    def _normalize_temp_table_legacy(cls, v: Any) -> Any:
+        # Translate the pre-v3 quoted-CSV shape (``'"A","B"'``) to a
+        # valid v3 alternation regex (``'A|B'``) before the
+        # ``Field(pattern=SAFE_FILTER_PATTERN)`` check runs.
+        # Non-string inputs and v3-shape strings pass through.
+        return normalize_legacy_filter_value(v)
+
     @field_validator("include_filter", "exclude_filter", mode="after")
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
@@ -228,6 +244,11 @@ class ExtractionTaskInput(Input):
     @classmethod
     def _coerce_filter(cls, v: Any) -> FilterMap | str:
         return _coerce_filter_value(v)
+
+    @field_validator("temp_table_regex", mode="before")
+    @classmethod
+    def _normalize_temp_table_legacy(cls, v: Any) -> Any:
+        return normalize_legacy_filter_value(v)
 
     @field_validator("include_filter", "exclude_filter", mode="after")
     @classmethod

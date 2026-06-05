@@ -245,7 +245,7 @@ def get_activities(activities):
         activities.prepare_column_extraction_queries,
         activities.execute_single_column_batch,
         activities.write_current_state,
-        activities.upload_to_atlan,
+        activities.upload_to_atlan,  # v2-native activity; v3 equivalent: self.upload(UploadInput(...))
         activities.update_incremental_marker,
         activities.save_workflow_state,
     ]

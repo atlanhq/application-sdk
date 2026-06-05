@@ -7,6 +7,10 @@ from typing import TYPE_CHECKING, Any, Union
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import list_keys as _list_keys
+from application_sdk.storage.formats.format_errors import (
+    ObjectStoreDownloadError,
+    ObjectStoreReadError,
+)
 from application_sdk.storage.ops import _resolve_store, normalize_key
 from application_sdk.storage.transfer import _download_one
 
@@ -177,20 +181,18 @@ async def _download_files(
                 file_extension,
             )
             return downloaded_paths
-        else:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                ObjectStoreReadError,
-            )
 
-            raise ObjectStoreReadError(
-                file_extension=file_extension,
-            )
-
-    except Exception as e:
-        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-            ObjectStoreDownloadError,
+        raise ObjectStoreReadError(
+            path=path,
+            file_extension=file_extension,
         )
 
+    except ObjectStoreReadError:
+        # READ error means files were downloaded but none matched the expected
+        # extension — preserve the READ classification instead of letting the
+        # broad ``except Exception`` below re-wrap it as a DOWNLOAD failure.
+        raise
+    except Exception as e:
         raise ObjectStoreDownloadError(
             path=path,
             file_extension=file_extension,

@@ -7,6 +7,9 @@ import "../examples/fanin/app.pkl" as faninApp
 import "../examples/full/app.pkl" as fullApp
 import "../examples/minimal/app.pkl" as minimalApp
 import "../examples/publish-controls/app.pkl" as publishControlsApp
+import "../src/App.pkl" as App
+import "../src/Config.pkl"
+import "../src/NativeApp.pkl"
 
 local connectionRefWorkflowJson: String = connectionRefApp.output.files["app/generated/connection-ref.json"].text
 local connectionRefManifestJson: String = connectionRefApp.output.files["app/generated/manifest.json"].text
@@ -23,6 +26,56 @@ local minimalInputPy: String = minimalApp.output.files["app/generated/_input.py"
 
 local publishControlsManifestJson: String = publishControlsApp.output.files["app/generated/manifest.json"].text
 local publishControlsInputPy: String = publishControlsApp.output.files["app/generated/_input.py"].text
+local bundleCrawlerInputPy: String = bundleApp.output.files["app/generated/crawler/_input.py"].text
+local bundleMinerInputPy: String = bundleApp.output.files["app/generated/miner/_input.py"].text
+local importTokenHelpText: String =
+  "Any prose mentioning ConnectionRef FileReference MaxItems Field( must not affect imports."
+local helpTextOnlyApp = (App) {
+  name = "helptext-import-token-test"
+  displayName = "HelpText Import Token Test"
+  icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+  hasCredentialConfig = false
+
+  pipeline {
+    publish = null
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["target"] = new App.TextInput {
+            title = "Target"
+            helpText = importTokenHelpText
+          }
+        }
+      }
+    }
+  }
+}
+local nativeHelpTextOnlyApp = (NativeApp) {
+  name = "native-helptext-import-token-test"
+  displayName = "Native HelpText Import Token Test"
+  icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+  workflowTypeOverride = "NativeHelpTextImportTokenTestWorkflow"
+  hasCredentialConfig = false
+  hasPublishStep = false
+
+  uiConfig = new Config.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["target"] = new Config.TextInput {
+            title = "Target"
+            helpText = importTokenHelpText
+          }
+        }
+      }
+    }
+  }
+}
+local helpTextOnlyInputPy: String = helpTextOnlyApp.output.files["app/generated/_input.py"].text
+local nativeHelpTextOnlyInputPy: String = nativeHelpTextOnlyApp.output.files["_input.py"].text
 
 facts {
   ["Minimal example generates all standard output files"] {
@@ -50,12 +103,32 @@ facts {
     !minimalInputPy.contains("load_to_atlan:")
   }
 
+  ["Minimal example emits only used SDK input imports"] {
+    minimalInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    !minimalInputPy.contains("from typing import")
+    !minimalInputPy.contains("from pydantic import")
+    !minimalInputPy.contains("from application_sdk.contracts.types import")
+    !minimalInputPy.contains("from application_sdk.credentials.ref import")
+  }
+
   ["Full example demonstrates JDBC URL auth with two auth options"] {
     fullCredentialJson.contains("\"AdvancedJDBCUrlGroup\"")
     fullCredentialJson.contains("\"connectBy\"")
     fullCredentialJson.contains("\"jdbcUrl\"")
     fullCredentialJson.contains("\"basic\"")
     fullCredentialJson.contains("\"token\"")
+  }
+
+  ["Full example demonstrates a field-level ConditionalFieldSpec"] {
+    fullCredentialJson.contains("\"token_audience\"")
+    fullCredentialJson.contains("\"type\": \"conditional\"")
+    fullCredentialJson.contains("\"agent-json.auth-type\": \"token\"")
+    fullCredentialJson.contains("\"credential-guid.auth-type\": \"token\"")
+    fullCredentialJson.contains("\"label\": \"Token audience\"")
   }
 
   ["Full example pipeline: extract with custom displayName, parseQueries, publish"] {
@@ -88,6 +161,21 @@ facts {
     // MaxItems(1000) bounds the number of schema entries.
     fullInputPy.contains("dict[str, str], MaxItems(1000)")
     !fullInputPy.contains("dict[str, Any]")
+  }
+
+  ["Full example emits isort-compatible SDK input imports"] {
+    fullInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "import json\n" +
+      "from typing import Annotated, Any, ClassVar\n\n" +
+      "from pydantic import Field, field_validator\n\n" +
+      "from application_sdk.contracts.types import MaxItems\n" +
+      "from application_sdk.credentials.ref import CredentialRef\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    !fullInputPy.contains("ConnectionRef")
+    !fullInputPy.contains("FileReference")
   }
 
   ["Full example UIRules wire conditional field requirements"] {
@@ -138,6 +226,47 @@ facts {
     bundleApp.output.files.containsKey("app/generated/miner/miner.json")
     bundleApp.output.files.containsKey("app/generated/miner/manifest.json")
     bundleApp.output.files.containsKey("app/generated/miner/_input.py")
+  }
+
+  ["Bundle example emits isort-compatible per-entrypoint SDK input imports"] {
+    bundleCrawlerInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "from typing import ClassVar\n\n" +
+      "from application_sdk.credentials.ref import CredentialRef\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    bundleMinerInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    !bundleMinerInputPy.contains("from typing import")
+    !bundleMinerInputPy.contains("from pydantic import")
+  }
+
+  ["Help text import tokens do not affect App.pkl SDK input imports"] {
+    helpTextOnlyInputPy.contains(importTokenHelpText)
+    helpTextOnlyInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    !helpTextOnlyInputPy.contains("from typing import")
+    !helpTextOnlyInputPy.contains("from pydantic import")
+    !helpTextOnlyInputPy.contains("from application_sdk.contracts.types import")
+  }
+
+  ["Help text import tokens do not affect NativeApp.pkl SDK input imports"] {
+    nativeHelpTextOnlyInputPy.contains(importTokenHelpText)
+    nativeHelpTextOnlyInputPy.contains(
+      "from __future__ import annotations\n\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
+      "class AppInputContract(ExtractionInput):"
+    )
+    !nativeHelpTextOnlyInputPy.contains("from typing import")
+    !nativeHelpTextOnlyInputPy.contains("from pydantic import")
+    !nativeHelpTextOnlyInputPy.contains("from application_sdk.contracts.types import")
   }
 
   ["Bundle example hoists shared credential configmap to app/generated root"] {

@@ -20,6 +20,13 @@ import obstore as obs
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
+from application_sdk.app._ep_registration import (
+    _apply_app_registration,
+    _build_entry_points,
+    _collect_implicit_ep,
+    _register_tasks,
+    _scan_entrypoints,
+)
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
     ObjectStoreNotConfiguredError,
@@ -29,13 +36,8 @@ from application_sdk.app.context import (
     TaskExecutionContext,
     _is_atlan_logger,
 )
-from application_sdk.app.entrypoint import (
-    EntryPointContractError,
-    EntryPointMetadata,
-    get_entrypoint_metadata,
-    is_entrypoint,
-)
-from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
+from application_sdk.app.entrypoint import EntryPointMetadata
+from application_sdk.app.registry import AppMetadata
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
@@ -497,12 +499,13 @@ class App(ABC):
 
         This is called when a class inherits from App. It:
         1. Derives the app name from the class name if not specified
-        2. Scans for @entrypoint methods (Path 1) or infers from run() (Path 2)
-        3. Registers the app with the AppRegistry
+        2. Collects explicit @entrypoint methods and/or the implicit run() entry point
+        3. Delegates building/validation to _build_entry_points
+        4. Registers with the AppRegistry via _apply_app_registration
 
         Skip registration if:
         - The class was already registered
-        - The class has other abstract methods (besides run)
+        - The class has other unimplemented abstract methods (besides run)
         - No valid entry points or run() with proper types found
         """
         super().__init_subclass__(**kwargs)
@@ -513,134 +516,30 @@ class App(ABC):
 
         app_name = cls.name or _pascal_to_kebab(cls.__name__)
 
-        # Path 1: explicit @entrypoint methods
-        entry_points = _scan_entrypoints(cls)
-        if entry_points:
-            # Only register concrete classes (no unimplemented abstract methods besides run)
-            abstract_methods = {
-                m
-                for m in dir(cls)
-                if getattr(getattr(cls, m, None), "__isabstractmethod__", False)
-            }
-            if abstract_methods - {"run"}:
-                return  # Genuine abstract class with other abstract methods
-
-            # Every entry point must follow the single-dataclass contract:
-            # one Input subclass parameter, one Output subclass return type.
-            # Unlike the implicit run() path (which silently skips template base
-            # classes), explicit @entrypoint decoration is always intentional —
-            # raise loudly so the developer sees the problem immediately.
-            # deferred import: circular dependency (entrypoint imports App)
-            for ep in entry_points.values():
-                if not (
-                    isinstance(ep.input_type, type) and issubclass(ep.input_type, Input)
-                ):
-                    raise EntryPointContractError(
-                        f"Entry point '{ep.name}' on {cls.__name__}: "
-                        f"input type {ep.input_type!r} must be a subclass of Input."
-                    )
-                if not (
-                    isinstance(ep.output_type, type)
-                    and issubclass(ep.output_type, Output)
-                ):
-                    raise EntryPointContractError(
-                        f"Entry point '{ep.name}' on {cls.__name__}: "
-                        f"output type {ep.output_type!r} must be a subclass of Output."
-                    )
-
-            first_ep = next(iter(entry_points.values()))
-            _apply_app_registration(
-                cls=cls,
-                name=app_name,
-                version=cls.version,
-                description=cls.description,
-                tags=cls.tags,
-                passthrough_modules=cls.passthrough_modules,
-                input_type=first_ep.input_type,
-                output_type=first_ep.output_type,
-                entry_points=entry_points,
-            )
+        # Skip classes with unimplemented abstract methods other than run() —
+        # those are intermediate abstract bases, not concrete apps.
+        abstract_methods = {
+            m
+            for m in dir(cls)
+            if getattr(getattr(cls, m, None), "__isabstractmethod__", False)
+        }
+        if abstract_methods - {"run"}:
             return
 
-        # Path 2: implicit run() — backward compat
-        if inspect.isabstract(cls):
+        explicit_eps = _scan_entrypoints(cls)
+        implicit_ep = _collect_implicit_ep(cls, App.run)
+
+        entry_points = _build_entry_points(cls, implicit_ep, explicit_eps)
+        if not entry_points:
             return
 
-        # Register classes that have a concrete run() available — either:
-        #   - Explicitly defined in the class's own __dict__, OR
-        #   - Inherited from an intermediate parent (not the App.run stub).
-        # Skip classes where cls.run resolves to the App.run stub: those are
-        # intermediate abstract bases or classes that only define @entrypoint.
-        if "run" not in cls.__dict__:
-            if cls.run is App.run:
-                return
-            run_method = cls.run  # concrete implementation from intermediate parent
-        else:
-            run_method = cls.__dict__["run"]
-
-        if getattr(run_method, "__isabstractmethod__", False):
-            return
-
-        # deferred import: circular dependency (entrypoint imports App)
-        try:
-            hints = get_type_hints(cls.run)
-        except Exception:
-            # Annotations are present but cannot be resolved (e.g. renamed
-            # forward refs, missing imports). Keep the registry tolerant —
-            # don't raise — but make the failure visible so the App doesn't
-            # silently disappear from the registry.
-            _task_logger.warning(
-                "Skipping run() annotation validation for %s: get_type_hints "
-                "failed to resolve annotations (likely an unresolved forward "
-                "reference or missing import). Skipping registration of run() "
-                "type validation; the App will still be registered.",
-                cls.__name__,
-                exc_info=True,
-            )
-            return
-
-        input_type = hints.get("input")
-        output_type = hints.get("return")
-
-        if input_type is None or output_type is None:
-            raise EntryPointContractError(
-                f"run() on {cls.__name__} must have type annotations: "
-                f"async def run(self, input: <Input subclass>) -> <Output subclass>"
-            )
-
-        if not (isinstance(input_type, type) and issubclass(input_type, Input)):
-            raise EntryPointContractError(
-                f"run() on {cls.__name__}: input type {input_type!r} must be "
-                f"a subclass of Input."
-            )
-        if not (isinstance(output_type, type) and issubclass(output_type, Output)):
-            raise EntryPointContractError(
-                f"run() on {cls.__name__}: output type {output_type!r} must be "
-                f"a subclass of Output."
-            )
-
-        # Using the base Input/Output directly is an error — concrete apps must
-        # define their own narrowed dataclass types.
-        if input_type is Input:
-            raise EntryPointContractError(
-                f"run() on {cls.__name__}: input type must be a concrete subclass "
-                f"of Input, not Input itself. Define a dedicated dataclass."
-            )
-        if output_type is Output:
-            raise EntryPointContractError(
-                f"run() on {cls.__name__}: output type must be a concrete subclass "
-                f"of Output, not Output itself. Define a dedicated dataclass."
-            )
-
-        # deferred import: circular dependency (entrypoint imports App)
-        implicit_ep = EntryPointMetadata(
-            name="run",
-            input_type=input_type,
-            output_type=output_type,
-            method_name="run",
-            implicit=True,
+        # App-level _input_type/_output_type come from the default entry point
+        # (or the first registered for single-entry-point apps where
+        # _resolve_default_entrypoint uses the len==1 path).
+        default_ep = next(
+            (ep for ep in entry_points.values() if ep.default),
+            next(iter(entry_points.values())),
         )
-
         _apply_app_registration(
             cls=cls,
             name=app_name,
@@ -648,9 +547,9 @@ class App(ABC):
             description=cls.description,
             tags=cls.tags,
             passthrough_modules=cls.passthrough_modules,
-            input_type=input_type,
-            output_type=output_type,
-            entry_points={"run": implicit_ep},
+            input_type=default_ep.input_type,
+            output_type=default_ep.output_type,
+            entry_points=entry_points,
         )
 
     @property
@@ -955,6 +854,21 @@ class App(ABC):
         is never re-executed on workflow replay even if the worker is replaced
         mid-run (e.g. a KEDA scale-down event).
 
+        **Store routing (SDR vs non-SDR):** this method targets the upstream
+        object store when one is configured (``UPSTREAM_OBJECT_STORE_NAME``
+        points to a distinct Dapr component), and falls back to the deployment
+        store otherwise.  In standard (non-SDR) deployments only the deployment
+        binding is present, so ``upstream_storage`` is ``None`` and routing
+        falls back to the deployment store.  In SDR deployments the upstream
+        store is Atlan's bucket — the correct destination for extracted
+        artifacts handed off to the publish app.
+
+        This routing applies to ``App.upload()`` and ``App.download()``.  The
+        automatic file-reference materialisation that transfers ``FileReference``
+        objects between ``@task`` methods always uses the deployment store; use
+        that mechanism (not ``App.upload()`` / ``App.download()``) for
+        intermediate task-to-task data.
+
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.upload` directly.
 
@@ -967,24 +881,27 @@ class App(ABC):
             containing both ``local_path`` and ``storage_path``, plus ``file_count``
             indicating the number of files uploaded.
 
-        Example — upload a single file produced by an extraction task::
+        Example — SDR extract app handing off artifacts to the publish app::
 
-            async def run(self, input: PipelineInput) -> PipelineOutput:
-                extract = await self.extract_data(ExtractInput(source=input.source))
-                up = await self.upload(UploadInput(local_path=extract.output_file))
-                # up.ref is durable — safe to pass to a task on a different worker
-                await self.load_data(LoadInput(ref=up.ref))
+            async def run(self, input: ExtractInput) -> ExtractOutput:
+                result = await self.extract_data(ExtractInput(source=input.source))
+                up = await self.upload(UploadInput(local_path=result.output_file))
+                # Return the ref so the publish app can consume it as input
+                return ExtractOutput(artifacts_ref=up.ref)
 
         Example — upload an entire output directory::
 
             up = await self.upload(UploadInput(local_path="/tmp/output/"))
             # up.ref.file_count == number of files in the directory
         """
+
         from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             upload as _upload,
         )
 
-        store = self.context.storage
+        # Prefer the upstream store (SDR: Atlan's bucket for the extract→publish
+        # handoff); fall back to the deployment store (standard deployments).
+        store = self.context.upstream_storage or self.context.storage
         if store is None:
             raise ObjectStoreNotConfiguredError()
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
@@ -1014,6 +931,13 @@ class App(ABC):
         If ``input.ref`` is provided and ``input.storage_path`` is empty, the
         ref's ``storage_path`` is used as the source.
 
+        **Store routing (SDR vs non-SDR):** mirrors ``App.upload()`` — reads
+        from the upstream store when one is configured, falling back to the
+        deployment store otherwise.  In standard (non-SDR) deployments only
+        the deployment binding is present, so ``upstream_storage`` is ``None``
+        and routing falls back to the deployment store.  In SDR deployments
+        the publish app uses this to pull artifacts written by the extract app.
+
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.download` directly.
 
@@ -1025,14 +949,12 @@ class App(ABC):
             ``DownloadOutput`` with a fully materialised ``FileReference``
             containing both ``storage_path`` and ``local_path``.
 
-        Example — download a file reference from a previous upload::
+        Example — SDR publish app consuming artifacts from the extract app::
 
-            async def run(self, input: InferInput) -> InferOutput:
-                dl = await self.download(
-                    DownloadInput(storage_path=input.model_ref.storage_path)
-                )
-                result = await self.run_inference(
-                    InferenceInput(model_path=dl.ref.local_path, data=input.data)
+            async def run(self, input: PublishInput) -> PublishOutput:
+                dl = await self.download(DownloadInput(ref=input.artifacts_ref))
+                return await self.publish_data(
+                    PublishInput(local_path=dl.ref.local_path)
                 )
 
         Example — re-materialise an existing FileReference::
@@ -1043,10 +965,9 @@ class App(ABC):
             download as _download,
         )
 
-        store = self.context.storage
+        store = self.context.upstream_storage or self.context.storage
         if store is None:
             raise ObjectStoreNotConfiguredError()
-
         # Resolve storage_path: explicit field takes precedence over ref.storage_path
         storage_path = input.storage_path
         if not storage_path and input.ref is not None:
@@ -1307,112 +1228,11 @@ class App(ABC):
 
 
 # =============================================================================
-# Registration helpers
+# Registration helpers — see application_sdk/app/_ep_registration.py
 # =============================================================================
-
-
-def _register_tasks(cls: type, app_name: str) -> None:
-    """Register all @task decorated methods for an App class.
-
-    Args:
-        cls: The App class.
-        app_name: The app's registered name.
-    """
-    task_registry = TaskRegistry.get_instance()
-
-    # Scan the class for @task decorated methods
-    for attr_name in dir(cls):
-        if attr_name.startswith("_"):
-            continue
-
-        attr = getattr(cls, attr_name, None)
-        if attr is None:
-            continue
-
-        if is_task(attr):
-            task_meta = get_task_metadata(attr)
-            if task_meta:
-                # Create a copy with the app name set
-                task_meta_copy = replace(task_meta, app_name=app_name)
-                # Register the task
-                task_registry.register(app_name, task_meta_copy)
-
-
-def _scan_entrypoints(cls: type) -> "dict[str, EntryPointMetadata]":
-    """Scan a class for @entrypoint-decorated methods.
-
-    Args:
-        cls: The App class to scan.
-
-    Returns:
-        Dict mapping entry point name to EntryPointMetadata.
-    """
-    # deferred import: circular dependency (entrypoint imports App)
-    entry_points: dict[str, EntryPointMetadata] = {}
-    for attr_name in dir(cls):
-        if attr_name.startswith("_"):
-            continue
-        attr = getattr(cls, attr_name, None)
-        if attr is None:
-            continue
-        if is_entrypoint(attr):
-            ep_meta = get_entrypoint_metadata(attr)
-            if ep_meta is not None:
-                entry_points[ep_meta.name] = ep_meta
-    return entry_points
-
-
-def _apply_app_registration(
-    cls: "type[App]",
-    name: str,
-    version: str,
-    description: str,
-    tags: dict[str, str] | None,
-    passthrough_modules: set[str] | None,
-    input_type: type[Input],
-    output_type: type[Output],
-    entry_points: "dict[str, EntryPointMetadata] | None" = None,
-) -> None:
-    """Register an App class with the AppRegistry.
-
-    Args:
-        cls: The App class to register.
-        name: App name.
-        version: Semantic version string.
-        description: Human-readable description.
-        tags: Optional tags for categorization.
-        passthrough_modules: Modules to pass through sandbox.
-        input_type: Input dataclass type.
-        output_type: Output dataclass type.
-        entry_points: Entry point metadata keyed by entry point name.
-    """
-    # Mark as registered to prevent duplicate registration
-    cls._app_registered = True
-
-    # Set class attributes
-    cls._app_name = name
-    cls._app_version = version
-    cls._input_type = input_type
-    cls._output_type = output_type
-
-    # Register with the global app registry
-    registry = AppRegistry.get_instance()
-    metadata = registry.register(
-        name=name,
-        version=version,
-        app_cls=cls,
-        input_type=input_type,
-        output_type=output_type,
-        description=description,
-        tags=tags,
-        passthrough_modules=passthrough_modules,
-        entry_points=entry_points or {},
-        allow_override=True,
-    )
-    cls._app_metadata = metadata
-
-    # Register all @task decorated methods
-    _register_tasks(cls, name)
+# _register_tasks, _collect_implicit_ep, _scan_entrypoints,
+# _build_entry_points, _apply_app_registration are imported at the top of this
+# module from _ep_registration and re-exported via __all__ for backward compat.
 
 
 # Cache generated workflow classes keyed by (app_cls, entry_point_name) so
