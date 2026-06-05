@@ -28,10 +28,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.23
+boto3==1.43.15
     # via atlan-application-sdk
-boto3-stubs==1.43.23
-botocore==1.43.23
+boto3-stubs==1.43.15
+botocore==1.43.15
     # via
     #   boto3
     #   s3transfer
@@ -70,7 +70,7 @@ cryptography==48.0.0
     #   trustme
 detect-installer==0.1.0
     # via fastapi-cloud-cli
-distlib==0.4.1
+distlib==0.4.0
     # via virtualenv
 dnspython==2.8.0
     # via email-validator
@@ -82,13 +82,13 @@ fastapi==0.136.3
     # via atlan-application-sdk
 fastapi-cli==0.0.24
     # via fastapi
-fastapi-cloud-cli==0.19.0
+fastapi-cloud-cli==0.18.0
     # via fastapi-cli
 fastar==0.11.0
     # via
     #   fastapi
     #   fastapi-cloud-cli
-filelock==3.29.1
+filelock==3.29.0
     # via
     #   python-discovery
     #   virtualenv
@@ -100,7 +100,7 @@ googleapis-common-protos==1.75.0
     # via
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-grpcio==1.81.0
+grpcio==1.80.0
     # via opentelemetry-exporter-otlp-proto-grpc
 h11==0.16.0
     # via
@@ -120,10 +120,10 @@ httpx-retries==0.4.6
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.155.1
+hypothesis==6.153.2
 identify==2.6.19
     # via pre-commit
-idna==3.18
+idna==3.16
     # via
     #   anyio
     #   email-validator
@@ -156,7 +156,7 @@ markupsafe==3.0.3
 mdurl==0.1.2
     # via markdown-it-py
 mock==5.2.0
-msal==1.37.0
+msal==1.36.0
     # via
     #   azure-identity
     #   msal-extensions
@@ -235,7 +235,7 @@ packaging==26.2
     #   pytest
 pastel==0.2.1
     # via poethepoet
-platformdirs==4.10.0
+platformdirs==4.9.6
     # via
     #   python-discovery
     #   virtualenv
@@ -256,7 +256,7 @@ protobuf==6.33.6
     #   googleapis-common-protos
     #   opentelemetry-proto
     #   temporalio
-pyatlan==9.7.4
+pyatlan==9.7.3
     # via atlan-application-sdk
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
@@ -290,14 +290,14 @@ python-dateutil==2.9.0.post0
     # via
     #   botocore
     #   pyatlan
-python-discovery==1.4.0
+python-discovery==1.3.1
     # via virtualenv
 python-dotenv==1.2.2
     # via
     #   atlan-application-sdk
     #   pydantic-settings
     #   uvicorn
-python-multipart==0.0.32
+python-multipart==0.0.29
     # via fastapi
 pytz==2026.2
     # via pyatlan
@@ -320,15 +320,15 @@ rich==15.0.0
     # via
     #   rich-toolkit
     #   typer
-rich-toolkit==0.20.0
+rich-toolkit==0.19.10
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli
 rignore==0.7.6
     # via fastapi-cloud-cli
-s3transfer==0.18.0
+s3transfer==0.17.1
     # via boto3
-sentry-sdk==2.61.1
+sentry-sdk==2.60.0
     # via fastapi-cloud-cli
 shellingham==1.5.4
     # via typer
@@ -336,18 +336,18 @@ six==1.17.0
     # via python-dateutil
 sortedcontainers==2.4.0
     # via hypothesis
-starlette==1.2.1
+starlette==1.1.0
     # via fastapi
-temporalio==1.28.0
+temporalio==1.27.2
     # via atlan-application-sdk
 tenacity==9.1.4
     # via pyatlan
 trustme==1.2.1
-typer==0.26.7
+typer==0.26.1
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli
-types-awscrt==0.34.1
+types-awscrt==0.33.0
     # via botocore-stubs
 types-protobuf==6.32.1.20260221
     # via temporalio
@@ -388,7 +388,7 @@ urllib3==2.7.0
     #   botocore
     #   requests
     #   sentry-sdk
-uvicorn==0.49.0
+uvicorn==0.48.0
     # via
     #   fastapi
     #   fastapi-cli
@@ -397,7 +397,7 @@ uvloop==0.22.1 ; sys_platform != 'win32'
     # via
     #   atlan-application-sdk
     #   uvicorn
-virtualenv==21.4.2
+virtualenv==21.3.3
     # via pre-commit
 watchfiles==1.2.0
     # via uvicorn
