@@ -1468,7 +1468,7 @@ class NotificationNode extends DAGNode {
       ["workflow_name"] = "$.workflow.name"
       ["workflow_qualified_name"] = "$.workflow.qualified_name"
       ["workflow_slug"] = "$.workflow.slug"
-      ["status"] = "Failed"
+      ["status"] = "$.workflow.status"
       ["run_details_url"] = "$.workflow.run_url"
       ["workflow_run_guid"] = "$.workflow.run_id"
       ["error_message"] = "$.failure.message"
@@ -1485,9 +1485,8 @@ It renders `app_name = "notification-app"` and
 `task_queue = "atlan-notification-app-{deployment_name}"`. Automation Engine
 resolves the `$.workflow.*` and `$.failure.*` placeholders when the finalizer
 runs, then the notification app fans the alert out to the tenant's enabled
-integrations. `status` is emitted as literal `"Failed"` because this node only
-runs on workflow failure and notification integrations can use that exact value
-for failure-only routing.
+integrations. The finalizer uses `$.workflow.status`; Automation Engine exposes
+the effective terminal workflow status for this run-level failure node.
 
 Set `notifyOnFailure = false` for utility/system apps that must not self-notify.
 To replace the default target or payload, define `extraNodes["notify-on-failure"]`.
