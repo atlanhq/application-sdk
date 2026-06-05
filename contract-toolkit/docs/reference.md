@@ -106,6 +106,16 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `workflowTypeOverride` | String? | null | Explicit workflow type (used as-is, overrides `workflowType`). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
+### E2E Test Harness
+
+These three fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `argoPackageName` | String | `"@atlan/{name}"` | Argo WorkflowTemplate package name. Override when the app uses a scoped or non-standard Argo package. |
+| `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
+| `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+
 ### Pipeline Block
 
 The typed `pipeline` block replaces per-flag properties. Each step is nullable to opt out.
