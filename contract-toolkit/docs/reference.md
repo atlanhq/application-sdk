@@ -328,7 +328,7 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 
 ---
 
-### NotificationNode
+### Failure Notification Overview
 
 ```pkl
 class NotificationNode extends DAGNode {
