@@ -1957,25 +1957,39 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
   when (pipeline.lineage != null) {
     ["lineage-app"] = renderNode(pipeline.lineage!!)
   }
-  when (pipeline.publish != null && !extraNodes.toMap().containsKey("publish")) {
+  when (pipeline.publish != null || extraNodes.toMap().containsKey("publish")) {
+    // If the app overrides the publish node via `extraNodes["publish"]`, emit
+    // the override here so it keeps the typed publish node's position in the
+    // generated DAG (between `lineage-app` and `lineage-publish`). Without
+    // this in-place emit, the override would only be appended by the trailing
+    // `for` loop and end up after `lineage-publish` — a cosmetic but noisy
+    // diff that hurts reviewability of override PRs.
     ["publish"] =
-      let (ps = pipeline.publish!!)
-      let (_publishEhCheck = validateWorkflowNodeErrorHandling(ps.errorHandling, "pipeline.publish.errorHandling"))
-      renderNode(new PublishNode {
-        executorEnabled = ps.executorEnabled
-        displayName = ps.displayName
-        errorHandling = ps.errorHandling
-        connectionCacheEnabled = ps.connectionCacheEnabled
-        connectionCacheViaAppEnabled = ps.connectionCacheViaAppEnabled
-        currentStateEnabled = ps.currentStateEnabled
-        currentStateViaAppEnabled = ps.currentStateViaAppEnabled
-      })
+      if (extraNodes.toMap().containsKey("publish"))
+        renderNode(extraNodes["publish"])
+      else
+        let (ps = pipeline.publish!!)
+        let (_publishEhCheck = validateWorkflowNodeErrorHandling(ps.errorHandling, "pipeline.publish.errorHandling"))
+        renderNode(new PublishNode {
+          executorEnabled = ps.executorEnabled
+          displayName = ps.displayName
+          errorHandling = ps.errorHandling
+          connectionCacheEnabled = ps.connectionCacheEnabled
+          connectionCacheViaAppEnabled = ps.connectionCacheViaAppEnabled
+          currentStateEnabled = ps.currentStateEnabled
+          currentStateViaAppEnabled = ps.currentStateViaAppEnabled
+        })
   }
   when (pipeline.publish != null && pipeline.publish!!.lineagePublish != null) {
     ["lineage-publish"] = renderNode(pipeline.publish!!.lineagePublish!!)
   }
   for (nodeId, node in extraNodes) {
-    [nodeId] = renderNode(node)
+    // `publish` is already emitted above (at its in-pipeline position) when
+    // overridden via `extraNodes["publish"]`; skip it here to avoid emitting
+    // a duplicate trailing entry.
+    when (nodeId != "publish") {
+      [nodeId] = renderNode(node)
+    }
   }
 }
 
