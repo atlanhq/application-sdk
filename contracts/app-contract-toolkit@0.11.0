@@ -1,0 +1,13 @@
+{
+  "name": "app-contract-toolkit",
+  "packageUri": "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0.11.0",
+  "version": "0.11.0",
+  "packageZipUrl": "https://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0.11.0.zip",
+  "packageZipChecksums": {
+    "sha256": "c0e07c0922ad4b6ec876d1550f7a49f69830adbbd5b1586bd99f12c38cb04a47"
+  },
+  "dependencies": {},
+  "sourceCodeUrlScheme": "https://github.com/atlanhq/application-sdk/blob/contract-toolkit-v0.11.0/contract-toolkit/src%{path}#L%{line}-L%{endLine}",
+  "sourceCode": "https://github.com/atlanhq/application-sdk",
+  "authors": []
+}
