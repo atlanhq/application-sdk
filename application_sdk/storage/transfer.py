@@ -596,6 +596,10 @@ async def upload(
             )
             errs = [r for r in results if isinstance(r, BaseException)]
             if errs:
+                for extra in errs[1:]:
+                    _logger.error(
+                        "concurrent upload failure (suppressed)", exc_info=extra
+                    )
                 raise errs[0]
             n = sum(1 for ok in results if ok)
             reason = "uploaded" if n > 0 else "skipped:hash_match"
