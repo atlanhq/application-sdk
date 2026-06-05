@@ -314,6 +314,7 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 | `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. |
 | `publishTagPipelineEnabled` | Boolean\|String? | auto | Value for `PublishNode`'s `tag_pipeline_enabled`. Auto-wired when `enable-tags` or `enable-tag-sync` is in the form. |
 | `publishTagAttachmentsPrefix` | String? | auto | Value for `PublishNode`'s `tag_attachments_prefix`. |
+| `notifyOnFailure` | Boolean | `true` | Appends the run-level failure notification system node (`notify-on-failure`). Set `false` for utility/system apps that must not self-notify, including the notification app itself. Also skipped when `extraNodes` defines `notify-on-failure`. |
 
 ---
 
@@ -1252,6 +1253,11 @@ condition trees. It is mutually exclusive with `dependsOn`. For pre-built nodes
 that define a default `dependsOn`, set `dependsOn = null` before setting
 `dependsOnCondition`.
 
+The reserved `workflow_failure` tag is the only node-less tag condition the
+toolkit permits. It is run-level, not node-level: Automation Engine evaluates it
+for finalizer nodes once the workflow run fails. This is used by
+`NotificationNode`; other tags still require `nodeId`.
+
 ```pkl
 class DependencyCondition {
   nodeId: String?
@@ -1267,6 +1273,14 @@ Direct condition:
 dependsOnCondition = new DependencyCondition {
   nodeId = "extract"
   tag = "success"
+}
+```
+
+Run-level failure finalizer condition:
+
+```pkl
+dependsOnCondition = new DependencyCondition {
+  tag = "workflow_failure"
 }
 ```
 
@@ -1426,6 +1440,47 @@ For built-in extract/default publish retry and timeout policy, use
 `extractNodeErrorHandling` and `publishNodeErrorHandling`. These fields emit
 manifest `error_handling` without replacing the generated nodes, and only accept
 workflow-safe `ErrorHandlingConfig` values. See `examples/publish-controls/`.
+
+### NotificationNode
+
+Pre-built run-failure notification system node. The toolkit appends it
+automatically as `notify-on-failure` when `notifyOnFailure = true`:
+
+```pkl
+class NotificationNode extends DAGNode {
+  displayName = "Notify on workflow failure"
+  workflowType = "NotificationWorkflow"
+  appName = "notification-app"
+  dependsOnCondition = new DependencyCondition { tag = "workflow_failure" }
+  args {
+    ["metadata"] {
+      ["notification_type"] = "workflow_failure_alert"
+      ["workflow_name"] = "$.workflow.name"
+      ["workflow_qualified_name"] = "$.workflow.qualified_name"
+      ["workflow_slug"] = "$.workflow.slug"
+      ["status"] = "Failed"
+      ["run_details_url"] = "$.workflow.run_url"
+      ["workflow_run_guid"] = "$.workflow.run_id"
+      ["error_message"] = "$.failure.message"
+      ["error_category"] = "$.failure.category"
+      ["suggested_action"] = "$.failure.suggested_action"
+      ["failed_node_id"] = "$.failure.node_id"
+      ["failed_activity"] = "$.failure.activity"
+    }
+  }
+}
+```
+
+It renders `app_name = "notification-app"` and
+`task_queue = "atlan-notification-app-{deployment_name}"`. Automation Engine
+resolves the `$.workflow.*` and `$.failure.*` placeholders when the finalizer
+runs, then the notification app fans the alert out to the tenant's enabled
+integrations. `status` is emitted as literal `"Failed"` because this node only
+runs on workflow failure and notification integrations can use that exact value
+for failure-only routing.
+
+Set `notifyOnFailure = false` for utility/system apps that must not self-notify.
+To replace the default target or payload, define `extraNodes["notify-on-failure"]`.
 
 ### QueryIntelligenceNode
 

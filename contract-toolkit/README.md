@@ -132,7 +132,11 @@ is still emitted, so no form input is required.
 
 Automation Engine DAG template. Auto-derived from the declared workflow params and the typed `pipeline` block. Heracles substitutes `{{param}}` placeholders with form values before sending to AE.
 
-Default pipeline: `extract → publish`. Opt out of publish with `pipeline.publish = null`. Add parseQueries, popularity, or lineage steps by setting the corresponding `pipeline.*` field.
+Default pipeline: `extract → publish`, plus a run-level
+`notify-on-failure` system node. Opt out of publish with
+`pipeline.publish = null`. Add parseQueries, popularity, or lineage steps by
+setting the corresponding `pipeline.*` field. Opt out of failure notifications
+with `notifyOnFailure = false`.
 
 ### `_input.py` (`app/generated/_input.py`)
 
@@ -231,6 +235,21 @@ pipeline {
 
 Dependencies between pipeline steps are **auto-wired** based on position — you do not write `dependsOn` for pipeline steps. Use `extraNodes` for custom nodes outside the typed pipeline.
 
+The toolkit also appends a run-level failure notification node by default:
+
+```pkl
+notifyOnFailure = false  // utility/system apps that must not self-notify
+```
+
+When enabled, the generated manifest includes `notify-on-failure`, a
+`NotificationNode` that dispatches `NotificationWorkflow` in `notification-app`.
+It depends on the reserved run-level `workflow_failure` tag, so Automation
+Engine runs it once after the workflow run fails and resolves the payload from
+`$.workflow.*` and `$.failure.*` context. The notification app then fans the
+alert out to the tenant's enabled integrations.
+
+To replace the generated node, define `extraNodes["notify-on-failure"]`.
+
 **Mapping from old API:**
 
 | Old | New |
@@ -246,7 +265,7 @@ Dependencies between pipeline steps are **auto-wired** based on position — you
 | `extraNodes { ["lineage-app"] = new LineageNode { ... } }` | `pipeline.lineage = new LineageStep { ... }` |
 | `extraNodes { ["lineage-publish"] = new LineagePublishNode { ... } }` | `pipeline.publish.lineagePublish = new LineagePublishStep { ... }` |
 
-`extraNodes` is still available as an escape hatch for nodes that fall outside the canonical pipeline (e.g. custom fan-in or notification steps).
+`extraNodes` is still available as an escape hatch for nodes that fall outside the canonical pipeline (e.g. custom fan-in steps).
 
 ## Deploy Block
 

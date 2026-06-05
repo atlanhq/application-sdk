@@ -1,0 +1,24 @@
+/// Fixture: app that opts out of the run-level failure notification node.
+///
+/// Utility and system apps use this toggle so their own workflow failures do
+/// not dispatch the notification app recursively.
+amends "../../src/App.pkl"
+
+name = "notify-disabled"
+displayName = "Notify Disabled"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+notifyOnFailure = false
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

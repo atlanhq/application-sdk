@@ -51,6 +51,35 @@
       "error_handling": {
         "start_to_close_timeout_seconds": 14400
       }
+    },
+    "notify-on-failure": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Notify on workflow failure",
+      "app_name": "notification-app",
+      "inputs": {
+        "workflow_type": "NotificationWorkflow",
+        "app_name": "notification-app",
+        "task_queue": "atlan-notification-app-{deployment_name}",
+        "args": {
+          "metadata": {
+            "notification_type": "workflow_failure_alert",
+            "workflow_name": "$.workflow.name",
+            "workflow_qualified_name": "$.workflow.qualified_name",
+            "workflow_slug": "$.workflow.slug",
+            "status": "Failed",
+            "run_details_url": "$.workflow.run_url",
+            "workflow_run_guid": "$.workflow.run_id",
+            "error_message": "$.failure.message",
+            "error_category": "$.failure.category",
+            "suggested_action": "$.failure.suggested_action",
+            "failed_node_id": "$.failure.node_id",
+            "failed_activity": "$.failure.activity"
+          }
+        }
+      },
+      "depends_on": {
+        "tag": "workflow_failure"
+      }
     }
   }
 }

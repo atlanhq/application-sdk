@@ -235,8 +235,20 @@ uiConfig: Widgets.UIConfig?
 // ── MANIFEST CONFIG ───────────────────────────────────────────────────────────
 
 /// Additional DAG nodes beyond the pipeline.
-/// If a key "publish" is defined here, it replaces the auto-generated publish node.
+/// If key "publish" is defined here, it replaces the auto-generated publish node.
+/// If key "notify-on-failure" is defined here, it replaces the auto-generated
+/// failure notification node.
 extraNodes: Mapping<String, DAGNode> = new Mapping {}
+
+/// Append a run-level failure notification node (`NotificationNode`, key
+/// `notify-on-failure`) to the generated manifest.
+///
+/// Defaults to `true` so native connector apps dispatch the notification app
+/// when their workflow run fails. Set `false` for utility/system apps that must
+/// not self-notify, including the notification app itself. Defining
+/// `extraNodes["notify-on-failure"]` also suppresses the default node so apps can
+/// intentionally replace the generated notification target or payload.
+notifyOnFailure: Boolean = true
 
 /// Mapping of manifest arg name → form field name for top-level extract args.
 manifestTopLevelArgs: Mapping<String, String> = new Mapping {
@@ -476,6 +488,11 @@ class AdvancedJDBCUrlGroup {
 class DependencyCondition {
   nodeId: String?
 
+  /// Optional dependency tag. `success` and `failure` are per-node AE tags.
+  ///
+  /// The reserved `workflow_failure` tag is run-level, not node-level. It is the
+  /// only tag allowed without `nodeId` and is used by `NotificationNode` to run
+  /// once after the workflow run fails.
   tag: String?
 
   andConditions: Listing<DependencyCondition>?
@@ -487,8 +504,10 @@ class DependencyCondition {
       throw("DependencyCondition cannot combine nodeId with andConditions/orConditions.")
     else if (andConditions != null && orConditions != null)
       throw("DependencyCondition cannot set both andConditions and orConditions.")
+    else if (tag == "workflow_failure" && nodeId == null)
+      null
     else if (tag != null && nodeId == null)
-      throw("DependencyCondition.tag requires nodeId.")
+      throw("DependencyCondition.tag requires nodeId, except the reserved run-level `workflow_failure` tag.")
     else if (nodeId == null && andConditions == null && orConditions == null)
       throw("DependencyCondition requires nodeId, andConditions, or orConditions.")
     else if (andConditions != null && andConditions.length == 0)
@@ -623,6 +642,40 @@ open class PublishNode extends DAGNode {
     ["current_state_via_app_enabled"] = currentStateViaAppEnabled
   }
   dependsOn { upstream }
+}
+
+/// Pre-built run-failure notification node.
+///
+/// Dispatches `NotificationWorkflow` in the notification app. Automation Engine
+/// resolves the `$.workflow.*` and `$.failure.*` placeholders when this finalizer
+/// node runs, and the notification app fans the alert out to the tenant's
+/// enabled integrations.
+///
+/// This node is injected by default as `notify-on-failure` when
+/// `notifyOnFailure = true`. It depends on the reserved run-level
+/// `workflow_failure` tag, so it runs once for the failed workflow run rather
+/// than once per failed activity node.
+open class NotificationNode extends DAGNode {
+  displayName = "Notify on workflow failure"
+  workflowType = "NotificationWorkflow"
+  appName = "notification-app"
+  dependsOnCondition = new DependencyCondition { tag = "workflow_failure" }
+  args {
+    ["metadata"] = new Mapping {
+      ["notification_type"] = "workflow_failure_alert"
+      ["workflow_name"] = "$.workflow.name"
+      ["workflow_qualified_name"] = "$.workflow.qualified_name"
+      ["workflow_slug"] = "$.workflow.slug"
+      ["status"] = "Failed"
+      ["run_details_url"] = "$.workflow.run_url"
+      ["workflow_run_guid"] = "$.workflow.run_id"
+      ["error_message"] = "$.failure.message"
+      ["error_category"] = "$.failure.category"
+      ["suggested_action"] = "$.failure.suggested_action"
+      ["failed_node_id"] = "$.failure.node_id"
+      ["failed_activity"] = "$.failure.activity"
+    }
+  }
 }
 
 /// Pre-built Query Intelligence node.
@@ -1976,6 +2029,9 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
   }
   for (nodeId, node in extraNodes) {
     [nodeId] = renderNode(node)
+  }
+  when (notifyOnFailure && !extraNodes.toMap().containsKey("notify-on-failure")) {
+    ["notify-on-failure"] = renderNode(new NotificationNode {})
   }
 }
 

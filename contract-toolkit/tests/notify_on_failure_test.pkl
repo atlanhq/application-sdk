@@ -1,0 +1,129 @@
+// Tests for the built-in run-level failure notification node.
+//
+// Automation Engine owns the `workflow_failure` finalizer behavior and resolves
+// the `$.workflow.*` / `$.failure.*` placeholders. The toolkit owns the manifest
+// shape that opts connector apps into that system node by default.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/default_pipeline.pkl" as defaultApp
+import "fixtures/notify_disabled.pkl" as disabledApp
+import "../src/App.pkl" as App
+
+local overrideApp = (App) {
+  name = "notify-override"
+  displayName = "Notify Override"
+  icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+  hasCredentialConfig = false
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator {
+            placeholderText = "Connection Name"
+          }
+        }
+      }
+    }
+  }
+
+  extraNodes {
+    ["notify-on-failure"] = new App.NotificationNode {
+      displayName = "Custom notify on failure"
+      appName = "custom-notification-app"
+      taskQueue = "custom-notification-queue"
+    }
+  }
+}
+
+local defaultManifest = new json.Parser { useMapping = true }.parse(
+  defaultApp.output.files["app/generated/manifest.json"].text
+)
+local defaultDag = defaultManifest["dag"]
+local notifyNode = defaultDag["notify-on-failure"]
+local notifyArgs = notifyNode["inputs"]["args"]["metadata"]
+
+local disabledManifest = new json.Parser { useMapping = true }.parse(
+  disabledApp.output.files["app/generated/manifest.json"].text
+)
+local disabledDag = disabledManifest["dag"]
+
+local overrideManifest = new json.Parser { useMapping = true }.parse(
+  overrideApp.output.files["app/generated/manifest.json"].text
+)
+local overrideNode = overrideManifest["dag"]["notify-on-failure"]
+
+facts {
+  ["Default app gets a notify-on-failure node"] {
+    notifyNode != null
+  }
+
+  ["Notify node dispatches the notification app workflow"] {
+    notifyNode["activity_name"] == "execute_workflow"
+    notifyNode["activity_display_name"] == "Notify on workflow failure"
+    notifyNode["app_name"] == "notification-app"
+    notifyNode["inputs"]["workflow_type"] == "NotificationWorkflow"
+    notifyNode["inputs"]["app_name"] == "notification-app"
+  }
+
+  ["Notify node task queue is derived from the notification app name"] {
+    notifyNode["inputs"]["task_queue"] == "atlan-notification-app-{deployment_name}"
+  }
+
+  ["Notify node depends on the run-level workflow_failure tag"] {
+    notifyNode["depends_on"]["tag"] == "workflow_failure"
+    !notifyNode["depends_on"].containsKey("node_id")
+  }
+
+  ["Notify node marks the payload as workflow_failure_alert"] {
+    notifyArgs["notification_type"] == "workflow_failure_alert"
+  }
+
+  ["Notify node emits failure status and templates workflow context fields"] {
+    notifyArgs["workflow_name"] == "$.workflow.name"
+    notifyArgs["workflow_qualified_name"] == "$.workflow.qualified_name"
+    notifyArgs["workflow_slug"] == "$.workflow.slug"
+    notifyArgs["status"] == "Failed"
+    notifyArgs["run_details_url"] == "$.workflow.run_url"
+    notifyArgs["workflow_run_guid"] == "$.workflow.run_id"
+  }
+
+  ["Notify node templates failure context fields"] {
+    notifyArgs["error_message"] == "$.failure.message"
+    notifyArgs["error_category"] == "$.failure.category"
+    notifyArgs["suggested_action"] == "$.failure.suggested_action"
+    notifyArgs["failed_node_id"] == "$.failure.node_id"
+    notifyArgs["failed_activity"] == "$.failure.activity"
+  }
+
+  ["notifyOnFailure=false suppresses the notify-on-failure node"] {
+    !disabledDag.containsKey("notify-on-failure")
+  }
+
+  ["Disabling notify-on-failure does not remove the default publish node"] {
+    disabledDag["publish"] != null
+  }
+
+  ["extraNodes can replace the notify-on-failure node"] {
+    overrideNode["activity_display_name"] == "Custom notify on failure"
+    overrideNode["app_name"] == "custom-notification-app"
+    overrideNode["inputs"]["app_name"] == "custom-notification-app"
+    overrideNode["inputs"]["task_queue"] == "custom-notification-queue"
+  }
+
+  ["NotificationNode defaults identify the notification app"] {
+    local n = new App.NotificationNode {}
+    n.workflowType == "NotificationWorkflow"
+    n.appName == "notification-app"
+    n.displayName == "Notify on workflow failure"
+  }
+
+  ["NotificationNode uses a node-less workflow_failure dependency"] {
+    local n = new App.NotificationNode {}
+    n.dependsOnCondition.tag == "workflow_failure"
+    n.dependsOnCondition.nodeId == null
+    n.dependsOnCondition._conditionShapeCheck == null
+  }
+}
