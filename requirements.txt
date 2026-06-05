@@ -2,135 +2,412 @@
 #    uv export --no-hashes --frozen
 -e .
 aiohappyeyeballs==2.6.2
+    # via aiohttp
 aiohttp==3.14.0
+    # via atlan-application-sdk
 aiosignal==1.4.0
+    # via aiohttp
 annotated-doc==0.0.4
+    # via
+    #   fastapi
+    #   typer
 annotated-types==0.7.0
+    # via pydantic
 anyio==4.13.0
+    # via
+    #   httpx
+    #   starlette
+    #   watchfiles
 asgiref==3.11.1
+    # via opentelemetry-instrumentation-asgi
 attrs==26.1.0
+    # via aiohttp
 authlib==1.6.12
+    # via pyatlan
 azure-core==1.41.0
+    # via azure-identity
 azure-identity==1.25.3
-boto3==1.43.15
-boto3-stubs==1.43.15
-botocore==1.43.15
+    # via atlan-application-sdk
+boto3==1.43.23
+    # via atlan-application-sdk
+boto3-stubs==1.43.23
+botocore==1.43.23
+    # via
+    #   boto3
+    #   s3transfer
 botocore-stubs==1.43.14
+    # via boto3-stubs
 certifi==2026.5.20
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
+    #   sentry-sdk
 cffi==2.0.0 ; platform_python_implementation != 'PyPy'
+    # via cryptography
 cfgv==3.5.0
+    # via pre-commit
 charset-normalizer==3.4.7
+    # via requests
 click==8.4.1
+    # via
+    #   rich-toolkit
+    #   uvicorn
 colorama==0.4.6 ; sys_platform == 'win32'
+    # via
+    #   click
+    #   loguru
+    #   pytest
+    #   typer
+    #   uvicorn
 coverage==7.14.1
 cryptography==48.0.0
+    # via
+    #   authlib
+    #   azure-identity
+    #   msal
+    #   pyjwt
+    #   trustme
 detect-installer==0.1.0
-distlib==0.4.0
+    # via fastapi-cloud-cli
+distlib==0.4.1
+    # via virtualenv
 dnspython==2.8.0
+    # via email-validator
 email-validator==2.3.0
+    # via
+    #   fastapi
+    #   pydantic
 fastapi==0.136.3
+    # via atlan-application-sdk
 fastapi-cli==0.0.24
-fastapi-cloud-cli==0.18.0
+    # via fastapi
+fastapi-cloud-cli==0.19.0
+    # via fastapi-cli
 fastar==0.11.0
-filelock==3.29.0
+    # via
+    #   fastapi
+    #   fastapi-cloud-cli
+filelock==3.29.1
+    # via
+    #   python-discovery
+    #   virtualenv
 frozenlist==1.8.0
+    # via
+    #   aiohttp
+    #   aiosignal
 googleapis-common-protos==1.75.0
-grpcio==1.80.0
+    # via
+    #   opentelemetry-exporter-otlp-proto-grpc
+    #   opentelemetry-exporter-otlp-proto-http
+grpcio==1.81.0
+    # via opentelemetry-exporter-otlp-proto-grpc
 h11==0.16.0
+    # via
+    #   httpcore
+    #   uvicorn
 httpcore==1.0.9
+    # via httpx
 httptools==0.8.0
+    # via uvicorn
 httpx==0.28.1
+    # via
+    #   fastapi
+    #   fastapi-cloud-cli
+    #   httpx-retries
+    #   pyatlan
 httpx-retries==0.4.6
-hypothesis==6.153.2
+    # via
+    #   atlan-application-sdk
+    #   pyatlan
+hypothesis==6.155.1
 identify==2.6.19
-idna==3.16
+    # via pre-commit
+idna==3.18
+    # via
+    #   anyio
+    #   email-validator
+    #   httpx
+    #   requests
+    #   trustme
+    #   yarl
 importlib-metadata==8.7.1
+    # via opentelemetry-api
 iniconfig==2.3.0
+    # via pytest
 isort==5.13.2
 jinja2==3.1.6
+    # via
+    #   fastapi
+    #   pyatlan
 jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
 lazy-loader==0.5
+    # via pyatlan
 libcst==1.8.6
 loguru==0.7.3
+    # via atlan-application-sdk
 markdown-it-py==4.2.0
+    # via rich
 markupsafe==3.0.3
+    # via jinja2
 mdurl==0.1.2
+    # via markdown-it-py
 mock==5.2.0
-msal==1.36.0
+msal==1.37.0
+    # via
+    #   azure-identity
+    #   msal-extensions
 msal-extensions==1.3.1
+    # via azure-identity
 msgspec==0.20.0
+    # via pyatlan
 multidict==6.7.1
+    # via
+    #   aiohttp
+    #   yarl
 nanoid==2.0.0
+    # via pyatlan
 nexus-rpc==1.4.0
+    # via temporalio
 nodeenv==1.10.0
+    # via pre-commit
 obstore==0.9.5
+    # via atlan-application-sdk
 opentelemetry-api==1.41.1
+    # via
+    #   opentelemetry-exporter-otlp-proto-grpc
+    #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-exporter-prometheus
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
 opentelemetry-exporter-otlp==1.41.1
+    # via atlan-application-sdk
 opentelemetry-exporter-otlp-proto-common==1.41.1
+    # via
+    #   opentelemetry-exporter-otlp-proto-grpc
+    #   opentelemetry-exporter-otlp-proto-http
 opentelemetry-exporter-otlp-proto-grpc==1.41.1
+    # via opentelemetry-exporter-otlp
 opentelemetry-exporter-otlp-proto-http==1.41.1
+    # via opentelemetry-exporter-otlp
 opentelemetry-exporter-prometheus==0.62b1
+    # via atlan-application-sdk
 opentelemetry-instrumentation==0.62b1
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-asgi==0.62b1
+    # via opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-fastapi==0.62b1
+    # via atlan-application-sdk
 opentelemetry-proto==1.41.1
+    # via
+    #   opentelemetry-exporter-otlp-proto-common
+    #   opentelemetry-exporter-otlp-proto-grpc
+    #   opentelemetry-exporter-otlp-proto-http
 opentelemetry-sdk==1.41.1
+    # via
+    #   opentelemetry-exporter-otlp-proto-grpc
+    #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-exporter-prometheus
 opentelemetry-semantic-conventions==0.62b1
+    # via
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+    #   opentelemetry-sdk
 opentelemetry-util-http==0.62b1
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
 orjson==3.11.9
+    # via atlan-application-sdk
 packaging==26.2
+    # via
+    #   lazy-loader
+    #   opentelemetry-instrumentation
+    #   pytest
 pastel==0.2.1
-platformdirs==4.9.6
+    # via poethepoet
+platformdirs==4.10.0
+    # via
+    #   python-discovery
+    #   virtualenv
 pluggy==1.6.0
+    # via pytest
 poethepoet==0.39.0
 pre-commit==4.6.0
 prometheus-client==0.25.0
+    # via
+    #   atlan-application-sdk
+    #   opentelemetry-exporter-prometheus
 propcache==0.5.2
+    # via
+    #   aiohttp
+    #   yarl
 protobuf==6.33.6
-pyatlan==9.7.3
+    # via
+    #   googleapis-common-protos
+    #   opentelemetry-proto
+    #   temporalio
+pyatlan==9.7.4
+    # via atlan-application-sdk
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
 pydantic==2.12.5
+    # via
+    #   atlan-application-sdk
+    #   fastapi
+    #   fastapi-cloud-cli
+    #   pyatlan
+    #   pydantic-extra-types
+    #   pydantic-settings
 pydantic-core==2.41.5
+    # via pydantic
 pydantic-extra-types==2.11.1
+    # via fastapi
 pydantic-settings==2.14.1
+    # via fastapi
 pygments==2.20.0
+    # via
+    #   pytest
+    #   rich
 pyjwt==2.13.0
+    # via msal
 pytest==9.0.3
+    # via
+    #   pytest-asyncio
+    #   pytest-timeout
 pytest-asyncio==1.3.0
 pytest-timeout==2.4.0
 python-dateutil==2.9.0.post0
-python-discovery==1.3.1
+    # via
+    #   botocore
+    #   pyatlan
+python-discovery==1.4.0
+    # via virtualenv
 python-dotenv==1.2.2
-python-multipart==0.0.29
+    # via
+    #   atlan-application-sdk
+    #   pydantic-settings
+    #   uvicorn
+python-multipart==0.0.32
+    # via fastapi
 pytz==2026.2
+    # via pyatlan
 pyyaml==6.0.3
+    # via
+    #   atlan-application-sdk
+    #   libcst
+    #   poethepoet
+    #   pre-commit
+    #   pyatlan
+    #   uvicorn
 pyyaml-ft==8.0.0 ; python_full_version == '3.13.*'
+    # via libcst
 requests==2.34.2
+    # via
+    #   azure-core
+    #   msal
+    #   opentelemetry-exporter-otlp-proto-http
 rich==15.0.0
-rich-toolkit==0.19.10
+    # via
+    #   rich-toolkit
+    #   typer
+rich-toolkit==0.20.0
+    # via
+    #   fastapi-cli
+    #   fastapi-cloud-cli
 rignore==0.7.6
-s3transfer==0.17.1
-sentry-sdk==2.60.0
+    # via fastapi-cloud-cli
+s3transfer==0.18.0
+    # via boto3
+sentry-sdk==2.61.1
+    # via fastapi-cloud-cli
 shellingham==1.5.4
+    # via typer
 six==1.17.0
+    # via python-dateutil
 sortedcontainers==2.4.0
-starlette==1.1.0
-temporalio==1.27.2
+    # via hypothesis
+starlette==1.2.1
+    # via fastapi
+temporalio==1.28.0
+    # via atlan-application-sdk
 tenacity==9.1.4
+    # via pyatlan
 trustme==1.2.1
-typer==0.26.1
-types-awscrt==0.33.0
+typer==0.26.7
+    # via
+    #   fastapi-cli
+    #   fastapi-cloud-cli
+types-awscrt==0.34.1
+    # via botocore-stubs
 types-protobuf==6.32.1.20260221
+    # via temporalio
 types-s3transfer==0.16.0
+    # via boto3-stubs
 typing-extensions==4.15.0
+    # via
+    #   aiohttp
+    #   aiosignal
+    #   anyio
+    #   azure-core
+    #   azure-identity
+    #   boto3-stubs
+    #   fastapi
+    #   grpcio
+    #   nexus-rpc
+    #   obstore
+    #   opentelemetry-api
+    #   opentelemetry-exporter-otlp-proto-grpc
+    #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
+    #   pydantic
+    #   pydantic-core
+    #   pydantic-extra-types
+    #   pytest-asyncio
+    #   rich-toolkit
+    #   starlette
+    #   temporalio
+    #   typing-inspection
 typing-inspection==0.4.2
+    # via
+    #   fastapi
+    #   pydantic
+    #   pydantic-settings
 urllib3==2.7.0
-uvicorn==0.48.0
+    # via
+    #   botocore
+    #   requests
+    #   sentry-sdk
+uvicorn==0.49.0
+    # via
+    #   fastapi
+    #   fastapi-cli
+    #   fastapi-cloud-cli
 uvloop==0.22.1 ; sys_platform != 'win32'
-virtualenv==21.3.3
+    # via
+    #   atlan-application-sdk
+    #   uvicorn
+virtualenv==21.4.2
+    # via pre-commit
 watchfiles==1.2.0
+    # via uvicorn
 websockets==16.0
+    # via uvicorn
 win32-setctime==1.2.0 ; sys_platform == 'win32'
+    # via loguru
 wrapt==2.2.1
+    # via opentelemetry-instrumentation
 yarl==1.24.2
+    # via aiohttp
 zipp==4.1.0
+    # via importlib-metadata
