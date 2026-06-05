@@ -935,8 +935,8 @@ class App(ABC):
             skip_if_exists=input.skip_if_exists,
             raise_on_empty=input.raise_on_empty,
             store=store,
-            source_ref=source_ref,
-            source_store=self.context.storage,
+            _source_ref=source_ref,
+            _source_store=self.context.storage,
             _app_prefix=app_prefix,
             _tier=input.tier,
         )

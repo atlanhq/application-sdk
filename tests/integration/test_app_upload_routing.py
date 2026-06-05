@@ -393,6 +393,36 @@ async def test_app_upload_empty_local_path_raises_storage_error(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# (i) Sensitive-path blocking fires even when local file is absent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_app_upload_blocks_sensitive_path_when_local_absent(tmp_path):
+    """_validate_upload_path must reject sensitive local_path before the fallback runs.
+
+    The guard comment in transfer.py claims path validation runs even when the
+    path does not exist locally. This test proves it: local_path="/etc/passwd"
+    (never present) with a valid deployment-store ref still raises
+    UnsafeUploadPathError before any store interaction occurs.
+    """
+    from application_sdk.storage.errors import UnsafeUploadPathError
+
+    deployment_store = create_local_store(tmp_path / "deployment")
+    upstream_store = create_local_store(tmp_path / "upstream")
+    app = _make_app(deployment_store, upstream_store=upstream_store)
+
+    ref = FileReference(
+        local_path="/etc/passwd",
+        storage_path="artifacts/apps/test/safe-key.txt",
+    )
+    with pytest.raises(UnsafeUploadPathError):
+        await app.upload(
+            UploadInput(local_path="/etc/passwd", ref=ref, tier=StorageTier.RETAINED)
+        )
+
+
+# ---------------------------------------------------------------------------
 # (h) UploadInput.ref field is symmetric with DownloadInput.ref
 # ---------------------------------------------------------------------------
 
