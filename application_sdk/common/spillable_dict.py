@@ -28,7 +28,7 @@ import shutil
 import tempfile
 import weakref
 from collections.abc import Iterator, MutableMapping
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self, TypeAlias
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -48,6 +48,20 @@ else:
         Options = None
         BlockBasedOptions = None
 
+# The key types rocksdict itself accepts. Anything outside this union is
+# rejected internally by ``key_may_exist`` / ``__getitem__`` with an
+# unhelpful TypeError; SpillableDict's defensive guards filter on this
+# set so callers see either standard dict-style misses (reads) or a
+# clear typed error (writes).
+#
+# ``SpillableKey`` is exported as the call-side type hint so static
+# checkers surface bad-key usage at the caller (e.g. ``d[None] = v``
+# becomes a type error against this union); ``ROCKSDB_KEY_TYPES`` is
+# the runtime tuple used for ``isinstance`` guards in the methods
+# below, since unions aren't valid second arguments to ``isinstance``.
+SpillableKey: TypeAlias = str | int | float | bool | bytes
+ROCKSDB_KEY_TYPES: tuple[type, ...] = (str, int, float, bool, bytes)
+
 
 class SpillableDict(MutableMapping):  # type: ignore[type-arg]
     """A disk-backed dictionary using RocksDB.
@@ -66,7 +80,36 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
     removed on ``close()`` / context-manager exit. Use only for ephemeral
     per-run state — there is no API for persistent reuse across runs.
 
-    **Keys must be strings.** Values may be any picklable Python object.
+    **Supported key types**: ``str``, ``int``, ``float``, ``bool``, ``bytes``
+    (whatever RocksDB itself accepts via rocksdict). These are exposed as
+    the ``SpillableKey`` typealias for static checkers. Note: unlike ``dict``,
+    ``bool`` / ``int`` / ``float`` keys do **not** collide — rocksdict encodes
+    them as distinct byte sequences, so ``d[1]`` and ``d[True]`` are separate
+    entries.
+
+    **Reads of unsupported / typo'd keys** are handled defensively to
+    match the standard ``dict`` contract that ``sqlitedict`` migrations
+    expect — so callers can probe optimistically without wrapping every
+    access:
+
+    - ``d.get(bad_key, default)`` returns ``default`` (instead of raising
+      from rocksdict's ``key_may_exist`` internals).
+    - ``bad_key in d`` returns ``False``.
+    - ``d[bad_key]`` raises ``KeyError`` (matches dict for missing keys).
+    - ``del d[bad_key]`` raises ``KeyError``.
+
+    **Writes of unsupported keys raise ``TypeError`` loudly**, including
+    ``d[None] = v``. Silently dropping writes hides caller bugs and turns
+    into data loss; if a caller has a "skip when key is None" semantic,
+    they should express it explicitly at the call site:
+
+        if key is not None:
+            d[key] = value
+
+    **Iteration order is RocksDB key order (lexicographic), not insertion
+    order.** Callers that need insertion order must track it themselves —
+    iterating a ``SpillableDict`` is not equivalent to iterating a Python
+    ``dict``.
 
     **Not thread-safe.** Serialize access externally if multiple threads or
     coroutines may touch the same key.
@@ -148,26 +191,45 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         self._atexit_handle = _atexit_cleanup
         atexit.register(self._atexit_handle)
 
-    def __setitem__(self, key: str, value: Any) -> None:
-        # Reminder for callers: value is pickled. See class docstring's
-        # "Caveat on untrusted data" — don't store attacker-controllable
-        # bytes here.
+    def __setitem__(self, key: SpillableKey, value: Any) -> None:
+        # Reminder: value is pickled. See class docstring's "Caveat on
+        # untrusted data" — don't store attacker-controllable bytes here.
+        if not isinstance(key, ROCKSDB_KEY_TYPES):
+            raise TypeError(
+                f"SpillableDict keys must be one of "
+                f"(str, int, float, bool, bytes); "
+                f"got {type(key).__name__}"
+            )
         self._db[key] = value
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: SpillableKey) -> Any:
+        # Reads of an unsupported key type are a guaranteed miss
+        # (couldn't have been stored, since __setitem__ rejects them).
+        # Match standard dict semantics for misses: KeyError.
+        if not isinstance(key, ROCKSDB_KEY_TYPES):
+            raise KeyError(key)
         return self._db[key]
 
-    def __delitem__(self, key: str) -> None:
+    def __delitem__(self, key: SpillableKey) -> None:
         # rocksdict's __delitem__ maps to RocksDB Delete, which is a no-op
         # on missing keys (writes a tombstone unconditionally). We want
         # standard dict semantics — match what sqlitedict callers expect.
         # Bloom filter short-circuits the negative case; the explicit
         # `in self._db` check handles bloom-filter false positives.
+        # The isinstance guard prevents key_may_exist from raising on
+        # unsupported types — those just KeyError, like dict.
+        if not isinstance(key, ROCKSDB_KEY_TYPES):
+            raise KeyError(key)
         if not self._db.key_may_exist(key) or key not in self._db:
             raise KeyError(key)
         del self._db[key]
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: SpillableKey, default: Any = None) -> Any:
+        # Reads with an unsupported key type can never hit anything
+        # (writes reject them), so return the default rather than
+        # forwarding to ``key_may_exist`` (which would raise).
+        if not isinstance(key, ROCKSDB_KEY_TYPES):
+            return default
         # Bloom filter short-circuits the disk read when RocksDB can prove
         # the key is absent.
         if not self._db.key_may_exist(key):
@@ -180,19 +242,19 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
     # An override that returns a generator would silently violate that
     # contract for marginal perf gain.
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(self) -> Iterator[SpillableKey]:
         # Rdict.keys() walks SST keys without ever reading + unpickling
         # values — both faster and narrower than .items() since `for k in d:`
         # has no reason to touch the pickle surface.
         # rocksdict's keys() returns Iterator[str|int|float|bytes|bool] (the
-        # supported key types); we contract for str-only keys, so cast.
-        return cast(Iterator[str], iter(self._db.keys()))
+        # supported key types); annotation matches the union directly.
+        return iter(self._db.keys())  # type: ignore[return-value]
 
     def __contains__(self, key: object) -> bool:
-        # Protocol signature uses `object`. We only write str keys, and
-        # rocksdict raises on unsupported key types — match dict's behavior
-        # of returning False for anything we couldn't possibly have stored.
-        if not isinstance(key, str):
+        # Protocol signature uses `object`. rocksdict raises on unsupported
+        # key types (and on None) — match dict's behavior of returning
+        # False for anything we couldn't possibly have stored.
+        if not isinstance(key, ROCKSDB_KEY_TYPES):
             return False
         return key in self._db
 
@@ -222,7 +284,7 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         """
         return int(self._db.property_value("rocksdb.estimate-num-keys") or "0")
 
-    def append_to_key(self, key: str, value: Any) -> None:
+    def append_to_key(self, key: SpillableKey, value: Any) -> None:
         """Append a value to the list stored at ``key``.
 
         Read-modify-write list append. **Not atomic, not thread-safe.**
@@ -242,9 +304,17 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         "Caveat on untrusted data" section.
 
         Args:
-            key: Dictionary key. Creates a new list if absent.
+            key: Dictionary key (must be a supported primitive type). Creates a
+                new list if absent. Raises ``TypeError`` for unsupported types
+                (including ``None``) — same contract as ``__setitem__``.
             value: Value to append to the list at ``key``.
         """
+        if not isinstance(key, ROCKSDB_KEY_TYPES):
+            raise TypeError(
+                f"SpillableDict keys must be one of "
+                f"(str, int, float, bool, bytes); "
+                f"got {type(key).__name__}"
+            )
         current = self.get(key, [])
         current.append(value)
         self[key] = current
