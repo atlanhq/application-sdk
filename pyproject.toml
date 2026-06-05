@@ -308,6 +308,8 @@ extend-select = [
 "contract-toolkit/examples/**/generated/_input.py" = ["F401"]
 # Mid-file import required to break circular dependency between models.py and assertions.py
 "application_sdk/testing/integration/models.py" = ["E402"]
+# Post-importorskip imports required so the test module skips cleanly when rocksdict is absent.
+"tests/unit/common/test_spillable_dict.py" = ["E402"]
 
 [tool.uv]
 default-groups = ["dev", "test"]

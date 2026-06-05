@@ -155,3 +155,34 @@ class TestFileReference:
         # Does not stat the path eagerly for non-existent inputs.
         ref = FileReference.from_local("/does/not/exist")
         assert ref.file_count == 1
+
+
+# =============================================================================
+# UploadInput / DownloadInput — ref field symmetry
+# =============================================================================
+
+
+class TestUploadDownloadRefSymmetry:
+    """UploadInput.ref must be symmetric with DownloadInput.ref (both optional)."""
+
+    def test_upload_input_ref_defaults_to_none(self) -> None:
+        from application_sdk.contracts.storage import UploadInput
+
+        assert UploadInput().ref is None
+
+    def test_upload_input_ref_accepts_file_reference(self) -> None:
+        from application_sdk.contracts.storage import UploadInput
+
+        ref = FileReference(local_path="/tmp/x.jsonl", storage_path="artifacts/x.jsonl")
+        assert UploadInput(ref=ref).ref == ref
+
+    def test_download_input_ref_defaults_to_none(self) -> None:
+        from application_sdk.contracts.storage import DownloadInput
+
+        assert DownloadInput().ref is None
+
+    def test_upload_and_download_ref_fields_are_symmetric(self) -> None:
+        from application_sdk.contracts.storage import DownloadInput, UploadInput
+
+        ref = FileReference(local_path="/tmp/x.jsonl", storage_path="artifacts/x.jsonl")
+        assert UploadInput(ref=ref).ref == DownloadInput(ref=ref).ref

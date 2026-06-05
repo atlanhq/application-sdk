@@ -2333,6 +2333,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for ``App.upload``.
 - **Fields:**
   - `local_path: str` `= ''`
+  - `ref: FileReference | None`
   - `storage_path: str | None`
   - `storage_subdir: str | None`
   - `tier: StorageTier` `= StorageTier.RETAINED`
