@@ -48,7 +48,11 @@ class SnowflakeApp(App):
         ...
 ```
 
-Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-point-name}`). All entry points share the same `@task` methods, handler, and `AppContext`. Trigger a specific entry point via `POST /workflows/v1/start?entrypoint=<name>`. See [Entry Points](entry-points.md) for full detail.
+Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-point-name}`). All entry points share the same `@task` methods, handler, and `AppContext`. Trigger a specific entry point via `POST /workflows/v1/start?entrypoint=<name>`.
+
+`run()` and `@entrypoint` methods can also **coexist** in the same class — useful when migrating an existing `run()`-only app incrementally. `run()` is always the default entry point in that case.
+
+See [Entry Points — Default entrypoint resolution](entry-points.md#default-entrypoint-resolution) for the full resolution rules.
 
 ## Orchestration in run()
 
