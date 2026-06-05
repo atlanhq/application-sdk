@@ -170,6 +170,21 @@ workflowType: String = name
 /// Task queue prefix for the extract node in the AE manifest.
 taskQueuePrefix: String = "atlan-\(name)"
 
+// ── E2E TEST HARNESS ──────────────────────────────────────────────────────────
+
+/// Argo WorkflowTemplate package name used by the e2e test harness.
+/// Default: `"@atlan/<name>"`. Override for apps with scoped or non-standard package names.
+argoPackageName: String = "@atlan/\(name)"
+
+/// Argo WorkflowTemplate resource name as deployed in the cluster.
+/// Default: `"atlan-<name>"` — same pattern as `taskQueuePrefix`.
+argoTemplateName: String = "atlan-\(name)"
+
+/// In-cluster HTTP URL for the app's Dapr service; used by the e2e harness to
+/// forward AE workflow calls to the running app.
+/// Default: `"http://<name>.<name>-app.svc.cluster.local"`.
+appServiceUrl: String = "http://\(name).\(name)-app.svc.cluster.local"
+
 // ── CREDENTIAL CONFIG ─────────────────────────────────────────────────────────
 
 /// Whether this app has a credential config.
@@ -2484,6 +2499,328 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     (if (classBody.isEmpty) "    pass\n" else classBody)
 }
 
+// ── e2e code generation ───────────────────────────────────────────────────────
+
+// Escape a string for use inside a Python double-quoted literal.
+local function escapePyStr(s: String): String =
+  s.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n").replaceAll("\r", "\\r")
+
+local function capitalizeFirst(s: String): String =
+  if (s.isEmpty) s else s.take(1).toUpperCase() + s.drop(1)
+
+local function pascalCase(s: String): String =
+  (new Listing {
+    for (seg in s.split(Regex("[^A-Za-z0-9]+"))) { capitalizeFirst(seg) }
+  }).toList().join("")
+
+// SQL-family categories drive SQLAppE2ETest / SQLMustacheSubstitutions selection.
+local function e2eBaseClass(): String =
+  let (cat = connector?.category)
+  if (cat == "warehouse" || cat == "database" || cat == "lake" || cat == "queryengine")
+    "SQLAppE2ETest"
+  else "BaseE2ETest"
+
+local function e2eSubsParent(): String =
+  let (cat = connector?.category)
+  if (cat == "warehouse" || cat == "database" || cat == "lake" || cat == "queryengine")
+    "SQLMustacheSubstitutions"
+  else "MustacheSubstitutions"
+
+// Fields already provided by MustacheSubstitutions (always skip).
+local e2eSubsBaseSkip: Set<String> =
+  (new Listing { "credential"; "credential_guid"; "connection" }).toList().toSet()
+
+// Fields added by SQLMustacheSubstitutions (skip when parent is SQL).
+local e2eSubsSqlSkip: Set<String> =
+  List("extraction_method", "agent_json", "include_filter", "exclude_filter", "exclude_table_regex", "preflight_check")
+    .fold(e2eSubsBaseSkip, (acc, elem) -> (acc as Set<String>).add(elem))
+
+local function e2eSubsSkip(): Set<String> =
+  if (e2eSubsParent() == "SQLMustacheSubstitutions") e2eSubsSqlSkip
+  else e2eSubsBaseSkip
+
+// Line-length-aware Field line: inlines if ≤ 88 chars, wraps otherwise.
+local function fmtSubsField(pyName: String, typeStr: String, defaultExpr: String, k: String): String =
+  let (inline = "    \(pyName): \(typeStr) = Field(\(defaultExpr), alias=\"{{\(k)}}\")")
+  if (inline.length <= 88) inline
+  else "    \(pyName): \(typeStr) = Field(\n        \(defaultExpr),\n        alias=\"{{\(k)}}\",\n    )"
+
+// Returns a typed pydantic Field line for a substitution field, or null to skip.
+local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
+  let (pyName = toPyName(k))
+  if (u is Widgets.ConnectionCreator || u is Widgets.ConnectionSelector || u is Widgets.ConnectionRefInput)
+    null
+  else if (u is Widgets.BooleanInput)
+    fmtSubsField(pyName, "bool", "default=\(if ((u as Widgets.BooleanInput).default) "True" else "False")", k)
+  else if (u is Widgets.Switcher)
+    fmtSubsField(pyName, "bool", "default=\(if ((u as Widgets.Switcher).default) "True" else "False")", k)
+  else if (u is Widgets.NumericInput)
+    let (d = (u as Widgets.NumericInput).default)
+    fmtSubsField(pyName, "int", "default=\(if (d != null) d!!.toInt() else 0)", k)
+  else if (u is Widgets.Radio)
+    let (radio = u as Widgets.Radio)
+    let (vals = radio.possibleValues.keys.toList())
+    if (!vals.isEmpty)
+      let (litStr = (new Listing { for (v in vals) { "\"\(v)\"" } }).toList().join(", "))
+      let (defVal = if (radio.default != null) radio.default!! else vals.first)
+      fmtSubsField(pyName, "Literal[\(litStr)]", "default=\"\(defVal)\"", k)
+    else
+      fmtSubsField(pyName, "str", "default=\"\(if (radio.default != null) radio.default!! else "")\"", k)
+  else if (u is Widgets.DropDown)
+    let (dd = u as Widgets.DropDown)
+    let (vals = dd.possibleValues.keys.toList())
+    if (!vals.isEmpty && !dd.multiSelect)
+      let (litStr = (new Listing { for (v in vals) { "\"\(v)\"" } }).toList().join(", "))
+      let (defVal = if (dd.default != null) dd.default!! else vals.first)
+      fmtSubsField(pyName, "Literal[\(litStr)]", "default=\"\(defVal)\"", k)
+    else
+      fmtSubsField(pyName, "str", "default=\"\(if (dd.default != null) dd.default!! else "")\"", k)
+  else if (u is Widgets.ConditionalInput)
+    let (ci = u as Widgets.ConditionalInput)
+    if (ci.outputValueType == "object")
+      fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
+    else if (ci.baseWidgetType == "radio" && ci.baseEnum != null && !ci.baseEnum!!.isEmpty)
+      let (litStr = (new Listing { for (v in ci.baseEnum!!) { "\"\(v)\"" } }).toList().join(", "))
+      let (defVal = if (ci.default != null) ci.default!!.toString() else ci.baseEnum!!.toList().first)
+      fmtSubsField(pyName, "Literal[\(litStr)]", "default=\"\(defVal)\"", k)
+    else
+      fmtSubsField(pyName, "str", "default=\"\(if (ci.default != null) ci.default!!.toString() else "")\"", k)
+  else if (u is Widgets.SqlTree || u is Widgets.NestedInput || u is Widgets.APITree ||
+      u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
+    fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
+  else
+    // TextInput, PasswordInput, CredentialInput, TextBoxInput, etc. → str
+    let (defVal =
+      if (u is Widgets.TextInput && (u as Widgets.TextInput).default != null)
+        (u as Widgets.TextInput).default!!
+      else "")
+    fmtSubsField(pyName, "str", "default=\"\(defVal)\"", k)
+
+local function generateE2EBasePy(): FileOutput = new FileOutput {
+  local baseClass = e2eBaseClass()
+  local cname = pascalCase(name)
+  local emitConnType = connector != null && connector!!.value != name
+  local emitConnCat = connector != null && connector!!.category != "warehouse"
+  text =
+    "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
+    "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
+    "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
+    "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
+    "    connector_short_name = \"\(escapePyStr(name))\"\n" +
+    "    argo_package_name = \"\(escapePyStr(argoPackageName))\"\n" +
+    "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
+    "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
+    (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +
+    (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "")
+}
+
+local function generateE2ESubstitutionsPy(): FileOutput? =
+  let (props = uiConfig?.properties ?? Map())
+  let (skip = e2eSubsSkip())
+  let (fieldLines = (new Listing {
+    for (k, u in props) {
+      when (!skip.contains(toPyName(k)) && u.includeInInput && getSubsFieldLine(k, u) != null) {
+        getSubsFieldLine(k, u)!! + "\n"
+      }
+    }
+  }).toList().fold("", (acc: String, s: String) -> acc + s))
+  if (fieldLines.isEmpty) null
+  else new FileOutput {
+    local parentClass = e2eSubsParent()
+    local cname = pascalCase(name)
+    local usesLiteral = fieldLines.contains("Literal[")
+    local usesAny = fieldLines.contains("dict[str, Any]")
+    local typingLine =
+      if (usesLiteral && usesAny) "from typing import Any, Literal\n\n"
+      else if (usesLiteral) "from typing import Literal\n\n"
+      else if (usesAny) "from typing import Any\n\n"
+      else ""
+    local parentImport =
+      if (parentClass == "SQLMustacheSubstitutions")
+        "from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions\n"
+      else
+        "from application_sdk.testing.e2e.substitutions import MustacheSubstitutions\n"
+    text =
+      "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
+      "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
+      "from __future__ import annotations\n\n" +
+      typingLine +
+      "from pydantic import Field\n\n" +
+      parentImport +
+      "\n\nclass \(cname)MustacheSubstitutions(\(parentClass)):\n" +
+      fieldLines
+  }
+
+// Returns a typed Field line for a single FieldSpec in a CredentialBody class.
+// authSpecific=true means the field only appears in some auth options (always use a default).
+local function credFieldLine(f: FieldSpec, authSpecific: Boolean): String =
+  let (pyName = toPyName(f.name))
+  let (pyType = if (f.fieldType == "number") "int" else "str")
+  let (defExpr =
+    if (f.defaultValue != null)
+      if (f.fieldType == "number") f.defaultValue!! else "\"" + f.defaultValue!! + "\""
+    else if (authSpecific || !f.required)
+      if (f.fieldType == "number") "0" else "\"\""
+    else "")
+  if (defExpr.isEmpty)
+    "    \(pyName): \(pyType) = Field(alias=\"\(f.name)\")"
+  else
+    "    \(pyName): \(pyType) = Field(default=\(defExpr), alias=\"\(f.name)\")"
+
+local function generateE2ECredentialPy(): FileOutput? =
+  if (!(hasCredentialConfig && credentialAuthOptions != null && !credentialAuthOptions!!.isEmpty))
+    null
+  else new FileOutput {
+    local cname = pascalCase(name)
+
+    // Default auth type: honour credentialAuthDefault when set, fall back to first key.
+    local firstAuthKey: String =
+      credentialAuthDefault ??
+      (new Listing { for (k, v in credentialAuthOptions!!) { k } }).toList().first
+
+    // Common top-level FieldSpec entries from either credentialUrlGroup or credentialCommonFields.
+    local commonSpecs: List<FieldSpec> = (new Listing {
+      when (credentialUrlGroup != null) {
+        credentialUrlGroup!!.hostField
+        credentialUrlGroup!!.portField
+        for (f in credentialUrlGroup!!.extraFields) {
+          when (f is FieldSpec) { f }
+        }
+      }
+      when (credentialUrlGroup == null) {
+        for (f in credentialCommonFields) {
+          when (f is FieldSpec) { f }
+        }
+      }
+    }).toList()
+
+    local condCommonSpecs: List<ConditionalFieldSpec> = (new Listing {
+      when (credentialUrlGroup != null) {
+        for (f in credentialUrlGroup!!.extraFields) {
+          when (f is ConditionalFieldSpec) { f }
+        }
+      }
+      when (credentialUrlGroup == null) {
+        for (f in credentialCommonFields) {
+          when (f is ConditionalFieldSpec) { f }
+        }
+      }
+    }).toList()
+
+    // Set of field names already in the common group (used to exclude from auth-specific).
+    local commonNameSet: Set<String> =
+      (new Listing { for (f in commonSpecs) { f.name } }).toList().toSet()
+
+    // Deduplicated auth-specific top-level FieldSpecs (first occurrence per name, excluding common).
+    local allAuthTopRaw: List<FieldSpec> = (new Listing {
+      for (key, opt in credentialAuthOptions!!) {
+        for (f in opt.fields) {
+          when (f is FieldSpec) { f }
+        }
+      }
+    }).toList()
+
+    local authTopDeduped: List<FieldSpec> =
+      allAuthTopRaw
+        .filter((f: FieldSpec) -> !commonNameSet.contains(f.name))
+        .fold(
+          List(),
+          (acc: List<FieldSpec>, f: FieldSpec) ->
+            if ((new Listing { for (s in acc) { s.name } }).toList().contains(f.name)) acc
+            else acc.add(f)
+        )
+
+    // Collect all extra FieldSpecs from auth options (for the nested Extra model).
+    local sharedExtraSpecs: List<FieldSpec> = (new Listing {
+      for (f in credentialSharedExtraFields) {
+        when (f is FieldSpec) { f }
+      }
+    }).toList()
+
+    local sharedExtraNames: Set<String> =
+      (new Listing { for (f in sharedExtraSpecs) { f.name } }).toList().toSet()
+
+    local allAuthExtraRaw: List<FieldSpec> = (new Listing {
+      for (key, opt in credentialAuthOptions!!) {
+        for (f in opt.extraFields) {
+          when (f is FieldSpec) { f }
+        }
+      }
+    }).toList()
+
+    // Extra model: sharedExtraSpecs + auth-specific extras, deduped.
+    local allExtraSpecs: List<FieldSpec> =
+      allAuthExtraRaw.fold(
+        sharedExtraSpecs,
+        (acc: List<FieldSpec>, f: FieldSpec) ->
+          if (sharedExtraNames.contains(f.name) ||
+              (new Listing { for (s in acc) { s.name } }).toList().contains(f.name))
+            acc
+          else acc.add(f)
+      )
+
+    local hasExtraModel = !allExtraSpecs.isEmpty
+
+    // Build field line blocks.
+    local commonLines = (new Listing {
+      for (f in commonSpecs) { credFieldLine(f, false) + "\n" }
+    }).toList().fold("", (acc: String, s: String) -> acc + s)
+
+    local condCommonLines = (new Listing {
+      for (f in condCommonSpecs) {
+        "    " + toPyName(f.name) + ": str | None = Field(default=None, alias=\"" + f.name + "\")\n"
+      }
+    }).toList().fold("", (acc: String, s: String) -> acc + s)
+
+    local authTopLines = (new Listing {
+      for (f in authTopDeduped) { credFieldLine(f, true) + "\n" }
+    }).toList().fold("", (acc: String, s: String) -> acc + s)
+
+    local extraFieldProp: String =
+      if (hasExtraModel)
+        let (line = "    extra: \(cname)CredentialBodyExtra = Field(default_factory=\(cname)CredentialBodyExtra, alias=\"extra\")")
+        (if (line.length <= 88) line
+        else "    extra: \(cname)CredentialBodyExtra = Field(\n        default_factory=\(cname)CredentialBodyExtra, alias=\"extra\"\n    )") + "\n"
+      else ""
+
+    local extraModelLines = (new Listing {
+      for (f in allExtraSpecs) { credFieldLine(f, true) + "\n" }
+    }).toList().fold("", (acc: String, s: String) -> acc + s)
+
+    local mainClassBody =
+      "    name: str = Field(alias=\"name\")\n" +
+      "    auth_type: str = Field(default=\"\(firstAuthKey)\", alias=\"authType\")\n" +
+      commonLines +
+      condCommonLines +
+      authTopLines +
+      extraFieldProp
+
+    local extraModelBlock =
+      if (hasExtraModel)
+        "\n\nclass \(cname)CredentialBodyExtra(BaseModel):\n" +
+        "    model_config = ConfigDict(frozen=True, populate_by_name=True, serialize_by_alias=True)\n\n" +
+        extraModelLines
+      else ""
+
+    local hasPipeType =
+      mainClassBody.contains(" | None") || extraModelLines.contains(" | None")
+
+    local pydanticImports: List<String> = (new Listing {
+      "Field"
+      when (hasExtraModel) { "BaseModel"; "ConfigDict" }
+    }).toList()
+
+    text =
+      "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
+      "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
+      (if (hasPipeType) "from __future__ import annotations\n\n" else "") +
+      "from pydantic import \(pydanticImports.join(", "))\n\n" +
+      "from application_sdk.testing.e2e.credential import CredentialBody\n" +
+      extraModelBlock +
+      "\n\nclass \(cname)CredentialBody(CredentialBody):\n" +
+      mainClassBody
+  }
+
 // ── atlan.yaml generation ─────────────────────────────────────────────────────
 
 local function asMapping(value: Any): Mapping<String, Any>? =
@@ -2687,6 +3024,8 @@ output =
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
+  let (_e2eCredOutput = generateE2ECredentialPy())
+  let (_e2eSubsOutput = generateE2ESubstitutionsPy())
   new ModuleOutput {
     files = new Mapping {
 
@@ -2698,15 +3037,26 @@ output =
         ["app.yaml"] = appYamlOutput
       }
 
-      // ── single-entrypoint mode (entrypoints is empty; uiConfig is set) ────
-      when (uiConfig != null && entrypoints.isEmpty) {
-        ["app/generated/\(workflowConfigName).json"] = workflowConfigOutput
-        when (hasCredentialConfig && credentialAuthOptions != null) {
-          ["app/generated/\(connectorConfigName).json"] = credentialConfigOutput
+      // ── single-entrypoint mode ────────────────────────────────────────────
+      when (entrypoints.isEmpty) {
+        // uiConfig-dependent runtime artifacts
+        when (uiConfig != null) {
+          ["app/generated/\(workflowConfigName).json"] = workflowConfigOutput
+          when (hasCredentialConfig && credentialAuthOptions != null) {
+            ["app/generated/\(connectorConfigName).json"] = credentialConfigOutput
+          }
+          ["app/generated/manifest.json"] = manifestOutput
+          ["app/generated/_input.py"] = generateInputClassPy()
+          ["app/generated/__init__.py"] = new FileOutput { text = "" }
         }
-        ["app/generated/manifest.json"] = manifestOutput
-        ["app/generated/_input.py"] = generateInputClassPy()
-        ["app/generated/__init__.py"] = new FileOutput { text = "" }
+        // e2e test-harness artifacts (independent of uiConfig)
+        ["app/generated/_e2e_base.py"] = generateE2EBasePy()
+        when (_e2eCredOutput != null) {
+          ["app/generated/_e2e_credential.py"] = _e2eCredOutput!!
+        }
+        when (_e2eSubsOutput != null) {
+          ["app/generated/_e2e_substitutions.py"] = _e2eSubsOutput!!
+        }
       }
 
       // ── multi-entrypoint mode (entrypoints is non-empty) ──────────────────
