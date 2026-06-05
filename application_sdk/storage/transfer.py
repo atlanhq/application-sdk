@@ -42,6 +42,9 @@ from typing import TYPE_CHECKING
 
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.observability.logger_adaptor import get_logger
+
+_logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -438,10 +441,17 @@ async def upload(
     )
     src = Path(local_path)
 
-    # Block sensitive paths (runs even when the path does not exist locally
-    # so uploads to sensitive locations are refused regardless of fallback path).
+    # Block sensitive local paths (runs even when the path does not exist locally
+    # so uploads from sensitive locations are refused regardless of fallback path).
     # Guard: only validate when local_path is non-empty — Path("") resolves to
     # CWD on Python/macOS, so is_dir() returns True and would upload the tree.
+    #
+    # Note: ATLAN_UPLOAD_FILE_BLOCKED_PATHS substring matching applies to
+    # local_path only.  When the caller passes only a ref (local_path="") the
+    # source is already an object-store key in the deployment store, not a local
+    # filesystem path, so the env-var blocklist has no meaningful scope there.
+    # The ".." path-traversal check on _source_ref.storage_path (below) covers
+    # the key-injection threat for that code path.
     if local_path:
         _validate_upload_path(src)
 
@@ -520,6 +530,8 @@ async def upload(
         )
         errs = [r for r in results if isinstance(r, BaseException)]
         if errs:
+            for extra in errs[1:]:
+                _logger.error("concurrent upload failure (suppressed)", exc_info=extra)
             raise errs[0]
         n = sum(1 for ok in results if ok)
         reason = "uploaded" if n > 0 else "skipped:hash_match"

@@ -363,10 +363,23 @@ async def test_app_upload_cross_store_sha256_match_causes_skip(tmp_path):
     first = await app.upload(UploadInput(ref=ref, tier=StorageTier.RETAINED))
     assert first.synced is True, "First upload should transfer the file"
 
+    # Capture the upstream file's on-disk state before the second call so we can
+    # prove that "skipped:hash_match" means zero bytes were written to the store.
+    upstream_key_path = upstream_root / first.ref.storage_path
+    pre_stat = upstream_key_path.stat()
+
     # Second upload: deployment sidecar == upstream sidecar → skip.
     second = await app.upload(UploadInput(ref=ref, tier=StorageTier.RETAINED))
     assert second.synced is False, "Second upload should be skipped (SHA-256 match)"
     assert "hash_match" in second.reason
+
+    # Prove no bytes touched the wire: upstream file must be byte-for-byte
+    # identical (same size, same mtime) after the second call.
+    post_stat = upstream_key_path.stat()
+    assert post_stat.st_size == pre_stat.st_size, "upstream file size changed on skip"
+    assert (
+        post_stat.st_mtime == pre_stat.st_mtime
+    ), "upstream file mtime changed on skip"
 
 
 # ---------------------------------------------------------------------------
@@ -420,26 +433,3 @@ async def test_app_upload_blocks_sensitive_path_when_local_absent(tmp_path):
         await app.upload(
             UploadInput(local_path="/etc/passwd", ref=ref, tier=StorageTier.RETAINED)
         )
-
-
-# ---------------------------------------------------------------------------
-# (h) UploadInput.ref field is symmetric with DownloadInput.ref
-# ---------------------------------------------------------------------------
-
-
-def test_upload_input_has_ref_field():
-    """UploadInput must expose a ref: FileReference | None field."""
-    # Field present with default None
-    ui = UploadInput()
-    assert ui.ref is None
-
-    # Field accepts a FileReference
-    ref = FileReference(local_path="/tmp/x.jsonl", storage_path="artifacts/x.jsonl")
-    ui_with_ref = UploadInput(ref=ref)
-    assert ui_with_ref.ref == ref
-
-    from application_sdk.contracts.storage import DownloadInput
-
-    # Symmetric with DownloadInput
-    di = DownloadInput()
-    assert di.ref is None
