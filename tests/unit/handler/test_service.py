@@ -4622,6 +4622,515 @@ class TestConfigEndpointPersistence:
         assert response.json()["data"] == {"hello": "world"}
 
 
+class TestComputeManifestHook:
+    """Per-entrypoint dynamic manifest hook.
+
+    Apps that need to compute the manifest per submission (placeholder
+    fill-in, SQL gen, full DAG rewrite) drop a `core.py` at
+    ``app.<entrypoint_snake>.core`` exposing a
+    ``compute_manifest(manifest, fe_inputs) -> dict`` callable. The SDK's
+    /manifest handler discovers it via importlib and substitutes the
+    return value as the response body.
+
+    Tests inject a fake module into ``sys.modules`` to simulate the
+    convention without touching the filesystem.
+    """
+
+    @staticmethod
+    def _install_fake_core(
+        monkeypatch: pytest.MonkeyPatch, entrypoint: str, fn: object
+    ) -> None:
+        """Register ``app.<snake>.core`` with ``compute_manifest = fn``."""
+        import sys
+        import types
+
+        snake = entrypoint.replace("-", "_")
+        # Ensure the parent packages exist so ``import app.<snake>.core`` resolves.
+        for parent in ("app", f"app.{snake}"):
+            if parent not in sys.modules:
+                pkg = types.ModuleType(parent)
+                pkg.__path__ = []  # type: ignore[attr-defined]
+                monkeypatch.setitem(sys.modules, parent, pkg)
+        core = types.ModuleType(f"app.{snake}.core")
+        core.compute_manifest = fn  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, f"app.{snake}.core", core)
+
+    def test_hook_invoked_when_module_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """compute_manifest is called and its return becomes the body."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "hook-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(
+            json.dumps({"dag": {"extract": {"static": True}}})
+        )
+
+        captured: dict[str, object] = {}
+
+        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            captured["manifest"] = manifest
+            captured["fe_inputs"] = fe_inputs
+            return {"dag": {"extract": {"computed": True, "echo": fe_inputs}}}
+
+        self._install_fake_core(monkeypatch, "hook-ep", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            payload = {"foo": "bar"}
+            response = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "hook-ep", "fe_inputs": json.dumps(payload)},
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert body == {"dag": {"extract": {"computed": True, "echo": payload}}}
+            # The hook receives the static manifest unmodified and the decoded form.
+            assert captured["manifest"] == {"dag": {"extract": {"static": True}}}
+            assert captured["fe_inputs"] == payload
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_static_manifest_when_no_hook(self, tmp_path: Path) -> None:
+        """No app.<snake>.core module → static manifest returned unchanged."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "no-hook"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"dag": {"extract": {"static": True}}}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=no-hook")
+            assert response.status_code == 200
+            assert response.json() == manifest_data
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_fe_inputs_defaults_to_empty_dict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the FE doesn't send `fe_inputs`, the hook gets an empty dict."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "default-form"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"k": "v"}))
+
+        captured: dict[str, object] = {}
+
+        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            captured["fe_inputs"] = fe_inputs
+            return manifest
+
+        self._install_fake_core(monkeypatch, "default-form", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=default-form")
+            assert response.status_code == 200
+            assert captured["fe_inputs"] == {}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_invalid_fe_inputs_returns_400(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Malformed fe_inputs JSON → 400 (not 500)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "bad-form"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+
+        self._install_fake_core(monkeypatch, "bad-form", lambda m, f: m)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "bad-form", "fe_inputs": "not-json{"},
+            )
+            assert response.status_code == 400
+            assert "fe_inputs is not valid JSON" in response.json()["detail"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_legacy_alias_forwards_fe_inputs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Heracles' /manifest (no version) also routes through the hook."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "legacy-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"orig": True}))
+
+        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {**manifest, "fe": fe_inputs}
+
+        self._install_fake_core(monkeypatch, "legacy-ep", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get(
+                "/manifest",
+                params={"entrypoint": "legacy-ep", "fe_inputs": json.dumps({"x": 1})},
+            )
+            assert response.status_code == 200
+            assert response.json() == {"orig": True, "fe": {"x": 1}}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_kebab_entrypoint_resolves_to_snake_module(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Kebab `csa-hello-a` → import `app.csa_hello_a.core`."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "csa-hello-a"  # kebab on disk
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"static": True}))
+
+        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"computed": True}
+
+        # Module is registered under app.csa_hello_a (snake) — the hook does the translation.
+        self._install_fake_core(monkeypatch, "csa-hello-a", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=csa-hello-a")
+            assert response.status_code == 200
+            assert response.json() == {"computed": True}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestPerEntrypointHandlerHook:
+    """Per-entrypoint handler discovery for /workflows/v1/{auth,check,metadata}.
+
+    Multi-entrypoint apps drop ``app.<entrypoint_snake>.handler`` modules
+    that expose plain async ``test_auth``, ``preflight_check``,
+    ``fetch_metadata`` functions. Heracles sends the entrypoint identifier
+    as the ``connector`` field (``{bundle_name}-{entrypoint.name}``); the
+    SDK matches the suffix against known entrypoints (subdirs of
+    ``CONTRACT_GENERATED_DIR``) and dispatches to the per-entrypoint module
+    when present, falling through to the app-level ``Handler`` instance
+    otherwise.
+
+    Tests inject fake modules into ``sys.modules`` to simulate the
+    discovery convention, and point ``CONTRACT_GENERATED_DIR`` at a
+    ``tmp_path`` populated with empty manifest files so the connector
+    suffix-match has known entrypoints to find.
+    """
+
+    @staticmethod
+    def _install_fake_handler(
+        monkeypatch: pytest.MonkeyPatch, entrypoint: str, **fns: object
+    ) -> None:
+        """Register ``app.<snake>.handler`` exposing the given async fns."""
+        import sys
+        import types
+
+        snake = entrypoint.replace("-", "_")
+        for parent in ("app", f"app.{snake}"):
+            if parent not in sys.modules:
+                pkg = types.ModuleType(parent)
+                pkg.__path__ = []  # type: ignore[attr-defined]
+                monkeypatch.setitem(sys.modules, parent, pkg)
+        handler_mod = types.ModuleType(f"app.{snake}.handler")
+        for name, fn in fns.items():
+            setattr(handler_mod, name, fn)
+        monkeypatch.setitem(sys.modules, f"app.{snake}.handler", handler_mod)
+
+    # ------------------------------------------------------------------
+    # /workflows/v1/auth
+    # ------------------------------------------------------------------
+
+    def test_auth_dispatches_to_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit ``entrypoint`` routes to the per-entrypoint test_auth by exact
+        name — a direct lookup, no contract-dir glob or connector parsing."""
+        captured: dict[str, object] = {}
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            captured["entrypoint"] = input.entrypoint
+            captured["app_name"] = ctx.app_name
+            return AuthOutput(status=AuthStatus.FAILED, message="entrypoint says no")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["data"]["status"] == "failed"
+        assert body["data"]["message"] == "entrypoint says no"
+        assert captured["entrypoint"] == "csa-hello-a"
+        assert captured["app_name"] == "test-app"
+
+    def test_auth_falls_back_when_no_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A valid ``entrypoint`` with no ``app.<segment>.handler`` module → the
+        app-level Handler.test_auth runs (deterministic is/isn't fallback)."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "sdk-fallback-noep-auth", "credentials": []},
+        )
+        assert response.status_code == 200
+        # _TestHandler returns SUCCESS with "auth ok"
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_falls_back_when_entrypoint_empty(self) -> None:
+        """No ``entrypoint`` → app-level Handler.test_auth runs (single-entrypoint compat)."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_invalid_entrypoint_name_falls_back(self) -> None:
+        """A malformed ``entrypoint`` (e.g. path-traversal attempt) fails the
+        format check → no dispatch, app-level Handler runs."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "../evil", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_connector_is_not_used_for_routing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The legacy ``connector`` field no longer drives dispatch. A connector
+        naming a real entrypoint module is ignored when no ``entrypoint`` is sent
+        — routing is explicit-only (the per-entrypoint fn must not run)."""
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            raise AssertionError("connector must not trigger per-entrypoint dispatch")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"connector": "test-bundle-csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    # ------------------------------------------------------------------
+    # /workflows/v1/check
+    # ------------------------------------------------------------------
+
+    def test_check_dispatches_to_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-entrypoint preflight_check is awaited; its checks render in response."""
+        from application_sdk.handler.contracts import PreflightCheck
+
+        async def preflight_check(input: PreflightInput, ctx) -> PreflightOutput:
+            assert input.entrypoint == "csa-hello-b"
+            assert ctx.app_name == "test-app"
+            return PreflightOutput(
+                status=PreflightStatus.NOT_READY,
+                checks=[
+                    PreflightCheck(
+                        name="recipientCheck",
+                        passed=False,
+                        message="recipient missing",
+                    )
+                ],
+            )
+
+        self._install_fake_handler(
+            monkeypatch, "csa-hello-b", preflight_check=preflight_check
+        )
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check",
+            json={"entrypoint": "csa-hello-b", "credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        # Envelope success reports that preflight ran (a check was produced), not
+        # that every check passed — per DBBI-665. The failing check surfaces in
+        # data.recipientCheck.
+        assert body["success"] is True
+        assert body["data"]["recipientCheck"] == {
+            "success": False,
+            "message": "recipient missing",
+            "successMessage": "",
+            "failureMessage": "recipient missing",
+        }
+
+    def test_check_falls_back_when_no_entrypoint_module(self) -> None:
+        """A valid ``entrypoint`` with no handler module → app-level
+        Handler.preflight_check runs."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check",
+            json={"entrypoint": "sdk-fallback-noep-check", "credentials": []},
+        )
+        assert response.status_code == 200
+        # Fell back to the app-level Handler; the default test handler's preflight
+        # returns status=ready, message "ready".
+        assert response.json()["message"] == "ready"
+
+    # ------------------------------------------------------------------
+    # /workflows/v1/metadata
+    # ------------------------------------------------------------------
+
+    def test_metadata_dispatches_to_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-entrypoint fetch_metadata is awaited; its objects render in response."""
+
+        async def fetch_metadata(input: MetadataInput, ctx) -> SqlMetadataOutput:
+            assert input.entrypoint == "csa-hello-d"
+            return SqlMetadataOutput(
+                objects=[
+                    SqlMetadataObject(TABLE_CATALOG="cat", TABLE_SCHEMA="sch1"),
+                    SqlMetadataObject(TABLE_CATALOG="cat", TABLE_SCHEMA="sch2"),
+                ]
+            )
+
+        self._install_fake_handler(
+            monkeypatch, "csa-hello-d", fetch_metadata=fetch_metadata
+        )
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"entrypoint": "csa-hello-d", "credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["data"]) == 2
+        assert body["data"][0] == {"TABLE_CATALOG": "cat", "TABLE_SCHEMA": "sch1"}
+
+    def test_metadata_falls_back_when_no_entrypoint_module(self) -> None:
+        """A valid ``entrypoint`` with no handler module → app-level
+        Handler.fetch_metadata runs."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"entrypoint": "sdk-fallback-noep-meta", "credentials": []},
+        )
+        assert response.status_code == 200
+        # _TestHandler returns empty SqlMetadataOutput
+        assert response.json()["data"] == []
+
+    def test_metadata_input_object_filter_from_metadata_template_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Heracles forwards the widget filter key as ``metadataTemplateKey`` (and
+        a ``type`` mirror) but the v3 SDK contract uses ``object_filter``. Verify
+        the bridge: per-entrypoint hooks read the widget key from
+        ``input.object_filter``."""
+        captured: dict[str, str] = {}
+
+        async def fetch_metadata(input: MetadataInput, ctx) -> ApiMetadataOutput:
+            captured["object_filter"] = input.object_filter
+            return ApiMetadataOutput(objects=[])
+
+        self._install_fake_handler(
+            monkeypatch, "csa-meta-bridge", fetch_metadata=fetch_metadata
+        )
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={
+                "entrypoint": "csa-meta-bridge",
+                "credentials": [],
+                "metadataTemplateKey": "tags",
+            },
+        )
+        assert response.status_code == 200
+        assert captured["object_filter"] == "tags"
+
+    def test_metadata_input_object_filter_explicit_wins_over_template_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the body sets ``object_filter`` explicitly, the bridge does not
+        overwrite it with ``metadataTemplateKey``."""
+        captured: dict[str, str] = {}
+
+        async def fetch_metadata(input: MetadataInput, ctx) -> ApiMetadataOutput:
+            captured["object_filter"] = input.object_filter
+            return ApiMetadataOutput(objects=[])
+
+        self._install_fake_handler(
+            monkeypatch, "csa-meta-bridge-2", fetch_metadata=fetch_metadata
+        )
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={
+                "entrypoint": "csa-meta-bridge-2",
+                "credentials": [],
+                "object_filter": "public.*",
+                "metadataTemplateKey": "tags",
+            },
+        )
+        assert response.status_code == 200
+        assert captured["object_filter"] == "public.*"
+
+    # ------------------------------------------------------------------
+    # Errors
+    # ------------------------------------------------------------------
+
+    def test_entrypoint_fn_raising_surfaces_as_500(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-entrypoint fn raising an unexpected exception → 500 (same as Handler.<fn>)."""
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            raise RuntimeError("entrypoint blew up")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 500
+
+
 class TestInputContractEndpoint:
     """Tests for GET /workflows/v1/input-contract."""
 

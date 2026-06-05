@@ -471,3 +471,40 @@ class TestMetadataInputFieldTypes:
         for key in ("metadataTemplateKey", "type"):
             inp = MetadataInput.model_validate({"credentials": [], key: "feedbacks"})
             assert inp.metadata_template_key == ""
+
+
+class TestEntrypointRefAlias:
+    """The handler `connector` field was renamed to `entrypoint_ref`; the
+    `connector` wire key stays as a validation + serialization alias so the
+    orchestrator (Heracles) needs no change.
+    """
+
+    @pytest.mark.parametrize("cls", [AuthInput, PreflightInput, MetadataInput])
+    def test_wire_connector_key_populates_entrypoint_ref(self, cls):
+        inp = cls.model_validate({"credentials": [], "connector": "bundle-ep-a"})
+        assert inp.entrypoint_ref == "bundle-ep-a"
+
+    @pytest.mark.parametrize("cls", [AuthInput, PreflightInput, MetadataInput])
+    def test_canonical_entrypoint_ref_key_accepted(self, cls):
+        inp = cls.model_validate({"credentials": [], "entrypoint_ref": "bundle-ep-a"})
+        assert inp.entrypoint_ref == "bundle-ep-a"
+
+    def test_serializes_back_to_connector_wire_key(self):
+        inp = AuthInput.model_validate({"credentials": [], "connector": "bundle-ep-a"})
+        dumped = inp.model_dump(by_alias=True)
+        assert dumped["connector"] == "bundle-ep-a"
+        assert "entrypoint_ref" not in dumped
+
+    @pytest.mark.parametrize("cls", [AuthInput, PreflightInput, MetadataInput])
+    def test_explicit_entrypoint_field_is_independent(self, cls):
+        """The authoritative `entrypoint` (bare name) is a distinct field from
+        the legacy `entrypoint_ref` (bundle-prefixed connector)."""
+        inp = cls.model_validate(
+            {
+                "credentials": [],
+                "entrypoint": "asset-export-advanced",
+                "connector": "csa-uber-asset-export-advanced",
+            }
+        )
+        assert inp.entrypoint == "asset-export-advanced"
+        assert inp.entrypoint_ref == "csa-uber-asset-export-advanced"
