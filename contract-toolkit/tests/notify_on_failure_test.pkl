@@ -1,19 +1,19 @@
 // Tests for the built-in run-level failure-notification node (NotificationNode)
 // and the `notifyOnFailure` app-level toggle.
 //
-// Background: every app built on App.pkl should alert on workflow-run failure
-// with no per-app wiring. The toolkit appends a `notify-on-failure` finalizer
-// node by default; it depends on the reserved run-level `workflow_failure` tag
+// Background: apps can opt in to workflow-run failure alerts by setting
+// `notifyOnFailure = true`. The toolkit then appends a `notify-on-failure`
+// finalizer node that depends on the reserved run-level `workflow_failure` tag
 // (a node-less DependencyCondition) so Automation Engine runs it once per failed
 // run and dispatches the notification app, which fans the alert out to the
-// tenant's enabled integrations. Utility/internal apps opt out via
-// `notifyOnFailure = false`. AE owns the finalizer behavior and resolves the
+// tenant's enabled integrations. AE owns the finalizer behavior and resolves the
 // `$.workflow.*` / `$.failure.*` placeholders; the toolkit owns the manifest
 // shape and the templated arg set.
 
 amends "pkl:test"
 
 import "pkl:json"
+import "../examples/full/app.pkl" as enabledApp
 import "fixtures/default_pipeline.pkl" as defaultApp
 import "fixtures/notify_disabled.pkl" as disabledApp
 import "../src/App.pkl" as App
@@ -46,12 +46,18 @@ local overrideApp = (App) {
   }
 }
 
-// Default app (no pipeline block, notifyOnFailure defaults true).
+// Default app (no pipeline block, notifyOnFailure defaults false).
 local defaultManifest = new json.Parser { useMapping = true }.parse(
   defaultApp.output.files["app/generated/manifest.json"].text
 )
 local defaultDag = defaultManifest["dag"]
-local notifyNode = defaultDag["notify-on-failure"]
+
+// Existing full example opts in (notifyOnFailure = true).
+local enabledManifest = new json.Parser { useMapping = true }.parse(
+  enabledApp.output.files["app/generated/manifest.json"].text
+)
+local enabledDag = enabledManifest["dag"]
+local notifyNode = enabledDag["notify-on-failure"]
 local notifyArgs = notifyNode["inputs"]["args"]["metadata"]
 
 // App that opts out (notifyOnFailure = false).
@@ -67,10 +73,14 @@ local overrideNode = overrideManifest["dag"]["notify-on-failure"]
 
 facts {
   // -----------------------------------------------------------------------
-  // Default: the node is appended with no app-level wiring.
+  // Default: the node is absent unless the app opts in.
   // -----------------------------------------------------------------------
 
-  ["App with no pipeline declaration gets a notify-on-failure node"] {
+  ["App with no pipeline declaration does not get a notify-on-failure node by default"] {
+    !defaultDag.containsKey("notify-on-failure")
+  }
+
+  ["App with notifyOnFailure=true gets a notify-on-failure node"] {
     notifyNode != null
   }
 
@@ -128,7 +138,7 @@ facts {
   }
 
   // -----------------------------------------------------------------------
-  // Opt-out: notifyOnFailure = false suppresses the node entirely.
+  // Disabled path: notifyOnFailure = false suppresses the node entirely.
   // -----------------------------------------------------------------------
 
   ["App with notifyOnFailure=false has no notify-on-failure node"] {

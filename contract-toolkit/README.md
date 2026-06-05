@@ -132,13 +132,12 @@ is still emitted, so no form input is required.
 
 Automation Engine DAG template. Auto-derived from the declared workflow params and the typed `pipeline` block. Heracles substitutes `{{param}}` placeholders with form values before sending to AE.
 
-Default pipeline: `extract → publish`, plus a run-level
-`notify-on-failure` system node. Opt out of publish with
+Default pipeline: `extract → publish`. Opt out of publish with
 `pipeline.publish = null`. Add parseQueries, popularity, or lineage steps by
-setting the corresponding `pipeline.*` field. Opt out of failure notifications
-with `notifyOnFailure = false`.
+setting the corresponding `pipeline.*` field. Opt in to failure notifications
+with `notifyOnFailure = true`.
 
-A run-level **failure-notification node** (`notify-on-failure`) is appended automatically (`notifyOnFailure = true`). It depends on the reserved run-level `workflow_failure` tag — Automation Engine runs it once when the workflow run terminates in failure — and dispatches the `notification-app` to fan alerts out to the tenant's enabled integrations (Teams, etc.). Set `notifyOnFailure = false` for utility/internal apps that should not self-notify (the notification app itself sets this).
+A run-level **failure-notification node** (`notify-on-failure`) is appended when `notifyOnFailure = true`. It depends on the reserved run-level `workflow_failure` tag — Automation Engine runs it once when the workflow run terminates in failure — and dispatches the `notification-app` to fan alerts out to the tenant's enabled integrations (Teams, etc.). By default the node is not emitted.
 
 ### `_input.py` (`app/generated/_input.py`)
 
@@ -237,10 +236,10 @@ pipeline {
 
 Dependencies between pipeline steps are **auto-wired** based on position — you do not write `dependsOn` for pipeline steps. Use `extraNodes` for custom nodes outside the typed pipeline.
 
-The toolkit also appends a run-level failure notification node by default:
+The toolkit can append a run-level failure notification node when an app opts in:
 
 ```pkl
-notifyOnFailure = false  // utility/system apps that must not self-notify
+notifyOnFailure = true
 ```
 
 When enabled, the generated manifest includes `notify-on-failure`, a

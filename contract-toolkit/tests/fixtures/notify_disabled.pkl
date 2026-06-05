@@ -1,9 +1,6 @@
-/// Fixture: app that opts out of the run-level failure-notification node.
+/// Fixture: app that explicitly leaves the run-level failure-notification node disabled.
 ///
-/// Exercises `notifyOnFailure = false` — the toggle utility/internal apps use
-/// so they do not append (and thus self-trigger) the notify-on-failure node.
-/// Utility and system apps use this so their own failures don't dispatch the
-/// notification app recursively.
+/// Exercises `notifyOnFailure = false`, which is also the default.
 amends "../../src/App.pkl"
 
 name = "notify-disabled"

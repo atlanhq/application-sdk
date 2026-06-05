@@ -9,13 +9,6 @@ name: Publish Contract Toolkit
 # versions with SDK v* releases on the repo releases page.
 
 on:
-  # TEMP (ARUN-619): publish a pre-release toolkit (0.11.0-arun619.0) from this
-  # branch so the Athena app can resolve a toolkit version that carries the
-  # notifyOnFailure node, for the Rung-4 E2E — before the real 0.11.0 release.
-  # REVERT this push trigger (+ the if-guard, checkout ref, and PklProject
-  # version bump) once 0.11.0 is released and Athena is repinned.
-  push:
-    branches: ['bichitra/arun-619-failure-notify-node']
   pull_request:
     types: [closed]
     branches: [main]
@@ -35,15 +28,12 @@ jobs:
     name: Publish contract toolkit package
     runs-on: ubuntu-latest
     if: >-
-      github.event_name == 'push' ||
-      (github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'release:contract-toolkit'))
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'release:contract-toolkit')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # TEMP (ARUN-619): on the push path build this branch's commit (carries
-          # notifyOnFailure + the 0.11.0-arun619.0 bump); the merge path still uses main.
-          ref: ${{ github.event_name == 'push' && github.sha || 'main' }}
+          ref: main
           fetch-depth: 0
 
       - name: Install PKL

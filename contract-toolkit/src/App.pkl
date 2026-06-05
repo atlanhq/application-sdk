@@ -260,11 +260,11 @@ extraNodes: Mapping<String, DAGNode> = new Mapping {}
 /// failure and dispatches the notification app to fan alerts out to the
 /// tenant's enabled integrations (Teams, etc.).
 ///
-/// Default `true`, so every app built on this template notifies on failure with
-/// no per-app wiring. Set `false` for utility/internal apps that must not
-/// self-notify (the notification app itself sets this). Override the node by
-/// defining `extraNodes["notify-on-failure"]`, which suppresses the default.
-notifyOnFailure: Boolean = true
+/// Default `false`, so apps must explicitly opt in with `notifyOnFailure = true`
+/// before the generated manifest includes the notification node. Override the
+/// node by defining `extraNodes["notify-on-failure"]`, which suppresses the
+/// toolkit-generated node.
+notifyOnFailure: Boolean = false
 
 /// Mapping of manifest arg name → form field name for top-level extract args.
 manifestTopLevelArgs: Mapping<String, String> = new Mapping {
