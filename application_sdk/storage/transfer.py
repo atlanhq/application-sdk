@@ -11,6 +11,22 @@ local file hash is compared against the sidecar; the upload is skipped when
 they match.  The same sidecar is used during downloads to verify integrity
 and skip unchanged local files.
 
+Cross-store deduplication (SDR deployments)
+-------------------------------------------
+``upload()`` accepts optional ``source_ref`` and ``source_store`` parameters
+(the deployment store and its file reference).  When both are supplied the
+function applies a three-step strategy per file:
+
+1. **Cross-store SHA-256 dedup** — compare the deployment-store sidecar
+   against the upstream-store sidecar; skip if they match (idempotent retry,
+   no bytes transferred).
+2. **Local upload** — if ``local_path`` exists on this pod, upload directly.
+3. **Deployment-store fallback** — if ``local_path`` is absent (cross-pod or
+   writer-deleted), stream from the deployment store to the upstream store.
+
+``App.upload()`` always passes ``source_store=self.context.storage`` so all
+callers gain the fallback automatically on the next SDK bump.
+
 This approach is backend-agnostic (no reliance on ETag formats) and works
 identically for single files and directories.
 """
@@ -97,6 +113,64 @@ async def _upload_one(
     return True, "uploaded"
 
 
+async def _cross_store_sha256_match(
+    source_store: ObjectStore,
+    source_key: str,
+    target_store: ObjectStore,
+    target_key: str,
+) -> bool:
+    """Return ``True`` if both stores have identical non-``None`` SHA-256 sidecars.
+
+    Used as step 1 of the three-step upload strategy to avoid transferring bytes
+    that are already current in the target store (idempotent retry support).
+    Returns ``False`` when either sidecar is absent so the upload proceeds.
+    """
+    source_digest = await _get_remote_sha256(source_store, source_key)
+    if source_digest is None:
+        return False
+    target_digest = await _get_remote_sha256(target_store, target_key)
+    return source_digest == target_digest
+
+
+async def _upload_from_store(
+    source_store: ObjectStore,
+    source_key: str,
+    target_store: ObjectStore,
+    target_key: str,
+) -> tuple[bool, str]:
+    """Upload a single file from *source_store* to *target_store*.
+
+    Implements steps 1 and 3 of the three-step upload strategy:
+
+    * Step 1 — cross-store SHA-256 dedup: skips the transfer when both stores
+      already hold the same content at their respective keys.
+    * Step 3 — deployment-store fallback: downloads to a temporary local file
+      and re-uploads to the target, writing the SHA-256 sidecar.
+
+    Returns ``(transferred, reason)``.
+    """
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        download_file,
+        upload_file,
+    )
+
+    if await _cross_store_sha256_match(
+        source_store, source_key, target_store, target_key
+    ):
+        return False, "skipped:hash_match"
+
+    fd, tmp_path_str = tempfile.mkstemp()
+    os.close(fd)
+    tmp = Path(tmp_path_str)
+    try:
+        await download_file(source_key, tmp, source_store, normalize=False)
+        sha256 = await upload_file(target_key, tmp, target_store, normalize=False)
+        await _put_remote_sha256(target_store, target_key, sha256)
+        return True, "uploaded"
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 async def _download_one(
     store: ObjectStore,
     store_key: str,
@@ -181,6 +255,8 @@ async def upload(
     skip_if_exists: bool = False,
     raise_on_empty: bool = False,
     store: ObjectStore | None = None,
+    source_ref: FileReference | None = None,
+    source_store: ObjectStore | None = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
     max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
@@ -195,19 +271,43 @@ async def upload(
     appended to _app_prefix so files land at ``{_app_prefix}/{storage_subdir}/...``.
     This preserves the directory name in the object store path.
 
+    Three-step upload strategy (when *source_ref* and *source_store* are supplied):
+
+    1. **Cross-store SHA-256 dedup** — compare deployment-store sidecar against
+       upstream sidecar; skip if they match (idempotent retry, zero bytes
+       transferred).  Calling ``App.upload()`` twice for the same file short-
+       circuits on the second call once the file is present in the target store.
+    2. **Local upload** — if *local_path* exists on this pod, upload directly.
+    3. **Deployment-store fallback** — if *local_path* is absent (cross-pod
+       KEDA-scaled SDR worker or writer-deleted by ``use_consolidation=True``),
+       stream from *source_store* to the target.
+
+    ``App.upload()`` automatically derives *source_ref* from *local_path* and
+    always passes ``source_store=self.context.storage``, so all existing call
+    sites gain the fallback for free without API changes.
+
     Args:
         local_path: Local file or directory to upload.
         storage_path: Destination key or prefix override.  Takes priority
             over *storage_subdir* and *_app_prefix* when set.
         storage_subdir: Subdirectory name appended to the auto-generated run prefix.
             Ignored when *storage_path* is set.
-        skip_if_exists: Skip files whose SHA-256 matches the stored sidecar.
+        skip_if_exists: Skip files whose local SHA-256 matches the stored sidecar
+            (step 2 only; the cross-store dedup in step 1 is unconditional).
         raise_on_empty: When ``True``, raise ``StorageEmptyUploadError`` if
             *local_path* is a directory that contains zero files. Opt-in
             fail-loud for connectors where empty output indicates a bug
             (see BLDX-1255). Defaults to ``False`` to preserve historical
             silent-zero behavior that incremental extractors rely on.
-        store: Object store to use, or ``None`` to resolve from infrastructure.
+        store: Target object store (upstream in SDR, deployment otherwise), or
+            ``None`` to resolve from infrastructure.
+        source_ref: Pre-computed ``FileReference`` carrying both ``local_path``
+            and ``storage_path`` for the deployment store.  Derived automatically
+            by ``App.upload()`` from *local_path*; callers can also supply it
+            directly (e.g. from a previous task output).
+        source_store: Deployment-store binding used as the step-3 fallback
+            source.  Always ``self.context.storage`` when called via
+            ``App.upload()``.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
         max_concurrency: Maximum parallel uploads for directory mode
             (default :data:`~application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS`).
@@ -217,7 +317,8 @@ async def upload(
 
     Raises:
         StorageError: If *local_path* does not exist or is neither a file
-            nor a directory.
+            nor a directory, and no *source_ref* / *source_store* fallback
+            is available.
         StorageEmptyUploadError: When *raise_on_empty* is ``True`` and
             *local_path* is a directory containing zero files
             (category=DATA_INTEGRITY, audience=APP_OWNER, retryable=False).
@@ -231,10 +332,16 @@ async def upload(
     )
 
     resolved = _resolve_store(store)
+    source_resolved = _resolve_store(source_store) if source_store is not None else None
     src = Path(local_path)
 
-    # Block sensitive paths
-    _validate_upload_path(src)
+    # Block sensitive paths (runs even when the path does not exist locally
+    # so uploads to sensitive locations are refused regardless of fallback path).
+    # Guard: only validate when local_path is non-empty — Path("") resolves to
+    # CWD on Python/macOS, so validating or stat-ing it without this guard
+    # causes is_dir() to return True and accidentally upload the working tree.
+    if local_path:
+        _validate_upload_path(src)
 
     if storage_subdir:
         from pathlib import (  # noqa: PLC0415 — stdlib pathlib; lazy use only
@@ -254,8 +361,8 @@ async def upload(
             raise UnsafeUploadPathError(unsafe_path=storage_subdir)
         storage_subdir = cleaned
 
-    if src.is_file():
-        # ── Single file ────────────────────────────────────────────────────
+    if local_path and src.is_file():
+        # ── Single file (step 2: local exists) ────────────────────────────
         if storage_path is not None:
             key = normalize_key(storage_path)
         elif _app_prefix and storage_subdir:
@@ -264,6 +371,23 @@ async def upload(
             key = f"{_app_prefix}/{src.name}"
         else:
             key = src.name
+
+        # Step 1: cross-store SHA-256 dedup (skip if upstream already current).
+        if (
+            source_ref is not None
+            and source_ref.storage_path
+            and source_resolved is not None
+        ) and await _cross_store_sha256_match(
+            source_resolved, source_ref.storage_path, resolved, key
+        ):
+            ref = FileReference(
+                local_path=str(src),
+                storage_path=key,
+                is_durable=True,
+                file_count=1,
+                tier=_tier,
+            )
+            return UploadOutput(ref=ref, synced=False, reason="skipped:hash_match")
 
         transferred, reason = await _upload_one(
             resolved, src, key, skip_if_exists=skip_if_exists
@@ -277,8 +401,8 @@ async def upload(
         )
         return UploadOutput(ref=ref, synced=transferred, reason=reason)
 
-    elif src.is_dir():
-        # ── Directory ──────────────────────────────────────────────────────
+    elif local_path and src.is_dir():
+        # ── Directory (step 2: local exists) ──────────────────────────────
         if storage_path is not None:
             prefix = normalize_key(storage_path)
         elif _app_prefix and storage_subdir:
@@ -315,8 +439,26 @@ async def upload(
                 local_path=local_path,
             )
 
+        # Build the per-file source key prefix for step-1 cross-store dedup.
+        src_dir_prefix = ""
+        if (
+            source_ref is not None
+            and source_ref.storage_path
+            and source_resolved is not None
+        ):
+            src_dir_prefix = normalize_key(source_ref.storage_path).rstrip("/") + "/"
+
         async def _bounded_upload(file_path: Path, key: str) -> bool:
             async with sem:
+                # Step 1: cross-store SHA-256 dedup per file.
+                if src_dir_prefix and source_resolved is not None:
+                    relative = str(file_path.relative_to(src)).replace(os.sep, "/")
+                    src_file_key = src_dir_prefix + relative
+                    if await _cross_store_sha256_match(
+                        source_resolved, src_file_key, resolved, key
+                    ):
+                        return False
+                # Step 2: upload from local.
                 ok, _ = await _upload_one(
                     resolved, file_path, key, skip_if_exists=skip_if_exists
                 )
@@ -346,6 +488,120 @@ async def upload(
             tier=_tier,
         )
         return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
+
+    elif (
+        source_ref is not None
+        and source_ref.storage_path
+        and source_resolved is not None
+    ):
+        # ── Step 3: deployment-store fallback (local path absent) ─────────
+        # local_path does not exist on this pod — stream from source_store.
+        # Used when the file was written by a different worker (cross-pod SDR)
+        # or deleted locally after upload (use_consolidation=True).
+        from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            list_keys,
+        )
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageEmptyUploadError,
+            StorageError,
+        )
+
+        source_norm = normalize_key(source_ref.storage_path)
+        source_dir_prefix = source_norm.rstrip("/") + "/"
+
+        # Probe the source store: sub-keys → directory; no sub-keys → single file.
+        dir_keys = await list_keys(source_dir_prefix, source_resolved, normalize=False)
+        data_dir_keys = [k for k in dir_keys if not _is_sidecar(k)]
+
+        if data_dir_keys:
+            # ── Directory fallback ─────────────────────────────────────────
+            if storage_path is not None:
+                fallback_prefix = normalize_key(storage_path)
+            elif _app_prefix and storage_subdir:
+                fallback_prefix = f"{_app_prefix}/{normalize_key(storage_subdir)}"
+            elif _app_prefix:
+                fallback_prefix = _app_prefix
+            elif source_ref.local_path:
+                fallback_prefix = Path(source_ref.local_path).name
+            else:
+                fallback_prefix = source_norm.rstrip("/").rsplit("/", 1)[-1]
+
+            if raise_on_empty and not data_dir_keys:
+                raise StorageEmptyUploadError(
+                    f"upload(source_ref.storage_path={source_ref.storage_path!r}): "
+                    "deployment store returned zero files for the given prefix.",
+                    local_path=source_ref.storage_path,
+                )
+
+            sem = asyncio.Semaphore(max_concurrency)
+
+            async def _bounded_fallback_dir(source_key: str) -> bool:
+                async with sem:
+                    rel = source_key.removeprefix(source_dir_prefix)
+                    tgt_key = f"{fallback_prefix}/{rel}" if fallback_prefix else rel
+                    ok, _ = await _upload_from_store(
+                        source_resolved, source_key, resolved, tgt_key
+                    )
+                    return ok
+
+            results = await asyncio.gather(
+                *[_bounded_fallback_dir(k) for k in data_dir_keys],
+                return_exceptions=True,
+            )
+            errors = [r for r in results if isinstance(r, BaseException)]
+            if errors:
+                raise errors[0]
+            transferred_count = sum(1 for ok in results if ok)
+
+            store_prefix = (
+                (fallback_prefix.rstrip("/") + "/") if fallback_prefix else ""
+            )
+            reason = "uploaded" if transferred_count > 0 else "skipped:hash_match"
+            ref = FileReference(
+                local_path=source_ref.local_path,
+                storage_path=store_prefix,
+                is_durable=True,
+                file_count=len(data_dir_keys),
+                tier=_tier,
+            )
+            return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
+
+        else:
+            # ── Single file fallback ───────────────────────────────────────
+            if source_ref.local_path:
+                local_name = Path(source_ref.local_path).name
+            else:
+                local_name = source_norm.rsplit("/", 1)[-1]
+
+            if storage_path is not None:
+                fallback_key = normalize_key(storage_path)
+            elif _app_prefix and storage_subdir:
+                fallback_key = (
+                    f"{_app_prefix}/{normalize_key(storage_subdir)}/{local_name}"
+                )
+            elif _app_prefix:
+                fallback_key = f"{_app_prefix}/{local_name}"
+            else:
+                fallback_key = local_name
+
+            if raise_on_empty:
+                raise StorageEmptyUploadError(
+                    f"upload(source_ref.storage_path={source_ref.storage_path!r}): "
+                    "deployment store returned zero files for the given key.",
+                    local_path=source_ref.storage_path,
+                )
+
+            transferred, reason = await _upload_from_store(
+                source_resolved, source_norm, resolved, fallback_key
+            )
+            ref = FileReference(
+                local_path=source_ref.local_path,
+                storage_path=fallback_key,
+                is_durable=True,
+                file_count=1,
+                tier=_tier,
+            )
+            return UploadOutput(ref=ref, synced=transferred, reason=reason)
 
     else:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules

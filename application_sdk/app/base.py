@@ -996,6 +996,9 @@ class App(ABC):
             # up.ref.file_count == number of files in the directory
         """
 
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
+            normalize_key,
+        )
         from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             upload as _upload,
         )
@@ -1009,6 +1012,23 @@ class App(ABC):
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
+
+        # Derive the internal FileReference used for cross-store dedup and the
+        # deployment-store fallback (step 3).  When input.ref is set explicitly
+        # the caller already has a durable FileReference (e.g. from a @task
+        # output); otherwise derive it from local_path.
+        # normalize_key strips TEMPORARY_PATH to yield the canonical
+        # deployment-store key — the same key written by extract tasks.
+        # Guard: if normalize_key returns "" (local_path resolved to the store
+        # root), skip creating source_ref so we don't inadvertently query the
+        # entire store.
+        _store_key = normalize_key(input.local_path) if input.local_path else ""
+        source_ref = input.ref or (
+            FileReference(local_path=input.local_path, storage_path=_store_key)
+            if _store_key
+            else None
+        )
+
         return await _upload(
             input.local_path,
             input.storage_path,
@@ -1016,6 +1036,8 @@ class App(ABC):
             skip_if_exists=input.skip_if_exists,
             raise_on_empty=input.raise_on_empty,
             store=store,
+            source_ref=source_ref,
+            source_store=self.context.storage,
             _app_prefix=app_prefix,
             _tier=input.tier,
         )
