@@ -1136,8 +1136,13 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
-    def test_multi_ep_missing_entrypoint_returns_400(self) -> None:
-        """Multi-entry-point app with no ?entrypoint= and no body selector returns 400."""
+    def test_multi_ep_no_entrypoint_dispatches_auto_default(self) -> None:
+        """Multi-entry-point app with no ?entrypoint= dispatches to the auto-default.
+
+        When multiple @entrypoints exist with no explicit default, the first
+        alphabetically (via dir()) is auto-marked default at registration.
+        Omitting ?entrypoint= therefore returns 200 and dispatches that ep.
+        """
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
@@ -1153,12 +1158,371 @@ class TestStartWorkflowRouting:
         client, patcher = self._make_routed_client(_AnotherMultiEpApp)
         try:
             response = client.post("/workflows/v1/start", json={"name": "x"})
-            assert response.status_code == 400
-            detail = response.json().get("detail", "")
-            assert "step-a" not in detail
-            assert "step-b" not in detail
+            assert response.status_code == 200
         finally:
             patcher.stop()
+
+
+class TestStartWorkflowInvocability:
+    """Tests that every entry-point combination is reachable via /workflows/v1/start.
+
+    Covers:
+      - run()-only: no ?entrypoint= AND ?entrypoint=run
+      - @entrypoint-only (single): no ?entrypoint= AND ?entrypoint={name}
+      - @entrypoints (multiple): ?entrypoint= for each AND no ?entrypoint= uses auto-default
+      - mixed run() + @entrypoint: default (run, no ?entrypoint=), explicit by name
+      - mixed run() + @entrypoints (multiple): same rules
+    """
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _make_routed_client(self, app_cls: type):  # type: ignore[return]
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="inv-test",
+            app_class=app_cls,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-1"
+        mock_handle.result_run_id = "run-1"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        client = TestClient(svc, raise_server_exceptions=False)
+        return client, patcher, mock_client
+
+    def _started_workflow_name(self, mock_client: object) -> str:
+        from unittest.mock import MagicMock
+
+        assert isinstance(mock_client, MagicMock)
+        return mock_client.start_workflow.call_args[0][0]
+
+    # ── run()-only ────────────────────────────────────────────────────────
+
+    def test_run_only_no_param_is_200(self) -> None:
+        """run()-only app: omitting ?entrypoint= dispatches successfully."""
+        from application_sdk.app.base import App
+
+        class _RunOnlyInvApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_RunOnlyInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            # Implicit run() uses bare app-name workflow type (no colon suffix)
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    def test_run_only_explicit_run_param_is_200(self) -> None:
+        """run()-only app: ?entrypoint=run dispatches to the same implicit entry point."""
+        from application_sdk.app.base import App
+
+        class _RunOnlyExplicitApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_RunOnlyExplicitApp)
+        try:
+            resp = client.post("/workflows/v1/start?entrypoint=run", json={"name": "x"})
+            assert resp.status_code == 200
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    # ── @entrypoint-only (single) ─────────────────────────────────────────
+
+    def test_single_ep_no_param_is_200(self) -> None:
+        """Single @entrypoint app: omitting ?entrypoint= dispatches via len==1 default."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _SingleEpInvApp(App):
+            @entrypoint
+            async def ingest(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_SingleEpInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":ingest")
+        finally:
+            patcher.stop()
+
+    def test_single_ep_explicit_param_is_200(self) -> None:
+        """Single @entrypoint app: ?entrypoint={name} dispatches correctly."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _SingleEpExplicitApp(App):
+            @entrypoint
+            async def ingest(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_SingleEpExplicitApp)
+        try:
+            resp = client.post(
+                "/workflows/v1/start?entrypoint=ingest", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":ingest")
+        finally:
+            patcher.stop()
+
+    # ── @entrypoints (multiple) ───────────────────────────────────────────
+
+    def test_multi_ep_no_param_dispatches_auto_default(self) -> None:
+        """Multiple @entrypoints, none explicit default: ?entrypoint= omitted uses auto-default.
+
+        Auto-default is the first alphabetically: alpha-ep precedes beta-ep.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpInvApp(App):
+            @entrypoint
+            async def alpha_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def beta_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MultiEpInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":alpha-ep")
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_explicit_alpha_param_is_200(self) -> None:
+        """Multiple @entrypoints: ?entrypoint=alpha-ep dispatches to alpha-ep."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpAlphaApp(App):
+            @entrypoint
+            async def alpha_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def beta_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MultiEpAlphaApp)
+        try:
+            resp = client.post(
+                "/workflows/v1/start?entrypoint=alpha-ep", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":alpha-ep")
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_explicit_beta_param_is_200(self) -> None:
+        """Multiple @entrypoints: ?entrypoint=beta-ep dispatches to beta-ep."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpBetaApp(App):
+            @entrypoint
+            async def alpha_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def beta_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MultiEpBetaApp)
+        try:
+            resp = client.post(
+                "/workflows/v1/start?entrypoint=beta-ep", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":beta-ep")
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_explicit_default_no_param_dispatches_marked(self) -> None:
+        """Multiple @entrypoints with one explicit default: ?entrypoint= omitted uses marked."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpMarkedApp(App):
+            @entrypoint
+            async def alpha_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint(default=True)
+            async def beta_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MultiEpMarkedApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":beta-ep")
+        finally:
+            patcher.stop()
+
+    # ── mixed run() + single @entrypoint ─────────────────────────────────
+
+    def test_mixed_single_no_param_dispatches_run(self) -> None:
+        """Mixed app: ?entrypoint= omitted dispatches to run() (permanent default)."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedSingleInvApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MixedSingleInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            # run() is implicit → bare app-name, no colon
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    def test_mixed_single_run_param_dispatches_run(self) -> None:
+        """Mixed app: ?entrypoint=run dispatches to run()."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedRunParamApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MixedRunParamApp)
+        try:
+            resp = client.post("/workflows/v1/start?entrypoint=run", json={"name": "x"})
+            assert resp.status_code == 200
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    def test_mixed_single_explicit_ep_param_dispatches_ep(self) -> None:
+        """Mixed app: ?entrypoint={name} dispatches to the named @entrypoint."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedEpParamApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MixedEpParamApp)
+        try:
+            resp = client.post(
+                "/workflows/v1/start?entrypoint=extract", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":extract")
+        finally:
+            patcher.stop()
+
+    # ── mixed run() + multiple @entrypoints ──────────────────────────────
+
+    def test_mixed_multi_no_param_dispatches_run(self) -> None:
+        """Mixed app with multiple @entrypoints: run() remains default when omitted."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedMultiInvApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def publish(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MixedMultiInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    def test_mixed_multi_explicit_ep_params_each_dispatch_correctly(self) -> None:
+        """Mixed app with multiple @entrypoints: each is reachable by name."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedMultiEachApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def publish(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        for ep_name, ep_suffix in [
+            ("run", None),
+            ("extract", ":extract"),
+            ("publish", ":publish"),
+        ]:
+            client, patcher, mock_client = self._make_routed_client(_MixedMultiEachApp)
+            try:
+                resp = client.post(
+                    f"/workflows/v1/start?entrypoint={ep_name}", json={"name": "x"}
+                )
+                assert (
+                    resp.status_code == 200
+                ), f"?entrypoint={ep_name} returned {resp.status_code}"
+                wf_name = self._started_workflow_name(mock_client)
+                if ep_suffix is None:
+                    assert (
+                        ":" not in wf_name
+                    ), f"?entrypoint={ep_name}: expected bare name (no colon), got {wf_name!r}"
+                else:
+                    assert wf_name.endswith(
+                        ep_suffix
+                    ), f"?entrypoint={ep_name}: expected suffix {ep_suffix!r}, got {wf_name!r}"
+            finally:
+                patcher.stop()
 
 
 class TestWrapResponse:
@@ -4256,3 +4620,293 @@ class TestConfigEndpointPersistence:
             response = client.get("/workflows/v1/config/round-trip")
         assert response.status_code == 200
         assert response.json()["data"] == {"hello": "world"}
+
+
+class TestInputContractEndpoint:
+    """Tests for GET /workflows/v1/input-contract."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _client(self, app_cls: type) -> TestClient:
+        svc = create_app_handler_service(
+            _TestHandler(), app_name="ic-test", app_class=app_cls
+        )
+        return TestClient(svc, raise_server_exceptions=False)
+
+    def test_single_entrypoint_returns_model_json_schema(self) -> None:
+        """Single-entry-point app: no ?entrypoint= resolves the only one and
+        returns exactly AppInputContract.model_json_schema()."""
+        from application_sdk.app.base import App
+
+        class _SingleEpApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        resp = self._client(_SingleEpApp).get("/workflows/v1/input-contract")
+        assert resp.status_code == 200
+        assert resp.json() == _RoutingInput.model_json_schema()
+
+    def test_multi_entrypoint_selected_by_query_param(self) -> None:
+        """Multi-entry-point app: ?entrypoint=<name> returns that entry point's schema."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        resp = self._client(_MultiEpApp).get(
+            "/workflows/v1/input-contract?entrypoint=extract"
+        )
+        assert resp.status_code == 200
+        assert resp.json() == _RoutingInput.model_json_schema()
+
+    def test_multi_entrypoint_no_param_uses_auto_default(self) -> None:
+        """Multi-entry-point app without ?entrypoint= → 200 using auto-default (first alphabetically)."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpApp2(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # 'extract' precedes 'load' alphabetically → auto-marked default
+        resp = self._client(_MultiEpApp2).get("/workflows/v1/input-contract")
+        assert resp.status_code == 200
+        assert resp.json() == _RoutingInput.model_json_schema()
+
+    def test_unknown_entrypoint_returns_404(self) -> None:
+        from application_sdk.app.base import App
+
+        class _SingleEpApp2(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        resp = self._client(_SingleEpApp2).get(
+            "/workflows/v1/input-contract?entrypoint=nope"
+        )
+        assert resp.status_code == 404
+
+    def test_invalid_entrypoint_name_returns_400(self) -> None:
+        from application_sdk.app.base import App
+
+        class _SingleEpApp3(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        resp = self._client(_SingleEpApp3).get(
+            "/workflows/v1/input-contract?entrypoint=../etc"
+        )
+        assert resp.status_code == 400
+
+    @staticmethod
+    def _inject_generated_contract(ep_module: str, contract_cls: type):
+        """Register a fake app/generated/{ep}/_input.py:AppInputContract in
+        sys.modules so _published_input_contract can import it. Returns the list
+        of injected module paths for cleanup."""
+        import sys
+        import types
+
+        paths = ["app", "app.generated", f"app.generated.{ep_module}"]
+        for p in paths:
+            sys.modules.setdefault(p, types.ModuleType(p))
+        leaf = f"app.generated.{ep_module}._input"
+        mod = types.ModuleType(leaf)
+        mod.AppInputContract = contract_cls
+        sys.modules[leaf] = mod
+        return paths + [leaf]
+
+    def test_prefers_generated_app_input_contract(self) -> None:
+        """When app/generated/{ep}/_input.py:AppInputContract is importable, the
+        endpoint returns its (rich) schema, not the thin runtime input_type."""
+        import sys
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _GenContract(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+            region: str = "region-us"
+
+        class _MultiEpGen(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        injected = self._inject_generated_contract("extract", _GenContract)
+        try:
+            resp = self._client(_MultiEpGen).get(
+                "/workflows/v1/input-contract?entrypoint=extract"
+            )
+            assert resp.status_code == 200
+            # rich generated contract, not the thin _RoutingInput
+            assert resp.json() == _GenContract.model_json_schema()
+            assert "region" in resp.json()["properties"]
+            # the entrypoint with no generated module still falls back
+            resp_load = self._client(_MultiEpGen).get(
+                "/workflows/v1/input-contract?entrypoint=load"
+            )
+            assert resp_load.json() == _RoutingInput.model_json_schema()
+        finally:
+            for p in injected:
+                sys.modules.pop(p, None)
+
+    def test_published_contract_falls_back_to_input_type(self) -> None:
+        """No generated module → _published_input_contract returns input_type."""
+        from application_sdk.app.entrypoint import EntryPointMetadata
+        from application_sdk.handler.service import _published_input_contract
+
+        ep = EntryPointMetadata(
+            name="no-generated-here",
+            input_type=_RoutingInput,
+            output_type=_RoutingOutput,
+            method_name="no_generated_here",
+        )
+        assert _published_input_contract(ep) is _RoutingInput
+
+
+class TestDefaultEntrypoint:
+    """Tests for default-entrypoint resolution (@entrypoint(default=True))."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_resolver_rules(self) -> None:
+        from application_sdk.app.entrypoint import (
+            EntryPointMetadata,
+            _resolve_default_entrypoint,
+        )
+
+        def _ep(name: str, *, default: bool = False) -> EntryPointMetadata:
+            return EntryPointMetadata(
+                name=name,
+                input_type=_RoutingInput,
+                output_type=_RoutingOutput,
+                method_name=name,
+                default=default,
+            )
+
+        a, b = _ep("a"), _ep("b")
+        # single → that one
+        assert _resolve_default_entrypoint({"a": a}) is a
+        # multi, one default → the default
+        bd = _ep("b", default=True)
+        assert _resolve_default_entrypoint({"a": a, "b": bd}) is bd
+        # multi, no default → None
+        assert _resolve_default_entrypoint({"a": a, "b": b}) is None
+        # multi, ambiguous (>1 default) → None
+        ad = _ep("a", default=True)
+        assert _resolve_default_entrypoint({"a": ad, "b": bd}) is None
+        # empty → None
+        assert _resolve_default_entrypoint({}) is None
+
+    def test_multiple_defaults_raise_at_registration(self) -> None:
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+
+        with pytest.raises(EntryPointContractError, match="default entry point"):
+
+            class _BadApp(App):
+                @entrypoint(default=True)
+                async def extract(self, input: _AlphaInput) -> _AlphaOutput:
+                    return _AlphaOutput()
+
+                @entrypoint(default=True)
+                async def load(self, input: _BetaInput) -> _BetaOutput:
+                    return _BetaOutput()
+
+    def test_input_contract_resolves_marked_default(self) -> None:
+        """Multi-entry-point app: no ?entrypoint= resolves the default-marked one."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _DefaultEpApp(App):
+            @entrypoint
+            async def extract(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(), app_name="default-ic", app_class=_DefaultEpApp
+        )
+        resp = TestClient(svc, raise_server_exceptions=False).get(
+            "/workflows/v1/input-contract"
+        )
+        assert resp.status_code == 200
+        # The default ('load') uses _RoutingInput — confirm that schema came back.
+        assert resp.json() == _RoutingInput.model_json_schema()
+
+    def test_start_resolves_marked_default_without_param(self) -> None:
+        """Multi-entry-point app: /start with no ?entrypoint= resolves the default."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _DefaultStartApp(App):
+            @entrypoint
+            async def extract(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="default-start",
+            app_class=_DefaultStartApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-1"
+        mock_handle.result_run_id = "run-1"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        try:
+            resp = TestClient(svc, raise_server_exceptions=False).post(
+                "/workflows/v1/start", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+        finally:
+            patcher.stop()

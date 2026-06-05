@@ -188,9 +188,35 @@ curl -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=mine-queries' 
   -d '{"credentials": {...}, "connection": {...}, "metadata": {...}}'
 ```
 
-For single-entry-point apps, `?entrypoint=` is optional — the sole entry point is selected automatically. For multi-entry-point apps it is **required** (returns 400 otherwise).
+When `?entrypoint=` is omitted the SDK resolves the default entry point automatically — see [Default entrypoint resolution](#default-entrypoint-resolution) below. Pass `?entrypoint=<name>` to target a specific entry point explicitly.
 
 > **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with legacy Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
+
+### Default entrypoint resolution
+
+The SDK resolves which entry point to invoke when `?entrypoint=` is omitted, following these rules in order:
+
+| App shape | Default resolution |
+|---|---|
+| `run()` only | `run()` is the implicit default (backward compat) |
+| Single `@entrypoint` | that entry point is the default (len==1 rule) |
+| Multiple `@entrypoint`s, none explicit | first alphabetically is auto-marked default |
+| Multiple `@entrypoint`s, one `default=True` | that one is the default |
+| Multiple `@entrypoint`s, multiple `default=True` | error at class definition time |
+| `run()` + `@entrypoint`(s) | `run()` is always the default; `@entrypoint(default=True)` raises |
+
+The `default=True` flag on `@entrypoint` is only meaningful when the app has multiple `@entrypoint` methods and no `run()` override. Mark it explicitly if you want a specific non-alphabetical entry point to be the default:
+
+```python
+class SnowflakeApp(App):
+    @entrypoint                       # not the default — 'e' < 'm' alphabetically
+    async def mine_queries(self, input: MiningInput) -> MiningOutput: ...
+
+    @entrypoint(default=True)         # explicitly the default
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput: ...
+```
+
+`run()` and `@entrypoint` methods can coexist in the same class. In that case `run()` permanently holds the default regardless of any `default=True` flag on `@entrypoint`.
 
 ### Shared infrastructure
 
