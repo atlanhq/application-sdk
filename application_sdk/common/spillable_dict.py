@@ -28,7 +28,7 @@ import shutil
 import tempfile
 import weakref
 from collections.abc import Iterator, MutableMapping
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self, TypeAlias, cast
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -48,10 +48,18 @@ else:
         Options = None
         BlockBasedOptions = None
 
-# Key types that rocksdict itself accepts. Anything outside this set is
+# The key types rocksdict itself accepts. Anything outside this union is
 # rejected internally by ``key_may_exist`` / ``__getitem__`` with an
 # unhelpful TypeError; SpillableDict's defensive guards filter on this
-# tuple instead so callers see standard dict-style behaviour.
+# set so callers see either standard dict-style misses (reads) or a
+# clear typed error (writes).
+#
+# ``SpillableKey`` is exported as the call-side type hint so static
+# checkers surface bad-key usage at the caller (e.g. ``d[None] = v``
+# becomes a type error against this union); ``ROCKSDB_KEY_TYPES`` is
+# the runtime tuple used for ``isinstance`` guards in the methods
+# below, since unions aren't valid second arguments to ``isinstance``.
+SpillableKey: TypeAlias = str | int | float | bool | bytes
 ROCKSDB_KEY_TYPES: tuple[type, ...] = (str, int, float, bool, bytes)
 
 
@@ -73,27 +81,27 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
     per-run state — there is no API for persistent reuse across runs.
 
     **Supported key types**: ``str``, ``int``, ``float``, ``bool``, ``bytes``
-    (whatever RocksDB itself accepts via rocksdict). Iteration always
-    yields ``str`` because the connector-facing call sites the SDK is
-    designed for write only string keys, but reads/contains/deletes accept
-    any of the supported types.
+    (whatever RocksDB itself accepts via rocksdict). These are exposed as
+    the ``SpillableKey`` typealias for static checkers.
 
-    **Unsupported keys are handled defensively**, matching the standard
-    ``dict`` contract a ``sqlitedict`` migration would expect:
+    **Reads of unsupported / typo'd keys** are handled defensively to
+    match the standard ``dict`` contract that ``sqlitedict`` migrations
+    expect — so callers can probe optimistically without wrapping every
+    access:
 
     - ``d.get(bad_key, default)`` returns ``default`` (instead of raising
       from rocksdict's ``key_may_exist`` internals).
     - ``bad_key in d`` returns ``False``.
-    - ``d[bad_key]`` raises ``KeyError``.
+    - ``d[bad_key]`` raises ``KeyError`` (matches dict for missing keys).
     - ``del d[bad_key]`` raises ``KeyError``.
-    - ``d[None] = value`` is a **silent no-op** — connector code paths
-      pass ``None`` for optional join keys (e.g. ``jobId`` on a
-      job-less source row) and would otherwise have to wrap every write
-      in an ``if key is not None`` guard.
 
-    Other non-primitive write keys (lists, custom objects, etc.) are *not*
-    silently dropped — they propagate rocksdict's ``TypeError`` so a bug
-    in the caller is loud rather than silently losing data.
+    **Writes of unsupported keys raise ``TypeError`` loudly**, including
+    ``d[None] = v``. Silently dropping writes hides caller bugs and turns
+    into data loss; if a caller has a "skip when key is None" semantic,
+    they should express it explicitly at the call site:
+
+        if key is not None:
+            d[key] = value
 
     **Iteration order is RocksDB key order (lexicographic), not insertion
     order.** Callers that need insertion order must track it themselves —
@@ -180,42 +188,43 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         self._atexit_handle = _atexit_cleanup
         atexit.register(self._atexit_handle)
 
-    def __setitem__(self, key: Any, value: Any) -> None:
-        # Silently drop None writes — connector callers pass None for
-        # optional join keys (e.g. jobId on a job-less source row) and
-        # would otherwise have to wrap every set in an `if key is not None`
-        # guard. Any *other* non-primitive type still propagates
-        # rocksdict's TypeError so caller bugs are loud, not silent
-        # data loss.
+    def __setitem__(self, key: SpillableKey, value: Any) -> None:
         # Reminder: value is pickled. See class docstring's "Caveat on
         # untrusted data" — don't store attacker-controllable bytes here.
-        if key is None:
-            return
+        if not isinstance(key, ROCKSDB_KEY_TYPES):
+            raise TypeError(
+                f"SpillableDict keys must be one of "
+                f"(str, int, float, bool, bytes); "
+                f"got {type(key).__name__}"
+            )
         self._db[key] = value
 
-    def __getitem__(self, key: Any) -> Any:
+    def __getitem__(self, key: SpillableKey) -> Any:
+        # Reads of an unsupported key type are a guaranteed miss
+        # (couldn't have been stored, since __setitem__ rejects them).
+        # Match standard dict semantics for misses: KeyError.
         if not isinstance(key, ROCKSDB_KEY_TYPES):
             raise KeyError(key)
         return self._db[key]
 
-    def __delitem__(self, key: Any) -> None:
+    def __delitem__(self, key: SpillableKey) -> None:
         # rocksdict's __delitem__ maps to RocksDB Delete, which is a no-op
         # on missing keys (writes a tombstone unconditionally). We want
         # standard dict semantics — match what sqlitedict callers expect.
         # Bloom filter short-circuits the negative case; the explicit
         # `in self._db` check handles bloom-filter false positives.
         # The isinstance guard prevents key_may_exist from raising on
-        # None / unsupported types — those just KeyError, like dict.
+        # unsupported types — those just KeyError, like dict.
         if not isinstance(key, ROCKSDB_KEY_TYPES):
             raise KeyError(key)
         if not self._db.key_may_exist(key) or key not in self._db:
             raise KeyError(key)
         del self._db[key]
 
-    def get(self, key: Any, default: Any = None) -> Any:
-        # Defensive: None / non-primitive keys can't have been stored
-        # (see __setitem__ + ROCKSDB_KEY_TYPES) so they always miss.
-        # Short-circuit before key_may_exist, which would raise.
+    def get(self, key: SpillableKey, default: Any = None) -> Any:
+        # Reads with an unsupported key type can never hit anything
+        # (writes reject them), so return the default rather than
+        # forwarding to ``key_may_exist`` (which would raise).
         if not isinstance(key, ROCKSDB_KEY_TYPES):
             return default
         # Bloom filter short-circuits the disk read when RocksDB can prove

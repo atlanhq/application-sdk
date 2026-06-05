@@ -259,29 +259,27 @@ class TestSpillableDictKeyTypeGuards:
             with pytest.raises(KeyError):
                 _ = d[object()]  # type: ignore[index]
 
-    def test_setitem_none_is_silent_noop(self) -> None:
-        """Connector code paths set d[jobId] = info even when jobId is
-        None (job-less source rows). Silently drop the write rather than
-        force every caller to guard."""
+    def test_setitem_none_raises_typeerror(self) -> None:
+        """Writing under a ``None`` key is rejected loudly — silent drop
+        would turn caller bugs into data loss. Callers with a 'skip None'
+        semantic must guard at the call site."""
         with SpillableDict() as d:
-            d[None] = "ignored"  # type: ignore[index]
+            with pytest.raises(TypeError, match="SpillableDict keys must be"):
+                d[None] = "loud"  # type: ignore[index]
             assert (None in d) is False  # type: ignore[operator]
-            # The store stays empty — the None write didn't sneak under
-            # some other key.
             assert len(d) == 0
-            # A real key after the noop still works.
+            # Real keys after the raise still work.
             d["k"] = "v"
             assert d["k"] == "v"
             assert len(d) == 1
 
-    def test_setitem_other_non_primitive_raises_loudly(self) -> None:
-        """Anything other than None must surface rocksdict's TypeError —
-        we don't silently drop list/dict/object writes, otherwise a caller
-        bug (forgetting to stringify a key) becomes silent data loss."""
+    def test_setitem_other_non_primitive_raises_typeerror(self) -> None:
+        """Non-primitive write keys (lists, custom objects, etc.) also
+        raise — same loud-failure rationale as the None case."""
         with SpillableDict() as d:
-            with pytest.raises((TypeError, Exception)):
+            with pytest.raises(TypeError, match="SpillableDict keys must be"):
                 d[[1, 2]] = "loud"  # type: ignore[index]
-            with pytest.raises((TypeError, Exception)):
+            with pytest.raises(TypeError, match="SpillableDict keys must be"):
                 d[object()] = "loud"  # type: ignore[index]
 
     def test_delitem_none_raises_keyerror(self) -> None:
