@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.14.0
-source-sha:    e84e1f49890c498a8419f7af5737cb62b15ff29f
-source-date:   2026-06-03T12:16:55+05:30
+source-sha:    1dfc34c1132648275418824822ca91742db8999e
+source-date:   2026-06-05T10:12:40+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2333,6 +2333,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for ``App.upload``.
 - **Fields:**
   - `local_path: str` `= ''`
+  - `ref: FileReference | None`
   - `storage_path: str | None`
   - `storage_subdir: str | None`
   - `tier: StorageTier` `= StorageTier.RETAINED`
