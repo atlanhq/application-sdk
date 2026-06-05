@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import json
 import mimetypes
 import os
@@ -40,6 +41,7 @@ import warnings
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
+from types import ModuleType
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
@@ -394,6 +396,30 @@ HandlerFn = Callable[[Any, HandlerContext], Awaitable[Any]]
 ComputeManifestFn = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
 
+def _import_optional_app_module(dotted: str) -> ModuleType | None:
+    """Import an optional consumer-owned module by dotted path.
+
+    Returns ``None`` only when the module *itself* (or one of its parent
+    packages) is absent — the expected "this app ships no such hook" case.
+    Re-raises when the module exists but fails to import: a transitive
+    ``ModuleNotFoundError`` (a missing dependency named somewhere other than the
+    target's own dotted path) or any other ``ImportError`` is a real bug in the
+    connector's code and must surface, not be silently swallowed into a
+    fall-through.
+    """
+    import importlib  # noqa: PLC0415 — cold path: per-entrypoint discovery only
+
+    try:
+        return importlib.import_module(dotted)
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        # Swallow only if what's missing is the target or one of its parents
+        # (e.g. ``app``, ``app.<segment>``, ``app.<segment>.core``).
+        if missing == dotted or dotted.startswith(f"{missing}."):
+            return None
+        raise
+
+
 def _discover_compute_manifest(entrypoint: str) -> ComputeManifestFn | None:
     """Look for a per-entrypoint ``compute_manifest`` hook.
 
@@ -412,8 +438,6 @@ def _discover_compute_manifest(entrypoint: str) -> ComputeManifestFn | None:
     Returns the callable or ``None`` if the module / attribute is absent.
     Best-effort discovery — never raises on import failure.
     """
-    import importlib  # noqa: PLC0415 — cold path: only loaded for /manifest
-
     # Lazy: app.entrypoint pulls in app.base, which imports this module
     # (handler.service is the FastAPI entry point); deferring to this cold
     # path avoids the import cycle.
@@ -422,11 +446,12 @@ def _discover_compute_manifest(entrypoint: str) -> ComputeManifestFn | None:
     )
 
     segment = entrypoint_module_segment(entrypoint)
-    try:
-        module = importlib.import_module(f"app.{segment}.core")
-    except (ModuleNotFoundError, ImportError):
+    module = _import_optional_app_module(f"app.{segment}.core")
+    if module is None:
         return None
     fn = getattr(module, "compute_manifest", None)
+    # compute_manifest is a *sync* callable (run off-loop via asyncio.to_thread
+    # at the call site), so accept any callable here.
     return cast("ComputeManifestFn | None", fn if callable(fn) else None)
 
 
@@ -469,8 +494,6 @@ def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
 
     Returns the callable or ``None`` if absent.
     """
-    import importlib  # noqa: PLC0415 — cold path: only loaded for /workflows/v1/{auth,check,metadata}
-
     # Lazy: app.entrypoint pulls in app.base, which imports this module
     # (handler.service is the FastAPI entry point); deferring to this cold
     # path avoids the import cycle.
@@ -479,12 +502,14 @@ def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
     )
 
     segment = entrypoint_module_segment(entrypoint)
-    try:
-        module = importlib.import_module(f"app.{segment}.handler")
-    except (ModuleNotFoundError, ImportError):
+    module = _import_optional_app_module(f"app.{segment}.handler")
+    if module is None:
         return None
     fn = getattr(module, fn_name, None)
-    return cast("HandlerFn | None", fn if callable(fn) else None)
+    # The dispatch ``await``s the result, so require a coroutine function — a
+    # sync ``def`` falls through to the app-level Handler rather than blowing up
+    # with a TypeError at request time.
+    return cast("HandlerFn | None", fn if inspect.iscoroutinefunction(fn) else None)
 
 
 def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
@@ -1656,10 +1681,36 @@ def _register_workflow_routes(
             # the hook get the static manifest unchanged (current behavior).
             compute = _discover_compute_manifest(entrypoint)
             if compute is not None:
-                form = _decode_fe_inputs(fe_inputs)
+                fe_inputs_decoded = _decode_fe_inputs(fe_inputs)
                 manifest_dict = json.loads(raw)
-                manifest_dict = compute(manifest_dict, form)
-                raw = json.dumps(manifest_dict).encode()
+                try:
+                    # Run off the event loop: the documented use case (SQL
+                    # generation / full DAG rewrite) is CPU/IO-bound and would
+                    # otherwise block FastAPI for the duration of the hook.
+                    computed = await asyncio.to_thread(
+                        compute, manifest_dict, fe_inputs_decoded
+                    )
+                except HTTPException:
+                    raise
+                except Exception:
+                    # Don't leak the hook's internals (stack/SQL/paths) to the
+                    # caller — mirror the other handler routes' generic 500.
+                    logger.error(
+                        "compute_manifest hook failed for entrypoint %r",
+                        entrypoint,
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=500, detail="Internal server error"
+                    ) from None
+                if not isinstance(computed, dict):
+                    logger.error(
+                        "compute_manifest for entrypoint %r returned %s, expected dict",
+                        entrypoint,
+                        type(computed).__name__,
+                    )
+                    raise HTTPException(status_code=500, detail="Internal server error")
+                raw = json.dumps(computed).encode()
 
             return Response(content=raw, media_type="application/json")
 

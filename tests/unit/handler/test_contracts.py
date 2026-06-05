@@ -474,9 +474,11 @@ class TestMetadataInputFieldTypes:
 
 
 class TestEntrypointRefAlias:
-    """The handler `connector` field was renamed to `entrypoint_ref`; the
-    `connector` wire key stays as a validation + serialization alias so the
-    orchestrator (Heracles) needs no change.
+    """`entrypoint_ref` is a NEW field added by this PR. It accepts the wire key
+    `connector` (validation_alias) and serializes back to `connector`
+    (serialization_alias), so Heracles' existing payload shape works without an
+    orchestrator-side change. It is informational only — per-entrypoint routing
+    uses the separate `entrypoint` field, not this one.
     """
 
     @pytest.mark.parametrize("cls", [AuthInput, PreflightInput, MetadataInput])

@@ -4644,7 +4644,9 @@ class TestComputeManifestHook:
         import sys
         import types
 
-        snake = entrypoint.replace("-", "_")
+        from application_sdk.app.entrypoint import entrypoint_module_segment
+
+        snake = entrypoint_module_segment(entrypoint)
         # Ensure the parent packages exist so ``import app.<snake>.core`` resolves.
         for parent in ("app", f"app.{snake}"):
             if parent not in sys.modules:
@@ -4654,6 +4656,37 @@ class TestComputeManifestHook:
         core = types.ModuleType(f"app.{snake}.core")
         core.compute_manifest = fn  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, f"app.{snake}.core", core)
+
+    def test_optional_import_returns_none_when_target_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A genuinely-missing module (target or a parent) → None (fall-through)."""
+        import importlib
+
+        from application_sdk.handler import service as svc
+
+        def _missing(name):
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+
+        monkeypatch.setattr(importlib, "import_module", _missing)
+        assert svc._import_optional_app_module("app.foo.core") is None
+
+    def test_optional_import_reraises_transitive_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A module that exists but whose own import fails (missing dependency)
+        must surface, not be swallowed into a silent fall-through."""
+        import importlib
+
+        from application_sdk.handler import service as svc
+
+        def _broken(name):
+            # The target's code imports 'somedep', which isn't installed.
+            raise ModuleNotFoundError("No module named 'somedep'", name="somedep")
+
+        monkeypatch.setattr(importlib, "import_module", _broken)
+        with pytest.raises(ModuleNotFoundError):
+            svc._import_optional_app_module("app.foo.core")
 
     def test_hook_invoked_when_module_exists(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -4853,7 +4886,9 @@ class TestPerEntrypointHandlerHook:
         import sys
         import types
 
-        snake = entrypoint.replace("-", "_")
+        from application_sdk.app.entrypoint import entrypoint_module_segment
+
+        snake = entrypoint_module_segment(entrypoint)
         for parent in ("app", f"app.{snake}"):
             if parent not in sys.modules:
                 pkg = types.ModuleType(parent)
@@ -4906,6 +4941,25 @@ class TestPerEntrypointHandlerHook:
         )
         assert response.status_code == 200
         # _TestHandler returns SUCCESS with "auth ok"
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_sync_handler_fn_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A *sync* ``def test_auth`` in the entrypoint module is rejected by
+        discovery (it would TypeError on ``await``) → app-level Handler runs."""
+
+        def test_auth(input: AuthInput, ctx) -> AuthOutput:  # not async — invalid
+            raise AssertionError("sync handler must not be dispatched")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 200
         assert response.json()["data"]["message"] == "auth ok"
 
     def test_auth_falls_back_when_entrypoint_empty(self) -> None:
