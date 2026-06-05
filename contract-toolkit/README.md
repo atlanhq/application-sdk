@@ -124,9 +124,14 @@ Credentials are shared — a user creates credentials once and reuses them acros
 
 Credential `FieldSpec` values render to frontend widget schemas. For boolean
 credential checkboxes, use `fieldType = "checkbox"`; the generated JSON keeps
-`type = "boolean"` and emits `ui.widget = "checkbox"`. When `credentialAuthOptions`
-has a single entry, the auth-type radio is auto-hidden — the generated default
-is still emitted, so no form input is required.
+`type = "boolean"` and emits `ui.widget = "checkbox"`. For credential file
+uploads, use `fieldType = "fileUpload"` with `fileTypes { ".crt"; ".pem" }`.
+For hybrid credential inputs that also accept secret-store keys or
+`objectstore://` paths, use `fieldType = "credentialFileInput"`. The generated
+JSON emits the selected upload widget, `ui.accept`, `ui.fileMetadata`, and opt-in
+`ui.removeBeforeUpload`. When
+`credentialAuthOptions` has a single entry, the auth-type radio is auto-hidden —
+the generated default is still emitted, so no form input is required.
 
 ### Manifest (`app/generated/manifest.json`)
 
