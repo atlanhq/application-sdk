@@ -1,11 +1,15 @@
 """Base class for codegen'd per-connector credential body models.
 
-Each connector's ``contract/app.pkl`` (via ``contract-toolkit/src/E2EOutput.pkl``)
-generates a ``<Connector>CredentialBody`` subclass in
-``app/generated/_e2e_credential.py``. Fields are derived from the pkl's
-``credentialCommonFields + credentialAuthOptions[*].fields + extraFields``
-(aligned with ``application_sdk.credentials.types.FieldSpec``). Aliases
-use the AE-payload-body key names.
+Each connector's ``contract/app.pkl`` generates a ``<Connector>CredentialBody``
+subclass in ``app/generated/_e2e_credential.py`` via
+``generateE2ECredentialPy()`` in ``contract-toolkit/src/App.pkl``. Fields are
+derived from the union of: ``credentialUrlGroup`` host/port/extraFields,
+``credentialSharedExtraFields``, ``credentialCommonFields``,
+``credentialAuthOptions[*].fields`` (auth-specific fields keep their type
+with a sentinel default — ``""`` for str, ``0`` for int; conditional common
+fields become ``Optional``), and ``credentialAuthOptions[*].extraFields``
+(emitted as a nested ``<Connector>CredentialBodyExtra`` model).
+Aliases use the AE-payload-body key names.
 
 Connectors with ``hasCredentialConfig = false`` (e.g. openapi → public
 source) do not emit this file; their ``_credential_body()`` returns ``None``.
