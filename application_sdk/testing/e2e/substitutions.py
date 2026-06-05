@@ -11,7 +11,8 @@ Hierarchy:
 * :class:`SQLMustacheSubstitutions` — SQL additions: extraction-method,
   agent-json, filters, preflight-check.
 * Per-connector subclasses live in ``app/generated/_e2e_substitutions.py``
-  (codegen'd from ``contract/app.pkl`` via ``contract-toolkit``).
+  (codegen'd from ``contract/app.pkl`` via ``generateE2ESubstitutionsPy()``
+  in ``contract-toolkit/src/App.pkl``).
 """
 
 from __future__ import annotations
@@ -55,7 +56,8 @@ class SQLMustacheSubstitutions(MustacheSubstitutions):
     Used by :class:`~application_sdk.testing.e2e.sql_app.SQLAppE2ETest`;
     subclassable further for SQL connectors whose manifest declares
     additional mustache keys (driven by the connector's ``app.pkl`` via
-    codegen — see ``contract-toolkit/src/E2EOutput.pkl``).
+    codegen — see ``generateE2ESubstitutionsPy()`` in
+    ``contract-toolkit/src/App.pkl``).
     """
 
     extraction_method: str = Field(default="", alias="{{extraction-method}}")
