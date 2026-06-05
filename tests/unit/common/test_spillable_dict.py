@@ -12,8 +12,8 @@ rocksdict = pytest.importorskip("rocksdict")
 # Imports below come after pytest.importorskip() — E402 is expected.
 # CI's pinned ruff (v0.6.4) flags it; per-line noqa silences the rule on
 # both these intentional post-importorskip imports.
-from application_sdk.common import spillable_dict as dbd_module  # noqa: E402
-from application_sdk.common.spillable_dict import SpillableDict  # noqa: E402
+from application_sdk.common import spillable_dict as dbd_module
+from application_sdk.common.spillable_dict import SpillableDict
 
 
 class TestSpillableDict:
@@ -281,6 +281,14 @@ class TestSpillableDictKeyTypeGuards:
                 d[[1, 2]] = "loud"  # type: ignore[index]
             with pytest.raises(TypeError, match="SpillableDict keys must be"):
                 d[object()] = "loud"  # type: ignore[index]
+
+    def test_append_to_key_none_raises_typeerror(self) -> None:
+        """append_to_key(None, ...) raises TypeError immediately — same
+        contract as d[None] = v, with no silent-drop via the get() path."""
+        with SpillableDict() as d:
+            with pytest.raises(TypeError):
+                d.append_to_key(None, "x")  # type: ignore[arg-type]
+            assert len(d) == 0
 
     def test_delitem_none_raises_keyerror(self) -> None:
         with SpillableDict() as d, pytest.raises(KeyError):

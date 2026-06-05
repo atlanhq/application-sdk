@@ -28,7 +28,7 @@ import shutil
 import tempfile
 import weakref
 from collections.abc import Iterator, MutableMapping
-from typing import TYPE_CHECKING, Any, Self, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Self, TypeAlias
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -239,13 +239,13 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
     # An override that returns a generator would silently violate that
     # contract for marginal perf gain.
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(self) -> Iterator[SpillableKey]:
         # Rdict.keys() walks SST keys without ever reading + unpickling
         # values — both faster and narrower than .items() since `for k in d:`
         # has no reason to touch the pickle surface.
         # rocksdict's keys() returns Iterator[str|int|float|bytes|bool] (the
-        # supported key types); we contract for str-only keys, so cast.
-        return cast(Iterator[str], iter(self._db.keys()))
+        # supported key types); annotation matches the union directly.
+        return iter(self._db.keys())  # type: ignore[return-value]
 
     def __contains__(self, key: object) -> bool:
         # Protocol signature uses `object`. rocksdict raises on unsupported
@@ -281,7 +281,7 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         """
         return int(self._db.property_value("rocksdb.estimate-num-keys") or "0")
 
-    def append_to_key(self, key: str, value: Any) -> None:
+    def append_to_key(self, key: SpillableKey, value: Any) -> None:
         """Append a value to the list stored at ``key``.
 
         Read-modify-write list append. **Not atomic, not thread-safe.**
@@ -301,9 +301,17 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         "Caveat on untrusted data" section.
 
         Args:
-            key: Dictionary key. Creates a new list if absent.
+            key: Dictionary key (must be a supported primitive type). Creates a
+                new list if absent. Raises ``TypeError`` for unsupported types
+                (including ``None``) — same contract as ``__setitem__``.
             value: Value to append to the list at ``key``.
         """
+        if not isinstance(key, ROCKSDB_KEY_TYPES):
+            raise TypeError(
+                f"SpillableDict keys must be one of "
+                f"(str, int, float, bool, bytes); "
+                f"got {type(key).__name__}"
+            )
         current = self.get(key, [])
         current.append(value)
         self[key] = current
