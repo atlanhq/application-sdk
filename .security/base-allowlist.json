@@ -94,5 +94,16 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2024-35515": {
+    "package": "sqlitedict==2.1.0",
+    "severity": "HIGH",
+    "reason": "Python dependency - no upstream fix available.",
+    "expires": "2026-07-05",
+    "added_by": "chaitanyaatlan",
+    "fix_available_date": null,
+    "compensating_controls": null,
+    "re_evaluation_trigger": "expiry",
+    "exposure_assessment": null
   }
 }
