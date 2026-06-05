@@ -665,9 +665,9 @@ class FieldSpec {
   fieldType: FieldType = "text"          // text|password|textarea|select|number|checkbox|url|email|inputRepeater|fileUpload|credentialFileInput
   options: Listing<String>?              // For select fields
   optionLabels: Mapping<String, String>? // Display labels for options
-  fileTypes: Listing<String>?            // For fileUpload fields: extensions or MIME types
-  fileMetadata: Boolean = true           // For fileUpload fields: emit metadata JSON mode
-  removeBeforeUpload: Boolean = false    // For fileUpload fields: emit legacy remove-before-upload flag
+  fileTypes: Listing<String>?            // For upload widgets: accepted extensions or MIME types
+  fileMetadata: Boolean = true           // For upload widgets: emit metadata JSON mode
+  removeBeforeUpload: Boolean = false    // For upload widgets: emit legacy remove-before-upload flag
   defaultValue: String?                  // Pre-filled value
   validationRegex: String?               // Regex pattern
   width: Int = 8                         // Grid: 8=full, 4=half, 2=quarter
@@ -785,10 +785,12 @@ declaration order.
 
 Use `fieldType = "fileUpload"` for credential fields that should render the
 frontend upload-only credential widget. Use `fieldType = "credentialFileInput"`
-for hybrid credential fields that also accept secret-store keys or
-`objectstore://` paths. The generated schema remains `type = "string"` and emits
-the selected upload widget, optional `ui.accept` from `fileTypes`,
-`ui.fileMetadata`, and opt-in `ui.removeBeforeUpload`.
+for frontend's credential file-reference input: uploaded files are stored as JSON
+upload references, while typed reference values (for example secret-store keys or
+`objectstore://` paths) remain plain strings. The generated schema remains
+`type = "string"` and emits the selected upload widget plus optional `ui.accept`
+from `fileTypes`, `ui.fileMetadata`, and opt-in `ui.removeBeforeUpload` when the
+widget is emitted.
 
 Use `credentialSharedExtraFields` when the same `extra` metadata should be
 available regardless of auth type instead of being duplicated in every option.

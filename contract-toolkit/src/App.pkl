@@ -1393,9 +1393,11 @@ local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
     when (f.feedback != null) { ["feedback"] = f.feedback }
     when (f.message != null) { ["message"] = f.message }
     when (f.byocDisabled != null) { ["BYOCdisabled"] = f.byocDisabled }
-    when ((f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") && f.fileTypes != null) { ["accept"] = f.fileTypes!!.toList() }
-    when (f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") { ["fileMetadata"] = f.fileMetadata }
-    when ((f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") && f.removeBeforeUpload) { ["removeBeforeUpload"] = true }
+    when (f.includeUiWidget) {
+      when ((f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") && f.fileTypes != null) { ["accept"] = f.fileTypes!!.toList() }
+      when (f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") { ["fileMetadata"] = f.fileMetadata }
+      when ((f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") && f.removeBeforeUpload) { ["removeBeforeUpload"] = true }
+    }
     when (f.validationRules != null) {
       ["rules"] = f.validationRules
     }
