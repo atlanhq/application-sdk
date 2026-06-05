@@ -266,6 +266,9 @@ class Widget {
   /// Whether the widget should return file metadata.
   fileMetadata: Boolean?
 
+  /// Whether the UI should remove the prior upload before accepting a replacement.
+  removeBeforeUpload: Boolean?
+
   /// Most distant past value that can be selected through the widget.
   min: Int?
 
@@ -613,10 +616,13 @@ class FileUploader extends UIElement {
 
   hidden placeholderText: String = ""
 
+  hidden removeBeforeUpload: Boolean = false
+
   fixed ui {
     widget = "fileUpload"
     placeholder = placeholderText
     accept = fileTypes.toList()
+    when (removeBeforeUpload) { removeBeforeUpload = true }
     fileMetadata = true
   }
 }
