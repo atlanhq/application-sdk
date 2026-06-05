@@ -345,8 +345,9 @@ is a contract error.
 Its `args.metadata` is templated from the run-level context AE injects at
 dispatch (`$.workflow.*` and `$.failure.*`): `notification_type`,
 `workflow_name`, `workflow_qualified_name`, `workflow_slug`, `status`,
-`run_details_url`, `workflow_run_guid`, `error_message`, `error_category`,
-`suggested_action`, `failed_node_id`, and `failed_activity`.
+`started_at`, `completed_at`, `duration_ms`, `run_details_url`,
+`workflow_run_guid`, `error_message`, `error_category`, `suggested_action`,
+`failed_node_id`, and `failed_activity`.
 
 To disable, set `notifyOnFailure = false`. To retarget the alert (different
 `appName`/`taskQueue`/args), define `extraNodes["notify-on-failure"]`. See

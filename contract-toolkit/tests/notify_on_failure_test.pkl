@@ -69,6 +69,9 @@ facts {
     notifyArgs["workflow_qualified_name"] == "$.workflow.qualified_name"
     notifyArgs["workflow_slug"] == "$.workflow.slug"
     notifyArgs["status"] == "$.workflow.status"
+    notifyArgs["started_at"] == "$.workflow.started_at"
+    notifyArgs["completed_at"] == "$.workflow.completed_at"
+    notifyArgs["duration_ms"] == "$.workflow.duration_ms"
     notifyArgs["run_details_url"] == "$.workflow.run_url"
     notifyArgs["workflow_run_guid"] == "$.workflow.run_id"
   }
