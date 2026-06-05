@@ -44,6 +44,8 @@ from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from obstore.store import ObjectStore
 
     from application_sdk.contracts.storage import DownloadOutput, UploadOutput
@@ -247,6 +249,102 @@ def _validate_upload_path(path: Path) -> None:
         raise UnsafeUploadPathError(unsafe_path=str(path))
 
 
+def _derive_target_key(
+    storage_path: str | None,
+    _app_prefix: str,
+    storage_subdir: str | None,
+    leaf_name: str,
+    normalize_key_fn: Callable[[str], str],
+    *,
+    append_leaf: bool = True,
+) -> str:
+    """Compute the target object-store key or prefix from call-site context.
+
+    All four upload branches share the same key-derivation logic — this
+    helper is the single source of truth so future changes (e.g. a new
+    tier or namespace segment) only require one edit.
+
+    Args:
+        storage_path: Explicit destination key/prefix — returned as-is when set.
+        _app_prefix: Run-scoped prefix injected by ``App.upload()``.
+        storage_subdir: Optional subdirectory segment appended after *_app_prefix*.
+        leaf_name: Filename for single-file uploads; directory basename when
+            there is no *_app_prefix* (the ``else`` fallback).  Pass ``""``
+            for directory-prefix derivation when *_app_prefix* is known to be
+            set (``append_leaf=False`` then makes the leaf a no-op).
+        normalize_key_fn: ``normalize_key`` from ``storage.ops`` (injected to
+            avoid a repeated lazy import at every call site).
+        append_leaf: When ``True`` (file mode), *leaf_name* is appended after
+            the base.  When ``False`` (dir-prefix mode), *leaf_name* is only
+            used as the fallback when neither *storage_path* nor *_app_prefix*
+            is available.
+    """
+    if storage_path is not None:
+        return normalize_key_fn(storage_path)
+    if _app_prefix:
+        base = (
+            f"{_app_prefix}/{normalize_key_fn(storage_subdir)}"
+            if storage_subdir
+            else _app_prefix
+        )
+        return f"{base}/{leaf_name}" if (append_leaf and leaf_name) else base
+    # No explicit prefix: fall back to leaf_name only (local branches) or ""
+    # (fallback branches — callers must guard against the empty result).
+    return leaf_name
+
+
+def _make_upload_output(
+    local_path: str | None,
+    storage_key: str,
+    file_count: int,
+    tier: StorageTier,
+    transferred_count: int,
+    reason: str,
+    *,
+    is_dir: bool = False,
+) -> UploadOutput:
+    """Build an ``UploadOutput`` from the common fields shared across all branches.
+
+    All four upload branches construct identical ``FileReference`` + ``UploadOutput``
+    objects — this helper eliminates the duplication and ensures ``is_durable=True``
+    is always set.
+
+    Args:
+        local_path: Local path stored on the ``FileReference`` (may be ``None``
+            for fallback refs whose file was never materialised on this pod).
+        storage_key: Object-store key (file) or prefix (directory).  For
+            directories, a trailing ``/`` is appended automatically when
+            *is_dir* is ``True``.
+        file_count: Number of files covered by the reference.
+        tier: Storage lifecycle tier forwarded to ``FileReference``.
+        transferred_count: Number of files actually transferred (0 = all
+            skipped via SHA-256 match).
+        reason: Human-readable transfer outcome (e.g. ``"uploaded"``).
+        is_dir: When ``True``, ensures ``storage_key`` ends with ``"/"`` as
+            the canonical object-store prefix convention.
+    """
+    from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        UploadOutput,
+    )
+
+    store_path = (storage_key.rstrip("/") + "/") if is_dir else storage_key
+    ref = FileReference(
+        local_path=local_path,
+        storage_path=store_path,
+        is_durable=True,
+        file_count=file_count,
+        tier=tier,
+    )
+    return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
+
+
+_FALLBACK_PREFIX_REQUIRED = (
+    "upload fallback: _app_prefix or storage_path is required when using the "
+    "deployment-store fallback. App.upload() always sets _app_prefix; if calling "
+    "transfer.upload() directly, supply _app_prefix or storage_path."
+)
+
+
 async def upload(
     local_path: str,
     storage_path: str | None = None,
@@ -326,8 +424,8 @@ async def upload(
             *local_path* is a directory containing zero files
             (category=DATA_INTEGRITY, audience=APP_OWNER, retryable=False).
     """
-    from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
-        UploadOutput,
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
@@ -343,15 +441,12 @@ async def upload(
     # Block sensitive paths (runs even when the path does not exist locally
     # so uploads to sensitive locations are refused regardless of fallback path).
     # Guard: only validate when local_path is non-empty — Path("") resolves to
-    # CWD on Python/macOS, so validating or stat-ing it without this guard
-    # causes is_dir() to return True and accidentally upload the working tree.
+    # CWD on Python/macOS, so is_dir() returns True and would upload the tree.
     if local_path:
         _validate_upload_path(src)
 
     if storage_subdir:
-        from pathlib import (  # noqa: PLC0415 — stdlib pathlib; lazy use only
-            PurePosixPath,
-        )
+        from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
 
         cleaned = storage_subdir.strip("/")
         if (
@@ -359,7 +454,7 @@ async def upload(
             or ".." in PurePosixPath(cleaned).parts
             or "\x00" in storage_subdir
         ):
-            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            from application_sdk.storage.errors import (  # noqa: PLC0415
                 UnsafeUploadPathError,
             )
 
@@ -368,49 +463,27 @@ async def upload(
 
     if local_path and src.is_file():
         # ── Single file (local exists) ────────────────────────────────────
-        if storage_path is not None:
-            key = normalize_key(storage_path)
-        elif _app_prefix and storage_subdir:
-            key = f"{_app_prefix}/{normalize_key(storage_subdir)}/{src.name}"
-        elif _app_prefix:
-            key = f"{_app_prefix}/{src.name}"
-        else:
-            key = src.name
-
+        key = _derive_target_key(
+            storage_path, _app_prefix, storage_subdir, src.name, normalize_key
+        )
         transferred, reason = await _upload_one(
             resolved, src, key, skip_if_exists=skip_if_exists
         )
-        ref = FileReference(
-            local_path=str(src),
-            storage_path=key,
-            is_durable=True,
-            file_count=1,
-            tier=_tier,
-        )
-        return UploadOutput(ref=ref, synced=transferred, reason=reason)
+        return _make_upload_output(str(src), key, 1, _tier, int(transferred), reason)
 
     elif local_path and src.is_dir():
-        # ── Directory (step 2: local exists) ──────────────────────────────
-        if storage_path is not None:
-            prefix = normalize_key(storage_path)
-        elif _app_prefix and storage_subdir:
-            prefix = f"{_app_prefix}/{normalize_key(storage_subdir)}"
-        elif _app_prefix:
-            prefix = _app_prefix
-        else:
-            prefix = src.name
-
-        sem = asyncio.Semaphore(max_concurrency)
-
+        # ── Directory (local exists) ──────────────────────────────────────
+        prefix = _derive_target_key(
+            storage_path,
+            _app_prefix,
+            storage_subdir,
+            src.name,
+            normalize_key,
+            append_leaf=False,
+        )
         files = [p for p in src.rglob("*") if p.is_file()]
-
         if raise_on_empty and not files:
-            # Opt-in fail-loud (BLDX-1255). Connectors hit by silent-zero
-            # failures pass ``raise_on_empty=True`` so an empty extract
-            # surfaces as a clear error here instead of propagating a
-            # ``file_count=0`` ``UploadOutput`` that downstream publish
-            # logic treats as success.
-            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,
             )
 
@@ -426,38 +499,33 @@ async def upload(
                 "stream-uploaded-per-file workaround pattern.",
                 local_path=local_path,
             )
+        sem = asyncio.Semaphore(max_concurrency)
+        keys = [
+            f"{prefix}/{str(fp.relative_to(src)).replace(os.sep, '/')}"
+            if prefix
+            else str(fp.relative_to(src)).replace(os.sep, "/")
+            for fp in files
+        ]
 
-        async def _bounded_upload(file_path: Path, key: str) -> bool:
+        async def _bounded_upload(file_path: Path, fkey: str) -> bool:
             async with sem:
                 ok, _ = await _upload_one(
-                    resolved, file_path, key, skip_if_exists=skip_if_exists
+                    resolved, file_path, fkey, skip_if_exists=skip_if_exists
                 )
                 return ok
-
-        keys = []
-        for file_path in files:
-            relative = str(file_path.relative_to(src)).replace(os.sep, "/")
-            keys.append(f"{prefix}/{relative}" if prefix else relative)
 
         results = await asyncio.gather(
             *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
             return_exceptions=True,
         )
-        errors = [r for r in results if isinstance(r, BaseException)]
-        if errors:
-            raise errors[0]
-        transferred_count = sum(1 for ok in results if ok)
-
-        store_prefix = (prefix.rstrip("/") + "/") if prefix else ""
-        reason = "uploaded" if transferred_count > 0 else "skipped:hash_match"
-        ref = FileReference(
-            local_path=str(src),
-            storage_path=store_prefix,
-            is_durable=True,
-            file_count=len(files),
-            tier=_tier,
+        errs = [r for r in results if isinstance(r, BaseException)]
+        if errs:
+            raise errs[0]
+        n = sum(1 for ok in results if ok)
+        reason = "uploaded" if n > 0 else "skipped:hash_match"
+        return _make_upload_output(
+            str(src), prefix, len(files), _tier, n, reason, is_dir=True
         )
-        return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
 
     elif (
         _source_ref is not None
@@ -465,23 +533,11 @@ async def upload(
         and source_resolved is not None
     ):
         # ── Deployment-store fallback (local path absent) ──────────────────
-        # local_path does not exist on this pod — stream from _source_store.
-        # Used when the file was written by a different worker (cross-pod SDR)
-        # or deleted locally after upload (use_consolidation=True).
-        from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            list_keys,
-        )
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
+        from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
+
+        from application_sdk.storage.batch import list_keys  # noqa: PLC0415
 
         source_norm = normalize_key(_source_ref.storage_path)
-
-        # Reject path-traversal segments in the deployment-store source key.
-        from pathlib import (  # noqa: PLC0415 — stdlib pathlib; lazy use only
-            PurePosixPath,
-        )
-
         if source_norm and ".." in PurePosixPath(source_norm).parts:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 UnsafeUploadPathError,
@@ -490,99 +546,77 @@ async def upload(
             raise UnsafeUploadPathError(unsafe_path=_source_ref.storage_path)
 
         source_dir_prefix = source_norm.rstrip("/") + "/"
-
-        # Probe the source store: sub-keys → directory; no sub-keys → single file.
-        dir_keys = await list_keys(source_dir_prefix, source_resolved, normalize=False)
-        data_dir_keys = [k for k in dir_keys if not _is_sidecar(k)]
+        data_dir_keys = [
+            k
+            for k in await list_keys(
+                source_dir_prefix, source_resolved, normalize=False
+            )
+            if not _is_sidecar(k)
+        ]
 
         if data_dir_keys:
             # ── Directory fallback ─────────────────────────────────────────
-            if storage_path is not None:
-                fallback_prefix = normalize_key(storage_path)
-            elif _app_prefix and storage_subdir:
-                fallback_prefix = f"{_app_prefix}/{normalize_key(storage_subdir)}"
-            elif _app_prefix:
-                fallback_prefix = _app_prefix
-            else:
-                raise StorageError(
-                    "upload fallback: _app_prefix or storage_path is required when "
-                    "using the deployment-store fallback. App.upload() always sets "
-                    "_app_prefix; if calling transfer.upload() directly, supply it."
-                )
-
+            fallback_prefix = _derive_target_key(
+                storage_path,
+                _app_prefix,
+                storage_subdir,
+                "",
+                normalize_key,
+                append_leaf=False,
+            )
+            if not fallback_prefix:
+                raise StorageError(_FALLBACK_PREFIX_REQUIRED)
             sem = asyncio.Semaphore(max_concurrency)
 
-            async def _bounded_fallback_dir(source_key: str) -> bool:
+            async def _bounded_fallback(source_key: str) -> bool:
                 async with sem:
                     rel = source_key.removeprefix(source_dir_prefix)
-                    tgt_key = f"{fallback_prefix}/{rel}" if fallback_prefix else rel
                     ok, _ = await _upload_from_store(
-                        source_resolved, source_key, resolved, tgt_key
+                        source_resolved,
+                        source_key,
+                        resolved,
+                        f"{fallback_prefix}/{rel}" if fallback_prefix else rel,
                     )
                     return ok
 
             results = await asyncio.gather(
-                *[_bounded_fallback_dir(k) for k in data_dir_keys],
-                return_exceptions=True,
+                *[_bounded_fallback(k) for k in data_dir_keys], return_exceptions=True
             )
-            errors = [r for r in results if isinstance(r, BaseException)]
-            if errors:
-                raise errors[0]
-            transferred_count = sum(1 for ok in results if ok)
-
-            store_prefix = (
-                (fallback_prefix.rstrip("/") + "/") if fallback_prefix else ""
+            errs = [r for r in results if isinstance(r, BaseException)]
+            if errs:
+                raise errs[0]
+            n = sum(1 for ok in results if ok)
+            reason = "uploaded" if n > 0 else "skipped:hash_match"
+            return _make_upload_output(
+                _source_ref.local_path,
+                fallback_prefix,
+                len(data_dir_keys),
+                _tier,
+                n,
+                reason,
+                is_dir=True,
             )
-            reason = "uploaded" if transferred_count > 0 else "skipped:hash_match"
-            ref = FileReference(
-                local_path=_source_ref.local_path,
-                storage_path=store_prefix,
-                is_durable=True,
-                file_count=len(data_dir_keys),
-                tier=_tier,
-            )
-            return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
 
         else:
             # ── Single file fallback ───────────────────────────────────────
-            local_name = (
+            leaf = (
                 Path(_source_ref.local_path).name
                 if _source_ref.local_path
                 else source_norm.rsplit("/", 1)[-1]
             )
-
-            if storage_path is not None:
-                fallback_key = normalize_key(storage_path)
-            elif _app_prefix and storage_subdir:
-                fallback_key = (
-                    f"{_app_prefix}/{normalize_key(storage_subdir)}/{local_name}"
-                )
-            elif _app_prefix:
-                fallback_key = f"{_app_prefix}/{local_name}"
-            else:
-                raise StorageError(
-                    "upload fallback: _app_prefix or storage_path is required when "
-                    "using the deployment-store fallback. App.upload() always sets "
-                    "_app_prefix; if calling transfer.upload() directly, supply it."
-                )
-
+            fallback_key = _derive_target_key(
+                storage_path, _app_prefix, storage_subdir, leaf, normalize_key
+            )
+            if not fallback_key:
+                raise StorageError(_FALLBACK_PREFIX_REQUIRED)
             transferred, reason = await _upload_from_store(
                 source_resolved, source_norm, resolved, fallback_key
             )
-            ref = FileReference(
-                local_path=_source_ref.local_path,
-                storage_path=fallback_key,
-                is_durable=True,
-                file_count=1,
-                tier=_tier,
+            return _make_upload_output(
+                _source_ref.local_path, fallback_key, 1, _tier, int(transferred), reason
             )
-            return UploadOutput(ref=ref, synced=transferred, reason=reason)
 
     else:
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
         raise StorageError(
             f"local_path does not exist or is not a file/directory: {local_path}"
         )
