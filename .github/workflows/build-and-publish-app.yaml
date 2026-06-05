@@ -1253,6 +1253,9 @@ jobs:
           APP_CONFIGS: ${{ needs.prepare.outputs.app_configs }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           GITHUB_ACTOR: ${{ github.triggering_actor }}
+          # Required by `gh api` calls below; without it the PR-author
+          # lookup silently falls back to triggering_actor.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
