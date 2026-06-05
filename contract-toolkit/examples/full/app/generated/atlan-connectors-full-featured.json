@@ -463,6 +463,34 @@
                   "label": "API Token",
                   "grid": 8
                 }
+              },
+              "ca_cert-file": {
+                "type": "string",
+                "ui": {
+                  "widget": "fileUpload",
+                  "label": "CA Certificate File",
+                  "grid": 8,
+                  "accept": [
+                    ".crt",
+                    ".pem"
+                  ],
+                  "fileMetadata": true,
+                  "removeBeforeUpload": true
+                }
+              },
+              "keytab-file": {
+                "type": "string",
+                "ui": {
+                  "widget": "credentialFileInput",
+                  "label": "Keytab File",
+                  "placeholder": "Upload a file, type a secret-store key, or objectstore://path",
+                  "grid": 8,
+                  "accept": [
+                    ".keytab",
+                    "application/kerberos-keytab"
+                  ],
+                  "fileMetadata": true
+                }
               }
             }
           },
@@ -588,6 +616,34 @@
               "widget": "password",
               "label": "API Token",
               "grid": 8
+            }
+          },
+          "ca_cert-file": {
+            "type": "string",
+            "ui": {
+              "widget": "fileUpload",
+              "label": "CA Certificate File",
+              "grid": 8,
+              "accept": [
+                ".crt",
+                ".pem"
+              ],
+              "fileMetadata": true,
+              "removeBeforeUpload": true
+            }
+          },
+          "keytab-file": {
+            "type": "string",
+            "ui": {
+              "widget": "credentialFileInput",
+              "label": "Keytab File",
+              "placeholder": "Upload a file, type a secret-store key, or objectstore://path",
+              "grid": 8,
+              "accept": [
+                ".keytab",
+                "application/kerberos-keytab"
+              ],
+              "fileMetadata": true
             }
           }
         }

@@ -48,6 +48,16 @@ on:
         description: "Path (in connector repo) to the source-cred injector; echoes `cred_guid=<guid>`."
         required: true
         type: string
+      app-module:
+        description: "ATLAN_APP_MODULE for the connector worker (e.g. app.extractor:MSSQLMetadataExtractor)."
+        required: false
+        type: string
+        default: ""
+      handler-module:
+        description: "ATLAN_HANDLER_MODULE — required so the worker registers the real extraction workflow (not DefaultHandler/SDR)."
+        required: false
+        type: string
+        default: ""
       system-deps-script:
         description: "Optional path to a script installing source system deps (ODBC, JCo, ...)."
         required: false
@@ -105,10 +115,12 @@ jobs:
 
       - name: Bring up AE stack (manifest-driven)
         id: stack
-        uses: atlanhq/application-sdk/.github/actions/ae-stack-up@main
+        uses: atlanhq/application-sdk/.github/actions/ae-stack-up@fix/ae-stack-up-local-vault
         with:
           app-name: ${{ inputs.app-name }}
           deployment: ${{ inputs.deployment }}
+          app-module: ${{ inputs.app-module }}
+          handler-module: ${{ inputs.handler-module }}
           org-pat-github: ${{ secrets.ORG_PAT_GITHUB }}
           atlan-base-url: ${{ secrets.ATLAN_BASE_URL }}
           atlan-client-id: ${{ secrets.ATLAN_CLIENT_ID }}
@@ -138,7 +150,8 @@ jobs:
           connection-name: ${{ inputs.connection-name != '' && inputs.connection-name || format('ci_{0}', inputs.app-name) }}
           manifest: ${{ inputs.app-name }}/app/generated/manifest.json
           atlan-yaml: ${{ inputs.app-name }}/atlan.yaml
-          # CI: dry-run publish (no real Atlas write / cache population).
+          # executor-enabled is a PUBLISH dry-run flag (per ae-workflow.sh), not
+          # DAG execution — keep it false so publish stays dry-run in CI.
           connection-creation-enabled: "false"
           executor-enabled: "false"
           connection-cache-enabled: "false"
@@ -153,37 +166,174 @@ jobs:
           AE="${{ steps.stack.outputs.ae-url }}"
 
           RUN=$(curl -sf -X POST "${AE}/api/v1/workflows/${SLUG}/submit" -H 'Content-Type: application/json' -d '{}')
-          RUN_GUID=$(echo "$RUN" | python3 -c "import json,sys;print(json.load(sys.stdin)['data']['guid'])")
+          echo "submit response: $RUN"
+          RUN_GUID=$(echo "$RUN" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('data',{}).get('guid') or d.get('guid',''))")
+          [ -n "$RUN_GUID" ] || { echo "::error::submit returned no run guid"; exit 1; }
           echo "Run: $RUN_GUID"
 
-          # Node ids to poll come straight from the manifest dag.
-          NODES=$(python3 -c "import json;print(' '.join(json.load(open('${{ inputs.app-name }}/app/generated/manifest.json'))['dag'].keys()))")
-          echo "Polling DAG nodes: $NODES"
+          EXPECTED=$(python3 -c "import json;print(len(json.load(open('${{ inputs.app-name }}/app/generated/manifest.json'))['dag']))")
+          echo "Expecting >= $EXPECTED node workflow(s) (+1 orchestrator)"
 
-          wait_for() { # workflow-id label timeout
-            local wf="$1" label="$2" to="${3:-900}" elapsed=0
-            while [ $elapsed -lt $to ]; do
-              local st
-              st=$(temporal workflow describe --workflow-id "$wf" 2>/dev/null | awk '/^\s+Status/{print $2}' | head -1 || echo NOT_STARTED)
-              echo "  $label: $st (${elapsed}s)"
-              case "$st" in
-                COMPLETED) return 0 ;;
-                FAILED|TERMINATED|CANCELED) echo "::error::$label $st"; return 1 ;;
-              esac
-              sleep 10; elapsed=$((elapsed+10))
-            done
-            echo "::error::$label timed out after ${to}s"; return 1
+          # This is a fresh single-run Temporal, so we don't need to guess child
+          # workflow IDs (AE names them off an internal GUID, not the submit
+          # guid). Just count ALL workflows by status and wait until everything
+          # settles. Dumps the full list each tick for visibility.
+          snapshot() {
+            temporal workflow list --limit 100 -o json 2>/dev/null \
+              | python3 -c "
+          import json,sys
+          try: rows=json.load(sys.stdin) or []
+          except Exception: rows=[]
+          def gid(r): return ((r.get('execution') or {}).get('workflowId')) or r.get('workflowId','?')
+          st={gid(r): str(r.get('status','')) for r in rows}
+          comp=sum('COMPLETED' in v for v in st.values())
+          fail=sum(any(x in v for x in ('FAILED','TERMINATED','CANCELED','TIMED_OUT')) for v in st.values())
+          run =sum('RUNNING' in v for v in st.values())
+          for w,v in sorted(st.items()): print('   ', w, v.replace('WORKFLOW_EXECUTION_STATUS_',''), file=sys.stderr)
+          print(f'{len(st)} {comp} {fail} {run}')
+          "
           }
 
-          rc=0
-          for node in $NODES; do
-            wait_for "${RUN_GUID}-${node}" "$node" 900 || rc=1
+          GRACE=300; MAX=1800; elapsed=0; rc=0
+          while [ $elapsed -lt $MAX ]; do
+            read -r total comp fail run < <(snapshot)
+            total=${total:-0}; comp=${comp:-0}; fail=${fail:-0}; run=${run:-0}
+            echo "  [${elapsed}s] workflows=$total completed=$comp failed=$fail running=$run"
+            if [ "$fail" -gt 0 ]; then echo "::error::a workflow failed/terminated"; rc=1; break; fi
+            # settled: at least EXPECTED nodes completed and nothing still running
+            if [ "$comp" -ge "$EXPECTED" ] && [ "$run" -eq 0 ] && [ "$total" -gt 0 ]; then echo "Run settled: $comp completed."; rc=0; break; fi
+            if [ "$total" -eq 0 ] && [ "$elapsed" -ge "$GRACE" ]; then
+              echo "::error::no workflows dispatched within ${GRACE}s — submit/queue problem"; rc=1; break
+            fi
+            sleep 10; elapsed=$((elapsed+10))
           done
+          [ $elapsed -lt $MAX ] || { echo "::error::run did not settle within ${MAX}s"; echo '--- full workflow list ---'; temporal workflow list --limit 50 2>/dev/null || true; rc=1; }
 
           echo "### AE full-DAG run \`${RUN_GUID}\`" >> "$GITHUB_STEP_SUMMARY"
           temporal workflow list --query "WorkflowId STARTS_WITH '${RUN_GUID}'" 2>/dev/null \
             | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
           exit $rc
+
+      - name: Print count summary
+        if: always()
+        shell: bash
+        env:
+          APP_NAME: ${{ inputs.app-name }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re, ast
+
+          LOGS = "logs"
+          app = os.environ["APP_NAME"]
+          # Log files written by ae-stack-up (app-id -> logs/<app-id>.log).
+          EXTRACT = f"{LOGS}/{app}-app.log"
+          PUBLISH = f"{LOGS}/publish-app.log"
+          QI      = f"{LOGS}/query-intelligence.log"
+          LINEAGE = f"{LOGS}/lineage-app.log"
+
+          def lines(p):
+              try:
+                  return open(p, encoding="utf-8", errors="replace").read().splitlines()
+              except FileNotFoundError:
+                  return []
+
+          out = []
+
+          # ── Extract: SDK APP_VITALS (generic across connectors) ──────────────
+          vitals = re.compile(r"APP_VITALS \| app_vitals\.act\.completed \| (\{.*\})")
+          fetch, transform = {}, {}
+          for ln in lines(EXTRACT):
+              m = vitals.search(ln)
+              if not m:
+                  continue
+              try:
+                  d = json.loads(m.group(1))
+              except Exception:
+                  continue
+              if d.get("status") != "succeeded":
+                  continue
+              suf = d.get("activity_type", "").split(":")[-1]
+              cnt = d.get("assets_processed", 0)
+              if suf.startswith("fetch_"):
+                  fetch[suf[6:]] = cnt
+              elif suf.startswith("transform_"):
+                  transform[suf[10:]] = cnt
+
+          # ── Publish / lineage-publish (shared publish app, generic) ──────────
+          wfid = re.compile(r"Workflow ID:\s+(\S+)\s+Run ID:")
+          part = re.compile(r"partition_count=(\d+)\s+synced_entities_count=(\d+)\s+transformed_entities_count=(\d+)")
+          stats = re.compile(r"Statistics collected:\s+(\d+) created,\s+(\d+) updated,\s+(\d+) deleted")
+          comp = re.compile(r"Compaction complete:\s+(\d+) entities")
+          pub = {"publish": {}, "lineage-publish": {}}
+          tag = None
+          for ln in lines(PUBLISH):
+              w = wfid.search(ln)
+              if w:
+                  tag = "lineage-publish" if w.group(1).endswith("-lineage-publish") else ("publish" if w.group(1).endswith("-publish") else None)
+              if not tag:
+                  continue
+              for rx, keys in ((part, ("partitions","synced","transformed")), (stats, ("created","updated","deleted")), (comp, ("compacted",))):
+                  m = rx.search(ln)
+                  if m:
+                      for i, k in enumerate(keys):
+                          pub[tag][k] = int(m.group(i+1))
+
+          # ── QI (only if the DAG ran it) ──────────────────────────────────────
+          qi = {}
+          for ln in lines(QI):
+              m = re.search(r"parse completed with:\s*(\{[^}]*\})", ln)
+              if m:
+                  try: qi = ast.literal_eval(m.group(1))
+                  except Exception: pass
+
+          # ── Lineage (only if the DAG ran it) ─────────────────────────────────
+          lin = {}
+          for key, rx in (("artifacts", r"Found (\d+) artifacts"),
+                          ("table_procs", r"Workflow complete: (\d+) table"),
+                          ("col_procs", r"Workflow complete:.*?(\d+) column processes")):
+              for ln in lines(LINEAGE):
+                  m = re.search(rx, ln)
+                  if m: lin[key] = int(m.group(1))
+
+          # ── Render Markdown to the Step Summary ──────────────────────────────
+          published = pub["publish"].get("compacted", 0)
+          out.append(f"## {app} — full-DAG counts\n")
+          out.append("### Extract\n")
+          out.append("| Asset Type | Fetched | Transformed | Published |")
+          out.append("|---|---:|---:|---:|")
+          types = sorted(set(fetch) | set(transform))
+          for t in types:
+              out.append(f"| {t} | {fetch.get(t,'-')} | {transform.get(t,'-')} | |")
+          out.append(f"| **TOTAL** | **{sum(fetch.values())}** | **{sum(transform.values())}** | **{published}** |")
+
+          out.append("\n### Publish")
+          out.append("| Stage | Partitions | Synced | Transformed | Compacted | Created | Updated | Deleted |")
+          out.append("|---|---:|---:|---:|---:|---:|---:|---:|")
+          for stage in ("publish", "lineage-publish"):
+              p = pub[stage]
+              if p:
+                  out.append(f"| {stage} | {p.get('partitions',0)} | {p.get('synced',0)} | {p.get('transformed',0)} | {p.get('compacted',0)} | {p.get('created',0)} | {p.get('updated',0)} | {p.get('deleted',0)} |")
+
+          if qi:
+              out.append("\n### Query Intelligence")
+              out.append("| Total | Parsed | Lineage | Tables | Errors |")
+              out.append("|---:|---:|---:|---:|---:|")
+              err = sum(int(v) for k,v in qi.items() if isinstance(v,(int,float)) and k.startswith("sqlglotError"))
+              out.append(f"| {qi.get('totalQueries',0)} | {qi.get('sqlglotProcessed',0)} | {qi.get('sqlglotLineageGenerated',0)} | {qi.get('sqlglotTablesDetected',0)} | {err} |")
+
+          if lin:
+              out.append("\n### Lineage")
+              out.append("| Artifacts | Table Procs | Col Procs |")
+              out.append("|---:|---:|---:|")
+              out.append(f"| {lin.get('artifacts',0)} | {lin.get('table_procs',0)} | {lin.get('col_procs',0)} |")
+
+          text = "\n".join(out)
+          print(text)
+          sp = os.environ.get("GITHUB_STEP_SUMMARY")
+          if sp:
+              with open(sp, "a") as f:
+                  f.write(text + "\n")
+          PYEOF
 
       - name: Dump logs on failure
         if: failure()
