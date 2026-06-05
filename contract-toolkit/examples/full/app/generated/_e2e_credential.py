@@ -17,3 +17,5 @@ class FullFeaturedCredentialBody(CredentialBody):
     username: str = Field(default="", alias="username")
     password: str = Field(default="", alias="password")
     token: str = Field(default="", alias="token")
+    ca_cert_file: str = Field(default="", alias="ca_cert-file")
+    keytab_file: str = Field(default="", alias="keytab-file")
