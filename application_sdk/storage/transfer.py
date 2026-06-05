@@ -503,7 +503,6 @@ async def upload(
         )
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             StorageEmptyUploadError,
-            StorageError,
         )
 
         source_norm = normalize_key(source_ref.storage_path)
@@ -525,13 +524,6 @@ async def upload(
                 fallback_prefix = Path(source_ref.local_path).name
             else:
                 fallback_prefix = source_norm.rstrip("/").rsplit("/", 1)[-1]
-
-            if raise_on_empty and not data_dir_keys:
-                raise StorageEmptyUploadError(
-                    f"upload(source_ref.storage_path={source_ref.storage_path!r}): "
-                    "deployment store returned zero files for the given prefix.",
-                    local_path=source_ref.storage_path,
-                )
 
             sem = asyncio.Semaphore(max_concurrency)
 
