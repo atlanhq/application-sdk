@@ -82,7 +82,10 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
 
     **Supported key types**: ``str``, ``int``, ``float``, ``bool``, ``bytes``
     (whatever RocksDB itself accepts via rocksdict). These are exposed as
-    the ``SpillableKey`` typealias for static checkers.
+    the ``SpillableKey`` typealias for static checkers. Note: unlike ``dict``,
+    ``bool`` / ``int`` / ``float`` keys do **not** collide — rocksdict encodes
+    them as distinct byte sequences, so ``d[1]`` and ``d[True]`` are separate
+    entries.
 
     **Reads of unsupported / typo'd keys** are handled defensively to
     match the standard ``dict`` contract that ``sqlitedict`` migrations
