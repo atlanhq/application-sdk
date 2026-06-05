@@ -42,6 +42,17 @@ credentialCommonFields {
     required = false
     width = 4
   }
+  // Conditionally required via credentialExtraAnyOfRules below — kept
+  // required:false at the field level so the rule drives both its requiredness
+  // and its visibility.
+  new FieldSpec {
+    name = "ssl_cert"
+    displayName = "SSL Certificate"
+    fieldType = "textarea"
+    required = false
+    helpText = "PEM-encoded certificate. Required when SSL is enabled."
+    width = 8
+  }
 }
 
 credentialAuthOptions {
@@ -51,6 +62,18 @@ credentialAuthOptions {
       new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
       new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
     }
+  }
+}
+
+// Conditional credential requirement keyed on an input other than `auth-type`.
+// `AuthOption.anyOfRequiredFields` can only key off the auth-type radio, so a
+// requirement driven by the `enable_ssl` checkbox is supplied as an extra
+// anyOf rule. (The frontend coerces both sides to strings, so the boolean
+// checkbox value matches the `"true"` const.)
+credentialExtraAnyOfRules {
+  new UIRule {
+    whenInputs { ["enable_ssl"] = "true" }
+    required { "ssl_cert" }
   }
 }
 

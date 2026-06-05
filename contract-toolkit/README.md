@@ -122,11 +122,9 @@ Auth form schema. Contains common fields (host, port), auth-type radio, and nest
 
 Credentials are shared — a user creates credentials once and reuses them across crawler and miner workflows.
 
-Credential `FieldSpec` values render to frontend widget schemas. For boolean
-credential checkboxes, use `fieldType = "checkbox"`; the generated JSON keeps
-`type = "boolean"` and emits `ui.widget = "checkbox"`. When `credentialAuthOptions`
-has a single entry, the auth-type radio is auto-hidden — the generated default
-is still emitted, so no form input is required.
+Credential `FieldSpec` values render to frontend widget schemas. For boolean credential checkboxes, use `fieldType = "checkbox"`; the generated JSON keeps `type = "boolean"` and emits `ui.widget = "checkbox"`. When `credentialAuthOptions` has a single entry, the auth-type radio is auto-hidden — the generated default is still emitted, so no form input is required.
+
+The credential `anyOf` block auto-generates one branch per `credentialAuthOptions` key. To make a field conditionally required based on an input other than the auth-type radio (for example an `enable_ssl` checkbox), append a `UIRule` via `credentialExtraAnyOfRules` — it adds an extra `anyOf` branch in both the plain and JDBC-URL flows. A field named in the rule's `required` is also hidden until the condition matches, so declare it `required = false`. See `examples/publish-controls/app.pkl` and the reference docs.
 
 ### Manifest (`app/generated/manifest.json`)
 

@@ -54,6 +54,16 @@
           "grid": 4
         }
       },
+      "ssl_cert": {
+        "type": "string",
+        "ui": {
+          "widget": "TextInput",
+          "label": "SSL Certificate",
+          "hidden": false,
+          "help": "PEM-encoded certificate. Required when SSL is enabled.",
+          "grid": 8
+        }
+      },
       "auth-type": {
         "type": "string",
         "enum": [
@@ -111,6 +121,16 @@
         },
         "required": [
           "basic"
+        ]
+      },
+      {
+        "properties": {
+          "enable_ssl": {
+            "const": "true"
+          }
+        },
+        "required": [
+          "ssl_cert"
         ]
       }
     ]
