@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-06-05",
+  "_updated": "2026-05-09",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
@@ -12,17 +12,6 @@
     "severity": "HIGH",
     "reason": "Base image - Dapr runtime dependency (Go stdlib used by daprd binary)",
     "expires": "2026-06-13",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "CVE-2026-6846": {
-    "package": "binutils (Alpine/Wolfi)",
-    "severity": "HIGH",
-    "reason": "Base image - Chainguard Wolfi binutils@2.46-r1. Fix available in 2.46-r2; awaiting SDK base image rebuild.",
-    "expires": "2026-07-05",
     "added_by": "mananjain99",
     "fix_available_date": null,
     "compensating_controls": null,
