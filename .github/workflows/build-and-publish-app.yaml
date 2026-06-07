@@ -65,6 +65,11 @@ on:
         required: false
         type: string
         default: ""
+      image_name:
+        description: "Override the image name used for GHCR + DockerHub repos. Defaults to the caller's repository name. Use this when the repo has been renamed but the existing GHCR package was created under the previous name (GitHub does not auto-rename packages on repo rename, and org policies typically block ORG_PAT_GITHUB from auto-creating new container packages — so without this override, the first push after rename 403s)."
+        required: false
+        type: string
+        default: ""
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -946,7 +951,9 @@ jobs:
       - name: Compute image tags
         id: tags
         env:
-          REPO: ${{ github.event.repository.name }}
+          # image_name override (when set) lets renamed repos keep pushing to
+          # their pre-rename GHCR package. See input docs above.
+          REPO: ${{ inputs.image_name != '' && inputs.image_name || github.event.repository.name }}
           REF: ${{ inputs.ref || github.ref }}
         run: |
           # Resolve SHA from the checked-out HEAD rather than github.sha.
