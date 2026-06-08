@@ -229,6 +229,26 @@ env:
     value: "4"   # workflows are capped at 4 hours
 ```
 
+## Per-Entry-Point Handlers
+
+A single app-level `Handler` serves `/workflows/v1/{auth,check,metadata}` for most apps. A **multi-entry-point** app can additionally provide *per-entry-point* implementations by dropping a `handler.py` in the entry point's package:
+
+```python
+# app/asset_export_advanced/handler.py
+from application_sdk.handler.contracts import AuthInput, AuthOutput
+from application_sdk.handler.context import HandlerContext
+
+async def test_auth(input: AuthInput, ctx: HandlerContext) -> AuthOutput: ...
+async def preflight_check(input: PreflightInput, ctx: HandlerContext) -> PreflightOutput: ...
+async def fetch_metadata(input: MetadataInput, ctx: HandlerContext) -> MetadataOutput: ...
+```
+
+These are **module-level `async` functions** taking `(input, ctx)` — not methods on the `Handler` class.
+
+**Dispatch & precedence.** Each request carries an `entrypoint` field — the bare entry-point name (e.g. `asset-export-advanced`) the orchestrator resolves from the Global Marketplace catalog and sends explicitly. When it's set and a conforming `app.<segment>.handler.<fn>` exists, the SDK routes to it **by exact name** and it **pre-empts** the app-level `Handler.<fn>`. When `entrypoint` is empty (single-entry-point apps), malformed, or the module/function is absent, dispatch falls through to the app-level `Handler` — 1:1 with today's behaviour. A non-`async` function is ignored (falls through) rather than failing at request time.
+
+> The `entrypoint`/`entrypoint_ref` fields on the input contracts: `entrypoint` is the authoritative bare name used for routing; `entrypoint_ref` carries the legacy `connector` wire value (accepted via a validation alias, serialized back as `connector`) and is **informational only** — it is not parsed for dispatch. See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the kebab→snake module-name rule.
+
 ## Testing Handlers
 
 Test handlers by injecting mock infrastructure:

@@ -54,6 +54,21 @@ Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-
 
 See [Entry Points — Default entrypoint resolution](entry-points.md#default-entrypoint-resolution) for the full resolution rules.
 
+### Dynamic manifest (compute_manifest)
+
+A static `manifest.json` is enough for most apps. A multi-entry-point app that must **compute** its manifest per submission (placeholder fill-in, SQL generation, full DAG rewrite) drops a `core.py` in its per-entry-point package exposing a `compute_manifest` hook:
+
+```python
+# app/asset_export_advanced/core.py
+def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+    # `manifest` is the static manifest (already token-substituted);
+    # `fe_inputs` is the decoded frontend form. Return the manifest to serve.
+    ...
+    return manifest
+```
+
+When the app defines it, `GET /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>` hands the static manifest plus the decoded `fe_inputs` to the hook and serves its return value; apps without the hook get the static manifest unchanged. The hook may be **sync** (run off the event loop via `asyncio.to_thread`) or **async** (awaited directly); it must return a `dict`. Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
+
 ## Orchestration in run()
 
 The `run()` method is where you compose tasks. It supports sequential, parallel, and conditional patterns:

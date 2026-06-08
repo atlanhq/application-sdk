@@ -1684,12 +1684,18 @@ def _register_workflow_routes(
                 fe_inputs_decoded = _decode_fe_inputs(fe_inputs)
                 manifest_dict = json.loads(raw)
                 try:
-                    # Run off the event loop: the documented use case (SQL
-                    # generation / full DAG rewrite) is CPU/IO-bound and would
-                    # otherwise block FastAPI for the duration of the hook.
-                    computed = await asyncio.to_thread(
-                        compute, manifest_dict, fe_inputs_decoded
-                    )
+                    if inspect.iscoroutinefunction(compute):
+                        # Async hook: await it directly (to_thread would run the
+                        # coroutine fn in a worker thread and hand back an
+                        # un-awaited coroutine, never the dict).
+                        computed = await compute(manifest_dict, fe_inputs_decoded)
+                    else:
+                        # Sync hook (the documented form): run off the event
+                        # loop — the use case (SQL generation / full DAG rewrite)
+                        # is CPU/IO-bound and would otherwise block FastAPI.
+                        computed = await asyncio.to_thread(
+                            compute, manifest_dict, fe_inputs_decoded
+                        )
                 except HTTPException:
                     raise
                 except Exception:

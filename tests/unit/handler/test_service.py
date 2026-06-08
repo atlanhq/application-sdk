@@ -4728,6 +4728,36 @@ class TestComputeManifestHook:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_async_hook_is_awaited(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ``async def compute_manifest`` is awaited directly (not run via
+        asyncio.to_thread, which would hand back an un-awaited coroutine)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "hook-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"dag": {"computed": "async", "echo": fe_inputs}}
+
+        self._install_fake_core(monkeypatch, "hook-ep", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "hook-ep", "fe_inputs": json.dumps({"k": "v"})},
+            )
+            assert response.status_code == 200
+            assert response.json() == {"dag": {"computed": "async", "echo": {"k": "v"}}}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_static_manifest_when_no_hook(self, tmp_path: Path) -> None:
         """No app.<snake>.core module → static manifest returned unchanged."""
         from application_sdk.handler import service as svc_module
