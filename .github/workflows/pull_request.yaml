@@ -165,13 +165,14 @@ jobs:
 
       - name: Install and start Dapr runtime (daprd)
         run: |
-          DAPR_CLI_VERSION="1.16.2"
+          DAPR_CLI_VERSION="1.17.1"
+          DAPR_RUNTIME_VERSION=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
           curl -sSLf "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" \
             -o /tmp/dapr-cli.tar.gz
           tar -xzf /tmp/dapr-cli.tar.gz -C /tmp dapr
           chmod +x /tmp/dapr
           sudo mv /tmp/dapr /usr/local/bin/dapr
-          dapr init --runtime-version 1.16.0 --slim
+          dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
           mkdir -p tests/integration/dapr-data/objectstore
           # Run daprd directly (no sidecar pattern) for deterministic behavior
           $HOME/.dapr/bin/daprd \
