@@ -467,10 +467,13 @@ class TestMetadataInputFieldTypes:
         )
         assert inp.metadata_template_key == "feedbacks"
 
-    def test_metadata_template_key_does_not_accept_non_canonical_fields(self):
+    def test_metadata_template_key_accepts_wire_aliases(self):
+        # The orchestrator sends the routing key as ``metadataTemplateKey`` (with
+        # a ``type`` mirror); both populate ``metadata_template_key`` via the
+        # field's validation alias rather than being punned into object_filter.
         for key in ("metadataTemplateKey", "type"):
             inp = MetadataInput.model_validate({"credentials": [], key: "feedbacks"})
-            assert inp.metadata_template_key == ""
+            assert inp.metadata_template_key == "feedbacks"
 
 
 class TestEntrypointRefAlias:

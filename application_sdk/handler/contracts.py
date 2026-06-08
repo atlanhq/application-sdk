@@ -422,8 +422,21 @@ class MetadataInput(BaseModel):
     :attr:`entrypoint` field; this is no longer parsed for dispatch. Retained
     for back-compat and for handlers that still read it."""
 
-    metadata_template_key: str = ""
-    """Metadata source routing key for multi-source metadata widgets."""
+    metadata_template_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "metadata_template_key", "metadataTemplateKey", "type"
+        ),
+    )
+    """Metadata source routing key for multi-source metadata widgets (e.g.
+    ``tags`` / ``connectors`` / ``typenames``).
+
+    Wire compatibility: the orchestrator sends this as ``metadataTemplateKey``
+    (with a ``type`` mirror added by its app client); both are accepted here via
+    the validation alias, so the routing key lands in its documented home rather
+    than being punned into :attr:`object_filter`. The metadata route still
+    mirrors it onto ``object_filter`` when that is empty, for handlers that read
+    the legacy field."""
 
     connection_config: BaseConnectionConfig = Field(
         default_factory=BaseConnectionConfig

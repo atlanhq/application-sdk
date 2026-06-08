@@ -830,7 +830,10 @@ class TestMetadataEndpoint:
         assert response.status_code == 200
         assert received == ["feedbacks"]
 
-    def test_metadata_non_canonical_keys_do_not_populate_template_key(self) -> None:
+    def test_metadata_wire_keys_populate_template_key(self) -> None:
+        # The orchestrator's wire keys (``metadataTemplateKey`` / ``type``)
+        # populate ``metadata_template_key`` via the field's validation alias —
+        # the routing key's documented home, not object_filter punning.
         received: list[str] = []
 
         class _MetadataTemplateCapture(_TestHandler):
@@ -850,7 +853,7 @@ class TestMetadataEndpoint:
 
             assert response.status_code == 200
 
-        assert received == ["", ""]
+        assert received == ["feedbacks", "feedbacks"]
 
     def test_metadata_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())
@@ -4622,6 +4625,33 @@ class TestConfigEndpointPersistence:
         assert response.json()["data"] == {"hello": "world"}
 
 
+def _install_fake_app_module(
+    monkeypatch: pytest.MonkeyPatch, entrypoint: str, leaf: str, **attrs: object
+) -> None:
+    """Inject ``app.<segment>.<leaf>`` into ``sys.modules`` with ``attrs`` set.
+
+    Shared by the per-entrypoint ``core`` (compute_manifest) and ``handler``
+    (test_auth/...) test helpers — simulates the on-disk convention without
+    touching the filesystem.
+    """
+    import sys
+    import types
+
+    from application_sdk.app.entrypoint import entrypoint_module_segment
+
+    snake = entrypoint_module_segment(entrypoint)
+    # Ensure parent packages exist so ``import app.<snake>.<leaf>`` resolves.
+    for parent in ("app", f"app.{snake}"):
+        if parent not in sys.modules:
+            pkg = types.ModuleType(parent)
+            pkg.__path__ = []  # type: ignore[attr-defined]
+            monkeypatch.setitem(sys.modules, parent, pkg)
+    module = types.ModuleType(f"app.{snake}.{leaf}")
+    for name, value in attrs.items():
+        setattr(module, name, value)
+    monkeypatch.setitem(sys.modules, f"app.{snake}.{leaf}", module)
+
+
 class TestComputeManifestHook:
     """Per-entrypoint dynamic manifest hook.
 
@@ -4641,21 +4671,7 @@ class TestComputeManifestHook:
         monkeypatch: pytest.MonkeyPatch, entrypoint: str, fn: object
     ) -> None:
         """Register ``app.<snake>.core`` with ``compute_manifest = fn``."""
-        import sys
-        import types
-
-        from application_sdk.app.entrypoint import entrypoint_module_segment
-
-        snake = entrypoint_module_segment(entrypoint)
-        # Ensure the parent packages exist so ``import app.<snake>.core`` resolves.
-        for parent in ("app", f"app.{snake}"):
-            if parent not in sys.modules:
-                pkg = types.ModuleType(parent)
-                pkg.__path__ = []  # type: ignore[attr-defined]
-                monkeypatch.setitem(sys.modules, parent, pkg)
-        core = types.ModuleType(f"app.{snake}.core")
-        core.compute_manifest = fn  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, f"app.{snake}.core", core)
+        _install_fake_app_module(monkeypatch, entrypoint, "core", compute_manifest=fn)
 
     def test_optional_import_returns_none_when_target_absent(
         self, monkeypatch: pytest.MonkeyPatch
@@ -4778,6 +4794,32 @@ class TestComputeManifestHook:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_non_callable_compute_manifest_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A `compute_manifest` attribute that isn't callable (e.g. an app that
+        writes `compute_manifest = SOME_DICT`) is ignored → static manifest."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "bad-hook"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"dag": {"static": True}}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        # Not callable — a plain dict assigned to the attribute name.
+        self._install_fake_core(monkeypatch, "bad-hook", {"not": "callable"})
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=bad-hook")
+            assert response.status_code == 200
+            assert response.json() == manifest_data
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_fe_inputs_defaults_to_empty_dict(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -4895,17 +4937,14 @@ class TestPerEntrypointHandlerHook:
 
     Multi-entrypoint apps drop ``app.<entrypoint_snake>.handler`` modules
     that expose plain async ``test_auth``, ``preflight_check``,
-    ``fetch_metadata`` functions. Heracles sends the entrypoint identifier
-    as the ``connector`` field (``{bundle_name}-{entrypoint.name}``); the
-    SDK matches the suffix against known entrypoints (subdirs of
-    ``CONTRACT_GENERATED_DIR``) and dispatches to the per-entrypoint module
-    when present, falling through to the app-level ``Handler`` instance
-    otherwise.
+    ``fetch_metadata`` functions. The orchestrator sends the exact entry-point
+    name in the ``entrypoint`` field (resolved from the marketplace catalog);
+    the SDK dispatches to the per-entrypoint module **by exact name** when
+    present, falling through to the app-level ``Handler`` instance otherwise.
 
-    Tests inject fake modules into ``sys.modules`` to simulate the
-    discovery convention, and point ``CONTRACT_GENERATED_DIR`` at a
-    ``tmp_path`` populated with empty manifest files so the connector
-    suffix-match has known entrypoints to find.
+    Tests inject fake modules into ``sys.modules`` to simulate the discovery
+    convention (no filesystem / contract-dir glob is involved on the explicit
+    path).
     """
 
     @staticmethod
@@ -4913,21 +4952,7 @@ class TestPerEntrypointHandlerHook:
         monkeypatch: pytest.MonkeyPatch, entrypoint: str, **fns: object
     ) -> None:
         """Register ``app.<snake>.handler`` exposing the given async fns."""
-        import sys
-        import types
-
-        from application_sdk.app.entrypoint import entrypoint_module_segment
-
-        snake = entrypoint_module_segment(entrypoint)
-        for parent in ("app", f"app.{snake}"):
-            if parent not in sys.modules:
-                pkg = types.ModuleType(parent)
-                pkg.__path__ = []  # type: ignore[attr-defined]
-                monkeypatch.setitem(sys.modules, parent, pkg)
-        handler_mod = types.ModuleType(f"app.{snake}.handler")
-        for name, fn in fns.items():
-            setattr(handler_mod, name, fn)
-        monkeypatch.setitem(sys.modules, f"app.{snake}.handler", handler_mod)
+        _install_fake_app_module(monkeypatch, entrypoint, "handler", **fns)
 
     # ------------------------------------------------------------------
     # /workflows/v1/auth
@@ -4983,6 +5008,21 @@ class TestPerEntrypointHandlerHook:
             raise AssertionError("sync handler must not be dispatched")
 
         self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_non_callable_handler_attr_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-callable ``test_auth`` attribute (e.g. ``test_auth = "x"``) is
+        ignored by discovery → app-level Handler runs."""
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth="not-a-fn")
 
         client = _make_client()
         response = client.post(
