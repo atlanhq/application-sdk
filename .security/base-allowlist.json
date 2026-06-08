@@ -83,5 +83,16 @@
     "compensating_controls": null,
     "re_evaluation_trigger": "expiry",
     "exposure_assessment": null
+  },
+  "CVE-2026-25087": {
+    "package": "pyarrow",
+    "severity": "HIGH",
+    "reason": "Python transitive dependency. Fix available in pyarrow 23.0.1, but the SDK's pandas/sql/incremental extras pin pyarrow<23.0.0 — adopting 23.x is a major-version bump that needs validation before the cap can be raised. Allowlisting downstream connector builds while the SDK bump is evaluated.",
+    "expires": "2026-07-08",
+    "added_by": "AngadSethi",
+    "fix_available_date": "2026-02-16",
+    "compensating_controls": null,
+    "re_evaluation_trigger": "fix_released",
+    "exposure_assessment": null
   }
 }
