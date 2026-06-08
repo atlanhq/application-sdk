@@ -111,8 +111,6 @@ facts {
     notifyArgs["duration_ms"] == "$.workflow.duration_ms"
     notifyArgs["connector"] == "$.workflow.connector"
     notifyArgs["schedule"] == "$.workflow.schedule"
-    notifyArgs["next_run_time"] == "$.workflow.next_run_time"
-    notifyArgs["last_runs"] == "$.workflow.last_runs"
     notifyArgs["creator_name"] == "$.workflow.creator_name"
     notifyArgs["modified_by_name"] == "$.workflow.modified_by_name"
     notifyArgs["run_details_url"] == "$.workflow.run_url"

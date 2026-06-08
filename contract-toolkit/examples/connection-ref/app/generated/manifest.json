@@ -38,8 +38,6 @@
             "completed_at": "$.workflow.completed_at",
             "duration_ms": "$.workflow.duration_ms",
             "schedule": "$.workflow.schedule",
-            "next_run_time": "$.workflow.next_run_time",
-            "last_runs": "$.workflow.last_runs",
             "creator_name": "$.workflow.creator_name",
             "modified_by_name": "$.workflow.modified_by_name",
             "run_details_url": "$.workflow.run_url",

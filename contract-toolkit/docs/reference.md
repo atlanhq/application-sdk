@@ -356,12 +356,13 @@ Its `args.metadata` is templated from the run-level context AE injects at
 dispatch (`$.workflow.*` and `$.failure.*`): `notification_type`,
 `workflow_name`, `workflow_qualified_name`, `workflow_slug`, `status`,
 `started_at`, `completed_at`, `duration_ms`, `connector`, `schedule`,
-`next_run_time`, `last_runs`, `creator_name`, `modified_by_name`,
-`run_details_url`, `workflow_run_guid`, `error_message`, `error_category`,
-`suggested_action`, `failed_node_id`, and `failed_activity`. The richer
-fields (`connector`, `schedule`, `next_run_time`, `last_runs`, `creator_name`,
-`modified_by_name`) are populated best-effort by AE's failure-alert enrichment
-activity for the finalizer node only; any that can't be resolved arrive empty.
+`creator_name`, `modified_by_name`, `run_details_url`, `workflow_run_guid`,
+`error_message`, `error_category`, `suggested_action`, `failed_node_id`, and
+`failed_activity`. The static workflow-definition fields (`connector`,
+`schedule`, `creator_name`, `modified_by_name`) are populated best-effort by
+AE's failure-alert enrichment activity for the finalizer node only; any that
+can't be resolved arrive empty. Dynamic context (`next_run_time`, `last_runs`)
+is a planned follow-up (see ARUN-619 subticket).
 
 To disable, set `notifyOnFailure = false`. To retarget the alert (different
 `appName`/`taskQueue`/args), define `extraNodes["notify-on-failure"]`. See
