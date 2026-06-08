@@ -247,6 +247,13 @@ These are **module-level `async` functions** taking `(input, ctx)` — not metho
 
 **Dispatch & precedence.** Each request carries an `entrypoint` field — the bare entry-point name (e.g. `asset-export-advanced`) the orchestrator resolves from the Global Marketplace catalog and sends explicitly. When it's set and a conforming `app.<segment>.handler.<fn>` exists, the SDK routes to it **by exact name** and it **pre-empts** the app-level `Handler.<fn>`. When `entrypoint` is empty (single-entry-point apps), malformed, or the module/function is absent, dispatch falls through to the app-level `Handler` — 1:1 with today's behaviour. A non-`async` function is ignored (falls through) rather than failing at request time.
 
+> ⚠️ **Things to know — the per-entrypoint module silently wins.** Dispatch is intentionally best-effort and resolved per request, so a few situations are easy to get wrong:
+>
+> - **Shadowing is silent.** If you define *both* `MyAppHandler.test_auth` (class) and `app/<segment>/handler.py:test_auth` (module) for the same entry point, the **module wins** and the class method never runs — with no error or log. If a per-entry-point module exists, treat it as the source of truth for that entry point.
+> - **Per-op, not all-or-nothing.** A module that defines only `fetch_metadata` leaves `test_auth`/`preflight_check` for that entry point falling back to the app-level `Handler`. One entry point's lifecycle can therefore be split across two files — don't assume `handler.py` owns everything.
+> - **Wrong name / wrong shape falls through quietly.** A misspelled function name, or a non-`async def`, won't match discovery and silently falls back to the app-level `Handler` (which may be `DefaultHandler`, returning a generic success). If your per-entry-point hook "isn't running," check the exact name and that it's `async`.
+> - **Which code runs depends on the request.** The same endpoint routes to `app.<segment>.handler` vs the app-level `Handler` purely based on the request's `entrypoint` field — you can't tell from the code alone.
+
 > The `entrypoint`/`entrypoint_ref` fields on the input contracts: `entrypoint` is the authoritative bare name used for routing; `entrypoint_ref` carries the legacy `connector` wire value (accepted via a validation alias, serialized back as `connector`) and is **informational only** — it is not parsed for dispatch. See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the kebab→snake module-name rule.
 
 ## Testing Handlers

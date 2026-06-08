@@ -496,6 +496,19 @@ def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
     (``DefaultHandler`` if no custom handler is configured), preserving
     today's single-entrypoint behavior 1:1.
 
+    Precedence & silent fall-through — important when reasoning about which
+    code actually runs (mirrored in ``docs/concepts/handlers.md``):
+
+    - When a per-entrypoint ``<fn_name>`` exists, it **pre-empts** the
+      app-level ``Handler.<fn_name>`` for that entry point. Defining both
+      silently runs the module one; the class method never executes.
+    - Resolution is per-op: a module that defines only ``fetch_metadata``
+      leaves ``test_auth`` / ``preflight_check`` falling back to the
+      app-level ``Handler`` — one entry point can be split across two files.
+    - A wrong name or a non-``async`` ``def`` does not match (see the
+      ``iscoroutinefunction`` check below) and **silently** falls through
+      rather than erroring — so a typo'd hook quietly does nothing.
+
     Returns the callable or ``None`` if absent.
     """
     # Lazy: app.entrypoint pulls in app.base, which imports this module
