@@ -163,23 +163,35 @@ jobs:
             sleep 2
           done
 
-      - name: Install and start Dapr runtime (daprd)
+      - name: Resolve pinned daprd version
+        id: dapr
         run: |
-          DAPR_CLI_VERSION="1.17.1"
-          DAPR_RUNTIME_VERSION=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
-          if [ -z "${DAPR_RUNTIME_VERSION}" ]; then
+          set -euo pipefail
+          ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+          if [[ -z "$ver" ]]; then
             echo "::error::Failed to parse __dapr_version from application_sdk/version.py"
             exit 1
           fi
-          curl -sSLf "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" \
-            -o /tmp/dapr-cli.tar.gz
-          tar -xzf /tmp/dapr-cli.tar.gz -C /tmp dapr
-          chmod +x /tmp/dapr
-          sudo mv /tmp/dapr /usr/local/bin/dapr
-          dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Resolved pinned daprd version: $ver"
+
+      - name: Install and start Dapr runtime (daprd)
+        run: |
+          # Download daprd directly from the Dapr release. Mirrors the SDK's
+          # own embedded-runtime path (application_sdk/dev/_dapr.py) instead
+          # of invoking `dapr init --slim`, which also tries to fetch the
+          # placement binary — a binary we never use (we run with
+          # --placement-host-address '') and whose download has been a
+          # recurring source of 504s on this job.
+          DAPR_VERSION="${{ steps.dapr.outputs.version }}"
+          mkdir -p "$HOME/.dapr/bin"
+          curl -sSLf "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" \
+            -o /tmp/daprd.tar.gz
+          tar -xzf /tmp/daprd.tar.gz -C "$HOME/.dapr/bin" daprd
+          chmod +x "$HOME/.dapr/bin/daprd"
           mkdir -p tests/integration/dapr-data/objectstore
           # Run daprd directly (no sidecar pattern) for deterministic behavior
-          $HOME/.dapr/bin/daprd \
+          "$HOME/.dapr/bin/daprd" \
             --app-id integ-test \
             --dapr-http-port 3500 \
             --resources-path ./tests/integration/dapr-components \
@@ -231,7 +243,7 @@ jobs:
           # Get the target branch of PR
           TARGET_BRANCH="${{ github.base_ref }}"
           # Default matrix if no label provided
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Parse labels from GitHub Script output
