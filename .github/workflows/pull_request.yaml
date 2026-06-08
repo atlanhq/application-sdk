@@ -226,7 +226,7 @@ jobs:
           # Get the target branch of PR
           TARGET_BRANCH="${{ github.base_ref }}"
           # Default matrix if no label provided
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Parse labels from GitHub Script output
