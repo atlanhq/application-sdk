@@ -324,7 +324,8 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 | `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. |
 | `publishTagPipelineEnabled` | Boolean\|String? | auto | Value for `PublishNode`'s `tag_pipeline_enabled`. Auto-wired when `enable-tags` or `enable-tag-sync` is in the form. |
 | `publishTagAttachmentsPrefix` | String? | auto | Value for `PublishNode`'s `tag_attachments_prefix`. |
-| `notifyOnFailure` | Boolean | `true` | Appends a run-level notification node (`NotificationNode`, key `notify-on-failure`) that fires when the workflow run reaches any terminal state (success or failure). The node depends on the reserved run-level `workflow_complete` tag (a `DependencyCondition` with no `nodeId`), so AE runs it once per run as a finalizer and dispatches the `notification-app`, which fans alerts to the tenant's enabled integrations and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Set `false` for utility/internal apps that should not self-notify (the notification app itself sets this); also skipped when `extraNodes` defines a `notify-on-failure` key. Name kept for back-compat — semantics are "notify on completion". See [NotificationNode](#notificationnode). |
+| `notifications` | Boolean | `true` | Top-level app on/off for notifications. When `true`, appends a run-level notification node (`NotificationNode`, key `notify-on-failure`) that fires when the workflow run reaches any terminal state (success or failure). The node depends on the reserved run-level `workflow_complete` tag (a `DependencyCondition` with no `nodeId`), so AE runs it once per run as a finalizer and dispatches the `notification-app`, which fans alerts to the tenant's enabled integrations and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Set `false` for utility/internal apps that should not self-notify (the notification app itself sets this); also skipped when `extraNodes` defines a `notify-on-failure` key. See [NotificationNode](#notificationnode). |
+| `notifyOnFailure` | Boolean | `true` | **Deprecated** alias for `notifications`. Retained so apps that set `notifyOnFailure = false` keep working — either flag being `false` disables the node. Prefer `notifications`. |
 
 ---
 
@@ -341,7 +342,7 @@ class NotificationNode extends DAGNode {
 ```
 
 Pre-built run-completion notification node. The toolkit appends it automatically
-as `notify-on-failure` when `notifyOnFailure = true` (the default), so apps rarely
+as `notify-on-failure` when `notifications = true` (the default), so apps rarely
 reference it directly. It renders `app_name = "notification-app"` and
 `task_queue = "atlan-notification-app-{deployment_name}"`, and depends on the
 reserved run-level `workflow_complete` tag.
@@ -367,7 +368,7 @@ AE's failure-alert enrichment activity for the finalizer node only; any that
 can't be resolved arrive empty. Dynamic context (`next_run_time`, `last_runs`)
 is a planned follow-up (see ARUN-619 subticket).
 
-To disable, set `notifyOnFailure = false`. To retarget the alert (different
+To disable, set `notifications = false`. To retarget the alert (different
 `appName`/`taskQueue`/args), define `extraNodes["notify-on-failure"]`. See
 `tests/notify_on_failure_test.pkl` and `tests/fixtures/notify_disabled.pkl`.
 
@@ -1501,7 +1502,7 @@ workflow-safe `ErrorHandlingConfig` values. See `examples/publish-controls/`.
 ### NotificationNode
 
 Pre-built run-completion notification system node. The toolkit appends it
-automatically as `notify-on-failure` when `notifyOnFailure = true`:
+automatically as `notify-on-failure` when `notifications = true`:
 
 ```pkl
 class NotificationNode extends DAGNode {
@@ -1538,7 +1539,7 @@ this run-level completion node (`Succeeded` or `Failed`), and `$.failure.*`
 resolves to empty strings on a successful run. (`notification_type` keeps the
 `workflow_failure_alert` value for routing back-compat.)
 
-Set `notifyOnFailure = false` for utility/system apps that must not self-notify.
+Set `notifications = false` for utility/system apps that must not self-notify.
 To replace the default target or payload, define `extraNodes["notify-on-failure"]`.
 
 ### QueryIntelligenceNode

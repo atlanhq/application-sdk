@@ -1,5 +1,6 @@
 // Tests for the built-in run-level notification node (NotificationNode) and the
-// `notifyOnFailure` app-level toggle.
+// `notifications` app-level on/off toggle (with the deprecated `notifyOnFailure`
+// alias).
 //
 // Background: every app built on App.pkl should alert on workflow-run completion
 // with no per-app wiring. The toolkit appends a `notify-on-failure` finalizer
@@ -8,7 +9,7 @@
 // any terminal state (success or failure) and dispatches the notification app,
 // which fans the alert out to the tenant's enabled integrations and decides
 // delivery per integration (failure-only vs. all). Utility/internal apps opt out
-// via `notifyOnFailure = false`. AE owns the finalizer behavior and resolves the
+// via `notifications = false`. AE owns the finalizer behavior and resolves the
 // `$.workflow.*` / `$.failure.*` placeholders; the toolkit owns the manifest
 // shape and the templated arg set.
 
@@ -47,7 +48,14 @@ local overrideApp = (App) {
   }
 }
 
-// Default app (no pipeline block, notifyOnFailure defaults true).
+// App that opts out via the deprecated alias (notifyOnFailure = false) — proves
+// back-compat: either flag being false disables the node.
+local legacyDisabledApp = (disabledApp) {
+  notifications = true
+  notifyOnFailure = false
+}
+
+// Default app (no pipeline block, notifications defaults true).
 local defaultManifest = new json.Parser { useMapping = true }.parse(
   defaultApp.output.files["app/generated/manifest.json"].text
 )
@@ -55,11 +63,16 @@ local defaultDag = defaultManifest["dag"]
 local notifyNode = defaultDag["notify-on-failure"]
 local notifyArgs = notifyNode["inputs"]["args"]["metadata"]
 
-// App that opts out (notifyOnFailure = false).
+// App that opts out (notifications = false).
 local disabledManifest = new json.Parser { useMapping = true }.parse(
   disabledApp.output.files["app/generated/manifest.json"].text
 )
 local disabledDag = disabledManifest["dag"]
+
+local legacyDisabledManifest = new json.Parser { useMapping = true }.parse(
+  legacyDisabledApp.output.files["app/generated/manifest.json"].text
+)
+local legacyDisabledDag = legacyDisabledManifest["dag"]
 
 local overrideManifest = new json.Parser { useMapping = true }.parse(
   overrideApp.output.files["app/generated/manifest.json"].text
@@ -128,11 +141,16 @@ facts {
   }
 
   // -----------------------------------------------------------------------
-  // Opt-out: notifyOnFailure = false suppresses the node entirely.
+  // Opt-out: notifications = false suppresses the node entirely.
   // -----------------------------------------------------------------------
 
-  ["App with notifyOnFailure=false has no notify-on-failure node"] {
+  ["App with notifications=false has no notify-on-failure node"] {
     !disabledDag.containsKey("notify-on-failure")
+  }
+
+  // Back-compat: the deprecated notifyOnFailure=false alias still disables it.
+  ["App with the deprecated notifyOnFailure=false alias has no notify-on-failure node"] {
+    !legacyDisabledDag.containsKey("notify-on-failure")
   }
 
   // The toggle must not disturb the rest of the DAG.

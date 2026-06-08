@@ -1,9 +1,8 @@
-/// Fixture: app that opts out of the run-level failure-notification node.
+/// Fixture: app that opts out of the run-level notification node.
 ///
-/// Exercises `notifyOnFailure = false` — the toggle utility/internal apps use
-/// so they do not append (and thus self-trigger) the notify-on-failure node.
-/// Utility and system apps use this so their own failures don't dispatch the
-/// notification app recursively.
+/// Exercises `notifications = false` — the top-level on/off switch utility and
+/// internal apps use so they do not append (and thus self-trigger) the
+/// notify-on-failure node, e.g. the notification app itself.
 amends "../../src/App.pkl"
 
 name = "notify-disabled"
@@ -11,7 +10,7 @@ displayName = "Notify Disabled"
 icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
 hasCredentialConfig = false
 
-notifyOnFailure = false
+notifications = false
 
 uiConfig = new UIConfig {
   tasks {

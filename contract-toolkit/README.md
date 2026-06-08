@@ -136,9 +136,9 @@ Default pipeline: `extract → publish`, plus a run-level
 `notify-on-failure` system node. Opt out of publish with
 `pipeline.publish = null`. Add parseQueries, popularity, or lineage steps by
 setting the corresponding `pipeline.*` field. Opt out of notifications
-with `notifyOnFailure = false`.
+with `notifications = false`.
 
-A run-level **notification node** (`notify-on-failure`) is appended automatically (`notifyOnFailure = true`). It depends on the reserved run-level `workflow_complete` tag — Automation Engine runs it once when the workflow run reaches any terminal state (success or failure) — and dispatches the `notification-app`, which fans alerts out to the tenant's enabled integrations (Teams, etc.) and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Set `notifyOnFailure = false` for utility/internal apps that should not self-notify (the notification app itself sets this). The toggle name is kept for back-compat; semantics are "notify on completion".
+A run-level **notification node** (`notify-on-failure`) is appended automatically (`notifications = true`). It depends on the reserved run-level `workflow_complete` tag — Automation Engine runs it once when the workflow run reaches any terminal state (success or failure) — and dispatches the `notification-app`, which fans alerts out to the tenant's enabled integrations (Teams, etc.) and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Set `notifications = false` for utility/internal apps that should not self-notify (the notification app itself sets this). The toggle name is kept for back-compat; semantics are "notify on completion".
 
 ### `_input.py` (`app/generated/_input.py`)
 
@@ -240,7 +240,7 @@ Dependencies between pipeline steps are **auto-wired** based on position — you
 The toolkit also appends a run-level notification node by default:
 
 ```pkl
-notifyOnFailure = false  // utility/system apps that must not self-notify
+notifications = false  // utility/system apps that must not self-notify
 ```
 
 When enabled, the generated manifest includes `notify-on-failure`, a

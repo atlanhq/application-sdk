@@ -255,21 +255,36 @@ uiConfig: Widgets.UIConfig?
 /// failure notification node.
 extraNodes: Mapping<String, DAGNode> = new Mapping {}
 
-/// Append a run-level notification node (`NotificationNode`, key
-/// `notify-on-failure`) that fires once when the workflow run reaches any
-/// terminal state (success or failure) and dispatches the notification app to
-/// fan alerts out to the tenant's enabled integrations (Teams, etc.). The
-/// notification app decides delivery per integration via its
-/// `alertsWorkflowChannel.failureOnly` config (failure-only vs. all runs).
+/// Top-level on/off for app notifications.
 ///
-/// Default `true`, so every app built on this template notifies on completion
-/// with no per-app wiring. Set `false` for utility/internal apps that must not
-/// self-notify (the notification app itself sets this). Override the node by
-/// defining `extraNodes["notify-on-failure"]`, which suppresses the default.
+/// When `true` (default), the toolkit appends a run-level notification node
+/// (`NotificationNode`, key `notify-on-failure`) that fires once when the
+/// workflow run reaches any terminal state (success or failure) and dispatches
+/// the notification app to fan alerts out to the tenant's enabled integrations
+/// (Teams, etc.). The notification app decides delivery per integration via its
+/// `alertsWorkflowChannel.failureOnly` config (failure-only vs. all runs) — so
+/// this flag is purely the broad app-level switch; *which* runs and *which*
+/// channels are the customer's call.
 ///
-/// Name retained as `notifyOnFailure` for back-compat; semantics are now
-/// "notify on completion, integration config decides failure-only vs. all".
+/// Set `false` for utility/internal apps that must not self-notify (the
+/// notification app itself sets this). Override the node entirely by defining
+/// `extraNodes["notify-on-failure"]`, which suppresses the default.
+///
+/// Future: a typed `pipeline.notifications` step may carry app-owned detail
+/// (which notification types/payload) — but never delivery conditions, which
+/// stay customer-owned. See the design follow-up.
+notifications: Boolean = true
+
+/// Deprecated alias for [notifications]. Retained so apps pinned to earlier
+/// pre-releases that set `notifyOnFailure = false` keep working — either flag
+/// being `false` disables the node ([_notificationsEnabled]).
+@Deprecated { message = "Use `notifications` — the broad app-level on/off switch." }
 notifyOnFailure: Boolean = true
+
+/// Effective notification switch: enabled only when both the canonical
+/// [notifications] flag and the deprecated [notifyOnFailure] alias are `true`,
+/// so setting *either* to `false` opts out.
+hidden _notificationsEnabled: Boolean = notifications && notifyOnFailure
 
 /// Mapping of manifest arg name → form field name for top-level extract args.
 manifestTopLevelArgs: Mapping<String, String> = new Mapping {
@@ -681,7 +696,7 @@ open class PublishNode extends DAGNode {
 ///
 /// The args template AE's run/failure context (`$.workflow.*`, `$.failure.*`),
 /// which AE injects into node input resolution — so the node is self-contained
-/// (no app-specific wiring). Gated by the app-level `notifyOnFailure` toggle;
+/// (no app-specific wiring). Gated by the app-level `notifications` toggle;
 /// override per app via `extraNodes["notify-on-failure"]`.
 open class NotificationNode extends DAGNode {
   displayName = "Notify on workflow completion"
@@ -2079,7 +2094,7 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
       [nodeId] = renderNode(node)
     }
   }
-  when (notifyOnFailure && !extraNodes.toMap().containsKey("notify-on-failure")) {
+  when (_notificationsEnabled && !extraNodes.toMap().containsKey("notify-on-failure")) {
     ["notify-on-failure"] = renderNode(new NotificationNode {})
   }
 }
