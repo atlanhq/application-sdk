@@ -103,7 +103,11 @@ inputs:
   dapr-version:
     required: false
     description: Dapr runtime version to install.
-    default: "1.16.2"
+    default: "1.17.9"
+  dapr-cli-version:
+    required: false
+    description: Dapr CLI version to download (may differ from the runtime version).
+    default: "1.17.1"
   force-external-runtime:
     required: false
     description: >
@@ -143,12 +147,13 @@ runs:
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
       run: |
-        DAPR_VERSION="${{ inputs.dapr-version }}"
-        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
+        DAPR_CLI_VERSION="${{ inputs.dapr-cli-version }}"
+        DAPR_RUNTIME_VERSION="${{ inputs.dapr-version }}"
+        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
         tar -xzf /tmp/dapr.tar.gz -C /tmp
         sudo mv /tmp/dapr /usr/local/bin/
         chmod +x /usr/local/bin/dapr
-        dapr init --runtime-version "${DAPR_VERSION}" --slim
+        dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
 
     - name: Install Temporal CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
