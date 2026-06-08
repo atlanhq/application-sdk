@@ -255,15 +255,20 @@ uiConfig: Widgets.UIConfig?
 /// failure notification node.
 extraNodes: Mapping<String, DAGNode> = new Mapping {}
 
-/// Append a run-level failure-notification node (`NotificationNode`, key
-/// `notify-on-failure`) that fires once when the workflow run terminates in
-/// failure and dispatches the notification app to fan alerts out to the
-/// tenant's enabled integrations (Teams, etc.).
+/// Append a run-level notification node (`NotificationNode`, key
+/// `notify-on-failure`) that fires once when the workflow run reaches any
+/// terminal state (success or failure) and dispatches the notification app to
+/// fan alerts out to the tenant's enabled integrations (Teams, etc.). The
+/// notification app decides delivery per integration via its
+/// `alertsWorkflowChannel.failureOnly` config (failure-only vs. all runs).
 ///
-/// Default `true`, so every app built on this template notifies on failure with
-/// no per-app wiring. Set `false` for utility/internal apps that must not
+/// Default `true`, so every app built on this template notifies on completion
+/// with no per-app wiring. Set `false` for utility/internal apps that must not
 /// self-notify (the notification app itself sets this). Override the node by
 /// defining `extraNodes["notify-on-failure"]`, which suppresses the default.
+///
+/// Name retained as `notifyOnFailure` for back-compat; semantics are now
+/// "notify on completion, integration config decides failure-only vs. all".
 notifyOnFailure: Boolean = true
 
 /// Mapping of manifest arg name → form field name for top-level extract args.
@@ -507,9 +512,11 @@ class DependencyCondition {
   /// Tag required on the direct dependency. AE reserves `success` and `failure`;
   /// any other value is treated as a custom tag emitted by the node.
   ///
-  /// `workflow_failure` is a reserved *run-level* tag: with no `nodeId`, it marks
-  /// a finalizer that AE runs last and only when the run fails (any node failed).
-  /// Used by the default `NotificationNode`.
+  /// `workflow_failure` and `workflow_complete` are reserved *run-level* tags:
+  /// with no `nodeId`, they mark a finalizer that AE runs last — `workflow_failure`
+  /// only when the run fails, `workflow_complete` on any terminal state (success
+  /// or failure). The default `NotificationNode` uses `workflow_complete` so AE
+  /// always dispatches on completion and the notification app decides delivery.
   tag: String?
 
   andConditions: Listing<DependencyCondition>?
@@ -521,10 +528,10 @@ class DependencyCondition {
       throw("DependencyCondition cannot combine nodeId with andConditions/orConditions.")
     else if (andConditions != null && orConditions != null)
       throw("DependencyCondition cannot set both andConditions and orConditions.")
-    else if (tag == "workflow_failure" && nodeId == null)
-      null // run-level finalizer trigger: a node-less tag is valid
+    else if ((tag == "workflow_failure" || tag == "workflow_complete") && nodeId == null)
+      null // run-level finalizer trigger: a node-less reserved tag is valid
     else if (tag != null && nodeId == null)
-      throw("DependencyCondition.tag requires nodeId (except the reserved run-level \"workflow_failure\" tag).")
+      throw("DependencyCondition.tag requires nodeId (except the reserved run-level \"workflow_failure\"/\"workflow_complete\" tags).")
     else if (nodeId == null && andConditions == null && orConditions == null)
       throw("DependencyCondition requires nodeId, andConditions, or orConditions.")
     else if (andConditions != null && andConditions.length == 0)
@@ -661,22 +668,26 @@ open class PublishNode extends DAGNode {
   dependsOn { upstream }
 }
 
-/// Pre-built run-failure notification node (a system app, like PublishNode).
+/// Pre-built run-completion notification node (a system app, like PublishNode).
 ///
 /// Dispatches a `NotificationWorkflow` to the notification app, which fans the
 /// alert out to the tenant's enabled integrations (Teams, etc.). It is a
-/// run-level finalizer: `dependsOnCondition = {tag: "workflow_failure"}` makes
-/// Automation Engine run it last and only when the run fails (any node failed).
+/// run-level finalizer: `dependsOnCondition = {tag: "workflow_complete"}` makes
+/// Automation Engine run it last on ANY terminal state (success or failure),
+/// carrying the real `$.workflow.status`. The notification app then decides
+/// delivery per integration via its `alertsWorkflowChannel.failureOnly` config
+/// (failure-only vs. all workflow runs) — so the trigger is "on completion" and
+/// the failure-vs-all policy lives entirely in the customer's integration config.
 ///
 /// The args template AE's run/failure context (`$.workflow.*`, `$.failure.*`),
 /// which AE injects into node input resolution — so the node is self-contained
 /// (no app-specific wiring). Gated by the app-level `notifyOnFailure` toggle;
 /// override per app via `extraNodes["notify-on-failure"]`.
 open class NotificationNode extends DAGNode {
-  displayName = "Notify on workflow failure"
+  displayName = "Notify on workflow completion"
   workflowType = "NotificationWorkflow"
   appName = "notification-app"
-  dependsOnCondition = new DependencyCondition { tag = "workflow_failure" }
+  dependsOnCondition = new DependencyCondition { tag = "workflow_complete" }
   args {
     ["metadata"] = new Mapping {
       ["notification_type"] = "workflow_failure_alert"

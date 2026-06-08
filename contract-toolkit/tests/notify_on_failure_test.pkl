@@ -1,13 +1,14 @@
-// Tests for the built-in run-level failure-notification node (NotificationNode)
-// and the `notifyOnFailure` app-level toggle.
+// Tests for the built-in run-level notification node (NotificationNode) and the
+// `notifyOnFailure` app-level toggle.
 //
-// Background: every app built on App.pkl should alert on workflow-run failure
+// Background: every app built on App.pkl should alert on workflow-run completion
 // with no per-app wiring. The toolkit appends a `notify-on-failure` finalizer
-// node by default; it depends on the reserved run-level `workflow_failure` tag
-// (a node-less DependencyCondition) so Automation Engine runs it once per failed
-// run and dispatches the notification app, which fans the alert out to the
-// tenant's enabled integrations. Utility/internal apps opt out via
-// `notifyOnFailure = false`. AE owns the finalizer behavior and resolves the
+// node by default; it depends on the reserved run-level `workflow_complete` tag
+// (a node-less DependencyCondition) so Automation Engine runs it once per run on
+// any terminal state (success or failure) and dispatches the notification app,
+// which fans the alert out to the tenant's enabled integrations and decides
+// delivery per integration (failure-only vs. all). Utility/internal apps opt out
+// via `notifyOnFailure = false`. AE owns the finalizer behavior and resolves the
 // `$.workflow.*` / `$.failure.*` placeholders; the toolkit owns the manifest
 // shape and the templated arg set.
 
@@ -76,7 +77,7 @@ facts {
 
   ["Notify node dispatches the notification app workflow"] {
     notifyNode["activity_name"] == "execute_workflow"
-    notifyNode["activity_display_name"] == "Notify on workflow failure"
+    notifyNode["activity_display_name"] == "Notify on workflow completion"
     notifyNode["app_name"] == "notification-app"
     notifyNode["inputs"]["workflow_type"] == "NotificationWorkflow"
     notifyNode["inputs"]["app_name"] == "notification-app"
@@ -86,10 +87,11 @@ facts {
     notifyNode["inputs"]["task_queue"] == "atlan-notification-app-{deployment_name}"
   }
 
-  // Run-level finalizer: a node-less workflow_failure tag, NOT a per-node
-  // success/failure dependency. AE runs it once when the whole run fails.
-  ["Notify node depends on the run-level workflow_failure tag with no node_id"] {
-    notifyNode["depends_on"]["tag"] == "workflow_failure"
+  // Run-level finalizer: a node-less workflow_complete tag, NOT a per-node
+  // success/failure dependency. AE runs it once on any terminal state (success
+  // or failure); the notification app decides delivery per integration.
+  ["Notify node depends on the run-level workflow_complete tag with no node_id"] {
+    notifyNode["depends_on"]["tag"] == "workflow_complete"
     !notifyNode["depends_on"].containsKey("node_id")
   }
 
@@ -154,19 +156,23 @@ facts {
     local n = new App.NotificationNode {}
     n.workflowType == "NotificationWorkflow"
     n.appName == "notification-app"
-    n.displayName == "Notify on workflow failure"
+    n.displayName == "Notify on workflow completion"
   }
 
-  ["NotificationNode depends on the workflow_failure tag with no nodeId"] {
+  ["NotificationNode depends on the workflow_complete tag with no nodeId"] {
     local n = new App.NotificationNode {}
-    n.dependsOnCondition.tag == "workflow_failure"
+    n.dependsOnCondition.tag == "workflow_complete"
     n.dependsOnCondition.nodeId == null
     n.dependsOnCondition._conditionShapeCheck == null
   }
 
-  // The reserved tag is the one node-less DependencyCondition the shape check
-  // permits; every other tag still requires a nodeId.
-  ["Node-less workflow_failure DependencyCondition passes the shape check"] {
+  // Both reserved run-level tags are the node-less DependencyConditions the
+  // shape check permits; every other tag still requires a nodeId.
+  ["Node-less workflow_complete DependencyCondition passes the shape check"] {
+    new App.DependencyCondition { tag = "workflow_complete" }._conditionShapeCheck == null
+  }
+
+  ["Node-less workflow_failure DependencyCondition still passes the shape check"] {
     new App.DependencyCondition { tag = "workflow_failure" }._conditionShapeCheck == null
   }
 }

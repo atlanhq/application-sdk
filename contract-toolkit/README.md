@@ -135,10 +135,10 @@ Automation Engine DAG template. Auto-derived from the declared workflow params a
 Default pipeline: `extract → publish`, plus a run-level
 `notify-on-failure` system node. Opt out of publish with
 `pipeline.publish = null`. Add parseQueries, popularity, or lineage steps by
-setting the corresponding `pipeline.*` field. Opt out of failure notifications
+setting the corresponding `pipeline.*` field. Opt out of notifications
 with `notifyOnFailure = false`.
 
-A run-level **failure-notification node** (`notify-on-failure`) is appended automatically (`notifyOnFailure = true`). It depends on the reserved run-level `workflow_failure` tag — Automation Engine runs it once when the workflow run terminates in failure — and dispatches the `notification-app` to fan alerts out to the tenant's enabled integrations (Teams, etc.). Set `notifyOnFailure = false` for utility/internal apps that should not self-notify (the notification app itself sets this).
+A run-level **notification node** (`notify-on-failure`) is appended automatically (`notifyOnFailure = true`). It depends on the reserved run-level `workflow_complete` tag — Automation Engine runs it once when the workflow run reaches any terminal state (success or failure) — and dispatches the `notification-app`, which fans alerts out to the tenant's enabled integrations (Teams, etc.) and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Set `notifyOnFailure = false` for utility/internal apps that should not self-notify (the notification app itself sets this). The toggle name is kept for back-compat; semantics are "notify on completion".
 
 ### `_input.py` (`app/generated/_input.py`)
 
@@ -237,7 +237,7 @@ pipeline {
 
 Dependencies between pipeline steps are **auto-wired** based on position — you do not write `dependsOn` for pipeline steps. Use `extraNodes` for custom nodes outside the typed pipeline.
 
-The toolkit also appends a run-level failure notification node by default:
+The toolkit also appends a run-level notification node by default:
 
 ```pkl
 notifyOnFailure = false  // utility/system apps that must not self-notify
@@ -245,10 +245,12 @@ notifyOnFailure = false  // utility/system apps that must not self-notify
 
 When enabled, the generated manifest includes `notify-on-failure`, a
 `NotificationNode` that dispatches `NotificationWorkflow` in `notification-app`.
-It depends on the reserved run-level `workflow_failure` tag, so Automation
-Engine runs it once after the workflow run fails and resolves the payload from
-`$.workflow.*` and `$.failure.*` context. The notification app then fans the
-alert out to the tenant's enabled integrations.
+It depends on the reserved run-level `workflow_complete` tag, so Automation
+Engine runs it once after the workflow run reaches any terminal state (success
+or failure) and resolves the payload from `$.workflow.*` and `$.failure.*`
+context (carrying the real status). The notification app then fans the alert out
+to the tenant's enabled integrations and decides delivery per integration
+(`failureOnly`: failure-only vs. all runs).
 
 To replace the generated node, define `extraNodes["notify-on-failure"]`.
 

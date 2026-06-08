@@ -51,7 +51,7 @@
     },
     "notify-on-failure": {
       "activity_name": "execute_workflow",
-      "activity_display_name": "Notify on workflow failure",
+      "activity_display_name": "Notify on workflow completion",
       "app_name": "notification-app",
       "inputs": {
         "workflow_type": "NotificationWorkflow",
@@ -82,7 +82,7 @@
         }
       },
       "depends_on": {
-        "tag": "workflow_failure"
+        "tag": "workflow_complete"
       }
     }
   }
