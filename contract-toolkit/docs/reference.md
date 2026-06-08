@@ -325,7 +325,6 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 | `publishTagPipelineEnabled` | Boolean\|String? | auto | Value for `PublishNode`'s `tag_pipeline_enabled`. Auto-wired when `enable-tags` or `enable-tag-sync` is in the form. |
 | `publishTagAttachmentsPrefix` | String? | auto | Value for `PublishNode`'s `tag_attachments_prefix`. |
 | `notifications` | Boolean | `true` | Top-level app on/off for notifications. When `true`, appends a run-level notification node (`NotificationNode`, key `notify-on-failure`) that fires when the workflow run reaches any terminal state (success or failure). The node depends on the reserved run-level `workflow_complete` tag (a `DependencyCondition` with no `nodeId`), so AE runs it once per run as a finalizer and dispatches the `notification-app`, which fans alerts to the tenant's enabled integrations and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Set `false` for utility/internal apps that should not self-notify (the notification app itself sets this); also skipped when `extraNodes` defines a `notify-on-failure` key. See [NotificationNode](#notificationnode). |
-| `notifyOnFailure` | Boolean | `true` | **Deprecated** alias for `notifications`. Retained so apps that set `notifyOnFailure = false` keep working — either flag being `false` disables the node. Prefer `notifications`. |
 
 ---
 

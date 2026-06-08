@@ -1,6 +1,5 @@
 // Tests for the built-in run-level notification node (NotificationNode) and the
-// `notifications` app-level on/off toggle (with the deprecated `notifyOnFailure`
-// alias).
+// `notifications` app-level on/off toggle.
 //
 // Background: every app built on App.pkl should alert on workflow-run completion
 // with no per-app wiring. The toolkit appends a `notify-on-failure` finalizer
@@ -48,13 +47,6 @@ local overrideApp = (App) {
   }
 }
 
-// App that opts out via the deprecated alias (notifyOnFailure = false) — proves
-// back-compat: either flag being false disables the node.
-local legacyDisabledApp = (disabledApp) {
-  notifications = true
-  notifyOnFailure = false
-}
-
 // Default app (no pipeline block, notifications defaults true).
 local defaultManifest = new json.Parser { useMapping = true }.parse(
   defaultApp.output.files["app/generated/manifest.json"].text
@@ -68,11 +60,6 @@ local disabledManifest = new json.Parser { useMapping = true }.parse(
   disabledApp.output.files["app/generated/manifest.json"].text
 )
 local disabledDag = disabledManifest["dag"]
-
-local legacyDisabledManifest = new json.Parser { useMapping = true }.parse(
-  legacyDisabledApp.output.files["app/generated/manifest.json"].text
-)
-local legacyDisabledDag = legacyDisabledManifest["dag"]
 
 local overrideManifest = new json.Parser { useMapping = true }.parse(
   overrideApp.output.files["app/generated/manifest.json"].text
@@ -146,11 +133,6 @@ facts {
 
   ["App with notifications=false has no notify-on-failure node"] {
     !disabledDag.containsKey("notify-on-failure")
-  }
-
-  // Back-compat: the deprecated notifyOnFailure=false alias still disables it.
-  ["App with the deprecated notifyOnFailure=false alias has no notify-on-failure node"] {
-    !legacyDisabledDag.containsKey("notify-on-failure")
   }
 
   // The toggle must not disturb the rest of the DAG.

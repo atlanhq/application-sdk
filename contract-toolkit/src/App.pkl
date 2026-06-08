@@ -275,17 +275,6 @@ extraNodes: Mapping<String, DAGNode> = new Mapping {}
 /// stay customer-owned. See the design follow-up.
 notifications: Boolean = true
 
-/// Deprecated alias for [notifications]. Retained so apps pinned to earlier
-/// pre-releases that set `notifyOnFailure = false` keep working — either flag
-/// being `false` disables the node ([_notificationsEnabled]).
-@Deprecated { message = "Use `notifications` — the broad app-level on/off switch." }
-notifyOnFailure: Boolean = true
-
-/// Effective notification switch: enabled only when both the canonical
-/// [notifications] flag and the deprecated [notifyOnFailure] alias are `true`,
-/// so setting *either* to `false` opts out.
-hidden _notificationsEnabled: Boolean = notifications && notifyOnFailure
-
 /// Mapping of manifest arg name → form field name for top-level extract args.
 manifestTopLevelArgs: Mapping<String, String> = new Mapping {
   ["credential_guid"] = "credential-guid"
@@ -2094,7 +2083,7 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
       [nodeId] = renderNode(node)
     }
   }
-  when (_notificationsEnabled && !extraNodes.toMap().containsKey("notify-on-failure")) {
+  when (notifications && !extraNodes.toMap().containsKey("notify-on-failure")) {
     ["notify-on-failure"] = renderNode(new NotificationNode {})
   }
 }
