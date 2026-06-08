@@ -167,6 +167,10 @@ jobs:
         run: |
           DAPR_CLI_VERSION="1.17.1"
           DAPR_RUNTIME_VERSION=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+          if [ -z "${DAPR_RUNTIME_VERSION}" ]; then
+            echo "::error::Failed to parse __dapr_version from application_sdk/version.py"
+            exit 1
+          fi
           curl -sSLf "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" \
             -o /tmp/dapr-cli.tar.gz
           tar -xzf /tmp/dapr-cli.tar.gz -C /tmp dapr

@@ -10,9 +10,8 @@ Holds two kinds of versions:
 
 CI workflows that need the daprd pin (`.github/workflows/push.yaml`,
 `.github/workflows/pull_request.yaml`, `.github/workflows/scale-tests.yaml`,
-`.github/actions/e2e-examples/action.yaml`) read it via a small shell
-step so this file stays the only place the literal ``1.17.x`` appears
-in the repo::
+`.github/actions/e2e-examples/action.yaml`) avoid hard-coding the runtime
+version by reading it from this file via a small shell step::
 
     ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
 
