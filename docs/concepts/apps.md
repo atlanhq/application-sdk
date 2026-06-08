@@ -69,6 +69,8 @@ def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
 
 When the app defines it, `GET /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>` hands the static manifest plus the decoded `fe_inputs` to the hook and serves its return value; apps without the hook get the static manifest unchanged. The hook may be **sync** (run off the event loop via `asyncio.to_thread`) or **async** (awaited directly); it must return a `dict`. Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
 
+> **`fe_inputs` size limit.** Because `fe_inputs` rides in the GET query string, it is bounded by the request-line cap of whatever proxy fronts the app (nginx defaults to 8 KB; ALB ~16 KB). The SDK rejects a decoded `fe_inputs` larger than **8 KB** with `413 Payload Too Large` so oversize surfaces as a clear error rather than an opaque upstream truncation. A fully-populated form for the largest connector we ship is ~1.6 KB (≈5 KB for a heavy multi-select), so this is comfortable headroom; forms that genuinely need more should move to a POST body rather than grow the query string.
+
 ## Orchestration in run()
 
 The `run()` method is where you compose tasks. It supports sequential, parallel, and conditional patterns:

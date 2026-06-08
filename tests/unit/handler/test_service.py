@@ -4875,6 +4875,40 @@ class TestComputeManifestHook:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_oversize_fe_inputs_returns_413(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """fe_inputs over the byte cap → 413 (clear error, not opaque
+        downstream truncation), and the hook is never invoked."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "big-form"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+
+        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            raise AssertionError("hook must not run for oversize fe_inputs")
+
+        self._install_fake_core(monkeypatch, "big-form", compute_manifest)
+
+        # Valid JSON, but larger than the cap.
+        huge = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES + 100)})
+        assert len(huge.encode("utf-8")) > svc_module._MAX_FE_INPUTS_BYTES
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "big-form", "fe_inputs": huge},
+            )
+            assert response.status_code == 413
+            assert "fe_inputs exceeds" in response.json()["detail"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_legacy_alias_forwards_fe_inputs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -516,12 +516,33 @@ def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
     return cast("HandlerFn | None", fn if inspect.iscoroutinefunction(fn) else None)
 
 
+#: Max size of the decoded ``fe_inputs`` query payload, in UTF-8 bytes.
+#
+# ``fe_inputs`` rides in a GET query string (``/workflows/v1/manifest?...``),
+# so it is bounded by the request-line caps of whatever proxy fronts the app
+# (nginx ``large_client_header_buffers`` defaults to 8 KB; ALB allows ~16 KB).
+# This app-side cap turns "payload too large" into a clear 413 instead of an
+# opaque upstream truncation/414. 8 KB was chosen empirically from the largest
+# connector form we ship (asset-export-advanced, ~65 fields): a fully-populated
+# form is ~1.6 KB decoded and a heavy multi-select (lists of qualified names /
+# GUIDs / tags) is ~5 KB — so 8 KB leaves headroom without rejecting legitimate
+# forms. Anything materially larger should move to a POST body (tracked
+# follow-up) rather than grow the query string.
+_MAX_FE_INPUTS_BYTES = 8192
+
+
 def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
     """Decode the ``fe_inputs`` query payload (JSON, sent URL-encoded by
-    Heracles for dynamic-manifest apps). Returns ``{}`` when absent;
-    raises ``HTTPException(400)`` when present but malformed."""
+    Heracles for dynamic-manifest apps). Returns ``{}`` when absent; raises
+    ``HTTPException(413)`` when it exceeds :data:`_MAX_FE_INPUTS_BYTES` and
+    ``HTTPException(400)`` when present but malformed."""
     if not raw:
         return {}
+    if len(raw.encode("utf-8")) > _MAX_FE_INPUTS_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"fe_inputs exceeds the {_MAX_FE_INPUTS_BYTES}-byte limit",
+        )
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
