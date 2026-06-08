@@ -1865,6 +1865,11 @@ local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> = new
   }
 }
 
+local function renderJdbcAuthMergeTargetOption(opt: AuthOption): Mapping<String, Any> =
+  let (auth = renderJdbcAuthOption(opt).toMap())
+  let (ui = (auth["ui"] as Mapping<String, Any>).toMap())
+  auth.put("ui", ui.put("hidden", true).toMapping()).toMapping()
+
 /// Namespace prefix per extraction-method. `credential-guid` is the form-field
 /// path for the direct credential input; `agent-json` is the path used when the
 /// agent extraction mode layers an override schema on the same form.
@@ -2308,7 +2313,7 @@ local function generateCredentialConfig(): Mapping<String, Any> =
         // the merge creates orphaned entries with no ui metadata → empty boxes.
         // These hidden copies ensure the merge inherits correct ui (HYP-1251).
         for (k, opt in credentialAuthOptions!!) {
-          [k] = renderJdbcAuthOption(opt)
+          [k] = renderJdbcAuthMergeTargetOption(opt)
         }
       }
       // Plain auth-type flow (non-JDBC): auth-type radio + nested panes

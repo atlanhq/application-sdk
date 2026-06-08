@@ -951,6 +951,11 @@ When `credentialUrlGroup != null`, the credential JSON emits:
      at `credential-guid.connectBy` / `credential-guid.extra.compiled_url`.
    - **`anyOf`** — enforces the selected auth-option pane is present.
 
+The renderer also emits each auth pane at the credential root as a hidden merge
+target for agent credential overrides. These root-level panes are not the
+visible credential UI; the visible JDBC auth panes live under
+`jdbcUrl.properties.<authKey>`.
+
 ### Classes
 
 ```pkl

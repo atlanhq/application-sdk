@@ -134,6 +134,9 @@ selected upload widget plus `ui.accept`, `ui.fileMetadata`, and opt-in
 `ui.removeBeforeUpload` when the widget is emitted. When
 `credentialAuthOptions` has a single entry, the auth-type radio is auto-hidden —
 the generated default is still emitted, so no form input is required.
+For `credentialUrlGroup` forms, the visible auth panes live inside
+`jdbcUrl.properties`; root-level auth panes are hidden merge targets for agent
+credential overrides.
 
 ### Manifest (`app/generated/manifest.json`)
 
