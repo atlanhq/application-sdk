@@ -92,15 +92,22 @@ jobs:
         id: drift
         if: steps.ctx.outputs.release == 'false'
         run: |
-          # source-sha / source-date are excluded: with squash merges the final
-          # SHA doesn't exist during the PR, so these fields are always stale
-          # until the manifest is regenerated post-merge.
+          # source-sha / source-date / sdk-version are excluded: with squash
+          # merges the final SHA doesn't exist during the PR, so source-sha/
+          # source-date are always stale until post-merge regeneration.
+          # sdk-version is excluded for the same reason: release PRs (bump-
+          # version-* branches) bump application_sdk/version.py, which the
+          # extractor reads to produce this header. In the merge queue the
+          # synthetic commit already has the new version, so the header would
+          # differ from the committed manifest even though no API surface changed.
+          # Excluding these three metadata-only header fields avoids false drift
+          # failures without hiding real API-surface changes.
           # || true: grep exits 1 on no matches; with pipefail that would kill the
           # script before the [ -z ] check, producing a false drift failure.
           SEMANTIC=$(git diff -- docs/agents/sdk-capabilities.md \
             | grep '^[+-]' \
             | grep -v '^+++\|^---' \
-            | grep -v '^[+-]source-sha:\|^[+-]source-date:' \
+            | grep -v '^[+-]source-sha:\|^[+-]source-date:\|^[+-]sdk-version:' \
             || true)
           if [ -z "$SEMANTIC" ]; then
             echo "status=clean" >> "$GITHUB_OUTPUT"

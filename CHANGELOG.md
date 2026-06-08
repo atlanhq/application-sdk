@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.15.1 (June 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.15.0...v3.15.1
+
+### Bug Fixes
+
+- bump dependencies and exclude sdk-version from capability manifest drift check (#2012) (by @cmgrote in [8ed4b09](https://github.com/atlanhq/application-sdk/commit/8ed4b09))
+
+
 ## v3.15.0 (June 05, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.14.0...v3.15.0

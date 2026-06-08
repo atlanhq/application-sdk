@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.15.0
-source-sha:    dc0e212615f645905ab7c184fb139f32e7329f49
-source-date:   2026-06-08T11:49:47+05:30
+sdk-version:   3.15.1
+source-sha:    5ba1be4922083122cc0d1aed42cb180d70e80eca
+source-date:   2026-06-08T23:31:21+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 25 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 26 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
@@ -157,6 +157,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Defined in:** `application_sdk/app/task.py`
 
 ### Functions
+
+#### `entrypoint_module_segment`
+
+- **Import:** `from application_sdk.app import entrypoint_module_segment`
+- **Signature:** `entrypoint_module_segment(name: str)`
+- **Summary:** Convert a kebab-case entry-point name to its Python module segment.
+- **Defined in:** `application_sdk/app/entrypoint.py`
 
 #### `mcp_tool`
 
@@ -2469,7 +2476,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-  - `metadata_template_key: str` `= ''` — Metadata source routing key for multi-source metadata widgets.
+  - `metadata_template_key: str` `= Field(default='', validation_alias=(AliasChoices('metadata_template_key', 'metadataTemplateKey', 'type')))` — Metadata source routing key for multi-source metadata widgets (e.g.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
   - `object_filter: str` `= ''` — Filter pattern (e.g., 'public.*', 'mydb.myschema.*').
   - `include_fields: bool` `= True` — Whether to include field/column details.
