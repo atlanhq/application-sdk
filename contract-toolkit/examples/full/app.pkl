@@ -9,7 +9,7 @@
 ///   - uiConfig: TextInput, BooleanInput, NumericInput, Radio, DropDown, SqlTree,
 ///               conditional UIRule, CredentialInput, ConnectionCreator
 ///   - extraNodes: custom DAG node outside the typed pipeline
-///   - notifyOnFailure: explicit opt-in to the run-failure notification node
+///   - notifications: explicit opt-in to the run-completion notification node
 amends "../../src/App.pkl"
 
 import "../../src/Connectors.pkl"
@@ -20,7 +20,7 @@ connector = Connectors.POSTGRES
 workflowType = "FullFeaturedExampleWorkflow"
 icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
 credentialConnectorType = "jdbc"
-notifyOnFailure = true
+notifications = true
 
 pipeline {
   extract {
