@@ -63,7 +63,7 @@ jobs:
       - name: Discover atlan-application-sdk consumers
         id: discover
         env:
-          GH_TOKEN: ${{ secrets.fleet-dispatch-token }}
+          GH_TOKEN: ${{ secrets['fleet-dispatch-token'] }}
         run: |
           set -euo pipefail
           # Search for repos in the atlanhq org that list atlan-application-sdk
@@ -73,7 +73,7 @@ jobs:
             --owner atlanhq \
             "atlan-application-sdk filename:pyproject.toml" \
             --json repository \
-            --jq '[.[].repository.nameWithOwner] | unique | @json' \
+            --jq '[.[].repository.nameWithOwner] | unique' \
             --limit 100 2>/dev/null || echo "[]")
 
           if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
@@ -96,7 +96,7 @@ jobs:
     steps:
       - name: Trigger workflow_dispatch
         env:
-          GH_TOKEN: ${{ secrets.fleet-dispatch-token }}
+          GH_TOKEN: ${{ secrets['fleet-dispatch-token'] }}
         run: |
           set -euo pipefail
           if gh workflow run "${{ inputs.workflow-file }}" \
