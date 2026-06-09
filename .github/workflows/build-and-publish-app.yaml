@@ -1152,6 +1152,10 @@ jobs:
             while IFS= read -r tag; do [ -n "$tag" ] && echo "    ${tag}"; done <<< "${RELEASE_TAGS}"
           fi
 
+      - name: Install crane
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        uses: imjasonh/setup-crane@59c71e96a00b28651f10369ba3359a6d730740a0 # v0.6
+
       - name: Push to Docker Hub (re-tag, no rebuild)
         id: dockerhub_push
         if: needs.prepare.outputs.enable_sdr == 'true'
@@ -1160,14 +1164,20 @@ jobs:
           DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
         run: |
           set -euo pipefail
-          docker buildx imagetools create \
-            --tag "${DOCKERHUB_IMAGE}" \
-            "${GHCR_IMAGE}"
+          # Use `crane copy`, not `docker buildx imagetools create`, for the
+          # cross-registry GHCR -> Docker Hub copy. imagetools uploads each blob
+          # to Docker Hub with a monolithic PUT, which Docker Hub rejects with
+          # HTTP 400 once a layer is large (e.g. apps that vendor a ~100MB jar).
+          # crane does chunked uploads + cross-repo blob mounts, so it handles
+          # large layers and copies the full multi-arch index byte-identically.
+          # Auth comes from ~/.docker/config.json written by the GHCR + Docker Hub
+          # login steps above.
+          crane copy "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"
           echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
 
           # Resolve the pushed manifest digest so we can sign by digest (immutable)
           # rather than by tag (mutable). `${DOCKERHUB_IMAGE%%:*}` strips the tag.
-          DIGEST="$(docker buildx imagetools inspect "${DOCKERHUB_IMAGE}" --format '{{.Manifest.Digest}}')"
+          DIGEST="$(crane digest "${DOCKERHUB_IMAGE}")"
           echo "digest_ref=${DOCKERHUB_IMAGE%%:*}@${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Sign Docker Hub image (cosign keyless)
